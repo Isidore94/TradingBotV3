@@ -35,6 +35,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | 79 | **Personal evidence counts once and refuses to name a best setup (ST5)** - the next nightly `preference_trade_outcomes` slot writes a report whose ledger reason carries `n_trades_matched` beside `n_statements_matched` and names the window as `10 sessions`; on the current store expect **10 trades behind 13 matched statements** over a 45-day read (the pair is what makes the duplicate visible - equal numbers on a quiet window are not a failure, a MISSING `n_trades_matched` is). Then on the desk: Weekend Prep's "Tag this week" lists the **26 provisional rows** with `Week` reading `backlog` on the ones older than the current week, the "Missing planned risk" table lists closed trades with no plan (expect ~165, newest first) and one row opens that trade in the Journal's Trades tab; the coverage line under the verdict card reads `Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting review: 26. Planned risk recorded: 0 of 172.` and the Analytics tab shows that sentence beside `1 confirmed setup tag - under the n=30 floor (26 provisional awaiting review) - no personal setup can be called best.` **The Analytics tab's four population numbers must read 165 complete / 7 partly closed / 32 open summing to 204, with `uncertain` a cross-cutting 120 (84 / 7 / 29) carrying NO pooled money** - a `partly_closed` of 0 or an `uncertain` that sums beside the other three is the review's blocker back again. **Nothing here is a scoring change**: the champion's scoring population, every detector and every alert are untouched by construction | 2026-09-06 ST5 entry |
 | 77 | **The repaired execution convention is EVIDENCE and the desk did not move (ST3)** - not a live behaviour gate: (1) the artifacts exist and are READABLE by the lead - three JSON/CSV pairs in `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\` (`both__comparison_20260906T110731.*`, `exec_only__…110814.*`, `levels_only__…110855.*`), with the headline copied into the 2026-09-06 ST3 entry: **472 of 794 changed** (`n_setups` 794 is the artifact's OWN denominator - 800 were offered and 6 carried no tradeable scenario; `--limit` is never the denominator), raw expectancy -0.0981 -> -0.1192, 43 of 50 groups moved rank, plus the two single-axis runs, and (2) **the desk's next persisted tracker write carries NO `execution_convention` and NO `level_knowledge` key on any record** and no event dict carries a `fill_basis` - the default path is what runs. A record that grew either key is the failure this gate exists to catch. The trader's DECISION on whether `gap_aware_v2` / `prior_session_v2` becomes the scoring convention is asked separately and is not part of this gate | 2026-09-06 ST3 entry |
 | 75 | **Each outcome carries its own clock (ST1)** - after the next persisted tracker write (Tuesday 2026-09-08 13:00 PT): (1) `master_avwap_session_horizon_outcomes.csv` exists beside `master_avwap_tier_outcomes.csv`, with `sessions_spanned == horizon_sessions` on EVERY measured row and a populated `unmeasured_reason` on every other one (expect `target_session_not_complete` on the newest scan dates and `no_bar_for_target_session` for symbols the scan held no frame for). (2) the v1 counts logged by the tier tracker on the same pass are UNCHANGED in shape. (3) The tier outcomes file's new `outcome_kind` column reads `favorable_direction_scanrow_v1` on every row, and the Master AVWAP setups table's header reads **Family favorable %** with a coverage line beside the status bar. (4) `setup_docs.family_record_coverage_line()` and `autopilot_core.swing_family_record_line()`, called in the same minute, print lines that are IDENTICAL TO EACH OTHER, and the tier performance export's population agrees with them on the stale rule. **Compare them to each other, never to a number written down here**: the window moves with the calendar, so the triple changes every session (`2587 / 0 / 16971` at `end=2026-09-03`, `2462 / 0 / 17096` on today's default window - both correct, and either would fail a stored-string check). (5) **`trading_bot.log` carries EXACTLY ONE line for this export**, and it is `Session-horizon outcomes exported N row(s), M measured, C same-session scan row(s) collapsed, D true duplicate(s) dropped` - the two counts SEPARATE. Expect D small (300 over the whole live history, 75 ids at four horizons) and C large (91,880); a four-figure D means a re-scan is being reported as a duplicate again. On a 30-session window over a history of this size, expect roughly 90,000 rows and ~25 MB. A run where the export FAILED logs `Session-horizon outcome export failed` instead and the run result carries `session_horizon_export_error` with NO counts - an absent count and a zero are different claims. **Nothing here promotes**: `POLICY_SESSION_V2` still has no production caller, and a decision to read v2 is the trader's | 2026-09-06 ST1 entry |
+| 76 | **Real counts on the desk, and one honest leader (ST2)** - after the next persisted tracker write: (1) `master_avwap_setup_type_recent_stats.csv` and `master_avwap_setup_type_stats.csv` both carry `n_wins` / `n_losses` FILLED (not blank), and on the recent file `n_wins + n_losses + n_flats + n_unmeasured + n_pending == n_episodes` on every row, with `n_episodes == tracked_setups`. (2) The recent-types table shows **Win % (unweighted)** and **Win % (recency-weighted)** as two columns whose values DIFFER on at least one family - if every pair is equal the weighting had no bite that day, which is information, not a pass. (3) The Setup Types tab leads with **Win %**, and its population sentence names `trade_r_representative_exit`, states its window (`ALL HISTORY`) and ends with the expired clause - **`N expired unmeasured, excluded` when N > 0 and the literal `0 expired unmeasured` when none, never an empty tail** (M3's gate #72 clause 5 reads the first form). (4) The banner prints one of the four verdict states and, when it prints a leader, names the SAME family the recent table lists first by bound (pins are novelty badges and do not count); when it prints `discovery only`, the word "Leader" is absent from that line. (5) No study family is ever named as the leader, and the exclusion count is shown. (6) **The Summary card above the banner agrees with it - the same family AND the same verdict state**, on a fresh day and on a stale one (they are computed once per page, so a disagreement is a defect, not a race); its "Setup types working" block shows BOTH sides, and the Best Type Edge tile reads the biggest `score_delta` (live base `SHORT +23`), not the table's first row. (7) `master_avwap_setup_short_horizon.csv` carries `n_wins` / `n_losses` / `latest_measured_session` filled, with **`n_wins + n_losses + n_flats == samples_2d` and `samples_2d + n_unmeasured == tracked_setups`** on every row, and `latest_measured_session` at or near the last completed session rather than 40+ sessions back - it is the MEASURED bar's date, not the entry. (8) The 2-session block's label names its verdict state (`Short-term (1-2d), leader` when there is one) and the words "discovery" and "carries no session" are absent from a leader line. **`not enough 2-session samples yet` appears ONLY when the block truly has no rows** - the live state is 12 eligible families 0.001 apart, which must render as `Short-term (1-2d), no clear leader`. (9) The swing line says **entry-dated** and the 2-session line says **measured**; neither claims the other's clock | 2026-09-06 ST2 entry |
 | 74 | **The control and study populations are shown, and the April framework is read (M5)** - restated after the reviewer round so it can PASS (the first wording demanded an equal `n` the framework does not produce). After the next persisted tracker write: (1) `master_avwap_control_discovery.csv` and `master_avwap_study_discovery.csv` exist, the control file carrying its three cohort rows plus one family row per (side, family), in an `all` block AND a `lately` block, every row stamped `population_setups`. (2) The **Controls** tab's sentence reads `N graded episodes from the M control setups the scan REJECTED` with **N < M** and M near 401 (Studies likewise, M near 3,992) - the two numbers are different things and a tab printing one of them twice is the defect this clause replaces. (3) Both tables sort by the Wilson lower bound, not the raw rate. (4) The **Exit frameworks** tab shows `comparison_apr2026` rows beside `baseline` ones, grouped by side and bucket with the baseline above its twin, Experimental reading True. (5) **The denominators reconcile, which is the real check**: on a (side, bucket) where the template has no `blocked_stop_rules`, the comparison's `n` EQUALS the baseline's and `Filtered` is 0; on SHORT / near_favorite_zone for `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav`, `n + Filtered` equals the baseline's `n` (the reviewer measured 585 + 98 = 683 on the live tracker). A smaller `n` with a matching `Filtered` is the experiment working; a smaller `n` with `Filtered` 0 is a defect | 2026-09-05 M5 entry |
 | 73 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
 | 72 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot, checked against REPRODUCIBLE numbers rather than the audit's prose (reviewer, 2026-09-05: the first wording was unsatisfiable). (1) `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE, with no "refresh skipped" line. (2) The payload's `saved_by` reads `close_slot` and its `saved_at` is market-local with an offset. (3) The three stats CSVs carry that same `tracker_saved_at`, and the Setup Tracker's status line shows BOTH clocks in ONE zone - `Tracker as of ... (close_slot); scan factors as of ...`, the two offsets equal. (4) `trading_bot.log` carries the literal token **`n_expired_unmeasured=`**; on the 2026-09-04 mirror the reproducible counts are **setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7, control 0, 52 total**, so expect ~52 on a tracker of that vintage - not the audit's "37 + 41", which counted a different thing. (5) The Setup Types tab says `N expired unmeasured, excluded` with N matching the summed CSV column (Current Picks deliberately says nothing - different population). (6) Family win rates unchanged to the cent where those setups contributed only a denominator, and the champion's scoring population unchanged by construction. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation, and **the FIRST save after merge rewrites every record's content hash** (`saved_at`/`saved_by` join the header, and `last_replayed_session` / `expiry_reason` / `stale_sessions` join the records), so a large `written` count on that one save is expected and is not a parity failure | 2026-09-05 M3 entry |
@@ -442,6 +443,146 @@ other full runs. It builds its M5 bars as `datetime.now().replace(hour=12, ...)`
 `.replace(hour=11, minute=20 / 25)`, so between 11:20 and 11:25 local its second bar is
 still FORMING and the completed-bar rule correctly drops it. It is a wall-clock-dependent
 test, unrelated to ST1 - the fix is to build its bars relative to a frozen moment.
+### 2026-09-06 (Sunday) - ST2: real integer counts at each table's own grain, and ONE declared leader
+
+**Branch `claude/st2-real-counts` (build tip on `claude/st2-real-counts-build`), NOT merged.**
+Packet ST2 of the Setup Tracker repair series, on the trader's *"Export true integer
+wins/losses/flats/unmeasured at each table's actual episode and outcome grain... Make the
+existing banner consume the same declared eligible leader as the evidence table... A study must
+stay labelled study and cannot become the live leader merely by having high R."*
+
+**The two defects, reproduced through the real code before anything was changed.**
+
+1. **The recent-types table printed a win count nobody observed.**
+   `legacy.build_recent_tracker_setup_family_rows` computes `win_rate_closed` as a
+   RECENCY-WEIGHTED mean of win flags (half life 14 days, `TRACKER_REGIME_MISMATCH_WEIGHT` on
+   top), and the panel handed that rate to `swing_headline.headline_from_rate`, which rebuilds
+   an integer pair as `round(rate * n)`. Two 28-day-old wins at weight .25 plus two same-day
+   losses at weight 1.0 give **0.2**, and the cell read **`25% (>=5%, n=4)`** - with a Wilson
+   bound computed from the invented 1-of-4 - where the truth was **2-2, 50%**.
+2. **The banner and the table named different families on one screen.**
+   `_best_now_banner_html` picked `max(avg_closed_r)` over any row with three closed setups,
+   across the live AND study namespaces; the table under it already ranked by the Wilson lower
+   bound. On the fixture that reproduces it, the table lists `tight_and_hot` (24-6, bound
+   0.627) first and the banner crowned `fat_but_wide` (54-36 at +2.50R, bound 0.497) - and a
+   three-example STUDY with a big R could be presented as the desk's best performer.
+
+**What landed.** ST2.1: the recent rows gain, additive at the end, `n_wins`, `n_losses`,
+`n_flats` (representative closed R exactly 0), `n_unmeasured` (closed and unreadable),
+`n_observations` (pre-dedupe) / `n_episodes` (post-dedupe, today's `tracked_setups` restated
+under its true name), `n_symbols`, `n_entry_sessions`, `n_pending`,
+`win_rate_closed_unweighted`, `win_rate_closed_basis` = `recency_weighted_half_life`,
+`outcome_kind` = `trade_r_representative_exit`, `horizon_basis` and `latest_measured_session` -
+counted in the SAME loop that builds `win_flags`, so the counted and the weighted readings can
+never disagree about which episodes they read. ST2.2: `build_tracker_setup_type_rows` gains the
+same counts plus `win_rate` at ITS grain, reconciling against `tradeable_setups` - **V3 item 1's
+owed seam, closed**: the tab could not have an honest win rate before because
+`master_avwap_tier_outcomes.csv`'s 184 rows collapse to 71 (side, bucket, family, zone) groups
+and one joined rate would have repeated across up to six rows. ST2.3: new pure module
+`scripts/working_lately.py` (`LEADER_MARGIN_LB` 0.05, `LEADER_FRESHNESS_SESSIONS` 2, both
+declared today BEFORE any forward evaluation and not tuned to make a winner appear;
+`LeaderVerdict`; `select_leader` with four states) is now the ONE decision the banner reads.
+
+**Three lead decisions, each with its own test.** (a) `select_leader` takes `min_n` as an
+argument (default `MIN_REPORTABLE_N`) and names the floor in its reason, so the two-session block
+passes `SHORT_TERM_MIN_SAMPLES` without declaring a second statistics contract. (b) When nothing
+reaches the floor the state is `no_evidence` AND `coverage["discovery_leader"]` carries the best
+live row below it, so the banner prints `No leader at the n=30 floor - leading on thin evidence:
+LONG thin_leader (n=12), discovery only` - never the word leader for it, and never beside a real
+leader. (c) The Setup Types tab sorts by `win_rate_lb` inside each side (`tight` above `fat`
+despite `fat`'s bigger `score_delta`) and carries a population sentence naming the outcome kind.
+
+**Champion untouched, proven.** Two goldens pinned from `main` at `84ee24d6`
+(`tests/fixtures/st2_recent_rows_golden.csv`, `st2_setup_type_rows_golden.csv`): every original
+column is byte-identical, the old recent header is a PREFIX of the new one, and `ranking_score` /
+`score_delta` are compared explicitly. Nothing here reaches a detector, a score that gates, an
+alert, a watchlist, Focus, the review queue or `review_policy.json`.
+
+**Fix round after the reviewer's NO-GO (same day).** Three blockers, all of them the SAME defect
+surviving somewhere the packet did not name. (1) **The Summary card crowned max-R-on-three three
+lines ABOVE the fixed banner**: `research_explanations.build_plain_english_whats_working` picked
+`max(avg_closed_r)` over `closed_setups >= 3` across BOTH namespaces, so live it read *"LONG
+top_pattern leads at +0.99R ... 3 closes"* while the banner underneath said *"SHORT general"*, and
+10 of its 17 candidates were studies. Both its leader bullets now read the same
+`select_leader` verdict. (2) The **Best Type Edge** tile read `setup_type_rows[0]`, so ST2.2's
+bound-first sort silently moved it from `SHORT +23` to `LONG +14`; it now picks max `score_delta`
+explicitly - a tile that borrows another surface's ordering has no meaning of its own. (3) The
+Summary's **Setup types working** block showed `rows[:8]` of a side-first list, which on the live
+export was eight LONG rows and no SHORT one (first SHORT at index 68 of 117); the CARD now takes
+its eight by the bound across both books while the TAB keeps its side-first order.
+
+Eight advisories with it: the count columns moved to the END of the SHIPPED header
+(`_move_keys_to_end`, golden `st2_shipped_headers_golden.json` pinned from `84ee24d6`); the panel
+remembers its last FRESH leader per horizon so `last_reliable_reading` is reachable (in-memory,
+ST6 persists it); `min_n` binds the stale and undated discovery pools; the population sentence
+names its window (ALL HISTORY, pointing at Last 30 Days) and `working_lately.FRESHNESS_SENTENCE`
+states the rule in words; `counted_pair` is the one reader so an exported integer 0 is a count;
+`headline_from_counts` gained an optional `flats`; and `0 expired unmeasured` renders. **The
+ask was ANSWERED yes**, so `build_tracker_short_horizon_rows` gained its own
+`n_wins`/`n_losses`/`n_flats`/`n_unmeasured`/`outcome_kind`/`horizon_basis`/`latest_measured_session`
+(golden `st2_short_horizon_golden.csv` pinned BEFORE the edit; `win_rate_2d` byte-identical), so
+the 2-session block is freshness-checked rather than discovery by construction. **One ruling
+along the way**: `select_leader` judges the FLOOR BEFORE freshness - a family with three samples
+is under the floor whatever the clock says, and telling a reader "not fresh" about three samples
+answers a question they did not ask.
+
+**Re-review round (same day).** The three original blockers reproduced as fixed; two NEW ones,
+both the same shape as the first round's - a surface computing for itself what the page had
+already decided. (1) **The card and the banner disagreed on the STALE path**: the banner went
+through `_remembered_verdict` (which carries a `previous`) while `research_explanations` called
+`select_leader` directly without one, so after a stale refresh the card printed *"no clear leader.
+Leading on thin evidence, SHORT general on n=88 - discovery only"* three lines above the banner's
+*"SHORT general [last reliable reading, as of 2026-09-04]"*. `panel_verdicts(panel)` now computes
+both horizons ONCE in `_summary_html` and hands the same objects to both renderers. (2) **The
+2-session label contradicted its own verdict**: it hardcoded "2-session discovery" over a real
+`leader` and printed "the export carries no session" beside "its newest measured session is 58
+sessions behind"; the label is now the horizon plus `verdict_label_suffix(verdict)`, and the
+no-session sentence renders only when `discovery_reason` is `no_session`.
+
+Five advisories with it: `discovery_basis_phrase` says **"older evidence"** for a stale row and
+keeps "thin" for the floor (both renderers, one helper); the two tests that could not fail on the
+old code are rebuilt (one row is now genuinely undated - the `_evidence_row` helper had been
+dating it - and the other drives the REAL export end to end into the banner);
+`research_explanations` falls back to MARKET-local like the panel; and **the 2-session rows now
+date themselves by the MEASURED bar** (`_short_horizon_measured_session` reads the trade date of
+`post_marks[horizon - 1]`, the same index the summary reads the close from), so a family entered
+eight weeks ago and measured two sessions later stops reading as 58 sessions stale on a current
+file - unknown stays EMPTY, never back-filled. The RECENT rows keep entry dating and the constant
+says why: they carry no exit date until ST4 adds `representative_exit_date`. The export identity
+is stated and tested: `n_wins + n_losses + n_flats == samples_2d` and
+`samples_2d + n_unmeasured == tracked_setups`.
+
+**Re-check round (same day), one blocker.** The banner guarded its short-term block on *"a
+discovery row OR a leader"* and otherwise printed the hardcoded *"not enough 2-session samples yet
+(accrues automatically each scan)"* - so `no_clear_leader`, which is TODAY'S LIVE STATE for that
+horizon (12 eligible families, the top two 0.001 of bound apart), rendered as "no samples" under a
+card three lines above saying "no clear leader". False, and self-contradicting on one screen. The
+conditional is gone: `_verdict_block_html` renders all four states. Two advisories with it:
+`freshness_sentence(kind)` replaces the single `FRESHNESS_SENTENCE`, because only the 2-session
+rows are measured-dated and the swing line was claiming a clock it does not have - it now reads
+**entry-dated** (`DATING_BASIS_BY_KIND`, defaulting to the conservative "entry" for an unknown
+kind); and the dead `discovery_note` parameter moved into `working_lately` beside
+`discovery_basis_phrase`, so the sentence and the gate it belongs to cannot drift apart.
+
+**Owed at integration:** ST1's `Headline.outcome_kind` wire, and ST4's `representative_exit_date`.
+**The ST4 switch is a one-line change** and the lead can make it at merge: ST4
+(`origin/claude/st4-first-actionable` at `9d75a27f`) stamps `representative_exit_date` onto the
+per-episode row inside `build_recent_tracker_setup_family_rows` - the SAME dict ST2's counting
+loop already reads as `closed_row`. In that loop, `session = str(closed_row.get("scan_date") or "")`
+becomes `str(closed_row.get("representative_exit_date") or closed_row.get("scan_date") or "")`,
+and `DATING_BASIS_BY_KIND["swing"]` flips from `"entry"` to `"measured"` so the sentence follows.
+Nothing else moves; the fallback keeps a still-running episode dated by its entry. ST1's tests-only branch was still at
+`29e36350` when this build started, so `outcome_kind` is a ROW column here and the headline kind
+is passed through the render text; when ST1 merges, `_counted_win_rate_rows` should pass it into
+`Headline`. **The ask-first question was answered** in the fix round (lead, same day):
+`legacy.build_tracker_short_horizon_rows` may gain the additive counts and a session under the
+trader's *"Export true integer wins/losses/flats/unmeasured at each table's actual episode and
+outcome grain"*, golden-pinned from the code before the edit. Done.
+
+**Verification (worktree, `d4e3f7b3`):** `pytest tests/ -q` 6939 passed, 2 skipped, 72 subtests,
+exit 0, 5 min 56 s, with the nightly AI lock FREE. `ruff` clean, smoke 7/7, `--selftest` green.
+No packaging trigger: `working_lately.py` is a module inside the already-collected top-level
+`scripts/` tree, no new dependency, no non-`.py` asset, no dynamic import.
 
 ### 2026-09-06 (Sunday, ~06:00-07:30 PT) - The digest spot-audit done and recorded, two stale packs rebuilt, the three open scoring questions decided
 

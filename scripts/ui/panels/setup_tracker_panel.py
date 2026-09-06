@@ -116,6 +116,13 @@ SETUP_TYPE_COLUMNS = (
     ("setup_family", "Setup Family"),
     ("favorite_zone", "Zone"),
     ("retest_label", "Retest"),
+    # WIN RATE LEADS here too (V3 item 1, the owed seam, closed by ST2.2). It is
+    # this row's OWN record at this row's own grain - `n_wins` / `n_losses` off
+    # the export - with `n` and the ONE Wilson lower bound in the cell, and the
+    # table sorts by that bound inside each side. Target Hit and Stop stay
+    # beside it under their own names: they answer different questions and were
+    # never a win rate, which is why this tab had none for so long.
+    ("win_rate_headline", "Win %"),
     ("closed_setups", "Closed"),
     ("open_setups", "Open"),
     ("avg_closed_r", "Closed R"),
@@ -138,7 +145,14 @@ RECENT_TYPE_COLUMNS = (
     # in one cell, `62% (>=52%, n=90)`, through `swing_headline.format_win_rate`.
     # Closed R stays right beside it and is never replaced: the two answer
     # different questions and dropping either is how a number starts lying.
-    ("win_rate_headline", "Win %"),
+    # ST2.1: the heading now says WHICH win rate. The cell is the row's own
+    # integer counts; `win_rate_closed` beside it is the RECENCY-WEIGHTED mean
+    # the scorer reads, kept on the table under its own name rather than
+    # deleted, because it is a real number that answers a different question.
+    # Reading one as the other is what printed "25% (n=4)" on a family that
+    # went 2-2.
+    ("win_rate_headline", "Win % (unweighted)"),
+    ("win_rate_closed", "Win % (recency-weighted)"),
     ("closed_setups", "Closed 30d"),
     ("tracked_setups", "Tracked 30d"),
     ("avg_closed_r", "Closed R"),
@@ -387,6 +401,16 @@ class SetupTrackerPanel(QFrame):
         self.setup_type_rows: list[dict[str, Any]] = []
         self.recent_type_rows: list[dict[str, Any]] = []
         self.short_term_rows: list[dict[str, Any]] = []
+        # The last verdict that named a leader off FRESH evidence, per horizon.
+        # `working_lately.select_leader`'s `last_reliable_reading` state needs a
+        # `previous` to carry, and without this it was unreachable from the
+        # desk: every refresh started from nothing, so a tracker that stopped
+        # writing produced "no clear leader" rather than "here is the last thing
+        # we could honestly read, and it is N sessions old" - which is strictly
+        # less information at exactly the moment the trader needs more.
+        # In-memory only and deliberately so: it is a cache of a reading, never
+        # evidence, and ST6 owns persisting it with the rest of the snapshot.
+        self._last_fresh_verdicts: dict[str, Any] = {}
         self.playbook_rows: list[dict[str, Any]] = []
         self.scan_factor_rows: list[dict[str, Any]] = []
         self.tier_performance_rows: list[dict[str, Any]] = []
@@ -783,7 +807,9 @@ class SetupTrackerPanel(QFrame):
         all_playbook_rows = _load_csv_rows_cached(SETUP_PLAYBOOKS_FILE)
         tier_performance_export_rows = _load_csv_rows_cached(MASTER_AVWAP_TIER_PERFORMANCE_FILE)
         self.current_pick_rows = _rank_current_picks(_load_csv_rows_cached(MASTER_AVWAP_TIER_LIST_FILE))
-        self.setup_type_rows = _rank_setup_types(all_setup_type_rows, min_closed=min_closed)
+        self.setup_type_rows = _rank_setup_types(
+            _setup_type_headline_rows(all_setup_type_rows), min_closed=min_closed
+        )
         self.recent_type_rows = _rank_recent_types(
             _recent_type_headline_rows(
                 _load_csv_rows_cached(RECENT_SETUP_TYPE_STATS_FILE)
@@ -872,7 +898,7 @@ class SetupTrackerPanel(QFrame):
         # `saved_by` come off the export the tracker pass stamped them onto -
         # never off the 1.1 GB JSON, which this panel must never open.
         self.setup_type_status_label.setText(
-            expired_unmeasured_sentence(all_setup_type_rows)
+            setup_type_population_sentence(all_setup_type_rows)
         )
         status = tracker_clock_sentence(
             _first_non_empty(all_setup_type_rows, "tracker_saved_at"),
@@ -1365,40 +1391,113 @@ def _rank_current_picks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _rank_setup_types(rows: list[dict[str, Any]], *, min_closed: int) -> list[dict[str, Any]]:
+    """Win rate leads, so the ORDER is the Wilson lower bound - inside each side.
+
+    ST2.2 / lead decision 2026-09-06. The old key was the champion's
+    `score_delta` then `ranking_score`, which is the SCORER's order and is not
+    what "which of my setup types is working" asks; a reader given a Win %
+    column sorted by something else reads the first row as the best one.
+
+    **`score_delta` and `ranking_score` are untouched** - they keep their values
+    and their column, and they stay in the key as tiebreaks. Sides are kept
+    apart because LONG and SHORT are two books, not two ends of one list, and
+    interleaving them by bound hides whichever side is quieter. A row with no
+    graded closes has no bound and sorts under every row that has one: "not
+    measured" is not "measured badly".
+    """
     filtered = [row for row in rows if _int(row.get("closed_setups")) >= min_closed]
-    return sorted(
-        filtered,
-        key=lambda row: (
+
+    def _key(row):
+        bound = row.get("win_rate_lb")
+        return (
+            str(row.get("side") or ""),
+            bound is None,
+            -(float(bound) if bound is not None else 0.0),
             -_float(row.get("score_delta"), 0.0),
             -_float(row.get("ranking_score"), 0.0),
             -_float(row.get("avg_closed_r_edge"), 0.0),
             -_int(row.get("closed_setups")),
-        ),
-    )
+        )
+
+    return sorted(filtered, key=_key)
+
+
+#: What the cell says when the export carried no integer counts - ST2.1.
+COUNTS_NOT_EXPORTED = "counts not exported yet"
 
 
 def _recent_type_headline_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Attach the win-rate headline to each recent-type row - R4 B3.
+    """Attach the win-rate headline to each recent-type row - R4 B3, fixed by ST2.1.
 
-    The row already carries `win_rate_closed` and `closed_setups`, so the record
-    is measured at the ROW'S OWN GRAIN and nothing is joined in from a parent
-    cohort. `swing_headline.headline_from_rate` rebuilds the integer pair Wilson
-    needs from the stored rate and count.
+    **The counts are READ, never rebuilt.** This used to hand the row's stored
+    `win_rate_closed` to `swing_headline`'s rate-to-headline constructor, which
+    recovers `round(rate * n)`. That is exact when the stored rate is
+    `wins / n` - and this one is not: `win_rate_closed` is a RECENCY-WEIGHTED
+    mean (`legacy.build_recent_tracker_setup_family_rows`, half life 14 days).
+    Two 28-day-old wins at weight .25 and two same-day losses at weight 1.0 gave
+    0.2, and this cell printed `25% (>=5%, n=4)` - a count nobody observed,
+    carrying a Wilson bound computed from it, where the truth was 2-2 and 50%.
 
-    `win_rate_lb` rides along as a hidden sort key. It is the number the table is
-    ordered by; the cell shows the rate, the bound and n together so the reader
-    can see why.
+    So the pair comes off the row's own `n_wins` / `n_losses`
+    (`swing_headline.headline_from_counts`), and a row whose export predates
+    those columns - or carries them EMPTY - says so. It is never reconstructed:
+    "we did not count this" is a fact, and a made-up 25% is not.
+
+    The weighted rate keeps its place on the table under its own heading; see
+    `RECENT_TYPE_COLUMNS`.
+
+    `win_rate_lb` rides along as the sort key `_rank_recent_types` orders by and
+    `working_lately.select_leader` ranks on, so the table and the banner cannot
+    disagree.
     """
-    from swing_headline import format_win_rate, headline_from_rate
+    return _counted_win_rate_rows(rows)
+
+
+def _setup_type_headline_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The same treatment for the Setup Types tab - ST2.2, V3 item 1's owed seam.
+
+    `master_avwap_setup_type_stats.csv` carried `target_hit_rate` and
+    `stop_rate` - different questions - and no win column, so V3 could not put a
+    win rate here without joining one from `master_avwap_tier_outcomes.csv`,
+    whose 184 rows collapse to 71 (side, bucket, family, zone) groups: one
+    joined rate would have repeated across up to six rows and read as each row's
+    own. ST2.2 gave the export its own counts at its own grain, so the cell is
+    now the row's own record and nothing is joined in.
+    """
+    return _counted_win_rate_rows(rows)
+
+
+def _counted_win_rate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`win_rate_headline` + `win_rate_lb` from a row's INTEGER counts, or a refusal.
+
+    One helper for both tables, so the two tabs can never drift into two
+    definitions of a win. O(rows) and pure arithmetic - it runs on the Qt thread
+    with the rest of `refresh()` (plan.md Phase 0.9 G-P2.3 owns moving this
+    panel to a worker as a whole).
+    """
+    from swing_headline import format_win_rate, headline_from_counts
+    from working_lately import counted_pair
 
     out: list[dict[str, Any]] = []
     for row in rows:
-        record = headline_from_rate(
-            str(row.get("setup_family") or ""),
-            win_rate=row.get("win_rate_closed"),
-            n=row.get("closed_setups"),
-        )
         enriched = dict(row)
+        pair = counted_pair(row)
+        if pair is None:
+            enriched["win_rate_headline"] = COUNTS_NOT_EXPORTED
+            enriched["win_rate_lb"] = None
+            out.append(enriched)
+            continue
+        wins, losses = pair
+        record = headline_from_counts(
+            str(row.get("setup_family") or ""),
+            wins=wins,
+            losses=losses,
+            # A scratch is not a loss and is not a win: `Headline.flats` keeps
+            # it out of `n` while it stays a MEASURED outcome. Dropping it here
+            # would leave the export counting flats and the cell not.
+            flats=_int(row.get("n_flats")),
+            avg_r=row.get("avg_closed_r"),
+        )
         enriched["win_rate_headline"] = (
             format_win_rate(record.as_row()) if record.n else ""
         )
@@ -1491,6 +1590,35 @@ def _rank_catch_rates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: (_int(row.get("horizon_sessions")), str(row.get("side") or "")))
 
 
+def _summary_setup_type_rows(
+    rows: list[dict[str, Any]], *, limit: int = 8
+) -> list[dict[str, Any]]:
+    """The Summary card's eight setup types: best by BOUND, across both sides.
+
+    **ST2 fix round.** The tab's own table sorts side-first, which is right for
+    a table you scroll - LONG and SHORT are two books. The Summary card shows
+    only the first eight rows of that list, so side-first ordering meant it
+    showed eight LONG rows and no SHORT one: on the live export the first SHORT
+    row sat at index 68 of 117, and a reader of the card would have concluded
+    the short book had nothing working. So this card takes its eight across BOTH
+    sides by the same Wilson lower bound, and every line shows its side.
+
+    The tab's order is untouched; this is a different question asked of the same
+    rows. A row with no bound sorts under every row that has one.
+    """
+
+    def _key(row):
+        bound = row.get("win_rate_lb")
+        return (
+            bound is None,
+            -(float(bound) if bound is not None else 0.0),
+            -_float(row.get("score_delta"), 0.0),
+            -_int(row.get("closed_setups")),
+        )
+
+    return sorted(rows, key=_key)[:limit]
+
+
 def _summary_html(panel: SetupTrackerPanel) -> str:
     body = theme.color("text_primary")
     muted = theme.color("text_secondary")
@@ -1499,18 +1627,22 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
     favorite_c = theme.color("favorite")
 
     parts = [f"<body style='color:{body}; font-size:9pt'>"]
+    # ONE computation per page, handed to BOTH renderers - the card and the
+    # banner are three lines apart and may never disagree (re-review blocker 1).
+    verdicts = panel_verdicts(panel)
     plain = build_plain_english_whats_working(
         current_rows=panel.current_pick_rows,
         short_term_rows=panel.short_term_rows,
         recent_rows=panel.recent_type_rows,
         playbook_rows=panel.playbook_rows,
         short_term_min_samples=SHORT_TERM_MIN_SAMPLES,
+        verdicts=verdicts,
     )
     parts.append(f"<div style='border:1px solid {favorite_c}; padding:7px; margin-bottom:7px'>")
     parts.append(f"<h3 style='margin:0; color:{favorite_c}'>{_esc(plain['headline'])}</h3><ul>")
     parts.extend(f"<li>{_esc(item)}</li>" for item in plain["bullets"])
     parts.append(f"</ul><div style='color:{muted}'>{_esc(plain['caution'])}</div></div>")
-    parts.append(_best_now_banner_html(panel))
+    parts.append(_best_now_banner_html(panel, verdicts))
     parts.append("<table width='100%' cellspacing='0' cellpadding='4'><tr>")
     parts.append("<td valign='top' width='35%'>")
     parts.append(f"<h3 style='margin:0; color:{favorite_c}'>Current S/A picks</h3>")
@@ -1533,12 +1665,12 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
 
     parts.append("<td valign='top' width='32%'>")
     parts.append(f"<h3 style='margin:0; color:{long_c}'>Setup types working</h3>")
-    for row in panel.setup_type_rows[:8]:
+    for row in _summary_setup_type_rows(panel.setup_type_rows, limit=8):
         edge = _float(row.get("avg_closed_r_edge"), 0.0)
         edge_color = long_c if edge >= 0 else short_c
         parts.append(
             f"<div><b>{_esc(row.get('side'))}</b> {_esc(row.get('setup_family'))} "
-            f"<span style='color:{muted}'>closed {_int(row.get('closed_setups'))}</span> "
+            f"<span style='color:{muted}'>{_esc(row.get('win_rate_headline'))}</span> "
             f"<span style='color:{edge_color}'>edge {_signed(edge)}R</span> "
             f"delta {_signed(_float(row.get('score_delta'), 0.0), decimals=0)}</div>"
         )
@@ -1580,9 +1712,175 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
     return "".join(parts)
 
 
-def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
-    """One unmissable line per horizon: the best performing setup right now —
-    swing (recent 30d realized R) and short-term (1-2 session follow-through)."""
+def _last_completed_session_or_today():
+    """The last completed exchange session, or today when the calendar refuses.
+
+    The calendar raises outside its validated range. A banner is not worth a
+    traceback, and falling back to today only ever makes the freshness test
+    STRICTER, never looser.
+    """
+    from datetime import datetime
+
+    import market_calendar
+
+    try:
+        return market_calendar.last_completed_session(
+            datetime.now(market_calendar.MARKET_TZ)
+        )
+    except Exception:
+        return datetime.now(market_calendar.MARKET_TZ).date()
+
+
+def _remembered_verdict(panel, rows, *, kind: str, last_completed_session, **kwargs):
+    """`select_leader`, with the panel's last FRESH verdict as `previous`.
+
+    This is what makes `last_reliable_reading` reachable from the desk. The
+    remembered verdict is replaced only when a new one is a `leader` off fresh
+    evidence, so a stale reading never overwrites the reading it is standing in
+    for, and a `no_clear_leader` never becomes a leader by being remembered.
+    """
+    from working_lately import select_leader
+
+    previous = panel._last_fresh_verdicts.get(kind)
+    verdict = select_leader(
+        rows,
+        kind=kind,
+        last_completed_session=last_completed_session,
+        previous=previous,
+        **kwargs,
+    )
+    if verdict.state == "leader":
+        panel._last_fresh_verdicts[kind] = verdict
+    return verdict
+
+
+def _verdict_block_html(
+    verdict, *, label: str, muted: str, side_color
+) -> str:
+    """One horizon's line, straight off a `working_lately.LeaderVerdict`.
+
+    Four states, four sentences, and the word "leader" never appears beside a
+    row that is not one.
+
+    **`label` is the HORIZON only**; the state is appended here from the verdict
+    (re-review blocker 2). The caller used to hardcode "2-session discovery",
+    which then sat over a real `leader` verdict and called it discovery.
+    """
+    from working_lately import discovery_basis_phrase, discovery_note, verdict_label_suffix
+
+    label = f"{label}, {verdict_label_suffix(verdict)}"
+    if verdict.state in {"leader", "last_reliable_reading"} and verdict.leader is not None:
+        row = verdict.leader
+        stamp = (
+            ""
+            if verdict.state == "leader"
+            else f" <span style='color:{muted}'>[as of {_esc(verdict.as_of)}]</span>"
+        )
+        return (
+            f"<div><b>{_esc(label)}:</b> "
+            f"<span style='color:{side_color(row.get('side'))}'><b>{_esc(row.get('side'))}</b></span> "
+            f"<b>{_esc(row.get('setup_family'))}</b>{stamp}"
+            f"<div style='color:{muted}; margin-left:14px'>{_esc(verdict.policy_line)}</div></div>"
+        )
+
+    discovery = verdict.coverage.get("discovery_leader")
+    if discovery is not None:
+        wins = _int(discovery.get("n_wins"))
+        losses = _int(discovery.get("n_losses"))
+        reason = verdict.coverage.get("discovery_reason") or ""
+        head = (
+            f"No leader at the n={verdict.coverage.get('min_n')} floor"
+            if reason == "floor"
+            else "No leader"
+        )
+        # A row kept out for being OLD is not thin - it has the evidence, it is
+        # just not current, and calling it thin misnames the gate (re-review
+        # advisory 1).
+        basis = discovery_basis_phrase(reason)
+        # ...and the extra sentence a discovery row earns, which for exactly
+        # one reason is "the export carries no measured session". It lives
+        # beside the phrase that names the same gate, so a caller can no longer
+        # pass one that does not match (re-check advisory 2). Printing it beside
+        # "58 sessions behind" was two contradictory facts in one line.
+        note = discovery_note(reason)
+        return (
+            f"<div style='color:{muted}'><b>{_esc(label)}:</b> {_esc(head)} - "
+            f"{_esc(basis)}: "
+            f"<span style='color:{side_color(discovery.get('side'))}'>"
+            f"<b>{_esc(discovery.get('side'))}</b></span> "
+            f"<b>{_esc(discovery.get('setup_family'))}</b> "
+            f"(n={wins + losses}), discovery only."
+            f"{(' ' + _esc(note)) if note else ''}"
+            f"<div style='margin-left:14px'>{_esc(verdict.reason)}</div></div>"
+        )
+    return (
+        f"<div style='color:{muted}'><b>{_esc(label)}:</b> "
+        f"{_esc(_VERDICT_HEADLINES.get(verdict.state, 'No verdict'))} - "
+        f"{_esc(verdict.reason)}</div>"
+    )
+
+
+#: The one spelling of each state, so the banner never invents a fifth.
+_VERDICT_HEADLINES = {
+    "leader": "Leader",
+    "no_clear_leader": "No clear leader",
+    "last_reliable_reading": "Last reliable reading",
+    "no_evidence": "No clear leader yet",
+}
+
+
+def panel_verdicts(panel: SetupTrackerPanel) -> dict[str, Any]:
+    """Both horizons' verdicts, computed ONCE for the whole Summary page.
+
+    **Re-review blocker 1.** The banner went through `_remembered_verdict` (which
+    carries a `previous`, so a stale refresh becomes `last_reliable_reading`)
+    while the plain-English card called `select_leader` directly with no
+    `previous` - so on the stale path the card printed *"no clear leader.
+    Leading on thin evidence, SHORT general on n=88 - discovery only"* directly
+    above the banner's *"SHORT general [last reliable reading, as of
+    2026-09-04]"*. Two renderers computing the same thing will disagree the
+    moment one of them gains an argument; there is now exactly one computation
+    per page and both renderers are handed the same objects.
+    """
+    from working_lately import short_term_evidence_rows
+
+    last_session = _last_completed_session_or_today()
+    return {
+        "swing": _remembered_verdict(
+            panel,
+            panel.recent_type_rows,
+            kind="swing",
+            last_completed_session=last_session,
+        ),
+        # The two-session block reads the same function with its own floor - the
+        # panel's `SHORT_TERM_MIN_SAMPLES`, passed in rather than re-declared.
+        # Since the ST2 fix round the short-horizon export carries its own
+        # counts and its own MEASURED session, so this block is judged for
+        # freshness too; a row from an OLDER file stays undated.
+        "swing_short_term": _remembered_verdict(
+            panel,
+            short_term_evidence_rows(panel.short_term_rows),
+            kind="swing_short_term",
+            last_completed_session=last_session,
+            min_n=SHORT_TERM_MIN_SAMPLES,
+        ),
+    }
+
+
+def _best_now_banner_html(panel: SetupTrackerPanel, verdicts: dict[str, Any] | None = None) -> str:
+    """One unmissable line per horizon, and it agrees with the table beneath it.
+
+    **ST2.3.** This used to pick `max(avg_closed_r)` over any row with three
+    closed setups, across the live AND study namespaces, while the table
+    underneath ranked by the Wilson lower bound - so on the same screen the
+    banner crowned `fat_but_wide` (+2.50R on 90, bound 0.497) and the table
+    listed `tight_and_hot` first (bound 0.627 on 30), and a three-example STUDY
+    with a big R could be presented as the desk's best performer. It now reads
+    `working_lately.select_leader` on the SAME rows in the SAME order, so the
+    two cannot disagree; a study is never the leader and its exclusion is
+    counted out loud; and when nothing is eligible the banner says which gate
+    closed instead of crowning whoever was left.
+    """
     muted = theme.color("text_secondary")
     favorite_c = theme.color("favorite")
     long_c = theme.color("long")
@@ -1591,52 +1889,44 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
     def _side_color(side: Any) -> str:
         return long_c if str(side or "").upper() == "LONG" else short_c
 
-    swing_row = next(
-        (
-            row
-            for row in sorted(panel.recent_type_rows, key=lambda r: -_float(r.get("avg_closed_r"), -1e9))
-            if _int(row.get("closed_setups")) >= 3 and _float(row.get("avg_closed_r")) is not None
-        ),
-        None,
-    )
-    short_row = next(
-        (
-            row
-            for row in panel.short_term_rows
-            if _int(row.get("samples_2d")) >= SHORT_TERM_MIN_SAMPLES and _float(row.get("avg_r_2d")) is not None
-        ),
-        None,
-    )
+    if verdicts is None:
+        verdicts = panel_verdicts(panel)
+    swing_verdict = verdicts["swing"]
+    short_verdict = verdicts["swing_short_term"]
 
     parts = [
         f"<div style='border:1px solid {favorite_c}; padding:6px; margin-bottom:6px'>",
         f"<b style='color:{favorite_c}; font-size:10pt'>BEST PERFORMING RIGHT NOW</b>",
     ]
-    if short_row is not None:
-        parts.append(
-            f"<div><b>Short-term (1-2d):</b> "
-            f"<span style='color:{_side_color(short_row.get('side'))}'><b>{_esc(short_row.get('side'))}</b></span> "
-            f"<b>{_esc(short_row.get('setup_family'))}</b> "
-            f"{_signed(_float(short_row.get('avg_r_2d')))}R@2d, win {_pct(short_row.get('win_rate_2d'))} "
-            f"<span style='color:{muted}'>(n={_int(short_row.get('samples_2d'))}, "
-            f"last 30d {_signed(_float(short_row.get('recent_avg_r_2d')))}R)</span></div>"
+    # **No conditional.** `_verdict_block_html` renders all four states, and the
+    # guard that used to sit here ("a discovery row OR a leader, else a
+    # hardcoded sentence") dropped `no_clear_leader` - today's live short-term
+    # state, 12 eligible families with the top two 0.001 of bound apart - into
+    # "not enough 2-session samples yet", which was false AND contradicted the
+    # card three lines above saying "no clear leader". A renderer that has a
+    # verdict must render the verdict.
+    parts.append(
+        _verdict_block_html(
+            short_verdict,
+            label="Short-term (1-2d)",
+            muted=muted,
+            side_color=_side_color,
         )
-    else:
-        parts.append(
-            f"<div style='color:{muted}'><b>Short-term (1-2d):</b> not enough 2-session samples yet "
-            f"(accrues automatically each scan).</div>"
+    )
+    parts.append(
+        _verdict_block_html(
+            swing_verdict,
+            label="Swing (30d realized)",
+            muted=muted,
+            side_color=_side_color,
         )
-    if swing_row is not None:
+    )
+    excluded = _int(swing_verdict.coverage.get("studies_excluded"))
+    if excluded:
         parts.append(
-            f"<div><b>Swing (30d realized):</b> "
-            f"<span style='color:{_side_color(swing_row.get('side'))}'><b>{_esc(swing_row.get('side'))}</b></span> "
-            f"<b>{_esc(swing_row.get('setup_family'))}</b> "
-            f"{_signed(_float(swing_row.get('avg_closed_r')))}R closed, target hit {_pct(swing_row.get('target_hit_rate'))} "
-            f"<span style='color:{muted}'>(closed {_int(swing_row.get('closed_setups'))})</span></div>"
-        )
-    else:
-        parts.append(
-            f"<div style='color:{muted}'><b>Swing (30d realized):</b> not enough closed setups in the last 30 days.</div>"
+            f"<div style='color:{muted}'>{excluded} study famil"
+            f"{'y' if excluded == 1 else 'ies'} excluded from the leader - an "
+            f"unpromoted idea never leads, whatever its R.</div>"
         )
 
     # Freshly promoted families + not-yet-favorite outperformers: the upgrade
@@ -1663,9 +1953,19 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
 
 
 def _best_type_label(rows: list[dict[str, Any]]) -> str:
+    """The tile is "Best Type EDGE", so it picks the biggest `score_delta`.
+
+    **It reads its own meaning, not the table's first row** (ST2 fix round).
+    It used to take `rows[0]`, which was fine only while the tab happened to be
+    sorted by `score_delta`; ST2.2 changed that sort to the Wilson lower bound
+    inside each side, and the tile silently changed with it - on the live export
+    from `SHORT +23` to `LONG +14`, a number the trader would have read as the
+    edge falling by nine points when nothing had moved at all. A tile that
+    borrows another surface's ordering has no meaning of its own.
+    """
     if not rows:
         return "-"
-    row = rows[0]
+    row = max(rows, key=lambda item: _float(item.get("score_delta"), 0.0) or 0.0)
     delta = _float(row.get("score_delta"), 0.0)
     return f"{_esc(row.get('side'))} {delta:+.0f}"
 
@@ -1751,6 +2051,58 @@ def expired_unmeasured_sentence(rows: list[dict[str, Any]]) -> str:
     if total <= 0:
         return ""
     return f"{total} expired unmeasured, excluded"
+
+
+def setup_type_population_sentence(rows: list[dict[str, Any]]) -> str:
+    """What the Setup Types tab's Win % column MEANS, above the table - ST2.2.
+
+    The trader's requirement: *"Show side, outcome meaning, actual measurement
+    horizon, window, and coverage."* A win column with no stated outcome
+    definition is the same defect as a rate with no n - a control row, a study
+    row and a pick row all look identical in a table, and so do a target-hit
+    rate and a win rate.
+
+    Every number here is summed from the export's OWN columns; this never opens
+    the 1.1 GB tracker JSON. M3's `expired unmeasured, excluded` clause is kept
+    verbatim at the end (gate #72 clause 5 reads it).
+    """
+    from working_lately import counted_pair
+
+    wins = losses = flats = unmeasured = pending = 0
+    counted_rows = 0
+    for row in rows:
+        # `counted_pair` is the ONE reader of these columns, and it is strict:
+        # a MISSING or BLANK cell is None, while an exported integer 0 is a
+        # count. A `str(...) or ""` truthiness check reads a real 0 as "not
+        # exported" and would silently drop every row that went 0-0.
+        pair = counted_pair(row)
+        if pair is None:
+            continue
+        counted_rows += 1
+        wins += pair[0]
+        losses += pair[1]
+        flats += _int(row.get("n_flats"))
+        unmeasured += _int(row.get("n_unmeasured"))
+        pending += _int(row.get("n_pending"))
+    expired = expired_unmeasured_sentence(rows) or "0 expired unmeasured"
+    if not counted_rows:
+        head = (
+            f"{len(rows):,} setup-type row(s); no win/loss counts in this export "
+            f"yet - the Win % column fills on the next tracker write."
+        )
+        return f"{head} {expired}".strip()
+    kind = _first_non_empty(rows, "outcome_kind") or "trade_r_representative_exit"
+    head = (
+        f"{counted_rows:,} setup-type row(s) at (side, bucket, family, zone, "
+        f"retest, compression) grain, over ALL HISTORY in the tracker (this tab "
+        f"has no lately window; the Last 30 Days tab is the windowed view); "
+        f"Win % is each row's OWN {wins:,} win(s) / {losses:,} loss(es) - "
+        f"outcome {kind} (the sign of the representative protective-stop "
+        f"scenario's closed R) - with {flats:,} flat, {unmeasured:,} "
+        f"closed-unmeasured and {pending:,} still open, none of them counted as "
+        f"a loss. Sorted by the Wilson lower bound inside each side."
+    )
+    return f"{head} {expired}".strip()
 
 
 def _latest_mtime_text(paths: list[Path]) -> str:

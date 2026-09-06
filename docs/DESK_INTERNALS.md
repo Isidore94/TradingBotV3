@@ -1542,6 +1542,166 @@ measurement and the reasoning behind each rule.
 
 **Headline statistics and the priority switch (V3, decision 0016)**
 
+- **The banner crowned max R on three and the table invented a count** (ST2,
+  2026-09-06). Two defects on one screen, both reproduced through the real code
+  before anything was changed.
+
+  *The invented count.* `legacy.build_recent_tracker_setup_family_rows` computes
+  `win_rate_closed` as a RECENCY-WEIGHTED mean of win flags - `exp(-ln2 *
+  age_days / 14.0)` times `TRACKER_REGIME_MISMATCH_WEIGHT` on a regime mismatch -
+  and the Setup Tracker's panel handed that rate to
+  `swing_headline.headline_from_rate`, whose whole job is to recover the integer
+  pair Wilson needs as `round(rate * n)`. That is exact when the stored rate was
+  computed as `wins / n`, which is how the veto and like cohort CSVs write theirs.
+  It is not how this one is written. Measured through the real writer: two
+  28-day-old wins at weight .25 plus two same-day losses at weight 1.0 give
+  **0.2**, and the cell printed **`25% (>=5%, n=4)`** - a 1-of-4 that never
+  happened, carrying a Wilson lower bound computed from it - where the family had
+  gone **2-2, 50%**. The fix is not a better reconstruction; there is no such
+  thing. The builders now export `n_wins` / `n_losses` / `n_flats` /
+  `n_unmeasured` / `n_pending` at each table's own grain, counted in the SAME
+  loop that builds `win_flags` so the counted and the weighted readings can never
+  read different episodes, and the panel uses `headline_from_counts`. The
+  weighted rate stays on the table under **Win % (recency-weighted)** beside
+  **Win % (unweighted)**: it is a real number that answers a different question,
+  and deleting it would be the mirror of the original mistake. A row from an
+  export written before the columns existed says **`counts not exported yet`**.
+  `headline_from_rate` survives for its legitimate callers and its docstring now
+  names them and forbids a weighted rate.
+
+  *The crown on three examples.* `_best_now_banner_html` picked
+  `max(avg_closed_r)` over any row with three closed setups, across the live AND
+  study namespaces, while the table directly underneath already ranked by the
+  Wilson lower bound. On the fixture that reproduces it the table lists
+  `tight_and_hot` (24-6, bound 0.627) first and the banner crowned
+  `fat_but_wide` (54-36 at +2.50R, bound 0.497); worse, a three-example STUDY
+  with a big R could be presented as the desk's best performer, which is exactly
+  the confusion between "interesting" and "working" that plan.md sec 7's
+  promotion ladder exists to prevent. Both now read
+  `working_lately.select_leader` on the same rows in the same order, so they
+  cannot disagree. **`LEADER_MARGIN_LB` = 0.05** (five points of *lower bound*,
+  not of raw rate: two rates can differ by fifteen points and still be one sample
+  apart when one is thin, and the bound is the number that already knows that)
+  and **`LEADER_FRESHNESS_SESSIONS` = 2** (one weekend plus a holiday; the
+  tracker writes at the close slot, so a reading older than that is news about
+  the desk, not about the family) were both declared 2026-09-06 BEFORE any
+  forward evaluation and are not tuned to make a winner appear. Four states, each
+  naming the gate that closed: `leader`, `no_clear_leader` (the reason names BOTH
+  families and the gap - printing the winner of a coin flip is how a banner
+  starts lying), `last_reliable_reading` (a stale input plus a `previous`
+  verdict; the leader and the `as_of` are the previous one's, unchanged) and
+  `no_evidence`. Lead decision the same day: `min_n` is an ARGUMENT (default
+  `MIN_REPORTABLE_N`) so the two-session block passes `SHORT_TERM_MIN_SAMPLES`
+  without declaring a second statistics contract, and a `no_evidence` verdict
+  carries `coverage["discovery_leader"]` - the best live row that was kept out -
+  which the banner prints as `No leader at the n=30 floor - leading on thin
+  evidence: <side> <family> (n=12), discovery only`. **Never the word leader for
+  it, and never beside a real one.** A NEW/RISING pin stays a NOVELTY badge on
+  the table and is not an input to the leader.
+
+  *The same defect, three more times.* The reviewer's NO-GO found it surviving
+  wherever the packet had not looked, which is the lesson worth keeping: fixing
+  the surface a defect was REPORTED on does not fix the defect. The Summary
+  card's plain-English block (`research_explanations`) sat THREE LINES ABOVE the
+  repaired banner still crowning `max(avg_closed_r)` on three closes across both
+  namespaces - live it read *"LONG top_pattern leads at +0.99R ... 3 closes"*
+  under a banner saying *"SHORT general"*, with 10 of its 17 candidates studies.
+  The **Best Type Edge** tile read `setup_type_rows[0]`, so ST2.2's new
+  bound-first sort silently moved it from `SHORT +23` to `LONG +14` - a tile
+  that borrows another surface's ordering has no meaning of its own, and it now
+  picks max `score_delta` explicitly. The Summary's **Setup types working**
+  block took `rows[:8]` of that same side-first list and so showed eight LONG
+  rows and no SHORT one (the first SHORT row sat at index 68 of 117); the CARD
+  now picks its eight by the bound across BOTH books, with the side shown, while
+  the TAB keeps side-first - a table you scroll and a card that shows eight are
+  different questions asked of the same rows.
+
+  *And twice more, in the re-review.* Both were the same shape as the three
+  above: a surface computing for itself what the page had already decided. The
+  plain-English card called `select_leader` directly while the banner went
+  through `_remembered_verdict`, which carries a `previous` - so on a STALE
+  refresh the card printed *"no clear leader. Leading on thin evidence, SHORT
+  general on n=88 - discovery only"* three lines above the banner's *"SHORT
+  general [last reliable reading, as of 2026-09-04]"*. Two renderers computing
+  the same thing will disagree the moment one of them gains an argument, so
+  `panel_verdicts(panel)` computes each horizon ONCE in `_summary_html` and both
+  renderers are handed the same objects; `build_plain_english_whats_working`
+  takes `verdicts=` and only computes its own when a caller has none. The second
+  was a LABEL that did not come from its verdict: the 2-session block hardcoded
+  "2-session discovery", which then sat over a real `leader`, and printed "the
+  export carries no session, so its freshness is unstated" beside "its newest
+  measured session is 58 sessions behind" - two contradictory facts in one line.
+  The label is now the horizon plus `verdict_label_suffix(verdict)`, and the
+  no-session sentence renders only when the gate was `no_session`.
+
+  *"Old" is not "thin".* `discovery_basis_phrase` gives one phrase per gate -
+  **leading on older evidence** for a stale row, **undated** for one with no
+  session, **thin** only under the floor - used by both renderers. A row kept
+  out for being old HAS the evidence; calling it thin names the wrong gate,
+  which is the same class of error as calling a weighted rate a count.
+
+  *A measured date, where the export can answer it.* Freshness was being read
+  off the ENTRY session everywhere, which is right for the recent family rows -
+  they carry no exit date, and a family whose newest entry is old cannot have a
+  newer measured close - but wrong for the 2-session block, where it made a
+  family entered eight weeks ago and MEASURED two sessions later read as 58
+  sessions stale on a file written that morning.
+  `legacy._short_horizon_measured_session` reads the trade date of
+  `post_marks[horizon - 1]`, the same mark the R itself was computed from, and
+  an episode whose marks cannot answer leaves the field EMPTY - undated, which
+  reads as not fresh, never a guess. The recent rows keep entry dating until ST4
+  lands `representative_exit_date`, and `LEADER_FRESHNESS_SESSIONS`' comment
+  says so rather than leaving the difference to be discovered. The short-horizon
+  export's identity, stated because a reader summing it wrong is the next
+  defect: `n_wins + n_losses + n_flats == samples_2d`, and
+  `samples_2d + n_unmeasured == tracked_setups`.
+
+  *And once more: a renderer that has a verdict must render it.* The re-check
+  found the banner's short-term block still guarded on "a discovery row OR a
+  leader", falling through to a hardcoded *"not enough 2-session samples yet
+  (accrues automatically each scan)"*. `no_clear_leader` matches neither
+  condition, and it is the LIVE state for that horizon - twelve eligible
+  families with the top two 0.001 of bound apart - so the banner said "no
+  samples" three lines under a card saying "no clear leader". Both statements
+  were on one screen and one of them was false. The conditional is gone. The
+  general rule: a special case written beside a state machine will eventually
+  contradict it, and a hardcoded sentence is a state the machine does not know
+  about.
+
+  *One clock per surface, named.* `FRESHNESS_SENTENCE` was a single constant
+  saying "measured inside 2 sessions" while only the 2-session rows are
+  measured-dated - so the swing line claimed a clock it does not have.
+  `freshness_sentence(kind)` reads `DATING_BASIS_BY_KIND` and says
+  **entry-dated** on the swing line, **measured** on the 2-session one, and
+  entry-dated for any kind it does not know, which is the conservative reading
+  rather than the flattering one. When ST4's `representative_exit_date` lands
+  the swing entry flips to `"measured"` and the sentence follows on its own.
+
+  *The floor is judged BEFORE the clock.* A family with three samples is under
+  the floor whatever the clock says, and answering "not fresh" to three samples
+  answers a question the reader did not ask. So `select_leader` splits
+  `at_floor` / `under_floor` first and only dates the at-floor rows; the
+  discovery pools and the reason branches run in the same order (stale, undated,
+  thin), so the sentence a verdict prints always names the gate that kept out the
+  row it is showing, and a row that CLEARS the floor and is merely old outranks a
+  current row with three samples. `min_n` therefore binds the stale and undated
+  pools by construction. **Freshness is measured on the ENTRY session** - these
+  rows carry no exit date, so `latest_measured_session` is the newest scan_date
+  among the episodes that produced a readable R, which is the conservative
+  reading - and `FRESHNESS_SENTENCE` says so on every surface, because "fresh"
+  without its clock is not a fact.
+
+  *What was NOT changed.* `ranking_score`, `score_delta`, the Expected-R
+  calibration and every pre-existing column of all THREE exports, pinned
+  byte-identical by goldens taken from `main` at `84ee24d6`: the two row goldens,
+  a shipped-header golden (the count columns belong at the END of the header the
+  trader opens, not at the end of the inner builder - they had landed at index 26
+  of 31 and 31 of 39), and `st2_short_horizon_golden.csv`. The two-session
+  export gained the same additive counts plus its own `latest_measured_session`
+  on the trader's answered ask, so that block is freshness-checked rather than
+  discovery by construction; `win_rate_2d` keeps its value, including its
+  treatment of an exactly-flat close as a zero flag, because moving it would be a
+  scoring change and this packet may not make one.
 - **The priority switch reorders and never withholds** - and it is **NOT BUILT
   YET** (V4 owns it; R4 B3 removed the sentence that cited a test for it). When
   it is built: "prioritise what is working" is display-only (decision 0016

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from evidence_stats import MIN_REPORTABLE_N
 from setup_docs import resolve_setup_doc
 
 
@@ -230,6 +231,93 @@ def build_research_explanation(kind: str, row: Mapping[str, Any] | None) -> dict
     return _generic_research_explanation(normalized, item)
 
 
+def _verdict_bullet(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    kind: str,
+    label: str,
+    min_n: int,
+    last_completed_session=None,
+    verdict=None,
+) -> str:
+    """One plain-English line straight off `working_lately.select_leader`.
+
+    **ST2 fix round.** This block sits THREE LINES ABOVE the "BEST PERFORMING
+    RIGHT NOW" banner, and it used to crown `max(avg_closed_r)` over any family
+    with three closes across BOTH namespaces - the exact defect ST2.3 removed
+    from the banner. On the live export it read *"LONG top_pattern leads at
+    +0.99R ... 3 closes"* while the banner right underneath said *"SHORT
+    general"*, and 10 of its 17 candidates were STUDIES. Two leaders on one
+    card, one of them an unpromoted idea, is worse than no leader at all.
+
+    It now reads the SAME verdict as the banner, so the two cannot disagree, and
+    a state that is not `leader` is printed as the state - never as a crown.
+
+    **``verdict`` is passed in by the Setup Tracker**, which computes both
+    horizons once per page (re-review blocker 1). Computing it here instead
+    dropped the caller's ``previous``, so on a stale refresh this card printed
+    "no clear leader ... discovery only" three lines above the banner's "last
+    reliable reading". Only a caller with no verdict of its own makes one here.
+    """
+    from working_lately import discovery_basis_phrase, select_leader
+
+    if last_completed_session is None:
+        from datetime import datetime
+
+        import market_calendar
+
+        try:
+            last_completed_session = market_calendar.last_completed_session(
+                datetime.now(market_calendar.MARKET_TZ)
+            )
+        except Exception:
+            # MARKET-local, the same fallback the panel uses. `date.today()` is
+            # machine-local, and on this desk (PT) that is a different day from
+            # market-local for three hours every evening (advisory 3).
+            last_completed_session = datetime.now(market_calendar.MARKET_TZ).date()
+
+    if verdict is None:
+        verdict = select_leader(
+            rows, kind=kind, last_completed_session=last_completed_session, min_n=min_n
+        )
+
+    def _mean_r(row) -> str:
+        """Mean R beside the win rate, never instead of it (decision 0016)."""
+        for field in ("avg_closed_r", "avg_r_2d"):
+            if row.get(field) not in (None, ""):
+                return f" Mean {_signed(row.get(field), 'R')}."
+        return ""
+
+    if verdict.state in {"leader", "last_reliable_reading"} and verdict.leader is not None:
+        row = verdict.leader
+        stamp = (
+            "" if verdict.state == "leader" else " (the last reliable reading, not today's)"
+        )
+        return (
+            f"{label}: {_text(row.get('side')).upper()} {_text(row.get('setup_family'))} "
+            f"leads{stamp}. {verdict.policy_line}.{_mean_r(row)}"
+        )
+    discovery = verdict.coverage.get("discovery_leader")
+    floor_note = (
+        f" It is under the minimum sample floor of n={min_n}, so read it as discovery."
+        if verdict.coverage.get("discovery_reason") == "floor"
+        else ""
+    )
+    if discovery is not None:
+        wins = _int(discovery.get("n_wins"))
+        losses = _int(discovery.get("n_losses"))
+        # The SAME phrase the banner uses, from the same helper, so the two
+        # never name the gate differently (advisory 1).
+        basis = discovery_basis_phrase(verdict.coverage.get("discovery_reason"))
+        return (
+            f"{label}: no clear leader. {basis.capitalize()}, "
+            f"{_text(discovery.get('side')).upper()} "
+            f"{_text(discovery.get('setup_family'))} on n={wins + losses} - "
+            f"discovery only.{floor_note}{_mean_r(discovery)}"
+        )
+    return f"{label}: no clear leader. {verdict.reason}{floor_note}"
+
+
 def build_plain_english_whats_working(
     *,
     current_rows: Sequence[Mapping[str, Any]] = (),
@@ -237,8 +325,16 @@ def build_plain_english_whats_working(
     recent_rows: Sequence[Mapping[str, Any]] = (),
     playbook_rows: Sequence[Mapping[str, Any]] = (),
     short_term_min_samples: int = 6,
+    last_completed_session=None,
+    verdicts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Summarize qualified measured leaders without filling empty slots."""
+    """Summarize qualified measured leaders without filling empty slots.
+
+    The two LEADER bullets - short-term and swing - go through
+    `working_lately.select_leader`, the one decision the Setup Tracker's banner
+    also reads, so this card and the banner beneath it can never name different
+    families or crown a study (ST2 fix round, 2026-09-06).
+    """
 
     bullets: list[str] = []
     ready = [row for row in current_rows if _text(row.get("tier")).upper() in {"S", "A"}]
@@ -248,35 +344,29 @@ def build_plain_english_whats_working(
     else:
         bullets.append("No current setup has cleared the S/A quality gate. An empty ready list is the honest result.")
 
-    short_candidates = [
-        row
-        for row in short_term_rows
-        if _int(row.get("samples_2d")) >= short_term_min_samples and (_float(row.get("avg_r_2d")) or 0.0) > 0
-    ]
-    if short_candidates:
-        best = max(short_candidates, key=lambda row: _float(row.get("avg_r_2d")) or -1e9)
-        bullets.append(
-            f"For the first two sessions, {_text(best.get('side')).upper()} {_text(best.get('setup_family'))} "
-            f"is strongest: {_signed(best.get('avg_r_2d'), 'R')} average, "
-            f"{_percent(best.get('win_rate_2d'))} wins, n={_int(best.get('samples_2d'))}."
-        )
-    else:
-        bullets.append("No short-term setup has both positive two-session R and the minimum sample floor yet.")
+    from working_lately import short_term_evidence_rows
 
-    swing_candidates = [
-        row
-        for row in recent_rows
-        if _int(row.get("closed_setups")) >= 3 and (_float(row.get("avg_closed_r")) or 0.0) > 0
-    ]
-    if swing_candidates:
-        best = max(swing_candidates, key=lambda row: _float(row.get("avg_closed_r")) or -1e9)
-        bullets.append(
-            f"Among recently closed swings, {_text(best.get('side')).upper()} {_text(best.get('setup_family'))} "
-            f"leads at {_signed(best.get('avg_closed_r'), 'R')} average with "
-            f"{_percent(best.get('target_hit_rate'))} target hits across {_int(best.get('closed_setups'))} closes."
+    supplied = verdicts or {}
+    bullets.append(
+        _verdict_bullet(
+            short_term_evidence_rows(short_term_rows),
+            kind="swing_short_term",
+            label="For the first two sessions",
+            min_n=short_term_min_samples,
+            last_completed_session=last_completed_session,
+            verdict=supplied.get("swing_short_term"),
         )
-    else:
-        bullets.append("No recent swing family has at least three closes and positive average R yet.")
+    )
+    bullets.append(
+        _verdict_bullet(
+            recent_rows,
+            kind="swing",
+            label="Among recently closed swings",
+            min_n=MIN_REPORTABLE_N,
+            last_completed_session=last_completed_session,
+            verdict=supplied.get("swing"),
+        )
+    )
 
     play_candidates = [
         row

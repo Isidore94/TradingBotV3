@@ -803,6 +803,75 @@ STUDY_SETUP_MAX_RECORDS = 4000
 STUDY_DISCOVERY_MIN_CLOSED_EPISODES = 5
 TRACKER_RECENT_FAMILY_LOOKBACK_DAYS = 28
 TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
+#: The ST2 count columns, in the order they are appended.
+#:
+#: They must land at the END of the SHIPPED header of each export, not at the
+#: end of the builder that first computes them - the recent rows gain
+#: `namespace` / `status` from `build_recent_setup_type_stat_rows` afterwards,
+#: and the setup-type rows gain `ranking_score` / `score_delta` from
+#: `rank_tracker_setup_type_rows` afterwards, so appending inside the inner
+#: builder wedged the new columns into the MIDDLE of the file a reader opens
+#: (index 26 of 31, and index 31 of 39). `_move_keys_to_end` is applied once
+#: per export, at the last hand that touches the row.
+TRACKER_RECENT_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "n_observations",
+    "n_episodes",
+    "n_symbols",
+    "n_entry_sessions",
+    "n_pending",
+    "win_rate_closed_unweighted",
+    "win_rate_closed_basis",
+    "outcome_kind",
+    "horizon_basis",
+    "latest_measured_session",
+)
+
+TRACKER_SETUP_TYPE_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "n_pending",
+    "win_rate",
+    "outcome_kind",
+)
+
+TRACKER_SHORT_HORIZON_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "outcome_kind",
+    "horizon_basis",
+    "latest_measured_session",
+)
+
+
+def _move_keys_to_end(row: dict, keys) -> dict:
+    """Re-insert ``keys`` at the end of ``row``, in order. Values untouched.
+
+    A dict preserves insertion order and `pd.DataFrame(rows)` writes the CSV
+    header in that order, so this is what decides where a column lands in the
+    file the trader opens.
+    """
+    for key in keys:
+        if key in row:
+            row[key] = row.pop(key)
+    return row
+
+
+#: WHAT a win on a tracker family / setup-type row IS (ST2, 2026-09-06).
+#:
+#: One string, stamped on both exports, because "win rate" without its outcome
+#: definition is not a statistic: this one is the sign of the REPRESENTATIVE
+#: (primary protective stop) scenario's closed R - the single stop you would
+#: actually have traded - and not the cross-variant average, not a percent move
+#: and not a target-hit rate. Units carry their name: this is R.
+TRACKER_REPRESENTATIVE_OUTCOME_KIND = "trade_r_representative_exit"
 # Short-horizon (1-2 session) outcome marks. Most tracked setups are swing
 # setups that need days/weeks to resolve; these scalars capture what each setup
 # did in its first 1-2 sessions after entry so a separate short-term playbook
@@ -7737,6 +7806,24 @@ def build_recent_tracker_setup_family_rows(
     if not recent_rows:
         return []
 
+    # ST2.1: OBSERVATIONS, before the collapse below turns them into episodes.
+    # The exported row has always called the post-dedupe number
+    # `tracked_setups`, which reads as "how many setups are behind this", so the
+    # pre-dedupe count had no name at all and nobody could see how much
+    # correlated re-scanning a family carried. Counted per family group here
+    # because after the collapse the information is gone.
+    def _family_group_key(row: dict) -> tuple[str, str, str]:
+        return (
+            str(row.get("side") or ""),
+            str(row.get("priority_bucket") or ""),
+            str(row.get("setup_family") or "general"),
+        )
+
+    observation_counts: dict[tuple[str, str, str], int] = {}
+    for row in recent_rows:
+        key = _family_group_key(row)
+        observation_counts[key] = observation_counts.get(key, 0) + 1
+
     # Collapse correlated daily re-scans so each independent episode counts once
     # before any baseline/group statistics are computed.
     recent_rows = _dedupe_recent_tracker_family_rows(recent_rows)
@@ -7811,15 +7898,37 @@ def build_recent_tracker_setup_family_rows(
         )
         # Win rate + profit factor for the proven-quality score: judged on the
         # same representative (primary-stop) closed R the ExpR blend uses.
+        #
+        # ST2.1 rides along in this SAME loop, deliberately: the integer counts
+        # and the weighted rate must never be able to disagree about which
+        # episodes they read. `n_wins`/`n_losses` are UNWEIGHTED and a flat is
+        # its own fact - the weighted `win_rate_closed` keeps counting a 0.0R
+        # close as a zero flag, unchanged, because it is a scoring input.
         win_flags: list[tuple[float, float]] = []
         gross_win = 0.0
         gross_loss = 0.0
+        n_wins = 0
+        n_losses = 0
+        n_flats = 0
+        n_unmeasured = 0
+        latest_measured_session = ""
         for closed_row in closed_rows:
             rep_r = _coerce_float(closed_row.get("representative_closed_r"))
             if rep_r is None:
                 rep_r = _coerce_float(closed_row.get("avg_closed_r"))
             if rep_r is None:
+                # CLOSED and unreadable. Not a loss, and never silently one.
+                n_unmeasured += 1
                 continue
+            session = str(closed_row.get("scan_date") or "")
+            if session > latest_measured_session:
+                latest_measured_session = session
+            if rep_r > 0:
+                n_wins += 1
+            elif rep_r < 0:
+                n_losses += 1
+            else:
+                n_flats += 1
             weight = float(_coerce_float(closed_row.get("recency_weight")) or 1.0)
             win_flags.append((1.0 if rep_r > 0 else 0.0, weight))
             if rep_r > 0:
@@ -7898,6 +8007,43 @@ def build_recent_tracker_setup_family_rows(
         score_delta, raw_score = _derive_recent_tracker_family_score_delta(item, baseline)
         item["score_delta"] = int(score_delta)
         item["ranking_score"] = float(raw_score)
+
+        # ---- ST2.1: the integer counts, ADDITIVE AND AT THE END ------------
+        #
+        # Everything above is untouched and every column above keeps its value
+        # (golden: `tests/fixtures/st2_recent_rows_golden.csv`). What follows is
+        # the row's own population in integers, so no reader ever has to rebuild
+        # one from a rate again. `win_rate_closed` is a RECENCY-WEIGHTED mean
+        # (half life `TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS`), and
+        # `swing_headline.headline_from_rate` used to turn it back into
+        # `round(rate * n)`: two 28-day-old wins at weight .25 and two same-day
+        # losses at weight 1.0 gave 0.2, which the panel printed as "25% (n=4)"
+        # when the truth was 2-2. `win_rate_closed_basis` names the weighting so
+        # the weighted number can stay on the screen beside the counted one
+        # rather than pretending to be it.
+        n_episodes = len(rows_for_group)
+        item["n_wins"] = int(n_wins)
+        item["n_losses"] = int(n_losses)
+        item["n_flats"] = int(n_flats)
+        item["n_unmeasured"] = int(n_unmeasured)
+        item["n_observations"] = int(observation_counts.get(group_key, n_episodes))
+        item["n_episodes"] = int(n_episodes)
+        item["n_symbols"] = len({str(row.get("symbol") or "") for row in rows_for_group})
+        item["n_entry_sessions"] = len(
+            {str(row.get("scan_date") or "") for row in rows_for_group}
+        )
+        item["n_pending"] = int(n_episodes - len(closed_rows))
+        item["win_rate_closed_unweighted"] = (
+            n_wins / (n_wins + n_losses) if (n_wins + n_losses) > 0 else None
+        )
+        item["win_rate_closed_basis"] = "recency_weighted_half_life"
+        item["outcome_kind"] = TRACKER_REPRESENTATIVE_OUTCOME_KIND
+        item["horizon_basis"] = f"{max_age_days}d lookback, representative exit"
+        # Freshness input for `working_lately.select_leader`. These rows carry
+        # no exit date, so the newest ENTRY session among the COUNTED episodes
+        # is the honest answer and the conservative one: a family whose last
+        # entry is old cannot have a newer measured close than its own scan.
+        item["latest_measured_session"] = latest_measured_session
         family_rows.append(item)
 
     family_rows.sort(
@@ -10005,6 +10151,31 @@ def build_tracker_playbook_recommendation_rows(playbook_rows: list[dict]) -> lis
     return recommendations
 
 
+def _short_horizon_measured_session(setup: dict, horizon: int) -> str:
+    """The trade date of the BAR the ``r_close_{horizon}d`` mark was read from.
+
+    ST2 re-review, advisory 4. Freshness for the 2-session block was being read
+    off the ENTRY session, which makes a family that entered eight weeks ago and
+    was MEASURED two sessions later look permanently stale ("58 sessions
+    behind") on a file written this morning. Entry is the conservative answer
+    only when nothing better is reachable; here it is, because
+    ``daily_marks`` carry ``trade_date`` and the mark this R was computed from
+    is exactly ``post_marks[horizon - 1]`` - the same index
+    ``_build_tracker_short_horizon_summary`` reads the close from.
+
+    Returns "" when the marks cannot answer. Empty means UNDATED, which
+    ``working_lately.select_leader`` treats as not fresh - never a guess.
+    """
+    marks = [mark for mark in (setup.get("daily_marks") or []) if isinstance(mark, dict)]
+    if not marks:
+        return ""
+    entry_pos = next((idx for idx, mark in enumerate(marks) if bool(mark.get("is_entry_day"))), 0)
+    post_marks = marks[entry_pos + 1 :]
+    if len(post_marks) < horizon:
+        return ""
+    return str(post_marks[horizon - 1].get("trade_date") or "")
+
+
 def build_tracker_short_horizon_rows(
     setups: dict[str, dict],
     *,
@@ -10039,6 +10210,10 @@ def build_tracker_short_horizon_rows(
             "r_close_2d": _coerce_float(short_horizon.get("r_close_2d")),
             "mfe_r_2d": _coerce_float(short_horizon.get("mfe_r_2d")),
             "mae_r_2d": _coerce_float(short_horizon.get("mae_r_2d")),
+            # ST2 re-review: the session this episode was MEASURED on, not the
+            # one it was entered on. Internal to this function; the export
+            # carries the max of these as `latest_measured_session`.
+            "measured_session_2d": _short_horizon_measured_session(setup, 2),
         }
 
     reference_day = reference_date or datetime.now().date()
@@ -10070,6 +10245,36 @@ def build_tracker_short_horizon_rows(
         avg_r_2d = mean(r2_values) if r2_values else None
         median_r_2d = median(r2_values) if r2_values else None
         win_rate_2d = mean(1.0 if value > 0 else 0.0 for value in r2_values) if r2_values else None
+        # ---- ST2 fix round: this export's OWN integer counts ---------------
+        #
+        # The trader's ST2 requirement is "true integer wins/losses/flats/
+        # unmeasured at EACH table's actual episode and outcome grain", and the
+        # ask to extend it here was answered yes on 2026-09-06. Purely additive:
+        # `win_rate_2d` above keeps its value, INCLUDING its treatment of an
+        # exactly-flat 2-session close as a zero flag - it is an existing
+        # column and moving it would be a scoring change. The counts below hold
+        # a flat apart, because a scratch is not a loss.
+        #
+        # **The identity these four hold**, and the reason they are exported
+        # rather than derived by a reader: `n_wins + n_losses + n_flats ==
+        # samples_2d`, and `samples_2d + n_unmeasured == tracked_setups`. An
+        # episode with no readable 2-session close is UNMEASURED, never a loss.
+        #
+        # `latest_measured_session` is the newest session an episode in this
+        # group was MEASURED on - the trade date of the bar the 2-session R was
+        # read from, not the entry (ST2 re-review, advisory 4: entry dating made
+        # a family measured two sessions after an old entry read as 58 sessions
+        # stale on a file written this morning). Empty when the marks cannot
+        # say, which reads as UNDATED and never as fresh.
+        n_wins_2d = sum(1 for value in r2_values if value > 0)
+        n_losses_2d = sum(1 for value in r2_values if value < 0)
+        n_flats_2d = sum(1 for value in r2_values if value == 0)
+        n_unmeasured_2d = len(rows_for_group) - len(r2_rows)
+        latest_measured_session = ""
+        for measured_row in r2_rows:
+            session = str(measured_row.get("measured_session_2d") or "")
+            if session > latest_measured_session:
+                latest_measured_session = session
         short_term_score = None
         if avg_r_2d is not None:
             short_term_score = (
@@ -10103,6 +10308,16 @@ def build_tracker_short_horizon_rows(
                 "recent_avg_r_2d": mean(recent_r2_values) if recent_r2_values else None,
                 "short_term_score": short_term_score,
                 "sample_setups": "; ".join(sample_examples),
+                # ST2 fix round, additive AT THE END of the shipped header.
+                # Golden: `tests/fixtures/st2_short_horizon_golden.csv`, pinned
+                # from the code as it stood BEFORE these seven columns existed.
+                "n_wins": int(n_wins_2d),
+                "n_losses": int(n_losses_2d),
+                "n_flats": int(n_flats_2d),
+                "n_unmeasured": int(n_unmeasured_2d),
+                "outcome_kind": "trade_r_close_2d",
+                "horizon_basis": "2 sessions after entry, close to close",
+                "latest_measured_session": latest_measured_session,
             }
         )
 
@@ -10180,6 +10395,12 @@ def build_tracker_setup_type_rows(
             "closed": int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0) > 0,
             "avg_total_r": _coerce_float(outcome_summary.get("avg_total_r")),
             "avg_closed_r": _coerce_float(outcome_summary.get("avg_closed_r")),
+            # ST2.2: the SAME field the recent-family rows count on, so the two
+            # tables cannot disagree about what a win is. Internal to this
+            # function; the exported row carries the counts, not this.
+            "representative_closed_r": _coerce_float(
+                outcome_summary.get("representative_closed_r")
+            ),
             "any_target_hit": bool(outcome_summary.get("any_target_hit")),
             "any_stopped": bool(outcome_summary.get("any_stopped")),
             "current_band_zone": str(entry_attributes.get("levels.current_band_zone") or ""),
@@ -10288,6 +10509,40 @@ def build_tracker_setup_type_rows(
             if closed_rows
             else None
         )
+        # ---- ST2.2: this ROW'S OWN win count, at this row's own grain -------
+        #
+        # V3 item 1's owed seam. The export carried `target_hit_rate` and
+        # `stop_rate` - different questions - and no win column, so the only way
+        # to put a win rate on the Setup Types tab was to join one from
+        # `master_avwap_tier_outcomes.csv`, whose 184 rows collapse to 71
+        # (side, bucket, family, zone) groups: one joined rate would have
+        # repeated across up to six rows here and read as each row's own. These
+        # count the setups IN THIS GROUP and nothing else.
+        type_n_wins = 0
+        type_n_losses = 0
+        type_n_flats = 0
+        type_n_unmeasured = 0
+        for closed_row in closed_rows:
+            rep_r = _coerce_float(closed_row.get("representative_closed_r"))
+            if rep_r is None:
+                rep_r = _coerce_float(closed_row.get("avg_closed_r"))
+            if rep_r is None:
+                type_n_unmeasured += 1
+            elif rep_r > 0:
+                type_n_wins += 1
+            elif rep_r < 0:
+                type_n_losses += 1
+            else:
+                type_n_flats += 1
+        # Tradeable but not yet closed. The denominator this reconciles against
+        # is `tradeable_setups`, never `tracked_setups`: a setup with no
+        # tradeable scenario was never a trade and is in neither column.
+        type_n_pending = len(tradeable_rows) - len(closed_rows)
+        type_win_rate = (
+            type_n_wins / (type_n_wins + type_n_losses)
+            if (type_n_wins + type_n_losses) > 0
+            else None
+        )
         sample_rows = sorted(
             rows_for_group,
             key=lambda row: (
@@ -10376,10 +10631,26 @@ def build_tracker_setup_type_rows(
                     else None
                 ),
                 "sample_setups": "; ".join(sample_examples),
+                # ST2.2, additive at the end. Every column above keeps its
+                # value (golden: `tests/fixtures/st2_setup_type_rows_golden.csv`).
+                "n_wins": int(type_n_wins),
+                "n_losses": int(type_n_losses),
+                "n_flats": int(type_n_flats),
+                "n_unmeasured": int(type_n_unmeasured),
+                "n_pending": int(type_n_pending),
+                "win_rate": type_win_rate,
+                "outcome_kind": TRACKER_REPRESENTATIVE_OUTCOME_KIND,
             }
         )
 
-    return rank_tracker_setup_type_rows(setup_type_rows)
+    ranked = rank_tracker_setup_type_rows(setup_type_rows)
+    # ST2 fix round: `rank_tracker_setup_type_rows` appends `compression_flag`,
+    # `ranking_score`, `score_delta` and the rank columns, so the count columns
+    # are moved AFTER it and land at the end of the shipped header rather than
+    # in the middle of the file a reader opens.
+    for ranked_row in ranked:
+        _move_keys_to_end(ranked_row, TRACKER_SETUP_TYPE_COUNT_COLUMNS)
+    return ranked
 
 
 SCAN_FACTOR_HORIZONS = (1, 3, 5, 10)
@@ -12335,6 +12606,10 @@ def build_recent_setup_type_stat_rows(payload: dict) -> list[dict]:
         row["is_new_family"] = is_new
         row["is_rising_non_favorite"] = is_rising
         row["status"] = " ".join(part for part, flag in (("NEW", is_new), ("RISING", is_rising)) if flag)
+        # ST2 fix round: this is the LAST hand on the row, so the count columns
+        # are moved here and land at the end of the SHIPPED header rather than
+        # in the middle of the file, ahead of `namespace` and `status`.
+        _move_keys_to_end(row, TRACKER_RECENT_COUNT_COLUMNS)
 
     # Highlighted rows (with at least a little closed evidence) pin to the
     # top; below them the usual evidence-first ordering.
