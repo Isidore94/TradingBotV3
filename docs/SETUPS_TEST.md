@@ -19,6 +19,19 @@ measures outcomes with the house exit discipline (level stops with close-failure
 counts, band-2 partial / band-3 run / band-1 trail, 18-session time stop). Study
 families ride along in the tracker as measured-only rows.
 
+**Where to READ them (packet M5, 2026-09-05).** The study namespace has its own tab on
+the **Setup Tracker → Studies**, and the control holdout — the setups the scan REJECTED,
+which is the population that says whether the gate is throwing away edge — has one
+beside it under **Controls**. Both are fed by `master_avwap_study_discovery.csv` and
+`master_avwap_control_discovery.csv`, written in the tracker's own save pass from
+`build_study_discovery_rows` / `build_control_discovery_rows`. Win rate leads with its
+`n` and its Wilson lower bound, the tables sort BY the bound, mean R sits beside it, and
+each carries an all-history block plus a `lately` block of the last 20 sessions. A third
+tab, **Exit frameworks**, reads `master_avwap_exit_framework_stats.csv` and is where the
+`comparison_apr2026` experimental exit templates finally sit beside the baseline ones on
+the same setups. All three are shadow evidence: a study or control row carries no
+scoring weight and is never a pick, and each tab says so above its table.
+
 **2. Backfill: the playbook study** (`scripts/setup_playbook_study.py`). Goes the
 other way — hypothesizes candidate families and backfill-measures them over the
 durable daily-bar store so families are comparable in R. Its discipline (as coded):

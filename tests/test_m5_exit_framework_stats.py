@@ -1,0 +1,451 @@
+"""Packet M5.3 - the April comparison framework finally gets a reader.
+
+`comparison_apr2026` has written 91,674 of the 275,022 rows in
+`master_avwap_setup_scenarios.csv` since April: two experimental exit templates
+(`exp_full_band2_hard_stop_125r` and `..._no_sma50_short_nearfav`) simulated on
+the SAME setups as the baseline templates, so the two can be compared at one
+variable. Every champion aggregate skips an `experimental` scenario by design,
+and until this packet **no reader of `framework_family == "comparison_apr2026"`
+existed anywhere under `scripts/`.** Written, never read.
+
+This file pins the reader:
+
+* one row per `(framework_family, exit_template_id, side, priority_bucket)`, so
+  a baseline template and a comparison template on the same setups sit side by
+  side with the SAME `n`;
+* `experimental` is a COLUMN, so a comparison row can never be read as the
+  champion's own record;
+* the aggregates the champion scores from do not move - the new export is
+  additive, and the fence that keeps the band-variant challenger out of them
+  stays exactly where it is;
+* the export is guarded: it may never cost the tracker save.
+"""
+
+from __future__ import annotations
+
+import csv
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = ROOT_DIR / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from master_avwap_lib import legacy  # noqa: E402
+from swing_headline import wilson_lower_bound  # noqa: E402
+
+from test_m5_discovery_exports import EXPORT_FILES, _redirect_exports  # noqa: E402
+
+
+BASELINE_TEMPLATE = "full_band2"
+COMPARISON_TEMPLATE = "exp_full_band2_hard_stop_125r"
+
+
+def _scenario(template, *, status, total_r, experimental, family, version):
+    return {
+        "scenario_id": f"lower_1__{template}",
+        "stop_reference_label": "LOWER_1",
+        "stop_reference_level": 42.0,
+        "stop_source_type": "band",
+        "exit_template_id": template,
+        "exit_template_label": template.replace("_", " "),
+        "framework_family": family,
+        "framework_version": version,
+        "experimental": experimental,
+        "tradeable": True,
+        "status": status,
+        "total_r": total_r,
+    }
+
+
+def _paired_setup(symbol, *, baseline, comparison, side="LONG", bucket="favorite_setup"):
+    """One setup carrying BOTH templates - the shape the comparison relies on."""
+    return {
+        "setup_id": f"{symbol}:2026-01-03",
+        "symbol": symbol,
+        "side": side,
+        "scan_date": "2026-01-03",
+        "anchor_date": "2026-01-02",
+        "priority_bucket": bucket,
+        "setup_family": "post_earnings_52w_break",
+        "scenarios": {
+            "baseline": _scenario(
+                BASELINE_TEMPLATE,
+                status=baseline[0],
+                total_r=baseline[1],
+                experimental=False,
+                family="baseline",
+                version="baseline",
+            ),
+            "comparison": _scenario(
+                COMPARISON_TEMPLATE,
+                status=comparison[0],
+                total_r=comparison[1],
+                experimental=True,
+                family="comparison_apr2026",
+                version=legacy.TRACKER_EXPERIMENTAL_FRAMEWORK_VERSION,
+            ),
+        },
+    }
+
+
+def _setups(*records):
+    return {record["setup_id"]: record for record in records}
+
+
+def _read_rows(path: Path) -> list[dict]:
+    with Path(path).open(newline="", encoding="utf-8-sig") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+# ---------------------------------------------------------------------------
+# The rows themselves
+# ---------------------------------------------------------------------------
+
+
+def test_one_baseline_and_one_comparison_on_the_same_setup_give_two_rows():
+    setups = _setups(
+        _paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("STOPPED", -1.25))
+    )
+    rows = legacy.build_exit_framework_stats_rows(setups)
+
+    assert len(rows) == 2
+    by_template = {row["exit_template_id"]: row for row in rows}
+    assert set(by_template) == {BASELINE_TEMPLATE, COMPARISON_TEMPLATE}
+    # SAME setups, so the same n - that equality is what makes it a comparison
+    # rather than two unrelated records.
+    assert by_template[BASELINE_TEMPLATE]["n"] == by_template[COMPARISON_TEMPLATE]["n"] == 1
+    assert by_template[BASELINE_TEMPLATE]["framework_family"] == "baseline"
+    assert by_template[COMPARISON_TEMPLATE]["framework_family"] == "comparison_apr2026"
+
+
+def test_the_comparison_row_is_labelled_experimental_and_the_baseline_is_not():
+    rows = legacy.build_exit_framework_stats_rows(
+        _setups(_paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("STOPPED", -1.25)))
+    )
+    by_template = {row["exit_template_id"]: row for row in rows}
+    assert by_template[COMPARISON_TEMPLATE]["experimental"] is True
+    assert by_template[BASELINE_TEMPLATE]["experimental"] is False
+    assert (
+        by_template[COMPARISON_TEMPLATE]["framework_version"]
+        == legacy.TRACKER_EXPERIMENTAL_FRAMEWORK_VERSION
+    )
+
+
+def test_the_rates_and_the_wilson_bound_are_computed_over_the_closed_rows():
+    setups = _setups(
+        _paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("TARGET_HIT", 1.1)),
+        _paired_setup("BBB", baseline=("TARGET_HIT", 1.4), comparison=("STOPPED", -1.25)),
+        _paired_setup("CCC", baseline=("STOPPED", -1.0), comparison=("STOPPED", -1.25)),
+    )
+    by_template = {
+        row["exit_template_id"]: row for row in legacy.build_exit_framework_stats_rows(setups)
+    }
+
+    baseline = by_template[BASELINE_TEMPLATE]
+    assert baseline["n"] == 3
+    assert baseline["n_closed"] == 3
+    assert baseline["wins"] == 2
+    assert baseline["losses"] == 1
+    assert baseline["win_rate"] == pytest.approx(2 / 3)
+    assert baseline["win_rate_lb"] == pytest.approx(wilson_lower_bound(2, 3))
+    assert baseline["stop_out_rate"] == pytest.approx(1 / 3)
+    assert baseline["target_hit_rate"] == pytest.approx(2 / 3)
+    assert baseline["avg_closed_r"] == pytest.approx((1.6 + 1.4 - 1.0) / 3)
+
+    comparison = by_template[COMPARISON_TEMPLATE]
+    assert comparison["n"] == 3
+    assert comparison["wins"] == 1
+    assert comparison["stop_out_rate"] == pytest.approx(2 / 3)
+
+
+def test_a_group_with_nothing_closed_is_blank_and_never_zero():
+    setups = _setups(
+        _paired_setup("AAA", baseline=("OPEN", 0.4), comparison=("OPEN", 0.2)),
+    )
+    for row in legacy.build_exit_framework_stats_rows(setups):
+        assert row["n"] == 1
+        assert row["n_closed"] == 0
+        # "nothing stopped out" and "nothing measured" are different claims and
+        # a 0.0 cannot say which.
+        assert row["win_rate"] is None
+        assert row["win_rate_lb"] is None
+        assert row["stop_out_rate"] is None
+        assert row["target_hit_rate"] is None
+        assert row["avg_closed_r"] is None
+
+
+def test_sides_and_buckets_are_separate_rows():
+    setups = _setups(
+        _paired_setup("AAA", baseline=("TARGET_HIT", 1.0), comparison=("STOPPED", -1.25)),
+        _paired_setup(
+            "BBB", baseline=("TARGET_HIT", 1.0), comparison=("STOPPED", -1.25), side="SHORT"
+        ),
+        _paired_setup(
+            "CCC",
+            baseline=("TARGET_HIT", 1.0),
+            comparison=("STOPPED", -1.25),
+            bucket="near_favorite_zone",
+        ),
+    )
+    keys = {
+        (row["framework_family"], row["exit_template_id"], row["side"], row["priority_bucket"])
+        for row in legacy.build_exit_framework_stats_rows(setups)
+    }
+    assert len(keys) == 6
+    assert ("comparison_apr2026", COMPARISON_TEMPLATE, "SHORT", "favorite_setup") in keys
+
+
+def test_an_expired_unmeasured_record_leaves_both_sides_of_the_fraction():
+    """M3.3's rule, in an EXPORT: uncertainty is excluded and COUNTED."""
+    expired = _paired_setup("EXP", baseline=("OPEN", 0.0), comparison=("OPEN", 0.0))
+    expired["setup_status"] = legacy.SETUP_STATUS_EXPIRED_UNMEASURED
+    setups = _setups(
+        _paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("STOPPED", -1.25)),
+        expired,
+    )
+    for row in legacy.build_exit_framework_stats_rows(setups):
+        assert row["n"] == 1
+        assert row["n_expired_unmeasured"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Reviewer blocker 1 - the pairing is NOT equal-n by construction, and the row
+# has to say why.
+#
+# `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav` carries
+# `blocked_stop_rules`, and `_tracker_experimental_filter_reason` sets
+# `cohort_filter_reason` on every scenario the rule skips. That scenario is then
+# built NON-TRADEABLE (`tradeable = bool(not filter_reason and ...)`), so a
+# builder that skips non-tradeable rows drops it silently: live, that template's
+# SHORT / near_favorite_zone cell read n=585 against the baseline's 683, and the
+# 98 missing were the experiment's own filter rather than a difference in
+# outcome. Reading that as "the comparison had fewer setups" is exactly backwards
+# - the filter IS the experiment.
+# ---------------------------------------------------------------------------
+
+
+def _filtered_setup(symbol, *, baseline, side="SHORT", bucket="near_favorite_zone"):
+    """A setup whose COMPARISON scenario the experiment's own rule skipped."""
+    setup = _paired_setup(symbol, baseline=baseline, comparison=("OPEN", 0.0), side=side, bucket=bucket)
+    comparison = setup["scenarios"]["comparison"]
+    comparison["exit_template_id"] = "exp_full_band2_hard_stop_125r_no_sma50_short_nearfav"
+    comparison["cohort_filter_reason"] = (
+        "Filtered by experiment: skip SMA_50 stop for SHORT near-favorite-zone setups"
+    )
+    comparison["tradeable"] = False
+    comparison["status"] = "FILTERED"
+    return setup
+
+
+FILTERED_TEMPLATE = "exp_full_band2_hard_stop_125r_no_sma50_short_nearfav"
+
+
+def test_a_scenario_the_experiment_filtered_is_counted_never_dropped():
+    rows = legacy.build_exit_framework_stats_rows(
+        _setups(_filtered_setup("AAA", baseline=("TARGET_HIT", 1.5)))
+    )
+    by_template = {row["exit_template_id"]: row for row in rows}
+    assert FILTERED_TEMPLATE in by_template, "the filtered group vanished entirely"
+    filtered = by_template[FILTERED_TEMPLATE]
+    assert filtered["n"] == 0
+    assert filtered["n_filtered_by_experiment"] == 1
+    # The baseline is untouched by the experiment's rule.
+    assert by_template[BASELINE_TEMPLATE]["n"] == 1
+    assert by_template[BASELINE_TEMPLATE]["n_filtered_by_experiment"] == 0
+
+
+def test_the_two_denominators_reconcile_against_the_baseline():
+    """The rule gate #67 is restated to: n + n_filtered == the baseline's n.
+
+    Three setups on the filtered side/bucket, two of which the rule skips. The
+    comparison cell must read n=1 with n_filtered=2, and 1 + 2 must equal the
+    baseline's 3 - so a reader can see that the missing rows are the experiment
+    and not a difference in outcome.
+    """
+    setups = _setups(
+        _filtered_setup("AAA", baseline=("TARGET_HIT", 1.5)),
+        _filtered_setup("BBB", baseline=("STOPPED", -1.0)),
+        _paired_setup(
+            "CCC",
+            baseline=("TARGET_HIT", 1.2),
+            comparison=("STOPPED", -1.25),
+            side="SHORT",
+            bucket="near_favorite_zone",
+        ),
+    )
+    # The unfiltered pair uses the same template id as the filtered ones, so all
+    # three land in one comparison group.
+    setups["CCC:2026-01-03"]["scenarios"]["comparison"]["exit_template_id"] = FILTERED_TEMPLATE
+    by_template = {
+        row["exit_template_id"]: row for row in legacy.build_exit_framework_stats_rows(setups)
+    }
+    baseline_n = by_template[BASELINE_TEMPLATE]["n"]
+    comparison = by_template[FILTERED_TEMPLATE]
+    assert baseline_n == 3
+    assert comparison["n"] == 1
+    assert comparison["n_filtered_by_experiment"] == 2
+    assert comparison["n"] + comparison["n_filtered_by_experiment"] == baseline_n
+
+
+def test_a_template_with_no_filter_still_pairs_at_equal_n():
+    """Where no rule applies the denominators must be EQUAL, filter count zero."""
+    setups = _setups(
+        _paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("STOPPED", -1.25)),
+        _paired_setup("BBB", baseline=("STOPPED", -1.0), comparison=("STOPPED", -1.25)),
+    )
+    rows = legacy.build_exit_framework_stats_rows(setups)
+    assert {row["n"] for row in rows} == {2}
+    assert {row["n_filtered_by_experiment"] for row in rows} == {0}
+
+
+def test_a_filtered_scenario_is_not_confused_with_an_expired_one():
+    """Two different exclusions, two different columns, never pooled."""
+    expired = _paired_setup("EXP", baseline=("OPEN", 0.0), comparison=("OPEN", 0.0))
+    expired["setup_status"] = legacy.SETUP_STATUS_EXPIRED_UNMEASURED
+    rows = legacy.build_exit_framework_stats_rows(
+        _setups(_filtered_setup("AAA", baseline=("TARGET_HIT", 1.5)), expired)
+    )
+    filtered = next(row for row in rows if row["exit_template_id"] == FILTERED_TEMPLATE)
+    assert filtered["n_filtered_by_experiment"] == 1
+    assert filtered["n_expired_unmeasured"] == 0
+    expired_row = next(row for row in rows if row["exit_template_id"] == COMPARISON_TEMPLATE)
+    assert expired_row["n_expired_unmeasured"] == 1
+    assert expired_row["n_filtered_by_experiment"] == 0
+
+
+def test_an_all_expired_group_still_emits_its_row_and_keeps_its_count():
+    """M3's reviewer blocker 2, in this export: a dropped group loses its count.
+
+    `build_tracker_setup_type_rows` and `build_tracker_stats_rows` both had
+    `if not rows: continue` after collecting the expired ones, so a group where
+    EVERY record aged out took its own `n_expired_unmeasured` with it - on the
+    live 2026-09-04 mirror the sentence read 16 where 45 had expired, under-
+    reporting by exactly the groups that were worst. This export must not repeat
+    it: the row is emitted with zero measured setups, blank measures, and the
+    real count. The identity fields survive because the group is created BEFORE
+    the expired check, which is this builder's `representative_by_group`.
+    """
+    expired = _paired_setup("EXP", baseline=("OPEN", 0.0), comparison=("OPEN", 0.0))
+    expired["setup_status"] = legacy.SETUP_STATUS_EXPIRED_UNMEASURED
+    rows = legacy.build_exit_framework_stats_rows(_setups(expired))
+
+    assert len(rows) == 2, "a group whose every record expired was dropped"
+    for row in rows:
+        assert row["n"] == 0
+        assert row["n_closed"] == 0
+        assert row["n_expired_unmeasured"] == 1
+        assert row["win_rate"] is None
+        assert row["avg_closed_r"] is None
+        # The identity is still there to render - a row that cannot say which
+        # template it describes is as useless as no row.
+        assert row["exit_template_id"] in {BASELINE_TEMPLATE, COMPARISON_TEMPLATE}
+        assert row["side"] == "LONG"
+        assert row["priority_bucket"] == "favorite_setup"
+    assert {row["framework_family"] for row in rows} == {"baseline", "comparison_apr2026"}
+
+
+def test_an_empty_tracker_exports_no_framework_rows():
+    assert legacy.build_exit_framework_stats_rows({}) == []
+
+
+# ---------------------------------------------------------------------------
+# The export, and the champion aggregates that must not move
+# ---------------------------------------------------------------------------
+
+
+def test_the_save_pass_writes_the_framework_csv(tmp_path, monkeypatch):
+    _redirect_exports(monkeypatch, tmp_path)
+    setups = _setups(
+        _paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("STOPPED", -1.25))
+    )
+    legacy.export_setup_tracker_views({"setups": setups})
+
+    path = legacy.EXIT_FRAMEWORK_STATS_FILE
+    assert path.exists()
+    families = {row["framework_family"] for row in _read_rows(path)}
+    assert families == {"baseline", "comparison_apr2026"}
+
+
+def _champion_bytes(tmp_path) -> dict[str, bytes]:
+    return {
+        name: getattr(legacy, name).read_bytes()
+        for name in EXPORT_FILES
+        if name
+        not in {
+            "CONTROL_DISCOVERY_STATS_FILE",
+            "STUDY_DISCOVERY_STATS_FILE",
+            "EXIT_FRAMEWORK_STATS_FILE",
+        }
+        and getattr(legacy, name).exists()
+    }
+
+
+def test_the_champion_aggregates_are_byte_identical_with_and_without_the_new_export(
+    tmp_path, monkeypatch
+):
+    """The invariant that binds this packet, checked by reproduction.
+
+    The same payload is exported twice into two directories: once normally, and
+    once with the three new builders raising so no new file is written at all.
+    Every champion export must come out byte for byte the same. If the new
+    aggregation ever reached back into the champion's rows - a shared mutable
+    row dict, a sort in place, a scenario the fence lets through - this is what
+    catches it.
+    """
+    setups = _setups(
+        _paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("STOPPED", -1.25)),
+        _paired_setup("BBB", baseline=("STOPPED", -1.0), comparison=("STOPPED", -1.25), side="SHORT"),
+    )
+
+    def _export_into(directory: Path, *, disabled: bool) -> dict[str, bytes]:
+        directory.mkdir(parents=True, exist_ok=True)
+        with monkeypatch.context() as patch:
+            for name in EXPORT_FILES:
+                patch.setattr(legacy, name, directory / f"{name.lower()}.csv", raising=False)
+            if disabled:
+                for name in (
+                    "build_control_discovery_stats_rows",
+                    "build_study_discovery_stats_rows",
+                    "build_exit_framework_stats_rows",
+                ):
+                    patch.setattr(legacy, name, _boom)
+            payload = {"setups": setups, "control_setups": {}, "study_setups": {}}
+            legacy.export_setup_tracker_views(payload)
+            return _champion_bytes(directory)
+
+    with_new = _export_into(tmp_path / "with", disabled=False)
+    without_new = _export_into(tmp_path / "without", disabled=True)
+
+    assert set(with_new) == set(without_new)
+    for name, blob in with_new.items():
+        assert blob == without_new[name], f"{name} moved when the new export ran"
+
+
+def _boom(*_args, **_kwargs):
+    raise ValueError("disabled for the parity half of this test")
+
+
+def test_a_raising_framework_export_never_costs_the_tracker_save(tmp_path, monkeypatch, caplog):
+    import logging
+
+    _redirect_exports(monkeypatch, tmp_path)
+    monkeypatch.setattr(legacy, "build_exit_framework_stats_rows", _boom)
+
+    with caplog.at_level(logging.WARNING):
+        legacy.export_setup_tracker_views(
+            {
+                "setups": _setups(
+                    _paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("STOPPED", -1.25))
+                )
+            }
+        )
+
+    assert not legacy.EXIT_FRAMEWORK_STATS_FILE.exists()
+    assert legacy.SETUP_SCENARIOS_FILE.exists()
+    assert any(
+        "exit framework" in record.getMessage().lower() for record in caplog.records
+    ), [record.getMessage() for record in caplog.records]

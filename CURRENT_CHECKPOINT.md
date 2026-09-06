@@ -75,6 +75,9 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 72 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot, checked against REPRODUCIBLE numbers rather than the audit's prose (reviewer, 2026-09-05: the first wording was unsatisfiable). (1) `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE, with no "refresh skipped" line. (2) The payload's `saved_by` reads `close_slot` and its `saved_at` is market-local with an offset. (3) The three stats CSVs carry that same `tracker_saved_at`, and the Setup Tracker's status line shows BOTH clocks in ONE zone - `Tracker as of ... (close_slot); scan factors as of ...`, the two offsets equal. (4) `trading_bot.log` carries the literal token **`n_expired_unmeasured=`**; on the 2026-09-04 mirror the reproducible counts are **setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7, control 0, 52 total**, so expect ~52 on a tracker of that vintage - not the audit's "37 + 41", which counted a different thing. (5) The Setup Types tab says `N expired unmeasured, excluded` with N matching the summed CSV column (Current Picks deliberately says nothing - different population). (6) Family win rates unchanged to the cent where those setups contributed only a denominator, and the champion's scoring population unchanged by construction. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation, and **the FIRST save after merge rewrites every record's content hash** (`saved_at`/`saved_by` join the header, and `last_replayed_session` / `expiry_reason` / `stale_sessions` join the records), so a large `written` count on that one save is expected and is not a parity failure | 2026-09-05 M3 entry |
 | 71 | **`unresolved` means UNMEASURED (M2)** - the first after-close sweep after merge logs the four-way split in `trading_bot.log` - `Outcome sweep finalized N pending trade(s): measured_eod A, swept_measured B, unmeasured C (of which expired D); already final in the CSV: E (counted in the total, not in the split); ...` - where **A + B + C + E == N**, because `expired` is a SUBSET of `unmeasured` and an already-final row's status was written by an earlier attempt this run never saw; the Daytrade Tracker's status line shows the coverage sentence after Q1's window sentence; and `outcome_semantics.terminal_kind` over the live file for the last 20 sessions reports `measured_eod + measured_swept` at or above the 7,427 measured at merge (3,820 + 3,607 of 8,161 events) with `unmeasured` near 644. **The packet's gate text said 7,600 and about 495**; those were read a day earlier over a window one session back, and the branch's own streamed read is the number to compare against | 2026-09-05 M2 entry |
 | 70 | **The band challenger measures (M1)** - after the next persisted tracker write: `master_avwap_band_variant_stats.csv` shows `n_variant > 0` on the rows whose records have >= 20 closes before the anchor, the four `_variant` columns fill, and the Setup Tracker's Band variant view reads `Measured N of M setups` rather than `Measured 0 of M`. **T4's >= 20 sessions of forward accrual start that day**, not 2026-08-26 - nothing accrued before it | 2026-09-05 M1 entry |
+| 69 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot, checked against REPRODUCIBLE numbers rather than the audit's prose (reviewer, 2026-09-05: the first wording was unsatisfiable). (1) `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE, with no "refresh skipped" line. (2) The payload's `saved_by` reads `close_slot` and its `saved_at` is market-local with an offset. (3) The three stats CSVs carry that same `tracker_saved_at`, and the Setup Tracker's status line shows BOTH clocks in ONE zone - `Tracker as of ... (close_slot); scan factors as of ...`, the two offsets equal. (4) `trading_bot.log` carries the literal token **`n_expired_unmeasured=`**; on the 2026-09-04 mirror the reproducible counts are **setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7, control 0, 52 total**, so expect ~52 on a tracker of that vintage - not the audit's "37 + 41", which counted a different thing. (5) The Setup Types tab says `N expired unmeasured, excluded` with N matching the summed CSV column (Current Picks deliberately says nothing - different population). (6) Family win rates unchanged to the cent where those setups contributed only a denominator, and the champion's scoring population unchanged by construction. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation, and **the FIRST save after merge rewrites every record's content hash** (`saved_at`/`saved_by` join the header, and `last_replayed_session` / `expiry_reason` / `stale_sessions` join the records), so a large `written` count on that one save is expected and is not a parity failure | 2026-09-05 M3 entry |
+| 74 | **The control and study populations are shown, and the April framework is read (M5)** - restated after the reviewer round so it can PASS (the first wording demanded an equal `n` the framework does not produce). After the next persisted tracker write: (1) `master_avwap_control_discovery.csv` and `master_avwap_study_discovery.csv` exist, the control file carrying its three cohort rows plus one family row per (side, family), in an `all` block AND a `lately` block, every row stamped `population_setups`. (2) The **Controls** tab's sentence reads `N graded episodes from the M control setups the scan REJECTED` with **N < M** and M near 401 (Studies likewise, M near 3,992) - the two numbers are different things and a tab printing one of them twice is the defect this clause replaces. (3) Both tables sort by the Wilson lower bound, not the raw rate. (4) The **Exit frameworks** tab shows `comparison_apr2026` rows beside `baseline` ones, grouped by side and bucket with the baseline above its twin, Experimental reading True. (5) **The denominators reconcile, which is the real check**: on a (side, bucket) where the template has no `blocked_stop_rules`, the comparison's `n` EQUALS the baseline's and `Filtered` is 0; on SHORT / near_favorite_zone for `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav`, `n + Filtered` equals the baseline's `n` (the reviewer measured 585 + 98 = 683 on the live tracker). A smaller `n` with a matching `Filtered` is the experiment working; a smaller `n` with `Filtered` 0 is a defect | 2026-09-05 M5 entry |
+| 65 | **The band challenger measures (M1)** - after the next persisted tracker write: `master_avwap_band_variant_stats.csv` shows `n_variant > 0` on the rows whose records have >= 20 closes before the anchor, the four `_variant` columns fill, and the Setup Tracker's Band variant view reads `Measured N of M setups` rather than `Measured 0 of M`. **T4's >= 20 sessions of forward accrual start that day**, not 2026-08-26 - nothing accrued before it | 2026-09-05 M1 entry |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
 | 62 | **The AI grounding contract holds on a real night (Q3)** - the first nightly run after `claude/q3-ai-grounding` merges: `ai_morning_brief.txt` OPENS with `Analyzed A of N. Membership-only B. Failed C.` and `A + B + C == N`; every membership-only block leads with `membership only - ...` and carries NO position language; and `ai_jobs`' dropped-row log names any position or numeric drop with its detail - the three strings the code emits are **`position claim without a position source`**, **`position claim in the executive summary`** and **`numeric claim without a resolvable metric_ref`**, and those are what to grep for. **Read the executive summaries too**: 480 of 1,478 published ones asserted a position, so expect the system's `Executive summary withheld: ...` line to appear on the first night and to become rare as the model learns the rule. A night with ZERO drops is also a pass - the rule is that a drop, when it happens, is named. **Watch for over-drop**: if the analyzed count collapses versus the prior night, the numeric regex is catching prose and the packet's `NUMERIC_CLAIM_PATTERNS` is the one thing to widen or narrow. | packet Q3, 2026-09-04 |
@@ -315,6 +318,72 @@ Also this evening: `%TEMP%\tradingbotv3-writer-locks` held 89,800 zero-byte `.lo
 (oldest 2026-08-31; `local_writer_lock` never unlinks them) and suites were crawling at ~2%
 CPU; the lead removed the 89,406 older than an hour (1 held file skipped). A sweep-on-release
 or a startup prune is owed - a small packet, not yet written.
+
+### 2026-09-05 - M5 BUILT: the control/study populations reach the desk and the April framework gets a reader (`claude/m5-shown-and-read`)
+
+Packet `.claude/packets/M5.md`, built on M3's tip `4108a0a9` (same files), answering
+finding 5 of the measurement audit below. Trader authorization: *"Fix all of these
+failures"* - the recorded yes for the `master_avwap_lib/legacy.py` edits and nothing
+wider. **Fail-before-fix proven by reproduction**: reverting `legacy.py` and
+`setup_tracker_panel.py` to the base tip leaves 21 failed / 12 errors across the three
+new test files; restoring gives 34 passed.
+
+**What was true.** `build_control_discovery_rows` and `build_study_discovery_rows` have
+graded 401 control records (setups the scan REJECTED) and 3,992 study records since B4,
+and no production caller reached either - 4,393 graded records whose only readers were
+two test files. `comparison_apr2026` has written 91,674 of the 275,022 rows in
+`master_avwap_setup_scenarios.csv` since April and **no reader of that
+`framework_family` existed anywhere under `scripts/`**: every champion aggregate skips an
+`experimental` scenario by design, and nothing read the what-if either.
+
+**What changed.** Three exports in the tracker's existing save pass -
+`master_avwap_control_discovery.csv`, `master_avwap_study_discovery.csv` and
+`master_avwap_exit_framework_stats.csv` - and three Setup Tracker tabs reading them
+(Controls, Studies, Exit frameworks). Win rate leads with `n` and the ONE Wilson bound
+(`swing_headline`, z = 1.96), mean R beside it, the window in SESSIONS, an all-history
+block AND a `lately` block, and the SORT IS THE BOUND. Each tab carries a population
+sentence above its table, because a control row and a pick look identical in a table.
+The framework export is a NEW FILE rather than columns on
+`master_avwap_setup_type_stats.csv`: that export's grain is the setup family and the
+offline tuner reads it into live scoring weights.
+
+**Reviewer round (NO-GO on `ba6d4faa`, both blockers fixed).** BLOCKER 1: the Exit
+frameworks pairing is not equal-n by construction. `_tracker_experimental_filter_reason`
+stamps `cohort_filter_reason` on every scenario a template's `blocked_stop_rules` skips
+and `_build_tracker_scenario` then builds it NON-TRADEABLE, so the builder's `tradeable`
+skip dropped it in silence: live, `..._no_sma50_short_nearfav` on SHORT /
+near_favorite_zone read n=585 against the baseline's 683 with nothing explaining the 98.
+`n_filtered_by_experiment` is a column now, counted BEFORE the tradeable skip and kept
+separate from the expired count (two different exclusions, two questions). The tab
+sentence no longer says "the SAME setups" - it says the same setups MINUS the template's
+own filter, and gate #67 is restated so it can pass. BLOCKER 2: the sentences printed
+graded EPISODES (308 / 2,600) under the noun SETUPS (401 / 3,992), claiming every record
+was graded. The export carries `population_setups` - the panel must never open the 1.1 GB
+JSON to count a namespace - and the sentence names both. Advisories taken: the
+`DISCOVERY_WINDOW_ROLLING` name now records WHY the guard's regex must not see a
+`*LATELY*` name and that the number itself is imported; the Exit frameworks rows are
+grouped by (side, bucket) with the baseline above its twin, bound-ranked inside the
+block, because a pure bound sort scattered the pairs. Nine tests, all proven red on
+`ba6d4faa` and green after; no live store was touched - every one runs under pytest with
+`tmp_path`.
+
+**What holds.** Nothing here reaches a detector, score, tier, rank, alert, watchlist,
+Focus, review queue or `review_policy.json`; the new files' only readers are the three
+new tabs (grepped, not assumed). Champion aggregates are pinned byte-identical by a
+reproduction test that exports one payload into two directories - once with the new
+builders live, once with them raising - and compares every champion CSV byte for byte.
+Each export has its OWN guard, so a failure is logged and can cost neither the tracker
+save nor its two siblings. `build_exit_framework_stats_rows` reads
+`_flatten_tracker_scenarios` rather than walking `setup["scenarios"]`, so the
+band-variant fence guard stays green. M3's ruling is followed: the exclusion of
+`EXPIRED_UNMEASURED` records lives in these exports and displays only.
+
+Verification on the branch tip: the targeted set (`-k "tracker or setup_tracker or
+discovery or study or control or band_variant or m1_ or m3_ or m5_ or swing_headline or
+evidence_stats or packaging"`) 608 passed, `ruff` clean, spec-drift green. No packaging
+trigger: no dependency, no non-`.py` asset, no new top-level `scripts/` package, no
+dynamic import - both changed modules are already collected. **Live gate #67 owed at
+merge.** The lead runs the full suite with the nightly AI lock free.
 
 ### 2026-09-05 - M3 BUILT: the tracker keeps up, says how old it is, and lets a stuck setup age out (`claude/m3-tracker-keeps-up`)
 
