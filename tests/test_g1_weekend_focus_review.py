@@ -711,3 +711,96 @@ def test_the_ten_row_floor_left_focus_review_and_stayed_everywhere_else(
     assert not thin, (
         f"the floor was removed from a page G1 does not touch: {thin}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8 and 9 - ADDED BY THE BUILDER (packet G1). Nothing above was weakened.
+#
+# The packet binds two things the tester's seven do not measure: the new
+# furniture is themed by OBJECT NAME and never by a per-widget stylesheet, and
+# the horizon combo - which moved onto the selector row - still re-filters both
+# cohort tables from what is already in memory, touching no store.
+# ---------------------------------------------------------------------------
+
+
+def test_the_new_furniture_is_themed_by_object_name_not_a_stylesheet(
+    make_panel, qapp
+):
+    from PySide6.QtWidgets import QTextBrowser, QToolButton, QWidget
+
+    panel = make_panel(3456, 2160)
+    page = panel.focus_review
+
+    qss = (ROOT / "scripts" / "ui" / "theme.qss").read_text(encoding="utf-8")
+
+    pane = _detail_pane(page)
+    assert pane.objectName(), "the detail pane must carry a theme object name"
+    assert f"QTextBrowser#{pane.objectName()}" in qss, (
+        f"theme.qss has no rule for QTextBrowser#{pane.objectName()}"
+    )
+
+    buttons = _require_selector(page)
+    names = {button.objectName() for button in buttons.values()}
+    assert names and "" not in names, (
+        "every selector button must carry a theme object name"
+    )
+    for name in names:
+        assert f"QToolButton#{name}" in qss, (
+            f"theme.qss has no rule for QToolButton#{name}"
+        )
+
+    # A stylesheet is expensive on the Qt thread; the page must not set one.
+    styled = [
+        widget.objectName() or widget.__class__.__name__
+        for widget in page.findChildren(QWidget)
+        if widget.styleSheet()
+    ]
+    assert not styled, f"per-widget stylesheets on the Focus Review page: {styled}"
+    assert not page.styleSheet(), "the page itself must not set a stylesheet"
+    assert isinstance(pane, QTextBrowser)
+    assert all(isinstance(button, QToolButton) for button in buttons.values())
+
+
+def test_the_horizon_combo_still_refilters_both_cohort_tables_from_memory(
+    make_panel, qapp, monkeypatch
+):
+    from ui.panels import weekend_prep_panel as panel_module
+
+    panel = make_panel(3456, 2160)
+    page = panel.focus_review
+    _render_fixture(qapp, page)
+
+    _select_view(qapp, page, "Vetoes")
+    assert page.cohort_horizon_input.isVisible()
+    assert page.cohort_table.rowCount() == EXPECTED_ROWS["cohort_table"]
+    assert page.like_table.rowCount() == EXPECTED_ROWS["like_table"]
+
+    reads: list[str] = []
+    for name in ("_read_veto_cohort", "_read_like_cohort"):
+        monkeypatch.setattr(
+            panel_module,
+            name,
+            lambda *a, _name=name, **k: reads.append(_name) or [],
+        )
+
+    # Every fixture cohort row is at the default horizon, so another horizon
+    # empties both tables - which is the filter working, not a lost read.
+    other = next(
+        horizon
+        for horizon in panel_module.COHORT_HORIZONS
+        if horizon != panel_module.DEFAULT_COHORT_HORIZON
+    )
+    page.cohort_horizon_input.setCurrentIndex(
+        page.cohort_horizon_input.findData(other)
+    )
+    _process(qapp)
+    assert page.cohort_table.rowCount() == 0
+    assert page.like_table.rowCount() == 0
+
+    page.cohort_horizon_input.setCurrentIndex(
+        page.cohort_horizon_input.findData(panel_module.DEFAULT_COHORT_HORIZON)
+    )
+    _process(qapp)
+    assert page.cohort_table.rowCount() == EXPECTED_ROWS["cohort_table"]
+    assert page.like_table.rowCount() == EXPECTED_ROWS["like_table"]
+    assert reads == [], f"changing the horizon touched a store: {reads}"
