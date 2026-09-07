@@ -1410,6 +1410,39 @@ which is evidence and must not be loaded as context.
   All five real undefined names were fixed, and the 74 remaining unused imports
   were swept the same day: **`ruff check .` reports `All checks passed`.**
 
+- **A repeatable desk workload bench, and a layout-fit check** (G0, 2026-09-06):
+  `scripts/ui/desk_bench.py` builds the pages ONE AT A TIME - never `MainWindow`,
+  so no IB, no autopilot, no timers - drives a fixed workload over a STAGED copy
+  of the home folder, and reports p50/p95/max per op across `--repeat`. Three
+  numbers per op: the synchronous Qt-thread time of the call, the time to settle,
+  and the LONGEST single `processEvents()` during the settle wait (the stall
+  proxy). A settle deadline is a recorded RESULT, never an error; the 2 ms yield
+  that lets a worker have the GIL is inside `settle_ms` and outside
+  `longest_iteration_ms`, and every settle carries the 120 ms `QUIET_MS` floor,
+  so a settle near 120-135 ms measured nothing and that op is read on `sync_ms`.
+  The fit half records `minimumSizeHint` /
+  `minimumSize` / `sizeHint` for every page, Weekend step and Research child
+  against the available height - the window height minus chrome MEASURED FROM
+  WIDGETS, not a constant - plus the sum of every table's floor including the
+  ones behind a tab. `stage --from --to` copies an allowlist of the read inputs
+  the pages open (not the 1.2 GB tracker JSON, the 622 MB attributes CSV or the
+  142 MB scenarios CSV), source opened read-only. **`--data-dir` is required and
+  is set into `TRADINGBOTV3_DATA_DIR` before the first import of anything under
+  `scripts/`**, `LOCALAPPDATA` moves into the scratch too, and the resolved
+  `project_paths.DATA_DIR` is printed and the process exits 2 if it lands under
+  the live home folder or the DAS - twice over, by two guards comparing their
+  own literals, because proving one guard bites means breaking it. **Both guards
+  run on the ARGUMENT at the top of `main()`, for `--data-dir` and for `--out`,
+  BEFORE the environment is prepared**: the first round refused a live
+  `--data-dir` only after `_prepare_environment` had already created it and
+  written a settings file inside it, which is the incident the refusal exists to
+  prevent. The bench's own `local_settings.json` is seeded key by key from the
+  real machine-local file through `machine_settings_seed`, an allowlist that
+  carries the display keys that change what is measured (`qt_ui_scale` scales
+  every `theme.px`) plus the trader's `daily_bars_source` pin, and never a
+  credential or a path key. It measures
+  and changes nothing: no panel imports it and no timer starts it. Runbook:
+  `docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md` section 7.
 - Broad pytest suite, deterministic smoke check, pytest markers, narrow Ruff gates,
   layered requirements with constraints, and Windows/macOS path handling.
 - Provider telemetry at IBKR/Yahoo/Nasdaq boundaries with completeness contracts and
@@ -1535,6 +1568,68 @@ gates are in `plan.md`.
 
 ## Recent changes (the last two build days)
 
+### 2026-09-06 - G0: measure first (branch `claude/g0-measure-first`)
+
+The first step of Phase 0.22's build order, authorized by the trader's *"lets use your
+recommendations for all 4 decsions. then go ahead and start the build order"*. It builds a
+measuring tool and takes one baseline; **no panel changed and no trader-facing behaviour
+changed**.
+
+- **`scripts/ui/desk_bench.py`** - the workload bench and the layout-fit check. Inventory
+  line above; runbook section 7. Nothing on the desk imports it and no timer starts it.
+- **The baseline, `desk_bench_baseline_2026-09-06.json`** (offscreen, 3456x2160 /
+  3840x2160 / 2560x1440, `--repeat 3`, over a 383.6 MB staged copy). Chrome measured
+  90 px from the widgets, so 2160 leaves 2,070 px of page. **Seven ops over 250 ms sync
+  p95, and they are three ops at three sizes**: `research.construct` 5,142 / 4,312 /
+  4,400 ms (it builds eight children eagerly), `setup_tracker.refresh` 1,320 / 1,098 /
+  1,060 ms, `market_journal.construct` 299 ms at the target size only.
+  `weekend.refresh_everything` returns in 1.7 ms and settles in 12.7 s p50, hitting the
+  20 s deadline once - the V2 design working exactly as written, and still 12 s of a page
+  filling in. **The worst single `processEvents()` in the whole run was 806.6 ms**, in
+  `research.construct` at 2560x1440; the 683 ms first recorded here was the worst inside
+  the Weekend wait, not the run.
+- **The fit check sees the defect G1 fixes.** `weekend_prep` needs 3,072 px and
+  `weekend_prep.focus_review` 2,858 px against 2,070 - flagged `overflow` at every size,
+  including 3840x2160, because the overflow is vertical and the width does not help. Of
+  the focus page's requirement, 2,340 px is nine table floors of 260 px (`TABLE_TEN_ROWS_PX`)
+  stacked in one vertical layout. Every other page fits at all three sizes.
+- **Two guards, not one, on the live store.** The fail-before-fix proof for the first guard
+  (sabotage it, watch nine tests fail) also staged six synthetic files into
+  `C:\TradingBotData\scratch` and the same folder on the DAS. Both trees were new, both
+  were removed, and no live file was touched - but a guard whose proof requires breaking it
+  needs a second guard that the same edit does not disable, so
+  `_refuse_to_open_for_writing` compares its own literals and runs before the destination
+  is created and again before every file is opened.
+- **Not offline**: constructing the Research tab reaches `treasury_calendar_service`, which
+  attempted an HTTPS call on every run and failed on certificate verification. Recorded
+  rather than fixed - G0 changes no panel.
+- **The fix round, the same evening (reviewer NO-GO, one blocker).** `main()` called
+  `_prepare_environment` - which mkdirs `--data-dir` and writes
+  `<data_dir>\_localappdata\TradingBotV3\local_settings.json` into it - and only THEN
+  asked whether that directory was the live store, so `--data-dir C:\TradingBotData`
+  exited 2 with three directories and a file already inside the live home folder: the
+  packet's own invariant broken by the module that states it. Both guards now run on the
+  ARGUMENT at the top of `main()`, through `refuse_live_destination`, for `--data-dir` and
+  `--out` (and again on the resolved out path, default included, before its mkdir).
+  `_abort_if_live` still runs after, because it answers the different question of what
+  `project_paths` resolved to. The second guard's literals moved into
+  `WRITE_REFUSAL_PREFIXES` so a test can point BOTH guards at a FAKE live root under
+  `tmp_path` and assert nothing is created there - no test aims a sabotaged guard at the
+  real live paths as a destination, which is how the first round created
+  `C:\TradingBotData\scratch`.
+- **The bench's settings are the trader's, minus the secrets** (same round). The
+  `local_settings.json` allowlist entry named the home-folder root, where that file does
+  not live, so it reported `absent` on every staging run and the baseline was measured
+  against a synthetic one-key file. It is dropped; `machine_settings_seed` carries an
+  allowlist of keys out of `%LOCALAPPDATA%\TradingBotV3\local_settings.json` at run time -
+  the display keys that change what is measured plus `daily_bars_source: yahoo`, and never
+  one of the five credentials or three live-store path keys that file also holds.
+  `qt_autopilot_auto_arm` is forced False and is not read from the real file.
+- **Live gate #81** (renumbered from #75 after the ST1-ST5 merge took #75-#79 and G4 took
+  #80): the same run windowed. Its third clause now reads "the two SLOWEST ops by sync
+  p95" rather than "the two ops over 250 ms" - three ops crossed 250 ms at the target size
+  in this baseline and four in the reviewer's re-run, so the line is noisy and the ORDER
+  is the check. 38 tests.
 ### 2026-09-06 - Packet G4: the explanation pane clears when its context changes (branch `claude/g4-stale-research-detail`)
 
 The GUI review of 2026-09-06 found the Day-trade Tracker still showing the `lrsi_cross50`

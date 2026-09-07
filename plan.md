@@ -373,7 +373,7 @@ coordinate by message; the desk restarts only on the trader's word.
 
 | Packet | State |
 |---|---|
-| G0 measure first | in build 2026-09-06 (base `main` - it edits no panel) |
+| G0 measure first | **BUILT** 2026-09-06 on `claude/g0-measure-first`: `scripts/ui/desk_bench.py` (workload bench + layout-fit check + `stage`), 38 tests, runbook section 7. Baseline taken at three sizes over a staged copy - `research.construct` 5.1 s, `setup_tracker.refresh` 1.3 s, `weekend.refresh_everything` 12.7 s to settle, the whole-run worst `processEvents()` 806.6 ms (`research.construct` at 2560x1440), and `weekend_prep` / `weekend_prep.focus_review` flagged `overflow` at every size, which is the proof the check sees what G1 fixes. Reviewer NO-GO on round 1 (the run path created the data directory before it refused a live one); fixed on the branch with an ordering test. Live gate #81 |
 | G4 | **G4.1 + G4.2 BUILT and green on `claude/g4-stale-research-detail`** (tester-first, merged with `main` `68762909` rather than `lead/merge-st`); live gate #80 owed at the next desk restart. **G4.3 stays queued as G4b.** |
 | G1, G3 | red tests being written 2026-09-06, based on `lead/merge-st` |
 | P2 | SUPERSEDED by ST2 (the other session) - stopped 16:50 PT, branch deleted, nothing built |
