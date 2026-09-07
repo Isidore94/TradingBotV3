@@ -882,8 +882,18 @@ class FocusReviewPage(_StepPage):
             )
             return
         taken = sum(1 for row in rows if str(row.get("traded") or "") == "yes")
+        # ST5.2: BOTH grains. `taken` counts STATEMENTS that found a trade and
+        # `n_trades` counts the distinct trades behind them - live, 13 statements
+        # over 10 trades - and a reader given one of those numbers reads it as
+        # the other.
+        n_trades = len({
+            str(row.get("trade_id") or "").strip()
+            for row in rows
+            if str(row.get("trade_id") or "").strip()
+        })
         self.preference_note.setText(
-            f"{len(rows)} statement(s) this week; {taken} were traded and "
+            f"{len(rows)} statement(s) this week; {taken} were traded over "
+            f"{n_trades} distinct trade(s) and "
             f"{len(rows) - taken} were not. The not-traded rows are the "
             "interesting ones - a paper return beside a blank trade id is a "
             "setup you named and skipped. Match confidence is a JUDGEMENT, not "
@@ -1149,7 +1159,11 @@ class WalkawayPage(_StepPage):
         self._reload_review_data()
 
 
-TAG_WEEK_COLUMNS = ("Date", "Symbol", "Status", "Tag", "Net")
+TAG_WEEK_COLUMNS = ("Date", "Symbol", "Status", "Tag", "Net", "Week")
+
+#: The missing-planned-risk worklist (ST5.5). Newest first, ten-row floor, and a
+#: row that is clicked opens the trade where the trader can type the plan.
+MISSING_RISK_COLUMNS = ("Date", "Symbol", "Direction", "Net", "Tag")
 
 
 class TagWeekPage(_StepPage):
@@ -1165,20 +1179,43 @@ class TagWeekPage(_StepPage):
     and never offered for confirmation.
 
     Reads on the page's worker, like every other step.
+
+    ST5.5 added two things and no writer. The list is widened to EVERY
+    provisional trade rather than the current week's, because the 26 waiting
+    proposals were mostly older than the week the page was scoped to. And the
+    "Missing planned risk" table names the closed trades with no plan recorded -
+    a worklist, never a calculation: `planned_risk` is the trader's own number
+    and clicking a row only opens the trade where they can type it.
     """
+
+    #: A row in the missing-risk table asks the host to open that trade in the
+    #: Journal's Trades tab. This page has no writer for `planned_risk` and this
+    #: signal is the whole of its involvement.
+    openTradeRequested = Signal(str)
+    #: ST5.4's coverage sentence, out to the panel so it can sit under the
+    #: verdict card WITHOUT joining it - the card is five to eight lines by the
+    #: trader's own request and this would be a ninth. Read on this page's
+    #: worker, which is why it travels from here rather than being read twice.
+    coverageChanged = Signal(str)
 
     def __init__(self, service, parent=None) -> None:
         super().__init__("tag_week", service, parent)
         monday, friday = service.week_bounds
         self.subtitle.setText(
-            f"Trades from {monday} to {friday} that the nightly tagger has not "
-            "had confirmed. Confirming writes YOUR answer; the guess stays "
-            "provisional until you do."
+            f"Every trade the nightly tagger has proposed a tag for and you have "
+            f"not confirmed - the whole backlog, not just {monday} to {friday} - "
+            "plus this week's trades it would not guess on. Confirming writes "
+            "YOUR answer; the guess stays provisional until you do."
         )
         self.refresh_button = QPushButton("Refresh tags")
         self.refresh_button.clicked.connect(self.reload)
         self.note = QLabel("")
         self.note.setWordWrap(True)
+        #: ST5.4's one coverage sentence, on the screen where the trader can act
+        #: on both halves of it.
+        self.coverage_note = QLabel("")
+        self.coverage_note.setObjectName("MutedLabel")
+        self.coverage_note.setWordWrap(True)
 
         self.table = _ten_row_table(QTableWidget(0, len(TAG_WEEK_COLUMNS)))
         self.table.setHorizontalHeaderLabels(list(TAG_WEEK_COLUMNS))
@@ -1222,25 +1259,75 @@ class TagWeekPage(_StepPage):
         #: read cannot cancel each other.
         self._write_worker = None
         self._rows: list[dict] = []
+        self._risk_rows: list[dict] = []
+
+        # ST5.5: the missing-risk worklist, under the tag table and clearly its
+        # own thing. A row is a REFERRAL, not a form.
+        self.risk_note = QLabel("")
+        self.risk_note.setWordWrap(True)
+        self.risk_table = _ten_row_table(QTableWidget(0, len(MISSING_RISK_COLUMNS)))
+        self.risk_table.setHorizontalHeaderLabels(list(MISSING_RISK_COLUMNS))
+        self.risk_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.risk_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.risk_table.doubleClicked.connect(self._open_selected_risk_row)
+        self.open_trade_button = QPushButton("Open in Journal...")
+        self.open_trade_button.setToolTip(
+            "Open the selected trade in the Journal's Trades tab, where you type "
+            "your planned entry and stop. Nothing here calculates a risk - a "
+            "risk worked backwards from what the trade did is not a plan."
+        )
+        self.open_trade_button.clicked.connect(self._open_selected_risk_row)
+        risk_buttons = QHBoxLayout()
+        risk_buttons.addWidget(self.open_trade_button)
+        risk_buttons.addStretch(1)
+
+        self._layout.addWidget(self.coverage_note)
         self._layout.addWidget(self.note)
-        self._layout.addWidget(self.table, 1)
+        self._layout.addWidget(self.table, 2)
         self._layout.addLayout(buttons)
+        self._layout.addWidget(self.risk_note)
+        self._layout.addWidget(self.risk_table, 1)
+        self._layout.addLayout(risk_buttons)
         self._finish_layout()
 
     def reload(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         self.refresh_button.setEnabled(False)
-        self.note.setText("Reading the week's trades...")
-        worker = _ReadWorker(lambda: _read_week_tag_rows(self.service.week_bounds), self)
+        self.note.setText("Reading the tag backlog...")
+        worker = _ReadWorker(lambda: self._read_everything(), self)
         worker.finished_with.connect(self._on_rows_ready)
         worker.failed.connect(self._on_rows_failed)
         self._worker = worker
         worker.start()
 
+    def _read_everything(self) -> dict:
+        """Every store this page reads, and no widget. Runs on the worker.
+
+        One `list_trades()` per reader is two reads of a store that answers in
+        milliseconds on 204 rows; keeping them separate keeps each one's rule
+        stated where it is applied, and neither is on the Qt thread.
+        """
+        return {
+            "tags": _read_week_tag_rows(self.service.week_bounds),
+            "missing_risk": _read_missing_planned_risk_rows(),
+            "coverage": _read_personal_evidence_coverage(),
+        }
+
     def _on_rows_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
         self.refresh_button.setEnabled(True)
-        self._rows = list(payload) if isinstance(payload, list) else []
+        # A list is what this slot was handed before ST5.5 gave the page a
+        # second table; both shapes still render, so nothing that calls
+        # `_on_rows_ready` directly had to move.
+        if isinstance(payload, dict):
+            self._rows = list(payload.get("tags") or [])
+            self._risk_rows = list(payload.get("missing_risk") or [])
+            coverage = str(payload.get("coverage") or "")
+            self.coverage_note.setText(coverage)
+            if coverage:
+                self.coverageChanged.emit(coverage)
+        else:
+            self._rows = list(payload) if isinstance(payload, list) else []
         self._render()
 
     def _on_rows_failed(self, message: str) -> None:  # pragma: no cover - signal seam
@@ -1256,16 +1343,70 @@ class TagWeekPage(_StepPage):
                 str(row.get("tag_status") or ""),
                 str(row.get("setup_tags") or ""),
                 _tag_net_text(row.get("net_pnl")),
+                # Which population this row came from, said out loud: the list
+                # is no longer one week, and a reader has to be able to see that
+                # without counting dates.
+                "this week" if row.get("in_review_week") else "backlog",
             )
             for column, text in enumerate(values):
                 self.table.setItem(index, column, QTableWidgetItem(text))
         if not self._rows:
-            self.note.setText("Nothing to confirm - every trade this week is your own answer.")
+            self.note.setText("Nothing to confirm - every proposed tag is your own answer already.")
         else:
+            proposed = sum(1 for row in self._rows if str(row.get("setup_tags") or "").strip())
+            backlog = sum(1 for row in self._rows if not row.get("in_review_week"))
             self.note.setText(
-                f"{len(self._rows)} trade(s) waiting. Confirming writes your answer; "
+                f"{len(self._rows)} trade(s) waiting - {proposed} carry a proposed tag, "
+                f"{backlog} are older than this week. Confirming writes your answer; "
                 "the tagger never overwrites one."
             )
+        self._render_missing_risk()
+
+    def _render_missing_risk(self) -> None:
+        self.risk_table.setRowCount(len(self._risk_rows))
+        for index, row in enumerate(self._risk_rows):
+            values = (
+                str(row.get("trade_date") or "")[:10],
+                str(row.get("symbol") or ""),
+                str(row.get("direction") or ""),
+                _tag_net_text(row.get("net_pnl")),
+                str(row.get("setup_tags") or ""),
+            )
+            for column, text in enumerate(values):
+                self.risk_table.setItem(index, column, QTableWidgetItem(text))
+        if not self._risk_rows:
+            self.risk_note.setText(
+                "Missing planned risk: none - every closed trade carries the risk you planned."
+            )
+            return
+        shown = len(self._risk_rows)
+        total = int(self._risk_rows[0].get("missing_risk_total") or shown)
+        capped = f"showing {shown} of {total}, " if total > shown else ""
+        self.risk_note.setText(
+            f"Missing planned risk: {total} closed trade(s) - {capped}newest first. "
+            "Without a planned risk the journal's R is BLANK, not zero - and it stays "
+            "blank, because a risk worked backwards from the result is not a plan. "
+            "Open a row to type yours in the Trades tab."
+        )
+
+    def _selected_risk_row(self) -> dict | None:
+        indexes = {index.row() for index in self.risk_table.selectedIndexes()}
+        for index in sorted(indexes):
+            if 0 <= index < len(self._risk_rows):
+                return self._risk_rows[index]
+        return None
+
+    def _open_selected_risk_row(self, *_args) -> None:
+        row = self._selected_risk_row()
+        if row is None:
+            self.statusChanged.emit("select a trade in the missing-risk list first")
+            return
+        trade_id = str(row.get("trade_id") or "")
+        if not trade_id:
+            self.statusChanged.emit("that row carries no trade id")
+            return
+        self.openTradeRequested.emit(trade_id)
+        self.statusChanged.emit(f"opening {row.get('symbol', '')} in the Journal")
 
     def _confirm(self, rows) -> None:
         """Confirm through the STORE's own API. A journal write fails loudly.
@@ -1397,33 +1538,123 @@ def _tag_net_text(value) -> str:
         return "-"
 
 
-def _read_week_tag_rows(bounds) -> list[dict]:
-    """The week's closed trades that are NOT the trader's own answer yet.
+def _open_journal_store(store=None, path=None):
+    """The store this page reads, with a seam a test can point at a temp file.
 
-    Provisional and needs_review only. A confirmed row is the trader's answer and
-    has nothing to offer this page; listing it would invite a second confirmation
-    of something already settled.
+    ST5.5: every reader below opened `JournalStore()` on the default home-folder
+    path with no way to inject one, so a test either monkeypatched the class or
+    could not run at all. `store` wins, then `path`, then the default.
+    """
+    if store is not None:
+        return store
+    from journal_store import JournalStore
+
+    return JournalStore(path) if path is not None else JournalStore()
+
+
+def _read_week_tag_rows(bounds, *, store=None, path=None) -> list[dict]:
+    """Trades that are NOT the trader's own answer yet - the review list.
+
+    Two populations, two scopes, and the difference is deliberate (ST5.5):
+
+    * **Every PROVISIONAL trade, whatever week it is from.** A provisional tag
+      is a machine guess sitting on the trader's own store waiting for a yes or
+      no, and there were **26 of them** on 2026-09-06 while this page - scoped
+      to the current week - offered a handful. A backlog the review screen
+      cannot see is a backlog nobody reviews, and gate #36 has been owed since
+      2026-09-01 for exactly that reason.
+    * **needs_review stays THIS WEEK's.** Those are 145 rows the tagger looked
+      at and refused to guess on; they carry no proposal, so listing all of them
+      would bury the 26 rows that have one under a hundred blanks.
+
+    A confirmed row is the trader's answer and is never listed - a second
+    confirmation settles nothing.
+
+    The week's rows sort FIRST, so widening the provisional half never pushes
+    the week the trader is reviewing off the top of the table.
     """
     from journal_store import (
         TAG_STATUS_NEEDS_REVIEW,
         TAG_STATUS_PROVISIONAL,
-        JournalStore,
     )
 
     monday, friday = bounds
     start, end = str(monday), str(friday)
-    wanted = {TAG_STATUS_PROVISIONAL, TAG_STATUS_NEEDS_REVIEW}
     rows = []
-    store = JournalStore()
-    for trade in store.list_trades():
+    for trade in _open_journal_store(store, path).list_trades():
         date = str(trade.get("trade_date") or "")[:10]
-        if not date or date < start or date > end:
+        in_week = bool(date) and start <= date <= end
+        status = str(trade.get("tag_status") or "")
+        if status == TAG_STATUS_PROVISIONAL:
+            pass  # backlog-wide: the whole point of this widening
+        elif status == TAG_STATUS_NEEDS_REVIEW and in_week:
+            pass
+        else:
             continue
-        if str(trade.get("tag_status") or "") not in wanted:
+        rows.append(dict(trade, in_review_week=in_week))
+    rows.sort(
+        key=lambda row: (
+            0 if row.get("in_review_week") else 1,
+            str(row.get("trade_date") or ""),
+            str(row.get("symbol") or ""),
+        )
+    )
+    return rows
+
+
+#: How many missing-risk rows reach the table. The packet's ten-row floor was a
+#: MINIMUM height, not a licence to build 165 `QTableWidgetItem`s on the Qt
+#: thread; the newest fifty is a session's worth of work and what the cap drops
+#: is PRINTED, because a silent top-N reads as "that was all of it".
+MISSING_RISK_ROWS_SHOWN = 50
+
+
+def _read_missing_planned_risk_rows(*, store=None, path=None, limit: int = MISSING_RISK_ROWS_SHOWN) -> list[dict]:
+    """Closed trades with no planned risk, newest first (ST5.5).
+
+    `planned_risk` is non-null on **0 of 204** live trades (2026-09-06), which is
+    why every `journal_r` in the preference report is blank. That is not a
+    number this desk may fill in: an R reconstructed from what the trade did is
+    a statement about the outcome wearing the plan's clothes. So this is a
+    WORKLIST, and the only thing a row does is open the trade in the Journal's
+    Trades tab where `JournalStore.save_risk_fields` already lives behind the
+    trader's own hand.
+
+    Read-only. Nothing in this module writes `planned_risk`, and nothing may.
+    """
+    rows = []
+    for trade in _open_journal_store(store, path).list_trades():
+        if str(trade.get("status") or "").upper() != "CLOSED":
+            continue
+        risk = trade.get("planned_risk")
+        if risk is not None and str(risk).strip() != "":
             continue
         rows.append(dict(trade))
-    rows.sort(key=lambda row: (str(row.get("trade_date") or ""), str(row.get("symbol") or "")))
-    return rows
+    rows.sort(
+        key=lambda row: (str(row.get("trade_date") or ""), str(row.get("symbol") or "")),
+        reverse=True,
+    )
+    total = len(rows)
+    shown = rows[: max(1, int(limit))]
+    # Every row carries the full count, so the note can say what the cap hid
+    # without a second read and without a parallel return value.
+    for row in shown:
+        row["missing_risk_total"] = total
+    return shown
+
+
+def _read_personal_evidence_coverage(*, store=None, path=None) -> str:
+    """The one coverage sentence, from the one helper (ST5.4).
+
+    `Confirmed tags: C of T closed trades. Provisional awaiting review: P.
+    Planned risk recorded: R of T.` - the same string the Journal's Analytics
+    tab shows, built here on the page's own worker because this one opens the
+    journal and the Qt thread never does.
+    """
+    from journal_analytics import personal_evidence_summary
+
+    trades = list(_open_journal_store(store, path).list_trades())
+    return str(personal_evidence_summary(trades)["coverage"]["line"])
 
 
 class DiscoveryPage(_StepPage):
@@ -1651,6 +1882,10 @@ class WeekendPrepPanel(QFrame):
     """The stepper rail and the five pages."""
 
     statusChanged = Signal(str)
+    #: ST5.5: "this closed trade has no planned risk" -> open it in the Journal's
+    #: Trades tab, where `save_risk_fields` already lives behind the trader's own
+    #: hand. This tab has no writer for that column and never will.
+    openTradeRequested = Signal(str)
 
     def __init__(self, parent=None, *, service: WeekendPrepService | None = None, focus_service=None) -> None:
         super().__init__(parent)
@@ -1681,6 +1916,7 @@ class WeekendPrepPanel(QFrame):
             page = self._pages[step]
             page.statusChanged.connect(self.statusChanged)
             self.pages.addWidget(page)
+        self.tag_week.openTradeRequested.connect(self.openTradeRequested)
 
         self.header = QLabel("")
         self.header.setObjectName("WeekendHeader")
@@ -1706,6 +1942,14 @@ class WeekendPrepPanel(QFrame):
         self.building_note = QLabel("")
         self.building_note.setObjectName("MutedLabel")
         self.building_note.setWordWrap(True)
+        # ST5.4: `Confirmed tags: C of T closed trades. Provisional awaiting
+        # review: P. Planned risk recorded: R of T.` - one sentence, UNDER the
+        # card rather than in it, because the card is five to eight lines by the
+        # trader's own request. Filled from the tag page's worker.
+        self.coverage_note = QLabel("")
+        self.coverage_note.setObjectName("MutedLabel")
+        self.coverage_note.setWordWrap(True)
+        self.tag_week.coverageChanged.connect(self.coverage_note.setText)
         self._verdict_worker = None
 
         top = QHBoxLayout()
@@ -1720,6 +1964,7 @@ class WeekendPrepPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addLayout(top)
         layout.addWidget(self.verdict_card)
+        layout.addWidget(self.coverage_note)
         layout.addWidget(self.building_note)
         layout.addLayout(body, 1)
 
@@ -1797,6 +2042,12 @@ class WeekendPrepPanel(QFrame):
         # opens. The full panel stays in Research; this is one line.
         pack = _safe(_read_research_pack, {})
 
+        # THE CARD STAYS FIVE TO EIGHT LINES. ST5.4's coverage sentence is a
+        # ninth, so it sits in its own label directly UNDER the card
+        # (`coverage_note`, fed by the tag page's own worker through
+        # `coverageChanged`) rather than inside it. The trader asked for a card,
+        # not a second wall of text, and `test_the_card_is_five_to_eight_lines`
+        # is that request written down.
         return weekend_verdict.build_verdict(
             learning_state=state,
             like_rows=likes,
@@ -2679,6 +2930,10 @@ def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
                 "side": str(raw.get("side") or ""),
                 "statement": f"{statement} ({detail})" if detail else statement,
                 "traded": str(raw.get("traded") or ""),
+                # ST5.2: carried so the note can count DISTINCT trades beside
+                # the statement count. Not a column on the table - the grain is
+                # the number a reader needs, not the id.
+                "trade_id": str(raw.get("trade_id") or ""),
                 # "no match" travels as words, never as a blank that could read
                 # as an unmeasured cell.
                 "match_confidence": str(raw.get("match_confidence") or "")

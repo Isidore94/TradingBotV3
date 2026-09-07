@@ -50,6 +50,7 @@ from gui_text_highlighter import (
     tree_tags_for_values,
 )
 from .setup_tagging import derive_setup_tag_payload
+from . import selection_policy as selection_policy_lib
 
 from project_paths import (
     LOCAL_SETTINGS_FILE,
@@ -104,6 +105,7 @@ from project_paths import (
     MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
     MASTER_AVWAP_TIER_LIST_FILE,
     MASTER_AVWAP_TIER_OUTCOMES_FILE,
+    MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE,
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
     MASTER_AVWAP_TIER_CATCH_RATE_FILE,
     MASTER_AVWAP_SCORING_CONFIG_FILE,
@@ -125,6 +127,41 @@ from project_paths import (
     get_tracker_storage_details,
     open_path_in_file_manager,
     save_tracker_storage_dir,
+)
+
+# Packet ST3. Leaf module (stdlib only), so no cycle: it names the tracker
+# replay's execution convention and level knowledge, both default-preserving.
+# The four policy names are imported even where this module does not branch on
+# them, so `master_avwap.<NAME>` resolves for a caller that only ever sees the
+# compatibility entrypoint; `execution_convention` remains their one home.
+from .execution_convention import (
+    DEFAULT_EXECUTION_CONVENTION,
+    DEFAULT_LEVEL_KNOWLEDGE,
+    EXECUTION_GAP_AWARE_V2,
+    EXECUTION_LITERAL_LEVEL_V1,
+    FILL_BASIS_CLOSE,
+    FILL_BASIS_DEFERRED_INVALID_BAR,
+    FILL_BASIS_INVALID_BAR,
+    FILL_KIND_STOP,
+    FILL_KIND_TARGET,
+    LEVEL_KNOWLEDGE_PRIOR_SESSION_V2,
+    LEVEL_KNOWLEDGE_SAME_SESSION_V1,
+    NO_PRIOR_SESSION_LEVEL,
+    bar_is_valid,
+    is_gap_aware,
+    resolve_fill,
+    uses_prior_session_levels,
+)
+
+# ST1: the ONE declared reading of the swing outcome files. Pure arithmetic
+# over `evidence_stats`; it imports nothing from this module, so there is no
+# cycle and no scoring path through it.
+from swing_evidence import (
+    ASSIGNED_TIER_SOURCE,
+    OUTCOME_KIND_SCANROW_V1,
+    is_stale_horizon,
+    outcome_kind_of,
+    tier_split,
 )
 
 from .levels import (
@@ -354,6 +391,9 @@ SCAN_FACTOR_OBSERVATIONS_FILE = MASTER_AVWAP_SCAN_FACTOR_OBSERVATIONS_FILE
 SCAN_FACTOR_LEADERBOARD_FILE = MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE
 TIER_LIST_FILE = MASTER_AVWAP_TIER_LIST_FILE
 TIER_OUTCOMES_FILE = MASTER_AVWAP_TIER_OUTCOMES_FILE
+#: ST1 item 2: the v2 exact-exchange-session file, BESIDE the v1 one and
+#: never instead of it. No production caller reads it yet.
+SESSION_HORIZON_OUTCOMES_FILE = MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE
 TIER_PERFORMANCE_FILE = MASTER_AVWAP_TIER_PERFORMANCE_FILE
 TIER_CATCH_RATE_FILE = MASTER_AVWAP_TIER_CATCH_RATE_FILE
 SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
@@ -764,6 +804,98 @@ STUDY_SETUP_MAX_RECORDS = 4000
 STUDY_DISCOVERY_MIN_CLOSED_EPISODES = 5
 TRACKER_RECENT_FAMILY_LOOKBACK_DAYS = 28
 TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
+#: The ST2 count columns, in the order they are appended.
+#:
+#: They must land at the END of the SHIPPED header of each export, not at the
+#: end of the builder that first computes them - the recent rows gain
+#: `namespace` / `status` from `build_recent_setup_type_stat_rows` afterwards,
+#: and the setup-type rows gain `ranking_score` / `score_delta` from
+#: `rank_tracker_setup_type_rows` afterwards, so appending inside the inner
+#: builder wedged the new columns into the MIDDLE of the file a reader opens
+#: (index 26 of 31, and index 31 of 39). `_move_keys_to_end` is applied once
+#: per export, at the last hand that touches the row.
+TRACKER_RECENT_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "n_observations",
+    "n_episodes",
+    "n_symbols",
+    "n_entry_sessions",
+    "n_pending",
+    "win_rate_closed_unweighted",
+    "win_rate_closed_basis",
+    "outcome_kind",
+    "horizon_basis",
+    "latest_measured_session",
+    # ST4 (2026-09-06), AFTER ST2's, for the same reason: these are stamped
+    # inside `build_recent_tracker_setup_family_rows` and would otherwise sit
+    # in the middle of the shipped header. `selection_policy` is the one a
+    # reader of a live export checks first - it must read `closed_first_v1`.
+    "selection_policy",
+    "as_of_session",
+    "n_excluded",
+    "excluded_reasons",
+    "fully_excluded_groups",
+)
+
+TRACKER_SETUP_TYPE_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "n_pending",
+    "win_rate",
+    "outcome_kind",
+)
+
+TRACKER_SHORT_HORIZON_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "outcome_kind",
+    "horizon_basis",
+    "latest_measured_session",
+)
+
+
+def _move_keys_to_end(row: dict, keys) -> dict:
+    """Re-insert ``keys`` at the end of ``row``, in order. Values untouched.
+
+    A dict preserves insertion order and `pd.DataFrame(rows)` writes the CSV
+    header in that order, so this is what decides where a column lands in the
+    file the trader opens.
+    """
+    for key in keys:
+        if key in row:
+            row[key] = row.pop(key)
+    return row
+
+
+#: WHAT a win on a tracker family / setup-type row IS (ST2, 2026-09-06).
+#:
+#: One string, stamped on both exports, because "win rate" without its outcome
+#: definition is not a statistic: this one is the sign of the REPRESENTATIVE
+#: (primary protective stop) scenario's closed R - the single stop you would
+#: actually have traded - and not the cross-variant average, not a percent move
+#: and not a target-hit rate. Units carry their name: this is R.
+TRACKER_REPRESENTATIVE_OUTCOME_KIND = "trade_r_representative_exit"
+#: Packet ST4.4 (2026-09-06). The order `excluded_reasons` is rendered in, so
+#: two builds of the same population produce the same string. A bare token
+#: counts records the family row never admitted and is summed into
+#: `n_excluded`; an `_in_population` token counts counted episodes a decision
+#: deliberately KEPT and is not summed - `expired_unmeasured_in_population` is
+#: decision (b) of 2026-09-06 and `untradeable` is decision (c).
+TRACKER_POPULATION_EXCLUSION_REASONS = (
+    "untradeable",
+    "after_as_of",
+    "expired_unmeasured_in_population",
+    "no_representative_in_population",
+    "undatable_exit_in_population",
+    "unknown_compact_in_population",
+)
 # Short-horizon (1-2 session) outcome marks. Most tracked setups are swing
 # setups that need days/weeks to resolve; these scalars capture what each setup
 # did in its first 1-2 sessions after entry so a separate short-term playbook
@@ -4685,14 +4817,32 @@ def _protective_band_label(side: str) -> str:
 #: the representative R, so it needs a golden fixture and a sec-7 promotion.
 REPRESENTATIVE_EXIT_TEMPLATE_ID = ""
 
+#: Packet ST4 (2026-09-06): the DECLARED representative exit template under
+#: `first_actionable_v2`. It is the first baseline entry of
+#: `SETUP_EXIT_TEMPLATES`, which is the one dict order has always practically
+#: handed back - so it is declared WITHOUT reading any outcome, and the
+#: comparison it feeds measures a naming, not a new preference. It is reachable
+#: only through an explicit `policy=` argument; `REPRESENTATIVE_EXIT_TEMPLATE_ID`
+#: above stays empty and stays the default.
+REPRESENTATIVE_EXIT_TEMPLATE_ID_V2 = "full_band2"
 
-def _representative_scenario(tradeable: list, primary_stop_label: str):
+
+def _representative_scenario(
+    tradeable: list,
+    primary_stop_label: str,
+    *,
+    policy: str = selection_policy_lib.DEFAULT_SELECTION_POLICY,
+):
     """The one scenario the headline per-setup R is measured on.
 
     You trade one stop and one exit plan, so this is the honest per-setup R.
     The stop is chosen by `_representative_stop_label_for_setup`; the exit
     template is `REPRESENTATIVE_EXIT_TEMPLATE_ID` when it is set, and otherwise
     the first match - which is what the code has always done.
+
+    Under `first_actionable_v2` (packet ST4) the template is
+    `REPRESENTATIVE_EXIT_TEMPLATE_ID_V2` instead, so reordering the `scenarios`
+    dict can no longer move the headline R. The default policy is unchanged.
 
     A configured template that no scenario carries falls back to the first
     match rather than returning nothing: a setup with no representative R would
@@ -4706,7 +4856,10 @@ def _representative_scenario(tradeable: list, primary_stop_label: str):
     ]
     if not matching:
         return None
-    wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
+    if selection_policy_lib.resolve_policy(policy) == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2:
+        wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID_V2 or "").strip()
+    else:
+        wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
     if wanted:
         for scenario in matching:
             if str(scenario.get("exit_template_id") or "") == wanted:
@@ -6386,6 +6539,29 @@ def _scenario_is_closed(status: object) -> bool:
     return str(status or "").upper() in TRACKER_CLOSED_SCENARIO_STATUSES
 
 
+def _scenario_recorded_exit_date(scenario: dict) -> str:
+    """The ISO date a scenario left the trade, or '' when it has not.
+
+    Packet ST4 (2026-09-06). There is NO scalar exit-date field on a scenario:
+    `_apply_scenario_exit_event` appends to `events`, one entry per leg, so the
+    recorded exit is the `trade_date` of the LAST entry. A partial exit leaves
+    an event behind on a scenario that is still running, which is why the
+    status gates the read - a partial's date is not an exit date. An open
+    scenario has `events` PRESENT and EMPTY.
+    """
+    if not isinstance(scenario, dict):
+        return ""
+    if not _scenario_is_closed(scenario.get("status")):
+        return ""
+    events = scenario.get("events")
+    if not isinstance(events, list) or not events:
+        return ""
+    last = events[-1]
+    if not isinstance(last, dict):
+        return ""
+    return str(last.get("trade_date") or "").strip()
+
+
 def _tracker_cost_per_share_per_side(entry_price: object) -> float:
     price = abs(_coerce_float(entry_price) or 0.0)
     return float(TRACKER_COST_COMMISSION_PER_SHARE) + float(TRACKER_SLIPPAGE_FRACTION_PER_SIDE) * price
@@ -6409,7 +6585,22 @@ def _bar_hits_stop_level(side: str, bar_row: pd.Series, stop_level: float | None
     return _coerce_float(bar_row.get("high")) is not None and float(bar_row["high"]) >= float(stop_level)
 
 
-def _apply_scenario_exit_event(scenario: dict, qty: int, exit_price: float, trade_date: str, reason: str) -> dict:
+def _apply_scenario_exit_event(
+    scenario: dict,
+    qty: int,
+    exit_price: float,
+    trade_date: str,
+    reason: str,
+    *,
+    fill_basis: str | None = None,
+    execution_convention: str | None = None,
+) -> dict:
+    """Book one exit leg. The cost model is unchanged and there is only one.
+
+    ``fill_basis`` / ``execution_convention`` (packet ST3) are ADDITIVE and
+    keyword-only: a caller that passes neither - which is every production
+    caller - writes exactly the event dict this function has always written.
+    """
     qty = int(max(0, qty))
     if qty <= 0:
         return {}
@@ -6433,6 +6624,10 @@ def _apply_scenario_exit_event(scenario: dict, qty: int, exit_price: float, trad
         "gross_pnl": float(gross_pnl),
         "cost": float(trade_cost),
     }
+    if fill_basis is not None:
+        event["fill_basis"] = str(fill_basis)
+    if execution_convention is not None:
+        event["execution_convention"] = str(execution_convention)
     scenario.setdefault("events", []).append(event)
     scenario["last_action"] = f"{reason} @ {exit_price:.2f} on {trade_date}"
     return event
@@ -6448,7 +6643,51 @@ def _evaluate_tracker_scenario_bar(
     is_entry_day: bool,
     dynamic_level_overrides: dict[str, float] | None = None,
     bar_index: int = 0,
+    execution_convention: str = DEFAULT_EXECUTION_CONVENTION,
+    level_knowledge: str = DEFAULT_LEVEL_KNOWLEDGE,
+    prior_session_levels: dict | None = None,
 ) -> list[dict]:
+    """Advance one scenario over one daily bar.
+
+    Packet ST3 added three keyword arguments, all of them default-preserving:
+
+    ``execution_convention``
+        ``literal_level_v1`` (default) books a touched level AT the level,
+        exactly as this function always has. ``gap_aware_v2`` routes every
+        level fill through :func:`master_avwap_lib.execution_convention.
+        resolve_fill`, so a bar that gapped through the level books the open,
+        a bar with no open books a clamped price, and an invalid candle books
+        nothing while the hold clock keeps running. **An invalid candle skips
+        the WHOLE bar under v2**: no excursion (``max_favorable_r`` /
+        ``max_adverse_r``) is read off it and no unrealized mark is written
+        from it, because both would come from the same contradictory prices.
+        The skip is counted as ``skipped_bar_reasons["invalid_bar"]``, and the
+        deferral label reaches the ``TIME_STOP`` and no other exit.
+    ``level_knowledge``
+        ``same_session_v1`` (default) tests this bar's high/low against the
+        levels the caller passed for THIS day. ``prior_session_v2`` tests them
+        against ``prior_session_levels`` instead - the last completed session's
+        - because a daily anchored-VWAP band for day D is computed with day D's
+        own bar folded in and is not knowable intrabar.
+    ``prior_session_levels``
+        ``{"anchor_levels", "indicator_row", "dynamic_level_overrides",
+        "trade_date"}`` for the session strictly before this bar, or None when
+        there is none. Read only under ``prior_session_v2``.
+
+    WHICH CHECKS ARE INTRABAR (level knowledge applies) and which are
+    CLOSE-BASED (day D's levels stay, because at the close they are known):
+
+    * INTRABAR - the partial-target touch and the final-target touch, both
+      ``_bar_hits_target`` against a ``_resolve_dynamic_level`` result.
+    * NOT LEVEL-DEPENDENT - the hard stop. Its level is ``entry_price`` minus
+      ``initial_risk_per_share * hard_stop_r_multiple``, fixed at entry, so it
+      is point-in-time clean already and ``prior_session_v2`` leaves it alone.
+      The excursion (``max_favorable_r`` / ``max_adverse_r``) is high/low
+      against ``entry_price`` and is likewise level-free.
+    * CLOSE-BASED - the two-closes protective stop (``close`` vs
+      ``active_stop_level``), the recorded ``active_stop_level`` itself, and
+      the maximum-hold force close at the bar's close.
+    """
     if not scenario.get("tradeable"):
         scenario["status"] = str(scenario.get("inactive_status") or "UNTRADEABLE")
         if scenario.get("inactive_reason"):
@@ -6456,6 +6695,131 @@ def _evaluate_tracker_scenario_bar(
         return []
 
     events = []
+    gap_aware = is_gap_aware(execution_convention)
+    prior_session = uses_prior_session_levels(level_knowledge)
+
+    def _count_reason(key: str, reason: str) -> None:
+        """Accumulate one named skip on the scenario.
+
+        A skip that is not counted is indistinguishable from a bar on which
+        nothing happened, and "nothing happened" is an answer this function is
+        not entitled to give.
+        """
+        skips = scenario.get(key)
+        if not isinstance(skips, dict):
+            skips = {}
+            scenario[key] = skips
+        skips[reason] = int(skips.get(reason, 0) or 0) + 1
+
+    def _count_intrabar_skip(reason: str) -> None:
+        _count_reason("intrabar_skip_reasons", reason)
+
+    if gap_aware and not bar_is_valid(bar_row):
+        # A candle whose own four prices contradict each other answers no
+        # question about this bar. Nothing is booked from it, AND - the part
+        # worth saying out loud - no excursion (`max_favorable_r` /
+        # `max_adverse_r`) is read off it and no unrealized mark is written
+        # from it, because every one of those numbers would be derived from
+        # the same contradictory prices. That is why the skip is COUNTED, in
+        # `skipped_bar_reasons` rather than `intrabar_skip_reasons`: an
+        # invalid candle skips the WHOLE bar, not just one intrabar test.
+        # The clock still runs: if this unusable bar was the maximum-hold bar,
+        # the force close is DEFERRED to the next usable one, never skipped.
+        if _scenario_is_open(scenario.get("status", "OPEN")):
+            _count_reason("skipped_bar_reasons", FILL_BASIS_INVALID_BAR)
+        if (
+            not is_entry_day
+            and _scenario_is_open(scenario.get("status", "OPEN"))
+            and int(scenario.get("remaining_shares", 0)) > 0
+            and int(bar_index) >= TRACKER_MAX_HOLD_DAYS
+        ):
+            scenario["time_stop_deferred"] = True
+        return events
+
+    def _clear_deferral_if_closed() -> None:
+        """The deferral is a fact about an OPEN trade's clock.
+
+        Once the scenario has closed - by ANY route, not just the time stop -
+        the flag has no meaning, and leaving it on the dict would put a stale
+        `time_stop_deferred: True` into the persisted record. Called after
+        every status assignment that can close the scenario.
+        """
+        if not _scenario_is_open(scenario.get("status", "OPEN")):
+            scenario.pop("time_stop_deferred", None)
+
+    def _intrabar_level(label: str, *, count_skip: bool = True):
+        """The level an INTRABAR high/low test may legitimately be run against.
+
+        Under ``same_session_v1`` this is literally ``_resolve_dynamic_level``
+        with the arguments the caller passed - byte-identical to what shipped.
+        """
+        same_session = _resolve_dynamic_level(
+            label,
+            current_anchor_levels,
+            indicator_row,
+            dynamic_level_overrides=dynamic_level_overrides,
+        )
+        if not prior_session:
+            return same_session
+        context = prior_session_levels if isinstance(prior_session_levels, dict) else None
+        prior_value = None
+        if context is not None:
+            prior_value = _resolve_dynamic_level(
+                label,
+                context.get("anchor_levels"),
+                context.get("indicator_row"),
+                dynamic_level_overrides=context.get("dynamic_level_overrides"),
+            )
+        if prior_value is None and same_session is not None and count_skip:
+            # The test was answerable today and is not answerable from the
+            # prior session. Skipping it silently would read as "not hit",
+            # which is a made-up answer; count the reason instead.
+            _count_intrabar_skip(NO_PRIOR_SESSION_LEVEL)
+        return prior_value
+
+    def _fill_kwargs(
+        kind: str,
+        level: float,
+        *,
+        close_based: bool = False,
+        deferrable: bool = False,
+    ) -> dict | None:
+        """Price + additive event keys for one booked exit, or None to skip.
+
+        v1 returns the literal level and NO extra keys, so the event dict is
+        the one this function has always written.
+
+        ``deferrable`` is passed by the maximum-hold force close and by NOTHING
+        else. The deferral flag says "an unusable bar sat on the max-hold
+        index", which is a fact about the TIME_STOP; an exit that fires ahead
+        of it on the same bar is its own decision and must not wear that label.
+        """
+        if not gap_aware:
+            return {"price": float(level), "extra": {}}
+        if close_based:
+            basis = (
+                FILL_BASIS_DEFERRED_INVALID_BAR
+                if deferrable and scenario.get("time_stop_deferred")
+                else FILL_BASIS_CLOSE
+            )
+            return {
+                "price": float(level),
+                "extra": {
+                    "fill_basis": basis,
+                    "execution_convention": EXECUTION_GAP_AWARE_V2,
+                },
+            }
+        fill = resolve_fill(side, kind, level, bar_row)
+        if not fill.booked:  # pragma: no cover - the invalid bar returned above
+            return None
+        return {
+            "price": float(fill.price),
+            "extra": {
+                "fill_basis": fill.basis,
+                "execution_convention": EXECUTION_GAP_AWARE_V2,
+            },
+        }
+
     entry_price = float(scenario.get("entry_price"))
     initial_risk_per_share = float(scenario.get("initial_risk_per_share", 0.0) or 0.0)
     direction = float(scenario.get("direction", 1.0) or 1.0)
@@ -6489,17 +6853,14 @@ def _evaluate_tracker_scenario_bar(
         scenario["total_r"] = float(scenario.get("realized_r", 0.0))
         return events
 
-    partial_target_level = _resolve_dynamic_level(
-        str(scenario.get("partial_target_label") or ""),
-        current_anchor_levels,
-        indicator_row,
-        dynamic_level_overrides=dynamic_level_overrides,
-    )
-    final_target_level = _resolve_dynamic_level(
-        str(scenario.get("final_target_label") or ""),
-        current_anchor_levels,
-        indicator_row,
-        dynamic_level_overrides=dynamic_level_overrides,
+    # INTRABAR: both target touches are tested against a bar's own high/low, so
+    # under prior_session_v2 they read the last completed session's levels.
+    partial_target_level = _intrabar_level(str(scenario.get("partial_target_label") or ""))
+    # This first final-target resolution is superseded below (the label can move
+    # when a partial trails the stop), so it never counts a skip - the live one
+    # does, and counting here would report every bar twice.
+    final_target_level = _intrabar_level(
+        str(scenario.get("final_target_label") or ""), count_skip=False
     )
     active_stop_label = str(scenario.get("active_stop_label") or scenario.get("stop_reference_label") or "")
     active_stop_level = _resolve_dynamic_level(
@@ -6521,16 +6882,21 @@ def _evaluate_tracker_scenario_bar(
         hard_stop_level = float(entry_price - (initial_risk_per_share * hard_stop_r_multiple * direction))
     scenario["hard_stop_level"] = hard_stop_level
     if int(scenario.get("remaining_shares", 0)) > 0 and _bar_hits_stop_level(side, bar_row, hard_stop_level):
+        fill = _fill_kwargs(FILL_KIND_STOP, float(hard_stop_level))
+        if fill is None:  # pragma: no cover - unreachable; the bar was valid
+            return events
         event = _apply_scenario_exit_event(
             scenario,
             int(scenario.get("remaining_shares", 0)),
-            float(hard_stop_level),
+            fill["price"],
             trade_date,
             "HARD_STOP",
+            **fill["extra"],
         )
         if event:
             events.append(event)
         scenario["status"] = "STOPPED"
+        _clear_deferral_if_closed()
         scenario["unrealized_pnl"] = 0.0
         scenario["unrealized_r"] = 0.0
         scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -6540,7 +6906,12 @@ def _evaluate_tracker_scenario_bar(
     if not scenario.get("partial_taken") and partial_target_level is not None and _bar_hits_target(side, bar_row, partial_target_level):
         qty = max(1, int(scenario.get("remaining_shares", 0)) // 2)
         qty = min(qty, int(scenario.get("remaining_shares", 0)))
-        event = _apply_scenario_exit_event(scenario, qty, float(partial_target_level), trade_date, "PARTIAL_TARGET")
+        fill = _fill_kwargs(FILL_KIND_TARGET, float(partial_target_level))
+        if fill is None:  # pragma: no cover - unreachable; the bar was valid
+            return events
+        event = _apply_scenario_exit_event(
+            scenario, qty, fill["price"], trade_date, "PARTIAL_TARGET", **fill["extra"]
+        )
         if event:
             events.append(event)
         scenario["partial_taken"] = True
@@ -6549,24 +6920,25 @@ def _evaluate_tracker_scenario_bar(
             scenario["active_stop_label"] = str(scenario.get("trail_after_partial_label"))
             scenario["close_failure_count"] = 0
         scenario["status"] = "PARTIAL" if int(scenario.get("remaining_shares", 0)) > 0 else "TARGET_HIT"
+        _clear_deferral_if_closed()
 
-    final_target_level = _resolve_dynamic_level(
-        str(scenario.get("final_target_label") or ""),
-        current_anchor_levels,
-        indicator_row,
-        dynamic_level_overrides=dynamic_level_overrides,
-    )
+    final_target_level = _intrabar_level(str(scenario.get("final_target_label") or ""))
     if int(scenario.get("remaining_shares", 0)) > 0 and final_target_level is not None and _bar_hits_target(side, bar_row, final_target_level):
+        fill = _fill_kwargs(FILL_KIND_TARGET, float(final_target_level))
+        if fill is None:  # pragma: no cover - unreachable; the bar was valid
+            return events
         event = _apply_scenario_exit_event(
             scenario,
             int(scenario.get("remaining_shares", 0)),
-            float(final_target_level),
+            fill["price"],
             trade_date,
             "FINAL_TARGET",
+            **fill["extra"],
         )
         if event:
             events.append(event)
         scenario["status"] = "TARGET_HIT"
+        _clear_deferral_if_closed()
         scenario["unrealized_pnl"] = 0.0
         scenario["unrealized_r"] = 0.0
         scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -6589,16 +6961,22 @@ def _evaluate_tracker_scenario_bar(
         )
         if scenario["close_failure_count"] >= close_failure_limit and int(scenario.get("remaining_shares", 0)) > 0:
             reason = "TRAIL_STOP" if scenario.get("partial_taken") and active_stop_label != scenario.get("stop_reference_label") else "STOP_FAIL"
+            # CLOSE-BASED: the decision is made at the close, so the close is
+            # the fill and no gap logic applies. Day D's own level is legitimate
+            # here under either level-knowledge policy.
+            fill = _fill_kwargs(FILL_KIND_STOP, float(close_value), close_based=True)
             event = _apply_scenario_exit_event(
                 scenario,
                 int(scenario.get("remaining_shares", 0)),
-                float(close_value),
+                fill["price"],
                 trade_date,
                 reason,
+                **fill["extra"],
             )
             if event:
                 events.append(event)
             scenario["status"] = "STOPPED"
+            _clear_deferral_if_closed()
             scenario["unrealized_pnl"] = 0.0
             scenario["unrealized_r"] = 0.0
             scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -6609,16 +6987,24 @@ def _evaluate_tracker_scenario_bar(
     # held the maximum window, so the outcome resolves instead of staying OPEN and
     # being silently dropped from closed-sample statistics.
     if int(scenario.get("remaining_shares", 0)) > 0 and int(bar_index) >= TRACKER_MAX_HOLD_DAYS:
+        # CLOSE-BASED, and the one place the deferral lands: under gap_aware_v2
+        # an invalid bar on the maximum-hold index books nothing, so this force
+        # close arrives on the next usable bar carrying `deferred_invalid_bar`.
+        fill = _fill_kwargs(
+            FILL_KIND_STOP, float(close_value), close_based=True, deferrable=True
+        )
         event = _apply_scenario_exit_event(
             scenario,
             int(scenario.get("remaining_shares", 0)),
-            float(close_value),
+            fill["price"],
             trade_date,
             "TIME_STOP",
+            **fill["extra"],
         )
         if event:
             events.append(event)
         scenario["status"] = "TIME_STOP"
+        _clear_deferral_if_closed()
         scenario["unrealized_pnl"] = 0.0
         scenario["unrealized_r"] = 0.0
         scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -6675,6 +7061,8 @@ def recompute_tracker_setup_record(
     band_history_cache: dict | None = None,
     replay_cache: dict | None = None,
     as_of_session=None,
+    execution_convention: str = DEFAULT_EXECUTION_CONVENTION,
+    level_knowledge: str = DEFAULT_LEVEL_KNOWLEDGE,
 ) -> dict:
     """Replay ``setup``'s scenarios over ``df`` and restate its record.
 
@@ -6682,6 +7070,15 @@ def recompute_tracker_setup_record(
     When given, the staleness rule runs after the closure rule at the end of
     this function; when omitted the record's status is decided by the closure
     rule alone, exactly as before.
+
+    ``execution_convention`` / ``level_knowledge`` (packet ST3) select the
+    replay's policies. Both default to what ships, and a DEFAULT run writes the
+    record it has always written - the two keys appear on the record only when
+    a non-default policy produced it, so nothing downstream can mistake shadow
+    evidence for the champion's own numbers. Under ``prior_session_v2`` the
+    INTRABAR target tests read the last completed session's bands; the daily
+    marks, the feature snapshots and the close-based decisions keep day D's,
+    because a mark is a record of the day rather than a decision taken inside it.
     """
     if df is None or df.empty:
         return setup
@@ -6821,6 +7218,38 @@ def recompute_tracker_setup_record(
             dynamic_level_overrides[POST_EARNINGS_STOP_LABEL] = _anchor_level_value(post_earnings_levels, "AVWAPE")
             for label in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
                 dynamic_level_overrides[label] = _anchor_level_value(post_earnings_levels, label)
+        # ST3.2: the last completed session's levels, for the INTRABAR tests
+        # under `prior_session_v2` only. `entry_start_pos + idx` is this bar's
+        # position in the full frame, so the prior key is the frame's own
+        # previous session - not a calendar guess, and never a date filter.
+        prior_session_levels = None
+        if uses_prior_session_levels(level_knowledge):
+            frame_pos = entry_start_pos + idx
+            prior_date = bar_date_strs[frame_pos - 1] if frame_pos > 0 else None
+            if prior_date is not None:
+                prior_overrides = {}
+                prior_post_earnings = post_earnings_history.get(prior_date)
+                if prior_post_earnings and is_post_earnings_setup:
+                    prior_overrides[POST_EARNINGS_STOP_LABEL] = _anchor_level_value(
+                        prior_post_earnings, "AVWAPE"
+                    )
+                    for label in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
+                        prior_overrides[label] = _anchor_level_value(prior_post_earnings, label)
+                # TWO INDEX SPACES, and they agree where it matters.
+                # `frame_pos` walks the FULL frame (`bar_date_strs`), which is
+                # what `prior_date` has to come from - the previous session may
+                # sit before the entry and so outside the trade slice.
+                # `idx - 1` walks the TRADE SLICE, and `indicator_trade` was
+                # sliced at the same entry date as `trade_df`, so for
+                # `idx >= 1` the two point at the same session. `idx == 0` is
+                # the entry day, which returns before any intrabar test runs,
+                # so a None indicator row there is never read.
+                prior_session_levels = {
+                    "trade_date": prior_date,
+                    "anchor_levels": current_history.get(prior_date),
+                    "indicator_row": indicator_trade.iloc[idx - 1] if idx >= 1 else None,
+                    "dynamic_level_overrides": prior_overrides,
+                }
         for scenario in working_scenarios.values():
             was_open = _scenario_is_open(scenario.get("status", "OPEN")) and bool(scenario.get("tradeable"))
             bar_events = _evaluate_tracker_scenario_bar(
@@ -6833,6 +7262,9 @@ def recompute_tracker_setup_record(
                 is_entry_day=(trade_date == entry_trade_date),
                 dynamic_level_overrides=dynamic_level_overrides,
                 bar_index=idx,
+                execution_convention=execution_convention,
+                level_knowledge=level_knowledge,
+                prior_session_levels=prior_session_levels,
             )
             # The shadow IS graded here - the call above is what accrues its R -
             # but its events stay off the champion's daily mark, which is a
@@ -6862,6 +7294,18 @@ def recompute_tracker_setup_record(
 
     setup["scenarios"] = working_scenarios
     setup["daily_marks"] = daily_marks
+    # ST3: the record NAMES a non-default policy and stays silent about the
+    # default one. Popping on the default path matters as much as writing on
+    # the other: a record replayed once under gap_aware_v2 and then replayed
+    # again by the desk must not keep carrying a label the desk did not use.
+    if str(execution_convention) != DEFAULT_EXECUTION_CONVENTION:
+        setup["execution_convention"] = str(execution_convention)
+    else:
+        setup.pop("execution_convention", None)
+    if str(level_knowledge) != DEFAULT_LEVEL_KNOWLEDGE:
+        setup["level_knowledge"] = str(level_knowledge)
+    else:
+        setup.pop("level_knowledge", None)
     # M3.2: the newest session whose bars were actually replayed against this
     # record's scenarios. `scan_date` is creation and answers a different
     # question; without this stamp there was no way to tell a setup being
@@ -7010,10 +7454,83 @@ def _flatten_tracker_daily_marks(setups: dict[str, dict]) -> list[dict]:
     return rows
 
 
-def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool = False) -> dict[str, object]:
+def _summarize_tracker_setup_outcome(
+    setup: dict,
+    *,
+    include_experimental: bool = False,
+    policy: str = selection_policy_lib.DEFAULT_SELECTION_POLICY,
+    as_of_session: str | None = None,
+) -> dict[str, object]:
+    """One setup's headline outcome.
+
+    Packet ST4 (2026-09-06) added two OPT-IN arguments and changed nothing that
+    a default call answers:
+
+    * ``policy`` - under ``first_actionable_v2`` the representative exit
+      template is DECLARED (`REPRESENTATIVE_EXIT_TEMPLATE_ID_V2`) instead of
+      falling out of `scenarios` dict order, and an OPEN representative reports
+      ``representative_closed_r = None`` with ``representative_status
+      "pending"`` instead of borrowing `avg_closed_r` from the alternate exit
+      plans that happened to close. Pending stays pending.
+    * ``as_of_session`` - replay. A scenario whose recorded exit date is AFTER
+      the cutoff reads as still running for this build, from the scenario's own
+      last event; the bars are never re-walked and no R is recomputed.
+
+    ``representative_status``, ``representative_exit_date``,
+    ``selection_policy`` and ``as_of_session`` are additive keys present under
+    both policies.
+    """
+    resolved_policy = selection_policy_lib.resolve_policy(policy)
+    as_of_day = _parse_iso_date_or_none(as_of_session) if as_of_session else None
+    is_default_read = (
+        not include_experimental
+        and resolved_policy == selection_policy_lib.DEFAULT_SELECTION_POLICY
+        and as_of_day is None
+    )
     cached_summary = setup.get("_scoring_outcome_summary")
-    if isinstance(cached_summary, dict) and not include_experimental:
+    # THE CACHE IS THE RECORD, and a default read takes it unconditionally.
+    #
+    # `_build_scoring_projection` writes a COMPACT projection with no
+    # `scenarios` key at all (`master_avwap_tracker_scoring_snapshot.json`,
+    # 11,372 of them), so for the live scoring path this summary is not an
+    # optimisation - it is the only copy of the answer. An earlier ST4 draft
+    # required `representative_status` in the cache before trusting it and
+    # recomputed otherwise; on the snapshot that recompute found no scenarios,
+    # returned `tradeable_scenario_count == 0`, and every setup was dropped
+    # (32 recent family rows -> 0, 74 nonzero `setup_type` score deltas -> 0),
+    # which the first D1 scan after merge would have written into
+    # `recent_tracker_score_delta` / `setup_type_score_delta`. A missing key is
+    # never a reason to recompute.
+    if isinstance(cached_summary, dict) and is_default_read:
         return copy.deepcopy(cached_summary)
+
+    scenarios_mapping = setup.get("scenarios")
+    if isinstance(cached_summary, dict) and not isinstance(scenarios_mapping, dict):
+        # A compact projection under a NON-default policy or an as_of replay.
+        # Neither can be evaluated without the scenarios, so the honest answer
+        # is the cached one with the challenger's verdict NAMED as unavailable
+        # - never an empty summary, which would silently delete the setup.
+        summary = copy.deepcopy(cached_summary)
+        summary["representative_status"] = "unknown_compact"
+        summary["representative_exit_date"] = ""
+        summary["representative_exit_undatable"] = False
+        summary["selection_policy"] = resolved_policy
+        summary["as_of_session"] = str(as_of_session or "")
+        return summary
+
+    def _closed_as_of(scenario: dict) -> bool:
+        if not _scenario_is_closed(scenario.get("status")):
+            return False
+        if as_of_day is None:
+            return True
+        exit_day = _parse_iso_date_or_none(_scenario_recorded_exit_date(scenario))
+        # An exit the replay cannot date is not an exit the replay may claim.
+        # It reads as still running and `representative_exit_undatable` below
+        # says so, because history compaction empties `events`
+        # (`scenario["events"] = []`) and a compacted CLOSED scenario is a
+        # measurement gap, not a trade still on.
+        return exit_day is not None and exit_day <= as_of_day
+
     scenarios = [
         scenario
         for scenario in (setup.get("scenarios") or {}).values()
@@ -7022,11 +7539,13 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     if not include_experimental:
         scenarios = [scenario for scenario in scenarios if not bool(scenario.get("experimental"))]
     tradeable = [scenario for scenario in scenarios if scenario.get("tradeable")]
-    open_tradeable = [scenario for scenario in tradeable if _scenario_is_open(scenario.get("status", ""))]
-    closed = [
+    closed = [scenario for scenario in tradeable if _closed_as_of(scenario)]
+    open_tradeable = [
         scenario
         for scenario in tradeable
-        if _scenario_is_closed(scenario.get("status"))
+        if _scenario_is_open(scenario.get("status", ""))
+        # Replay only: a scenario that closes AFTER the cutoff was open then.
+        or (_scenario_is_closed(scenario.get("status")) and not _closed_as_of(scenario))
     ]
     total_rs = [
         float(scenario.get("total_r", 0.0) or 0.0)
@@ -7061,11 +7580,27 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     # preference to the cross-variant average (it falls back to the average when
     # the primary stop scenario isn't present).
     primary_stop_label = _representative_stop_label_for_setup(setup)
-    representative = _representative_scenario(tradeable, primary_stop_label)
+    representative = _representative_scenario(
+        tradeable, primary_stop_label, policy=resolved_policy
+    )
     rep_total_r = _clip_tracker_r_value(representative.get("total_r"), TRACKER_SCORING_R_CLIP) if representative else None
-    rep_is_closed = bool(representative and _scenario_is_closed(representative.get("status")))
-    representative_total_r = rep_total_r if rep_total_r is not None else avg_total_r
-    representative_closed_r = rep_total_r if (rep_total_r is not None and rep_is_closed) else avg_closed_r
+    rep_is_closed = bool(representative and _closed_as_of(representative))
+    if resolved_policy == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2:
+        # ST4.2: never substitute a more mature or more attractive alternate
+        # recipe. An open representative is PENDING and grades nothing; a setup
+        # with no representative at all reports nothing rather than the
+        # cross-variant average of exit plans nobody chose.
+        representative_total_r = rep_total_r
+        representative_closed_r = rep_total_r if rep_is_closed else None
+    else:
+        representative_total_r = rep_total_r if rep_total_r is not None else avg_total_r
+        representative_closed_r = rep_total_r if (rep_total_r is not None and rep_is_closed) else avg_closed_r
+    if representative is None:
+        representative_status = ""
+    elif rep_is_closed:
+        representative_status = "closed"
+    else:
+        representative_status = "pending"
     return {
         "representative_stop_label": str(representative.get("stop_reference_label")) if representative else "",
         # WHICH EXIT TEMPLATE the headline R is measured on (P4 B6). It was
@@ -7096,6 +7631,31 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
         "max_days_held": max(days_held_values) if days_held_values else 0,
         "any_target_hit": any(str(scenario.get("status", "")).upper() == "TARGET_HIT" for scenario in tradeable),
         "any_stopped": any(str(scenario.get("status", "")).upper() == "STOPPED" for scenario in tradeable),
+        # ---- ST4, additive: the representative's own state, said out loud ---
+        #
+        # `representative_closed_r` above is a NUMBER under v1 even when the
+        # trade is still running (it borrows `avg_closed_r`), so nothing on the
+        # summary said whether the headline had resolved. These four keys say
+        # it under BOTH policies and move no existing value.
+        "representative_status": representative_status,
+        "representative_exit_date": (
+            _scenario_recorded_exit_date(representative)
+            if (representative is not None and rep_is_closed)
+            else ""
+        ),
+        # True when the REPLAY could not date this setup's representative exit
+        # - a CLOSED scenario whose `events` history compaction emptied. It
+        # reads as pending for the replay, and this flag is what stops that
+        # being reported as a trade still running.
+        "representative_exit_undatable": bool(
+            representative is not None
+            and as_of_day is not None
+            and not rep_is_closed
+            and _scenario_is_closed(representative.get("status"))
+            and _parse_iso_date_or_none(_scenario_recorded_exit_date(representative)) is None
+        ),
+        "selection_policy": resolved_policy,
+        "as_of_session": str(as_of_session or ""),
     }
 
 
@@ -7313,32 +7873,25 @@ def _tracker_episode_key(setup: dict) -> tuple[str, str, str, str]:
     )
 
 
-def _dedupe_recent_tracker_family_rows(rows: list[dict]) -> list[dict]:
+def _dedupe_recent_tracker_family_rows(
+    rows: list[dict],
+    *,
+    policy: str = selection_policy_lib.DEFAULT_SELECTION_POLICY,
+) -> list[dict]:
     """Collapse correlated daily re-scans of the same episode to one
     representative row: prefer a record that has closed (resolved outcome), then
-    the earliest entry (the trade you would actually have taken at first signal)."""
+    the earliest entry (the trade you would actually have taken at first signal).
 
-    groups: dict[tuple, list[dict]] = {}
-    for row in rows:
-        key = (
-            str(row.get("symbol") or ""),
-            str(row.get("side") or ""),
-            str(row.get("anchor_date") or ""),
-            str(row.get("setup_family") or "general"),
-        )
-        groups.setdefault(key, []).append(row)
-    representatives: list[dict] = []
-    for group in groups.values():
-        representatives.append(
-            sorted(
-                group,
-                key=lambda r: (
-                    0 if int(r.get("closed_setups", 0) or 0) > 0 else 1,
-                    str(r.get("scan_date") or ""),
-                ),
-            )[0]
-        )
-    return representatives
+    Packet ST4 (2026-09-06). That default rule reads the OUTCOME to pick the
+    entry: a later rescan that happens to have closed beats the earlier open
+    row a trader could actually have taken. It is unchanged and still the
+    default; `scripts/master_avwap_lib/selection_policy.py` now owns the one
+    implementation of it, and `first_actionable_v2` is an opt-in challenger
+    (earliest row per attempt, one attempt per declared re-entry) reachable
+    only through this keyword. Every returned row is stamped
+    `selection_policy`.
+    """
+    return selection_policy_lib.select_episode_rows(rows, policy=policy)
 
 
 def _coarse_regime_bucket(label: object) -> str:
@@ -7365,10 +7918,29 @@ def build_recent_tracker_setup_family_rows(
     lookback_days: int = TRACKER_RECENT_FAMILY_LOOKBACK_DAYS,
     recency_half_life_days: float = TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS,
     current_regime_label: str | None = None,
+    selection_policy: str = selection_policy_lib.DEFAULT_SELECTION_POLICY,
+    as_of_session: str | None = None,
 ) -> list[dict]:
+    """Recent per-family evidence rows, one per selected episode, aggregated.
+
+    Packet ST4 (2026-09-06) added two OPT-IN arguments and four additive
+    columns; a default call is byte-identical to what shipped
+    (`tests/fixtures/st4_family_rows_golden.csv`, pinned from `main` before any
+    of this existed).
+
+    * ``selection_policy`` names which observation of a thesis becomes the
+      graded episode - see `master_avwap_lib.selection_policy`.
+    * ``as_of_session`` replays the build: scan rows after the cutoff are
+      excluded and a scenario that closed after it reads as still running.
+    * ``n_excluded`` / ``excluded_reasons`` say what the population left out
+      and, with an ``_in_population`` suffix, what it deliberately KEPT.
+    """
     if not isinstance(setups, dict) or not setups:
         return []
 
+    resolved_policy = selection_policy_lib.resolve_policy(selection_policy)
+    as_of_session_text = str(as_of_session or "").strip()
+    as_of_day = _parse_iso_date_or_none(as_of_session_text) if as_of_session_text else None
     reference_day = reference_date or datetime.now().date()
     max_age_days = max(1, int(lookback_days))
     half_life = max(1.0, float(recency_half_life_days))
@@ -7377,6 +7949,25 @@ def build_recent_tracker_setup_family_rows(
     )
     recent_rows = []
     baseline_groups: dict[tuple[str, str], list[dict]] = {}
+    # ST4.4: population accounting. Keyed by the same (side, bucket, family)
+    # group the rows land in, because "how many did this family drop" is only
+    # answerable beside the family that dropped them. A record whose group
+    # cannot be named (no side or no priority bucket) is not attributable and
+    # is not counted here.
+    excluded_counts: dict[tuple[str, str, str], dict[str, int]] = {}
+
+    def _count_excluded(setup_record: dict, reason: str) -> None:
+        try:
+            context = _tracker_setup_context(setup_record)
+        except Exception:
+            return
+        side = str(context.get("side") or "")
+        priority_bucket = str(context.get("priority_bucket") or "").strip()
+        if not side or not priority_bucket:
+            return
+        key = (side, priority_bucket, str(context.get("setup_family") or "general"))
+        bucket = excluded_counts.setdefault(key, {})
+        bucket[reason] = bucket.get(reason, 0) + 1
 
     for setup in setups.values():
         if not isinstance(setup, dict):
@@ -7384,12 +7975,22 @@ def build_recent_tracker_setup_family_rows(
         scan_day = _parse_iso_date_or_none(setup.get("scan_date"))
         if scan_day is None or scan_day > reference_day:
             continue
+        if as_of_day is not None and scan_day > as_of_day:
+            # ST4.3: the replay never saw this scan.
+            _count_excluded(setup, "after_as_of")
+            continue
         age_days = (reference_day - scan_day).days
         if age_days < 0 or age_days > max_age_days:
             continue
 
-        outcome_summary = _summarize_tracker_setup_outcome(setup)
+        outcome_summary = _summarize_tracker_setup_outcome(
+            setup, policy=resolved_policy, as_of_session=as_of_session_text or None
+        )
         if int(outcome_summary.get("tradeable_scenario_count", 0) or 0) <= 0:
+            # Decision (c), 2026-09-06: neither open nor closed is UNTRADEABLE
+            # and was already outside every count through this filter. ST4 only
+            # makes it NAMED - the behaviour is untouched.
+            _count_excluded(setup, "untradeable")
             continue
 
         context = _tracker_setup_context(setup)
@@ -7424,15 +8025,87 @@ def build_recent_tracker_setup_family_rows(
             "any_target_hit": bool(outcome_summary.get("any_target_hit")),
             "any_stopped": bool(outcome_summary.get("any_stopped")),
             "recency_weight": float(recency_weight),
+            # ST4.1: the attempt rule's only input. There is no scalar exit
+            # field on a scenario, so this is stamped here from the
+            # representative's own last recorded event and read by
+            # `selection_policy.assign_attempts`; empty means still running.
+            "representative_exit_date": str(
+                outcome_summary.get("representative_exit_date") or ""
+            ),
+            "representative_status": str(
+                outcome_summary.get("representative_status") or ""
+            ),
+            "representative_exit_undatable": bool(
+                outcome_summary.get("representative_exit_undatable")
+            ),
         }
         recent_rows.append(row)
 
     if not recent_rows:
         return []
 
+    # ST2.1: OBSERVATIONS, before the collapse below turns them into episodes.
+    # The exported row has always called the post-dedupe number
+    # `tracked_setups`, which reads as "how many setups are behind this", so the
+    # pre-dedupe count had no name at all and nobody could see how much
+    # correlated re-scanning a family carried. Counted per family group here
+    # because after the collapse the information is gone.
+    def _family_group_key(row: dict) -> tuple[str, str, str]:
+        return (
+            str(row.get("side") or ""),
+            str(row.get("priority_bucket") or ""),
+            str(row.get("setup_family") or "general"),
+        )
+
+    observation_counts: dict[tuple[str, str, str], int] = {}
+    for row in recent_rows:
+        key = _family_group_key(row)
+        observation_counts[key] = observation_counts.get(key, 0) + 1
+
     # Collapse correlated daily re-scans so each independent episode counts once
     # before any baseline/group statistics are computed.
-    recent_rows = _dedupe_recent_tracker_family_rows(recent_rows)
+    recent_rows = _dedupe_recent_tracker_family_rows(recent_rows, policy=resolved_policy)
+
+    # WHICH EPISODES THE HEADLINE MAY GRADE.
+    #
+    # Under `closed_first_v1` this is exactly what it has always been - the row
+    # has at least one closed tradeable scenario - and every number below is
+    # unchanged (golden). Under `first_actionable_v2` "pending stays pending"
+    # has to reach the AGGREGATE too, or the rule is decorative: a row whose
+    # representative is still running but whose ALTERNATE exit plan closed had
+    # `closed_setups == 1`, so it was graded from `avg_closed_r` further down,
+    # which is the same substitution ST4.2 removed one level up. Measured on
+    # the 2026-09-03 mirror: 271 of 2,712 v2 episodes had a PENDING
+    # representative and were being graded anyway (252 losses, 19 wins).
+    is_v2 = resolved_policy == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2
+
+    def _row_is_unmeasurable(row: dict) -> bool:
+        """Neither graded nor pending: this build could not evaluate the row.
+
+        Only ever true of a COMPACT record whose `_scoring_outcome_summary` is
+        the whole story - there are no scenarios to read - and only on a build
+        that had to look at the scenarios: **the challenger, OR a replay under
+        EITHER policy**. A v1 replay is the case that made this matter: v1
+        answers such a record straight out of the cache, and that cache was
+        written without the cutoff, so the replay would grade trades it could
+        not have seen. Counting it as pending would be the other lie - it says
+        "still running" about a trade that finished.
+
+        The DEFAULT read (v1, no `as_of`) never reaches here: it returns the
+        cache verbatim and `unknown_compact` is a status only the bypass path
+        can write, so every shipped number is untouched.
+        """
+        if str(row.get("representative_status") or "") != "unknown_compact":
+            return False
+        return is_v2 or as_of_day is not None
+
+    def _row_is_graded(row: dict) -> bool:
+        if _row_is_unmeasurable(row):
+            return False
+        if is_v2:
+            return str(row.get("representative_status") or "") == "closed"
+        return int(row.get("closed_setups", 0) or 0) > 0
+
     baseline_groups = {}
     for row in recent_rows:
         baseline_groups.setdefault(
@@ -7441,7 +8114,7 @@ def build_recent_tracker_setup_family_rows(
 
     baseline_map: dict[tuple[str, str], dict[str, object]] = {}
     for context_key, rows_for_context in baseline_groups.items():
-        closed_rows = [row for row in rows_for_context if int(row.get("closed_setups", 0) or 0) > 0]
+        closed_rows = [row for row in rows_for_context if _row_is_graded(row)]
         baseline_map[context_key] = {
             "tracked_setups": len(rows_for_context),
             "closed_setups": len(closed_rows),
@@ -7476,7 +8149,7 @@ def build_recent_tracker_setup_family_rows(
 
     family_rows = []
     for group_key, rows_for_group in grouped.items():
-        closed_rows = [row for row in rows_for_group if int(row.get("closed_setups", 0) or 0) > 0]
+        closed_rows = [row for row in rows_for_group if _row_is_graded(row)]
         baseline = baseline_map.get((group_key[0], group_key[1]), {})
         avg_total_r = _weighted_mean(
             [(row.get("avg_total_r"), row.get("recency_weight")) for row in rows_for_group]
@@ -7504,15 +8177,41 @@ def build_recent_tracker_setup_family_rows(
         )
         # Win rate + profit factor for the proven-quality score: judged on the
         # same representative (primary-stop) closed R the ExpR blend uses.
+        #
+        # ST2.1 rides along in this SAME loop, deliberately: the integer counts
+        # and the weighted rate must never be able to disagree about which
+        # episodes they read. `n_wins`/`n_losses` are UNWEIGHTED and a flat is
+        # its own fact - the weighted `win_rate_closed` keeps counting a 0.0R
+        # close as a zero flag, unchanged, because it is a scoring input.
         win_flags: list[tuple[float, float]] = []
         gross_win = 0.0
         gross_loss = 0.0
+        n_wins = 0
+        n_losses = 0
+        n_flats = 0
+        n_unmeasured = 0
+        latest_measured_session = ""
         for closed_row in closed_rows:
             rep_r = _coerce_float(closed_row.get("representative_closed_r"))
-            if rep_r is None:
+            if rep_r is None and not is_v2:
+                # v1 only. Under v2 this is the SAME substitution ST4.2 removed
+                # one level up - the mean of the alternate exit plans that
+                # happened to close - and it would put it straight back into
+                # the win count.
                 rep_r = _coerce_float(closed_row.get("avg_closed_r"))
             if rep_r is None:
+                # CLOSED and unreadable. Not a loss, and never silently one.
+                n_unmeasured += 1
                 continue
+            session = str(closed_row.get("scan_date") or "")
+            if session > latest_measured_session:
+                latest_measured_session = session
+            if rep_r > 0:
+                n_wins += 1
+            elif rep_r < 0:
+                n_losses += 1
+            else:
+                n_flats += 1
             weight = float(_coerce_float(closed_row.get("recency_weight")) or 1.0)
             win_flags.append((1.0 if rep_r > 0 else 0.0, weight))
             if rep_r > 0:
@@ -7540,7 +8239,7 @@ def build_recent_tracker_setup_family_rows(
             sample = f"{row.get('symbol')} {row.get('scan_date')}".strip()
             avg_closed_value = _coerce_float(row.get("avg_closed_r"))
             avg_total_value = _coerce_float(row.get("avg_total_r"))
-            if avg_closed_value is not None and int(row.get("closed_setups", 0) or 0) > 0:
+            if avg_closed_value is not None and _row_is_graded(row):
                 sample += f" ({avg_closed_value:+.2f}R)"
             elif avg_total_value is not None:
                 sample += f" ({avg_total_value:+.2f}R open)"
@@ -7591,7 +8290,121 @@ def build_recent_tracker_setup_family_rows(
         score_delta, raw_score = _derive_recent_tracker_family_score_delta(item, baseline)
         item["score_delta"] = int(score_delta)
         item["ranking_score"] = float(raw_score)
+
+        # ---- ST2.1: the integer counts, ADDITIVE AND AT THE END ------------
+        #
+        # Everything above is untouched and every column above keeps its value
+        # (golden: `tests/fixtures/st2_recent_rows_golden.csv`). What follows is
+        # the row's own population in integers, so no reader ever has to rebuild
+        # one from a rate again. `win_rate_closed` is a RECENCY-WEIGHTED mean
+        # (half life `TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS`), and
+        # `swing_headline.headline_from_rate` used to turn it back into
+        # `round(rate * n)`: two 28-day-old wins at weight .25 and two same-day
+        # losses at weight 1.0 gave 0.2, which the panel printed as "25% (n=4)"
+        # when the truth was 2-2. `win_rate_closed_basis` names the weighting so
+        # the weighted number can stay on the screen beside the counted one
+        # rather than pretending to be it.
+        n_episodes = len(rows_for_group)
+        item["n_wins"] = int(n_wins)
+        item["n_losses"] = int(n_losses)
+        item["n_flats"] = int(n_flats)
+        item["n_unmeasured"] = int(n_unmeasured)
+        item["n_observations"] = int(observation_counts.get(group_key, n_episodes))
+        item["n_episodes"] = int(n_episodes)
+        item["n_symbols"] = len({str(row.get("symbol") or "") for row in rows_for_group})
+        item["n_entry_sessions"] = len(
+            {str(row.get("scan_date") or "") for row in rows_for_group}
+        )
+        # `closed_rows` is now "graded", which under v1 is the same set it has
+        # always been. Under v2 an episode the policy could not evaluate at all
+        # (a compact projection) is neither graded nor pending, so it is
+        # subtracted here and NAMED in `excluded_reasons` - reporting a
+        # finished trade as still running would be its own lie. The identity a
+        # reader can check is n_wins + n_losses + n_flats + n_unmeasured +
+        # n_pending + n_unmeasurable == n_episodes.
+        n_unmeasurable = sum(1 for row in rows_for_group if _row_is_unmeasurable(row))
+        item["n_pending"] = int(n_episodes - len(closed_rows) - n_unmeasurable)
+        item["win_rate_closed_unweighted"] = (
+            n_wins / (n_wins + n_losses) if (n_wins + n_losses) > 0 else None
+        )
+        item["win_rate_closed_basis"] = "recency_weighted_half_life"
+        item["outcome_kind"] = TRACKER_REPRESENTATIVE_OUTCOME_KIND
+        item["horizon_basis"] = f"{max_age_days}d lookback, representative exit"
+        # Freshness input for `working_lately.select_leader`. These rows carry
+        # no exit date, so the newest ENTRY session among the COUNTED episodes
+        # is the honest answer and the conservative one: a family whose last
+        # entry is old cannot have a newer measured close than its own scan.
+        item["latest_measured_session"] = latest_measured_session
+
+        # ---- ST4: which policy chose these episodes, and what it left out ---
+        #
+        # Two grains, and the token names say which: a bare `reason=N` counts
+        # RECORDS the population never admitted and is summed into
+        # `n_excluded`; a `reason_in_population=N` counts COUNTED episodes that
+        # are deliberately still here, so a reader can see a decided case
+        # without mistaking it for a drop. Decisions (b) and (c) of 2026-09-06
+        # are named here, never reopened.
+        item["selection_policy"] = resolved_policy
+        item["as_of_session"] = as_of_session_text
+        reason_counts = dict(excluded_counts.get(group_key, {}))
+        expired_in_population = sum(
+            1
+            for row in rows_for_group
+            if str(row.get("setup_status") or "").upper() == SETUP_STATUS_EXPIRED_UNMEASURED
+        )
+        if expired_in_population:
+            reason_counts["expired_unmeasured_in_population"] = expired_in_population
+        no_representative_in_population = sum(
+            1 for row in rows_for_group if not str(row.get("representative_status") or "")
+        )
+        if no_representative_in_population:
+            reason_counts["no_representative_in_population"] = no_representative_in_population
+        # The replay could not DATE these exits (history compaction empties
+        # `events`), so they read as pending. Named, because "pending" and "we
+        # cannot see when it closed" are different facts and only one of them
+        # is a trade still on. Measured 2026-09-06: 0 of 75,437 scenarios in
+        # the 28-day window are compacted, but 99,562 of 206,341 across all
+        # history are, so an earlier `as_of_session` or a longer lookback walks
+        # straight into them.
+        undatable_in_population = sum(
+            1 for row in rows_for_group if bool(row.get("representative_exit_undatable"))
+        )
+        if undatable_in_population:
+            reason_counts["undatable_exit_in_population"] = undatable_in_population
+        if n_unmeasurable:
+            reason_counts["unknown_compact_in_population"] = int(n_unmeasurable)
+        item["n_excluded"] = int(
+            sum(
+                count
+                for reason, count in reason_counts.items()
+                if not reason.endswith("_in_population")
+            )
+        )
+        item["excluded_reasons"] = ";".join(
+            f"{reason}={reason_counts[reason]}"
+            for reason in TRACKER_POPULATION_EXCLUSION_REASONS
+            if reason_counts.get(reason)
+        )
         family_rows.append(item)
+
+    # A (side, bucket, family) whose every record was excluded produces NO row,
+    # so its exclusions would vanish with it - the one place this accounting
+    # could still lose a number. The build-level total is stamped on every row
+    # instead, identical on all of them, so a reader of any single row can see
+    # that a whole family went missing.
+    surviving_group_keys = {
+        (
+            str(row.get("side") or ""),
+            str(row.get("priority_bucket") or ""),
+            str(row.get("setup_family") or "general"),
+        )
+        for row in recent_rows
+    }
+    fully_excluded_groups = sum(
+        1 for key in excluded_counts if key not in surviving_group_keys
+    )
+    for item in family_rows:
+        item["fully_excluded_groups"] = int(fully_excluded_groups)
 
     family_rows.sort(
         key=lambda item: (
@@ -9698,6 +10511,31 @@ def build_tracker_playbook_recommendation_rows(playbook_rows: list[dict]) -> lis
     return recommendations
 
 
+def _short_horizon_measured_session(setup: dict, horizon: int) -> str:
+    """The trade date of the BAR the ``r_close_{horizon}d`` mark was read from.
+
+    ST2 re-review, advisory 4. Freshness for the 2-session block was being read
+    off the ENTRY session, which makes a family that entered eight weeks ago and
+    was MEASURED two sessions later look permanently stale ("58 sessions
+    behind") on a file written this morning. Entry is the conservative answer
+    only when nothing better is reachable; here it is, because
+    ``daily_marks`` carry ``trade_date`` and the mark this R was computed from
+    is exactly ``post_marks[horizon - 1]`` - the same index
+    ``_build_tracker_short_horizon_summary`` reads the close from.
+
+    Returns "" when the marks cannot answer. Empty means UNDATED, which
+    ``working_lately.select_leader`` treats as not fresh - never a guess.
+    """
+    marks = [mark for mark in (setup.get("daily_marks") or []) if isinstance(mark, dict)]
+    if not marks:
+        return ""
+    entry_pos = next((idx for idx, mark in enumerate(marks) if bool(mark.get("is_entry_day"))), 0)
+    post_marks = marks[entry_pos + 1 :]
+    if len(post_marks) < horizon:
+        return ""
+    return str(post_marks[horizon - 1].get("trade_date") or "")
+
+
 def build_tracker_short_horizon_rows(
     setups: dict[str, dict],
     *,
@@ -9732,6 +10570,10 @@ def build_tracker_short_horizon_rows(
             "r_close_2d": _coerce_float(short_horizon.get("r_close_2d")),
             "mfe_r_2d": _coerce_float(short_horizon.get("mfe_r_2d")),
             "mae_r_2d": _coerce_float(short_horizon.get("mae_r_2d")),
+            # ST2 re-review: the session this episode was MEASURED on, not the
+            # one it was entered on. Internal to this function; the export
+            # carries the max of these as `latest_measured_session`.
+            "measured_session_2d": _short_horizon_measured_session(setup, 2),
         }
 
     reference_day = reference_date or datetime.now().date()
@@ -9763,6 +10605,36 @@ def build_tracker_short_horizon_rows(
         avg_r_2d = mean(r2_values) if r2_values else None
         median_r_2d = median(r2_values) if r2_values else None
         win_rate_2d = mean(1.0 if value > 0 else 0.0 for value in r2_values) if r2_values else None
+        # ---- ST2 fix round: this export's OWN integer counts ---------------
+        #
+        # The trader's ST2 requirement is "true integer wins/losses/flats/
+        # unmeasured at EACH table's actual episode and outcome grain", and the
+        # ask to extend it here was answered yes on 2026-09-06. Purely additive:
+        # `win_rate_2d` above keeps its value, INCLUDING its treatment of an
+        # exactly-flat 2-session close as a zero flag - it is an existing
+        # column and moving it would be a scoring change. The counts below hold
+        # a flat apart, because a scratch is not a loss.
+        #
+        # **The identity these four hold**, and the reason they are exported
+        # rather than derived by a reader: `n_wins + n_losses + n_flats ==
+        # samples_2d`, and `samples_2d + n_unmeasured == tracked_setups`. An
+        # episode with no readable 2-session close is UNMEASURED, never a loss.
+        #
+        # `latest_measured_session` is the newest session an episode in this
+        # group was MEASURED on - the trade date of the bar the 2-session R was
+        # read from, not the entry (ST2 re-review, advisory 4: entry dating made
+        # a family measured two sessions after an old entry read as 58 sessions
+        # stale on a file written this morning). Empty when the marks cannot
+        # say, which reads as UNDATED and never as fresh.
+        n_wins_2d = sum(1 for value in r2_values if value > 0)
+        n_losses_2d = sum(1 for value in r2_values if value < 0)
+        n_flats_2d = sum(1 for value in r2_values if value == 0)
+        n_unmeasured_2d = len(rows_for_group) - len(r2_rows)
+        latest_measured_session = ""
+        for measured_row in r2_rows:
+            session = str(measured_row.get("measured_session_2d") or "")
+            if session > latest_measured_session:
+                latest_measured_session = session
         short_term_score = None
         if avg_r_2d is not None:
             short_term_score = (
@@ -9796,6 +10668,16 @@ def build_tracker_short_horizon_rows(
                 "recent_avg_r_2d": mean(recent_r2_values) if recent_r2_values else None,
                 "short_term_score": short_term_score,
                 "sample_setups": "; ".join(sample_examples),
+                # ST2 fix round, additive AT THE END of the shipped header.
+                # Golden: `tests/fixtures/st2_short_horizon_golden.csv`, pinned
+                # from the code as it stood BEFORE these seven columns existed.
+                "n_wins": int(n_wins_2d),
+                "n_losses": int(n_losses_2d),
+                "n_flats": int(n_flats_2d),
+                "n_unmeasured": int(n_unmeasured_2d),
+                "outcome_kind": "trade_r_close_2d",
+                "horizon_basis": "2 sessions after entry, close to close",
+                "latest_measured_session": latest_measured_session,
             }
         )
 
@@ -9873,6 +10755,12 @@ def build_tracker_setup_type_rows(
             "closed": int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0) > 0,
             "avg_total_r": _coerce_float(outcome_summary.get("avg_total_r")),
             "avg_closed_r": _coerce_float(outcome_summary.get("avg_closed_r")),
+            # ST2.2: the SAME field the recent-family rows count on, so the two
+            # tables cannot disagree about what a win is. Internal to this
+            # function; the exported row carries the counts, not this.
+            "representative_closed_r": _coerce_float(
+                outcome_summary.get("representative_closed_r")
+            ),
             "any_target_hit": bool(outcome_summary.get("any_target_hit")),
             "any_stopped": bool(outcome_summary.get("any_stopped")),
             "current_band_zone": str(entry_attributes.get("levels.current_band_zone") or ""),
@@ -9981,6 +10869,40 @@ def build_tracker_setup_type_rows(
             if closed_rows
             else None
         )
+        # ---- ST2.2: this ROW'S OWN win count, at this row's own grain -------
+        #
+        # V3 item 1's owed seam. The export carried `target_hit_rate` and
+        # `stop_rate` - different questions - and no win column, so the only way
+        # to put a win rate on the Setup Types tab was to join one from
+        # `master_avwap_tier_outcomes.csv`, whose 184 rows collapse to 71
+        # (side, bucket, family, zone) groups: one joined rate would have
+        # repeated across up to six rows here and read as each row's own. These
+        # count the setups IN THIS GROUP and nothing else.
+        type_n_wins = 0
+        type_n_losses = 0
+        type_n_flats = 0
+        type_n_unmeasured = 0
+        for closed_row in closed_rows:
+            rep_r = _coerce_float(closed_row.get("representative_closed_r"))
+            if rep_r is None:
+                rep_r = _coerce_float(closed_row.get("avg_closed_r"))
+            if rep_r is None:
+                type_n_unmeasured += 1
+            elif rep_r > 0:
+                type_n_wins += 1
+            elif rep_r < 0:
+                type_n_losses += 1
+            else:
+                type_n_flats += 1
+        # Tradeable but not yet closed. The denominator this reconciles against
+        # is `tradeable_setups`, never `tracked_setups`: a setup with no
+        # tradeable scenario was never a trade and is in neither column.
+        type_n_pending = len(tradeable_rows) - len(closed_rows)
+        type_win_rate = (
+            type_n_wins / (type_n_wins + type_n_losses)
+            if (type_n_wins + type_n_losses) > 0
+            else None
+        )
         sample_rows = sorted(
             rows_for_group,
             key=lambda row: (
@@ -10069,10 +10991,26 @@ def build_tracker_setup_type_rows(
                     else None
                 ),
                 "sample_setups": "; ".join(sample_examples),
+                # ST2.2, additive at the end. Every column above keeps its
+                # value (golden: `tests/fixtures/st2_setup_type_rows_golden.csv`).
+                "n_wins": int(type_n_wins),
+                "n_losses": int(type_n_losses),
+                "n_flats": int(type_n_flats),
+                "n_unmeasured": int(type_n_unmeasured),
+                "n_pending": int(type_n_pending),
+                "win_rate": type_win_rate,
+                "outcome_kind": TRACKER_REPRESENTATIVE_OUTCOME_KIND,
             }
         )
 
-    return rank_tracker_setup_type_rows(setup_type_rows)
+    ranked = rank_tracker_setup_type_rows(setup_type_rows)
+    # ST2 fix round: `rank_tracker_setup_type_rows` appends `compression_flag`,
+    # `ranking_score`, `score_delta` and the rank columns, so the count columns
+    # are moved AFTER it and land at the end of the shipped header rather than
+    # in the middle of the file a reader opens.
+    for ranked_row in ranked:
+        _move_keys_to_end(ranked_row, TRACKER_SETUP_TYPE_COUNT_COLUMNS)
+    return ranked
 
 
 SCAN_FACTOR_HORIZONS = (1, 3, 5, 10)
@@ -10103,6 +11041,13 @@ SCAN_FACTOR_OBSERVATION_COLUMNS = [
     # unaffected.
     "sessions_spanned",
     "stale_horizon",
+    # ST1 item 1: WHAT THIS ROW IS. `win` is the sign of a close-to-close
+    # percent move between two of the symbol's own scan rows - not a
+    # stop-rule verdict and not R. The column DECLARES that; it changes no
+    # value. Appended at the END of the header, and a row read with it
+    # missing or empty reads as `favorable_direction_scanrow_v1`
+    # (`swing_evidence.outcome_kind_of`).
+    "outcome_kind",
 ]
 SCAN_FACTOR_LEADERBOARD_COLUMNS = [
     "generated_at",
@@ -10197,6 +11142,13 @@ TIER_OUTCOME_COLUMNS = [
     "stale_horizon",
     "positive_scan_factor_match_count",
     "positive_scan_factor_matches",
+    # ST1 item 1: WHAT THIS ROW IS. `win` is the sign of a close-to-close
+    # percent move between two of the symbol's own scan rows - not a
+    # stop-rule verdict and not R. The column DECLARES that; it changes no
+    # value. Appended at the END of the header, and a row read with it
+    # missing or empty reads as `favorable_direction_scanrow_v1`
+    # (`swing_evidence.outcome_kind_of`).
+    "outcome_kind",
 ]
 TIER_PERFORMANCE_COLUMNS = [
     "generated_at",
@@ -10221,6 +11173,12 @@ TIER_PERFORMANCE_COLUMNS = [
     "spy_relative_edge_pct",
     "positive_scan_factor_match_rate",
     "sample_observations",
+    # ST1 item 4: how much of this cell is a tier somebody RECORDED and how
+    # much is one reconstructed from the bucket. A reconstructed label may
+    # never validate shipped S/A performance, and a cell that does not say
+    # which it is cannot be read either way.
+    "n_assigned_tier",
+    "n_derived_tier",
 ]
 TIER_CATCH_RATE_COLUMNS = [
     "generated_at",
@@ -10704,6 +11662,9 @@ def build_scan_factor_observation_rows(
                         # number the tracker has produced, which is a scoring
                         # change and not this packet's to make.
                         **_horizon_drift_columns(scan_date, future_scan_date, horizon),
+                        # ST1 item 1: the row SAYS what it is. `win` above is the
+                        # sign of this percent move, not a stop-rule verdict.
+                        "outcome_kind": OUTCOME_KIND_SCANROW_V1,
                     }
                 )
 
@@ -11292,6 +12253,9 @@ def build_bot_tier_outcome_rows(
                 "stale_horizon": obs.get("stale_horizon"),
                 "positive_scan_factor_match_count": len(matches),
                 "positive_scan_factor_matches": _format_positive_scan_factor_matches(matches),
+                # ST1 item 1: carried from the observation, never re-decided
+                # here - one row, one declared meaning, both files agreeing.
+                "outcome_kind": outcome_kind_of(obs),
             }
         )
 
@@ -11334,6 +12298,7 @@ def _tier_performance_summary_row(
     )
     match_counts = pd.to_numeric(group_df.get("positive_scan_factor_match_count"), errors="coerce").fillna(0)
     sample_rows = group_df.to_dict("records")
+    tier_counts = tier_split(sample_rows)
     sample_rows.sort(
         key=lambda item: (
             str(item.get("scan_date") or ""),
@@ -11385,6 +12350,11 @@ def _tier_performance_summary_row(
         ),
         "positive_scan_factor_match_rate": float((match_counts > 0).mean()) if len(match_counts) else None,
         "sample_observations": "; ".join(samples),
+        # ST1 item 4. `tier_split` counts `tier_source`, so a cell says how much
+        # of itself is a decision that shipped and how much is a label
+        # reconstructed from the bucket for a row written before B4.
+        "n_assigned_tier": tier_counts["assigned"],
+        "n_derived_tier": tier_counts["derived"],
     }
 
 
@@ -11394,11 +12364,50 @@ def build_bot_tier_performance_rows(
     *,
     lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
     reference_date: date | datetime | str | None = None,
+    assigned_only: bool = False,
 ) -> list[dict]:
+    """Tier x side x horizon cells from the tier outcome rows.
+
+    **ST1 item 3: a row this file counts is a row the other two readers count.**
+    `setup_docs._all_family_outcomes` and `autopilot_core.swing_family_records`
+    drop an explicit `stale_horizon` True; this export dropped nothing, so the
+    tier report counted rows the two trader-facing surfaces had thrown away -
+    5,005 of 19,558 on the live file. It is a REPORT export (its three
+    consumers are the Setup Tracker's Tier performance tab, the human-focus
+    comparison table and the AI evidence list - no detector, score, gate or
+    alert reads it), so the rule that governs the other two governs it.
+    Uncertainty still never deletes: only an explicit True drops.
+
+    **It shares the RULE, not the whole policy, and that is deliberate.** These
+    cells span every horizon at once over a 365-day lookback, so
+    `swing_evidence.POLICY_SCANROW_V1`'s horizon and window clauses do not
+    describe them. What must not differ is what an unmeasurable row means, so
+    this calls `swing_evidence.is_stale_horizon` - the same function
+    `read_eligible_rows` calls - and applies it to the BASELINE observations too:
+    an edge is a cell minus its baseline, and a baseline built on other rules
+    makes that subtraction meaningless.
+
+    **ST1 item 4:** `assigned_only=True` restricts every cell to rows whose
+    `tier_source` is the value the stamper writes, so shipped S/A performance is
+    never validated by a label reconstructed from the bucket. The default output
+    keeps today's population and simply SAYS how it splits, in
+    `n_assigned_tier` / `n_derived_tier`.
+    """
     if not tier_outcome_rows:
         return []
-    tier_df = pd.DataFrame(tier_outcome_rows)
-    all_obs_df = pd.DataFrame(observation_rows or [])
+    tier_rows = [row for row in tier_outcome_rows if not is_stale_horizon(row)]
+    if assigned_only:
+        tier_rows = [
+            row
+            for row in tier_rows
+            if str(row.get("tier_source") or "").strip().lower() == ASSIGNED_TIER_SOURCE
+        ]
+    if not tier_rows:
+        return []
+    tier_df = pd.DataFrame(tier_rows)
+    all_obs_df = pd.DataFrame(
+        [row for row in (observation_rows or []) if not is_stale_horizon(row)]
+    )
     if tier_df.empty or all_obs_df.empty:
         return []
     tier_df["_scan_date_dt"] = pd.to_datetime(tier_df["scan_date"], errors="coerce")
@@ -11656,18 +12665,34 @@ def export_bot_tier_tracker_views(
     history_df: pd.DataFrame | None = None,
     observation_rows: list[dict] | None = None,
     leaderboard_rows: list[dict] | None = None,
+    closes_for=None,
+    session_horizon_path: Path | None = None,
 ) -> dict:
+    """Write the tier tracker's four CSVs, and the v2 session-horizon one beside them.
+
+    `closes_for(symbol) -> {date: close} | None` supplies the COMPLETED daily
+    bars the caller already holds (ST1 item 2). It is never fetched here: an
+    export that opens a socket is an export that can hang the scan, so a symbol
+    with no frame in hand simply produces `no_bar_for_target_session` rows. With
+    no `closes_for` at all the v2 file is still written, every row unmeasured
+    and saying why.
+
+    The v2 write is GUARDED end to end: it is a shadow file with no production
+    reader, and it may never cost the v1 exports or the tracker save.
+    """
     history_path = Path(history_path or D1_FEATURE_HISTORY_FILE)
     tier_list_path = Path(tier_list_path or TIER_LIST_FILE)
     tier_outcomes_path = Path(tier_outcomes_path or TIER_OUTCOMES_FILE)
     tier_performance_path = Path(tier_performance_path or TIER_PERFORMANCE_FILE)
     tier_catch_rate_path = Path(tier_catch_rate_path or TIER_CATCH_RATE_FILE)
+    session_horizon_path = Path(session_horizon_path or SESSION_HORIZON_OUTCOMES_FILE)
 
     if history_df is None and (not history_path.exists() or history_path.stat().st_size == 0):
         _write_scan_factor_csv(tier_list_path, [], TIER_LIST_COLUMNS)
         _write_scan_factor_csv(tier_outcomes_path, [], TIER_OUTCOME_COLUMNS)
         _write_scan_factor_csv(tier_performance_path, [], TIER_PERFORMANCE_COLUMNS)
         _write_scan_factor_csv(tier_catch_rate_path, [], TIER_CATCH_RATE_COLUMNS)
+        _write_session_horizon_outcomes(session_horizon_path, None, None)
         return {"tier_pick_count": 0, "tier_outcome_count": 0, "tier_performance_count": 0, "tier_catch_rate_count": 0}
 
     if history_df is None:
@@ -11698,7 +12723,10 @@ def export_bot_tier_tracker_views(
     _write_scan_factor_csv(tier_outcomes_path, tier_outcome_rows, TIER_OUTCOME_COLUMNS)
     _write_scan_factor_csv(tier_performance_path, tier_performance_rows, TIER_PERFORMANCE_COLUMNS)
     _write_scan_factor_csv(tier_catch_rate_path, tier_catch_rate_rows, TIER_CATCH_RATE_COLUMNS)
-    return {
+    session_horizon = _write_session_horizon_outcomes(
+        session_horizon_path, history_df, closes_for
+    )
+    result = {
         "tier_pick_count": len(tier_pick_rows),
         "tier_outcome_count": len(tier_outcome_rows),
         "tier_performance_count": len(tier_performance_rows),
@@ -11707,7 +12735,81 @@ def export_bot_tier_tracker_views(
         "tier_outcomes_path": str(tier_outcomes_path),
         "tier_performance_path": str(tier_performance_path),
         "tier_catch_rate_path": str(tier_catch_rate_path),
+        "session_horizon_outcomes_path": str(session_horizon_path),
     }
+    # A failed v2 export reports the FAILURE, and no counts. Reporting zeros
+    # there would say "measured nothing", which is a different claim.
+    if "error" in session_horizon:
+        result["session_horizon_export_error"] = str(session_horizon["error"])
+    else:
+        result["session_horizon_outcome_count"] = int(session_horizon.get("rows", 0) or 0)
+        result["session_horizon_measured_count"] = int(session_horizon.get("measured", 0) or 0)
+        result["session_horizon_dropped_duplicates"] = int(
+            session_horizon.get("duplicates", 0) or 0
+        )
+        result["session_horizon_collapsed_same_session"] = int(
+            session_horizon.get("collapsed", 0) or 0
+        )
+    return result
+
+
+def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
+    """The ST1 item 2 v2 export. GUARDED: it may never cost the v1 exports.
+
+    Shadow only - no production reader - so a failure here is logged and
+    swallowed. It fetches nothing: `closes_for` is the caller's own completed
+    bars, and a symbol with no frame in hand yields unmeasured rows with a
+    reason rather than a network call inside an export.
+    """
+    from datetime import datetime as _datetime
+
+    try:
+        from .session_horizon_outcomes import (
+            SESSION_HORIZON_OUTCOME_COLUMNS,
+            build_session_horizon_observation_rows,
+        )
+
+        if history_df is None:
+            _write_scan_factor_csv(path, [], SESSION_HORIZON_OUTCOME_COLUMNS)
+            return {"rows": 0, "measured": 0, "duplicates": 0, "collapsed": 0}
+        import market_calendar
+
+        last_complete = market_calendar.last_completed_session(_datetime.now())
+        built = build_session_horizon_observation_rows(
+            history_df,
+            closes_for if callable(closes_for) else (lambda symbol: None),
+            last_completed_session=last_complete,
+        )
+        _write_scan_factor_csv(path, built.rows, SESSION_HORIZON_OUTCOME_COLUMNS)
+        # ONE ASSIGNMENT, AFTER the builder has answered. Filling these in one by
+        # one meant a failure partway reported the counts it had reached and a
+        # silent ZERO for the rest - the reviewer hit exactly that: the export
+        # test passed with `collapsed == 0` against a module that had no such
+        # count at all. A number that was never measured must be ABSENT.
+        result = {
+            "rows": len(built.rows),
+            "measured": sum(1 for row in built.rows if row.get("measured") is True),
+            "duplicates": int(built.dropped_duplicates),
+            "collapsed": int(built.collapsed_same_session),
+        }
+        # BOTH numbers, under their own names: a same-session collapse is the
+        # desk having scanned again, and a duplicate is the input recording one
+        # scan twice. Reporting them as one number is how 14 honest re-scans
+        # became "475,492 duplicates".
+        logging.info(
+            "Session-horizon outcomes exported %s row(s), %s measured, "
+            "%s same-session scan row(s) collapsed, %s true duplicate(s) dropped.",
+            result["rows"],
+            result["measured"],
+            result["collapsed"],
+            result["duplicates"],
+        )
+        return result
+    except Exception as exc:
+        logging.exception("Session-horizon outcome export failed (shadow file; v1 unaffected).")
+        # No counts at all: "the export failed" and "the export measured zero"
+        # are different facts, and a zero here would be read as the second.
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 def _load_csv_dict_rows(path: Path | str | None) -> list[dict]:
@@ -11864,6 +12966,10 @@ def build_recent_setup_type_stat_rows(payload: dict) -> list[dict]:
         row["is_new_family"] = is_new
         row["is_rising_non_favorite"] = is_rising
         row["status"] = " ".join(part for part, flag in (("NEW", is_new), ("RISING", is_rising)) if flag)
+        # ST2 fix round: this is the LAST hand on the row, so the count columns
+        # are moved here and land at the end of the SHIPPED header rather than
+        # in the middle of the file, ahead of `namespace` and `status`.
+        _move_keys_to_end(row, TRACKER_RECENT_COUNT_COLUMNS)
 
     # Highlighted rows (with at least a little closed evidence) pin to the
     # top; below them the usual evidence-first ordering.

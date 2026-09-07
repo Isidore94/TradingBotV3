@@ -5,12 +5,19 @@ from typing import Any
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QColor
 
+from swing_headline import OUTCOME_KIND_FAVORABLE_DIRECTION, headline_labels
 from ui import theme
 from ui.models.setup import SetupRow
 
 
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 ROW_ROLE = Qt.ItemDataRole.UserRole + 2
+
+#: The setups table's record column header - ST1 item 1. The NOUN is
+#: `swing_headline`'s, so the header and the cells it sits above can never
+#: disagree about what the number is; "Family" is this table's own word, because
+#: the statistic is about the row's setup family and not about the symbol.
+FAMILY_RATE_HEADER = f"Family {headline_labels(OUTCOME_KIND_FAVORABLE_DIRECTION)[0].lower()}"
 
 
 class SetupTableModel(QAbstractTableModel):
@@ -43,7 +50,18 @@ class SetupTableModel(QAbstractTableModel):
         # setup family the row belongs to, not about this symbol on this day; a
         # column headed "Win %" on a per-symbol row would read as a claim about
         # the name in front of the trader, which it is not.
-        ("family_win_rate", "Family Win %"),
+        #
+        # ST1 item 1: and it says FAVORABLE, not WIN. The number behind this
+        # column is `master_avwap_tier_outcomes.csv`'s `win`, which is the sign
+        # of a close-to-close percent move at a scan-row offset - no stop rule
+        # was ever applied to it. The key stays `family_win_rate` because the
+        # panel's widths, squeeze order and sort handlers are pinned to it; the
+        # LABEL is what the trader reads, and it now matches the measurement.
+        #
+        # The noun comes from `swing_headline.headline_labels`, not from a
+        # string typed here: this column and `format_win_rate`'s cells must
+        # never disagree about what the number is called.
+        ("family_win_rate", FAMILY_RATE_HEADER),
     )
 
     def __init__(self, rows: list[SetupRow] | None = None, parent=None) -> None:

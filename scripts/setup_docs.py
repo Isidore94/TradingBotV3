@@ -35,10 +35,12 @@ Ground rules shared by every setup (the tracker's exit discipline):
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from evidence_stats import SWING_HORIZON_SESSIONS
+from swing_evidence import describe
 
 STOP_CLOSE_FAILURES = 2
 POST_EARNINGS_STOP_CLOSE_FAILURES = 1
@@ -643,11 +645,19 @@ def _all_family_outcomes() -> dict[str, list[dict]]:
     horizon. Only an explicit `True` drops - `None` means the drift could not be
     measured, and uncertainty is not grounds for deletion.
 
+    **ST1 item 3: those three rules are no longer written here.** They are
+    `swing_evidence.POLICY_SCANROW_V1`, applied by
+    `swing_evidence.read_eligible_rows`, which is also what
+    `autopilot_core.swing_family_records` and the tier performance export use -
+    one file, one reading. The eligible set is unchanged; what is new is that
+    the read RECONCILES (eligible + pending + excluded == source rows) and can
+    say so on the surface through :func:`family_record_coverage_line`.
+
     Returns {} for anything it cannot read. A setup doc is reference material the
     trader opens mid-session; it must never fail to render because a CSV moved.
     """
     try:
-        import csv
+        from swing_evidence import POLICY_SCANROW_V1, read_eligible_rows
 
         path = _family_outcomes_path()
         first, last = _family_outcomes_window()
@@ -659,28 +669,38 @@ def _all_family_outcomes() -> dict[str, list[dict]]:
         if _FAMILY_OUTCOMES_CACHE.get("key") == key:
             return _FAMILY_OUTCOMES_CACHE["rows"]
 
-        wanted_horizon = str(int(RECORD_HORIZON_SESSIONS))
+        policy = POLICY_SCANROW_V1
+        if int(RECORD_HORIZON_SESSIONS) != int(policy.horizon_sessions):
+            policy = replace(policy, horizon_sessions=int(RECORD_HORIZON_SESSIONS))
+        read = read_eligible_rows(path, policy, window=(first, last))
         grouped: dict[str, list[dict]] = {}
-        with open(path, newline="", encoding="utf-8-sig") as handle:
-            for row in csv.DictReader(handle):
-                if str(row.get("horizon_sessions") or "").strip() != wanted_horizon:
-                    continue
-                if str(row.get("stale_horizon") or "").strip().lower() == "true":
-                    continue
-                stamp_text = str(row.get("scan_date") or "")[:10]
-                if stamp_text and not (first <= stamp_text <= last):
-                    continue
-                family = str(
-                    row.get("setup_family") or row.get("family") or ""
-                ).strip().lower().replace(" ", "_").replace("-", "")
-                if not family:
-                    continue
-                grouped.setdefault(family, []).append(dict(row))
+        for row in read.rows:
+            family = str(
+                row.get("setup_family") or row.get("family") or ""
+            ).strip().lower().replace(" ", "_").replace("-", "")
+            if not family:
+                continue
+            grouped.setdefault(family, []).append(dict(row))
         _FAMILY_OUTCOMES_CACHE.clear()
-        _FAMILY_OUTCOMES_CACHE.update({"key": key, "rows": grouped})
+        _FAMILY_OUTCOMES_CACHE.update(
+            {"key": key, "rows": grouped, "coverage": describe(policy, read)}
+        )
         return grouped
     except Exception:  # noqa: BLE001 - reference material never raises at a reader
         return {}
+
+
+def family_record_coverage_line() -> str:
+    """One line saying what the family records ARE - ST1 item 3.
+
+    Outcome kind, horizon IN ITS OWN UNIT ("5 scan rows", not "5 sessions"), the
+    window and the coverage (`eligible / pending / excluded`). Shown beside the
+    rate on every surface fed by this file, so a reader can tell what they are
+    looking at without opening the CSV. Costs nothing extra: it is the same read
+    the records came from, memoised beside them.
+    """
+    _all_family_outcomes()
+    return str(_FAMILY_OUTCOMES_CACHE.get("coverage") or "")
 
 
 def _read_family_outcomes(family_key: str) -> list[dict]:

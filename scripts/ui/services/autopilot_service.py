@@ -1907,6 +1907,16 @@ class AutopilotService(QObject):
                 for row in swing_rows
             ]
             picks = [pick for pick in picks if pick["symbol"]][:10]
+            # ONE read of the tier outcomes for both the ranking and the line
+            # that says what was ranked (ST1 item 3).
+            swing_family_records, swing_family_read = core.swing_family_read()
+            swing_family_record_line = ""
+            if swing_family_read is not None:
+                from swing_evidence import describe as _describe_policy
+
+                swing_family_record_line = _describe_policy(
+                    swing_family_read.policy, swing_family_read
+                )
             payload = {
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "enabled": self._enabled,
@@ -1921,7 +1931,11 @@ class AutopilotService(QObject):
                 # rather than in `render_away_report`, which is a pure renderer;
                 # an unreadable file yields {} and the ranking falls back to
                 # expected R, which is a weaker order and never a wrong one.
-                "swing_family_records": core.swing_family_records(),
+                "swing_family_records": swing_family_records,
+                # ST1 item 3: and the digest SAYS what it ranked on - outcome
+                # kind, horizon in its own unit, window, coverage. Same read as
+                # the records above, never a second pass over a 7.9 MB file.
+                "swing_family_record_line": swing_family_record_line,
                 "bucket_roster": core.build_bucket_roster(roster_rows),
                 "swing_data_current": current_session_data,
                 "swing_data_line": (

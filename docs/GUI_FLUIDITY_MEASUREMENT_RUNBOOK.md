@@ -178,6 +178,21 @@ because proving a guard bites means breaking it and re-running, and the first
 such run here staged six files into `C:\TradingBotData\scratch` before the
 second guard existed.
 
+**`local_settings.json` is not on the allowlist, on purpose.** It was, named
+against the home-folder root, where that file does not live: the real one is
+machine-local at `%LOCALAPPDATA%\TradingBotV3\local_settings.json`, so the entry
+printed `absent` on every staging run and the first baseline was measured on a
+synthetic one-key settings file. The bench now seeds its own redirected settings
+from the real machine-local file at RUN time (`machine_settings_seed`), key by
+key from an allowlist: the display keys that change what is measured -
+`qt_ui_scale` scales every `theme.px` and therefore every fit number -
+`gui_mode`, `qt_theme`, `qt_compact_density`, the split sizes, plus the trader's
+`daily_bars_source` pin. It never copies one of the five credentials or the
+three live-store path keys (`shared_data_dir`, `research_store_dir`,
+`ai_store_dir`) that file also holds, and `qt_autopilot_auto_arm` is forced
+False rather than read. The run prints `machine settings: carried from <path>`,
+or names why it could not read it and runs on the defaults.
+
 ### Run it
 
 ```powershell
@@ -189,8 +204,12 @@ second guard existed.
 `--data-dir` is REQUIRED and goes into `TRADINGBOTV3_DATA_DIR` **before the
 first import of anything under `scripts/`**; `LOCALAPPDATA` moves into the
 scratch too, so a panel that writes a cache cannot reach the machine-local store
-either. The resolved `project_paths.DATA_DIR` is the first thing printed, and
-the process exits 2 if it lands under the live home folder or the DAS. Output
+either. **`--data-dir` and `--out` are both checked by both guards BEFORE
+anything is created**, because preparing the environment is itself a write: the
+first version refused a live `--data-dir` only after it had already made the
+directory and written a settings file inside it. The resolved
+`project_paths.DATA_DIR` is then printed, and the process exits 2 if it lands
+under the live home folder or the DAS. Output
 lands at `%LOCALAPPDATA%\TradingBotV3\diagnostics\desk_bench_<stamp>.json`
 (`--out` overrides); `--platform windows` runs on a real screen and additionally
 records each `QScreen`'s geometry and `devicePixelRatio`.
@@ -208,6 +227,17 @@ Three numbers per op, because they answer different questions:
 `dl` counts settle deadlines. **A deadline is a RESULT, not an error**: a page
 that never finished is reported as one, and the bench never sleeps to make a
 number look better. `*` marks an op over 250 ms sync p95.
+
+**Every settle carries a 120 ms floor** (`QUIET_MS`): settling is declared only
+after the page has been quiet that long, so a settle reading near 120-135 ms
+measured NOTHING - the op was finished before the first drain - and that op is
+read on `sync` instead. The 2 ms yield the loop takes while a worker is running
+(so the worker gets the GIL rather than the bench spinning against it) is inside
+`settle` and outside `stall`, which brackets the `processEvents()` call alone.
+**The 250 ms mark is a label, not a verdict**: three ops crossed it at the
+target size in the 2026-09-06 baseline and four in the reviewer's re-run of the
+same branch. Compare the ORDER of the slowest ops between two runs, not who is
+over the line.
 
 ### Reading the fit table
 
@@ -248,7 +278,9 @@ Seven ops over 250 ms sync p95, across the three sizes:
 | `market_journal.construct` | 299 ms (3456x2160 only) |
 
 `weekend.refresh_everything` returns in 1.7 ms and settles in 12.7 s p50, hitting
-the 20 s deadline once. Two pages flagged `overflow` at every size:
+the 20 s deadline once. The worst single `processEvents()` in the whole run was
+**806.6 ms**, in `research.construct` at 2560x1440. Two pages flagged `overflow`
+at every size:
 `weekend_prep` (needs 3,072 px) and `weekend_prep.focus_review` (needs 2,858 px,
 of which 2,340 is nine table floors of 260 px each) - the defect G1 fixes, and
 the proof this check sees it. G1-G7 are re-measured against this file.

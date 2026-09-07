@@ -149,13 +149,17 @@ COMPACT_COLUMN_WIDTHS = {
     "industry": 130,
     "d1_vs_sector": 84,
     "d1_vs_industry": 88,
-    # R4 B3. The cell is `62% (>=52%, n=90)` at natural width, which is wider
-    # than this table can afford; 104px shows the rate and the bound and elides
-    # the n, which is the right thing to lose first - the n is also readable in
-    # the tooltip and the bound already encodes it. Without an entry here the
-    # column took DataTable's 80px floor and NO squeeze rule, and the compact
-    # profile overflowed its viewport by 99px at 1400px wide.
-    "family_win_rate": 104,
+    # R4 B3. The cell is `62% favorable (>=52%, n=90)` at natural width, which is
+    # wider than this table can afford; this shows the rate and its noun and
+    # elides the tail, which is the right thing to lose first - the n is also
+    # readable in the tooltip and the bound already encodes it. Without an entry
+    # here the column took DataTable's 80px floor and NO squeeze rule, and the
+    # compact profile overflowed its viewport by 99px at 1400px wide.
+    #
+    # ST1 item 1 widened it by the width of one word: the cell used to read
+    # `62% (>=52%, n=90)` and now says WHICH rate it is. The 76px squeeze floor
+    # below is unchanged.
+    "family_win_rate": 132,
 }
 
 
@@ -174,23 +178,29 @@ def _row_context(row: SetupRow) -> str:
 
 
 class _FamilyRecordWorker(QThread):
-    """One pass over the tracker outcomes for the Family Win % column - R4 B3.
+    """One pass over the tracker outcomes for the Family favorable % column.
 
-    It never raises into Qt. A blank record column is a column that has not been
-    measured yet; a swing screen that fails to load because a CSV moved would be
-    a far worse trade.
+    R4 B3, relabelled by ST1 item 1. It never raises into Qt. A blank record
+    column is a column that has not been measured yet; a swing screen that fails
+    to load because a CSV moved would be a far worse trade.
+
+    Emits `(records, coverage line)` - ST1 item 3. The line is
+    `swing_evidence.describe` over the SAME read, so the surface that shows the
+    rate also says what the rate is: outcome kind, horizon in its own unit,
+    window, and eligible / pending / excluded.
     """
 
     done = Signal(object)
 
     def run(self) -> None:  # pragma: no cover - exercised through its seam
         try:
-            from setup_docs import family_headline_rows
+            from setup_docs import family_headline_rows, family_record_coverage_line
 
             records = family_headline_rows()
+            coverage = family_record_coverage_line()
         except Exception:  # noqa: BLE001 - one column, never the table
-            records = {}
-        self.done.emit(records)
+            records, coverage = {}, ""
+        self.done.emit((records, coverage))
 
 
 class MasterAvwapPanel(QWidget):
@@ -308,6 +318,12 @@ class MasterAvwapPanel(QWidget):
         self.data_as_of_label.setObjectName("MutedLabel")
         self.last_run_label = QLabel("Last run: never")
         self.last_run_label.setObjectName("MutedLabel")
+        # ST1 item 3: what the Family favorable % column IS - outcome kind,
+        # horizon in its own unit, window, coverage. Filled from the same worker
+        # read that fills the column, blank until it lands.
+        self._family_record_coverage = ""
+        self.family_record_label = QLabel("")
+        self.family_record_label.setObjectName("MutedLabel")
         self.scheduler_status_label = QLabel("")
         self.scheduler_status_label.setObjectName("MutedLabel")
         self.scheduler_status_label.setWordWrap(True)
@@ -397,6 +413,7 @@ class MasterAvwapPanel(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.addWidget(self.status_label)
         status_row.addStretch(1)
+        status_row.addWidget(self.family_record_label)
         status_row.addWidget(self.last_run_label)
 
         layout = QVBoxLayout(self)
@@ -880,7 +897,22 @@ class MasterAvwapPanel(QWidget):
         worker.start()
 
     def _on_family_records_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
-        self.model.set_family_records(payload if isinstance(payload, dict) else {})
+        records, coverage = payload if isinstance(payload, tuple) else (payload, "")
+        self.model.set_family_records(records if isinstance(records, dict) else {})
+        self.set_family_record_coverage(str(coverage or ""))
+
+    def set_family_record_coverage(self, line: str) -> None:
+        """The one line saying WHAT the Family favorable % column is - ST1 item 3.
+
+        A rate on a table with no statement of its outcome kind, horizon and
+        coverage is the failure this packet exists to stop: 62% of what, over
+        what clock, out of how many rows nobody could read.
+        """
+        self._family_record_coverage = str(line or "")
+        label = getattr(self, "family_record_label", None)
+        if label is not None:
+            label.setText(self._family_record_coverage)
+            label.setToolTip(self._family_record_coverage)
 
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
         self._start_family_record_read()

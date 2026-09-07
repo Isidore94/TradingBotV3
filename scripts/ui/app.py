@@ -131,6 +131,10 @@ class MainWindow(QMainWindow):
         self.weekend_prep_panel = WeekendPrepPanel(
             focus_service=self.trading_panel.focus_service
         )
+        # ST5.5: "this closed trade has no planned risk" -> the Journal's Trades
+        # tab, on that trade. Weekend Prep never writes `planned_risk`; it
+        # refers, and the trader types the plan where `save_risk_fields` lives.
+        self.weekend_prep_panel.openTradeRequested.connect(self._open_journal_trade)
         self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel(self.trading_panel.price_alert_service)
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
@@ -595,6 +599,27 @@ class MainWindow(QMainWindow):
             # Closed here rather than left open: a span that outlived its click
             # would attribute every later idle stall to the last page visited.
             interaction_trace.end()
+
+    def _open_journal_trade(self, trade_id: str) -> None:
+        """Show the Journal page on one trade (ST5.5). Never a writer.
+
+        A referral that cannot find its trade says so in the status line rather
+        than leaving the trader on a Journal page wondering which row was meant.
+        """
+        for index, spec in enumerate(PAGE_SPECS):
+            if spec.attribute == "journal_panel":
+                self._select_page(index)
+                break
+        try:
+            found = self.journal_panel.show_trade(str(trade_id or ""))
+        except Exception as exc:  # noqa: BLE001 - a referral never costs the desk
+            self._set_scan_status(f"could not open that trade: {exc}")
+            return
+        if not found:
+            self._set_scan_status(
+                "that trade is not in the Journal's current filter - widen the "
+                "date range and try again"
+            )
 
     def _record_auto_mode_flip(self, previous: str, current: str) -> None:
         """Write the flip into the Market Journal, with SPY as it stood.

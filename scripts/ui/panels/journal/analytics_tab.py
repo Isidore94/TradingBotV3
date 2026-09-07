@@ -113,6 +113,13 @@ class AnalyticsTab(QFrame):
         self.currency_note = QLabel("")
         self.currency_note.setObjectName("CurrencyNote")
         self.currency_note.setWordWrap(True)
+        #: ST5.4. Two sentences the charts below cannot say for themselves: how
+        #: much of this journal is the trader's own answer, and how much of it
+        #: carries a plan. Both are counted over CLOSED trades - the same
+        #: denominator every number on this tab uses.
+        self.evidence_note = QLabel("")
+        self.evidence_note.setObjectName("MutedLabel")
+        self.evidence_note.setWordWrap(True)
 
         self.curve = pg.PlotWidget(title="Cumulative P&L") if PYQTGRAPH_AVAILABLE else QLabel(
             "pyqtgraph is not installed; the table below carries the same numbers."
@@ -167,6 +174,7 @@ class AnalyticsTab(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.headline)
         layout.addWidget(self.currency_note)
+        layout.addWidget(self.evidence_note)
         layout.addWidget(self.curve, 3)
         layout.addWidget(self.curve_table, 1)
         layout.addWidget(QLabel("By group"))
@@ -204,6 +212,17 @@ class AnalyticsTab(QFrame):
             )
         self.currency_note.setText(note)
         self.currency_note.setVisible(bool(note))
+
+        # ST5.4: the coverage line and the refusal that stands where a "best
+        # personal setup" would otherwise be named. In memory over the rows
+        # already loaded - no second query, nothing new on the Qt thread.
+        evidence = summary.get("personal_evidence") or {}
+        coverage_line = str((evidence.get("coverage") or {}).get("line") or "")
+        headline_line = str(evidence.get("headline") or "")
+        self.evidence_note.setText(
+            " ".join(part for part in (coverage_line, headline_line) if part)
+        )
+        self.evidence_note.setVisible(bool(coverage_line or headline_line))
 
         points = journal_feed.equity_curve(trades, mode)
         if PYQTGRAPH_AVAILABLE:
