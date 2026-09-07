@@ -288,6 +288,30 @@ which is evidence and must not be loaded as context.
   **the roll is the session's OPEN, not midnight in New York** (R4 A17): a Pacific
   note at 21:00 was filing against tomorrow. `written_after_the_session` is still
   COMPUTED, and measured against the session's **CLOSE** rather than its date.
+- **The full thought is READABLE, and the list shows an excerpt** (G3, 2026-09-06).
+  The page put the WHOLE text of an entry into a one-line `QListWidgetItem`, which
+  the narrow list elided, and selecting it repainted the capture charts and nothing
+  else — so a 1,200-character thought was shown NOWHERE. The list label now carries
+  `_excerpt` (first line, 90 characters, `…` only when there IS more), and the right
+  half is a vertical splitter with a READER above the charts (2 to 3): `thought_meta`
+  (session, timeframe, `written HH:MM` in the zone the stored `created_at` CARRIES —
+  a naive stamp says "no zone recorded" rather than being handed one — `[desk]`, the
+  after-the-session marker, the symbols) over `thought_view`, a read-only
+  `QTextBrowser` filled with `setPlainText` so the trader's own `<` is never markup.
+  **The words carry a MEASURE and the list a readable column**: the reader is capped at
+  `_reader_measure` (`averageCharWidth() × 100` or `theme.px(1200)`, the smaller, floored at
+  `theme.px(240)`) and left-aligned with the slack on the right — 96 characters a line under
+  the desk's theme, not the 400 the full pane gave — and the `lower` splitter OPENS at a
+  third of the page, because stretch shares a resize and never the first layout.
+  **The reader is filled at the HEAD of `_on_entry_selected`**, synchronously from
+  `self._entries[row]`, before the no-capture guard returns and before
+  `_CaptureWorker` is constructed: an entry with no capture is still readable, and
+  one entry's words can never appear under another's selection. The empty-session
+  branch clears it. The composer opens at four text lines (`setSizes`, measured
+  228 → 106 px at 3456 × 2160) and still drags taller. **Layout only**: the store,
+  `entry_id`, `created_at`, `session_date`, `written_after_the_session` and the Desk
+  tab are untouched, and the dated newest-first contract and the two-space separator
+  both stay.
 - **The unused surfaces are HIDDEN, never removed** (V2, answer 7). One setting,
   default OFF, hides the Alerts / D1 Focus / Armed tabs and the Universe page.
   `setTabVisible`, so no index shifts; every timer stays visibility-gated; and a
@@ -1568,6 +1592,66 @@ gates are in `plan.md`.
 
 ## Recent changes (the last two build days)
 
+### 2026-09-06 - Packet G3: the Market Journal's full thought is readable (branch `claude/g3-market-journal-reader`)
+
+Phase 0.22, the G (layout) lane, third of the trader's prioritised layout repairs. The
+GUI review's finding was functional, not cosmetic: the left-nav Market Journal page is
+where the trader re-reads what they thought, and the words were shown NOWHERE. The whole
+text went into a `QListWidgetItem` in a narrow list, which elides it to one clipped line;
+selecting the row repainted the four capture charts and did nothing else. **No store,
+identity, timestamp or write behaviour changed** — a G packet may change words, widths,
+positions and defaults and never how anything is computed.
+
+- **G3.1 the list shows an excerpt, dated.** `_excerpt(text, limit=EXCERPT_LIMIT)`
+  (module level, 90 characters) takes the first line and appends `…` **only when there is
+  more** — the ellipsis is a claim, so a short entry is still shown whole. A 1,200-character
+  entry's label went from 1,221 characters to 112. The date stays first, the two-space
+  separator stays (`test_the_entries_list_is_dated_and_newest_first` splits on it), and
+  `[desk]`, `[written after the session]`, the 📈 marker, the symbols and the
+  `written <created_at>` tooltip are all unchanged.
+- **G3.2 a reader pane.** `thought_meta` (a `QLabel`) over `thought_view` (a read-only
+  `QTextBrowser`, word-wrapped, selectable, no `setStyleSheet` — `QLabel#ThoughtMeta` and
+  `QTextBrowser#ThoughtReader` are new `theme.qss` rules), in a new `QSplitter(Vertical)`
+  in the right half with the reader ABOVE at stretch 2 and the existing charts widget
+  BELOW at 3. Stretch alone governs only resizes, so the split also gets `setSizes`
+  (measured 796 / 1194 at 3456 × 2160); without it the empty chart grid's size hint opened
+  the reader at two lines. `setPlainText`, never `setHtml`: a thought containing `<` is
+  not markup. The meta line reads `2026-09-05 · D1 · written 13:36 UTC-07:00 · SPY` —
+  the zone is the one the stored `created_at` CARRIES, and a naive stamp says
+  `(no zone recorded)` rather than being silently given one. The left half is untouched
+  (the fix round then opened the `lower` splitter at one third: 1,151 / 2,301 px at 3456 × 2160, measured by the reviewer).
+- **G3.3 selection fills the reader FIRST.** `_on_entry_selected` filled the reader at its
+  HEAD, from `self._entries[row]` through `_entry_for_row`, **before** the no-capture guard
+  that returns early at what was `:506-512` and before `_CaptureWorker` is constructed. So
+  an entry with no capture is readable (and the charts note still says exactly what it said
+  before), and the words never depend on a worker — the late-capture guard proves a
+  payload can arrive for a row the trader has left, and one entry's words under another
+  entry's selection would be the worst failure this page could have. `_render_entries`'s
+  empty branch clears the reader beside the charts.
+- **The composer stops eating the page.** The vertical splitter's top pane opens at four
+  text lines (`COMPOSER_LINES`, from the box's own `fontMetrics().lineSpacing()`): measured
+  228 → 106 px at 3456 × 2160. The handle still drags it as tall as the trader wants.
+- **Fix round: the thought gets a MEASURE.** The first cut set `thought_view` across the
+  full 2,779 px of the right half, where a 68-character sentence became one 400-character
+  line, so the text (and `thought_meta`) is now capped at `_reader_measure` —
+  `QFontMetrics.averageCharWidth() × 100` or `theme.px(1200)`, whichever is SMALLER, floored
+  at `theme.px(240)` — which under the desk's own theme is 600 px and **96 characters a
+  line**, left-aligned with the slack on the right so the pane keeps its full width for the
+  charts below.
+- **Fix round: the entries column opens at a third of the page.** Stretch governs only
+  RESIZES, so the size hints opened it at 655 px and clipped the new 90-character excerpt
+  after about 35 — `lower.setSizes(LOWER_SPLIT_SHARES)` opens it at 1,132 px at 3456 × 2160
+  (proportions, not pixels), and the handle still drags either way.
+- **Tests.** `tests/test_g3_market_journal_reader.py` — the tester's six (excerpt under 140
+  characters and dated; the full 1,200 characters in the reader; selection changes it; no
+  capture still fills it; the empty render clears it; the reader is already filled when the
+  monkeypatched module-level `_CaptureWorker` is CONSTRUCTED) plus three added by the
+  builder (the ellipsis is never decoration; the reader sits above the charts on its own
+  vertical splitter at 2/3, read back off the child size policies since `QSplitter` has no
+  `stretchFactor` getter; the meta line keeps the stamp's zone). All nine proven failing on
+  the pre-G3 panel. `test_r4_market_journal_page_and_tables.py`,
+  `test_qt_market_journal_page.py` and `test_v2_market_journal_one_box.py` stay green
+  untouched.
 ### 2026-09-06 - G0: measure first (branch `claude/g0-measure-first`)
 
 The first step of Phase 0.22's build order, authorized by the trader's *"lets use your
