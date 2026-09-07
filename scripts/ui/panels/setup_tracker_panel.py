@@ -988,10 +988,44 @@ class SetupTrackerPanel(QFrame):
                 self._refresh_pending = True
                 return
             self._refresh_pending = False
-        self._read_worker = ReadWorker(self._read_until_nothing_is_pending, self)
-        self._read_worker.finished_with.connect(self._on_exports_loaded)
-        self._read_worker.failed.connect(self._on_exports_failed)
-        self._read_worker.start()
+        worker = ReadWorker(self._read_until_nothing_is_pending, self)
+        self._read_worker = worker
+        worker.finished_with.connect(self._on_exports_loaded)
+        worker.failed.connect(self._on_exports_failed)
+        #: G7 fix round, items 1 and 2. `finished` is QThread's OWN signal,
+        #: fired only once the thread has actually stopped - unlike
+        #: `finished_with`/`failed`, it fires for every outcome, so it is the
+        #: one place both fixes belong.
+        worker.finished.connect(lambda: self._on_worker_finished(worker))
+        worker.start()
+
+    def _on_worker_finished(self, worker: ReadWorker) -> None:
+        """G7 fix round items 1 and 2, both on the worker's own `finished`.
+
+        Item 1: `_read_until_nothing_is_pending` releases `_refresh_lock`
+        with `_refresh_pending` False the moment its loop decides to stop -
+        but the `ReadWorker` thread has not actually finished at that
+        instant, so a `refresh()` call landing in that window sees
+        `worker.isRunning()` still True, sets `_refresh_pending = True`, and
+        returns without starting anything. Nobody was going to check that
+        flag again: the loop already left, and the page went on showing rows
+        ranked at the previous `min_closed`. Restarting here, on `finished`,
+        closes the window.
+
+        Item 2: dropping the panel's reference to `worker` here - before
+        `deleteLater()`, and before a possible restart hands `_read_worker` a
+        new instance - is what keeps a later `refresh()` from calling
+        `isRunning()` on a C++ object Qt has since destroyed.
+        """
+        if self._read_worker is worker:
+            self._read_worker = None
+        with self._refresh_lock:
+            pending = self._refresh_pending
+            if pending:
+                self._refresh_pending = False
+        if pending and not self._shutting_down:
+            self.refresh()
+        worker.deleteLater()
 
     def _read_until_nothing_is_pending(self) -> dict[str, Any]:
         """The worker's whole job: read, and read again if one was asked for.
@@ -1910,9 +1944,9 @@ def _counted_win_rate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """`win_rate_headline` + `win_rate_lb` from a row's INTEGER counts, or a refusal.
 
     One helper for both tables, so the two tabs can never drift into two
-    definitions of a win. O(rows) and pure arithmetic - it runs on the Qt thread
-    with the rest of `refresh()` (plan.md Phase 0.9 G-P2.3 owns moving this
-    panel to a worker as a whole).
+    definitions of a win. O(rows) and pure arithmetic - it runs on the
+    `ReadWorker` thread, inside `_read_tracker_exports`, with the rest of the
+    read `refresh()` now offloads (G7.2); nothing here touches a widget.
     """
     from swing_headline import format_win_rate, headline_from_counts
     from working_lately import counted_pair

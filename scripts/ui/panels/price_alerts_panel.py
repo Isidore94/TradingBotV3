@@ -9,6 +9,8 @@ needs re-arming.
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -265,6 +267,17 @@ class PriceAlertsPanel(QFrame):
 
     def _save_table(self) -> None:
         if self._loading or self.read_only:
+            return
+        if not self._loaded_once:
+            # G7 fix round item 3: `_table_entries()` reads the QTableWidget,
+            # which is EMPTY before the first `showEvent` load (G7.1). A save
+            # here would write that empty table over the real store - a save
+            # timer armed, or a stray cell-changed signal, before the page was
+            # ever shown. The first load itself never arms the timer.
+            logging.debug(
+                "Price Alerts _save_table() called before the first load; "
+                "refusing to write an unpopulated table over the store."
+            )
             return
         self.service.save_entries(self._table_entries())
         self._load_table()

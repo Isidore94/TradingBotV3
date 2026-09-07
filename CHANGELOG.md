@@ -1666,6 +1666,16 @@ They are evidence and must not be loaded as context.
 - **The Market Journal builds its four capture charts on demand** (G7.3, 2026-09-07):
   `_ensure_charts()` on the first capture render, not in `__init__`; `_clear_charts`
   walks an empty dict when nothing is built. `market_journal.construct` p50 57.9 -> 9.8 ms.
+- **G7 fix round** (same day, same branch): a `refresh()` asked for inside the
+  `ReadWorker`'s teardown window - after its reader loop released `_refresh_lock` with
+  `_refresh_pending` False but before the QThread's own `finished` fired - used to be
+  ORPHANED, leaving the Setup Tracker showing rows ranked at the previous `min_closed`
+  with nothing left to re-check the flag; `_on_worker_finished`, wired to `finished`
+  (fired only once `isRunning()` is reliably False), now restarts it. The same slot
+  drops the panel's `_read_worker` reference and calls `deleteLater()`, so five
+  refreshes leave at most one `QThread` child instead of five. `PriceAlertsPanel
+  ._save_table` now refuses (and logs) a save before the panel's first `showEvent`
+  load, when the table is still empty and would otherwise overwrite the real store.
 - **Twelve swing variables are recorded and none is weighted** (P4 A2): human focus
   pick/side, tracker setup family, market regime, sector, industry, ATR as a PERCENT of
   price (beside the dollar bucket, never replacing it), signed SMA200/SMA50 distance in
@@ -1940,6 +1950,12 @@ sixteen longest `CLAUDE.md` bullets moved VERBATIM into `docs/DESK_INTERNALS.md`
 rule kept, shortened to name its seam and point at its entry): **51.7 KB -> 48.5 KB**,
 still ~3 KB over its ~45 KB rule, so the trim is started and not finished. `AGENTS.md`
 re-copied byte-identical.
+
+**Fix round, same branch:** a `refresh()` asked for in the `ReadWorker`'s teardown
+window was orphaned (fixed on the worker's own `finished` signal, which also clears
+the stale `_read_worker` reference and `deleteLater()`s it - five refreshes now leave
+at most one `QThread` child, not five); `PriceAlertsPanel._save_table` now refuses a
+save before its first `showEvent` load. Four new tests, all proven RED first.
 
 ### 2026-09-07 - Packet G5: Research > Results, the landing page the trader may read (branch `claude/g5-research-results`)
 

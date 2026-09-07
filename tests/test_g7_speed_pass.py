@@ -1040,3 +1040,147 @@ def test_the_market_journal_builds_no_candle_chart_until_a_capture_is_rendered(
         panel.shutdown()
         panel.deleteLater()
         app.processEvents()
+
+
+# ===========================================================================
+# G7 fix round (reviewer GO with advisories, 2026-09-07): four small items
+# ===========================================================================
+
+
+def test_a_refresh_asked_for_in_the_workers_teardown_window_is_not_orphaned(
+    app, tracker_module, tmp_path, monkeypatch
+):
+    """G7 fix round item 1.
+
+    `_read_until_nothing_is_pending` releases `_refresh_lock` with
+    `_refresh_pending` False the moment its loop decides to stop - but the
+    `ReadWorker` QThread has not actually finished at that instant, so
+    `refresh()` calls made in that window still see `worker.isRunning() ==
+    True`, set `_refresh_pending = True`, and return. Nobody was ever going to
+    check that flag again: the loop already left. The un-fixed panel shows
+    rows ranked at the PREVIOUS `min_closed` forever, until something else
+    happens to call `refresh()`.
+
+    `ReadWorker.run()` is monkeypatched (a test-only change - the file itself
+    is untouched) to pause, with a `threading.Event`, exactly between the
+    reader returning and the thread's own `finished` firing: the real
+    teardown window, held open on purpose rather than hoped for.
+    """
+    import ui.read_worker as read_worker_module
+
+    entered_window = threading.Event()
+
+    def _slow_run(self) -> None:
+        try:
+            result = self._work()
+        except Exception as exc:  # noqa: BLE001 - mirrors the real run()
+            self.failed.emit(str(exc))
+            return
+        entered_window.set()
+        time.sleep(0.3)
+        self.finished_with.emit(result)
+
+    monkeypatch.setattr(read_worker_module.ReadWorker, "run", _slow_run)
+
+    seen_min_closed: list[int] = []
+    real_read = tracker_module._read_tracker_exports
+
+    def _counting_read(min_closed):
+        payload = real_read(min_closed)
+        seen_min_closed.append(int(payload.get("min_closed") or 0))
+        return payload
+
+    monkeypatch.setattr(tracker_module, "_read_tracker_exports", _counting_read)
+
+    panel = _populated_tracker(app, tracker_module, tmp_path, monkeypatch)
+    try:
+        assert entered_window.wait(timeout=5.0), (
+            "the constructor's own refresh never reached the widened window"
+        )
+        assert panel._read_worker is not None and panel._read_worker.isRunning(), (
+            "the worker had already finished; the window was not held open"
+        )
+
+        landed: list[bool] = []
+        panel.refreshFinished.connect(lambda: landed.append(True))
+        panel.min_closed_input.blockSignals(True)
+        panel.min_closed_input.setValue(11)
+        panel.min_closed_input.blockSignals(False)
+        panel.refresh()
+
+        with panel._refresh_lock:
+            assert panel._refresh_pending is True, (
+                "the refresh() call landed outside the teardown window - "
+                "widen it rather than change the assertion"
+            )
+
+        assert _drain(app, lambda: len(landed) >= 2, timeout=10.0), (
+            "the refresh asked for during the worker's teardown never got its "
+            "own pass - the page is stuck showing the previous min_closed"
+        )
+        assert len(seen_min_closed) >= 2, (
+            f"only {len(seen_min_closed)} export reads; the pending refresh was dropped"
+        )
+        assert seen_min_closed[-1] == 11, (
+            f"the second pass read min_closed={seen_min_closed[-1]}, not 11"
+        )
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+        app.processEvents()
+
+
+def test_five_refreshes_leave_at_most_one_qthread_child(
+    app, tracker_module, tmp_path, monkeypatch
+):
+    """G7 fix round item 2. Every `refresh()` built a new `ReadWorker` parented
+    to the panel and none was ever deleted - five refreshes, five leaked
+    `QThread` objects. `finished` is connected to `deleteLater` so a worker
+    that has already handed back its rows is collected once Qt's event loop
+    gets a turn."""
+    panel = _populated_tracker(app, tracker_module, tmp_path, monkeypatch)
+    try:
+        for _ in range(5):
+            _await_refresh(app, panel)
+
+        for _ in range(10):
+            app.processEvents()
+
+        remaining = panel.findChildren(QThread)
+        assert len(remaining) <= 1, (
+            f"{len(remaining)} QThread children survived five refreshes - "
+            f"finished workers were never deleted"
+        )
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+        app.processEvents()
+
+
+def test_price_alerts_save_before_first_load_writes_nothing(app, monkeypatch):
+    """G7 fix round item 3. `_table_entries()` reads the `QTableWidget`, which
+    is EMPTY before the first `showEvent` load (G7.1's own idiom) - so a save
+    that fires before the panel was ever shown (an armed save timer, a stray
+    `cellChanged` signal) would write an empty table over the real store."""
+    import price_alerts
+    from ui.panels import price_alerts_panel as module
+    from ui.services.price_alert_service import PriceAlertService
+
+    saves = _Calls("price_alerts.save_price_alerts")
+    monkeypatch.setattr(price_alerts, "save_price_alerts", saves.returning(lambda: True))
+
+    service = PriceAlertService(engine_enabled=True)
+    panel = module.PriceAlertsPanel(service)
+    try:
+        app.processEvents()
+        # Never shown: `_loaded_once` is still False, and `self.table` has
+        # zero rows.
+        panel._save_table()
+        assert len(saves) == 0, (
+            f"a save before the first load wrote {len(saves)} time(s) over the "
+            f"real store"
+        )
+    finally:
+        panel.deleteLater()
+        service.deleteLater()
+        app.processEvents()
