@@ -1075,9 +1075,9 @@ class SetupTrackerPanel(QFrame):
 #: zone, retest and compression, so `shown_identity` alone collides there; these
 #: two carry the collision that matters to the trader. A row that carries
 #: neither reads `("", "")` on both sides of the comparison, so widening never
-#: turns a real match into a miss. **A pair differing only in `retest_label`
-#: still collides** and falls to the first such row in the model's own order -
-#: deliberate, so the re-show never invents a grain the packet did not name.
+#: turns a real match into a miss. The lead widened it to the WHOLE Setup Types
+#: grain at merge (2026-09-07): `retest_label` and `compression_label` joined,
+#: so no two rows of one (side, family) can collide on this tuple.
 DETAIL_WIDENING_KEYS = ("favorite_zone", "priority_bucket", "retest_label", "compression_label")
 
 
