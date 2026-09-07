@@ -189,11 +189,18 @@ the default (the partial/target-gap cases, the deferral-flag cases, the post-ear
 override case): a level-knowledge default that silently un-books their target would have
 made them pass for the wrong reason.
 
-**Baseline:** `pytest tests/ -q` with nothing deselected, nightly AI lock probed FREE:
-**7072 passed, 3 skipped, 72 subtests passed, 0 failed, exit 0**, 8 min 40 s. `ruff check .`
-clean, `scripts/smoke_check.py` 7/7, `launch_gui.py --selftest` 74/74, CLAUDE.md == AGENTS.md
-(50,081 bytes, 16 SMALLER than before this packet). **No packaging trigger**: no new
-dependency, no non-`.py` asset, no new top-level `scripts/` package, no dynamic import.
+**Baseline (after the review round):** `pytest tests/ -q` with nothing deselected, nightly AI
+lock probed FREE: **7074 passed, 3 skipped, 72 subtests passed, 0 failed, exit 0**, 7 min 21 s.
+`ruff check .` clean, `scripts/smoke_check.py` 7/7, `launch_gui.py --selftest` 74/74,
+CLAUDE.md == AGENTS.md (50,081 bytes, 16 SMALLER than before this packet). **No packaging
+trigger**: no new dependency, no non-`.py` asset, no new top-level `scripts/` package, no
+dynamic import.
+
+One earlier run of the same tree showed `test_chart_snapshot.py::test_stale_d1_tail_triggers_one_backfill_with_cooldown`
+failing (`assert 2 == 1`). It is a Qt COOLDOWN timing test and I had `smoke_check.py` and
+`launch_gui.py --selftest` running beside the suite; it passes alone and in the clean run above,
+and nothing in this packet touches `scripts/ui/` or that test. Recorded rather than dropped: a
+flake nobody wrote down is a flake somebody re-finds.
 
 **Review round (2026-09-07).** The reviewer reproduced the branch, accepted the code and the
 judgement call, and returned three blockers and four advisories, all in TEXT or in the shape
