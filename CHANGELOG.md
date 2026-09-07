@@ -333,24 +333,31 @@ which is evidence and must not be loaded as context.
   else — so a 1,200-character thought was shown NOWHERE. The list label now carries
   `_excerpt` (first line, 90 characters, `…` only when there IS more), and the right
   half is a vertical splitter with a READER above the charts (2 to 3): `thought_meta`
-  (session, timeframe, `written HH:MM` in the zone the stored `created_at` CARRIES —
-  a naive stamp says "no zone recorded" rather than being handed one — `[desk]`, the
-  after-the-session marker, the symbols) over `thought_view`, a read-only
+  (session, timeframe, `written HH:MM UTC±HH:MM` converted with `astimezone` to
+  `pass_bars.desk_zone()` (G3b, 2026-09-07 — every live row stores `created_at` in UTC,
+  and printing the zone the stamp CARRIES read `written 13:36 UTC` for a note typed at
+  06:36 Pacific) — a naive stamp is never guessed at and still says "no zone recorded" —
+  `[desk]`, the after-the-session marker, the symbols) over `thought_view`, a read-only
   `QTextBrowser` filled with `setPlainText` so the trader's own `<` is never markup.
   **The words carry a MEASURE and the list a readable column**: the reader is capped at
   `_reader_measure` (`averageCharWidth() × 100` or `theme.px(1200)`, the smaller, floored at
   `theme.px(240)`) and left-aligned with the slack on the right — 96 characters a line under
   the desk's theme, not the 400 the full pane gave — and the `lower` splitter OPENS at a
   third of the page, because stretch shares a resize and never the first layout.
-  **The reader is filled at the HEAD of `_on_entry_selected`**, synchronously from
-  `self._entries[row]`, before the no-capture guard returns and before
-  `_CaptureWorker` is constructed: an entry with no capture is still readable, and
-  one entry's words can never appear under another's selection. The empty-session
-  branch clears it. The composer opens at four text lines (`setSizes`, measured
-  228 → 106 px at 3456 × 2160) and still drags taller. **Layout only**: the store,
-  `entry_id`, `created_at`, `session_date`, `written_after_the_session` and the Desk
-  tab are untouched, and the dated newest-first contract and the two-space separator
-  both stay.
+  **The reader is filled at the HEAD of `_on_entry_selected`**, synchronously, keyed
+  by `entry_id` (`_selected_entry_id` → `_entry_for_id`, G3b item 2 — a row-index
+  lookup only lined up with `self._entries` because every row was an entry; a future
+  header/grouping row would desync the two silently), before the no-capture guard
+  returns and before `_CaptureWorker` is constructed: an entry with no capture is
+  still readable, and one entry's words can never appear under another's selection.
+  The empty-session branch clears it. The composer opens at four text lines
+  (`setSizes`, measured 228 → 106 px at 3456 × 2160) and still drags taller. The
+  reader's pixel cap is recomputed on a scale change too
+  (`refresh_reader_measure()`, called from `MainWindow._apply_scaled_metrics`, G3b
+  item 3 — it used to be computed once, in `__init__`, and never again).
+  **Layout only**: the store, `entry_id`, `created_at`, `session_date`,
+  `written_after_the_session` and the Desk tab are untouched, and the dated
+  newest-first contract and the two-space separator both stay.
 - **The unused surfaces are HIDDEN, never removed** (V2, answer 7). One setting,
   default OFF, hides the Alerts / D1 Focus / Armed tabs and the Universe page.
   `setTabVisible`, so no index shifts; every timer stays visibility-gated; and a
@@ -1631,6 +1638,29 @@ gates are in `plan.md`.
 
 ## Recent changes (the last two build days)
 
+### 2026-09-07 - Packet G3b: three reviewer advisories on the Market Journal reader (branch `claude/g3b-reader-followups`)
+
+Three small follow-ups on G3, each tester-first (proven red on the pre-fix panel, then
+green): (1) `_written_line` now converts the AWARE `created_at` with `astimezone` to
+`pass_bars.desk_zone()` (the one desk-zone seam, N1) and prints `HH:MM UTC±HH:MM` in
+the DESK's own zone — every live row stores `created_at` in UTC
+(`market_journal.py`'s `moment.astimezone(timezone.utc)`), so the meta line was reading
+`written 13:36 UTC` for a note typed at 06:36 Pacific on every live row; a NAIVE stamp is
+still never guessed at and still says `(no zone recorded)`. (2) `_on_entry_selected` now
+keys the reader lookup by `entry_id` (`_selected_entry_id` → the new `_entry_for_id`,
+replacing `_entry_for_row`) instead of the QListWidget's row index, so a future
+header/grouping row cannot desync `self.entries` from `self._entries` and land one
+entry's words under another entry's selection. (3) `refresh_reader_measure()` extracts
+the `__init__` pixel-cap computation into a callable method, wired into
+`MainWindow._apply_scaled_metrics` (`scripts/ui/app.py`, one line — the seam that method
+exists for) so a scale change re-applies the reader's cap the same way it re-applies
+every other Python-side pixel budget on the page; before this the cap was computed once
+and never again. **Tests.** Three added to `tests/test_g3_market_journal_reader.py`
+(15 total, nothing weakened): converts a UTC stamp to Pacific and asserts the offset
+label; a naive stamp still says unrecorded; a dummy header row with no `entry_id`
+inserted at row 0 proves the reader still reads the SELECTED entry, not whatever row
+index it now sits at; a font-size change proves `refresh_reader_measure()` recomputes
+the cap. No store, identity, timestamp write, or layout dimension changed.
 ### 2026-09-06 - Packet G1: Weekend Prep › Focus Review is one table, a view selector and a detail pane (branch `claude/g1-weekend-focus-review`)
 
 Trader, 2026-09-06, prioritising the Desk Reshape Plan: the **"Weekend Prep

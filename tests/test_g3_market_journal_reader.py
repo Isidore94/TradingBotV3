@@ -310,10 +310,21 @@ def test_the_reader_sits_above_the_charts_on_its_own_vertical_splitter(panel):
     assert charts_holder.sizePolicy().verticalStretch() == 3
 
 
-def test_the_meta_line_keeps_the_zone_the_stored_stamp_carries(panel):
-    """A time printed without its zone is a quiet backdating."""
+def test_the_meta_line_keeps_the_zone_the_stored_stamp_carries(panel, monkeypatch):
+    """A time printed without its zone is a quiet backdating.
+
+    G3b converts an aware stamp to the DESK zone, so the desk zone is pinned to
+    -07:00 here: on a PST day or another machine the same fixture would
+    otherwise print 12:36 -08:00 and this test would read the season, not the
+    code (the G3b builder's own warning).
+    """
+    from datetime import timedelta, timezone
+
     from ui.panels.market_journal_panel import _written_line
 
+    monkeypatch.setattr(
+        "ui.annotations.pass_bars.desk_zone", lambda: timezone(timedelta(hours=-7))
+    )
     _render(panel, [_entry("mj-long", LONG_TEXT, created_at=f"{SESSION}T13:36:35-07:00")])
 
     meta = panel.thought_meta.text()
@@ -407,3 +418,112 @@ def test_the_entries_column_opens_wide_enough_to_read_an_excerpt(qapp, panel):
     lower.setSizes([2400, 1000])
     qapp.processEvents()
     assert panel.entries.width() > opened_at, "the entries/charts handle no longer moves"
+
+
+# ==========================================================================
+# Packet G3b (2026-09-07) - three reviewer advisories on the reader.
+# ==========================================================================
+def test_written_line_converts_the_stored_utc_stamp_to_the_desk_zone(monkeypatch):
+    """G3b item 1: every live row stores `created_at` in UTC
+    (`market_journal.py`'s `moment.astimezone(timezone.utc).isoformat()`), so
+    the OLD `_written_line` - which printed the zone the stamp CARRIES - read
+    `written 13:36 UTC` for a note typed at 06:36 Pacific, on every live row.
+    `astimezone` converts the AWARE side to `pass_bars.desk_zone()`; the zone
+    is pinned so this says the same thing on every machine.
+    """
+    from zoneinfo import ZoneInfo
+
+    import ui.annotations.pass_bars as pass_bars
+    from ui.panels.market_journal_panel import _written_line
+
+    monkeypatch.setattr(pass_bars, "desk_zone", lambda: ZoneInfo("America/Los_Angeles"))
+
+    # 13:36 UTC is 06:36 Pacific (PDT, -07:00) in September.
+    line = _written_line("2026-09-06T13:36:00+00:00")
+
+    assert "06:36" in line, line
+    assert "13:36" not in line, line
+    assert "UTC-07:00" in line, line
+
+
+def test_written_line_never_converts_a_naive_stamp(monkeypatch):
+    """A naive stamp carries no zone to convert FROM - guessing one would be
+    exactly the quiet backdating this page's whole contract forbids."""
+    from zoneinfo import ZoneInfo
+
+    import ui.annotations.pass_bars as pass_bars
+    from ui.panels.market_journal_panel import _written_line
+
+    monkeypatch.setattr(pass_bars, "desk_zone", lambda: ZoneInfo("America/Los_Angeles"))
+
+    line = _written_line("2026-09-06T13:36:00")
+
+    assert "no zone recorded" in line, line
+    assert "13:36" in line, line
+
+
+def test_reader_selection_is_keyed_by_entry_id_not_row_index(panel):
+    """G3b item 2: `_on_entry_selected` used to look the entry up by the
+    QListWidget's ROW INDEX (`_entry_for_row`), which only lines up with
+    `self._entries` because every row today IS an entry. Insert a row with no
+    `entry_id` at the top - standing in for a future header/grouping row -
+    and prove the reader still shows the SELECTED entry's words, not
+    whatever `self._entries` happens to hold at that row index.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidgetItem
+
+    _render(
+        panel,
+        [
+            _entry("mj-long", LONG_TEXT, session=SESSION),
+            _entry("mj-short", SHORT_TEXT, session=OTHER_SESSION),
+        ],
+    )
+    # Sanity: newest first, so row 0 is the long entry with no header yet.
+    assert panel.entries.item(0).data(Qt.UserRole) == "mj-long"
+
+    blocked = panel.entries.blockSignals(True)
+    try:
+        header = QListWidgetItem("--- a future header row ---")
+        header.setData(Qt.UserRole, "")
+        panel.entries.insertItem(0, header)
+        panel.entries.setCurrentRow(1)
+    finally:
+        panel.entries.blockSignals(blocked)
+
+    # Row index 1 now HOLDS the long entry (pushed down by the header), while
+    # `self._entries[1]` is still the SHORT entry - a row-index lookup would
+    # read the wrong one. Signals were blocked above (an insert must not
+    # itself repaint anything), so the handler is exercised directly, exactly
+    # as `currentRowChanged` would have called it.
+    assert panel.entries.currentItem().data(Qt.UserRole) == "mj-long"
+    panel._on_entry_selected(1)
+
+    assert panel.thought_view.toPlainText() == LONG_TEXT, panel.thought_view.toPlainText()
+
+
+def test_refresh_reader_measure_recomputes_the_cap_from_the_current_font(panel):
+    """G3b item 3: the reader's pixel cap (`_reader_measure`) was computed
+    ONCE in `__init__` and never again, so a scale change left the old cap on
+    the page - `MainWindow._apply_scaled_metrics` exists for exactly these
+    Python-side pixel budgets and had no seam to call here. A much larger
+    font must produce a much wider (still-capped) measure once
+    `refresh_reader_measure()` is called.
+    """
+    small = panel.thought_view.font()
+    small.setPointSize(6)
+    panel.thought_view.setFont(small)
+    panel.thought_meta.setFont(small)
+    panel.refresh_reader_measure()
+    before = panel.thought_view.maximumWidth()
+
+    large = panel.thought_view.font()
+    large.setPointSize(24)
+    panel.thought_view.setFont(large)
+    panel.thought_meta.setFont(large)
+    panel.refresh_reader_measure()
+    after = panel.thought_view.maximumWidth()
+
+    assert after != before, (before, after)
+    assert panel.thought_meta.maximumWidth() == after, "the meta label keeps the same cap"

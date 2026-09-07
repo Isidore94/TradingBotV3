@@ -26,7 +26,7 @@ handed.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from PySide6.QtCore import QThread, Qt, Signal
@@ -130,13 +130,27 @@ def _excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
     return f"{first}…" if truncated else first
 
 
-def _written_line(created_at: Any) -> str:
-    """`written HH:MM <zone>` from the stored stamp, in the zone it CARRIES.
+def _utc_offset_label(moment: datetime) -> str:
+    """`UTC-07:00` / `UTC+00:00` - the offset an AWARE moment carries."""
+    offset = moment.utcoffset() or timedelta(0)
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "-" if total_minutes < 0 else "+"
+    hours, minutes = divmod(abs(total_minutes), 60)
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
 
-    G3 is a layout packet: this reads `created_at` and never re-derives it.
-    A stamp with no zone says so rather than being silently given one - the
-    Market Journal's whole contract is that an entry is never backdated, and
-    a time printed in a zone nobody recorded is a quiet backdating.
+
+def _written_line(created_at: Any) -> str:
+    """`written HH:MM UTC±HH:MM`, in the DESK's own zone (G3b item 1).
+
+    Every live row stores `created_at` in UTC (`market_journal.py` astimezones
+    to `timezone.utc` before writing), so printing the zone the stamp CARRIES
+    - what this used to do - read `written 13:36 UTC` for a note typed at
+    06:36 Pacific, on every live row. The AWARE side gets `astimezone`d to
+    `pass_bars.desk_zone()` (the one desk-zone seam, N1 2026-09-05) so the
+    printed time is the trader's own clock; a NAIVE stamp carries no zone to
+    convert FROM and still says so rather than being silently given one - the
+    Market Journal's whole contract is that an entry is never backdated, and a
+    time printed in a zone nobody recorded is a quiet backdating.
     """
     raw = str(created_at or "").strip()
     if not raw:
@@ -147,8 +161,10 @@ def _written_line(created_at: Any) -> str:
         return f"written {raw[:19]}"
     if moment.tzinfo is None:
         return f"written {moment.strftime('%H:%M')} (no zone recorded)"
-    zone = moment.tzname() or moment.strftime("%z")
-    return f"written {moment.strftime('%H:%M')} {zone}".strip()
+    from ui.annotations.pass_bars import desk_zone
+
+    local = moment.astimezone(desk_zone())
+    return f"written {local.strftime('%H:%M')} {_utc_offset_label(local)}"
 
 
 class _EntriesWorker(QThread):
@@ -342,13 +358,7 @@ class MarketJournalPanel(QFrame):
         # G3 fix round: the words get a MEASURE. Left-aligned inside the pane
         # with the slack on the right - a stretch after each row, so the pane
         # keeps its full width and the text stops at about 100 characters.
-        # Polished first: the theme sizes fonts in the stylesheet, so an
-        # unpolished widget would be measured in the default font and the
-        # column would not follow the theme it claims to follow.
-        self.thought_view.ensurePolished()
-        reader_measure = _reader_measure(self.thought_view.fontMetrics())
-        self.thought_meta.setMaximumWidth(reader_measure)
-        self.thought_view.setMaximumWidth(reader_measure)
+        self.refresh_reader_measure()
         meta_row = QHBoxLayout()
         meta_row.setContentsMargins(0, 0, 0, 0)
         meta_row.addWidget(self.thought_meta, 1)
@@ -663,15 +673,35 @@ class MarketJournalPanel(QFrame):
         self.calendar_strip.setText(f"Calendar: {coverage.get('note', '')}")
 
     # -- the reader ---------------------------------------------------------
-    def _entry_for_row(self, row: Any) -> dict | None:
-        """The entry behind a list row, or None for the "no entries" placeholder."""
-        try:
-            index = int(row)
-        except (TypeError, ValueError):
-            return None
-        if index < 0 or index >= len(self._entries):
-            return None
-        return self._entries[index]
+    def refresh_reader_measure(self) -> None:
+        """Recompute the reader's pixel cap from the CURRENT font (G3b item 3).
+
+        `_reader_measure` ran once, in `__init__`, so a scale change re-applied
+        every other Python-side pixel budget (`MainWindow._apply_scaled_metrics`
+        exists for exactly that) but left this pane's old cap in place. Callable
+        on its own so that method can call it too. Polished first: the theme
+        sizes fonts in the stylesheet, so an unpolished widget would be
+        measured in the default font and the column would not follow the
+        theme it claims to follow.
+        """
+        self.thought_view.ensurePolished()
+        reader_measure = _reader_measure(self.thought_view.fontMetrics())
+        self.thought_meta.setMaximumWidth(reader_measure)
+        self.thought_view.setMaximumWidth(reader_measure)
+
+    def _entry_for_id(self, entry_id: str) -> dict | None:
+        """The entry behind an `entry_id`, keyed the same way every row is.
+
+        G3b item 2: this used to be `_entry_for_row`, keyed by the QListWidget's
+        ROW INDEX into `self._entries` - which lines up only because every row
+        today IS an entry. A future header or grouping row would desync the
+        two lists silently and put one entry's words under another's
+        selection - the worst failure this page could have (see
+        `_fill_reader`'s own docstring). Keying by the `Qt.UserRole` id every
+        row already carries removes that dependency entirely.
+        """
+        index = self._row_for_entry(entry_id)
+        return self._entries[index] if index is not None else None
 
     def _fill_reader(self, entry: dict | None) -> None:
         """G3.2/G3.3 - the full thought, written from the ENTRY.
@@ -714,8 +744,11 @@ class MarketJournalPanel(QFrame):
         # G3.3: the WORDS FIRST, synchronously, at the head of the method -
         # before the no-capture guard below returns early and before any
         # worker is constructed. An entry with no capture is still readable.
-        self._fill_reader(self._entry_for_row(_row))
+        # G3b item 2: keyed by `entry_id` (the same id the row's Qt.UserRole
+        # and the charts both use), never by `_row` - a row index into
+        # `self._entries` is only right while every row is an entry.
         entry_id = self._selected_entry_id()
+        self._fill_reader(self._entry_for_id(entry_id))
         if not entry_id:
             self._clear_charts("Select an entry to see the charts it was written against.")
             return
