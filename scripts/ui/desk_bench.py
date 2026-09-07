@@ -445,42 +445,138 @@ class OpReading:
     settle_ms: float
     longest_iteration_ms: float
     settled: bool
+    #: What the settle's own worker probe cost, inside `settle_ms` (G7.0). The
+    #: bench used to walk the whole widget tree twice on every poll, so a share
+    #: of each wait it reported was the bench holding the GIL. This is a RESULT,
+    #: not a diagnostic: a reader who cannot see this number cannot tell a slow
+    #: page from a slow measurement.
+    poll_cost_ms: float = 0.0
     error: str = ""
 
 
 def _widget_workers_running(root) -> bool:
-    """Is anything this page owns still reading?
+    """Is anything this page owns still reading? One full walk of the tree.
 
     Two idioms are in use and both are checked: `ui.read_worker.ReadWorker` and
     friends are `QThread`s parented to the widget, and the Day-trade Tracker
     uses plain `threading.Thread` objects held on attributes. A settle wait that
     knew about only one of them would call the other page settled while its read
     was still in flight.
+
+    This is the WALK. `settle` does not call it per poll any more (G7.0) - it
+    holds a `_WorkerProbe`, which walks once per op and then asks the workers it
+    found. Kept as the single description of what a worker looks like, and used
+    by the probe itself.
     """
-    from PySide6.QtCore import QThread
-    from PySide6.QtWidgets import QWidget
+    probe = _WorkerProbe(root)
+    return probe.running()
 
-    for worker in root.findChildren(QThread):
+
+#: How stale the probe's candidate set may get before it is walked again while
+#: a page is busy (G7.0). The packet's number: a read that starts during a
+#: settle is caught within a quarter-second, and a quiet page is confirmed with
+#: one fresh walk before the settle is declared, so nothing is lost.
+WORKER_REWALK_MS = 250.0
+
+
+class _WorkerProbe:
+    """The candidate worker set for one page, walked rarely and asked often.
+
+    The G0 reviewer measured ~1.5 ms per poll on Research, twice per iteration,
+    against a `QUIET_MS` window of 120 ms - the bench was holding the GIL for a
+    large share of the wait it was timing, which taxes exactly the pages it
+    exists to measure. The set of objects that could be a worker changes only
+    when a page starts one, so it is walked once per op, re-walked at most every
+    `WORKER_REWALK_MS` while the page is busy, and re-walked once more before a
+    settle is declared - which is the moment a read started after the last walk
+    would otherwise be missed.
+
+    `cost_ms` is every microsecond spent in here, so the overhead can be
+    reported rather than assumed away.
+    """
+
+    def __init__(self, root) -> None:
+        self._root = root
+        self._qthreads: list = []
+        self._threads: list = []
+        self._walked_at = 0.0
+        self.walks = 0
+        self.cost_ms = 0.0
+        started = time.perf_counter()
+        self._walk()
+        self.cost_ms += (time.perf_counter() - started) * 1000.0
+
+    def _walk(self) -> None:
+        from PySide6.QtCore import QThread
+        from PySide6.QtWidgets import QWidget
+
+        root = self._root
+        qthreads: list = []
+        threads: list = []
         try:
-            if worker.isRunning():
+            qthreads = list(root.findChildren(QThread))
+            widgets = [root, *root.findChildren(QWidget)]
+        except RuntimeError:  # pragma: no cover - the page was deleted mid-walk
+            widgets = []
+        for widget in widgets:
+            try:
+                attributes = list(vars(widget).values())
+            except TypeError:  # pragma: no cover - C++-only object
+                continue
+            for value in attributes:
+                if isinstance(value, threading.Thread):
+                    threads.append(value)
+        self._qthreads = qthreads
+        self._threads = threads
+        self._walked_at = time.perf_counter()
+        self.walks += 1
+
+    def _known_running(self) -> bool:
+        for worker in self._qthreads:
+            try:
+                if worker.isRunning():
+                    return True
+            except RuntimeError:  # pragma: no cover - deleted mid-scan
+                continue
+        for thread in self._threads:
+            if thread.is_alive():
                 return True
-        except RuntimeError:  # pragma: no cover - deleted mid-scan
-            continue
-    for widget in [root, *root.findChildren(QWidget)]:
+        return False
+
+    def running(self, *, confirm: bool = False) -> bool:
+        """True while anything this page owns is still reading.
+
+        `confirm=True` forces one fresh walk when the known set has gone quiet.
+        The settle uses it at the end of the quiet window, so "this page is
+        done" is never answered from a set that is a quarter-second old.
+        """
+        started = time.perf_counter()
         try:
-            attributes = list(vars(widget).values())
-        except TypeError:  # pragma: no cover - C++-only object
-            continue
-        for value in attributes:
-            if isinstance(value, threading.Thread) and value.is_alive():
+            busy = self._known_running()
+            stale = (started - self._walked_at) * 1000.0 >= WORKER_REWALK_MS
+            if busy:
+                if stale:
+                    self._walk()
                 return True
-    return False
+            if confirm or stale:
+                self._walk()
+                return self._known_running()
+            return False
+        finally:
+            self.cost_ms += (time.perf_counter() - started) * 1000.0
 
 
-def settle(app, root, *, deadline_s: float = DEFAULT_DEADLINE_S) -> tuple[float, float, bool]:
+def settle(
+    app, root, *, deadline_s: float = DEFAULT_DEADLINE_S
+) -> tuple[float, float, bool, float]:
     """Drain the event loop until the page stops working, or give up.
 
-    Returns `(settle_ms, longest_iteration_ms, settled)`.
+    Returns `(settle_ms, longest_iteration_ms, settled, poll_cost_ms)`.
+
+    `poll_cost_ms` is the bench's own share of `settle_ms` - the time spent
+    deciding whether the page was still reading (G7.0). It is reported rather
+    than hidden: it is inside the wait it is measuring, and a wait that does not
+    say how much of itself it caused cannot be trusted at the margin.
 
     The longest iteration is the longest single `processEvents()` call, which
     is the stall proxy: a slot that runs 800 ms inside one drain is invisible in
@@ -501,6 +597,7 @@ def settle(app, root, *, deadline_s: float = DEFAULT_DEADLINE_S) -> tuple[float,
     ops on `sync_ms`.
     """
     start = time.perf_counter()
+    probe = _WorkerProbe(root)
     longest = 0.0
     quiet_since: float | None = None
     settled = False
@@ -510,18 +607,30 @@ def settle(app, root, *, deadline_s: float = DEFAULT_DEADLINE_S) -> tuple[float,
         longest = max(longest, (time.perf_counter() - t0) * 1000.0)
 
         now = time.perf_counter()
-        if _widget_workers_running(root):
+        if probe.running():
             quiet_since = None
         elif quiet_since is None:
             quiet_since = now
         elif (now - quiet_since) * 1000.0 >= QUIET_MS:
-            settled = True
-            break
+            # One fresh walk before the page is called quiet. A read that
+            # started after the last walk - the Day-trade Tracker's second
+            # worker is the real case - would otherwise end the settle while it
+            # was still in flight.
+            if probe.running(confirm=True):
+                quiet_since = None
+            else:
+                settled = True
+                break
         if now - start >= deadline_s:
             break
         if quiet_since is None:
             time.sleep(0.002)
-    return (time.perf_counter() - start) * 1000.0, longest, settled
+    return (
+        (time.perf_counter() - start) * 1000.0,
+        longest,
+        settled,
+        probe.cost_ms,
+    )
 
 
 def time_op(app, root, name: str, size_label: str, call: Callable[[], Any], *, deadline_s: float) -> OpReading:
@@ -533,7 +642,7 @@ def time_op(app, root, name: str, size_label: str, call: Callable[[], Any], *, d
     except Exception as exc:  # noqa: BLE001 - a broken op is a RESULT here
         error = f"{type(exc).__name__}: {exc}"
     sync_ms = (time.perf_counter() - t0) * 1000.0
-    settle_ms, longest, settled = settle(app, root, deadline_s=deadline_s)
+    settle_ms, longest, settled, poll_cost_ms = settle(app, root, deadline_s=deadline_s)
     return OpReading(
         op=name,
         size=size_label,
@@ -541,6 +650,7 @@ def time_op(app, root, name: str, size_label: str, call: Callable[[], Any], *, d
         settle_ms=settle_ms,
         longest_iteration_ms=longest,
         settled=settled,
+        poll_cost_ms=poll_cost_ms,
         error=error,
     )
 
@@ -836,7 +946,9 @@ def run_bench(
                         }
                     )
                     break
-                settle_ms, longest, settled = settle(app, panel, deadline_s=deadline_s)
+                settle_ms, longest, settled, poll_cost_ms = settle(
+                    app, panel, deadline_s=deadline_s
+                )
                 readings.append(
                     OpReading(
                         op=f"{name}.construct",
@@ -845,6 +957,7 @@ def run_bench(
                         settle_ms=settle_ms,
                         longest_iteration_ms=longest,
                         settled=settled,
+                        poll_cost_ms=poll_cost_ms,
                     )
                 )
 
@@ -954,6 +1067,10 @@ def _aggregate(readings: Sequence[OpReading]) -> list[dict[str, Any]]:
                 "sync_ms": summarize([r.sync_ms for r in group]),
                 "settle_ms": summarize([r.settle_ms for r in group]),
                 "longest_iteration_ms": summarize([r.longest_iteration_ms for r in group]),
+                # G7.0: what the settle's own worker probe cost inside
+                # `settle_ms`. Reported per op so the bench's overhead is a
+                # number in the artifact rather than a claim in a docstring.
+                "poll_cost_ms": summarize([r.poll_cost_ms for r in group]),
                 "deadline_hits": sum(1 for r in group if not r.settled),
                 "errors": errors,
             }
@@ -987,6 +1104,15 @@ def format_ops_table(rows: Sequence[dict[str, Any]]) -> str:
         )
     lines.append("")
     lines.append(f"* = sync p95 over {SLOW_OP_MS:.0f} ms.  dl = settle deadline hits (a RESULT, not an error).")
+    # G7.0: the bench's own share of every settle above, in one line. The table
+    # keeps its shape so a before/after pair still lines up column for column.
+    costs = [row["poll_cost_ms"]["max"] for row in rows if row.get("poll_cost_ms")]
+    costs = [value for value in costs if value is not None]
+    if costs:
+        lines.append(
+            f"bench poll cost (inside settle): worst {max(costs):,.1f} ms over "
+            f"{len(costs)} op(s)."
+        )
     return "\n".join(lines)
 
 

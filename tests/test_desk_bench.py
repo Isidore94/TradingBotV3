@@ -360,10 +360,15 @@ def test_a_deadline_is_a_recorded_result_and_not_an_error():
     # `_widget_workers_running` looks for a live `threading.Thread`, so the
     # stand-in above is ignored and the page settles. The deadline itself is
     # what is under test, so it is set to zero.
-    settle_ms, longest, settled = desk_bench.settle(_app, page, deadline_s=0.0)
+    # G7.0 added the bench's own poll cost as a fourth value; the trigger moves,
+    # the assertions do not.
+    settle_ms, longest, settled, poll_cost_ms = desk_bench.settle(
+        _app, page, deadline_s=0.0
+    )
     assert settled is False
     assert settle_ms >= 0.0
     assert longest >= 0.0
+    assert poll_cost_ms >= 0.0
 
 
 def test_a_broken_op_is_recorded_as_an_error_and_does_not_stop_the_run():
