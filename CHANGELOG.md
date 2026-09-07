@@ -416,6 +416,41 @@ They are evidence and must not be loaded as context.
   Layout lane only: no number, sort key, read or write moved, and the Trades
   splitter opening at 39/61 instead of its declared 3:2 is a separate,
   unfixed defect (a later Journal packet).
+- **Every Setup Tracker tab, the Desk Setups table and the AWAY Recap tables
+  name their text column too, so the §12 rule's MEASURED path has no
+  trader-facing caller left** (G2b, 2026-09-07). The measured answer is
+  content-dependent and content moves: a populated Catch Rate gave the width to
+  `sample_caught_winners` while the MISSED winners the tab exists for clipped;
+  an EMPTY Controls or Studies tab measured its HEADERS, so `Win % (low)`
+  stretched and `Family` sat at its floor; and Human Picks handed `cohort` most
+  of a 4K window and pushed its ten measurements off the right.
+  `SetupTrackerPanel._make_table` takes `text_key` / `elide_keys` /
+  `stretch_last` and resolves every index BY KEY through `_column_index`, which
+  RAISES on an unknown name (a literal index is a defect waiting for the next
+  column insert - ST2 and M5 each added one this month); the two `fit_columns()`
+  call sites are unchanged, so the attribute leaderboard's worker slot picks the
+  declaration up as well. **Human Picks is the one table that wants the slack
+  left EMPTY**: `apply_width_rule` gains `stretch_last: bool = True`, and with it
+  False and no text column named it suppresses the MEASURED auto-pick as well as
+  `stretchLastSection`, because leaving the classify path on would hand `cohort`
+  the slack by the back door; a NAMED text column still stretches, and every
+  existing caller is byte-identical under the default. `DataTable.set_width_rule`
+  carries the flag. On the DESK setups table the FULL profile names `setup_tags`
+  and the elision is installed as `_KeyLevelElideDelegate`, which inherits
+  `MiddleElideDelegate` AND `SetupTableDelegate` — **a per-column delegate
+  REPLACES the view's own**, so the rule's plain `elide_columns` delegate would
+  have left `key_level` alone without the alternating background, favorite tint,
+  selection fill and hairline separator its own row still draws; the setups
+  delegate wins `paint`/`sizeHint`, `MiddleElideDelegate` supplies the
+  full-value tooltip, and the ONE override is `_text`, because the base
+  hard-codes `ElideRight` and a key level's tail is its anchor and retest date.
+  The COMPACT profile takes the column delegate off again and is otherwise
+  untouched (`COMPACT_COLUMN_WIDTHS`, `_fit_compact_columns` and F9 unchanged,
+  pinned by a golden). AWAY Recap middle-elides `Line`, `Trigger` and
+  `Cell / held x ran` — whose `held x ran` suffix is exactly what an end elision
+  loses — and names `Symbol` on the Focus table. Layout lane only: no number,
+  sort key, read or write moved, the rule still runs once per fill after the
+  fill, and a golden pins every tracker tab's rendered cells and row order.
 - **"Tag this week" is a weekend step** (V2 item 2e, corrected by R4 A15). The
   week's provisional and needs_review trades, confirm-all-shown and
   confirm-selected through `JournalStore.confirm_tags`, ten visible rows, read AND
@@ -1758,6 +1793,56 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-07 - Packet G2b: the Setup Tracker tabs, the Desk Setups table and the AWAY tables name their column (branch `claude/g2b-tracker-desk-away-columns`)
+
+The other half of G2, the half that waited for ST6 to stop rewriting these three
+panels. Tester first: nine tests red on `7e018c99` (`tests/test_g2b_named_columns.py`
+six, `tests/test_table_width_rule.py` three) plus three green-by-design guards - a
+render golden over every tab's cells and row order, a golden of every compact
+column width, and the AWAY Focus table's already-correct measured answer, kept as a
+regression guard with the reason in its docstring. Each populated fixture carries a
+DECOY text column longer than the one the packet names, so the measured path picks
+the decoy and the assertion can only pass by naming.
+
+- **`apply_width_rule(..., stretch_last=False)`** (`scripts/ui/widgets/data_table.py`).
+  §12's two answers are both wrong for one shape - a table of ONE identifier and a
+  row of measurements - and Setup Tracker ▸ Human Picks is that shape. It suppresses
+  the measured auto-pick as well as the last section; suppressing only the last
+  section would still have handed `cohort` the slack through the classify path,
+  which is the whole complaint. A NAMED text column still stretches.
+  `DataTable.set_width_rule` carries it; the default leaves every existing caller
+  byte-identical.
+- **Fourteen tracker tables declare their roles at construction**
+  (`_make_table(columns, *, text_key=None, elide_keys=(), stretch_last=True)`), every
+  index resolved by KEY through the new `_column_index`, which raises rather than
+  guessing. Playbooks stretches `Exit Plan` and elides `sample_setups`; Catch Rate
+  stretches `Missed Samples` and elides the caught ones; Controls and Studies
+  stretch `Family` and elide `cohort`, so `Win % (low)` never takes the slack on an
+  EMPTY tab; Human Picks stretches nothing. The two `fit_columns()` call sites are
+  unchanged, so the attribute leaderboard's worker slot is covered too.
+- **The Desk Setups FULL profile names `setup_tags`** and installs
+  `_KeyLevelElideDelegate` on `key_level`. **DEVIATION from the packet's literal
+  `elide_columns=(key_level,)`, and the reason**: `apply_width_rule` gives an elide
+  column a per-column `MiddleElideDelegate`, and a per-column delegate REPLACES the
+  view's delegate - so the packet's call would have left `key_level` painted by Qt's
+  default while its own row kept `SetupTableDelegate`'s alternating background,
+  favorite tint, selection fill and separator. The new delegate inherits both
+  classes (the setups delegate wins `paint` and `sizeHint`; `MiddleElideDelegate`
+  supplies the full-value tooltip) and overrides `_text` alone, because that helper
+  hard-codes `ElideRight` - the end elision §12 forbids for an identifier whose tail
+  is its anchor and retest date. The compact profile removes the column delegate on
+  the way in and is untouched otherwise.
+- **AWAY Recap** middle-elides `Line`, `Trigger` and `Cell / held x ran`, and names
+  `Symbol` on the Focus table.
+- Four builder-added tests (`tests/test_g2b_key_level_delegate.py`) pin what the
+  tester's isinstance check cannot: the column's delegate is a `SetupTableDelegate`
+  too, its `sizeHint` is still the setups row height, painting a long key level
+  really does reach `elide_middle` with the WHOLE value and keeps a real tail, and
+  compact gets the column back. All four proven red with the four source files
+  reverted.
+
+Layout lane: no number, sort key, read or write moved. Live gate **#85**.
 
 ### 2026-09-06 - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders (branch `claude/st6-working-lately`, not merged)
 
