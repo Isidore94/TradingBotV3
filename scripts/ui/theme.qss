@@ -184,6 +184,23 @@ QTextEdit {
     selection-background-color: @selection@;
 }
 
+/* Weekend Prep > Focus Review (packet G1). The nine tables are one stack
+   behind a nine-button selector, and the selected row is read WHOLE in the
+   pane beside it - the cell elides at paint time, this does not. Both are
+   styled here by object name: the page builds no stylesheet of its own. */
+QToolButton#WeekendViewButton {
+    padding: @pad_small@ @pad_medium@;
+}
+
+QTextBrowser#WeekendRowDetail {
+    background: @bg_panel@;
+    color: @text_primary@;
+    border: 1px solid @border@;
+    border-radius: @radius@;
+    padding: @pad_small@;
+    selection-background-color: @selection@;
+}
+
 QTableView {
     background: @bg_panel@;
     alternate-background-color: @bg_elevated@;
