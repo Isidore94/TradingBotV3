@@ -226,11 +226,31 @@ def test_enter_saves_and_shift_enter_does_not(panel, monkeypatch):
 
 
 def test_every_weekend_prep_table_shows_ten_rows(qapp):
+    """The 260 px floor, on every Weekend page EXCEPT Focus Review.
+
+    Packet G1 (2026-09-06) took the floor off the Focus Review page: nine
+    tables x 260 px is 2,340 px of minimum inside the ~2,050 px a 2160 screen
+    gives the page, and `WeekendPrepPanel` could not be shown at 2160 at all.
+    That page now stacks its nine tables behind a view selector and the ONE
+    VISIBLE table takes the height, so decision 0016 answer 10 is measured
+    there on the VIEWPORT instead of on a minimum height, by
+    ``tests/test_g1_weekend_focus_review.py::
+    test_the_visible_focus_review_table_shows_ten_rows_at_1440``.
+
+    The floor, the constant and this assertion all stay for the other five
+    pages - which is why Focus Review is EXCLUDED here rather than the test
+    being deleted.
+    """
     from PySide6.QtWidgets import QTableWidget
     from ui.panels import weekend_prep_panel as panel_module
 
     weekend = panel_module.WeekendPrepPanel()
-    tables = weekend.findChildren(QTableWidget)
+    focus_review_tables = set(weekend.focus_review.findChildren(QTableWidget))
+    tables = [
+        table
+        for table in weekend.findChildren(QTableWidget)
+        if table not in focus_review_tables
+    ]
 
     assert tables, "the tab must have tables to be about"
     thin = [
