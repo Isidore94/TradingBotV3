@@ -4,7 +4,7 @@ import csv
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -247,6 +247,23 @@ DIMENSION_TABS = (
 )
 
 
+def _explanation_identity(kind: str, row: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    """What names the row an explanation is about (packet G4.2).
+
+    The columns that name the SEGMENT, read from the row dict and never from the
+    display text: the dimension, plus the `direction|segment` pair the learning
+    store itself keys a segment by (a `long vwap` row and a `short vwap` row are
+    two different measurements). Values are stringified because a performance
+    row arrives from `csv.DictReader` as strings and a decision row does not.
+    """
+    return (
+        str(kind or ""),
+        str(row.get("dimension") or ""),
+        str(row.get("direction") or ""),
+        str(row.get("segment") or ""),
+    )
+
+
 class DaytradeTrackerPanel(QFrame):
     """Research tab: BounceBot's measured performance and the live learning state.
 
@@ -337,6 +354,17 @@ class DaytradeTrackerPanel(QFrame):
         self.tabs.addTab(self._decisions_page(), "My Decisions")
 
         self.explanation_view = ResearchExplanationView(self)
+        # Packet G4.2: a tab change is a CONTEXT change, and an explanation
+        # never outlives its context - the GUI review of 2026-09-06 found the
+        # `lrsi_cross50` explanation still standing over the Combos tab with no
+        # combo selected. Connected after both strips are built so the addTab
+        # calls above do not fire it during construction.
+        self.tabs.currentChanged.connect(self._on_context_tab_changed)
+        # Belt and braces: in the live GUI the OUTER strip changes first when
+        # the trader leaves My Decisions, so this second connection is only
+        # reached for a move BETWEEN the My Decisions sub-tabs - which is a
+        # context change of its own and must clear the pane too.
+        self.decisions_tabs.currentChanged.connect(self._on_context_tab_changed)
 
         self._refreshFinished.connect(self._on_refresh_finished)
         self._decisionsLoaded.connect(self._on_decisions_loaded)
@@ -534,7 +562,47 @@ class DaytradeTrackerPanel(QFrame):
         payload = dict(row)
         if dimension and not payload.get("dimension"):
             payload["dimension"] = dimension
-        self.explanation_view.show_row(kind, payload)
+        self.explanation_view.show_row(
+            kind, payload, identity=_explanation_identity(kind, payload)
+        )
+
+    def _on_context_tab_changed(self, _index: int) -> None:
+        """Any tab move retires the explanation (packet G4.2)."""
+        self.explanation_view.clear()
+
+    def _reshow_or_clear_explanation(self) -> None:
+        """After a data revision, re-read the open row or take the pane down.
+
+        The identity is looked up in the model that now holds the tab's rows and
+        the pane is redrawn from the NEW row dict - never the cached one, or the
+        pane would keep showing a number the table has already revised. A
+        segment the revision dropped takes its explanation with it. One dict
+        lookup over the current dimension's rows; nothing else lands on the Qt
+        thread here.
+        """
+        view = self.explanation_view
+        identity = getattr(view, "shown_identity", None)
+        if view.isHidden() or not identity:
+            return
+        kind, dimension = identity[0], identity[1]
+        if kind == "daytrade_learning":
+            model = self.learning_model
+        else:
+            entry = self._dimension_tables.get(dimension)
+            model = entry[1] if entry else None
+        if model is None:
+            view.clear()
+            return
+        for row in model.rows():
+            if not isinstance(row, dict):
+                continue
+            payload = dict(row)
+            if dimension and not payload.get("dimension"):
+                payload["dimension"] = dimension
+            if _explanation_identity(kind, payload) == identity:
+                view.show_row(kind, payload, identity=identity)
+                return
+        view.clear()
 
     # ------------------------------------------------------------------
     def reload_from_disk(self) -> None:
@@ -630,6 +698,8 @@ class DaytradeTrackerPanel(QFrame):
     def _on_refresh_finished(self, message: str) -> None:
         self.refresh_button.setEnabled(True)
         self.reload_from_disk()
+        # The models under the open explanation just changed (G4.2).
+        self._reshow_or_clear_explanation()
         self.status_label.setText(message)
         self.statusChanged.emit(message)
 
@@ -685,6 +755,8 @@ class DaytradeTrackerPanel(QFrame):
         for key, (table, model) in self._dimension_tables.items():
             model.set_rows(_by_headline(by_dimension.get(key, [])))
             table.fit_columns()
+        # The held/ran columns are a data revision too (G4.2).
+        self._reshow_or_clear_explanation()
 
     def shutdown(self) -> None:
         """Let no read outlive the panel it was going to update."""
