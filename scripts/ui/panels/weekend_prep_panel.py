@@ -720,8 +720,23 @@ class FocusReviewPage(_StepPage):
         self._layout.addLayout(selector_row)
         self._layout.addWidget(self.view_split, 1)
 
-        self.view_selector.idClicked.connect(self._select_view)
+        self.view_selector.idClicked.connect(self._on_view_button_clicked)
         self._select_view(FOCUS_REVIEW_DEFAULT_VIEW)
+
+    def _on_view_button_clicked(self, index: int) -> None:
+        """A click on the view ALREADY shown does nothing at all.
+
+        An exclusive checkable button still emits `clicked` when it is already
+        checked, so without this the selector re-ran the view change on every
+        re-click: nothing on screen moved except the trader's selected row and
+        the pane reading it, which is the only thing the click could destroy.
+        The unconditional `_select_view` stays for the constructor, which has
+        to check the button and set the horizon visibility on a `_view_index`
+        that already equals the default.
+        """
+        if int(index) == self._view_index:
+            return
+        self._select_view(int(index))
 
     def _select_view(self, index: int) -> None:
         """Show one of the nine views. A VIEW change: no read, no render."""
@@ -753,6 +768,24 @@ class FocusReviewPage(_StepPage):
             self.detail_pane.clear()
             return
         self.detail_pane.setHtml(self._row_detail_html(table, items[0].row()))
+
+    def _refresh_detail_pane(self) -> None:
+        """Re-read the pane from the cells that are on screen NOW.
+
+        The pane is filled from `itemSelectionChanged`, and a render that keeps
+        the row COUNT leaves the row selected without re-emitting it - so the
+        table showed the new read and the pane went on describing the previous
+        one, under the same row number, with nothing saying which was which. A
+        render that SHRINKS the table drops the selection and Qt re-emits by
+        itself, which is why only the equal-count case rotted.
+
+        Re-reading is the whole repair: the same row is rebuilt from the new
+        cells, and a selection the new render could not carry empties the pane
+        rather than freezing it. Every render pass ends here.
+        """
+        if not self._view_tables:
+            return
+        self._show_selected_row(self._view_tables[self._view_index])
 
     def _row_detail_html(self, table, row: int) -> str:
         from html import escape
@@ -825,6 +858,8 @@ class FocusReviewPage(_StepPage):
         self._render_performance(data.get("performance") or [])
         self._render_feedback(data.get("feedback") or [])
         self._render_week(data.get("week") or [])
+        # The nine tables just changed under a selection that survived them.
+        self._refresh_detail_pane()
 
     def _on_focus_failed(self, message: str) -> None:  # pragma: no cover - signal seam
         """State the failure; keep every row already on screen.
@@ -937,7 +972,10 @@ class FocusReviewPage(_StepPage):
         note = (
             f"{len(rows)} verdict(s) in the reviewed week ({tally}), dated by the "
             "session they are ABOUT rather than when they were typed. These are "
-            "opinions, not outcomes - read them against the rollup above."
+            # "the rollup above" was `performance_table`, which is a button away
+            # now rather than a scroll away: name the VIEW, not a position.
+            "opinions, not outcomes - read them against the Picks graded view, "
+            "which is the rollup they should be weighed against."
         )
         if len(rows) > len(shown):
             note += f" {len(rows) - len(shown)} row(s) beyond the first {len(shown)} are not shown."
@@ -960,6 +998,9 @@ class FocusReviewPage(_StepPage):
         """
         self._render_cohort(self._cohort_rows)
         self._render_like_cohort(self._like_rows)
+        # A horizon with the same row count keeps the selection, so this is the
+        # second door onto the staleness `_refresh_detail_pane` exists for.
+        self._refresh_detail_pane()
 
     def _render_like_cohort(self, rows) -> None:
         """R10.F's cohort, rendered under the same honesty rules as the veto one."""
@@ -994,7 +1035,9 @@ class FocusReviewPage(_StepPage):
             f"{len(shown)} row(s) at the {self._cohort_horizon()}-session horizon, "
             f"of {len(rows)} across all horizons, one per claimed setup family. "
             "Returns are side-adjusted, so POSITIVE means the pick you liked "
-            "WORKED - the opposite reading from the veto table above, where "
+            # The nine tables are a stack now: nothing is above anything, and a
+            # note that names a position sends the trader nowhere.
+            "WORKED - the opposite reading from the Vetoes view, where "
             "positive means the one you rejected would have."
             + quick_sentence
             + " "
