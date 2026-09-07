@@ -1634,6 +1634,13 @@ class TagWeekPage(_StepPage):
                 f"{backlog} are older than this week. Confirming writes your answer; "
                 "the tagger never overwrites one."
             )
+        # G2a: Tag takes the slack, Symbol middle-elides with its full value in
+        # the tooltip. Indices come from TAG_WEEK_COLUMNS itself, never a literal.
+        apply_width_rule_to_table_widget(
+            self.table,
+            text_columns=(TAG_WEEK_COLUMNS.index("Tag"),),
+            elide_columns=(TAG_WEEK_COLUMNS.index("Symbol"),),
+        )
         self._render_missing_risk()
 
     def _render_missing_risk(self) -> None:
@@ -1648,6 +1655,15 @@ class TagWeekPage(_StepPage):
             )
             for column, text in enumerate(values):
                 self.risk_table.setItem(index, column, QTableWidgetItem(text))
+        # G2a: Tag is the risk table's only free-text column (MISSING_RISK_COLUMNS
+        # carries no description/reason column); Symbol middle-elides. Indices
+        # come from MISSING_RISK_COLUMNS itself, never a literal. Applied before
+        # the empty-rows early return so a zero-row render still names Tag.
+        apply_width_rule_to_table_widget(
+            self.risk_table,
+            text_columns=(MISSING_RISK_COLUMNS.index("Tag"),),
+            elide_columns=(MISSING_RISK_COLUMNS.index("Symbol"),),
+        )
         if not self._risk_rows:
             self.risk_note.setText(
                 "Missing planned risk: none - every closed trade carries the risk you planned."
