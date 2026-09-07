@@ -21,7 +21,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 |---|---|
 | Latest work | **2026-09-07 morning (Labor Day, no session): the four first-wave layout packets MERGED to `main` one by one - G4 (`18d3f91d`, gate #80), G0 (`f12aa0e0`, gate #81), G3 (`c209b5d8`, no gate) and G1 (this merge, gate #82)** - each tester-first, each reviewed by reproduction, G0 and G1 after a NO-GO fix round (G0: the bench's run path wrote before its live-store abort; G1: the detail pane went stale after a refresh), G3 after a lead-requested readability round (a ~100-character reader measure, the entries column at one third). **2026-09-07: G1's fix round is done and pushed** - the reviewer's one blocker was that the detail pane went STALE after a refresh (wired to `itemSelectionChanged` only, so a render that KEPT the row count left the row selected, never re-emitted, and the pane described the PREVIOUS read under the same row number). Every render pass now ends in `_refresh_detail_pane`, which re-reads the visible view's selected row from the NEW cells and empties when the new render could not carry the selection - `_on_focus_ready` and also `_on_cohort_horizon_changed`, the horizon being the same staleness through a second door. Two advisories taken: clicking the button of the view ALREADY shown is now a no-op (it was clearing the trader's row), and two notes name a VIEW ("the Vetoes view", "the Picks graded view") instead of a position that no longer exists in a stack. The captions still carry no count and that stands as built - the count lives in each view's own note. `main` `18d3f91d` (G4) merged in and this packet's live gate renumbered **#82**. Five more tests, four proven RED first. Before that, **2026-09-06 evening: Phase 0.22's first LAYOUT packet, G1, was BUILT and pushed to `claude/g1-weekend-focus-review` (UNMERGED)** - Weekend Prep > Focus Review now stacks its nine tables behind a nine-button view selector with a read-only detail pane beside them. Nine 260 px ten-row floors is 2,340 px of minimum height in the ~2,050 px a 2160 screen gives the page, so `WeekendPrepPanel` could not be shown at 2160 at all (measured: page 2,824 px, panel 2,934 px) - the trader's "Weekend Prep overlap" was arithmetic. Layout lane only: no number, read, sort key or write moved, the read is still ONE pass over all nine tables, the verdict card is still uncapped. Nine tests proven RED first (the tester's seven plus two the builder added); see the 2026-09-06 G1 entry, the 2026-09-07 fix-round entry and gate #82. Before that, **2026-09-06 (Sunday, 06:10-18:30 PT): the Setup Tracker review repairs - packets ST1-ST5 MERGED at `22cc84d3`**, from the trader's *"Please repair the Setup Tracker findings below, then finish the existing Working-lately experience"*: ST1 each outcome names its meaning (`outcome_kind` = favorable direction at a scan-row offset, NOT a stop-rule win; `swing_evidence.read_eligible_rows` the one reader; exact-session v2 rows in their own shadow file); ST2 integer counts at every table's grain and ONE leader (`working_lately.select_leader`, the Setup Types tab's own win rate - V3 item 1 complete); ST3 a versioned execution convention and prior-session level knowledge (default byte-identical; the comparison on 794 setups is evidence, not a change); ST4 the first-actionable selection policy prepared beside today's (default byte-identical; a cache-bypass that would have zeroed the live score deltas caught in review); ST5 personal evidence by status with uncertainty as a label, the 10-SESSION window, counts by trade, no best setup without confirmed tags. Every branch tester-first, built, and reviewed by reproduction (ST1 GO after two rounds, ST2 GO after three, ST3 GO, ST4 GO after one, ST5 GO after one). **ST6 (the Working-lately strip, the priority switch, the AWAY Recap) is BUILT on `claude/st6-working-lately` and NOT merged**: its reviewer found four blockers (switch OFF must restore arrival order, the row cap before the priority view, the day-trade bound on `held_run_score` itself, the favorable kind's clock is its measured session) and the fix round died on the session limit at 17:30 PT with the builder mid-way. The same morning the other session recorded the Q4 spot-audit and decided the three scoring questions (its 2026-09-06 entry), and a third session opened the Phase 0.22 layout lane. | |
 | Working branch | `main` after the G1 merge (merge commits on top of `c209b5d8` ← `f12aa0e0` ← `18d3f91d` ← `68762909`); merges are made in the scratch worktree `wt-g-merge` on `lead/merge-g` and fast-forwarded into the desk checkout when it is clean. |
-| Unmerged / open | **G lane: nothing unmerged - G3b (three reviewer advisories on the Market Journal reader: desk-local written time, lookup by `entry_id`, the measure refreshed on a scale change) merged with this commit; its one fragile test pinned to a fixed -07:00 desk zone at merge.** Queued: G2 clipped tables, G4b (the Setup Tracker's detail pane, after ST6), G5 Research › Results (after ST6's snapshot), G7 speed pass. **The other lead's `claude/st6-working-lately` (ST6) is in its fix round on `lead/merge-st`**; the Phase 0.22 rule stands - nothing of the G lane touches `setup_tracker_panel.py`, `master_avwap_panel.py`, `away_recap_panel.py`, `alert_center_panel.py`, `research_panel.py` or `legacy.py` until ST6 lands. Also open from before: `claude/s1-quick-verbs`, the 2026-09-03 lake incident call, the lock-file sweep packet, one pre-existing suite flake (`test_chart_snapshot.py::test_stale_d1_tail_triggers_one_backfill_with_cooldown`, a D1 backfill leaking from an earlier Qt file into its pump window - passes alone and on re-run; worth its own packet). |
+| Unmerged / open | **G lane: `claude/g2a-journal-and-tagweek-columns` (G2a, the Journal Trades tab and Weekend Prep's Tag Week page name their text column) BUILT and pushed, UNMERGED** - G2 split into G2a (this packet, touches neither file ST6 rewrites) and G2b (the Setup Tracker tabs, the Desk Setups table, the AWAY tables), queued after ST6 lands. G3b (three reviewer advisories on the Market Journal reader) is merged. Queued: G2b, G4b (the Setup Tracker's detail pane, after ST6), G5 Research › Results (after ST6's snapshot), G7 speed pass. **The other lead's `claude/st6-working-lately` (ST6) is in its fix round on `lead/merge-st`**; the Phase 0.22 rule stands - nothing of the G lane touches `setup_tracker_panel.py`, `master_avwap_panel.py`, `away_recap_panel.py`, `alert_center_panel.py`, `research_panel.py` or `legacy.py` until ST6 lands. Also open from before: `claude/s1-quick-verbs`, the 2026-09-03 lake incident call, the lock-file sweep packet, one pre-existing suite flake (`test_chart_snapshot.py::test_stale_d1_tail_triggers_one_backfill_with_cooldown`, a D1 backfill leaking from an earlier Qt file into its pump window - passes alone and on re-run; worth its own packet). |
 | Next action | **Restart the desk (trader's call) so ST1-ST5 are live, then Tuesday 2026-09-08 13:00 PT (Monday is Labor Day): live gates #70-#74 from before plus #75 (ST1), #76 (ST2), #78 (ST4), #79 (ST5) at the first persisted tracker write and the first nightly run; #77 (ST3) is the comparison artifact.** Then finish ST6 (above). Then the trader's decisions (below). Phase 0.22 (the layout lane, G0-G7) runs in the other session on branches based on `lead/merge-st`. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63).**  **Merge G0 (fixed, reviewed once) so G1 has its yardstick; its live gate is #81 - the same bench run windowed.** |
 | Trader actions owed | **Three scoring decisions, each with frozen before/after evidence on copies (nothing live changed):** (1) ST4 pending-stays-pending - v1 grades ~228 episodes as losses on an alternate exit that closed while the representative trade was still running; honouring `representative_status` moves the same 2,249 theses from 61.6% to 70.5% favorable and is 94% of the mean-R move - a pure honesty fix, could be authorised alone; (2) ST4 first-actionable re-entries - 463 second attempts after a closed first attempt, winning 80% AFTER the fix, but that population exists only because the first attempt closed (survivorship by construction) - decide whether a re-entry is its own trade; (3) ST3 `gap_aware_v2` / `prior_session_v2` - the execution repair HELPS (89 of 794 changed, expectancy -0.098 to -0.081) and the prior-session level knowledge HURTS (458 changed, -0.098 to -0.149) because same-day bands were peeking; decide whether either becomes the scoring convention, and whether targets should gap-fill at the open like stops or a stops-only convention needs its own name. Also: restart the desk; the 26 provisional tags await review in Weekend Prep; record planned risk on new trades (0 of 172 have it). |
 | Last verified baseline | **`lead/merge-g` at `379c39d3` (the G1 merge on top of G3, G0 and G4), in the scratch merge worktree, nightly AI lock FREE: `pytest tests/ -q` with NOTHING DESELECTED: 7132 passed, 3 skipped, 72 subtests passed, ZERO failures, exit 0, 10 min 05 s; ruff clean; smoke 7/7; source selftest 74/74.** Each merge before it ran the same gate: G3 merge 7118 (exit 0), G0 merge 7107 (exit 0), G4 branch 7069 (exit 0). Previous: `main` `68762909`, 7063 passed. |
@@ -121,6 +121,60 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-07 - G2a BUILT: the Trades and Tag Week tables name their text column (branch `claude/g2a-journal-and-tagweek-columns`)
+
+Phase 0.22, the layout half of G2 (split from G2b - the Setup Tracker tabs, the Desk Setups
+table, the AWAY tables - which is queued after ST6 lands, since G2a touches neither file
+ST6 rewrites). Tester-first: five tests committed RED at `b2798ec7` (four proven FAILING on
+`main` `a1dab8fa`: `Tags`/`Tag` 100 px on a 3,456 px desk, `Symbol` with no
+`MiddleElideDelegate`, `Interactive` where `Stretch` was expected; one golden green by
+design). Builder made the four pass without weakening any, then merged `main` `6de5aced`
+(G3b) in clean.
+
+**The rule already existed and neither file called it.** `ui/widgets/data_table.py`'s
+`apply_width_rule_to_table_widget` stretches a named text column, clamps every other to
+`[MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH]`, and middle-elides a named identifier column with its
+full value in a tooltip - `trades_tab.py` and `weekend_prep_panel.py` never called it, so a
+raw `QTableWidget` at Qt's default resize left option symbols and tag lists clipped on a
+3,456 px desk with most of the row blank. `_populate_table` (Journal Trades' ONE render
+seam) now ends with the rule naming `Tags` (`TRADES_COLUMNS.index("Tags")`, a new module
+constant) as the stretching column and `Symbol` as the middle-elide column.
+`TagWeekPage._render` (for `self.table`) and `_render_missing_risk` (for `self.risk_table`)
+do the same against `TAG_WEEK_COLUMNS` / `MISSING_RISK_COLUMNS`, both indexed by name.
+
+**Two premises the packet got wrong, both caught by the tester and corrected in the fix:**
+`TAG_WEEK_COLUMNS` carries SIX columns, not five - `("Date", "Symbol", "Status", "Tag",
+"Net", "Week")`, `Week` having been added after the packet was drafted - which is why every
+index is looked up by name rather than a literal, in both the tests and the fix.
+`MISSING_RISK_COLUMNS` (`"Date", "Symbol", "Direction", "Net", "Tag"`) carries no
+description/reason column at all, so `Tag` is its only free-text column and the one named -
+not "whichever column carries the description/reason" as the packet described.
+
+The risk table's width-rule call runs BEFORE `_render_missing_risk`'s empty-rows early
+return, so a zero-row render still names `Tag` by NAME rather than by content.
+`_populate_table`'s existing NEEDS_REVIEW tooltip is untouched - the width rule's own
+tooltip write only fires where an item carries none already.
+
+**Layout lane only**: no number, sort key, read or write moved (the golden - every cell's
+text and the row order, captured from `main` at `a1dab8fa` before any width rule existed -
+stayed green throughout). The Trades tab's splitter declares `setStretchFactor(0, 3)` /
+`(1, 2)` but opens `[1347, 2105]` at 3,456 px - the table gets 39% of the desk and the
+detail pane 61%, not the declared 3:2 - a real defect the tester found and named. **It is
+NOT this packet's** (the packet said nothing else in the tab moves) and is left for a later
+Journal packet.
+
+**Fail-before-fix proven**: `git stash` reverted both files to `a1dab8fa`; the four RED
+tests failed again with the tester's exact messages; the golden stayed green; `git stash
+pop` restored the fix and all five went green.
+
+**Verification**: `tests/test_g2a_named_text_columns.py` 5/5; the journal/weekend/
+data_table/width-rule subset (`-k "journal or weekend or data_table or width"`) 940 passed,
+0 failed; full suite (see the Last verified baseline row); ruff clean; smoke 7/7; source
+selftest 74/74. Two offscreen screenshots taken at 3,456×2,160 with a long option symbol and
+a long tag in the fixture, confirming visually that `Tags`/`Tag` takes the slack on both
+tables. **No live gate beyond the trader seeing the wider Trades and Tag Week columns after
+the next desk restart** - layout only, nothing here is measured on a live store.
 
 ### 2026-09-07 - G3b BUILT: three reviewer advisories on the Market Journal reader (branch `claude/g3b-reader-followups`)
 

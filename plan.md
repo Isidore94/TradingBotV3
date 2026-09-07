@@ -247,7 +247,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.13** | Grade what the trader already said (P0-P10) | Every verdict gets a forward record; a like starts a five-session watch. **MERGED; live gates #29-#43 owed** |
 | **0.16** | Capture and board rules (packets T1 + T2) | A veto with no box, a quick like that stays, a claimed like that is one double-click and advances, a board click that queues nothing, the TC2000 board on M5 Focus. **BUILT; live gate #58 owed** |
 | **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1–V3/R4 merged; V4's Working-lately switch and AWAY Recap remain NOT BUILT - they are P6 and G6 of Phase 0.22** |
-| **0.22** | Desk reshape + tracker evidence repairs (G0–G7, P1–P6) | Two lanes that never share a branch: the layout lane (Weekend overlap, clipped tables, Market Journal reader, stale Research detail, a Research › Results landing page, AWAY Recap, speed) and the measurement lane (the six Setup Tracker packets). **AUTHORIZED 2026-09-06; G0 in build** |
+| **0.22** | Desk reshape + tracker evidence repairs (G0–G7, P1–P6) | Two lanes that never share a branch: the layout lane (Weekend overlap, clipped tables, Market Journal reader, stale Research detail, a Research › Results landing page, AWAY Recap, speed) and the measurement lane (the six Setup Tracker packets). **AUTHORIZED 2026-09-06; G0/G1/G3/G4 merged to `main`, G2a built (unmerged), G2b queued after ST6** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -360,7 +360,10 @@ personal evidence, ST6 the V4 snapshot + Working-lately strip + priority switch 
 leader-change events. This session found that work at 16:45 PT, a quarter-hour after starting a
 duplicate of ST2, and stopped the duplicate; the "P1–P6" names in the 2026-09-06 plan artifact ARE
 ST1–ST6. Lane G (layout, this session): G0 measure first, G1 Weekend Focus Review one table + view
-selector + detail pane, G2 clipped tables (name the text column), G3 Market Journal reader, G4 stale
+selector + detail pane, G2 clipped tables (name the text column) - split into **G2a** (the Journal's
+Trades tab and Weekend Prep's Tag Week page, neither file ST6 touches) and **G2b** (the Setup
+Tracker tabs, the Desk Setups table, the AWAY tables, queued after ST6 lands) - G3 Market Journal
+reader, G4 stale
 Research detail clears on context change (Day-trade Tracker now; the Setup Tracker half is G4b after
 ST6), G5 Research › Results landing page (reads ST2's counts and ST6's snapshot), G7 speed pass
 re-measured against G0. G6 (AWAY Recap reshape) is ST6's item; any layout polish left after it is a
@@ -369,7 +372,7 @@ number is computed; an M packet may change exports, readers and meanings and nev
 G branches base on `lead/merge-st`, never edit a file ST2/ST6 is rewriting, and the two leads
 coordinate by message; the desk restarts only on the trader's word.
 
-**Order (G lane):** G0 → G1 → G4 → G3 → G2 → G5 (after ST2 + ST6 land) → G4b → G7.
+**Order (G lane):** G0 → G1 → G4 → G3 → G2a → G2b (after ST6) → G5 (after ST2 + ST6 land) → G4b → G7.
 
 | Packet | State |
 |---|---|
@@ -378,7 +381,9 @@ coordinate by message; the desk restarts only on the trader's word.
 | G3 Market Journal reader | **BUILT 2026-09-06**, branch `claude/g3-market-journal-reader` (tester's six red tests at `705ad780`, `main` `68762909` merged in); the list shows a dated 90-character excerpt and the right half is a reader over the charts, filled at the head of `_on_entry_selected`. **No live gate** - layout only, checked by the trader opening the page. Awaiting review and merge |
 | G1 Weekend Focus Review | **BUILT 2026-09-06, reviewed, ONE blocker FIXED 2026-09-07** on `claude/g1-weekend-focus-review`, unmerged, live gate **#82** owed (G4 took #80 when it landed on `main` first). Nine tables into a `QStackedWidget` behind a nine-button `QButtonGroup` selector, the ten-row floors off THIS page only (the constant and `_ten_row_table` stay for the other five), a read-only `QTextBrowser` detail pane at 3:1 that clears on a view change, a population sentence per view. The read is still ONE pass over all nine tables and no number, sort key or write moved. Fix round: the pane re-reads the selected row at the end of BOTH render passes (it was wired to `itemSelectionChanged` only, so an equal-count refresh left it describing the previous read); re-clicking the current view's button is a no-op; two notes name a VIEW rather than a position. **Base deviation:** the packet named `lead/merge-st` `e7c51409`; that work had already reached `main` `68762909` by build time, so the branch bases on the tester's `76eba3ae` with `main` merged in, and `main` `18d3f91d` (G4) was merged in for the fix round |
 | P2 | SUPERSEDED by ST2 (the other session) - stopped 16:50 PT, branch deleted, nothing built |
-| G2, G5, G4b, G7 | queued in the order above; G5 and G4b wait for ST2/ST6 in `lead/merge-st` |
+| G2a clipped tables (Journal + Weekend Prep) | **BUILT 2026-09-07** on `claude/g2a-journal-and-tagweek-columns` (tester's five tests at `b2798ec7`, four proven RED on `main` `a1dab8fa`, one golden green by design; `main` `6de5aced` merged in). Journal Trades' `_populate_table` and Weekend Prep's `TagWeekPage._render` / `_render_missing_risk` each end with `apply_width_rule_to_table_widget`, naming `Tags`/`Tag` as the stretching text column (indices taken from the header tuples by name, never a literal) and `Symbol` as the middle-elide column. **Base deviations from the packet, both corrected in the tests and the fix**: `TAG_WEEK_COLUMNS` carries six columns, not five (`Week` was added after the packet was drafted); `MISSING_RISK_COLUMNS` carries no description/reason column, so `Tag` is its only text column, not "whichever column carries the description/reason". The Trades splitter's 39/61 open (not the declared 3:2) is a separate, unfixed defect for a later Journal packet. No live gate beyond the trader seeing the columns after the next restart |
+| G2b (Setup Tracker tabs, Desk Setups table, AWAY tables) | queued after ST6 lands |
+| G5, G4b, G7 | queued in the order above; G5 and G4b wait for ST2/ST6 in `lead/merge-st` |
 
 ## Phase 0.21 — Measurement audit repairs M2, M3, M5 (2026-09-05) — BUILT, live gates #71, #72, #74 owed
 
