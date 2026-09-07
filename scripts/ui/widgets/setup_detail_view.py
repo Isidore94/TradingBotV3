@@ -37,8 +37,14 @@ class SetupDetailView(QTextBrowser):
         #: Packet G4.1: what the pane is showing, as
         #: `(kind, side, family, symbol-or-blank, dimension-or-blank)`, computed
         #: by `_render` from the row it just drew. `None` means nothing is shown.
-        #: The widget gains the API here; its caller
-        #: (`setup_tracker_panel.py`) is packet G4b, after ST6 lands.
+        #: Read by `setup_tracker_panel.py` since packet G4b (2026-09-07), which
+        #: clears the pane on a tab move and re-shows the open row from the NEW
+        #: row dict at the end of `refresh()`. That panel WIDENS this tuple with
+        #: `favorite_zone` / `priority_bucket` for its own match, because a
+        #: Setup Types row has neither a `symbol` nor a `dimension` and two
+        #: zones of one (side, family) land on the same identity here - so
+        #: **this tuple alone is not a row key** for a caller whose table has a
+        #: finer grain.
         self.shown_identity: tuple | None = None
         self._levelsLoaded.connect(self._on_levels_loaded)
 

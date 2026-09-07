@@ -307,6 +307,11 @@ class AwayRecapPanel(QFrame):
                 for row in recap.get("best_swings") or []
             ],
             text_columns=(3,),
+            # G2b.4: `Line` is a whole sentence and the window is not always
+            # 4K wide. Qt's own end elision drops the part the reader is
+            # looking for; the middle one keeps the tail and the item carries
+            # the full sentence as its tooltip.
+            elide_columns=(3,),
             chart_column=4,
             symbol_column=1,
         )
@@ -319,6 +324,10 @@ class AwayRecapPanel(QFrame):
         self._fill(
             self.focus_table,
             [(row["symbol"], row["side"]) for row in recap.get("focus_to_manage") or []],
+            # G2b.4: the measured rule already answers `Symbol` here, for every
+            # row set this recap can produce. Naming it fixes that answer so a
+            # longer `Side` value can never quietly move it.
+            text_columns=(0,),
         )
 
     @staticmethod
@@ -418,6 +427,9 @@ class AwayRecapPanel(QFrame):
                 for row in shown
             ],
             text_columns=(5, 6),
+            # G2b.4. `Cell / held x ran` ends in the suffix the recap is read
+            # for, and an end elision is exactly what loses it.
+            elide_columns=(5, 6),
             chart_column=7,
             symbol_column=1,
         )

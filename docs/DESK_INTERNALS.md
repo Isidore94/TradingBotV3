@@ -2884,3 +2884,58 @@ displaces a champion scenario - under whatever the defaults currently are.
 record carries the three stamps, `n_pending` is non-zero, no `pending` representative is graded,
 the tables re-rank (expect the ST4 comparison's 2,249 -> 2,712 episodes and 61.6% -> 72.0%
 favorable), and the first D1 scan after it still writes NONZERO score deltas.
+
+## G5 - a window that labelled and never filtered, and a source line that printed `None` (2026-09-07)
+
+### What was measured, on `claude/g5-research-results` @ `85d11227`
+
+The Results page's window control (`Recent 20 sessions | All history | Custom...`) reached
+`research_results._window_of`, which returned a NAME, two dates and a LABEL - and nothing else
+read them. `_bot_sections` rendered every cell in the snapshot and `_mine_sections` bucketed
+every closed trade in the journal, under whichever heading the buttons happened to be showing.
+The reviewer reproduced it in one line: a trade closed in **2019** was counted, with its money,
+under "Custom window 2026-09-01 to 2026-09-04". A heading is a claim, and this one was false in
+every selection but "All history".
+
+The same page's freshness line read, on every real snapshot on this machine:
+
+    swing_trade_r <- an unnamed file @ None; swing_favorable <- an unnamed file @ None; ...
+
+because `working_lately.build_snapshot` writes `path: ""` and `mtime: None` for each source it
+computes itself (`_rows_by_session` fills in `rows` and `rows_by_session` instead), and the
+first cut of `_bot_freshness` printed the path and the mtime and nothing else. The fixture the
+tests were written against carried a path and an mtime, so nothing was red.
+
+And a band card printed its BAND's size over the three rows it renders per section: 27 cells,
+six printed lines, one label reading `27 shown`.
+
+### The rules this produced
+
+- **A window control either applies or is disabled; it never merely labels.** For **My trades**
+  `research_results.in_window` filters CLOSED trades on `closed_at`, inclusive at both ends,
+  and the count it turned away is reported (`stats["n_outside_window"]`) - a filter that drops
+  rows silently is the same defect one step later. A trade whose `closed_at` the journal never
+  carried is counted OUT of a bounded window: "not known to be inside" is not "inside".
+- **For Bot setups the SNAPSHOT owns the window.** Every `EvidenceCell` carries the
+  `window_sessions` its own aggregator walked, ending at the snapshot's `as_of`, so the three
+  buttons are DISABLED with `WINDOW_ON_BOT_TOOLTIP` and the page prints
+  `ResultsView.window_sentence` ("The snapshot owns this window: 20 sessions ending
+  2026-09-04") in place of a date range its numbers never saw. `window_applies` is the flag a
+  reader checks; it is False for bot and True for mine.
+- **The three control groups react on `idToggled` filtered on `checked`, not `idClicked`.**
+  `QAbstractButton::click()` returns early on a disabled button, and one of the packet's own
+  tests drives the window control while the page is on Bot. Filtering `toggled` keeps ONE
+  reaction per change (an exclusive group un-checks the old button as it checks the new one)
+  and leaves a disabled button's STATE drivable, which is what a test does and a trader cannot.
+- **A provenance line states what the snapshot recorded and never a Python literal.**
+  `_source_text` prints the source's `rows`, adds a path or an mtime only when one is present,
+  and a snapshot with no source at all prints `NO_SOURCES`. The lesson under it is older than
+  this page: a fixture richer than the file it stands for cannot fail on the file's shape, so
+  the test for a provenance line is written against the WRITER's own output.
+- **A card counts the lines it rendered.** `N of M shown` - N the printed lines
+  (`CARD_LINES`), M the band's own total - and an empty section prints no heading.
+- **Every running-text label on a page is capped at G3's reading measure.**
+  `READER_MEASURE_CHARS` is 100 characters of the label's own font, floored and ceilinged in
+  design pixels, left-aligned, wrapped. Measured before the fix: the section label was ONE
+  1,922-character line set across 3,456 px. The constant is asserted equal to
+  `market_journal_panel`'s, so the two readers cannot drift apart.

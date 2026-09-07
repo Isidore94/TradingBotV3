@@ -491,24 +491,58 @@ class SetupTrackerPanel(QFrame):
         self.exit_framework_status_label.setWordWrap(True)
 
         self.tabs = QTabWidget()
-        self.current_table, self.current_model = self._make_table(CURRENT_PICK_COLUMNS)
-        self.setup_type_table, self.setup_type_model = self._make_table(SETUP_TYPE_COLUMNS)
-        self.recent_type_table, self.recent_type_model = self._make_table(RECENT_TYPE_COLUMNS)
-        self.short_term_table, self.short_term_model = self._make_table(SHORT_TERM_COLUMNS)
-        self.playbook_table, self.playbook_model = self._make_table(PLAYBOOK_COLUMNS)
-        self.scan_factor_table, self.scan_factor_model = self._make_table(SCAN_FACTOR_COLUMNS)
-        self.tier_performance_table, self.tier_performance_model = self._make_table(TIER_PERFORMANCE_COLUMNS)
-        self.catch_rate_table, self.catch_rate_model = self._make_table(CATCH_RATE_COLUMNS)
-        self.human_pick_table, self.human_pick_model = self._make_table(HUMAN_PICK_COLUMNS)
-        self.band_variant_table, self.band_variant_model = self._make_table(BAND_VARIANT_COLUMNS)
+        # G2b.2: every tab NAMES the column that takes the slack and the
+        # identifiers that elide, by key. See `_make_table`.
+        self.current_table, self.current_model = self._make_table(
+            CURRENT_PICK_COLUMNS, text_key="scan_factor_matches"
+        )
+        self.setup_type_table, self.setup_type_model = self._make_table(
+            SETUP_TYPE_COLUMNS, text_key="sample_setups"
+        )
+        self.recent_type_table, self.recent_type_model = self._make_table(
+            RECENT_TYPE_COLUMNS, text_key="sample_setups"
+        )
+        self.short_term_table, self.short_term_model = self._make_table(
+            SHORT_TERM_COLUMNS, text_key="sample_setups"
+        )
+        # Exit Plan is what a playbook row is FOR; the samples beside it are
+        # longer, so the measured rule gave them the width Exit Plan needed.
+        self.playbook_table, self.playbook_model = self._make_table(
+            PLAYBOOK_COLUMNS, text_key="profit_take_summary", elide_keys=("sample_setups",)
+        )
+        self.scan_factor_table, self.scan_factor_model = self._make_table(
+            SCAN_FACTOR_COLUMNS, text_key="sample_observations"
+        )
+        self.tier_performance_table, self.tier_performance_model = self._make_table(
+            TIER_PERFORMANCE_COLUMNS, text_key="sample_observations"
+        )
+        # The GUI review's finding verbatim: the CAUGHT examples ate the width
+        # and the MISSED ones - the point of the tab - clipped.
+        self.catch_rate_table, self.catch_rate_model = self._make_table(
+            CATCH_RATE_COLUMNS,
+            text_key="sample_missed_winners",
+            elide_keys=("sample_caught_winners",),
+        )
+        # One identifier and ten measurements, and no free-text column at all,
+        # so the slack stays EMPTY rather than going to `cohort` or `Delta %`.
+        self.human_pick_table, self.human_pick_model = self._make_table(
+            HUMAN_PICK_COLUMNS, elide_keys=("cohort",), stretch_last=False
+        )
+        self.band_variant_table, self.band_variant_model = self._make_table(
+            BAND_VARIANT_COLUMNS, text_key="setup_family", elide_keys=("exit_template_id",)
+        )
+        # `Family` takes the slack on both discovery tabs, so `Win % (low)`
+        # never takes it - which is what an EMPTY tab did, measuring headers.
         self.control_discovery_table, self.control_discovery_model = self._make_table(
-            DISCOVERY_COLUMNS
+            DISCOVERY_COLUMNS, text_key="setup_family", elide_keys=("cohort",)
         )
         self.study_discovery_table, self.study_discovery_model = self._make_table(
-            DISCOVERY_COLUMNS
+            DISCOVERY_COLUMNS, text_key="setup_family", elide_keys=("cohort",)
         )
         self.exit_framework_table, self.exit_framework_model = self._make_table(
-            EXIT_FRAMEWORK_COLUMNS
+            EXIT_FRAMEWORK_COLUMNS,
+            text_key="framework_family",
+            elide_keys=("exit_template_id",),
         )
         for table in (
             self.control_discovery_table,
@@ -517,7 +551,9 @@ class SetupTrackerPanel(QFrame):
         ):
             table.setMinimumHeight(TABLE_TEN_ROWS_PX)
         self.attribute_table, self.attribute_model = self._make_table(
-            ATTRIBUTE_LEADERBOARD_COLUMNS
+            ATTRIBUTE_LEADERBOARD_COLUMNS,
+            text_key="sample_setups",
+            elide_keys=("value_label",),
         )
 
         self.tabs.addTab(self.current_table, "Current Picks")
@@ -645,6 +681,14 @@ class SetupTrackerPanel(QFrame):
         # picks it shows the family mechanics plus THIS symbol's stop/target
         # prices from the current anchor bands.
         self.detail_view = SetupDetailView(self, playbook_lookup=self._best_playbook_row)
+        #: Packet G4b. `SetupDetailView.shown_identity` is deliberately coarse -
+        #: `(kind, side, family, symbol, dimension)` - and on the Setup Types
+        #: export two rows of one (side, family) live in different zones and
+        #: buckets, so the identity alone would re-show the wrong row after a
+        #: refresh. This is the SHOWN row's widening key, recorded beside the
+        #: identity by the two show helpers below and trusted only while the
+        #: pane is up. `None` means nothing is shown.
+        self._detail_widened_key: tuple | None = None
         self.current_table.clicked.connect(self._on_pick_clicked)
         explained_tables = (
             (self.setup_type_table, "setup_type"),
@@ -660,6 +704,35 @@ class SetupTrackerPanel(QFrame):
             table.clicked.connect(
                 lambda index, explanation_kind=kind: self._on_research_row_clicked(index, explanation_kind)
             )
+        #: Every table that can open the pane, with the model that holds its
+        #: rows and the `show_*` call its tab uses (`""` is `show_setup`).
+        #: Looked up by TAB rather than by position, so adding or reordering a
+        #: tab cannot silently re-point the re-show.
+        self._detail_tables: tuple[tuple[DataTable, TrackerTableModel, str], ...] = (
+            (self.current_table, self.current_model, ""),
+            *(
+                (table, model, kind)
+                for (table, kind), model in zip(
+                    explained_tables,
+                    (
+                        self.setup_type_model,
+                        self.recent_type_model,
+                        self.short_term_model,
+                        self.playbook_model,
+                        self.scan_factor_model,
+                        self.tier_performance_model,
+                        self.catch_rate_model,
+                        self.human_pick_model,
+                    ),
+                    strict=True,
+                )
+            ),
+        )
+        # G4b.1: any tab move is a context change and retires the explanation.
+        # The pane carries STOP AND TARGET PRICES on this page, so one left
+        # standing beside another tab's table is a price plan read against the
+        # wrong row.
+        self.tabs.currentChanged.connect(self._on_context_tab_changed)
 
         self._attributesLoaded.connect(self._on_attributes_loaded)
         self._build_layout()
@@ -711,7 +784,26 @@ class SetupTrackerPanel(QFrame):
     def _make_table(
         self,
         columns: tuple[tuple[str, str], ...],
+        *,
+        text_key: str | None = None,
+        elide_keys: tuple[str, ...] = (),
+        stretch_last: bool = True,
     ) -> tuple[DataTable, TrackerTableModel]:
+        """Build one tab's table and NAME the column that takes the slack.
+
+        Packet G2b.2. Every table here ran `apply_width_rule`'s measured path,
+        which is content-dependent and moves: on a populated Catch Rate the
+        caught samples outgrew the missed ones and ate the width the Missed
+        Samples column exists to show, and on an EMPTY Controls tab the widest
+        thing on screen is a HEADER, so `Win % (low)` stretched while `Family`
+        sat at its floor. Naming the column fixes the answer to what the tab is
+        for, populated or empty.
+
+        `text_key` and `elide_keys` are KEYS, resolved through `_column_index`
+        against this table's own tuple. A literal index would be a defect
+        waiting for the next column insert - ST2 and M5 each added columns to
+        these tuples this month.
+        """
         numeric_keys = {key for key, _label in columns if _looks_numeric_key(key)}
         model = TrackerTableModel(
             columns,
@@ -725,6 +817,11 @@ class SetupTrackerPanel(QFrame):
         table = DataTable()
         table.setModel(proxy)
         table.setShowGrid(False)
+        table.set_width_rule(
+            text_columns=None if text_key is None else (_column_index(columns, text_key),),
+            elide_columns=tuple(_column_index(columns, key) for key in elide_keys),
+            stretch_last=stretch_last,
+        )
         return table, model
 
     def _make_explained_tab(
@@ -928,6 +1025,12 @@ class SetupTrackerPanel(QFrame):
         self.status_label.setText(status)
         self.statusChanged.emit(status)
 
+        # G4b.2, LAST: every model above now holds the new rows, so an open
+        # explanation is either re-drawn from the row that replaced it or taken
+        # down. Running it here rather than earlier is what keeps the tables
+        # themselves untouched by this packet.
+        self._reshow_or_clear_detail()
+
     # ------------------------------------------------------------------
     # Click-to-detail: family mechanics + this symbol's stop/target prices
     # ------------------------------------------------------------------
@@ -935,6 +1038,16 @@ class SetupTrackerPanel(QFrame):
         row = index.data(ROW_ROLE)
         if not isinstance(row, dict):
             return
+        self._show_pick_row(row)
+
+    def _on_research_row_clicked(self, index, kind: str) -> None:
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, dict):
+            return
+        self._show_research_row(kind, row)
+
+    # -- the two show paths, shared by a click and by a refresh's re-show ---
+    def _show_pick_row(self, row: dict[str, Any]) -> None:
         self.detail_view.show_setup(
             symbol=str(row.get("symbol") or ""),
             side=str(row.get("side") or "LONG"),
@@ -942,18 +1055,68 @@ class SetupTrackerPanel(QFrame):
             tier=str(row.get("tier") or ""),
             last_close=row.get("last_close"),
         )
+        self._detail_widened_key = _detail_widened_key(row)
 
-    def _on_family_row_clicked(self, index) -> None:
-        row = index.data(ROW_ROLE)
-        if not isinstance(row, dict):
-            return
-        self.detail_view.show_family(str(row.get("setup_family") or ""), side=str(row.get("side") or ""))
-
-    def _on_research_row_clicked(self, index, kind: str) -> None:
-        row = index.data(ROW_ROLE)
-        if not isinstance(row, dict):
-            return
+    def _show_research_row(self, kind: str, row: dict[str, Any]) -> None:
         self.detail_view.show_research_row(kind, row)
+        self._detail_widened_key = _detail_widened_key(row)
+
+    def _clear_detail(self) -> None:
+        self.detail_view.clear()
+        self._detail_widened_key = None
+
+    def _on_context_tab_changed(self, _index: int) -> None:
+        """Any tab move retires the explanation (packet G4b.1)."""
+        self._clear_detail()
+
+    def _reshow_or_clear_detail(self) -> None:
+        """After a re-read, redraw the open row from its NEW dict, or take it down.
+
+        **The first question is whether the pane is up**, not whether a match
+        exists: the trader reaches the hidden state by moving tabs, and a scan
+        that re-showed on a match alone would pop an explanation open under
+        someone who had closed it.
+
+        The row is then looked up in the model that now holds the CURRENT tab's
+        rows and the pane is redrawn from the new dict - never the cached one,
+        or it would keep printing a stop, a target or a mean R the table has
+        already revised. A row the re-read dropped takes its explanation with
+        it. One linear scan of that one model, no dict copied per row.
+        """
+        view = self.detail_view
+        identity = getattr(view, "shown_identity", None)
+        if view.isHidden() or not identity:
+            return
+        source = self._detail_source_for_current_tab()
+        if source is None:
+            self._clear_detail()
+            return
+        model, kind = source
+        wanted_widening = self._detail_widened_key
+        for position in range(model.rowCount()):
+            row = model.row_at(position)
+            if not isinstance(row, dict):
+                continue
+            if _detail_row_identity(row, kind) != identity:
+                continue
+            if wanted_widening is not None and _detail_widened_key(row) != wanted_widening:
+                continue
+            if kind:
+                self._show_research_row(kind, row)
+            else:
+                self._show_pick_row(row)
+            return
+        self._clear_detail()
+
+    def _detail_source_for_current_tab(self) -> tuple[TrackerTableModel, str] | None:
+        """The (model, show-kind) behind the tab the trader is looking at."""
+        widget = self.tabs.currentWidget()
+        if widget is None:
+            return None
+        for table, model, kind in self._detail_tables:
+            if widget is table or widget.isAncestorOf(table):
+                return model, kind
+        return None
 
     def _best_playbook_row(self, side: str, family: str) -> dict[str, Any] | None:
         side = str(side or "").strip().upper()
@@ -965,6 +1128,47 @@ class SetupTrackerPanel(QFrame):
             ):
                 return row
         return None
+
+
+#: Packet G4b. The two columns that make two rows of one (side, family)
+#: DIFFERENT rows on this page. Setup Types groups by side, bucket, family,
+#: zone, retest and compression, so `shown_identity` alone collides there; these
+#: two carry the collision that matters to the trader. A row that carries
+#: neither reads `("", "")` on both sides of the comparison, so widening never
+#: turns a real match into a miss. The lead widened it to the WHOLE Setup Types
+#: grain at merge (2026-09-07): `retest_label` and `compression_label` joined,
+#: so no two rows of one (side, family) can collide on this tuple.
+DETAIL_WIDENING_KEYS = ("favorite_zone", "priority_bucket", "retest_label", "compression_label")
+
+
+def _detail_widened_key(row: dict[str, Any]) -> tuple:
+    return tuple(str(row.get(key) or "") for key in DETAIL_WIDENING_KEYS)
+
+
+def _detail_row_identity(row: dict[str, Any], kind: str) -> tuple:
+    """The identity `SetupDetailView` will publish for this row under `kind`.
+
+    A MIRROR of `SetupDetailView._render`, kept here so the re-show can ask
+    "is this the row the pane is showing?" without drawing anything. `kind`
+    empty is the `show_setup` path (Current Picks); anything else is the
+    `show_research_row` path.
+    """
+    if kind:
+        return (
+            str(kind or ""),
+            str(row.get("side") or row.get("direction") or "LONG").strip().upper(),
+            str(row.get("setup_family") or ""),
+            "",
+            str(row.get("dimension") or ""),
+        )
+    symbol = str(row.get("symbol") or "").strip().upper()
+    return (
+        "setup" if symbol else "family",
+        str(row.get("side") or "LONG").strip().upper(),
+        str(row.get("setup_family") or ""),
+        symbol,
+        "",
+    )
 
 
 #: Parsed export rows, keyed by path, with the (mtime_ns, size) they came from.
@@ -2223,6 +2427,19 @@ def _latest_mtime_text(paths: list[Path]) -> str:
 
 def _tier_rank(value: Any) -> int:
     return {"S": 0, "A": 1, "B": 2, "C": 3}.get(str(value or "").upper(), 9)
+
+
+def _column_index(columns: tuple[tuple[str, str], ...], key: str) -> int:
+    """Where a column sits in its own tuple, BY KEY (packet G2b.2).
+
+    Raises rather than guessing: a width rule that silently pointed at the
+    wrong column would be invisible until the trader read a clipped table, and
+    a construction-time `KeyError` names the typo on the spot.
+    """
+    for index, (column_key, _label) in enumerate(columns):
+        if column_key == key:
+            return index
+    raise KeyError(f"{key!r} is not a column of this table")
 
 
 def _looks_numeric_key(key: str) -> bool:

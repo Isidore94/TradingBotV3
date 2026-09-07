@@ -374,6 +374,22 @@ They are evidence and must not be loaded as context.
   worker; the detail pane is G4's identity-aware one (a control change takes it
   down, a refresh re-opens the same row from the NEW numbers). No "Chart it":
   `EvidenceCell` carries no example symbols and G5 adds no new read.
+  **The window control applies where it can and is disabled where it cannot**
+  (fix round): My trades filters its closed trades by `closed_at` through
+  `research_results.in_window` (inclusive both ends, the turned-away count
+  reported as `n_outside_window`, a trade with no `closed_at` counted OUT of a
+  bounded window), and on Bot setups the three buttons are DISABLED because
+  each cell was measured over the window its own aggregator walked -
+  `window_applies` / `window_sentence` state that from `window_sessions` and
+  `as_of` and never a date range. The freshness line names each source by its
+  `rows` (`working_lately` stores `path ""` / `mtime null`) and says
+  `NO_SOURCES` when none was recorded; a band card reads `N of M shown` for the
+  lines it actually printed; money names its currency and a refused total
+  prints `resolve_pnl_key`'s own reason; `untagged` is never a row under the
+  Confirmed-tag header; a study row is muted like an ineligible one; the
+  section text is ONE short verdict line per kind (state and reason, verbatim)
+  with the full leader line in the tooltip, and every running-text label is
+  capped at G3's reading measure.
 - **Weekend Prep has ONE Refresh and a verdict card** (V2 item 2, decision 0016
   answer 10; finished by R4 A13/A14/A18). The click starts each page's own reader
   and returns - measured under 50 ms with the reads stubbed at the WORKER
@@ -452,6 +468,41 @@ They are evidence and must not be loaded as context.
   Layout lane only: no number, sort key, read or write moved, and the Trades
   splitter opening at 39/61 instead of its declared 3:2 is a separate,
   unfixed defect (a later Journal packet).
+- **Every Setup Tracker tab, the Desk Setups table and the AWAY Recap tables
+  name their text column too, so the §12 rule's MEASURED path has no
+  trader-facing caller left** (G2b, 2026-09-07). The measured answer is
+  content-dependent and content moves: a populated Catch Rate gave the width to
+  `sample_caught_winners` while the MISSED winners the tab exists for clipped;
+  an EMPTY Controls or Studies tab measured its HEADERS, so `Win % (low)`
+  stretched and `Family` sat at its floor; and Human Picks handed `cohort` most
+  of a 4K window and pushed its ten measurements off the right.
+  `SetupTrackerPanel._make_table` takes `text_key` / `elide_keys` /
+  `stretch_last` and resolves every index BY KEY through `_column_index`, which
+  RAISES on an unknown name (a literal index is a defect waiting for the next
+  column insert - ST2 and M5 each added one this month); the two `fit_columns()`
+  call sites are unchanged, so the attribute leaderboard's worker slot picks the
+  declaration up as well. **Human Picks is the one table that wants the slack
+  left EMPTY**: `apply_width_rule` gains `stretch_last: bool = True`, and with it
+  False and no text column named it suppresses the MEASURED auto-pick as well as
+  `stretchLastSection`, because leaving the classify path on would hand `cohort`
+  the slack by the back door; a NAMED text column still stretches, and every
+  existing caller is byte-identical under the default. `DataTable.set_width_rule`
+  carries the flag. On the DESK setups table the FULL profile names `setup_tags`
+  and the elision is installed as `_KeyLevelElideDelegate`, which inherits
+  `MiddleElideDelegate` AND `SetupTableDelegate` — **a per-column delegate
+  REPLACES the view's own**, so the rule's plain `elide_columns` delegate would
+  have left `key_level` alone without the alternating background, favorite tint,
+  selection fill and hairline separator its own row still draws; the setups
+  delegate wins `paint`/`sizeHint`, `MiddleElideDelegate` supplies the
+  full-value tooltip, and the ONE override is `_text`, because the base
+  hard-codes `ElideRight` and a key level's tail is its anchor and retest date.
+  The COMPACT profile takes the column delegate off again and is otherwise
+  untouched (`COMPACT_COLUMN_WIDTHS`, `_fit_compact_columns` and F9 unchanged,
+  pinned by a golden). AWAY Recap middle-elides `Line`, `Trigger` and
+  `Cell / held x ran` — whose `held x ran` suffix is exactly what an end elision
+  loses — and names `Symbol` on the Focus table. Layout lane only: no number,
+  sort key, read or write moved, the rule still runs once per fill after the
+  fill, and a golden pins every tracker tab's rendered cells and row order.
 - **"Tag this week" is a weekend step** (V2 item 2e, corrected by R4 A15). The
   week's provisional and needs_review trades, confirm-all-shown and
   confirm-selected through `JournalStore.confirm_tags`, ten visible rows, read AND
@@ -1332,8 +1383,23 @@ They are evidence and must not be loaded as context.
   (`_on_refresh_finished`, `_on_held_run_loaded`) looks that identity up in the
   model that now holds the tab's rows and redraws from the **new** row dict, or
   clears when the revision dropped the segment. Display only: no model, sort,
-  read or number changes, one dict lookup per revision on the Qt thread. The
-  Setup Tracker's `detail_view` gets the same rule in packet G4b, after ST6.
+  read or number changes, one dict lookup per revision on the Qt thread.
+  **BOTH Research detail panes now carry the rule** (G4b, 2026-09-07): the Setup
+  Tracker's `detail_view` clears on any move of its fourteen-tab strip, and the
+  END of `refresh()` re-shows the open row from the NEW row dict or takes the
+  pane down. **The visibility question is asked FIRST** - the trader reaches the
+  hidden state by moving tabs, so a re-show keyed on a match alone would pop an
+  explanation open under someone who had closed it. The match is one linear scan
+  (`row_at`, no dict copied per row) of the CURRENT tab's model, found through
+  `_detail_tables` by asking which tab widget owns the table, never by tab
+  position, and re-shown through that tab's own `show_*` call. `shown_identity`
+  is coarse on this page - a Setup Types row has no `dimension` and no `symbol` -
+  so the scan widens with `DETAIL_WIDENING_KEYS` (`favorite_zone`,
+  `priority_bucket`), normalised so a row carrying neither compares equal on both
+  sides; a pair differing only in `retest_label` still collides and falls to the
+  first such row in the model's own order. The dead `_on_family_row_clicked` was
+  removed (`SetupDetailView.show_family` is untouched). Display only on this
+  panel too: a golden pins all fourteen tabs' render across the change.
 - Review events partitioned by installation, merged/deduplicated by readers, capture
   audits, preference scoreboard, AI-curated `review_policy.json`, and a permanent
   no-suppression boundary.
@@ -1802,7 +1868,8 @@ that day): Research gains a Results page the trader may read, four populations
 never pooled, opening on Bot setups x Swing x Recent 20 sessions with the last
 choice remembered. Tester-first: nine RED tests at `a79c7f20` off `main`
 `7e018c99`, re-proven failing on the un-fixed tree (6 failed, 3 errors) before
-the first edit; eleven more added by the builder.
+the first edit; **thirteen** more added by the builder, and eighteen more in
+the fix round below - thirty-one added in all, forty in the packet.
 
 - **`scripts/research_results.py`** - pure, frozen dataclasses (`ResultsRow`,
   `ResultsBands`, `ResultsSection`, `ResultsView`), `band_cells` and
@@ -1839,6 +1906,88 @@ the first edit; eleven more added by the builder.
 - Nothing here scores, ranks a queue, alerts, writes evidence or reaches
   `review_policy.json`. Live gate **#87**.
 
+**Review fix round (same day, same branch).** Three blockers and eight
+advisories; **eighteen tests proven RED** against the reviewed tip `85d11227`
+(18 failed, 13 passed) before a line of the fix existed.
+
+- **The window control APPLIES.** `_window_of` labelled a window and nothing
+  filtered by it, so a trade closed in 2019 was counted under "2026-09-01 to
+  2026-09-04". `research_results.in_window` filters MY TRADES' closed trades by
+  `closed_at`, inclusive at both ends; the count it turns away is REPORTED
+  (`n_outside_window`), and a trade whose `closed_at` the journal never carried
+  is counted out of a bounded window rather than folded into it. For BOT the
+  SNAPSHOT owns the window: the three buttons are disabled with a tooltip, and
+  `window_applies` / `window_sentence` state the cells' own `window_sessions`
+  through `as_of` instead of a date range the numbers never saw. The button
+  groups moved to `idToggled` filtered on `checked` so a disabled button's
+  state is still drivable - one reaction per change, as before.
+- **The freshness line says what the snapshot has.** `working_lately` writes
+  `path: ""` and `mtime: null` for every source it computes, so the line read
+  `an unnamed file @ None` three times over on every real snapshot. It prints
+  each source's `rows`, adds a path or an mtime only when present, and says
+  `NO_SOURCES` when nothing was recorded. The literal `None` cannot reach the
+  screen.
+- **A band card counts the lines it rendered** - `N of M shown`, not `M shown`
+  over three printed rows - and an empty section leaves no dangling heading.
+- Money names its currency and a refused total prints `resolve_pnl_key`'s own
+  reason and the currencies; `untagged` left the Confirmed-tag table (coverage
+  is the sentence's business); a study row is muted like an ineligible one; the
+  section text is ONE short verdict line per kind with the rest in a tooltip;
+  every running-text label is capped at G3's reading measure
+  (`READER_MEASURE_CHARS` 100, left-aligned) - it was one 1,922-character line.
+  The window button label reads `evidence_stats.LATELY_SESSIONS`.
+- The suite-wide selection fixture left `tests/conftest.py` for the two files
+  that write the key.
+
+### 2026-09-07 - Packet G2b: the Setup Tracker tabs, the Desk Setups table and the AWAY tables name their column (branch `claude/g2b-tracker-desk-away-columns`)
+
+The other half of G2, the half that waited for ST6 to stop rewriting these three
+panels. Tester first: nine tests red on `7e018c99` (`tests/test_g2b_named_columns.py`
+six, `tests/test_table_width_rule.py` three) plus three green-by-design guards - a
+render golden over every tab's cells and row order, a golden of every compact
+column width, and the AWAY Focus table's already-correct measured answer, kept as a
+regression guard with the reason in its docstring. Each populated fixture carries a
+DECOY text column longer than the one the packet names, so the measured path picks
+the decoy and the assertion can only pass by naming.
+
+- **`apply_width_rule(..., stretch_last=False)`** (`scripts/ui/widgets/data_table.py`).
+  §12's two answers are both wrong for one shape - a table of ONE identifier and a
+  row of measurements - and Setup Tracker ▸ Human Picks is that shape. It suppresses
+  the measured auto-pick as well as the last section; suppressing only the last
+  section would still have handed `cohort` the slack through the classify path,
+  which is the whole complaint. A NAMED text column still stretches.
+  `DataTable.set_width_rule` carries it; the default leaves every existing caller
+  byte-identical.
+- **Fourteen tracker tables declare their roles at construction**
+  (`_make_table(columns, *, text_key=None, elide_keys=(), stretch_last=True)`), every
+  index resolved by KEY through the new `_column_index`, which raises rather than
+  guessing. Playbooks stretches `Exit Plan` and elides `sample_setups`; Catch Rate
+  stretches `Missed Samples` and elides the caught ones; Controls and Studies
+  stretch `Family` and elide `cohort`, so `Win % (low)` never takes the slack on an
+  EMPTY tab; Human Picks stretches nothing. The two `fit_columns()` call sites are
+  unchanged, so the attribute leaderboard's worker slot is covered too.
+- **The Desk Setups FULL profile names `setup_tags`** and installs
+  `_KeyLevelElideDelegate` on `key_level`. **DEVIATION from the packet's literal
+  `elide_columns=(key_level,)`, and the reason**: `apply_width_rule` gives an elide
+  column a per-column `MiddleElideDelegate`, and a per-column delegate REPLACES the
+  view's delegate - so the packet's call would have left `key_level` painted by Qt's
+  default while its own row kept `SetupTableDelegate`'s alternating background,
+  favorite tint, selection fill and separator. The new delegate inherits both
+  classes (the setups delegate wins `paint` and `sizeHint`; `MiddleElideDelegate`
+  supplies the full-value tooltip) and overrides `_text` alone, because that helper
+  hard-codes `ElideRight` - the end elision §12 forbids for an identifier whose tail
+  is its anchor and retest date. The compact profile removes the column delegate on
+  the way in and is untouched otherwise.
+- **AWAY Recap** middle-elides `Line`, `Trigger` and `Cell / held x ran`, and names
+  `Symbol` on the Focus table.
+- Four builder-added tests (`tests/test_g2b_key_level_delegate.py`) pin what the
+  tester's isinstance check cannot: the column's delegate is a `SetupTableDelegate`
+  too, its `sizeHint` is still the setups row height, painting a long key level
+  really does reach `elide_middle` with the WHOLE value and keeps a real tail, and
+  compact gets the column back. All four proven red with the four source files
+  reverted.
+
+Layout lane: no number, sort key, read or write moved. Live gate **#85**.
 
 ### 2026-09-06 - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders (branch `claude/st6-working-lately`, not merged)
 
@@ -1878,6 +2027,48 @@ against the reviewed tip first.
   market-local and aware; gate #83 says what a PASS looks like on day one.
 - The snapshot now FEEDS `panel_verdicts`, so ST2's one-computation-per-page
   design holds with the shared reading as its source.
+### 2026-09-07 - Packet G4b: the Setup Tracker's detail pane clears when its context changes (branch `claude/g4b-setup-tracker-detail`)
+
+The second half of G4, deferred while ST2/ST6 rewrote `setup_tracker_panel.py`. Tester-first
+on `main` `7e018c99`: five tests committed RED at `9879aa4a` plus one golden green by design
+(it pins all FOURTEEN tabs' rendered header and rows through the sort proxy). Builder made the
+five pass without weakening any and added a sixth. `origin/main` `6d9f4b43` merged in after.
+
+**The widget half had shipped and nothing called it.** `SetupDetailView.shown_identity` and
+its overriding `clear()` landed with G4.1; on this panel the fourteen-tab strip had no
+`currentChanged` handler and `refresh()` replaced every model's rows without touching the
+pane. The pane here carries a stop price, a 1R and two targets, so what stayed on screen was
+a price plan read against a symbol the table no longer held.
+
+- **G4b.1 - a tab move is a context change.** `self.tabs.currentChanged` ->
+  `_on_context_tab_changed` -> `clear()`: empty, hidden, identity forgotten. Same verb G4 gave
+  the Day-trade Tracker.
+- **G4b.2 - a refresh re-shows from the NEW row or clears.** `_reshow_or_clear_detail()` runs
+  at the END of `refresh()`, after every `set_rows` and `fit_columns`. **It asks whether the
+  pane is VISIBLE first**, not whether a match exists - the trader reaches the hidden state by
+  moving tabs, and a scan that re-showed on a match alone would pop an explanation open under
+  someone who had closed it. Then one linear scan of the CURRENT tab's model (`row_at`, no
+  dict copied per row) for the matching identity, re-shown through that tab's own `show_*`
+  call and from the NEW row dict, so the pane prints the revised number rather than the cached
+  one; no match, `clear()`. The tab's model and show-kind come from `_detail_tables` by asking
+  which tab widget owns the table (`isAncestorOf`), never by tab position.
+- **The identity is widened where this page collides.** A Setup Types row has no `dimension`
+  and no `symbol`, so two rows of one (side, family) in different zones share the whole
+  identity. `DETAIL_WIDENING_KEYS` (`favorite_zone`, `priority_bucket`) separates them,
+  normalised so a row carrying neither compares equal on both sides and widening can never
+  turn a real match into a miss. A pair differing only in `retest_label` still collides and
+  falls to the first such row in the model's own order - stated, not hidden.
+- **`_on_family_row_clicked` removed**: defined since the panel was written, never connected.
+  `SetupDetailView.show_family` is untouched (a G4 test drives it).
+- **Layout lane.** No number, sort, column or read moved; the golden is green before and
+  after, including after a full click / tab-switch / refresh cycle. The Attributes tab lands
+  later on its own worker (`_on_attributes_loaded`) and is not one of the eight clickable
+  tables, so it is out of this packet's seam.
+
+Fail-before-fix: `scripts/ui/panels/setup_tracker_panel.py` restored from `9879aa4a` gives
+5 failed / 1 passed; restored, 7 passed. The builder's widening test was proven the same way
+with `DETAIL_WIDENING_KEYS = ()`. Live gate **#86**.
+
 ### 2026-09-07 - Packet G2a: the Trades and Tag Week tables name their text column (branch `claude/g2a-journal-and-tagweek-columns`)
 
 The layout half of G2, split from the Setup-Tracker/Desk/AWAY half (G2b, queued after ST6
