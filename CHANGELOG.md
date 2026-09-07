@@ -1169,6 +1169,27 @@ which is evidence and must not be loaded as context.
   All five real undefined names were fixed, and the 74 remaining unused imports
   were swept the same day: **`ruff check .` reports `All checks passed`.**
 
+- **A repeatable desk workload bench, and a layout-fit check** (G0, 2026-09-06):
+  `scripts/ui/desk_bench.py` builds the pages ONE AT A TIME - never `MainWindow`,
+  so no IB, no autopilot, no timers - drives a fixed workload over a STAGED copy
+  of the home folder, and reports p50/p95/max per op across `--repeat`. Three
+  numbers per op: the synchronous Qt-thread time of the call, the time to settle,
+  and the LONGEST single `processEvents()` during the settle wait (the stall
+  proxy). A settle deadline is a recorded RESULT, never an error, and nothing is
+  slept inside a timed region. The fit half records `minimumSizeHint` /
+  `minimumSize` / `sizeHint` for every page, Weekend step and Research child
+  against the available height - the window height minus chrome MEASURED FROM
+  WIDGETS, not a constant - plus the sum of every table's floor including the
+  ones behind a tab. `stage --from --to` copies an allowlist of the read inputs
+  the pages open (not the 1.2 GB tracker JSON, the 622 MB attributes CSV or the
+  142 MB scenarios CSV), source opened read-only. **`--data-dir` is required and
+  is set into `TRADINGBOTV3_DATA_DIR` before the first import of anything under
+  `scripts/`**, `LOCALAPPDATA` moves into the scratch too, and the resolved
+  `project_paths.DATA_DIR` is printed and the process exits 2 if it lands under
+  the live home folder or the DAS - twice over, by two guards comparing their
+  own literals, because proving one guard bites means breaking it. It measures
+  and changes nothing: no panel imports it and no timer starts it. Runbook:
+  `docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md` section 7.
 - Broad pytest suite, deterministic smoke check, pytest markers, narrow Ruff gates,
   layered requirements with constraints, and Windows/macOS path handling.
 - Provider telemetry at IBKR/Yahoo/Nasdaq boundaries with completeness contracts and
@@ -1254,6 +1275,40 @@ sessions of forward accrual start at its first measured row. Their remaining evi
 gates are in `plan.md`.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-06 - G0: measure first (branch `claude/g0-measure-first`)
+
+The first step of Phase 0.22's build order, authorized by the trader's *"lets use your
+recommendations for all 4 decsions. then go ahead and start the build order"*. It builds a
+measuring tool and takes one baseline; **no panel changed and no trader-facing behaviour
+changed**.
+
+- **`scripts/ui/desk_bench.py`** - the workload bench and the layout-fit check. Inventory
+  line above; runbook section 7. Nothing on the desk imports it and no timer starts it.
+- **The baseline, `desk_bench_baseline_2026-09-06.json`** (offscreen, 3456x2160 /
+  3840x2160 / 2560x1440, `--repeat 3`, over a 383.6 MB staged copy). Chrome measured
+  90 px from the widgets, so 2160 leaves 2,070 px of page. **Seven ops over 250 ms sync
+  p95, and they are three ops at three sizes**: `research.construct` 5,142 / 4,312 /
+  4,400 ms (it builds eight children eagerly), `setup_tracker.refresh` 1,320 / 1,098 /
+  1,060 ms, `market_journal.construct` 299 ms at the target size only.
+  `weekend.refresh_everything` returns in 1.7 ms and settles in 12.7 s p50, hitting the
+  20 s deadline once - the V2 design working exactly as written, and still 12 s of a page
+  filling in. The worst single `processEvents()` in the run was 683 ms, inside that wait.
+- **The fit check sees the defect G1 fixes.** `weekend_prep` needs 3,072 px and
+  `weekend_prep.focus_review` 2,858 px against 2,070 - flagged `overflow` at every size,
+  including 3840x2160, because the overflow is vertical and the width does not help. Of
+  the focus page's requirement, 2,340 px is nine table floors of 260 px (`TABLE_TEN_ROWS_PX`)
+  stacked in one vertical layout. Every other page fits at all three sizes.
+- **Two guards, not one, on the live store.** The fail-before-fix proof for the first guard
+  (sabotage it, watch nine tests fail) also staged six synthetic files into
+  `C:\TradingBotData\scratch` and the same folder on the DAS. Both trees were new, both
+  were removed, and no live file was touched - but a guard whose proof requires breaking it
+  needs a second guard that the same edit does not disable, so
+  `_refuse_to_open_for_writing` compares its own literals and runs before the destination
+  is created and again before every file is opened.
+- **Not offline**: constructing the Research tab reaches `treasury_calendar_service`, which
+  attempted an HTTPS call on every run and failed on certificate verification. Recorded
+  rather than fixed - G0 changes no panel.
 
 ### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
 

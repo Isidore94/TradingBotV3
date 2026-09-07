@@ -26,7 +26,7 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 | [`DESK_TESTING_PLAN.md`](DESK_TESTING_PLAN.md) | Trader's step-by-step testing sequence; shipped in the exe, rendered at Settings ▸ Testing Plan |
 | [`AWAY_SCANNER_RUNBOOK.md`](AWAY_SCANNER_RUNBOOK.md) | Auto/Away operation and report recovery |
 | [`EVENING_MODE_RUNBOOK.md`](EVENING_MODE_RUNBOOK.md) | EVENING mode and ntfy phone setup |
-| [`GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md`](GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md) | One command over the stall log; the baseline and targets |
+| [`GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md`](GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md) | One command over the stall log; the baseline and targets; section 7 is the repeatable desk workload bench and the layout-fit check (G0) |
 | [`REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md`](REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md) | Regime-evidence collection and evidence floors |
 | [`MACOS_SETUP.md`](MACOS_SETUP.md) | macOS setup; its cloud-mount sections are dead since decision 0015 |
 | [`packaging/README.md`](../packaging/README.md) | Frozen-build triggers, process, selftest |

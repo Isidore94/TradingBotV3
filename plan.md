@@ -370,7 +370,7 @@ P3 / P4 in parallel (block nothing) → P6 → G6 → G7. Packets live in `.clau
 
 | Packet | State |
 |---|---|
-| G0 measure first | in build 2026-09-06 |
+| G0 measure first | **BUILT** 2026-09-06 on `claude/g0-measure-first`: `scripts/ui/desk_bench.py` (workload bench + layout-fit check + `stage`), 32 tests, runbook section 7. Baseline taken at three sizes over a staged copy - `research.construct` 5.1 s, `setup_tracker.refresh` 1.3 s, `weekend.refresh_everything` 12.7 s to settle, and `weekend_prep` / `weekend_prep.focus_review` flagged `overflow` at every size, which is the proof the check sees what G1 fixes. Live gate #75 |
 | G1, G4, G3 | tests being written 2026-09-06 |
 | P2 | tests being written 2026-09-06; builder waits for the `legacy.py` yes |
 | G2, G5, P1, P5, P3, P4, P6, G6, G7 | queued in the order above |
