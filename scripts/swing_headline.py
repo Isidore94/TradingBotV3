@@ -201,9 +201,18 @@ def headline_from_counts(
     *,
     wins: Any,
     losses: Any,
+    flats: Any = 0,
     avg_r: Any = None,
     sessions: int = LATELY_SESSIONS,
 ) -> Headline:
+    """A headline from the integer counts a store actually observed.
+
+    ``flats`` is optional and additive (ST2 fix round): a store that counts an
+    exactly-flat outcome separately - the tracker's exports do since ST2.1 -
+    passes it, and `Headline` keeps it out of `n` while leaving it a MEASURED
+    outcome. A caller that has no flat count keeps today's behaviour exactly.
+    """
+
     def _int(value: Any) -> int:
         try:
             return max(0, int(float(value)))
@@ -221,6 +230,7 @@ def headline_from_counts(
         name=str(name or ""),
         wins=_int(wins),
         losses=_int(losses),
+        flats=_int(flats),
         avg_r=_float(avg_r),
         sessions=int(sessions),
     )
@@ -237,11 +247,25 @@ def headline_from_rate(
 ) -> Headline:
     """A headline from a STORED rate and count, for a surface that has no rows.
 
-    Several stores keep the rate and the sample size rather than the graded rows
-    behind them - the veto and like cohort CSVs, the tracker's recent-types
-    export. Rebuilding wins from `round(rate * n)` recovers the integer pair
-    Wilson needs and is exact whenever the stored rate was computed as `wins / n`,
-    which is how every one of those files writes it.
+    **NEVER hand this a weighted rate.** Rebuilding wins as `round(rate * n)` is
+    exact if and only if the stored rate was computed as `wins / n` over exactly
+    those `n` rows. Hand it a recency-weighted, regime-weighted or otherwise
+    reweighted mean and it returns an integer pair NOBODY OBSERVED, with a
+    Wilson bound computed from the invented pair - which is what the Setup
+    Tracker's recent-types table printed until ST2 (2026-09-06): two 28-day-old
+    wins at weight .25 and two same-day losses at weight 1.0 gave 0.2, and the
+    cell read `25% (>=5%, n=4)` where the truth was 2-2 and 50%.
+
+    **The legitimate callers, each of which writes `wins / n`:**
+
+    * the veto cohort CSV and the like cohort CSV (`review_learning`'s pooled
+      performance rows), read by the Weekend Prep cohort tables;
+    * `legacy.build_tracker_short_horizon_rows`' `win_rate_2d`, a plain
+      unweighted mean of `1.0 if r_close_2d > 0 else 0.0` over exactly
+      `samples_2d` values, adapted in `working_lately.short_term_evidence_rows`.
+
+    The tracker's recent-types export is NO LONGER one of them: it exports
+    `n_wins` / `n_losses` and its readers use `headline_from_counts`.
 
     An n of 0 gives a headline with no rate at all rather than a zero: "nothing
     graded" and "graded and lost everything" are different facts.
