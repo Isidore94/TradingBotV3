@@ -980,3 +980,61 @@ def _offline_tripwire(request, monkeypatch):
         raise OfflineSuiteViolation(
             f"{test_id} attempted live I/O on a background thread: " + "; ".join(sorted(set(attempts)))
         )
+
+
+#: The `local_settings.json` key the Research > Results page remembers its
+#: selection under (packet G5). Spelled here rather than imported so this
+#: fixture never drags a Qt panel module into a headless test's import graph.
+RESULTS_SELECTION_KEY = "research_results_selection"
+
+
+@pytest.fixture(autouse=True)
+def _restore_the_results_selection():
+    """Let no test's Research > Results choice outlive the test that made it.
+
+    The Results page remembers its selection in `local_settings.json` by trader
+    decision (2026-09-06), and the write is real production behaviour - a test
+    that proves the choice survives a rebuild has to make it. What does not
+    belong to production is one test's choice deciding the next test's
+    fixtures: a REMEMBERED "My trades" makes every later `ResearchPanel`
+    construction read the journal on its worker, which CREATES the journal
+    database, which is precisely the state
+    `test_qt_journal_panel::test_migration_failure_stays_visible_instead_of_claiming_no_accounts`
+    exists to find the absence of. Measured, not guessed: that test fails with
+    the G5 panel tests in front of it and passes with this fixture in place.
+    """
+    import json as _json
+
+    import project_paths as _project_paths
+
+    def _read() -> dict:
+        path = Path(_project_paths.LOCAL_SETTINGS_FILE)
+        if not path.exists():
+            return {}
+        try:
+            payload = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    before = _read().get(RESULTS_SELECTION_KEY)
+    try:
+        yield
+    finally:
+        path = Path(_project_paths.LOCAL_SETTINGS_FILE)
+        # The suite points LOCALAPPDATA at a temp directory; never touch a real one.
+        if "pytest-localappdata" not in str(path):
+            return
+        payload = _read()
+        if payload.get(RESULTS_SELECTION_KEY) == before:
+            return
+        if before is None:
+            payload.pop(RESULTS_SELECTION_KEY, None)
+        else:
+            payload[RESULTS_SELECTION_KEY] = before
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+            _project_paths.invalidate_local_settings_cache()
+        except OSError:
+            pass

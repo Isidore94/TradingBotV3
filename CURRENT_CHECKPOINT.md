@@ -218,7 +218,17 @@ shortlist and a paragraph of the detail pane. Re-measured at three sizes: the ta
 799 / 1599 px and `minimumSizeHint` is 427 at all three.
 
 **Not built, and why:** no "Chart it" button - `EvidenceCell` carries no example symbols and
-this packet adds no new read. Live gate **#87**.
+this packet adds no new read. **Two more places the code disagreed with the packet.** (a) The
+shortlist's third column was to be "wins/n or held/measured"; an `EvidenceCell` carries
+`n_graded` / `n_eligible` and neither a win count nor a held count, so the column states what
+the cell states (`613 graded of 613` for a swing cell, `613 episode(s)` for a day-trade one,
+whose score is not a rate and grades nothing) - inventing the other two would be exactly the
+re-derivation the packet forbids. (b) The one shortlist holds BOTH swing sections, so it grew
+two columns the packet did not name - **Measure** (the cell's kind) and **Population**
+(live / study). Without them a 0.72 closed-R rate and a 58.0 favorable-direction percent shared
+one `Statistic` column with nothing telling them apart, and a study row was indistinguishable
+from a live one, which is "listed under their own label" quietly not happening. Live gate
+**#87**.
 
 ### 2026-09-07 - G2a BUILT: the Trades and Tag Week tables name their text column (branch `claude/g2a-journal-and-tagweek-columns`)
 

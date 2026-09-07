@@ -1828,6 +1828,14 @@ the first edit; eleven more added by the builder.
   column of the shortlist and a paragraph of the detail pane. Re-measured: the
   table gets 295 px at 1920x1080, 799 at 2560x1440, 1599 at 3456x2160, and
   `minimumSizeHint` is 427 at every size.
+- **Two more deviations, both in the shortlist.** Its third column was to be
+  "wins/n or held/measured"; an `EvidenceCell` carries `n_graded` /
+  `n_eligible` and neither of those, so the column states what the cell states
+  and invents nothing. And because the one table holds BOTH swing sections it
+  grew two columns the packet did not name - **Measure** (the cell's kind) and
+  **Population** (live / study) - without which a 0.72 closed-R rate and a 58.0
+  favorable-direction percent shared one `Statistic` column with nothing
+  telling them apart, and a study row was indistinguishable from a live one.
 - Nothing here scores, ranks a queue, alerts, writes evidence or reaches
   `review_policy.json`. Live gate **#87**.
 

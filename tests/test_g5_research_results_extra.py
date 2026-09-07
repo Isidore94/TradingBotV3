@@ -193,16 +193,56 @@ def test_a_custom_window_prints_its_two_dates_and_nothing_else(
 
 @pytest.mark.qt
 def test_the_research_panel_forwards_a_pushed_snapshot_to_the_results_page(
-    snapshot_payload,
+    monkeypatch, snapshot_payload
 ):
-    """`app.py`'s one line ends here: ONE snapshot, four surfaces."""
+    """`app.py`'s one line ends here: ONE snapshot, four surfaces.
+
+    Both of the Results page's reads are stubbed and its selection is asked for
+    rather than inherited. Without that this test opens the REAL journal store
+    on its worker whenever a previous test left the page remembering "My
+    trades" - which is the page behaving correctly and the test being
+    unhermetic, and it made `test_qt_journal_panel`'s migration test fail two
+    files later.
+    """
+    import json
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
 
+    import project_paths
+    from ui.panels import research_results_panel as results_module
     from ui.panels.research_panel import ResearchPanel
+    from ui.services import journal_feed, working_lately_service
+
+    settings = Path(project_paths.LOCAL_SETTINGS_FILE)
+    assert "pytest-localappdata" in str(settings), (
+        "refusing to touch a real local_settings.json"
+    )
+    saved = {}
+    if settings.exists():
+        try:
+            saved = json.loads(settings.read_text(encoding="utf-8"))
+        except ValueError:
+            saved = {}
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps(
+            {**saved, results_module.RESULTS_SELECTION_KEY: ["bot", "swing", "recent"]},
+            indent=1,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    project_paths.invalidate_local_settings_cache()
+
+    for target in (working_lately_service, results_module):
+        if hasattr(target, "read_persisted_snapshot"):
+            monkeypatch.setattr(target, "read_persisted_snapshot", lambda *a, **k: {})
+    for target in (journal_feed, results_module):
+        if hasattr(target, "load_trades"):
+            monkeypatch.setattr(target, "load_trades", lambda *a, **k: [])
 
     app = QApplication.instance() or QApplication([])
     panel = ResearchPanel(None)
@@ -218,6 +258,8 @@ def test_the_research_panel_forwards_a_pushed_snapshot_to_the_results_page(
         app.processEvents()
         panel.deleteLater()
         app.processEvents()
+        settings.write_text(json.dumps(saved, indent=1) + "\n", encoding="utf-8")
+        project_paths.invalidate_local_settings_cache()
 
 
 def test_a_trade_with_no_timestamps_at_all_is_unknown_timing():
