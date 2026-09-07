@@ -241,3 +241,73 @@ def test_the_recent_window_is_walked_on_the_exchange_calendar(
     assert (end - start).days > 20, (
         "twenty trading sessions cannot span twenty calendar days or fewer"
     )
+
+
+@pytest.mark.qt
+def test_a_remembered_custom_selection_builds_without_reading_from_the_constructor(
+    monkeypatch, snapshot_payload
+):
+    """A saved `custom` window must not start the first read mid-construction.
+
+    `QDateEdit.setDate` emits `dateChanged`, so a page that connected that
+    signal before seeding the two dates would call `refresh()` from inside
+    `__init__` - with a remembered `custom` selection, before the labels the
+    render writes into exist.
+    """
+    import json
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+
+    import project_paths
+    from ui.panels import research_results_panel as module
+    from ui.services import journal_feed, working_lately_service
+
+    settings = Path(project_paths.LOCAL_SETTINGS_FILE)
+    assert "pytest-localappdata" in str(settings), (
+        "refusing to touch a real local_settings.json"
+    )
+
+    payload = {}
+    if settings.exists():
+        try:
+            payload = json.loads(settings.read_text(encoding="utf-8"))
+        except ValueError:
+            payload = {}
+    payload[module.RESULTS_SELECTION_KEY] = ["bot", "swing", "custom"]
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
+    project_paths.invalidate_local_settings_cache()
+
+    snapshot = json.loads(json.dumps(snapshot_payload))
+    for target in (working_lately_service, module):
+        if hasattr(target, "read_persisted_snapshot"):
+            monkeypatch.setattr(target, "read_persisted_snapshot", lambda *a, **k: snapshot)
+    for target in (journal_feed, module):
+        if hasattr(target, "load_trades"):
+            monkeypatch.setattr(target, "load_trades", lambda *a, **k: [])
+
+    app = QApplication.instance() or QApplication([])
+    panel = module.ResearchResultsPanel()
+    try:
+        for _ in range(3):
+            for thread in panel.findChildren(QThread):
+                thread.wait(15000)
+            for _ in range(20):
+                app.processEvents()
+        assert panel.selection() == ("bot", "swing", "custom")
+        assert not panel.custom_start.isHidden(), "the Custom window hid its own date fields"
+        assert not panel.custom_end.isHidden()
+        assert panel.freshness_text(), "the page rendered nothing at all"
+        assert panel.shortlist.model().rowCount() > 0
+    finally:
+        panel.shutdown()
+        app.processEvents()
+        panel.deleteLater()
+        app.processEvents()
+        payload.pop(module.RESULTS_SELECTION_KEY, None)
+        settings.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
+        project_paths.invalidate_local_settings_cache()

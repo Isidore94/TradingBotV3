@@ -189,10 +189,15 @@ class ResearchResultsPanel(QFrame):
         for edit in (self.custom_start, self.custom_end):
             edit.setCalendarPopup(True)
             edit.setDisplayFormat("yyyy-MM-dd")
-            edit.dateChanged.connect(self._on_custom_dates_changed)
         today = QDate.currentDate()
         self.custom_start.setDate(today.addDays(-30))
         self.custom_end.setDate(today)
+        # Connected AFTER the two initial dates are set. `setDate` emits
+        # `dateChanged`, and with a remembered `custom` selection that would
+        # have started the page's first read from inside the constructor -
+        # before the labels it renders into exist.
+        for edit in (self.custom_start, self.custom_end):
+            edit.dateChanged.connect(self._on_custom_dates_changed)
 
         self.freshness_label = QLabel("")
         self.freshness_label.setObjectName("MutedLabel")
