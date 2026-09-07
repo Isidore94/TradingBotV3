@@ -155,6 +155,85 @@ def test_a_numbers_only_table_stretches_its_last_section_rather_than_nothing(app
     assert table.horizontalHeader().stretchLastSection() is True
 
 
+# -- packet G2b.1: the one table that WANTS the slack left empty --------------
+
+
+def test_stretch_last_false_leaves_the_slack_empty_on_a_table_of_identifiers(app):
+    """ADDED by the tester for packet G2b (2026-09-07); nothing above changed.
+
+    Setup Tracker ▸ Human Picks is one identifier and ten measurements. The
+    default rule has two answers for it and both are wrong: name nothing and
+    `cohort` is the widest text column, so it takes the slack and pushes the
+    measurements off the right of a 4K window (the GUI review's complaint);
+    stretch the last section instead and `Delta %` grows for no reason.
+
+    So `apply_width_rule` gains `stretch_last: bool = True`. With it False and
+    no text column named, NOTHING stretches - every column keeps its measured
+    width inside the floor/ceiling and the remaining width stays empty.
+
+    Red on ``7e018c99`` with `TypeError: apply_width_rule() got an unexpected
+    keyword argument 'stretch_last'`.
+    """
+    headers = ("Cohort", "Side", "Horizon", "N", "Win", "Avg %")
+    rows = [
+        ("human_focus_swing_second_dev_breakout", "LONG", "5", "44", "57%", "1.82"),
+        ("human_focus_m5_alerts_intraday_bounce", "SHORT", "5", "18", "44%", "-0.31"),
+    ]
+    table = DataTable()
+    table.setModel(_model(headers, rows))
+    apply_width_rule(table, elide_columns=(0,), stretch_last=False)
+    header = table.horizontalHeader()
+
+    table.resize(2304, 400)
+    table.show()
+    try:
+        assert header.stretchLastSection() is False
+        for column in range(len(headers)):
+            assert header.sectionResizeMode(column) != QHeaderView.ResizeMode.Stretch, (
+                f"column {column} took the slack on a table that has no text column "
+                "to give it to"
+            )
+            assert MIN_COLUMN_WIDTH <= header.sectionSize(column) <= MAX_COLUMN_WIDTH
+        assert isinstance(table.itemDelegateForColumn(0), MiddleElideDelegate)
+    finally:
+        table.hide()
+
+
+def test_stretch_last_defaults_to_the_behaviour_every_caller_has_today(app):
+    """ADDED by the tester for packet G2b. The new keyword changes nothing for
+    a caller that does not pass it: a numbers-only table still stretches its
+    last section, and a table with a text column still stretches that."""
+    numbers = DataTable()
+    numbers.setModel(_model(("a", "b"), [("1", "2"), ("3", "4")]))
+    apply_width_rule(numbers, stretch_last=True)
+    assert numbers.horizontalHeader().stretchLastSection() is True
+
+    cohorts = DataTable()
+    cohorts.setModel(_model(COHORT_HEADERS, COHORT_ROWS))
+    apply_width_rule(cohorts, stretch_last=True)
+    assert cohorts.horizontalHeader().sectionResizeMode(0) == QHeaderView.ResizeMode.Stretch
+    assert cohorts.horizontalHeader().stretchLastSection() is False
+
+
+def test_a_data_table_carries_stretch_last_through_set_width_rule(app):
+    """ADDED by the tester for packet G2b. The Setup Tracker reaches the rule
+    through `DataTable.fit_columns`, so the flag has to survive the shell."""
+    table = DataTable()
+    table.setModel(
+        _model(
+            ("Cohort", "N", "Win"),
+            [("human_focus_swing_second_dev_breakout", "44", "57%")],
+        )
+    )
+    table.set_width_rule(elide_columns=(0,), stretch_last=False)
+    table.fit_columns()
+    header = table.horizontalHeader()
+
+    assert header.stretchLastSection() is False
+    for column in range(3):
+        assert header.sectionResizeMode(column) != QHeaderView.ResizeMode.Stretch
+
+
 def test_numeric_classification_covers_the_shapes_these_tables_hold():
     for value in ("12", "-3.5", "$1,204", "(0.42)", "88%", "2.3x", "+7"):
         assert looks_numeric(value), value
