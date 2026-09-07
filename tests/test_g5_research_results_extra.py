@@ -244,6 +244,109 @@ def test_the_recent_window_is_walked_on_the_exchange_calendar(
 
 
 @pytest.mark.qt
+def test_the_shortlist_labels_a_study_row_and_puts_it_under_every_live_one(
+    monkeypatch, snapshot_payload
+):
+    """"Listed under their own label" has to be visible IN THE TABLE.
+
+    A `study` cell with the best bound on the page sitting in the shortlist
+    with no label is an unpromoted idea reading as a result. It is last, and
+    the row says which population it belongs to.
+    """
+    import json
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+
+    import project_paths
+    from ui.models.tracker_table_model import ROW_ROLE
+    from ui.panels import research_results_panel as module
+    from ui.services import journal_feed, working_lately_service
+
+    # The page REMEMBERS its selection, so a previous test's choice would decide
+    # which population this one looks at. Asked for explicitly, restored after.
+    settings = Path(project_paths.LOCAL_SETTINGS_FILE)
+    assert "pytest-localappdata" in str(settings), (
+        "refusing to touch a real local_settings.json"
+    )
+    saved = {}
+    if settings.exists():
+        try:
+            saved = json.loads(settings.read_text(encoding="utf-8"))
+        except ValueError:
+            saved = {}
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps({**saved, module.RESULTS_SELECTION_KEY: ["bot", "swing", "recent"]}, indent=1)
+        + "\n",
+        encoding="utf-8",
+    )
+    project_paths.invalidate_local_settings_cache()
+
+    snapshot = json.loads(json.dumps(snapshot_payload))
+    for target in (working_lately_service, module):
+        if hasattr(target, "read_persisted_snapshot"):
+            monkeypatch.setattr(target, "read_persisted_snapshot", lambda *a, **k: snapshot)
+    for target in (journal_feed, module):
+        if hasattr(target, "load_trades"):
+            monkeypatch.setattr(target, "load_trades", lambda *a, **k: [])
+
+    app = QApplication.instance() or QApplication([])
+    panel = module.ResearchResultsPanel()
+    try:
+        assert panel.selection() == ("bot", "swing", "recent")
+        panel.set_working_lately_snapshot(snapshot)
+        for _ in range(3):
+            for thread in panel.findChildren(QThread):
+                thread.wait(15000)
+            for _ in range(20):
+                app.processEvents()
+
+        columns = [key for key, _label in module.BOT_COLUMNS]
+        assert "namespace" in columns, (
+            "the shortlist has no column naming the population a row belongs to"
+        )
+        assert "kind" in columns, (
+            "the shortlist holds two sections and no column says which MEASURE a "
+            "row is - a 0.72 closed-R rate and a 58.0 favorable percent would "
+            "share one Statistic column with nothing to tell them apart"
+        )
+        model = panel.shortlist.model()
+        rows = [model.index(i, 0).data(ROW_ROLE) for i in range(model.rowCount())]
+        pairs = [
+            (str(row.get("kind") or ""), str(row.get("namespace") or "")) for row in rows
+        ]
+        assert {"swing_trade_r", "swing_favorable"} == {kind for kind, _ in pairs}
+        assert "study" in {name for _kind, name in pairs}, (
+            "the study cells never reached the shortlist"
+        )
+        # Within each measure the live rows come first and the studies last.
+        for kind in ("swing_trade_r", "swing_favorable"):
+            names = [name for row_kind, name in pairs if row_kind == kind]
+            assert "study" in names and "live" in names, names
+            first_study = names.index("study")
+            assert all(name == "study" for name in names[first_study:]), (
+                f"a live {kind} row sits below a study one: {names}"
+            )
+        # And the two measures are not interleaved: each is one contiguous block.
+        kinds = [kind for kind, _name in pairs]
+        assert kinds == sorted(kinds, key=lambda k: kinds.index(k)), kinds
+        assert len([i for i in range(1, len(kinds)) if kinds[i] != kinds[i - 1]]) == 1, (
+            f"the two swing measures are interleaved in one table: {kinds}"
+        )
+    finally:
+        panel.shutdown()
+        app.processEvents()
+        panel.deleteLater()
+        app.processEvents()
+        settings.write_text(json.dumps(saved, indent=1) + "\n", encoding="utf-8")
+        project_paths.invalidate_local_settings_cache()
+
+
+@pytest.mark.qt
 def test_a_remembered_custom_selection_builds_without_reading_from_the_constructor(
     monkeypatch, snapshot_payload
 ):

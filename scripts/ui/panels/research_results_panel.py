@@ -67,6 +67,12 @@ WINDOWS = (
 BOT_COLUMNS = (
     ("side", "Side"),
     ("family", "Family"),
+    ("kind", "Measure"),
+    # The study rows sit UNDER the live ones and are LABELLED. Without this
+    # column a `study` cell in the shortlist is indistinguishable from a live
+    # one, which is the packet's "listed under their own label" quietly not
+    # happening - an unpromoted idea reading as a result.
+    ("namespace", "Population"),
     ("sample", "Sample"),
     ("statistic", "Statistic"),
     ("lower_bound", "Lower bound"),

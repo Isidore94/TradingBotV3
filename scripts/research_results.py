@@ -341,6 +341,11 @@ def _cell_row(cell: EvidenceCell) -> ResultsRow:
         ),
         "side": str(cell.side or "").upper(),
         "family": str(cell.family or ""),
+        # WHICH MEASURE this row is, in the one table that holds two sections.
+        # A 0.72 closed-R rate and a 58.0 favorable-direction percent in one
+        # `Statistic` column with nothing naming the measure would be exactly
+        # the pooling the two sections exist to prevent.
+        "kind": str(cell.kind or ""),
         "sample": _sample_text(cell),
         "statistic": _number(cell.statistic),
         "lower_bound": _number(cell.uncertainty_low),
