@@ -1598,29 +1598,43 @@ KIND_POLICY_FIELDS = (
 
 
 def _kind_policy(cells: Sequence[EvidenceCell]) -> dict[str, dict[str, Any]]:
-    """`{kind: {field: value}}` for the fields every cell of a kind shares.
+    """`{kind: {field: value}}` for every field a kind's cells all agree on.
 
-    Taken from the FIRST cell of each kind. A kind whose cells disagreed on one
-    of these would be a kind that is really two, and `pool_cells` already refuses
-    to combine those - so a disagreement here is a defect upstream, not something
-    to average away. The per-cell value still wins on read.
+    The seven in `KIND_POLICY_FIELDS` are shared BY DEFINITION - they are
+    properties of the kind, and a kind whose cells disagreed on one would be a
+    kind that is really two, which `pool_cells` already refuses to combine. The
+    rest are found by MEASUREMENT: on the live recent-types export every cell
+    also carries the same `namespace`, the same two unmeasured concentration
+    shares and the same zeros, and writing 150 copies of each is most of what
+    made the first version 133 KB.
+
+    Lossless in both directions: the per-cell value wins on read, so a field
+    lifted here is a field every cell agreed on and every cell gets back.
     """
-    out: dict[str, dict[str, Any]] = {}
+    by_kind: dict[str, list[EvidenceCell]] = {}
     for cell in cells:
-        if cell.kind in out:
-            continue
-        out[cell.kind] = {field: getattr(cell, field) for field in KIND_POLICY_FIELDS}
+        by_kind.setdefault(cell.kind, []).append(cell)
+    names = [spec.name for spec in dataclass_fields(EvidenceCell) if spec.name != "kind"]
+    out: dict[str, dict[str, Any]] = {}
+    for kind, group in by_kind.items():
+        first = group[0]
+        shared: dict[str, Any] = {}
+        for field in names:
+            value = getattr(first, field)
+            if field in KIND_POLICY_FIELDS or all(
+                getattr(cell, field) == value for cell in group
+            ):
+                shared[field] = value
+        out[kind] = shared
     return out
 
 
-def _compact_cell(cell: EvidenceCell) -> dict[str, Any]:
+def _compact_cell(cell: EvidenceCell, shared: Mapping[str, Any]) -> dict[str, Any]:
     """One cell's own facts - everything except what the kind already said."""
-    row = asdict(cell)
-    shared = {field: getattr(cell, field) for field in KIND_POLICY_FIELDS}
     return {
         key: value
-        for key, value in row.items()
-        if key not in shared or value != shared[key] or key == "kind"
+        for key, value in asdict(cell).items()
+        if key == "kind" or key not in shared or value != shared[key]
     }
 
 
@@ -1685,14 +1699,17 @@ class EvidenceSnapshot:
         `cells_from_payload`, so nothing the trader's requirement asks the
         snapshot to identify is lost and the file is roughly a third of the size.
         """
+        kind_policy = _kind_policy(self.cells)
         return {
             "schema": SNAPSHOT_SCHEMA,
             "snapshot_id": self.snapshot_id,
             "as_of": self.as_of,
             "built_at": self.built_at,
             "policy": list(_policy_lines()),
-            "kind_policy": _kind_policy(self.cells),
-            "cells": [_compact_cell(cell) for cell in self.cells],
+            "kind_policy": kind_policy,
+            "cells": [
+                _compact_cell(cell, kind_policy.get(cell.kind, {})) for cell in self.cells
+            ],
             "verdicts": {
                 kind: {
                     "state": verdict.state,

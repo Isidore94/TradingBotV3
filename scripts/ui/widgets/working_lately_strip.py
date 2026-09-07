@@ -27,7 +27,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel
 
 import working_lately
-from ui import theme
 
 
 class WorkingLatelyStrip(QFrame):
@@ -99,15 +98,27 @@ class WorkingLatelyStrip(QFrame):
         return "\n".join(lines)
 
     def _refresh(self) -> None:
-        text = self.line_text()
-        self.line_label.setText(text)
-        self.line_label.setToolTip(self.tooltip_text())
-        self.setToolTip(self.tooltip_text())
-        try:
-            self.line_label.setStyleSheet("")  # variants live in theme.qss
-            self.setMinimumHeight(theme.px(22))
-        except Exception:  # noqa: BLE001 - a strip is never worth a traceback
-            pass
+        """Format once, set twice. Nothing else on the Qt thread.
+
+        **Re-review advisory 4.** This cost 14.65 ms per call: it built the
+        tooltip TWICE (once per `setToolTip`) - and the tooltip is one
+        `EvidenceCell.line()` per cell over a live snapshot's hundreds - and it
+        called `setStyleSheet("")` on the label, which is a stylesheet
+        recomputation for the whole subtree to say nothing. The variant lives in
+        `theme.qss` keyed on a dynamic property, which is the rule the fluidity
+        pass wrote and this widget was breaking.
+        """
+        tooltip = self.tooltip_text()
+        self.line_label.setText(self.line_text())
+        self.line_label.setToolTip(tooltip)
+        self.setToolTip(tooltip)
+        has_snapshot = bool(self._payload)
+        if self.property("hasSnapshot") != has_snapshot:
+            self.setProperty("hasSnapshot", has_snapshot)
+            # Re-polish THIS widget only - no stylesheet is set or recomputed.
+            style = self.style()
+            style.unpolish(self)
+            style.polish(self)
 
     # -- interaction -------------------------------------------------------
 

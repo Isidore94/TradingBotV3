@@ -193,6 +193,12 @@ class AutopilotService(QObject):
     #: `ui.app`) only writes evidence. A profile change while Auto is OFF is
     #: NOT a flip and is not emitted, because `auto_mode` did not move.
     autoModeChanged = Signal(str, str)
+    #: A scheduled swing scan that WROTE THE SETUP TRACKER has finished, so
+    #: the tracker exports on disk are new (ST6 re-review, advisory 5). The
+    #: manual scan service's `finished` is a different object and only ever
+    #: fires for a scan the trader started, so a desk left alone through the
+    #: close slot - which is the normal case - never saw one.
+    setupTrackerWritten = Signal(str)
     _reportFinished = Signal(object, str)
 
     def __init__(self, bounce_service, parent=None) -> None:
@@ -1210,6 +1216,7 @@ class AutopilotService(QObject):
             self._log("A swing scan is already running.")
             return
         self._active_scan_slot = slot_label
+        self._active_scan_writes_tracker = bool(update_setup_tracker)
         self._pending_slot_marks = list(mark_slots)
         tracker_text = "WITH setup-tracker write" if update_setup_tracker else "no tracker write"
         started = self._scan_service.run_autopilot_scan(
@@ -1240,6 +1247,10 @@ class AutopilotService(QObject):
         slot = self._active_scan_slot or "?"
         self._mark_slots_done()
         self._log(f"Swing scan for slot {slot} finished at {stamp} ({len(rows)} setup rows).")
+        if getattr(self, "_active_scan_writes_tracker", False):
+            # Announced, not acted on: the listener coalesces and re-reads.
+            self.setupTrackerWritten.emit(str(slot))
+        self._active_scan_writes_tracker = False
         self._active_scan_slot = None
         self._waiting_scan_slot = None
         self._request_report_write()

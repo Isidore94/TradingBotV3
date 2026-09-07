@@ -151,6 +151,12 @@ class M5AlertBar(QWidget):
         # still here, the repeat fold is computed before any sort, and turning
         # the switch off brings today's arrival order back exactly.
         self._working_lately_order: list[tuple[str, str]] = []
+        #: The bar's own backing list, in ARRIVAL order (newest first). The
+        #: QListWidget shows a VIEW of it. Blocker 1 of the ST6 re-review was
+        #: that there was no such list: the widget was both the model and the
+        #: display, so a sort applied while the switch was on could not be
+        #: undone when it went off.
+        self._arrival: list[QListWidgetItem] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -210,22 +216,28 @@ class M5AlertBar(QWidget):
         if not symbol:
             return
         side = str(getattr(alert, "side", "") or "")
-        existing = self._row_for(symbol, side)
+        existing = self._arrival_item_for(symbol, side)
         if existing is not None:
-            row, item = existing
-            repeats = int(item.data(_REPEAT_ROLE) or 1) + 1
-            self.list.takeItem(row)
-            self._write_item(item, alert, repeats)
-            self.list.insertItem(0, item)
-            self._apply_priority_order()
-            self._refresh_title()
-            return
-        item = QListWidgetItem()
-        self._write_item(item, alert, 1)
-        self.list.insertItem(0, item)
-        while self.list.count() > MAX_ROWS:
-            self.list.takeItem(self.list.count() - 1)
-        self._apply_priority_order()
+            repeats = int(existing.data(_REPEAT_ROLE) or 1) + 1
+            self._write_item(existing, alert, repeats)
+            self._arrival.remove(existing)
+            self._arrival.insert(0, existing)
+        else:
+            item = QListWidgetItem()
+            self._write_item(item, alert, 1)
+            self._arrival.insert(0, item)
+            self.list.addItem(item)
+            # **The cap applies to the ARRIVAL list, never to the displayed
+            # order** (ST6 re-review, blocker 2). Trimming the sorted list made
+            # the switch decide WHICH rows survive: with MAX_ROWS at 3 and
+            # AAA/BBB/CCC/DDD posted, OFF kept BBB/CCC/DDD and ON kept
+            # AAA/CCC/DDD - a display preference deleting a different alert.
+            while len(self._arrival) > MAX_ROWS:
+                dropped = self._arrival.pop()
+                row = self.list.row(dropped)
+                if row >= 0:
+                    self.list.takeItem(row)
+        self._render_order()
         self._refresh_title()
 
     def mount_top_strip(self, widget) -> None:
@@ -244,57 +256,72 @@ class M5AlertBar(QWidget):
         self._working_lately_order = [
             (str(cell), str(side)) for cell, side in (order or ())
         ]
-        self._apply_priority_order()
+        self._render_order()
 
-    def _apply_priority_order(self) -> None:
-        """Stably re-sort the visible rows. Nothing is added, dropped or folded.
+    def _display_order(self) -> list:
+        """The order to DRAW, computed from the arrival list. Never stored.
 
-        The fold has ALREADY happened by the time this runs - `post` writes the
-        backing item and its ×N badge first - so the set of rows and every
-        repeat count are identical whether the switch is on or off. Ties keep
-        arrival order, which is what makes turning the switch off restore
-        today's list exactly.
+        **The backing list is never sorted** (ST6 re-review, blocker 1). It used
+        to be: `_apply_priority_order` re-ordered the widget in place and
+        returned early when the switch was off, so a list sorted while the
+        switch was ON stayed sorted after it went OFF and today's arrival order
+        was gone for the session. The priority order is a VIEW; turning the
+        switch off is nothing more than drawing the same rows in the order they
+        arrived, which is what "reorders and never withholds" has to mean if it
+        is to be reversible.
         """
         import working_lately
 
-        if not self._working_lately_order or not working_lately.prioritise_enabled():
-            return
-        count = self.list.count()
-        if count < 2:
-            return
-        items = [self.list.item(index) for index in range(count)]
-        ranked = sorted(
-            range(count),
-            key=lambda index: (
-                working_lately.priority_rank(
-                    self._working_lately_order,
-                    working_lately.alert_priority_key(items[index].data(_ALERT_ROLE)),
+        rows = list(self._arrival)
+        if len(rows) < 2 or not self._working_lately_order:
+            return rows
+        if not working_lately.prioritise_enabled():
+            return rows
+        return [
+            item
+            for _rank, _index, item in sorted(
+                (
+                    (
+                        working_lately.priority_rank(
+                            self._working_lately_order,
+                            working_lately.alert_priority_key(item.data(_ALERT_ROLE)),
+                        ),
+                        index,
+                        item,
+                    )
+                    for index, item in enumerate(rows)
                 ),
-                index,
-            ),
-        )
-        if ranked == list(range(count)):
-            return
-        taken = [self.list.takeItem(0) for _ in range(count)]
-        for index in ranked:
-            self.list.addItem(taken[index])
+                key=lambda entry: (entry[0], entry[1]),
+            )
+        ]
 
-    def _row_for(self, symbol: str, side: str):
-        """The existing row for this symbol+side, or None. Linear over <=400.
+    def _render_order(self) -> None:
+        """Draw the display order. A no-op when it already matches."""
+        order = self._display_order()
+        current = [self.list.item(index) for index in range(self.list.count())]
+        if current == order:
+            return
+        while self.list.count():
+            self.list.takeItem(0)
+        for item in order:
+            self.list.addItem(item)
+
+    def _arrival_item_for(self, symbol: str, side: str):
+        """The arrival-list row for this symbol+side, or None.
 
         Keyed on symbol AND side deliberately: a name that flips direction is a
-        different claim, and folding the two would hide the flip - the one
-        thing on this bar most worth seeing.
+        different claim, and folding the two would hide the flip - the one thing
+        on this bar most worth seeing.
         """
-        for row in range(self.list.count()):
-            item = self.list.item(row)
+        for item in self._arrival:
             held = item.data(_ALERT_ROLE)
             if held is None:
                 continue
-            held_symbol = str(getattr(held, "symbol", "") or "").strip().upper()
-            held_side = str(getattr(held, "side", "") or "")
-            if held_symbol == symbol and held_side == side:
-                return row, item
+            if (
+                str(getattr(held, "symbol", "") or "").strip().upper() == symbol
+                and str(getattr(held, "side", "") or "") == side
+            ):
+                return item
         return None
 
     def _write_item(self, item: QListWidgetItem, alert: Any, repeats: int) -> None:
@@ -348,6 +375,7 @@ class M5AlertBar(QWidget):
         return text
 
     def clear_all(self) -> None:
+        self._arrival.clear()
         self.list.clear()
         self._refresh_title()
 
@@ -358,6 +386,9 @@ class M5AlertBar(QWidget):
         alert = item.data(_ALERT_ROLE)
         row = self.list.row(item)
         if row >= 0:
+            # Out of the arrival list too, or the next render would put it back.
+            if item in self._arrival:
+                self._arrival.remove(item)
             self.list.takeItem(row)
             self._refresh_title()
         if alert is not None:

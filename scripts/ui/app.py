@@ -207,7 +207,16 @@ class MainWindow(QMainWindow):
         self.trading_panel.alert_center.m5AlertsDayRolled.connect(
             self.working_lately_service.on_day_roll
         )
+        # Trigger (c), BOTH halves. The manual scan service fires only for a
+        # scan the trader started; the CLOSE-SLOT write - which is the one that
+        # produces the exports on a normal day, on a desk nobody is touching -
+        # comes from Auto Pilot's own scan service (re-review advisory 5). Both
+        # route through the same coalescer, so a manual scan that happens to
+        # land on the slot is still one build.
         self.trading_panel.master_panel.scan_service.finished.connect(
+            lambda *_args: self.working_lately_service.on_tracker_export()
+        )
+        self.autopilot_panel.service.setupTrackerWritten.connect(
             lambda *_args: self.working_lately_service.on_tracker_export()
         )
         # The page used to carry a second RS/RW view, so that the two reads
