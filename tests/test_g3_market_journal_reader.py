@@ -263,3 +263,62 @@ def test_the_reader_is_filled_before_the_capture_worker_is_started(panel, monkey
 
     assert seen, "the capture worker was never constructed - the seam moved"
     assert seen[0] == LONG_TEXT
+
+
+# ==========================================================================
+# Added by the BUILDER (nothing above is weakened): the excerpt's ellipsis is
+# a claim, the reader sits above the charts, and the meta line keeps the zone
+# the stamp carries. Each of these fails on the pre-G3 file too - `_excerpt`
+# and `thought_meta` do not exist there.
+# ==========================================================================
+def test_the_ellipsis_means_there_is_more_and_is_not_printed_when_there_is_not():
+    """A short thought is shown WHOLE in the list; `…` is never decoration."""
+    from ui.panels.market_journal_panel import EXCERPT_LIMIT, _excerpt
+
+    assert _excerpt(SHORT_TEXT) == SHORT_TEXT
+    assert not _excerpt(SHORT_TEXT).endswith("…")
+    # A first line that fits but is followed by more IS truncated - the rest
+    # of the thought is real and the list must say so.
+    assert _excerpt("one line\nand a second") == "one line…"
+    assert _excerpt("") == ""
+    long_one = _excerpt("x" * 400)
+    assert len(long_one) == EXCERPT_LIMIT + 1
+    assert long_one.endswith("…")
+
+
+def test_the_reader_sits_above_the_charts_on_its_own_vertical_splitter(panel):
+    """G3.2 - the right half is reader OVER charts, 2 to 3.
+
+    Not the `lower` splitter's (2, 3), which is LEFT vs RIGHT: this is the new
+    vertical one inside the right half.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QSplitter
+
+    reader_holder = panel.thought_view.parent()
+    charts_holder = panel.charts_note.parent()
+    right = reader_holder.parent()
+
+    assert isinstance(right, QSplitter), type(right).__name__
+    assert right.orientation() == Qt.Vertical
+    assert charts_holder.parent() is right, "the charts are not in the reader's splitter"
+    assert right.indexOf(reader_holder) == 0, "the charts are above the words"
+    # QSplitter has no `stretchFactor` getter: `setStretchFactor` writes the
+    # child's size policy along the splitter's orientation, so that is where
+    # the 2 and the 3 are read back from.
+    assert reader_holder.sizePolicy().verticalStretch() == 2
+    assert charts_holder.sizePolicy().verticalStretch() == 3
+
+
+def test_the_meta_line_keeps_the_zone_the_stored_stamp_carries(panel):
+    """A time printed without its zone is a quiet backdating."""
+    from ui.panels.market_journal_panel import _written_line
+
+    _render(panel, [_entry("mj-long", LONG_TEXT, created_at=f"{SESSION}T13:36:35-07:00")])
+
+    meta = panel.thought_meta.text()
+    assert "written 13:36" in meta, meta
+    assert "07:00" in meta, meta
+    # A naive stamp SAYS it is naive rather than being handed a zone.
+    assert "no zone recorded" in _written_line("2026-09-02T13:36:35")
+    assert _written_line("") == "written at an unrecorded time"

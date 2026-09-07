@@ -61,6 +61,24 @@ QLabel#CautionLabel {
     color: @caution@;
 }
 
+/* Market Journal reader (G3): the meta line above the thought - session,
+   timeframe, when it was written, who wrote it, the symbols. Secondary, so
+   the words underneath are what the eye lands on. */
+QLabel#ThoughtMeta {
+    color: @text_secondary@;
+}
+
+/* ...and the thought itself: a document to READ, not an input box, so it
+   drops the input background and border a QTextEdit would otherwise get. */
+QTextBrowser#ThoughtReader {
+    background: @bg_panel@;
+    color: @text_primary@;
+    border: 1px solid @border@;
+    border-radius: @radius@;
+    padding: @pad_small@;
+    selection-background-color: @selection@;
+}
+
 /* Review-learning guidance line on the visual review pane: advisory
    take-prob / blind-spot notes. Favorite-gold so it reads as "the desk
    knows something here" without shouting. */

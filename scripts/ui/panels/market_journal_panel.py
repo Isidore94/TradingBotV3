@@ -26,7 +26,7 @@ handed.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from PySide6.QtCore import QThread, Qt, Signal
@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -59,6 +60,55 @@ CAPTURE_PANES = (
     ("benchmark_m5", "{benchmark} M5", "m5"),
     ("benchmark_d1", "{benchmark} D1", "d1"),
 )
+
+#: How much of a thought the narrow entries list shows (G3.1). The list
+#: elides one line whatever it is handed, so putting a 1,200-character
+#: thought in there showed the trader a clipped fragment and nothing else;
+#: 90 characters is about a sentence, which is enough to FIND an entry. The
+#: rest of it is the reader pane's job, not the list's.
+EXCERPT_LIMIT = 90
+
+#: How many lines of the composer the page opens with (G3.2). The composer
+#: used to take whatever the vertical splitter's stretch gave it, which on a
+#: tall screen was half the page for an empty box. Four lines is a paragraph;
+#: the splitter handle still drags it as tall as the trader wants.
+COMPOSER_LINES = 4
+
+
+def _excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
+    """The first line of a thought, cut at `limit`, with `…` when there is more.
+
+    The ellipsis is a CLAIM - "there is more text than this" - so it is never
+    printed for a short single-line entry that is shown whole.
+    """
+    body = str(text or "").strip()
+    lines = body.splitlines()
+    first = lines[0].strip() if lines else ""
+    truncated = len(lines) > 1 or len(first) > limit
+    if len(first) > limit:
+        first = first[:limit].rstrip()
+    return f"{first}…" if truncated else first
+
+
+def _written_line(created_at: Any) -> str:
+    """`written HH:MM <zone>` from the stored stamp, in the zone it CARRIES.
+
+    G3 is a layout packet: this reads `created_at` and never re-derives it.
+    A stamp with no zone says so rather than being silently given one - the
+    Market Journal's whole contract is that an entry is never backdated, and
+    a time printed in a zone nobody recorded is a quiet backdating.
+    """
+    raw = str(created_at or "").strip()
+    if not raw:
+        return "written at an unrecorded time"
+    try:
+        moment = datetime.fromisoformat(raw)
+    except ValueError:
+        return f"written {raw[:19]}"
+    if moment.tzinfo is None:
+        return f"written {moment.strftime('%H:%M')} (no zone recorded)"
+    zone = moment.tzname() or moment.strftime("%z")
+    return f"written {moment.strftime('%H:%M')} {zone}".strip()
 
 
 class _EntriesWorker(QThread):
@@ -172,6 +222,22 @@ class MarketJournalPanel(QFrame):
         self.context_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.calendar_strip = QLabel("")
         self.calendar_strip.setWordWrap(True)
+        # G3.2: the reader. The page's reason to exist is the WORDS, and until
+        # now they were shown nowhere - the whole text went into a one-line
+        # list item and was elided. Read-only, wrapped, selectable, styled from
+        # `theme.qss` by object name (no `setStyleSheet` on the Qt thread).
+        self.thought_meta = QLabel("")
+        self.thought_meta.setObjectName("ThoughtMeta")
+        self.thought_meta.setWordWrap(True)
+        self.thought_meta.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.thought_view = QTextBrowser()
+        self.thought_view.setObjectName("ThoughtReader")
+        self.thought_view.setReadOnly(True)
+        self.thought_view.setLineWrapMode(QTextBrowser.WidgetWidth)
+        self.thought_view.setOpenExternalLinks(False)
+        self.thought_view.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
         self.charts_note = QLabel("")
         self.charts_note.setWordWrap(True)
         self.digest_label = QLabel("")
@@ -233,9 +299,33 @@ class MarketJournalPanel(QFrame):
         charts_body.addWidget(self.digest_label)
         charts_body.addLayout(charts_layout, 1)
 
+        reader_widget = QWidget()
+        reader_body = QVBoxLayout(reader_widget)
+        reader_body.setContentsMargins(0, 0, 0, 0)
+        reader_body.addWidget(QLabel("The thought, in full"))
+        reader_body.addWidget(self.thought_meta)
+        reader_body.addWidget(self.thought_view, 1)
+
+        # G3.2: the right half is now READER over CHARTS. The charts are the
+        # follow-on evidence; the trader opens this page to read what they
+        # wrote, so the words get the top of the column and the 2 x 2 grid
+        # keeps the larger share below it. Draggable either way.
+        right = QSplitter(Qt.Vertical)
+        right.addWidget(reader_widget)
+        right.addWidget(charts_widget)
+        right.setStretchFactor(0, 2)
+        right.setStretchFactor(1, 3)
+        # Stretch alone only governs RESIZES; the opening split comes from the
+        # size hints, and an empty chart grid hints far larger than a paragraph
+        # of text - which opened the reader at a couple of lines. These are
+        # proportions, not pixels: QSplitter scales them to the real height and
+        # honours each child's minimum. Measured 796 / 1194 at 3456 x 2160.
+        right.setSizes([800, 1200])
+
+        # NOTE: this pair is LEFT vs RIGHT and is not the pair above.
         lower = QSplitter(Qt.Horizontal)
         lower.addWidget(review_widget)
-        lower.addWidget(charts_widget)
+        lower.addWidget(right)
         lower.setStretchFactor(0, 2)
         lower.setStretchFactor(1, 3)
 
@@ -243,6 +333,11 @@ class MarketJournalPanel(QFrame):
         splitter.addWidget(compose_widget)
         splitter.addWidget(lower)
         splitter.setStretchFactor(1, 3)
+        # An empty box was opening at roughly half the page on a tall screen,
+        # because a stretch factor alone gives the composer a share of every
+        # resize. Four text lines is the initial size; the handle still moves.
+        compose_height = self.entry_text.fontMetrics().lineSpacing() * COMPOSER_LINES + 48
+        splitter.setSizes([compose_height, compose_height * 6])
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -409,9 +504,13 @@ class MarketJournalPanel(QFrame):
                 # DATED by the session it is ABOUT, which is the question the
                 # picker used to answer. `created_at` moves to the tooltip.
                 session = str(entry.get("session_date") or "")[:10]
+                # G3.1: an EXCERPT, not the whole text. The date stays first
+                # and the two-space separator stays - both are pinned by
+                # `test_the_entries_list_is_dated_and_newest_first`.
                 label = (
                     f"{session}  {entry.get('timeframe', '')}{hand}{marker}{camera} "
-                    f"{('[' + symbols + '] ') if symbols else ''}{entry.get('text', '')}"
+                    f"{('[' + symbols + '] ') if symbols else ''}"
+                    f"{_excerpt(entry.get('text', ''))}"
                 )
                 item = QListWidgetItem(label)
                 item.setToolTip(f"written {str(entry.get('created_at') or '')[:19]}")
@@ -422,6 +521,8 @@ class MarketJournalPanel(QFrame):
         if not entries:
             # Cleared under blocked signals, so the charts would otherwise keep
             # drawing the previous session's tape under this session's silence.
+            # G3.3: and the reader would keep yesterday's words under it.
+            self._fill_reader(None)
             self._clear_charts("No entries for this session, so there is nothing to chart.")
             return
         row = self._row_for_entry(previous)
@@ -496,8 +597,59 @@ class MarketJournalPanel(QFrame):
             return
         self.calendar_strip.setText(f"Calendar: {coverage.get('note', '')}")
 
+    # -- the reader ---------------------------------------------------------
+    def _entry_for_row(self, row: Any) -> dict | None:
+        """The entry behind a list row, or None for the "no entries" placeholder."""
+        try:
+            index = int(row)
+        except (TypeError, ValueError):
+            return None
+        if index < 0 or index >= len(self._entries):
+            return None
+        return self._entries[index]
+
+    def _fill_reader(self, entry: dict | None) -> None:
+        """G3.2/G3.3 - the full thought, written from the ENTRY.
+
+        Never from the capture worker: `_render_capture` can arrive for a row
+        the trader has already left (that is what the late-capture guard is
+        for), and one entry's words under another entry's selection is the
+        worst failure this page could have.
+
+        `setPlainText`, never `setHtml`: the trader's own words are text, and a
+        thought containing `<` is not markup.
+        """
+        if not entry:
+            self.thought_meta.setText("")
+            self.thought_view.setPlainText("")
+            return
+        import market_journal
+
+        parts = [
+            part
+            for part in (
+                str(entry.get("session_date") or "")[:10],
+                str(entry.get("timeframe") or ""),
+                _written_line(entry.get("created_at")),
+            )
+            if part
+        ]
+        if market_journal.is_machine_entry(entry):
+            parts.append("[desk]")
+        if entry.get("written_after_the_session"):
+            parts.append("[written after the session]")
+        symbols = ", ".join(entry.get("symbols") or ())
+        if symbols:
+            parts.append(symbols)
+        self.thought_meta.setText("  ·  ".join(parts))
+        self.thought_view.setPlainText(str(entry.get("text") or ""))
+
     # -- the captured charts ----------------------------------------------
     def _on_entry_selected(self, _row: int) -> None:
+        # G3.3: the WORDS FIRST, synchronously, at the head of the method -
+        # before the no-capture guard below returns early and before any
+        # worker is constructed. An entry with no capture is still readable.
+        self._fill_reader(self._entry_for_row(_row))
         entry_id = self._selected_entry_id()
         if not entry_id:
             self._clear_charts("Select an entry to see the charts it was written against.")
