@@ -335,9 +335,45 @@ They are evidence and must not be loaded as context.
   the row FIRST and then asks for the scoped removal that refuses a name the
   trader typed. The note box saves on **Enter** and newlines on Shift+Enter
   through one helper, `ui/widgets/note_prompt.py` (R4 A6).
-- **The Research tab is the builder's surface** (V3 item 5). The nightly fact
-  pack's headline gets one line on Weekend Prep's verdict card; the full panel
-  stays in Research, which now says so on the page.
+- **The Research tab is the builder's surface, EXCEPT its Results page** (V3
+  item 5; decision 0016 answer 7 AMENDED 2026-09-06). The nightly fact pack's
+  headline gets one line on Weekend Prep's verdict card; the full panel stays in
+  Research, which says so on the page - and the page now says it of the other
+  eight tabs only. The second sentence still binds: nothing the trader must see
+  may live only in Research.
+- **Research > Results is the trader-readable full readout** (packet G5,
+  2026-09-07; `scripts/research_results.py` + `ui/panels/research_results_panel.py`).
+  FIRST tab and the one Research opens on; the other eight keep their order.
+  Four populations that are never pooled - **Bot setups | My trades** x **Swing |
+  Day trading** - over **Recent 20 sessions | All history | Custom**, the choice
+  remembered under `local_settings` key `research_results_selection` and
+  defaulting to bot / swing / recent (trader, decision 3 of 2026-09-06). Bot
+  cells come ONLY from ST6's snapshot, read through
+  `working_lately.cells_from_payload` because `snapshot["cells"]` is compacted,
+  and Bot x Swing shows `swing_trade_r` and `swing_favorable` as TWO labelled
+  sections that never pool. **The page computes no statistic**: `band_cells`
+  borrows `meets_floor` / `n_floor`, `EvidenceCell.concentrated`,
+  `working_lately.rank_basis` and `evidence_stats.lately_window`, every number a
+  row carries is the cell's own object (pinned by an identity test), and
+  `rate * n` appears nowhere (pinned by a source-level guard). Stronger lately is
+  the eligible cells in the snapshot's own order, top three; Weaker is the three
+  lowest by statistic **among the ones Stronger did not take**, so no cell can
+  stand under both headings; Not enough evidence is every ineligible cell with
+  its own reason (below the floor with `n_graded`/`n_floor`, concentrated with
+  the share, not measured, pending); a study is in no band and is listed under
+  its own label. The kind's `LeaderVerdict` state and reason are printed
+  verbatim above the bands with `observational leader among K cells`. **My
+  trades** splits CLOSED trades by holding period through
+  `journal_trade_shape.is_date_only` - a broker row is `unknown timing` under
+  BOTH horizons and assigned to neither - reports fees beside net, counts R only
+  where the trader's own `planned_risk` is present, names an instrument and
+  never a direction, and prints *"no confirmed tags yet - nothing here names a
+  setup"* rather than a leaderboard of machine guesses. Both reads are on a
+  `ReadWorker`; the snapshot arrives through `set_working_lately_snapshot`
+  (`app.py` connects `snapshotChanged` to `ResearchPanel`) or off disk on the
+  worker; the detail pane is G4's identity-aware one (a control change takes it
+  down, a refresh re-opens the same row from the NEW numbers). No "Chart it":
+  `EvidenceCell` carries no example symbols and G5 adds no new read.
 - **Weekend Prep has ONE Refresh and a verdict card** (V2 item 2, decision 0016
   answer 10; finished by R4 A13/A14/A18). The click starts each page's own reader
   and returns - measured under 50 ms with the reads stubbed at the WORKER
@@ -1758,6 +1794,43 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-07 - Packet G5: Research > Results, the landing page the trader may read (branch `claude/g5-research-results`)
+
+Trader, 2026-09-06 (decision 0016 answer 7, AMENDED that day, and decision 3 of
+that day): Research gains a Results page the trader may read, four populations
+never pooled, opening on Bot setups x Swing x Recent 20 sessions with the last
+choice remembered. Tester-first: nine RED tests at `a79c7f20` off `main`
+`7e018c99`, re-proven failing on the un-fixed tree (6 failed, 3 errors) before
+the first edit; eleven more added by the builder.
+
+- **`scripts/research_results.py`** - pure, frozen dataclasses (`ResultsRow`,
+  `ResultsBands`, `ResultsSection`, `ResultsView`), `band_cells` and
+  `build_results_view`. No new statistic, threshold or eligibility rule: the
+  floors, the concentration refusal, the ranking basis and the window are all
+  borrowed from `working_lately` / `evidence_stats`, and a bot row's numbers are
+  the cell's OWN OBJECTS. `band_cells` RAISES on a mixed-kind cell list the way
+  `working_lately.pool_cells` refuses across its axes.
+- **`scripts/ui/panels/research_results_panel.py`** - three control groups, three
+  band cards, one shortlist and G4's identity-aware detail pane, every read on a
+  `ReadWorker`, the selection persisted.
+- **`research_panel.py`** - Results first and current, the eight existing tabs in
+  their order, a `set_working_lately_snapshot` seam, `shutdown()` joins the new
+  reader, and the pointer label reworded to the amendment. **`app.py`** gains ONE
+  line so the strip and the page render the same reading.
+- **Deviation from the packet, measured rather than argued.** The packet asked
+  for `EvidenceCell.line()` on each band card. At 1920x1080 three of those
+  twelve-clause lines in a third-width card left the shortlist under them **26
+  pixels tall** - G0/G1's `overflow` defect. The card now prints a ONE-LINE head
+  spelled the way the Desk's own Working-lately line spells it
+  (`name - statistic (>= bound, n=..., N sessions)`), carries the full
+  `EvidenceCell.line()` as its tooltip, and every field of that line is also a
+  column of the shortlist and a paragraph of the detail pane. Re-measured: the
+  table gets 295 px at 1920x1080, 799 at 2560x1440, 1599 at 3456x2160, and
+  `minimumSizeHint` is 427 at every size.
+- Nothing here scores, ranks a queue, alerts, writes evidence or reaches
+  `review_policy.json`. Live gate **#87**.
+
 
 ### 2026-09-06 - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders (branch `claude/st6-working-lately`, not merged)
 

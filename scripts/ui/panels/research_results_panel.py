@@ -144,15 +144,22 @@ class _BandCard(QFrame):
         total = sum(len(rows) for _title, rows in pairs)
         self.count_label.setText(f"{total} shown" if total else "nothing to show")
         lines: list[str] = []
+        full: list[str] = []
         for title, rows in pairs:
             if len(pairs) > 1:
                 lines.append(f"{title}:")
+                full.append(f"{title}:")
             for row in rows[:3]:
-                text = row.line
+                head = row.display.get("headline") or row.line
                 if row.reason:
-                    text = f"{text}\n    why not: {row.reason}"
-                lines.append(f"• {text}")
+                    head = f"{head} - {row.reason}"
+                lines.append(f"• {head}")
+                full.append(f"• {row.line}")
         self.body_label.setText("\n".join(lines) if total else empty_text)
+        # `EvidenceCell.line()` in full, where it was always meant to live: a
+        # dozen clauses per cell is a tooltip, and every field in it is also a
+        # column of the shortlist below and a paragraph of the detail pane.
+        self.body_label.setToolTip("\n".join(full))
 
 
 class ResearchResultsPanel(QFrame):
@@ -250,9 +257,10 @@ class ResearchResultsPanel(QFrame):
             for button in store.values():
                 controls.addWidget(button, 0)
             controls.addSpacing(12)
-        controls.addWidget(QLabel("from"), 0)
+        self._custom_labels = (QLabel("from"), QLabel("to"))
+        controls.addWidget(self._custom_labels[0], 0)
         controls.addWidget(self.custom_start, 0)
-        controls.addWidget(QLabel("to"), 0)
+        controls.addWidget(self._custom_labels[1], 0)
         controls.addWidget(self.custom_end, 0)
         controls.addStretch(1)
         row = QWidget()
@@ -299,8 +307,10 @@ class ResearchResultsPanel(QFrame):
 
     def _update_custom_visibility(self) -> None:
         custom = self._selection[2] == "custom"
-        for edit in (self.custom_start, self.custom_end):
-            edit.setVisible(custom)
+        # The two words go with the two fields: a bare "from" and "to" standing
+        # beside nothing is a control the trader cannot use.
+        for widget in (self.custom_start, self.custom_end, *self._custom_labels):
+            widget.setVisible(custom)
 
     def _selected_key(self, store: dict) -> str:
         for key, button in store.items():

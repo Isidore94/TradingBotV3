@@ -328,6 +328,17 @@ def _cell_row(cell: EvidenceCell) -> ResultsRow:
         }
     )
     display = {
+        # ONE line for a band card, spelled the way the Trading Desk's own
+        # Working-lately line spells it. The full provenance stays available as
+        # `ResultsRow.line` (`EvidenceCell.line()`), which is a dozen clauses
+        # long and belongs in a tooltip and the detail pane, not stacked three
+        # deep in a third-width card - measured at 1920x1080, three of them left
+        # the shortlist under the cards 26 pixels tall.
+        "headline": (
+            f"{cell.name} - {_number(cell.statistic)} "
+            f"(>= {_number(cell.uncertainty_low)}, n={cell.n_eligible}, "
+            f"{cell.n_sessions} sessions)"
+        ),
         "side": str(cell.side or "").upper(),
         "family": str(cell.family or ""),
         "sample": _sample_text(cell),
@@ -578,7 +589,11 @@ def _mine_section(key: str, trades: Sequence[Any], currency_mode: Any) -> Result
         reason="",
         eligible=True,
         values=dict(stats),
-        display={"label": MINE_TITLES.get(key, key), "line": bucket_line},
+        display={
+            "label": MINE_TITLES.get(key, key),
+            "line": bucket_line,
+            "headline": bucket_line,
+        },
     )
     return ResultsSection(
         key=key,
