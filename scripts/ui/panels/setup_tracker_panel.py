@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import logging
 import threading
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ from project_paths import (
 )
 from research_explanations import build_plain_english_whats_working
 from ui import theme
+from ui.read_worker import ReadWorker, join_worker
 from ui.timer_utils import SignalCoalescer
 from ui.models.tracker_table_model import ROW_ROLE, TrackerSortProxyModel, TrackerTableModel
 from ui.services.human_focus_tracker_feed import (
@@ -394,6 +396,11 @@ class SetupTrackerPanel(QFrame):
     statusChanged = Signal(str)
     #: The attribute leaderboard read lands here, off the worker thread.
     _attributesLoaded = Signal(object)
+    #: Emitted on the Qt thread once a refresh's rows have been APPLIED (G7.2).
+    #: `refresh()` returns as soon as it has started a read, so this - not the
+    #: call - is the moment the tables hold the new rows. A test awaits it; the
+    #: desk uses it for nothing, and it carries no payload on purpose.
+    refreshFinished = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -735,11 +742,46 @@ class SetupTrackerPanel(QFrame):
         self.tabs.currentChanged.connect(self._on_context_tab_changed)
 
         self._attributesLoaded.connect(self._on_attributes_loaded)
+        #: G7.2. The export read runs on ONE `ReadWorker` and is single-flight:
+        #: a refresh asked for while one is in flight is coalesced into it, the
+        #: same rule `start_attribute_refresh` has always used.
+        self._read_worker: ReadWorker | None = None
+        self._shutting_down = False
+        #: A refresh asked for while one is in flight. The worker in flight
+        #: takes it (one more pass, whatever the number of requests), so the
+        #: request is never LOST and never doubles the reads either.
+        self._refresh_pending = False
+        self._refresh_lock = threading.Lock()
+        #: The spinbox value the next pass reads with. Taken on the Qt thread -
+        #: a `QSpinBox` is not a worker's to ask.
+        self._refresh_min_closed = 5
+        #: What each table was last rendered FROM, so an export nothing rewrote
+        #: costs no model reset and no column fit. Keyed by the table's own
+        #: attribute name; a table absent from here has never been rendered.
+        self._rendered_from: dict[str, tuple] = {}
+        #: G7.1: the first show pays for the first read, never the constructor.
+        self._loaded_once = False
         self._build_layout()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Read the first time the page is actually looked at (G7.1).
+
+        This was the 1.3 s op in the G0 baseline and it ran at startup for a
+        Research tab nobody had selected. A `QTabWidget` child gets its
+        `showEvent` only when its tab is chosen, so Research's first paint costs
+        one child's load rather than nine.
+        """
+        super().showEvent(event)
+        if self._loaded_once:
+            return
+        self._loaded_once = True
         self.refresh()
 
     def shutdown(self) -> None:
         """Let no read outlive the panel it was going to update."""
+        self._shutting_down = True
+        join_worker(self._read_worker)
+        self._read_worker = None
         thread = getattr(self, "_attributes_thread", None)
         if thread is not None and thread.is_alive():
             thread.join(timeout=2.0)
@@ -918,47 +960,107 @@ class SetupTrackerPanel(QFrame):
         except Exception:  # noqa: BLE001 - a banner is never worth a traceback
             logging.debug("Setup Tracker summary re-render skipped", exc_info=True)
 
+    # ------------------------------------------------------------------
+    # The refresh: one read on one worker, then one render on the Qt thread
+    # ------------------------------------------------------------------
     def refresh(self) -> None:
-        min_closed = int(self.min_closed_input.value())
-        all_setup_type_rows = _load_csv_rows_cached(SETUP_TYPE_STATS_FILE)
-        all_playbook_rows = _load_csv_rows_cached(SETUP_PLAYBOOKS_FILE)
-        tier_performance_export_rows = _load_csv_rows_cached(MASTER_AVWAP_TIER_PERFORMANCE_FILE)
-        self.current_pick_rows = _rank_current_picks(_load_csv_rows_cached(MASTER_AVWAP_TIER_LIST_FILE))
-        self.setup_type_rows = _rank_setup_types(
-            _setup_type_headline_rows(all_setup_type_rows), min_closed=min_closed
-        )
-        self.recent_type_rows = _rank_recent_types(
-            _recent_type_headline_rows(
-                _load_csv_rows_cached(RECENT_SETUP_TYPE_STATS_FILE)
-            )
-        )
-        self.short_term_rows = _rank_short_term(_load_csv_rows_cached(SHORT_HORIZON_FILE))
-        self.playbook_rows = _rank_playbooks(all_playbook_rows, min_closed=min_closed)
-        self.scan_factor_rows = _rank_scan_factors(_load_csv_rows_cached(MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE))
-        self.tier_performance_rows = _rank_tier_performance(tier_performance_export_rows)
-        self.catch_rate_rows = _rank_catch_rates(_load_csv_rows_cached(MASTER_AVWAP_TIER_CATCH_RATE_FILE))
-        self.human_pick_rows = build_human_focus_comparison_rows(
-            load_human_focus_performance_rows(),
-            tier_performance_export_rows,
-        )
-        # Shadow section. Same inline read as every other export on this page
-        # (plan.md Phase 0.9 G-P2.3 owns moving this panel off the Qt thread as
-        # a whole; doing it for one section would leave the page half on each).
-        band_variant_export_rows = _load_csv_rows_cached(BAND_VARIANT_STATS_FILE)
-        self.band_variant_rows = _rank_band_variants(band_variant_export_rows)
+        """Ask for the twelve exports and the human-focus read. G7.2.
+
+        Everything this used to do inline now happens on ONE `ReadWorker` -
+        twelve `_load_csv_rows_cached` calls, `load_human_focus_performance_rows`
+        and the pure ranking of what they returned - and the Qt thread does the
+        rendering alone. It measured 1.3 s p95 at 3456 x 2160 in the G0 baseline
+        and it fires on construction, on every spinbox step and on the button.
+
+        Single-flight and COALESCED: a refresh asked for while one is in flight
+        is taken by the worker in flight as one more pass, whatever the number
+        of requests - so a spinbox step during a read is never lost, two reads
+        are never in flight at once, and there is exactly one render and one
+        `refreshFinished` per worker. `refreshFinished` is emitted when the ROWS
+        ARE APPLIED, never when this call returns.
+        """
+        if self._shutting_down:
+            return
+        with self._refresh_lock:
+            self._refresh_min_closed = int(self.min_closed_input.value())
+            worker = self._read_worker
+            if worker is not None and worker.isRunning():
+                self._refresh_pending = True
+                return
+            self._refresh_pending = False
+        self._read_worker = ReadWorker(self._read_until_nothing_is_pending, self)
+        self._read_worker.finished_with.connect(self._on_exports_loaded)
+        self._read_worker.failed.connect(self._on_exports_failed)
+        self._read_worker.start()
+
+    def _read_until_nothing_is_pending(self) -> dict[str, Any]:
+        """The worker's whole job: read, and read again if one was asked for.
+
+        Running the coalesced pass HERE rather than from the Qt-thread slot is
+        what makes `shutdown()`'s join enough - a request made a moment before
+        the desk closes cannot leave a read starting after the panel is gone,
+        because there is only ever the one thread and joining it is joining
+        everything it was going to do.
+        """
+        while True:
+            with self._refresh_lock:
+                min_closed = int(self._refresh_min_closed)
+            payload = _read_tracker_exports(min_closed)
+            with self._refresh_lock:
+                if not self._refresh_pending:
+                    return payload
+                self._refresh_pending = False
+
+    def _on_exports_failed(self, message: str) -> None:
+        """A read that could not run leaves the page showing what it had.
+
+        `ReadWorker` never raises into Qt, and a tracker that blanked itself to
+        announce a failed read would destroy the only copy of what it knew.
+        """
+        self.status_label.setText(f"Tracker exports could not be read: {message}")
+        self.refreshFinished.emit()
+
+    def _on_exports_loaded(self, payload: object) -> None:
+        """Apply one read's rows. Qt thread, and the ONLY place that renders.
+
+        A table is reset and re-fitted only when the export behind it CHANGED
+        since the last render (`_rendered_from`). The mtime cache already
+        skipped the parse on an unchanged file, but the thirteen model resets
+        and thirteen column fits ran anyway - on every spinbox step, over files
+        a scan rewrites a few times a day.
+        """
+        data = payload if isinstance(payload, dict) else {}
+        if not data:
+            self.refreshFinished.emit()
+            return
+        signatures: dict[str, Any] = data.get("signatures") or {}
+        ranked: dict[str, Any] = data.get("ranked") or {}
+        raw: dict[str, Any] = data.get("raw") or {}
+        min_closed = int(data.get("min_closed") or 0)
+
+        all_setup_type_rows = raw.get("setup_type") or []
+        band_variant_export_rows = raw.get("band_variant") or []
+        control_discovery_export_rows = raw.get("control_discovery") or []
+        study_discovery_export_rows = raw.get("study_discovery") or []
+        exit_framework_export_rows = raw.get("exit_framework") or []
+
+        self.current_pick_rows = ranked.get("current") or []
+        self.setup_type_rows = ranked.get("setup_type") or []
+        self.recent_type_rows = ranked.get("recent_type") or []
+        self.short_term_rows = ranked.get("short_term") or []
+        self.playbook_rows = ranked.get("playbook") or []
+        self.scan_factor_rows = ranked.get("scan_factor") or []
+        self.tier_performance_rows = ranked.get("tier_performance") or []
+        self.catch_rate_rows = ranked.get("catch_rate") or []
+        self.human_pick_rows = ranked.get("human_pick") or []
+        self.band_variant_rows = ranked.get("band_variant") or []
+        self.control_discovery_rows = ranked.get("control_discovery") or []
+        self.study_discovery_rows = ranked.get("study_discovery") or []
+        self.exit_framework_rows = ranked.get("exit_framework") or []
+
         self.band_variant_status_label.setText(
             band_variant_coverage_sentence(band_variant_export_rows)
         )
-        # M5.2 / M5.3, same inline read and the same reason. These three are
-        # small: the control export is one row per (side, family) x two windows
-        # and the framework export one per template group, so tens of rows each
-        # against the attribute leaderboard's 38,617.
-        control_discovery_export_rows = _load_csv_rows_cached(CONTROL_DISCOVERY_STATS_FILE)
-        study_discovery_export_rows = _load_csv_rows_cached(STUDY_DISCOVERY_STATS_FILE)
-        exit_framework_export_rows = _load_csv_rows_cached(EXIT_FRAMEWORK_STATS_FILE)
-        self.control_discovery_rows = _rank_discovery_rows(control_discovery_export_rows)
-        self.study_discovery_rows = _rank_discovery_rows(study_discovery_export_rows)
-        self.exit_framework_rows = _rank_exit_frameworks(exit_framework_export_rows)
         self.control_discovery_status_label.setText(
             discovery_population_sentence(control_discovery_export_rows, kind="control")
         )
@@ -969,38 +1071,20 @@ class SetupTrackerPanel(QFrame):
             exit_framework_population_sentence(exit_framework_export_rows)
         )
 
-        self.current_model.set_rows(self.current_pick_rows[:300])
-        self.human_pick_model.set_rows(self.human_pick_rows)
-        self.setup_type_model.set_rows(self.setup_type_rows[:300])
-        self.recent_type_model.set_rows(self.recent_type_rows[:300])
-        self.short_term_model.set_rows(self.short_term_rows[:300])
-        self.playbook_model.set_rows(self.playbook_rows[:300])
-        self.scan_factor_model.set_rows(self.scan_factor_rows[:300])
-        self.tier_performance_model.set_rows(self.tier_performance_rows)
-        self.catch_rate_model.set_rows(self.catch_rate_rows)
-        self.band_variant_model.set_rows(self.band_variant_rows[:300])
-        self.control_discovery_model.set_rows(self.control_discovery_rows[:300])
-        self.study_discovery_model.set_rows(self.study_discovery_rows[:300])
-        self.exit_framework_model.set_rows(self.exit_framework_rows[:300])
-        # The attribute leaderboard is read on a worker (19.7 MB live); the
-        # table fills when it arrives.
-        self.start_attribute_refresh()
-        for table in (
-            self.current_table,
-            self.human_pick_table,
-            self.setup_type_table,
-            self.recent_type_table,
-            self.short_term_table,
-            self.playbook_table,
-            self.scan_factor_table,
-            self.tier_performance_table,
-            self.catch_rate_table,
-            self.band_variant_table,
-            self.control_discovery_table,
-            self.study_discovery_table,
-            self.exit_framework_table,
+        rendered: dict[str, tuple] = {}
+        for table_name, model_name, rows, memo in _table_render_plan(
+            ranked, signatures, min_closed, str(data.get("human_focus_digest") or "")
         ):
-            table.fit_columns()
+            rendered[table_name] = memo
+            if self._rendered_from.get(table_name) == memo:
+                continue
+            getattr(self, model_name).set_rows(rows)
+            getattr(self, table_name).fit_columns()
+        self._rendered_from = rendered
+
+        # The attribute leaderboard is read on its own worker (19.7 MB live);
+        # the table fills when it arrives. Left exactly as it was.
+        self.start_attribute_refresh()
 
         tracked_setups = sum(_int(row.get("tracked_setups")) for row in all_setup_type_rows)
         current_sa = sum(1 for row in self.current_pick_rows if str(row.get("tier") or "").upper() in {"S", "A"})
@@ -1020,7 +1104,9 @@ class SetupTrackerPanel(QFrame):
         status = tracker_clock_sentence(
             _first_non_empty(all_setup_type_rows, "tracker_saved_at"),
             _first_non_empty(all_setup_type_rows, "tracker_saved_by"),
-            _latest_mtime_text([MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE]),
+            # Stat'ed on the worker with the reads (G7.2): a `stat` is a file
+            # call and this one used to happen on the render path.
+            str(data.get("scan_factor_mtime_text") or ""),
         )
         self.status_label.setText(status)
         self.statusChanged.emit(status)
@@ -1030,6 +1116,7 @@ class SetupTrackerPanel(QFrame):
         # down. Running it here rather than earlier is what keeps the tables
         # themselves untouched by this packet.
         self._reshow_or_clear_detail()
+        self.refreshFinished.emit()
 
     # ------------------------------------------------------------------
     # Click-to-detail: family mechanics + this symbol's stop/target prices
@@ -1168,6 +1255,134 @@ def _detail_row_identity(row: dict[str, Any], kind: str) -> tuple:
         str(row.get("setup_family") or ""),
         symbol,
         "",
+    )
+
+
+#: The twelve exports `refresh()` reads, by the short name the payload, the
+#: signatures and the per-table memo all use (G7.2). The attribute leaderboard
+#: is deliberately absent: it is 19.7 MB and has had its own worker since
+#: Phase 0.9, and the packet leaves it exactly where it is.
+def tracker_export_files() -> tuple[tuple[str, Any], ...]:
+    """Resolved at CALL time, never bound into a module constant.
+
+    These twelve names are patched on this module by the tests that point a
+    panel at a temporary home folder, so a tuple built at import would read the
+    paths the live desk uses no matter what a test said.
+    """
+    return (
+        ("setup_type", SETUP_TYPE_STATS_FILE),
+        ("playbook", SETUP_PLAYBOOKS_FILE),
+        ("tier_performance", MASTER_AVWAP_TIER_PERFORMANCE_FILE),
+        ("tier_list", MASTER_AVWAP_TIER_LIST_FILE),
+        ("recent_type", RECENT_SETUP_TYPE_STATS_FILE),
+        ("short_term", SHORT_HORIZON_FILE),
+        ("scan_factor", MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE),
+        ("catch_rate", MASTER_AVWAP_TIER_CATCH_RATE_FILE),
+        ("band_variant", BAND_VARIANT_STATS_FILE),
+        ("control_discovery", CONTROL_DISCOVERY_STATS_FILE),
+        ("study_discovery", STUDY_DISCOVERY_STATS_FILE),
+        ("exit_framework", EXIT_FRAMEWORK_STATS_FILE),
+    )
+
+
+def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
+    """The whole of the Setup Tracker's read, on a worker thread. G7.2.
+
+    Twelve cached CSV reads, the human-focus read and the pure ranking of what
+    they returned - none of it touches a widget, and it is the same code in the
+    same order the Qt thread used to run inline. Each file's `(mtime_ns, size)`
+    is taken BEFORE its read: a file rewritten mid-pass then has a signature the
+    NEXT refresh will see as changed, which is the safe direction to be wrong in.
+
+    The human-focus store has no file signature to take, so its rows carry a
+    content digest instead. Same question, answered from what was read.
+    """
+    signatures: dict[str, Any] = {}
+    raw: dict[str, list[dict]] = {}
+    for name, path in tracker_export_files():
+        signatures[name] = _csv_signature(path)
+        raw[name] = _load_csv_rows_cached(path)
+
+    human_focus_rows = load_human_focus_performance_rows()
+    digest = hashlib.sha1(
+        repr(human_focus_rows).encode("utf-8", "replace")
+    ).hexdigest()
+
+    ranked = {
+        "current": _rank_current_picks(raw["tier_list"]),
+        "setup_type": _rank_setup_types(
+            _setup_type_headline_rows(raw["setup_type"]), min_closed=min_closed
+        ),
+        "recent_type": _rank_recent_types(_recent_type_headline_rows(raw["recent_type"])),
+        "short_term": _rank_short_term(raw["short_term"]),
+        "playbook": _rank_playbooks(raw["playbook"], min_closed=min_closed),
+        "scan_factor": _rank_scan_factors(raw["scan_factor"]),
+        "tier_performance": _rank_tier_performance(raw["tier_performance"]),
+        "catch_rate": _rank_catch_rates(raw["catch_rate"]),
+        "human_pick": build_human_focus_comparison_rows(
+            human_focus_rows, raw["tier_performance"]
+        ),
+        "band_variant": _rank_band_variants(raw["band_variant"]),
+        "control_discovery": _rank_discovery_rows(raw["control_discovery"]),
+        "study_discovery": _rank_discovery_rows(raw["study_discovery"]),
+        "exit_framework": _rank_exit_frameworks(raw["exit_framework"]),
+    }
+    return {
+        "min_closed": int(min_closed),
+        "signatures": signatures,
+        "human_focus_digest": digest,
+        "raw": raw,
+        "ranked": ranked,
+        "scan_factor_mtime_text": _latest_mtime_text(
+            [MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE]
+        ),
+    }
+
+
+def _table_render_plan(
+    ranked: dict[str, Any],
+    signatures: dict[str, Any],
+    min_closed: int,
+    human_focus_digest: str,
+) -> tuple[tuple[str, str, list[dict], tuple], ...]:
+    """`(table attribute, model attribute, rows to show, what they came from)`.
+
+    The memo is what the rows were BUILT from, never the rows themselves: the
+    file's `(mtime_ns, size)`, plus `min_closed` for the two tables the spinbox
+    actually re-ranks, plus the human-focus digest for the one table with no
+    file behind it. Two tables read the same tier-performance export and both
+    say so, so a rewrite of it re-fits both and nothing else.
+    """
+    return (
+        ("current_table", "current_model", (ranked.get("current") or [])[:300],
+         (signatures.get("tier_list"),)),
+        ("human_pick_table", "human_pick_model", ranked.get("human_pick") or [],
+         (signatures.get("tier_performance"), human_focus_digest)),
+        ("setup_type_table", "setup_type_model", (ranked.get("setup_type") or [])[:300],
+         (signatures.get("setup_type"), min_closed)),
+        ("recent_type_table", "recent_type_model", (ranked.get("recent_type") or [])[:300],
+         (signatures.get("recent_type"),)),
+        ("short_term_table", "short_term_model", (ranked.get("short_term") or [])[:300],
+         (signatures.get("short_term"),)),
+        ("playbook_table", "playbook_model", (ranked.get("playbook") or [])[:300],
+         (signatures.get("playbook"), min_closed)),
+        ("scan_factor_table", "scan_factor_model", (ranked.get("scan_factor") or [])[:300],
+         (signatures.get("scan_factor"),)),
+        ("tier_performance_table", "tier_performance_model",
+         ranked.get("tier_performance") or [], (signatures.get("tier_performance"),)),
+        ("catch_rate_table", "catch_rate_model", ranked.get("catch_rate") or [],
+         (signatures.get("catch_rate"),)),
+        ("band_variant_table", "band_variant_model",
+         (ranked.get("band_variant") or [])[:300], (signatures.get("band_variant"),)),
+        ("control_discovery_table", "control_discovery_model",
+         (ranked.get("control_discovery") or [])[:300],
+         (signatures.get("control_discovery"),)),
+        ("study_discovery_table", "study_discovery_model",
+         (ranked.get("study_discovery") or [])[:300],
+         (signatures.get("study_discovery"),)),
+        ("exit_framework_table", "exit_framework_model",
+         (ranked.get("exit_framework") or [])[:300],
+         (signatures.get("exit_framework"),)),
     )
 
 
