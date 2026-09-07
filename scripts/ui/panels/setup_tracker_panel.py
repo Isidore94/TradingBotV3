@@ -1078,7 +1078,7 @@ class SetupTrackerPanel(QFrame):
 #: turns a real match into a miss. **A pair differing only in `retest_label`
 #: still collides** and falls to the first such row in the model's own order -
 #: deliberate, so the re-show never invents a grain the packet did not name.
-DETAIL_WIDENING_KEYS = ("favorite_zone", "priority_bucket")
+DETAIL_WIDENING_KEYS = ("favorite_zone", "priority_bucket", "retest_label", "compression_label")
 
 
 def _detail_widened_key(row: dict[str, Any]) -> tuple:
