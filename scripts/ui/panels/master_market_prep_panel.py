@@ -52,8 +52,23 @@ class MasterMarketPrepPanel(QFrame):
         self.human_picks_text.setMaximumHeight(84)
         self.status_label = QLabel("")
         self.status_label.setObjectName("MutedLabel")
+        #: G7.1: the first show pays for the first read, never the constructor.
+        self._loaded_once = False
         self._build_layout()
         self._configure_watcher()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Read the first time the page is actually looked at (G7.1).
+
+        Two local reads plus today's human picks, run at startup for a Research
+        tab nobody had selected. The file watcher is still configured in the
+        constructor: a page that only learns about a new scan once it has been
+        opened would be a behaviour change, and this is not one.
+        """
+        super().showEvent(event)
+        if self._loaded_once:
+            return
+        self._loaded_once = True
         self.refresh()
 
     def _build_layout(self) -> None:

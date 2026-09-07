@@ -284,6 +284,8 @@ class DaytradeTrackerPanel(QFrame):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
+        #: G7.1: the first show pays for the first read, never the constructor.
+        self._loaded_once = False
         self._refresh_thread: threading.Thread | None = None
 
         self._decisions_thread: threading.Thread | None = None
@@ -370,9 +372,28 @@ class DaytradeTrackerPanel(QFrame):
         self._decisionsLoaded.connect(self._on_decisions_loaded)
         self._heldRunLoaded.connect(self._on_held_run_loaded)
         self._build_layout()
+
+    # ------------------------------------------------------------------
+    # First load on first show (G7.1, the Market Journal idiom)
+    # ------------------------------------------------------------------
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Read the first time the page is actually looked at.
+
+        `reload_from_disk()` is a CSV parse plus a JSON read plus every
+        dimension model rebuilt, and the scoreboard read behind it is a 34 KB
+        JSON on the home folder. The desk builds every left-nav panel at
+        startup and most are never opened, so this page paid all of it for a
+        tab nobody selected. A `QTabWidget` child gets its `showEvent` only
+        when its tab is chosen, so Research's first paint costs one child's
+        load rather than nine.
+        """
+        super().showEvent(event)
+        if self._loaded_once:
+            return
+        self._loaded_once = True
         self.reload_from_disk()
         # Off the Qt thread from the first paint: the scoreboard is a 34 KB
-        # JSON on the home folder, and reading it in the constructor is the
+        # JSON on the home folder, and reading it on the render path is the
         # drip these panels have been audited for twice.
         self.start_decisions_refresh(rebuild=False)
 

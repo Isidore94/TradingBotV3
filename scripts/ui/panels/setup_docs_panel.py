@@ -31,6 +31,12 @@ class _RecordWorker(QThread):
     live store - so calling it from the handler would put a store read on the Qt
     thread for every click. It never raises into Qt: a page of setup mechanics is
     still worth reading with the records missing.
+
+    G7.1 gave it the overview's banner too. `render_best_now_html` did two
+    UNCACHED CSV reads inside the render that `setCurrentRow(0)` fired from the
+    constructor - on the Qt thread, at startup, for a tab nobody had opened. It
+    is the same read this worker already exists for, so it happens here, once,
+    beside the records rather than in a second reader.
     """
 
     done = Signal(object)
@@ -45,7 +51,12 @@ class _RecordWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             logging.debug("Setup docs could not read the tracker record: %s", exc)
             sentences = {}
-        self.done.emit(sentences)
+        try:
+            banner = render_best_now_html()
+        except Exception as exc:  # noqa: BLE001
+            logging.debug("Setup docs could not read the best-now exports: %s", exc)
+            banner = ""
+        self.done.emit({"records": sentences, "best_now_html": banner})
 
 
 class SetupDocsPanel(QFrame):
@@ -98,11 +109,25 @@ class SetupDocsPanel(QFrame):
         # record simply renders no line - a doc that waits for a CSV is a doc the
         # trader cannot open.
         self._records: dict[str, str] = {}
+        #: The overview's "best performing right now" banner, read on the worker
+        #: with the records (G7.1). Empty means "not read yet", which renders no
+        #: banner - a playbook that waits for a CSV is a playbook nobody opens.
+        self._best_now_html = ""
+        self._record_worker: _RecordWorker | None = None
+        #: G7.1: the first show pays for the first read, never the constructor.
+        self._loaded_once = False
+
+        self.family_list.setCurrentRow(0)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Start the record read the first time the page is looked at (G7.1)."""
+        super().showEvent(event)
+        if self._loaded_once:
+            return
+        self._loaded_once = True
         self._record_worker = _RecordWorker(list(self._docs_by_key), self)
         self._record_worker.done.connect(self._on_records_ready)
         self._record_worker.start()
-
-        self.family_list.setCurrentRow(0)
 
     def shutdown(self) -> None:
         worker = getattr(self, "_record_worker", None)
@@ -110,7 +135,9 @@ class SetupDocsPanel(QFrame):
             worker.wait(2000)
 
     def _on_records_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
-        self._records = dict(payload) if isinstance(payload, dict) else {}
+        data = payload if isinstance(payload, dict) else {}
+        self._records = dict(data.get("records") or {})
+        self._best_now_html = str(data.get("best_now_html") or "")
         self._render_current()
 
     def _on_family_selected(self, current: QListWidgetItem | None, _previous=None) -> None:
@@ -124,7 +151,11 @@ class SetupDocsPanel(QFrame):
             return
         key = current.data(Qt.ItemDataRole.UserRole)
         if key == "__overview__":
-            self.doc_view.setHtml(render_all_docs_html(records=self._records))
+            self.doc_view.setHtml(
+                render_all_docs_html(
+                    records=self._records, best_now_html=self._best_now_html
+                )
+            )
         elif key in self._docs_by_key:
             self.doc_view.setHtml(
                 render_doc_html(
@@ -190,7 +221,13 @@ def render_doc_html(
 def render_best_now_html() -> str:
     """Live 'best performing right now' banner from the tracker exports: the
     top short-term (1-2 session) family and the top swing family (30d realized).
-    Re-read on every render so the playbook always shows current evidence."""
+
+    **Called only from `_RecordWorker`, never on the Qt thread** (G7.1). The two
+    reads go through `setup_tracker_panel._load_csv_rows_cached` - the ONE
+    reader for these exports - so the tracker page and this banner parse each
+    file once per version instead of twice per render. The ROWS are unchanged:
+    the cached reader is the uncached one plus an `(mtime_ns, size)` memo.
+    """
     # Imported lazily: setup_tracker_panel imports setup_detail_view, which
     # imports this module, so a module-level import here would be circular.
     from ui.panels.setup_tracker_panel import (
@@ -199,7 +236,7 @@ def render_best_now_html() -> str:
         SHORT_TERM_MIN_SAMPLES,
         _float,
         _int,
-        _load_csv_rows,
+        _load_csv_rows_cached,
     )
 
     muted = theme.color("text_secondary")
@@ -209,13 +246,13 @@ def render_best_now_html() -> str:
 
     short_rows = [
         row
-        for row in _load_csv_rows(SHORT_HORIZON_FILE)
+        for row in _load_csv_rows_cached(SHORT_HORIZON_FILE)
         if _int(row.get("samples_2d")) >= SHORT_TERM_MIN_SAMPLES and _float(row.get("avg_r_2d")) is not None
     ]
     short_rows.sort(key=lambda row: -_float(row.get("short_term_score"), -1e9))
     swing_rows = [
         row
-        for row in _load_csv_rows(RECENT_SETUP_TYPE_STATS_FILE)
+        for row in _load_csv_rows_cached(RECENT_SETUP_TYPE_STATS_FILE)
         if _int(row.get("closed_setups")) >= 3 and _float(row.get("avg_closed_r")) is not None
     ]
     swing_rows.sort(key=lambda row: -_float(row.get("avg_closed_r"), -1e9))
@@ -248,14 +285,21 @@ def render_best_now_html() -> str:
     return "".join(parts)
 
 
-def render_all_docs_html(*, records: dict | None = None) -> str:
+def render_all_docs_html(*, records: dict | None = None, best_now_html: str = "") -> str:
+    """The whole playbook as one page. PURE: it reads no file.
+
+    `best_now_html` is passed IN for the same reason `record_sentence` is - this
+    used to call `render_best_now_html()` itself, which put two CSV reads on the
+    Qt thread inside a render the constructor fired (G7.1). An empty banner is
+    "not read yet" and simply renders nothing.
+    """
     body = theme.color("text_primary")
     muted = theme.color("text_secondary")
     favorite = theme.color("favorite")
     parts = [
         f"<body style='color:{body}; font-size:9pt'>",
         f"<h2 style='margin:0; color:{favorite}'>Setup Playbook — every setup, exactly</h2>",
-        render_best_now_html(),
+        str(best_now_html or ""),
         f"<p style='color:{muted}'>Shared exit discipline: stops are LEVELS — a stop fires after "
         f"{STOP_CLOSE_FAILURES} daily closes beyond the level (1 close for post-earnings setups), never on an "
         f"intraday wick. Default profit plan: 50% at the 2nd deviation band, rest toward the 3rd band with the "

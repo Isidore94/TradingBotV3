@@ -51,6 +51,10 @@ class PriceAlertsPanel(QFrame):
         self.service = service or PriceAlertService(self)
         self.read_only = bool(read_only)
         self._loading = False
+        #: G7.1: the first show pays for the first store read, never the
+        #: constructor. The service's own monitoring timer is untouched - it is
+        #: a separate question and the packet leaves it alone.
+        self._loaded_once = False
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -169,8 +173,21 @@ class PriceAlertsPanel(QFrame):
         layout.addWidget(self.status_label)
         layout.addWidget(self.table, 1)
 
-        self._load_table()
         self._refresh_status()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Load the alert table the first time the page is looked at (G7.1).
+
+        `price_alerts.load_price_alerts()` is a home-folder read and the panel
+        is one of nine Research children the desk builds at startup. The status
+        line is still written in the constructor: it reads no file, and a page
+        that opened blank until it was shown would be a behaviour change.
+        """
+        super().showEvent(event)
+        if self._loaded_once:
+            return
+        self._loaded_once = True
+        self._load_table()
 
     # ------------------------------------------------------------------
     # Table <-> store

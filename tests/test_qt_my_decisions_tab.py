@@ -280,6 +280,11 @@ def test_construction_reads_but_never_rebuilds(qapp_guard, monkeypatch):
 
     made = panel_module.DaytradeTrackerPanel()
     try:
+        # G7.1, the same trigger the `panel` fixture above got: the first read
+        # moved from the constructor to the first show, so the page is asked for
+        # it. What is under test is unchanged and is the second assertion - the
+        # read happens, the REBUILD does not.
+        made.start_decisions_refresh(rebuild=False)
         assert _settle(made, lambda: bool(reads))
         assert calls == []
     finally:
