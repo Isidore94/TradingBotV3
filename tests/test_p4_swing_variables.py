@@ -367,7 +367,19 @@ def test_the_tab_exists_and_the_big_export_is_read_off_the_qt_thread():
 
     from ui.panels import setup_tracker_panel as panel_module
 
-    refresh = inspect.getsource(panel_module.SetupTrackerPanel.refresh)
+    # G7.2 split the refresh in two - `refresh()` starts one `ReadWorker` and
+    # `_on_exports_loaded` renders what it returned - so the refresh PATH is
+    # both of them plus the read the worker runs. The subject of the assertions
+    # is unchanged: nowhere on that path is the 19.7 MB export opened, and the
+    # path still hands it to its own worker.
+    refresh = "\n".join(
+        inspect.getsource(source)
+        for source in (
+            panel_module.SetupTrackerPanel.refresh,
+            panel_module.SetupTrackerPanel._on_exports_loaded,
+            panel_module._read_tracker_exports,
+        )
+    )
     assert "MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE" not in refresh
     assert "start_attribute_refresh" in refresh
 

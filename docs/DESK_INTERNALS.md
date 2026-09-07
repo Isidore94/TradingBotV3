@@ -2939,3 +2939,164 @@ six printed lines, one label reading `27 shown`.
   design pixels, left-aligned, wrapped. Measured before the fix: the section label was ONE
   1,922-character line set across 3,456 px. The constant is asserted equal to
   `market_journal_panel`'s, so the two readers cannot drift apart.
+
+## G7 - the pages the desk built for nobody, and the bench that taxed its own wait (2026-09-07)
+
+### What was measured
+
+The G0 baseline (2026-09-06, offscreen, `--repeat 3`) had three ops over the 250 ms sync
+mark at 3456 x 2160: `research.construct` at 5.1 s, `setup_tracker.refresh` at 1.3 s and
+`market_journal.construct` at 299 ms. The G7 recon found the shape behind all three.
+
+- **No page was built lazily.** `app.py` constructed every left-nav page eagerly before
+  the `QStackedWidget`. The ONE deferred first load in the whole app was the Market
+  Journal's `showEvent` gate, whose own comment states the rule the rest of the desk was
+  not following: *"the desk builds every left-nav panel at startup and most are never
+  opened."*
+- **`ResearchPanel.__init__` built nine children and five of them READ inside their own
+  constructors** - the Day-trade Tracker (a CSV parse, a JSON read, every dimension model
+  rebuilt and fitted), the Setup Tracker (`refresh()`, the 1.3 s op), Market Prep (two
+  local reads plus the human-focus picks), Price Alerts (`load_price_alerts()`), and the
+  Setup Playbook, whose `setCurrentRow(0)` rendered an overview whose banner did two
+  UNCACHED CSV reads on the Qt thread.
+- **`SetupTrackerPanel.refresh()` was entirely on the Qt thread** except the attribute
+  leaderboard: twelve `_load_csv_rows_cached` calls, `load_human_focus_performance_rows`,
+  thirteen `model.set_rows` and thirteen `fit_columns()`. The mtime cache stat'ed every
+  file on every call and skipped only the PARSE, so the thirteen model resets and thirteen
+  column fits ran even when nothing had changed - on every spinbox step.
+- **The bench was taxing its own wait.** `desk_bench.settle` called
+  `_widget_workers_running` on every poll, which walked `findChildren(QThread)` AND
+  `findChildren(QWidget)` plus `vars()` over the whole page. The G0 reviewer measured
+  ~1.5 ms per poll on Research against a 120 ms `QUIET_MS` window: the bench held the GIL
+  for a large share of the time it was reporting as the page's.
+
+### The rules this produced
+
+- **A Research child reads on its FIRST SHOW, never at startup.** The idiom is the Market
+  Journal's, unchanged: a `_loaded_once` flag and a `showEvent` override that calls the
+  page's own reload. A `QTabWidget` child receives its `showEvent` only when its tab is
+  selected, which is why `research_panel.py` needed no change at all - the tab widget
+  already had the information, and the children were the ones not asking.
+- **Deferring is not skipping, and the cost has to be visible where it lands.** Every
+  deferred read still happens the first time the page is SHOWN. The re-measure shows that
+  honestly: `research.construct` fell 3,025.1 -> 533.4 ms sync p95 and
+  `research.tab.Day Trade Tracker` rose 2.3 -> 448.8 ms, because the Day-trade page's
+  `reload_from_disk()` is still synchronous on the Qt thread. G7 moved WHEN it runs, not
+  where; a packet that claimed the saving without naming where it went would be reporting
+  a number rather than a measurement.
+- **What a first-show gate must NOT swallow.** Market Prep's `QFileSystemWatcher` is still
+  configured in the constructor and Price Alerts' status line is still rendered there,
+  because neither reads a file and a page that only learned about a new scan once it had
+  been opened would be a behaviour change. The Price Alert service's own monitoring timer
+  is untouched: it is a separate question.
+- **One reader per export.** The Setup Playbook's banner reads the short-horizon and
+  recent-type exports through `setup_tracker_panel._load_csv_rows_cached`, the same reader
+  the tracker page uses, so the two parse each file once per version instead of twice per
+  render. `render_all_docs_html` and `render_best_now_html` take what they render as
+  arguments; a renderer that opens a file is a render on the Qt thread waiting to happen.
+- **A refresh that leaves the Qt thread has to say when it landed.** `refresh()` returns
+  as soon as it has started a `ReadWorker`, so `refreshFinished` is the moment the rows
+  are APPLIED. It carries no payload and the desk uses it for nothing; it exists because
+  a test that cannot see the render can only assert on a call that no longer means
+  anything.
+- **The coalesced pass belongs INSIDE the worker, not in the Qt-thread slot.** A refresh
+  asked for while one is in flight is taken by the worker in flight as one more pass,
+  whatever the number of requests. Had the extra pass been started from the render slot,
+  a request made a moment before the desk closed would leave a read starting after
+  `shutdown()` had joined - the join would be joining the wrong thing. With the loop in
+  the worker, joining the thread joins everything it was going to do.
+- **A memo over the thing a table was BUILT from.** `_table_render_plan` names, per table,
+  the export signature (and `min_closed` for the two tables the spinbox re-ranks, and a
+  content digest for the human-focus table, which has no file). Two tables read the
+  tier-performance export and both say so, so a rewrite of it re-fits both and nothing
+  else. A cache that skips the parse but resets the model is not a cache the trader can
+  feel.
+- **A measuring tool reports its own overhead rather than assuming it away.**
+  `_WorkerProbe` walks the candidate set once per op, re-walks it at most every
+  `WORKER_REWALK_MS` (250 ms) while the page is busy, and re-walks it ONCE MORE before a
+  settle is declared - the only moment a read that started after the last walk could be
+  missed, which is exactly the Day-trade Tracker's second worker. `settle` returns
+  `poll_cost_ms` as a fourth value and every op row carries it. On the after-run the worst
+  poll cost was 91.5 ms, inside the 9.4 s `weekend.refresh_everything` settle: under 1 %,
+  and now a number instead of a claim.
+- **A test that calls a slot directly while the real worker is in flight is testing two
+  writers.** `tests/test_g7_speed_pass.py`'s Market Journal test builds its capture in
+  memory, so the panel's own `_CaptureWorker` lands an EMPTY payload for the same entry
+  and clears the charts - green alone, red under load, purely on which arrived first. The
+  test now lets the empty landing arrive first. In the real desk `_render_capture` is only
+  ever called by that worker, once per selection, so this is a test artifact and not a
+  behaviour to design around.
+
+## The sentences CLAUDE.md moved here on 2026-09-07 (G7 docs pass)
+
+`CLAUDE.md`'s size rule is that a rule there is one to three sentences naming its
+seam, and that its story, numbers and quotes live here. It had drifted to 51.7 KB
+against its ~45 KB limit, so the sixteen longest bullets were shortened and each
+one's ORIGINAL text is reproduced below, verbatim and unedited. **Nothing was
+deleted.** Where a bullet below and the current `CLAUDE.md` differ, the shortened
+rule in `CLAUDE.md` is the binding one and this is the full account behind it; the
+incident sections elsewhere in this file remain the deeper record.
+
+### M4 - both AVWAP band families in one snapshot, long form
+
+- **The daily snapshot carries BOTH AVWAP band families and they never share a column** (packet M4, 2026-09-05, BD-102). `avwape_*` is the champion (frozen, decision 0008); `avwap_variant_*` + `avwap_variant_formula_version` is the challenger, computed from the SAME bars and anchor index by `indicators.avwap_band_variants` and **independently of whether the champion produced bands** - a NULL band is "not measured", never a band on the centre line. `FEATURE_SET_VERSION` is `tier1_v2` and `tier1_v1` rows are never rewritten, so a session can hold one of each and **readers keep the newest `computed_at`**. `swing_house_variant_v1` is a `dataclasses.replace` twin of `swing_house_v1` differing ONLY in `band_family`; `build_outcomes` picks the band map from the RECIPE, and a variant recipe with no challenger bands walks `plain_no_target` rather than borrowing the champion's levels. Its `outcome_definition_id` (`band_variant_v1`) fences it out of every `house_default_v1` reader. `band-coverage --compare A B` pairs the two on the SAME occurrence ids with `swing_headline`'s ONE Wilson and counts an unpaired occurrence rather than dropping it. Shadow only; T4's criteria decide and nothing here promotes.
+
+### N3 - the bounded narration view, long form
+
+- **The `setup_research` narration is a BOUNDED view and its selection is a SIZE rule, never a ranking by result** (N3, 2026-09-05, BD-101). Every eligible cell died at 619 cells / 658,292 chars against a 78,119-char budget, and no 64k-context model reaches that, so "raise the budget" is not the fix. `_bounded_narration_view` encodes the fixed head first, then eligible policy cells by **`stats.n` descending, then `recipe_id`/`family`/`side`** until the next would cross the budget, then the after-like ELIGIBLE cells (P10 C3) by their top-level `n_episodes`. **No `mean_r`, `win_rate`, `profit_factor`, `expectancy` or any R statistic may enter that key** - gate #43 is a refusal. `narrated K of N` is stated in the view, the `.narration.json`, the pack markdown and the ledger reason; the refusal survives, narrowed to "the head plus the first cell does not fit", and names the head's size.
+
+### P9 / N1 - the two like modes and the aware sidecar read, long form
+
+- **A LIKE has two modes and only one names a setup** (P9). **Alt+L** is the QUICK like (`like_mode: "quick"`, no claim, no why, never prompts); **Alt+K** is the CLAIMED like (the claim is the whole gesture; the why is optional since T2). The quick-like BUTTONS prompt for an optional note; the key never does. `like_mode` is additive and its absence reads `claimed`. A like carries zero privileges, grades under `like_unclaimed` when quick, and contributes a LINK to the auto-tagger, never a tag. `sidecar_completion` finishes a capture sidecar into a NEW file (`m5_bars_completed_ref`); `m5_bars_ref` is never rewritten. **That read is AWARE (N1, 2026-09-05)**: a sidecar's naive `dt` is DESK-local wall time, so `pass_bars.desk_zone()` is ATTACHED to it (never an offset stripped), the close is 16:00 MARKET-local, and a new sidecar is written WITH its offset (schema stays 1); `lake_read_failed: <Exc>` is a READ fault and `research_store_unreachable` is `ResearchStore.open()` only - the naive bounds raised `ArrowInvalid` and read as "unreachable" every night from 2026-09-02 while the store answered 60 rows.
+
+### M2 - a swept trade counts under the policy that measured it, long form
+
+- A sweep-finalized trade counts under the policy that MEASURED it: `setup_scoreboard.exit_policy_r` keeps `eod_hold` / `stop_exit` / `last_measured` as separate columns, never blended; every eod-hold view reads `r_eod_hold`. **`unresolved` means UNMEASURED** (M2, 2026-09-05): a swept trade that measured its bars is written `swept_measured` and counts under the policy that measured it; every reader goes through `outcome_semantics.terminal_kind` (a status-less `final` with a numeric close is `measured_eod`, never `open`); the champion's eod-hold tier cells still take `eod_complete` only, BY DECISION (2026-09-06): a swept trade was measured under another policy and 99% of them sit in the freeze window, so they stay readable under `sweep_exit_policy_rows` and never enter the eod-hold cell - pinned by a golden characterization in `tests/test_setup_scoreboard.py`.
+
+### The personal-evidence reader rules, long form
+
+- **`preference_trade_outcomes` matches inside 10 SESSIONS** (`statement_window_end`; a calendar refusal falls back NARROWER) **and `trade_level_summary` sums P&L once per `trade_id`** over a file that stays one row per statement. **`journal_exposure` reads bias from the legs — a LONG option is never a bullish setup**, a `trade_legs` row is a FILL so `multi_leg` means more than one option CONTRACT, and a spread look-alike is `partial_of_spread_candidate` (no sibling seam exists). **`personal_evidence_summary` partitions by STATUS** — complete / partly_closed / open_exposure, whose net and winners are `None` — **with `uncertain` a CROSS-CUTTING label that pools no money**, counts both tag lanes over ONE denominator (closed or partly closed) and names no best setup below `MIN_REPORTABLE_N`; Weekend Prep lists the WHOLE provisional backlog and REFERS a missing `planned_risk` to the Trades tab, never computing one from an outcome.
+
+### ST4 / ST7 - the named selection policy, long form
+
+- **Which observation of a thesis gets graded is a NAMED policy** (ST4/ST7): family rows carry `selection_policy`; `first_actionable_v2` (`master_avwap_lib/selection_policy.py` - earliest row per attempt, declared re-entry rule, declared `full_band2` representative, pending stays pending) is the default since 2026-09-06 (decision 0019), `closed_first_v1` remains by name, and the persisted write logs `policies: selection=.. execution=.. levels=..`. A scenario's exit date is its last `events` entry, read only when CLOSED; a COMPACTED record is `undatable_exit`, never silently pending. **A compact projection's `_scoring_outcome_summary` IS the record**: a default read takes it unconditionally and an ABSENT `representative_status` grades off `closed_setups` - recomputing dropped every setup and zeroed both deltas.
+
+### ST6 - the one Working-lately snapshot, long form
+
+- **ONE Working-lately snapshot, four surfaces, and nothing called proven** (ST6): `working_lately.build_snapshot` is PURE and `snapshot_id` is a sha1 over the sorted cells + the declared policy lines + `as_of` alone, so a timer tick cannot move it; `ui/services/working_lately_service.py` owns the worker build, `snapshot_latest.json` and the deduplicated `leader_change_events.jsonl` (cause REFUSAL-FIRST: `lost_coverage`, `corrected_data`, `window_rollover`, `new_outcomes`); the strip, the tracker banner (its own read labelled `panel read`), Weekend Prep and the AWAY Recap render THAT payload. Dependence is answered by REFUSING - a cell over `CONCENTRATION_LIMIT` (0.5) of one name or session cannot lead, `pool_cells` RAISES across kind/side/outcome kind, `LEADER_PERSISTENCE_SNAPSHOTS` (2, declared 2026-09-06 before any forward look) holds a NEW leader for two distinct-`as_of` snapshots, and every surface prints `observational leader among K cells`.
+
+### Headline statistics - the ST1/ST2 clauses, long form
+
+- **Win rate leads every trader-facing SWING surface** (first, with `n` and a Wilson lower bound from `swing_headline`, sorting by the bound, mean R beside it); **MFE-after-a-held-level leads every DAY-TRADE surface**. ONE WILSON: `swing_headline`'s z (1.96); `expected_r.py`'s 1.28 is a parameter inside a fenced file. **Counts are integers at each table's own grain** (ST2): the recent, Setup Types and short-horizon exports carry `n_wins`/`n_losses`/`n_flats`/`n_unmeasured`/`n_pending`, the weighted rate keeps its own name (`win_rate_closed_basis`), a count is never rebuilt from a rate, and a row without them says `counts not exported yet`. **ONE leader through `working_lately.select_leader`** (declared `LEADER_MARGIN_LB` 0.05 and `LEADER_FRESHNESS_SESSIONS` 2, four states, the floor judged before the clock, a study never leads, a `discovery_leader` is never called one); a page computes its verdicts ONCE (`panel_verdicts`) and every renderer shows all four states - a hardcoded fallback sentence is a state the machine does not know. **The tier outcomes `win` is a FAVORABLE-DIRECTION flag at a scan-row offset, not a stop-rule win** (ST1): `outcome_kind` says so, `Headline.outcome_kind` makes those surfaces say "favorable", `swing_evidence.read_eligible_rows` is the ONE reader, and the exact-session v2 rows (`session_horizon_outcomes.py`) are a separate shadow file with no production caller.
+
+### Q1 - the day-trade headline and measured held, long form
+
+- **The day-trade headline is `held_run_score`**: P(held in the first 30 min) × trimmed-mean MFE_R of the held ones; ONE formula reaches every surface (the tracker joins `dimension_summaries`; the M5 row reads `alert_cell` + `alert_suffix`); segments are spelled the AGGREGATOR's way; `UNDERIVED_DIMENSIONS` separates "the log cannot answer" from "reachable, not derived". **Held is MEASURED held** (Q1): `measured_held` / `measured_broken` / `pending` / `unmeasured`, `hold_rate` = held / MEASURED, the unmeasured counted and shown, never assumed; the D1 dimension is the ALIGNED same-session setup from `master_avwap_tracker_scoring_snapshot.json` (index expires on the day roll), missing snapshot = UNKNOWN. My Decisions rows use `ALL_DIRECTIONS`, a pooled cell accumulated from the episodes, never an average of two cells. The window is `evidence_stats.lately_window`, gaps reported.
+
+### T1 - the four capture verbs, long form
+
+- **A VETO retires the chart, a CLAIMED like ADVANCES it, a QUICK like and a NOTE move nothing** (trader, 2026-09-04). A rail veto uses its own verb (`vetoRetireRequested` → `_retire_after_veto`) and writes ONE row; the "✕ Not today" button writes an uncoded row and opens the note box. A quick like is `likeRecorded` → `_after_like`; a claimed like is `likeAdvanceRequested` → `_advance_after_like` → `_advance_review_queue`; an advance parks nothing and drops nothing. Both write `like_advance` through `_record_like_advance` because `review_learning.TAKE_ACTIONS` keys on it. "Veto D1 — but M5 today" writes a veto row and emits a REQUEST; the panel places (first), then retires (second) through the box-free verb.
+
+### The three auto-tagging lanes, long form
+
+- Auto-tagging has three lanes that never compete and are ordered by LANE, never confidence: `journal_analytics.AutoTagger` (which setup, from the scanner's own files), `journal_trade_shape` (facts from the trade's own timestamps and legs), and `trader_capture` (what the trader already SAID inside the trade's own window, outranking every fuzzy source, a rejection prefixed `vetoed:` / `passed:`). No tag is ever derived from the outcome; unmeasurable emits NO tag; `context_row_id` is a pointer, and plan.md P5.3/P5.4 own the canonical opportunity id. `preference_trade_outcomes` shows its match confidence on every row or says "no match".
+
+### A broker file is authoritative for money, long form
+
+- **A broker file is authoritative for money and blind to time.** `journal_statement_import` (Questrade `.xlsx`, no `openpyxl`) and `journal_ib_transactions` (IBKR sectioned csv, USD price / CAD money, masked accounts unmasked only when exactly one fits) write executions at MIDNIGHT market-local; `journal_trade_shape.is_date_only` refuses to name a session for them. Side and options come from the DESCRIPTION; identity is `fill_signature` plus an ordinal, never positional; a statement never writes into a (broker, account, day) a richer source already covers. Commission carries a SIGN and the importer owns it — nothing downstream may `abs()` it.
+
+### M1 - the challenger measured through the catch-up path, long form
+
+- **The AVWAP band challenger is measured through the CATCH-UP path too** (M1, 2026-09-05): `build_anchor_band_variant_meta` lives in `legacy.py` and serves BOTH the live scan (`runner.py` re-exports it) and the tracker catch-up (`_evaluate_priority_snapshot_for_date`), which never set the block, so the shadow measured nothing from 08-26 to 09-05. Never add a third builder; a record is rebuilt on every persisted tracker write, so no migration exists. The Band variant tab prints `Measured N of M setups (K unmeasured: <top reason>).` from the export's own counts (`top_unmeasured_reason`), never by reading the 1.1 GB tracker; still shadow only, T4's 20-session accrual starts at the first measured row.
+
+### M5 - the control, study and exit-framework populations, long form
+
+- **The control, study and experimental-exit populations are SURFACED, LABELLED, and never mixed with picks** (M5, 2026-09-05): three Setup Tracker tabs - Controls (`N graded episodes from the M setups`, never one number under the other noun), Studies, Exit frameworks (`comparison_apr2026` beside `baseline`, `n_filtered_by_experiment` reconciling the two n's) - read three CSVs written in the tracker's own guarded save pass. Win rate leads with `n` and the ONE Wilson bound, the sort is the bound, each tab carries a population sentence and `experimental` is a COLUMN. Shadow only; the champion aggregates are pinned byte-identical.
+
+### The M5 Strength Board's auto-adoption, long form
+
+- **M5 Strength Board:** batched yfinance over `universe_all.txt` PLUS the four trader watchlists, zero IB traffic; relative volume is SESSION-RELATIVE and is not one of the seven fenced formula functions (byte-identical to the R8 baseline); D1 SMA floors read `2y` with today's forming bar dropped. Its parity rows auto-join M5 Focus (`_auto_adopt_strength_board`: DESK only, empty `failed_floors` only, the ONE adoption gate re-run per row, skipping `_ignored_symbols` and `FocusPickStore.declined_today`, one `add_many` per side plus `mark_auto_adopted`, never `FocusService.add`, never removing). Every Focus add is injected into `longs.txt` / `shorts.txt` by `FocusPickStore._inject_into_shared` and a removal un-injects it.
+
+### Every ticker click lands on the centre chart, long form
+
+- **Every ticker click on the Trading Desk charts into the centre Visual Alert Review pane** through `chart_symbol`, never `_enqueue_review_alert` (panels carry a `set_chart_sink` that `set_mode` points at `chart_symbol` in workspace mode). **A board chart holds NO place in the waiting list and is never re-queued or skip-counted** (`_is_manual_chart_look` on `MANUAL_CHART_TAG`); looking at a WAITING name takes it out for good. `show_board_symbol` is the popup door for a board on ANOTHER page. The RS/RW board (starts OPEN) and the Strength section (starts closed) are sections under the Desk's Strength window, one `StrengthBoardService` owned by `MainWindow`.

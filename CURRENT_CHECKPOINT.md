@@ -19,12 +19,12 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-07: G5 (Research > Results - the landing page the trader may read: four populations never pooled, a pure view that computes no new statistic, the ST6 snapshot read through `cells_from_payload`) BUILT, REVIEWED (NO-GO, three blockers) and FIXED on `claude/g5-research-results`, `origin/main` `b231323e` merged in; live gate #87 owed. The fix round: the window control now APPLIES to My trades and is DISABLED on Bot (the snapshot owns its window and the page says so from `window_sessions`); the freshness line prints each source's `rows` instead of `an unnamed file @ None`; a band card counts the lines it rendered. Eighteen tests written RED first, forty green.** **~12:10 PT: G2b MERGED (gate #85). ~10:00 PT: G4b BUILT and unmerged (gate #86). ~08:40 PT: G2a MERGED.** **~03:00 PT (Labor Day): the Setup Tracker review is COMPLETE on `main` at `c73f5325`** - ST6 and ST7 merged on top of ST1-ST5 and the G lane's G4/G0/G3/G1/G3b; ST6 is the ONE deterministic evidence snapshot plus the Working-lately strip and the priority switch, ST7 makes the trader's three scoring decisions the tracker's DEFAULTS (decision 0019). The detail of every one of them is in its own dated entry below. |
-| Working branch | `claude/g5-research-results` (G5, built and fix-rounded, unmerged, with `origin/main` `b231323e` merged in). `main` after the G2b merge is the trunk; the ST lane is complete. |
-| Unmerged / open | **G5 is BUILT, reviewed and fix-rounded on `claude/g5-research-results`, awaiting re-review and merge** (adds `scripts/research_results.py`, `ui/panels/research_results_panel.py`, the Results tab in `research_panel.py` and ONE line in `app.py`; touches no detector, score, alert or evidence writer). `claude/g4b-setup-tracker-detail` is BUILT and green, awaiting review and merge. G lane still queued: G7 speed pass, then the Journal packet the G2a tester surfaced (the Trades splitter opens 39/61 against its declared 3:2; the blank space above the table). Open from before: `claude/s1-quick-verbs`, the 2026-09-03 lake incident call, the lock-file sweep packet, the `test_chart_snapshot` cooldown flake, and the order-dependent `test_qt_journal_panel::test_migration_failure_stays_visible_instead_of_claiming_no_accounts` flake (a remembered Results selection was ONE cause and is fixed; the race between the migration worker and the header's account read is not). **Two packets owed:** 100 of 1,980 cached daily-bar files end in a FORMING candle on seven sessions and the replay reads them; CLAUDE.md is 50.1 KB against its ~45 KB rule. |
-| Next action | **Re-review and merge G5 (and G4b), then restart the desk (trader's call) - ST1-ST7 and the G lane are on `main` and none of it is live until then.** Then Tuesday 2026-09-08 (Monday is Labor Day): the first persisted tracker write at 13:00 PT restates the tracker under the three new defaults (gate #84: the `Setup tracker policies:` log line, every record stamped, `n_pending` ~902, the first D1 scan still writing NONZERO score deltas), and with it gates #70-#76, #78's surviving clause, #79 and #83 (the strip on the first DESK session reads `no evidence` for swing_trade_r until that write, then `awaiting persistence (1 of 2)`); #77 is the artifact clause only. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63).** Then the two new packets above. |
+| Latest work | **2026-09-07 ~16:20 PT: G7 (the speed pass - the bench stops taxing its own settle, five Research children read on their FIRST SHOW so Research's first paint loads ONE child not nine, the Setup Tracker's refresh runs on a `ReadWorker` and re-fits only the tables whose export changed, the Market Journal's four charts are built on the first capture) BUILT and green on `claude/g7-speed-pass`; live gate #88 owed. Re-measured over a staged copy at 3456x2160: `research.construct` sync p95 3,025 -> 533 ms, `setup_tracker.refresh` 577 -> 0.2 ms, `market_journal.construct` p50 58 -> 10 ms, the layout-fit table byte-identical; the deferred first loads show up against the tab that asks for them. Fifteen tester tests written RED first, all eighteen green. In the same pass `CLAUDE.md` 51.7 -> 48.5 KB, sixteen bullets' story moved verbatim to `docs/DESK_INTERNALS.md`.** **Earlier 2026-09-07 (each with its own dated entry below): G5 Research > Results BUILT, reviewed NO-GO and FIXED (gate #87); G2b MERGED (#85); G4b BUILT (#86); G2a MERGED.** **~03:00 PT: the Setup Tracker review is COMPLETE on `main` at `c73f5325`** - ST6 and ST7 merged on top of ST1-ST5 and the G lane's G4/G0/G3/G1/G3b; ST6 is the ONE deterministic evidence snapshot plus the Working-lately strip and the priority switch, ST7 makes the trader's three scoring decisions the tracker's DEFAULTS (decision 0019). |
+| Working branch | `claude/g7-speed-pass` (G7, built, unmerged, with `origin/main` `a00f296d` merged in), and `claude/g5-research-results` (G5, fix-rounded, unmerged) beside it. `main` at `a00f296d` (after the G2b merge) is the trunk; the ST lane is complete. |
+| Unmerged / open | **G7 is BUILT and green on `claude/g7-speed-pass`, awaiting review and merge** (the bench's settle probe, five Research children reading on their first show, the Setup Tracker's refresh on a `ReadWorker` with a per-table memo, the Market Journal's charts on demand; no detector, score, alert or evidence writer, and the layout-fit table is byte-identical before and after). **G5 is BUILT, reviewed and fix-rounded on `claude/g5-research-results`**, and `claude/g4b-setup-tracker-detail` is BUILT and green; both await review and merge. G lane still queued: the Journal packet the G2a tester surfaced (the Trades splitter opens 39/61 against its declared 3:2; the blank space above the table). Open from before: `claude/s1-quick-verbs`, the 2026-09-03 lake incident call, the lock-file sweep packet, the `test_chart_snapshot` cooldown flake, and the order-dependent `test_qt_journal_panel::test_migration_failure_stays_visible_instead_of_claiming_no_accounts` flake. **One packet owed:** 100 of 1,980 cached daily-bar files end in a FORMING candle on seven sessions and the replay reads them. **`CLAUDE.md`'s trim is STARTED, not finished** (51.7 -> 48.5 KB, still ~3 KB over the rule). **One G7 advisory:** the Day-trade Tracker's `reload_from_disk()` is still 448 ms synchronous on the Qt thread - G7 moved when it runs, not where. |
+| Next action | **Review and merge G7, re-review and merge G5 (and G4b), then restart the desk (trader's call) - ST1-ST7 and the G lane are on `main` and none of it is live until then.** Then Tuesday 2026-09-08 (Monday is Labor Day): the first persisted tracker write at 13:00 PT restates the tracker under the three new defaults (gate #84: the `Setup tracker policies:` log line, every record stamped, `n_pending` ~902, the first D1 scan still writing NONZERO score deltas), and with it gates #70-#76, #78's surviving clause, #79 and #83 (the strip on the first DESK session reads `no evidence` for swing_trade_r until that write, then `awaiting persistence (1 of 2)`); #77 is the artifact clause only. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63).** Then the two new packets above. |
 | Trader actions owed | **Restart the desk.** The three scoring decisions are TAKEN and built (decision 0019: pending stays pending - trader; a re-entry after a closed first attempt is its own trade - trader; `gap_aware_v2` + `prior_session_v2` - lead's discretion, both pure correctness fixes; rollback is one switch by name). Expect the Setup Tracker's numbers to move on Tuesday's write: 2,249 -> 2,712 episodes, 61.6% -> 72.0% favorable on the recent family rows - a restatement, not a defect. Still: the 26 provisional tags await review in Weekend Prep; record planned risk on new trades (0 of 172 have it); the 2026-09-03 lake incident call. |
-| Last verified baseline | **`lead/merge-g` at `0a1478e0` (G5 - Research › Results - after its fix round, fast-forwarded on top of G2b's `b231323e`), 2026-09-07 ~13:40 PT, in the scratch merge worktree, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 7255 passed, 3 skipped, 72 subtests passed, ZERO failures, exit 0, 9 min 46 s; smoke 7/7; selftest 74/74; ruff clean; the leak-order check (`test_g5_research_results_panel.py` then `test_qt_journal_panel.py`) 51 passed after the suite-wide autouse fixture was dropped.** Previous: `main` `b231323e`, 7215 passed. |
+| Last verified baseline | **`claude/g7-speed-pass` (G7, `origin/main` `a00f296d` merged in), 2026-09-07 ~16:20 PT, in the builder's worktree, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 7273 passed, 3 skipped, 72 subtests passed, ZERO failures, exit 0, 7 min 3 s; ruff clean; smoke 7/7; source selftest 74/74.** Previous: `lead/merge-g` at `0a1478e0` (G5 after its fix round), 7255 passed, exit 0. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
 | Desk | **RESTARTED 21:18 PT 2026-09-05 on `main` at `e1a2de15` (pid 9036, trampoline 25260) on the trader's "You restart the desk"**: the old desk (pid 29260, `a6fb1a8d`) closed cleanly through `CloseMainWindow` (both writer leases released in the log), and two launches through `trading_desk.cmd` from a hidden `cmd /c` left no process, so the lead started `.venv\Scripts\python.exe launch_gui.py` directly with stdout/stderr captured under the session scratchpad (`desk_stdout.log`: "desk slot held"); `trading_bot.log` shows Auto Pilot ON from saved state, weekend quiet hours, IB 502 (TWS off on a Saturday, expected), 668 MB at 60 s. N1-N3 and M1-M5 are LIVE on this desk. The heartbeat file is not refreshed on a weekend (still pid 600 / 09-04 14:11), as on the previous restart. |
 
@@ -32,6 +32,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 88 | **The desk opens without paying for eight pages nobody asked for (G7)** - the next desk restart, at the trader's own 3456 x 2160, plus ONE windowed bench run while the trader is away (this run doubles as gate #81's on-screen check). On the desk: (1) the desk WINDOW appears and is clickable sooner than it did - Research's nine children are built but only the open tab reads; (2) click **Research** and it lands on **Results** with no wait, then click **Setup Tracker** - the tables fill in a moment LATER and the window stays clickable the whole time (the read is on a worker now); (3) click **Day Trade Tracker** - it takes about half a second to appear the FIRST time and instantly after, which is the cost that used to sit in startup; (4) step the Setup Tracker's **Min closed** spinbox up and down five times - the page keeps up and the tables do not flash; (5) open a **Market Journal** entry that HAS a capture - the four charts appear, and an entry with none shows the note and no empty axes; (6) nothing anywhere shows a number, a sort or a row it did not show before. The bench run: `scripts\ui\desk_bench.py --data-dir <staged copy> --platform windows --sizes 3456x2160 --repeat 3 --compare <the G7 after-JSON>` with the desk DOWN, and its `research.construct` / `setup_tracker.refresh` / `market_journal.construct` within noise of the offscreen after-table in `docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md` section 7. **Known and expected, not a failure:** `research.tab.Day Trade Tracker` is SLOWER than before by design - its read is still synchronous and G7 moved only WHEN it runs | 2026-09-07 G7 entry |
 | 87 | **Research opens on Results, the four selections show four different populations, and "not enough evidence" reads as a sentence (G5)** - the trader's first read after the restart. (1) Clicking **Research** lands on a tab called **Results**, not Market Prep, and the eight old tabs are behind it in the order they had. (2) The three control rows read **Bot setups | My trades**, **Swing | Day trading**, **Recent 20 sessions | All history | Custom...**, with Bot / Swing / Recent already chosen; the two date fields appear ONLY on Custom. (3) Clicking through all four selections gives four DIFFERENT readouts and **no family name appears under both Bot x Swing and Bot x Day** - they measure different things and are never pooled; Bot x Swing shows TWO labelled sections (closed R on the representative exit, then favorable direction in percent) and never one merged list. (4) The **Not enough evidence** card reads as a sentence per row - "below the evidence floor - 11 graded of 11 against a floor of 30", "too concentrated to lead - one name is 0.81 of the sample", "not measured yet - 44 pending" - and never as a blank or a zero. (5) Change any control and the detail pane on the right goes away; click a row, press nothing, and a refresh brings the SAME row back with the same numbers. (6) The freshness line names the snapshot's first eight characters, and they are **the same eight** the Working-lately strip and the Setup Tracker banner print - one reading, four surfaces. **What a PASS looks like on day one:** until the first post-restart close-slot tracker write, the swing sections may read `no_evidence` with the machine's own reason, and every band may say "nothing to show" - that is the snapshot being honest, not the page being broken. My trades will say **"no confirmed tags yet - nothing here names a setup"** wherever the trader has not confirmed a tag, and `n with R` will be 0 of N until planned risk is recorded. Nothing on this page may change a number that appears anywhere else **Also read on that first pass (the fix round):** the three window buttons on **Bot setups** are GREYED OUT and hovering one says the snapshot owns its own window, while the line under the controls reads *The snapshot owns this window: 20 sessions ending <session>* and never a date range; switch to **My trades**, the buttons come alive, and **Custom...** with a narrow range really does drop the trades outside it (the count changes). The freshness line names each source with a ROW COUNT (`swing_trade_r <- 10 row(s)`) and the word `None` appears nowhere on the page. A band card reads `3 of 27 shown`, never `27 shown` over three lines | 2026-09-07 G5 entry |
 | 86 | **The Setup Tracker's explanation never outlives its context (G4b)** - on the next desk restart, on the Research tab's **Setup Tracker**: click a **Current Picks** row so the right-hand pane prices it (stop, 1R, two targets), then switch to **Playbooks** - the pane is GONE, not an empty box and not the previous plan. Come back to Current Picks and press **Refresh Tracker**: the pane stays DOWN, because a pane the trader closed by moving tabs is never reopened by a re-read. Then click the row again and press Refresh Tracker: the pane either shows that same symbol with the REFRESHED numbers (read the tier and the last close against the row in the table beside it - they must agree) or disappears if the re-read dropped the row. Repeat both on **Setup Types**, where the pane must come back on the row's OWN zone and bucket, not a same-family twin in another zone. **Display only**: the fourteen tables, their sort order, their columns and every number in them are unchanged by this packet, so a changed count or a changed order on that screen is a defect, not this gate passing. Gate #80 covers the Day-trade Tracker's pane; this is the other half | 2026-09-07 G4b entry |
 | 85 | **Four tables read whole at the trader's own width (G2b)** - the next desk restart, at 3456 px. (1) **Setup Tracker ▸ Human Picks**: the ten measurement columns sit BESIDE a `Cohort` column no wider than 260 px, every one of them on screen without a horizontal scroll, and the width past `Delta %` is EMPTY - a stretched `Cohort` or a stretched `Delta %` is this gate failing. Hovering a clipped cohort shows the whole value. (2) **An EMPTY Controls tab** (and Studies, if its export is also absent): `Family` takes the slack and `Win % (low)` does NOT - the empty render measures headers, which is how the numeric column won before. (3) **Playbooks**: `Exit Plan` reads in full and `Recent Samples` is the column that elides, in the MIDDLE. Catch Rate is the same shape the other way round: `Missed Samples` reads, `Caught Samples` elides. (4) **The Desk Setups table at FULL width**: symbol, side, bucket and key level all read unclipped, `Setup Tags` is the column that grew, and a long key level elides in the MIDDLE (`$412.50…08-27`, never `$412.50…`) **while its row still paints as a setups row** - alternating background, the favorite tint, the LONG/SHORT and bucket chips, the selection fill. A `Key Level` cell drawn in plain text on an unstyled row is the specific regression this packet's delegate exists to avoid. Then press **F9** (or whatever switches the compact profile back): the compact setups table is byte-identical to before - same widths, same hidden columns, `Exp R` still beside the level. **Nothing here is a number**: no count, sort order, window or export on any of these tables may read differently from before, and the AWAY Recap's `Line`, `Trigger` and `Cell / held x ran` columns keep their full value in the tooltip | 2026-09-07 G2b entry || 84 | **The tracker's three defaults are live and the record says so (ST7)** - after the first persisted tracker write on the merged branch: (1) `trading_bot.log` carries `Setup tracker policies: selection=first_actionable_v2 execution=gap_aware_v2 levels=prior_session_v2` - an ABSENT line is a fail of the same weight as a line naming the v1 policies. (2) Every record in `master_avwap_setup_tracker.json` carries `execution_convention` = `gap_aware_v2` and `level_knowledge` = `prior_session_v2`, and every row of `master_avwap_setup_type_recent_stats.csv` carries `selection_policy` = `first_actionable_v2` - a row still reading `closed_first_v1` after that write is the defect this gate exists to catch (it is the exact inverse of gate #78's clause, which was written while the flip was still owed). (3) `n_pending` is NON-ZERO on at least one recent family row, and **no row whose `representative_status` is `pending` is graded** - on the 2026-09-03 mirror 271 of 2,712 episodes were. (4) The Setup Types and recent tables re-rank, and the order is expected to be the ST4 comparison's: 2,249 -> 2,712 episodes and 61.6% -> 72.0% favorable. **Expect `n_pending` around 902, not ST4's quoted 915**: the pre-ST4 bridge is keyed on the `representative_status` key being ABSENT, and 48 live-vintage records carry it PRESENT and EMPTY (measured, no representative scenario), which reads UNMEASURED rather than pending - 13 episodes, so 902 + 13. **History IS restated by this write, by decision** (0019) - that is not a failure to report. (5) The first D1 scan after the write still writes NONZERO `recent_tracker_score_delta` / `setup_type_score_delta`. The reproducible figures, measured on a COPY of the 2026-09-06 snapshot: **32 recent family rows, 1,688 of 2,195 episodes closed, 14 nonzero recent deltas and 74 nonzero `setup_type` deltas**. With the bridge reverted the same copy gives 32 rows but **0 closed of 2,195 and 7 nonzero recent deltas** (the `setup_type` 74 is unaffected - that builder takes no policy), so this clause fails on a HALVING, not only on a collapse | 2026-09-07 ST7 entry |
@@ -125,6 +126,124 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-07 - G7 BUILT: the speed pass - first loads on first show, the tracker's refresh off the Qt thread, re-measured (branch `claude/g7-speed-pass`)
+
+Packet `.claude/packets/G7.md`, the last item of the Phase 0.22 G lane, tester first
+(`c13d46c8` off `0a1478e0`: fifteen red tests, three green-by-design, plus explicit
+LOAD TRIGGERS added to 22 existing construction sites and a `tests/conftest.py`
+`refresh_setup_tracker(panel)` helper tolerant of both the synchronous and the
+asynchronous shape). Every red test was re-proven failing against the un-fixed file
+before the fix that makes it pass; `origin/main` `a00f296d` merged in.
+
+**Nothing here changes a number, a sort, a read's RESULT or a write** - only WHEN and
+on WHICH THREAD a read happens, and how the bench measures itself. The G2b render
+golden (`tests/fixtures/g2b_tracker_render_golden.json`, pinned from `7e018c99`) is
+re-rendered THROUGH the new asynchronous seam and is unchanged, and it PASSED on the
+un-fixed code too - which is what proves it pins the cells rather than the seam.
+
+**G7.0 - the bench stops taxing what it measures.** `settle` holds a `_WorkerProbe`
+instead of walking the whole widget tree twice on every poll (the G0 reviewer measured
+~1.5 ms a poll on Research against a 120 ms quiet window). The candidate worker set is
+walked once per op, re-walked at most every `WORKER_REWALK_MS` (250 ms) while the page
+is busy, and re-walked ONCE MORE before a settle is declared - the only moment a read
+that started after the last walk could be missed, and the tester's late-worker test
+starts one 300 ms into the wait to prove it is not. `settle` returns a fourth value,
+`poll_cost_ms`; `OpReading` carries it, `_aggregate` summarizes it and the ops table
+prints one footer line, so the bench's own share of a wait is a number in the artifact.
+`QUIET_MS` and the deadline semantics are untouched, and the three GREEN-BY-DESIGN
+tests (a plain `threading.Thread`, a `QThread`, and a worker started mid-settle all
+still hold a settle open) stayed green throughout.
+
+**G7.1 - first load on first show.** Five Research children moved their constructor
+read to a `showEvent` gate (`_loaded_once`, the Market Journal idiom, whose own comment
+is the rule: *the desk builds every left-nav panel at startup and most are never
+opened*): the Day-trade Tracker (`reload_from_disk` + `start_decisions_refresh`), the
+Setup Tracker (`refresh`), Market Prep (`refresh`; the file WATCHER stays in the
+constructor), Price Alerts (the table load only; the service's monitoring timer is a
+separate question the packet leaves alone) and the Setup Playbook. A `QTabWidget` child
+gets its `showEvent` only when its tab is selected, so Research's first paint costs ONE
+child's load rather than nine and `research_panel.py` needed no change at all. The
+Playbook's two UNCACHED CSV reads inside `render_best_now_html` - which
+`setCurrentRow(0)` fired from the constructor, on the Qt thread - moved onto its
+existing record worker and now go through `setup_tracker_panel._load_csv_rows_cached`,
+ONE reader; `render_all_docs_html` takes the banner as an argument and is now pure, the
+same treatment `record_sentence` already had.
+
+**G7.2 - the Setup Tracker's refresh leaves the Qt thread.** `refresh()` starts ONE
+`ReadWorker` that does the twelve `_load_csv_rows_cached` calls,
+`load_human_focus_performance_rows`, the pure ranking of what they returned and the
+scan-factor `stat`; `_on_exports_loaded` renders on the Qt thread and emits the new
+`refreshFinished`. It is single-flight and COALESCED: a refresh asked for while one is
+in flight is taken by the worker in flight as one more pass, whatever the number of
+requests, and that pass runs INSIDE the worker rather than from the Qt-thread slot -
+which is what makes `shutdown()`'s `join_worker` enough, because a request made a
+moment before the desk closes cannot leave a read starting after the panel is gone.
+`_table_render_plan` names, per table, the export it was built from, and a table whose
+memo is unchanged is neither reset nor re-fitted: the mtime cache already skipped the
+PARSE, but thirteen model resets and thirteen column fits ran on every spinbox step
+anyway. Two tables read the tier-performance export and both say so; the human-focus
+table has no file, so its memo carries a content digest of the rows the worker read;
+the two tables the spinbox re-ranks carry `min_closed`. `tracker_export_files()`
+resolves its paths at CALL time, because the tests patch those twelve constants on the
+module. The attribute leaderboard's own worker is untouched, as the packet asks.
+
+**G7.3 - Market Journal charts on demand.** The four `CandleChart`s are built by
+`_ensure_charts()` on the first capture render; `_clear_charts` walks an empty dict when
+nothing is built, which is what "not built yet" looks like and is already cleared.
+
+**G7.4 - the re-measure.** Both runs offscreen, `--sizes 3456x2160 --repeat 3`, over the
+same 385.0 MB staged copy, minutes apart, the BEFORE run being this branch's base with
+only the seven files under test reverted - so the two differ by the packet and nothing
+else. `research.construct` sync p95 **3,025.1 -> 533.4 ms** (settle 6,277.1 -> 134.2);
+`setup_tracker.refresh` **576.9 -> 0.2 ms** (settle 256.1 -> 246.8 - the read is there
+now); `market_journal.construct` p50 **57.9 -> 9.8 ms** (p95 194.7 -> 163.1). Read those
+with their other half: **nothing got faster by being skipped**, so the deferred first
+load appears against the tab that asks for it - `research.tab.Day Trade Tracker` 2.3 ->
+448.8 ms sync, `research.tab.Setup Tracker` settle 152.7 -> 1,180.8 ms (its sync stays
+1.7 ms, because the read is on a worker), `research.tab.Master AVWAP Market Prep` 1.8 ->
+79.8 ms. Two ops remain over the 250 ms sync mark against two before. **The layout-fit
+table is byte-identical across the two runs, all 19 rows**, which is what a lane that
+moves no widget should look like. Both tables are in
+`docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md` section 7 under "The G7 re-measure".
+
+**Three deviations, all recorded.** (1) `tests/test_g7_speed_pass.py`'s Market Journal
+test carried a race the packet could not have foreseen: selecting the entry starts the
+panel's real `_CaptureWorker`, and this fixture's capture is built in memory rather than
+stored, so that worker's EMPTY payload clears the charts whenever it lands after the
+test's own direct `_render_capture` call - green alone, red under `-k "market_journal or
+journal_capture or g3"`. The test now lets the empty landing arrive FIRST; not one
+assertion moved, and in the real desk `_render_capture` is only ever called by that
+worker, once per selection. (2) `tests/test_qt_my_decisions_tab.py`'s
+`test_construction_reads_but_never_rebuilds` pins the Day-trade constructor read and the
+tester gave the trigger to that file's `panel` fixture but not to this test; it now asks
+for `start_decisions_refresh(rebuild=False)` explicitly, both assertions untouched, and
+the one under test (the rebuild never happens) is the second. (3)
+`tests/test_p4_swing_variables.py`'s
+`test_the_tab_exists_and_the_big_export_is_read_off_the_qt_thread` reads
+`SetupTrackerPanel.refresh`'s SOURCE; G7.2 split that path in two, so it now reads
+`refresh` + `_on_exports_loaded` + `_read_tracker_exports` together and asserts exactly
+what it asserted before. `tests/test_desk_bench.py:363` unpacks `settle`'s fourth value
+- shape only, as the packet said it would have to.
+
+**Advisory for the lead, not a defect:** the Day-trade Tracker's `reload_from_disk()` is
+still 448 ms SYNCHRONOUS on the Qt thread. G7 moved when it runs (first show, not
+startup) and the packet did not ask to move it to a worker; that is a later packet, and
+until then the first click on that tab costs about half a second.
+
+**The CLAUDE.md trim, in the same pass** (the packet asked for it): the sixteen longest
+bullets kept their rule - shortened to one to three sentences naming their seam and
+pointing at their entry - and each ORIGINAL bullet is reproduced VERBATIM under its own
+heading in `docs/DESK_INTERNALS.md` ("The sentences CLAUDE.md moved here on
+2026-09-07"). Nothing was deleted. **51.7 KB -> 48.5 KB**, and it is STARTED not
+finished: the file is still ~3 KB over its ~45 KB rule, and a second batch was tried and
+REVERTED because it bought 158 bytes for seven more binding-rule edits. `AGENTS.md`
+re-copied byte-identical. G7's own rules went to `docs/DESK_INTERNALS.md` ("G7 - the
+pages the desk built for nobody") and NOT to CLAUDE.md, which the packet said to leave
+alone.
+
+Live gate **#88**. No packaging trigger: no new dependency, no non-`.py` asset, no new
+top-level `scripts/` package, no dynamic import.
 
 ### 2026-09-06 (Sunday) - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders
 

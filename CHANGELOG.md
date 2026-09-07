@@ -1634,7 +1634,38 @@ They are evidence and must not be loaded as context.
 - **The attribute leaderboard has a desk surface** (2026-09-01, P4 A1): an
   **Attributes** tab on the Setup Tracker over the ~190-attribute export the scanner has
   always written, floor-clearing rows first and sub-floor rows greyed, labelled and last.
-  Read OFF the Qt thread - alone among that page's exports - because it is 19.7 MB.
+  Read OFF the Qt thread on its OWN worker because it is 19.7 MB - and since G7.2 every
+  other export on that page is off the Qt thread too, on a second worker.
+- **A Research child reads on its FIRST SHOW, never at startup** (G7.1, 2026-09-07):
+  the Market Journal's `_loaded_once` + `showEvent` idiom, generalised to the Day-trade
+  Tracker (`reload_from_disk` + `start_decisions_refresh`), the Setup Tracker
+  (`refresh`), Market Prep (`refresh`; its file WATCHER stays in the constructor), Price
+  Alerts (the table load; the service's monitoring timer is untouched) and the Setup
+  Playbook (its record worker, which now also carries the overview banner). A
+  `QTabWidget` child gets its `showEvent` only when its tab is selected, so **Research's
+  first paint costs ONE child's load rather than nine** and `research_panel.py` needed no
+  change. The Playbook's two UNCACHED reads inside `render_best_now_html` moved onto that
+  worker and go through `setup_tracker_panel._load_csv_rows_cached` - ONE reader for
+  these exports - and `render_all_docs_html` takes the banner as an argument and is pure.
+  Nothing is skipped: every deferred read still happens the first time the page is shown,
+  so the cost appears against the tab that asks for it.
+- **The Setup Tracker's refresh runs on a worker and re-fits only what changed** (G7.2,
+  2026-09-07): `refresh()` starts ONE `ReadWorker` doing the twelve
+  `_load_csv_rows_cached` calls, `load_human_focus_performance_rows`, the pure ranking
+  and the scan-factor `stat`; `_on_exports_loaded` renders on the Qt thread and emits
+  `refreshFinished`. It is single-flight and COALESCED - a refresh asked for while one is
+  in flight is taken by the worker in flight as one more pass, and that pass runs INSIDE
+  the worker, which is what makes `shutdown()`'s `join_worker` enough. `_table_render_plan`
+  names, per table, the export it was built from; a table whose memo is unchanged is
+  neither reset nor re-fitted (the mtime cache skipped only the PARSE, so thirteen model
+  resets and thirteen column fits ran on every spinbox step). The human-focus table has
+  no file, so its memo is a content digest; the two tables the spinbox re-ranks carry
+  `min_closed`; `tracker_export_files()` resolves its paths at CALL time. Measured
+  3456x2160 repeat 3: `setup_tracker.refresh` sync p95 576.9 -> 0.2 ms,
+  `research.construct` 3,025.1 -> 533.4 ms, the layout-fit table byte-identical.
+- **The Market Journal builds its four capture charts on demand** (G7.3, 2026-09-07):
+  `_ensure_charts()` on the first capture render, not in `__init__`; `_clear_charts`
+  walks an empty dict when nothing is built. `market_journal.construct` p50 57.9 -> 9.8 ms.
 - **Twelve swing variables are recorded and none is weighted** (P4 A2): human focus
   pick/side, tracker setup family, market regime, sector, industry, ATR as a PERCENT of
   price (beside the dollar bucket, never replacing it), signed SMA200/SMA50 distance in
@@ -1703,6 +1734,13 @@ They are evidence and must not be loaded as context.
   that lets a worker have the GIL is inside `settle_ms` and outside
   `longest_iteration_ms`, and every settle carries the 120 ms `QUIET_MS` floor,
   so a settle near 120-135 ms measured nothing and that op is read on `sync_ms`.
+  **The settle's worker probe is a `_WorkerProbe`, not a tree walk per poll**
+  (G7.0, 2026-09-07): the candidate set is walked once per op, re-walked at most
+  every `WORKER_REWALK_MS` (250 ms) while the page is busy, and re-walked ONCE
+  MORE before a settle is declared - the only moment a read that started after
+  the last walk could be missed. `settle` returns a fourth value, `poll_cost_ms`,
+  and every op row carries its `n/p50/p95/max`, so the bench's own share of a
+  wait is a number in the artifact rather than a claim in a docstring.
   The fit half records `minimumSizeHint` /
   `minimumSize` / `sizeHint` for every page, Weekend step and Research child
   against the available height - the window height minus chrome MEASURED FROM
@@ -1860,6 +1898,48 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-07 - Packet G7: the speed pass - first loads on first show, the tracker's refresh off the Qt thread (branch `claude/g7-speed-pass`)
+
+The last item of the Phase 0.22 G lane, tester-first (`c13d46c8`: fifteen red tests,
+three green-by-design, and explicit load TRIGGERS on 22 existing construction sites).
+**Nothing here changes a number, a sort, a read's RESULT or a write** - only WHEN and
+on WHICH THREAD a read happens, and how the bench measures itself. The G2b render
+golden is re-rendered THROUGH the new asynchronous seam and is unchanged.
+
+- **G7.0** `desk_bench.settle` holds a `_WorkerProbe` instead of walking the whole
+  widget tree twice per poll: the candidate set is walked once per op, re-walked at
+  most every `WORKER_REWALK_MS` (250 ms) while the page is busy, and re-walked ONCE
+  MORE before a settle is declared - the only moment a read started after the last walk
+  could be missed. `settle` returns a fourth value `poll_cost_ms`, `OpReading` carries
+  it and `_aggregate` summarizes it per op. `QUIET_MS` and the deadline semantics are
+  unchanged, and the three settle-RESULT tests (a plain `threading.Thread`, a `QThread`,
+  and a worker started 300 ms into the wait) stayed green throughout.
+- **G7.1** five Research children read on their first `showEvent` (`_loaded_once`), so
+  Research's first paint loads ONE child rather than nine; `research_panel.py` needed no
+  change. The Setup Playbook's two uncached CSV reads moved onto its existing record
+  worker, through `_load_csv_rows_cached` - ONE reader - and `render_all_docs_html` is
+  now pure.
+- **G7.2** `SetupTrackerPanel.refresh()` starts ONE `ReadWorker` for the twelve cached
+  reads, the human-focus read and the ranking; the Qt-thread slot resets and re-fits only
+  the tables whose export signature changed, then emits the new `refreshFinished`.
+  Single-flight and coalesced, with the extra pass INSIDE the worker so `shutdown()`'s
+  join is enough.
+- **G7.3** the Market Journal's four `CandleChart`s are built on the first capture render.
+- **G7.4** re-measured offscreen at 3456x2160, `--repeat 3`, over the same staged copy,
+  against the same base with only the seven files under test reverted: `research.construct`
+  sync p95 **3,025.1 -> 533.4 ms**, `setup_tracker.refresh` **576.9 -> 0.2 ms**,
+  `market_journal.construct` p50 **57.9 -> 9.8 ms**. The deferred first loads appear
+  against the tab that asks for them (`research.tab.Day Trade Tracker` 2.3 -> 448.8 ms
+  sync, still synchronous by design). **The layout-fit table is byte-identical across the
+  two runs, all 19 rows.** Both tables are in `docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md`
+  section 7.
+
+Live gate **#88**. No packaging trigger. In the same pass the story sentences of the
+sixteen longest `CLAUDE.md` bullets moved VERBATIM into `docs/DESK_INTERNALS.md` (each
+rule kept, shortened to name its seam and point at its entry): **51.7 KB -> 48.5 KB**,
+still ~3 KB over its ~45 KB rule, so the trim is started and not finished. `AGENTS.md`
+re-copied byte-identical.
 
 ### 2026-09-07 - Packet G5: Research > Results, the landing page the trader may read (branch `claude/g5-research-results`)
 

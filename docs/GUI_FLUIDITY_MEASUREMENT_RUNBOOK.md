@@ -289,3 +289,44 @@ the proof this check sees it. G1-G7 are re-measured against this file.
 `treasury_calendar_service`, which attempted an HTTPS call on every run and
 failed on certificate verification. Harmless to the numbers, but the bench is
 not hermetic and must not be described as such.
+
+### The G7 re-measure, 2026-09-07
+
+G7 changed **when** and **on which thread** a read happens, and nothing else.
+Both runs below are offscreen, `--sizes 3456x2160 --repeat 3`, against the same
+385.0 MB staged copy, on the same machine, minutes apart: the BEFORE run is the
+branch's base `0a1478e0` with only the seven source files under test reverted,
+so the two differ by the packet and nothing else. Chrome measured 90 px.
+
+**The bench's own overhead is now a number.** `settle` returns a fourth value,
+`poll_cost_ms`, and every op row in the JSON carries its `n/p50/p95/max`; the
+ops table prints one footer line, `bench poll cost (inside settle): worst
+91.5 ms over 71 op(s)` - that worst case belongs to the 9.4 s
+`weekend.refresh_everything` settle, so it is under 1 % of the wait it is
+inside. Before G7.0 the probe walked the whole widget tree twice per poll.
+
+| op (3456x2160) | sync p95 before | sync p95 after | settle p95 before | settle p95 after |
+|---|---|---|---|---|
+| `research.construct` | **3,025.1 ms** | **533.4 ms** | 6,277.1 ms | 134.2 ms |
+| `setup_tracker.refresh` | 576.9 ms | **0.2 ms** | 256.1 ms | 246.8 ms |
+| `market_journal.construct` | 194.7 ms (p50 57.9) | 163.1 ms (p50 9.8) | 125.9 ms | 121.5 ms |
+| `research.tab.Day Trade Tracker` | 2.3 ms | **448.8 ms** | 162.8 ms | 5,929.9 ms |
+| `research.tab.Setup Tracker` | 3.9 ms | 1.7 ms | 152.7 ms | 1,180.8 ms |
+| `research.tab.Master AVWAP Market Prep` | 1.8 ms | 79.8 ms | 138.1 ms | 135.1 ms |
+| `research.tab.Setup Playbook` | 4.6 ms | 4.8 ms | 134.3 ms | 291.3 ms |
+
+**Read the last four rows with the first three.** Nothing got faster by being
+skipped: a page's first load is now paid by the tab that asks for it, so the
+cost that used to sit inside `research.construct` at startup - for eight tabs
+the trader had not opened - appears against the tab they open. The whole of
+`research.construct`'s 2.5 s saving is that move plus the tracker's read leaving
+the Qt thread; `setup_tracker.refresh` is 0.2 ms because it now starts a
+`ReadWorker` and returns, and the 246.8 ms settle is where the read is.
+
+Two ops remain over the 250 ms sync mark, against two before:
+`research.construct` (533.4 ms - constructing nine child widgets, no read) and
+`research.tab.Day Trade Tracker` (448.8 ms - `reload_from_disk()` is still
+synchronous on the Qt thread; G7 moved WHEN it runs, not where, and moving it to
+a worker is a later packet). **The layout-fit table is byte-identical across the
+two runs**, all 19 rows, which is what a lane that moves no widget should look
+like.
