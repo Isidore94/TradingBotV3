@@ -122,6 +122,57 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 
 ### 2026-09-06 (Sunday) - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders
 
+**RE-REVIEW FIX ROUND (same day, same branch): four blockers, eight advisories, fourteen
+tests in `tests/test_st6_fix_round.py`, every one proven RED against the reviewed tip
+`e0ec2e2e` before any fix stayed in.**
+
+1. **The switch could not be undone.** The M5 bar and the waiting review list both re-sorted
+   their BACKING lists, and the bar returned early when disabled - so a list sorted while the
+   switch was on stayed sorted for the session, and the review queue's next chart was still
+   the prioritised one after the switch went off. The backing list is now ARRIVAL-ordered and
+   never touched: the bar keeps `_arrival` and draws a view (`_display_order` /
+   `_render_order`), and the queue is not sorted at all (`_next_review_index` picks an index).
+   A display preference that cannot be undone is not a display preference.
+2. **The row cap ran on the sorted list**, so the switch decided WHICH alert stopped existing:
+   with `MAX_ROWS` at 3 and the oldest arrival the highest-ranked cell, ON kept AAA/CCC/DDD and
+   OFF kept BBB/CCC/DDD. The cap belongs to the arrival list; the view is ordered after.
+3. **The day-trade bound was on the wrong quantity.** `held_run_score` is P(held 30m) x the
+   trimmed-mean MFE_R of the held ones, and the bound beside it was the bootstrap of those
+   MFEs alone - live, `held x ran 1.21 (>= 2.070)`, a lower bound ABOVE its own statistic, and
+   the cell it ranked first was not the cell with the best held x ran.
+   `evidence_stats.session_block_statistic_bootstrap` keeps the resampling in the one
+   statistics contract and takes the FORMULA from the caller; `Segment.score_bootstrap`
+   recomputes the whole score per draw. The day-trade kind ranks on the STATISTIC - it is the
+   declared day-trade headline - with `LEADER_MARGIN_HELD_RUN_R` (0.10, score units), declared
+   before any forward look; the 0.05 win-rate margin never applies to an R scale.
+4. **`swing_favorable` could never be fresh.** It was dated by `scan_date` while the outcome is
+   measured `horizon_sessions` later, so the live file (newest scan 2026-08-28, horizon 5, read
+   against 2026-09-04) was exactly one horizon behind by construction. The cell's clock is now
+   `future_scan_date` / `target_session`. And a withheld kind SAYS SO on the strip - it used to
+   be printed only when it named a leader, so silence read as two questions instead of three.
+
+**Advisories, all eight.** The observational caveat counts one KIND's cells (`pool_cells`
+already refuses to compare across kinds, so a summed K overstates the search). The payload went
+from 133 KB to **44,411 bytes on a pessimistic 150-cell fixture** - `_kind_policy` lifts every
+field a kind's cells all agree on, losslessly, and the declared cap is 48,000 with its reason in
+the test. A counts-only export says `concentration unmeasured`, not `top symbol unmeasured`. The
+strip builds its tooltip ONCE, sets no stylesheet (the variant is a dynamic property in
+`theme.qss`) and renders 150 cells in under 5 ms, against 14.65 ms measured. `AutopilotService
+.setupTrackerWritten` is the CLOSE-SLOT trigger the manual scan service never fires on a desk
+nobody is touching. `built_at` and every event `ts` are market-local and AWARE. Gate #80 now
+says what a PASS looks like on day one. Nothing further was added to CLAUDE.md.
+
+**And the snapshot FEEDS `panel_verdicts`**, so ST2 round 2's one-computation-per-page design
+holds with the shared reading as its source and the panel's own `select_leader` read as the
+labelled fallback - otherwise the card and the banner would have split again the first time the
+persistence rule held a new leader back.
+
+**Merged in:** ST2 at `7e541514`, ST4 at `9d75a27f`, and the lead's integration branch
+`lead/merge-st` at `68762909` (ST1-ST5). Doc conflicts resolved by keeping both entries; gate
+#80 sits above the lead's ordered #79-#75, and CLAUDE.md takes the lead's trim plus ST6's two
+BUILT bullets.
+
+
 ### 2026-09-06 - ST5 BUILT: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
 
 **Branch note:** the tester's branch `claude/st5-personal-evidence` (tip `f6a28138`, base

@@ -2742,3 +2742,52 @@ bypass path can write.
 snapshot is the reproducible check); the artifact stays under
 `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`; and the policy decision is the
 trader's, as a separate change with its own golden fixtures.
+
+
+### ST6 re-review - four things the first build got wrong (2026-09-06)
+
+**A display preference that cannot be undone is not a display preference.** The
+switch re-sorted the M5 bar's QListWidget and rebound the review queue's own
+list, so a session that turned it on could never get today's arrival order back:
+the bar returned early when disabled and the sorted list simply stayed. The rule
+is now structural - the backing list is ARRIVAL-ordered and never touched, the
+priority order is a VIEW computed at draw time, and the review queue is not
+sorted at all (`_next_review_index` chooses an index). "Reorders and never
+withholds" has to be reversible or it is a rewrite of the record.
+
+**A cap over a sorted list deletes a different thing.** The `MAX_ROWS` trim took
+the tail of whatever order was displayed, so with the cap at 3 and the oldest
+arrival the highest-ranked cell, ON kept AAA/CCC/DDD and OFF kept BBB/CCC/DDD -
+the switch deciding which alert stopped existing. The cap belongs to the arrival
+list; the view is ordered afterwards.
+
+**An interval belongs to the number it stands beside.** `held_run_score` is
+P(held 30m) x the trimmed-mean MFE_R of the held ones - a product over two
+denominators - and the bound printed next to it was
+`session_block_bootstrap` over the MFEs alone. Live that read
+`held x ran 1.21 (>= 2.070)`: a lower bound ABOVE its own statistic, and the cell
+it ranked first (`LONG regime_pause_rs`) was not the cell with the best held x
+ran (`LONG lrsi_cross_50`). `evidence_stats.session_block_statistic_bootstrap`
+keeps the resampling in the one statistics contract and takes the FORMULA from
+the caller; `Segment.score_bootstrap` recomputes the whole score on each draw.
+**The day-trade kind ranks on the statistic** - it is the desk's declared
+day-trade headline (decision 0016 answer 4) - and its margin is
+`LEADER_MARGIN_HELD_RUN_R` (0.10, score units), declared 2026-09-06 before any
+forward look. The 0.05 win-rate margin is a margin on a quantity bounded in
+[0, 1] and never applies to an R scale.
+
+**Freshness asks when a thing was MEASURED, not when it was entered.**
+`swing_favorable` was dated by `scan_date` while the outcome is measured
+`horizon_sessions` later, so the live file - newest `scan_date` 2026-08-28,
+horizon 5, read against 2026-09-04 - was exactly one horizon behind and could
+never be fresh. The cell's clock is `future_scan_date` (v1) or `target_session`
+(v2). And a kind that is withheld now SAYS SO on the strip: it used to be printed
+only when it named a leader, so silence read as though the desk had two questions
+instead of three.
+
+**Two smaller rules from the same round.** The observational caveat counts ONE
+KIND's cells - the swing leader was never chosen against the day-trade cells and
+`pool_cells` refuses to make them comparable. And a share is not display-rounded
+and a concentration that was never taken says `concentration unmeasured` rather
+than `top symbol unmeasured`, which reads like a measurement that came back
+empty.
