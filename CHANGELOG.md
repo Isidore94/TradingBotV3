@@ -298,6 +298,11 @@ which is evidence and must not be loaded as context.
   a naive stamp says "no zone recorded" rather than being handed one — `[desk]`, the
   after-the-session marker, the symbols) over `thought_view`, a read-only
   `QTextBrowser` filled with `setPlainText` so the trader's own `<` is never markup.
+  **The words carry a MEASURE and the list a readable column**: the reader is capped at
+  `_reader_measure` (`averageCharWidth() × 100` or `theme.px(1200)`, the smaller, floored at
+  `theme.px(240)`) and left-aligned with the slack on the right — 96 characters a line under
+  the desk's theme, not the 400 the full pane gave — and the `lower` splitter OPENS at a
+  third of the page, because stretch shares a resize and never the first layout.
   **The reader is filled at the HEAD of `_on_entry_selected`**, synchronously from
   `self._entries[row]`, before the no-capture guard returns and before
   `_CaptureWorker` is constructed: an entry with no capture is still readable, and
@@ -1582,6 +1587,17 @@ positions and defaults and never how anything is computed.
 - **The composer stops eating the page.** The vertical splitter's top pane opens at four
   text lines (`COMPOSER_LINES`, from the box's own `fontMetrics().lineSpacing()`): measured
   228 → 106 px at 3456 × 2160. The handle still drags it as tall as the trader wants.
+- **Fix round: the thought gets a MEASURE.** The first cut set `thought_view` across the
+  full 2,779 px of the right half, where a 68-character sentence became one 400-character
+  line, so the text (and `thought_meta`) is now capped at `_reader_measure` —
+  `QFontMetrics.averageCharWidth() × 100` or `theme.px(1200)`, whichever is SMALLER, floored
+  at `theme.px(240)` — which under the desk's own theme is 600 px and **96 characters a
+  line**, left-aligned with the slack on the right so the pane keeps its full width for the
+  charts below.
+- **Fix round: the entries column opens at a third of the page.** Stretch governs only
+  RESIZES, so the size hints opened it at 655 px and clipped the new 90-character excerpt
+  after about 35 — `lower.setSizes(LOWER_SPLIT_SHARES)` opens it at 1,132 px at 3456 × 2160
+  (proportions, not pixels), and the handle still drags either way.
 - **Tests.** `tests/test_g3_market_journal_reader.py` — the tester's six (excerpt under 140
   characters and dated; the full 1,200 characters in the reader; selection changes it; no
   capture still fills it; the empty render clears it; the reader is already filled when the
