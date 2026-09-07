@@ -1106,7 +1106,7 @@ which is evidence and must not be loaded as context.
   Taken/Closed imports, structured reviews, free-form notes, tags, and analytics.
 - Deterministic novice explanations across Setup Tracker, Day Trade Tracker, and
   Move Forensics, plus an evidence-floor-aware “What’s Working” summary.
-  **A detail pane never outlives the context that opened it** (G4, 2026-09-06).
+- **A detail pane never outlives the context that opened it** (G4, 2026-09-06).
   `ResearchExplanationView` and `SetupDetailView` each carry `shown_identity` and
   an OVERRIDE of `clear()` that empties, HIDES and forgets - `QTextEdit.clear()`
   alone leaves an empty pane standing. On the Day-trade Tracker the identity is
