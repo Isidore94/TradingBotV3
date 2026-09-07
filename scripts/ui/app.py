@@ -201,6 +201,11 @@ class MainWindow(QMainWindow):
         self.working_lately_service.snapshotChanged.connect(
             self.research_panel.setup_tracker_panel.set_working_lately_snapshot
         )
+        # G5: Research > Results renders the SAME reading (decision 0016 answer
+        # 7 as amended - "both read ONE evidence snapshot").
+        self.working_lately_service.snapshotChanged.connect(
+            self.research_panel.set_working_lately_snapshot
+        )
         self.working_lately_service.snapshotChanged.connect(
             self.weekend_prep_panel.set_working_lately_snapshot
         )

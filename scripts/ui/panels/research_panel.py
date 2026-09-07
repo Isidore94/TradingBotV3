@@ -6,6 +6,7 @@ from ui.panels.daytrade_tracker_panel import DaytradeTrackerPanel
 from ui.panels.master_market_prep_panel import MasterMarketPrepPanel
 from ui.panels.move_forensics_panel import MoveForensicsPanel
 from ui.panels.price_alerts_panel import PriceAlertsPanel
+from ui.panels.research_results_panel import ResearchResultsPanel
 from ui.panels.setup_docs_panel import SetupDocsPanel
 from ui.panels.setup_tracker_panel import SetupTrackerPanel
 from ui.panels.ticker_lookup_panel import TickerLookupPanel
@@ -25,6 +26,10 @@ class ResearchPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         tabs = QTabWidget()
+        # Packet G5: the Results page is FIRST and is the one the tab opens
+        # on (decision 0016 answer 7 as amended 2026-09-06, and decision 3
+        # of that day). The other eight keep the order they had.
+        self.results_panel = ResearchResultsPanel()
         self.market_prep_panel = MasterMarketPrepPanel()
         self.setup_tracker_panel = SetupTrackerPanel()
         self.setup_docs_panel = SetupDocsPanel()
@@ -36,6 +41,7 @@ class ResearchPanel(QFrame):
             price_alert_service,
             read_only=price_alert_read_only,
         )
+        tabs.addTab(self.results_panel, "Results")
         tabs.addTab(self.market_prep_panel, "Master AVWAP Market Prep")
         tabs.addTab(self.setup_tracker_panel, "Setup Tracker")
         tabs.addTab(self.setup_docs_panel, "Setup Playbook")
@@ -49,6 +55,7 @@ class ResearchPanel(QFrame):
         # `findChildren`, which would find the first QTabWidget on the page and
         # break the day a second one appears.
         self.tabs = tabs
+        tabs.setCurrentIndex(0)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -60,17 +67,29 @@ class ResearchPanel(QFrame):
         # The pointer is here rather than in a doc because this is the screen
         # somebody stands on when they wonder whether a number belongs here.
         pointer = QLabel(
-            "This tab is the BUILDER'S surface. Nothing the trader has to see "
-            "may live only here - the trader-facing surfaces are the Trading "
-            "Desk (Capture), the Journal, Weekend Prep and the AWAY Recap. A "
-            "number that matters gets a line on one of those; the full readout "
-            "stays here."
+            "Results is the trader's page here and it opens first: the full "
+            "readout of what is working, with Bot setups / My trades and Swing "
+            "/ Day trading kept as four separate populations. Every other tab "
+            "is the BUILDER'S surface. Nothing the trader has to see may live "
+            "only in Research - the Desk's own \"what is working lately\" line "
+            "stays the primary surface and reads the same snapshot as Results, "
+            "and the Trading Desk (Capture), the Journal, Weekend Prep and the "
+            "AWAY Recap still carry every number that matters."
         )
         pointer.setObjectName("MutedLabel")
         pointer.setWordWrap(True)
         layout.addWidget(pointer)
 
         layout.addWidget(tabs, 1)
+
+    def set_working_lately_snapshot(self, payload) -> None:
+        """Forward the desk's ONE snapshot to the Results page (packet G5.2).
+
+        `app.py` connects `WorkingLatelyService.snapshotChanged` here as well as
+        to the Setup Tracker, so the Results page renders the reading the
+        service just published instead of the one it last read off disk.
+        """
+        self.results_panel.set_working_lately_snapshot(payload)
 
     def show_setup_tracker(self) -> None:
         """Raise the Setup Tracker tab. The strip on the desk clicks through here."""
@@ -83,6 +102,7 @@ class ResearchPanel(QFrame):
         # already fell behind once: the warehouse readout grew a worker in
         # G-P1.5 and was not here. Anything below that owns a thread belongs in
         # this list the same day it grows one.
+        self.results_panel.shutdown()
         self.ticker_lookup_panel.shutdown()
         self.price_alerts_panel.shutdown()
         self.warehouse_readout_panel.shutdown()
