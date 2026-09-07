@@ -832,7 +832,8 @@ TRACKER_RECENT_COUNT_COLUMNS = (
     # ST4 (2026-09-06), AFTER ST2's, for the same reason: these are stamped
     # inside `build_recent_tracker_setup_family_rows` and would otherwise sit
     # in the middle of the shipped header. `selection_policy` is the one a
-    # reader of a live export checks first - it must read `closed_first_v1`.
+    # reader of a live export checks first - since ST7 (2026-09-07, decision
+    # 0019) it must read `first_actionable_v2`.
     "selection_policy",
     "as_of_session",
     "n_excluded",
@@ -4822,8 +4823,9 @@ REPRESENTATIVE_EXIT_TEMPLATE_ID = ""
 #: `SETUP_EXIT_TEMPLATES`, which is the one dict order has always practically
 #: handed back - so it is declared WITHOUT reading any outcome, and the
 #: comparison it feeds measures a naming, not a new preference. It is reachable
-#: only through an explicit `policy=` argument; `REPRESENTATIVE_EXIT_TEMPLATE_ID`
-#: above stays empty and stays the default.
+#: what `first_actionable_v2` reads, and that has been the DEFAULT since ST7
+#: (2026-09-07, decision 0019). `REPRESENTATIVE_EXIT_TEMPLATE_ID` above stays
+#: empty and is what `closed_first_v1` reads when it is named.
 REPRESENTATIVE_EXIT_TEMPLATE_ID_V2 = "full_band2"
 
 
@@ -4840,9 +4842,11 @@ def _representative_scenario(
     template is `REPRESENTATIVE_EXIT_TEMPLATE_ID` when it is set, and otherwise
     the first match - which is what the code has always done.
 
-    Under `first_actionable_v2` (packet ST4) the template is
-    `REPRESENTATIVE_EXIT_TEMPLATE_ID_V2` instead, so reordering the `scenarios`
-    dict can no longer move the headline R. The default policy is unchanged.
+    Under `first_actionable_v2` (packet ST4), the DEFAULT since 2026-09-07
+    (decision 0019), the template is `REPRESENTATIVE_EXIT_TEMPLATE_ID_V2`
+    instead, so reordering the `scenarios` dict can no longer move the headline
+    R. `closed_first_v1`, named explicitly, still reads
+    `REPRESENTATIVE_EXIT_TEMPLATE_ID` and still moves with dict order.
 
     A configured template that no scenario carries falls back to the first
     match rather than returning nothing: a setup with no representative R would
@@ -6649,11 +6653,12 @@ def _evaluate_tracker_scenario_bar(
 ) -> list[dict]:
     """Advance one scenario over one daily bar.
 
-    Packet ST3 added three keyword arguments, all of them default-preserving:
+    Packet ST3 added three keyword arguments; packet ST7 (2026-09-07, decision
+    0019) made the repaired value of each the DEFAULT:
 
     ``execution_convention``
-        ``literal_level_v1`` (default) books a touched level AT the level,
-        exactly as this function always has. ``gap_aware_v2`` routes every
+        ``literal_level_v1`` books a touched level AT the level, exactly as this
+        function did until 2026-09-07. ``gap_aware_v2`` (DEFAULT) routes every
         level fill through :func:`master_avwap_lib.execution_convention.
         resolve_fill`, so a bar that gapped through the level books the open,
         a bar with no open books a clamped price, and an invalid candle books
@@ -6664,8 +6669,8 @@ def _evaluate_tracker_scenario_bar(
         The skip is counted as ``skipped_bar_reasons["invalid_bar"]``, and the
         deferral label reaches the ``TIME_STOP`` and no other exit.
     ``level_knowledge``
-        ``same_session_v1`` (default) tests this bar's high/low against the
-        levels the caller passed for THIS day. ``prior_session_v2`` tests them
+        ``same_session_v1`` tests this bar's high/low against the levels the
+        caller passed for THIS day. ``prior_session_v2`` (DEFAULT) tests them
         against ``prior_session_levels`` instead - the last completed session's
         - because a daily anchored-VWAP band for day D is computed with day D's
         own bar folded in and is not knowable intrabar.
@@ -8035,6 +8040,13 @@ def build_recent_tracker_setup_family_rows(
             "representative_status": str(
                 outcome_summary.get("representative_status") or ""
             ),
+            # ST7: whether the SUMMARY carried the column at all, which the
+            # coerced string above destroys. A summary written before ST4 has
+            # no such key; a summary written by ST4+ for a record with no
+            # representative scenario has the key and an EMPTY value. Those are
+            # different facts and `_row_is_graded` treats them differently.
+            # Not exported - `TRACKER_RECENT_FAMILY_COLUMNS` is unchanged.
+            "representative_status_known": "representative_status" in outcome_summary,
             "representative_exit_undatable": bool(
                 outcome_summary.get("representative_exit_undatable")
             ),
@@ -8105,20 +8117,28 @@ def build_recent_tracker_setup_family_rows(
         if _row_is_unmeasurable(row):
             return False
         if is_v2:
-            status = str(row.get("representative_status") or "")
+            # THE PRE-ST4 BRIDGE, and it is keyed on the column being ABSENT.
+            #
             # A cached summary written BEFORE ST4 has no `representative_status`
-            # column at all - the live `master_avwap_tracker_scoring_snapshot.json`
+            # key at all - the live `master_avwap_tracker_scoring_snapshot.json`
             # is full of them until the next persisted tracker write rebuilds it
-            # (ST7.1). "Read it as-is" has to mean read it: the only closure fact
-            # such a row carries is `closed_setups`, so that is what is read, and
-            # `no_representative_in_population` counts them below. Treating an
-            # ABSENT column as "not closed" would zero the live scoring
-            # population the way the first ST4 build did (32 recent family rows
-            # -> 0, 74 nonzero `setup_type` deltas -> 0). An EMPTY status is
-            # different from a `pending` one, which is what v2 refuses to grade.
-            if not status:
+            # (ST7.1) - and the only closure fact such a row carries is
+            # `closed_setups`, so that is what is read. Measured on a COPY of the
+            # 2026-09-06 snapshot: without this the 32 recent family rows survive
+            # but their graded population goes 1,688 closed -> 0 (all 2,195
+            # episodes pending) and the nonzero `recent_tracker_score_delta`
+            # count goes 14 -> 7. (`setup_type` deltas are unaffected either way:
+            # `build_tracker_setup_type_rows` takes no policy.)
+            #
+            # A summary ST4+ wrote for a record with no representative scenario
+            # has the key with an EMPTY value - 48 such records on that snapshot -
+            # and is NOT bridged: it was measured, and the measurement was "no
+            # representative", which is unmeasurable rather than closed. Reading
+            # the coerced string alone cannot tell the two apart, which is why
+            # the row carries `representative_status_known`.
+            if not row.get("representative_status_known", True):
                 return int(row.get("closed_setups", 0) or 0) > 0
-            return status == "closed"
+            return str(row.get("representative_status") or "") == "closed"
         return int(row.get("closed_setups", 0) or 0) > 0
 
     baseline_groups = {}

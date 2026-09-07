@@ -19,7 +19,8 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import master_avwap as m  # noqa: E402
+import master_avwap as m
+from master_avwap_lib import selection_policy as sp  # noqa: E402
 
 
 def _daily(d, o, h, l, c):
@@ -159,11 +160,40 @@ class RecentSetupTypeStatsTests(unittest.TestCase):
             f"study:w{i}": _closed_1stdev(f"W{i}", 1.2, scan=f"2026-06-2{i}")
             for i in range(2, 7)  # scan dates 22..26, ages 3..7 days
         }
-        rows = m.build_recent_tracker_setup_family_rows(study, lookback_days=30, reference_date=ref)
+        # v1 BY NAME. This study's stop is the VWAP, and
+        # `_representative_stop_label_for_setup` answers `LOWER_1` for a LONG
+        # with no bounce signal, so the record has NO representative scenario.
+        # v1 does not need one - it grades on `closed_setups > 0`.
+        rows = m.build_recent_tracker_setup_family_rows(
+            study, lookback_days=30, reference_date=ref,
+            selection_policy=sp.SELECTION_CLOSED_FIRST_V1,
+        )
         fam = [r for r in rows if r["setup_family"] == m.FIRST_DEV_BREAKOUT_STUDY_FAMILY]
         self.assertTrue(fam)
         self.assertGreater(fam[0]["closed_setups"], 0)
         self.assertGreater(fam[0]["avg_closed_r"], 0)
+
+        # ST7 (2026-09-07, decision 0019): the DEFAULT is `first_actionable_v2`,
+        # which grades the DECLARED representative and nothing else. A record
+        # with no representative is UNMEASURED, not a win - and the row is still
+        # produced, still counted, and says so. This is ST4's rule reaching a
+        # study family whose stop is not the protective band; it is shadow
+        # evidence either way and no champion pick is graded here.
+        default_rows = m.build_recent_tracker_setup_family_rows(
+            study, lookback_days=30, reference_date=ref
+        )
+        default_fam = [
+            r for r in default_rows
+            if r["setup_family"] == m.FIRST_DEV_BREAKOUT_STUDY_FAMILY
+        ]
+        self.assertTrue(default_fam, "the row must not vanish")
+        self.assertEqual(int(default_fam[0]["n_episodes"]), len(study))
+        self.assertEqual(int(default_fam[0]["closed_setups"]), 0)
+        self.assertIn(
+            f"no_representative_in_population={len(study)}",
+            str(default_fam[0]["excluded_reasons"]),
+        )
+        self.assertEqual(int(default_fam[0]["n_excluded"]), 0)
 
     def test_build_recent_setup_type_stat_rows_tags_namespace(self):
         base = date.today()

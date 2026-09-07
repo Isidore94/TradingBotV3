@@ -593,3 +593,76 @@ def test_a_compact_projection_without_a_policy_stamp_is_still_read_as_is(stamp_s
     # rather than grading a trade it could not have seen.
     replayed = m._summarize_tracker_setup_outcome(projection, as_of_session="2026-01-07")
     assert replayed["representative_status"] == "unknown_compact"
+
+# ---------------------------------------------------------------------------
+# 7 (builder, ST7.1) - the persisted tracker write NAMES its three policies.
+# ---------------------------------------------------------------------------
+def test_the_persisted_tracker_write_logs_the_three_policies(caplog):
+    """Live gate #84 greps this line, so a test owns its shape.
+
+    There was no success log line at this seam before ST7 - not a count, not a
+    stamp - so the packet's "state it in the log line the tracker write already
+    emits" had nothing to extend and one was ADDED at the call site, before
+    `save_setup_tracker_payload`. It is logged unconditionally: an absent line
+    and a line naming the v1 policies are different facts, and only one of them
+    means "the flip did not reach the desk".
+    """
+    import logging
+    from unittest import mock
+
+    from master_avwap_lib import legacy
+
+    payload = legacy._default_setup_tracker_payload()
+    payload["data_session"] = "2026-09-04"
+
+    with caplog.at_level(logging.INFO, logger=""):
+        with (
+            mock.patch.object(legacy, "export_setup_tracker_views"),
+            mock.patch.object(legacy, "write_control_discovery_report"),
+            mock.patch.object(legacy, "write_master_avwap_study_report"),
+            mock.patch.object(legacy, "save_setup_tracker_payload") as save_mock,
+        ):
+            legacy.update_setup_tracker_from_scan(
+                [], {"symbols": {}}, {}, {}, None,
+                auto_tune=False, tracker_payload=payload,
+            )
+
+    assert save_mock.called, "the write itself still has to happen"
+    lines = [record.getMessage() for record in caplog.records]
+    policy_lines = [line for line in lines if "policies: selection=" in line]
+    assert len(policy_lines) == 1, f"expected exactly one policies line, got {policy_lines}"
+    assert policy_lines[0] == (
+        "Setup tracker policies: selection=first_actionable_v2 "
+        "execution=gap_aware_v2 levels=prior_session_v2"
+    )
+    # It reads the CONSTANTS, so it can never drift from what the replay used.
+    assert _sp().DEFAULT_SELECTION_POLICY in policy_lines[0]
+    assert _ec().DEFAULT_EXECUTION_CONVENTION in policy_lines[0]
+    assert _ec().DEFAULT_LEVEL_KNOWLEDGE in policy_lines[0]
+
+
+# ---------------------------------------------------------------------------
+# 8 (builder, ST7.2) - the compare CLIs say which arm is the default.
+# ---------------------------------------------------------------------------
+def test_the_compare_clis_name_the_default_arm():
+    """A frozen artifact that calls the wrong arm "what the desk runs today" is
+    worse than no note at all: it is read months later as the record of what
+    was live."""
+    import tracker_selection_compare as selection_cli
+
+    readme = selection_cli.README_TEXT
+    assert "first_actionable_v2" in readme and "closed_first_v1" in readme
+    assert "THE DEFAULT IS NOW `first_actionable_v2`" in readme
+    assert "decision 0019" in readme
+    assert "OLD arm" in readme
+    # The claim the flip made false must be gone in every phrasing.
+    lowered = readme.lower()
+    assert "still the default everywhere" not in lowered
+    assert "closed_first_v1` is what the desk runs today" not in readme
+    assert "no export switches to v2" not in lowered
+
+    import tracker_execution_compare as execution_cli
+
+    old = execution_cli.POLICY_OLD
+    new = execution_cli.POLICY_NEW
+    assert old != new

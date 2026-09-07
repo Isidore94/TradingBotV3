@@ -437,6 +437,20 @@ def _build_tracker_setup(
                 "tradeable": True,
                 "status": scenario_status,
                 "total_r": total_r,
+                # ST7 (2026-09-07): the stub carries the two fields that make it
+                # a REPRESENTATIVE scenario, which every real tracker record has
+                # (`_build_tracker_scenarios_from_setup` writes both) and this
+                # stub simply never bothered with. Without them
+                # `_representative_scenario` finds no match, the summary reports
+                # `representative_status ""`, and under the default policy the
+                # row is unmeasurable rather than graded - so every aggregate
+                # assertion below would have been measuring "no representative"
+                # instead of the recency weighting it is named for. The values
+                # are the ones the champion picks for a LONG/SHORT setup with no
+                # bounce signal: `_representative_stop_label_for_setup` and
+                # `REPRESENTATIVE_EXIT_TEMPLATE_ID_V2`.
+                "stop_reference_label": "LOWER_1" if side.upper() == "LONG" else "UPPER_1",
+                "exit_template_id": "full_band2",
             }
         },
     }

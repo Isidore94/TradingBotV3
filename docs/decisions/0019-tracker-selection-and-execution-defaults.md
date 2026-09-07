@@ -98,6 +98,19 @@ scoring path — and the next persisted tracker write rebuilds it. The write log
 `policies: selection=… execution=… levels=…` so which generation is on disk is
 readable rather than inferred.
 
+Such a projection also carries no `representative_status`, which is the column
+`first_actionable_v2` grades on, so the aggregate reads its `closed_setups`
+instead for exactly as long as it takes that next write to happen. Measured on a
+copy of the 2026-09-06 snapshot, WITHOUT that bridge: the 32 recent family rows
+survive, but 1,688 closed episodes of 2,195 become 0 and the 14 nonzero
+`recent_tracker_score_delta` become 7. (`setup_type` deltas are 74 either way -
+that builder takes no policy argument.) The bridge is keyed on the key being
+ABSENT and never on its value being empty: 48 records on that snapshot were
+measured by ST4+ and found to have NO representative scenario, and those stay
+unmeasured - so **the first live reading of `n_pending` is expected to be 902,
+not the 915 the ST4 comparison quoted**, the difference being those 13 episodes
+moving from pending to unmeasured.
+
 **Survivorship caveat, recorded because it bounds claim (2).** The 463 second
 attempts win about 80% AFTER the fix, but that population exists only because
 the scanner re-listed the thesis, which it does when the setup still looks

@@ -543,20 +543,25 @@ def main(argv: list[str] | None = None) -> int:
         "schema": "tracker_execution_compare/1",
         "written_at": datetime.now().astimezone().isoformat(),
         "authorization": (
-            "EVIDENCE ONLY. This comparison is not authorization to overwrite live "
-            "historical results, to restate the tracker, or to promote gap_aware_v2 / "
-            "prior_session_v2 into scoring. The trader's decision is separate."
+            "EVIDENCE. The decision this comparison was built for was taken on "
+            "2026-09-06 (decision 0019) and gap_aware_v2 / prior_session_v2 became "
+            "the DEFAULT replay policies on 2026-09-07 (packet ST7); literal_level_v1 "
+            "/ same_session_v1 remain selectable by name and are the arm labelled "
+            "'old' below. This file still promotes nothing and authorizes nothing: it "
+            "reads COPIES, writes only its own stamped artifact, and no detector, "
+            "score, alert, watchlist, Focus entry or review_policy.json is reachable "
+            "from it."
         ),
         "policies": {
             POLICY_OLD: {
                 "execution_convention": ec.EXECUTION_LITERAL_LEVEL_V1,
                 "level_knowledge": ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
-                "note": "what ships and scores today",
+                "note": "what shipped until 2026-09-06; still selectable by name",
             },
             POLICY_NEW: {
                 "execution_convention": new_convention,
                 "level_knowledge": new_knowledge,
-                "note": "the repair, shadow only",
+                "note": "the repair; the DEFAULT since 2026-09-07 (decision 0019)",
             },
         },
         "inputs": {

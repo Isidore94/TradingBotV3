@@ -2657,14 +2657,42 @@ a pending trade.** ST4's cache rule says a DEFAULT read of a compact scoring pro
 `_scoring_outcome_summary` verbatim, and it still does - `master_avwap_tracker_scoring_snapshot.json`
 holds 11,372 records with no `scenarios` key at all, and for the live scoring path that summary is
 the only copy of the answer. But v2's "pending stays pending" keys on `representative_status`, and
-a projection written BEFORE ST4 does not carry that column at all. Treating its absence as "not
-closed" would have dropped every one of those rows out of the graded population - the same 32
-recent family rows -> 0 and 74 nonzero `setup_type` deltas -> 0 that the first ST4 build produced,
-arriving through a different door. `_row_is_graded` therefore reads the row's own `closed_setups`
-when the status is ABSENT, and `no_representative_in_population` counts those rows so the gap is
-visible rather than silent. A status that is PRESENT and reads `pending` is still never graded -
-that is the decision. The next persisted tracker write rebuilds every projection with the column
-filled, so this is a bridge, not a permanent second rule.
+a projection written BEFORE ST4 does not carry that column at all. `_row_is_graded` therefore
+reads the row's own `closed_setups` when the key is ABSENT, and `no_representative_in_population`
+counts those rows so the gap is visible rather than silent.
+
+**The size of the failure, measured rather than assumed** (reviewer, on a COPY of the 2026-09-06
+snapshot with the bridge reverted): the 32 recent family rows still appear - this is NOT the first
+ST4 build's total collapse - but their graded population goes **1,688 closed -> 0**, all 2,195
+episodes reading pending, and the nonzero `recent_tracker_score_delta` count goes **14 -> 7**. The
+`setup_type` deltas are **74 either way**, because `build_tracker_setup_type_rows` takes no policy
+argument at all and never consults one. Half the champion's recent-family score input going blank
+for one scan is a smaller fault than "everything zeroes" and is still the fault the bridge exists
+to prevent; quoting the bigger number would have been quoting the wrong incident.
+
+**The bridge is keyed on the key being ABSENT, never on the value being empty**, and the two are
+different measurements. A summary ST4+ wrote for a record whose scenarios carry no representative
+has the key with an EMPTY string - 48 such records on that snapshot - and it means "measured, and
+there is no representative", which is unmeasurable, not closed. Those rows are NOT bridged; 13
+episodes move pending -> unmeasured, so ST4's quoted 915 pending reads 902 + 13 on this branch.
+The coerced string on the row destroys the distinction, so the row carries
+`representative_status_known` (not exported; `TRACKER_RECENT_FAMILY_COLUMNS` is unchanged). A
+status that is PRESENT and reads `pending` is still never graded - that is the decision. The next
+persisted tracker write rebuilds every projection with the column filled, so this is a bridge, not
+a permanent second rule.
+
+**A record with NO representative scenario is UNMEASURED under the default, and that reaches the
+STUDY families.** `_representative_stop_label_for_setup` answers the protective band (`LOWER_1`
+long, `UPPER_1` short) unless the setup carries a first-band bounce signal, and
+`_representative_scenario` returns None when no tradeable scenario carries that stop label. v1 did
+not care - it graded on `closed_setups > 0` - so this never showed. The 1st-dev-breakout study's
+scenarios are stopped at the VWAP, so under the default their rows are produced, counted, and
+reported as `no_representative_in_population` with `closed_setups` 0 rather than graded. That is
+ST4's rule arriving somewhere ST4 did not measure, it is shadow evidence either way, and no
+champion pick is graded through it - but a reader of the study tables must not mistake the change
+for the study going quiet. It is pinned by
+`tests/test_first_dev_breakout.py::test_recent_family_rows_include_1stdev_breakout`, which now
+asserts BOTH readings.
 
 **The bypass moved with the default and the rule did not.** `unknown_compact` is what a read that
 cannot be answered from the cache says instead of returning an empty summary. That is any
