@@ -111,6 +111,7 @@ which is evidence and must not be loaded as context.
   the last 20 sessions, **2,642 are `derived_from_bucket` and 0 are `assigned`** -
   the 341 assigned rows in the whole file are horizon 1 from 2026-09-02/03, so
   every recent S/A cell today is entirely reconstructed labels.
+  reach for it.
 - **The tracker exports INTEGER counts at each table's own grain, and the
   weighted rate keeps its own name** (ST2.1/ST2.2, 2026-09-06).
   `build_recent_tracker_setup_family_rows` and `build_tracker_setup_type_rows`
@@ -290,6 +291,7 @@ which is evidence and must not be loaded as context.
   `autopilot_today.txt` gains `== WORKING LATELY ==` in its EXISTING body:
   **no new push**, AWAY-only routine output, already inside the rule, and an
   absent snapshot is an ABSENT SECTION.
+
 - **MFE after a held level leads every DAY-TRADE surface** (V3 item 2, WIRED by
   R4 A9/A10). The Day Trade Tracker leads with **Held 30m** and Held x Ran and
   opens sorted by the second; the tier statistics stay beside them. **One
@@ -979,7 +981,83 @@ which is evidence and must not be loaded as context.
   Read-only, mints no identifier, and an unmatured paper grade is blank rather than
   zero. The swing strip's "took" badge now names its trade in a tooltip through the
   SAME matching rule that put the badge there - the id is EXTRA and never a
-  condition for the mark.
+  condition for the mark. **The window is SESSIONS and the counts are BY TRADE**
+  (ST5, 2026-09-06): `TRADE_WINDOW_SESSIONS` (10) walked through
+  `market_calendar` by `statement_window_end` replaces `TRADE_WINDOW_DAYS`
+  (kept one release as an alias), so a statement on Friday 2026-09-04 reaches
+  2026-09-21 rather than 2026-09-14 and a Labor Day week no longer throws five
+  sessions away; a calendar that refuses falls back to the OLD, strictly
+  NARROWER arithmetic, because uncertainty may not invent a match. Confidence
+  labels are unchanged. `trade_level_summary` sums P&L ONCE per `trade_id` over
+  a file that stays one row per statement (live: 13 `traded=yes` rows over 10
+  distinct trades), `summary_note` prints both denominators, and
+  `run_preference_trade_outcomes` carries `n_statements_matched` /
+  `n_trades_matched` out of the slot.
+- **Ownership is not market bias** (ST5.3, 2026-09-06,
+  `scripts/journal_exposure.py`). `classify_exposure(trade)` ->
+  `Exposure(instrument, ownership_direction, market_bias, structure,
+  certainty)`. `trades.direction` is the sign of the opening quantity and
+  nothing else; read as a market view it makes the live journal a bearish trader
+  with a bullish record (53 of 89 option trades SHORT, 39 of those winners -
+  they are sold puts). **A LONG option is never a bullish setup**: a bought put
+  is `bearish`, a sold put `bullish_or_neutral`, a sold call
+  `bearish_or_neutral`, stock follows `direction`, and `UNKNOWN` / `BAG` /
+  `CASH` stay `unknown`. **A `trade_legs` row is a FILL**, so `multi_leg` means
+  more than one distinct option CONTRACT among the legs - two fills of one
+  contract is not a structure; the contract is read from the OCC `trades.symbol`
+  and from `raw_executions.raw_json["option"]`, which is why
+  `JournalStore.list_trade_legs` gained ONE column (`e.raw_json`). The store has
+  no sibling seam for a spread, so a second option trade on the same underlying,
+  expiry and session is `partial_of_spread_candidate` - never
+  `partial_of_spread` - and lands in the uncertain population rather than
+  claiming half a spread.
+- **Three populations by STATUS, and uncertainty is a LABEL across them**
+  (ST5.4, 2026-09-06, `journal_analytics.personal_evidence_summary`, additive on
+  `build_analytics_summary` as `personal_evidence`). `complete` (CLOSED) /
+  `partly_closed` (CLOSED_PARTIAL) / `open_exposure` (everything else) PARTITION
+  every trade - each with n, winners, CAD and USD P&L, the `market_bias` split
+  with `unknown` printed as its own bucket, and `n_uncertain` beside it. The
+  cross-cutting `uncertain` block (UNKNOWN instrument, BAG, CASH, `multi_leg`,
+  `partial_of_spread_candidate`) lists its members WITH the status each is
+  counted under and **pools no money at all**, because its members span three
+  statuses. **Checking uncertainty first made it a fourth bucket that ate the
+  other three**: measured on a copy of the live journal, `uncertain` came out
+  n=120 holding 84 CLOSED, all 7 CLOSED_PARTIAL and 29 of 32 OPEN trades, so
+  `partly_closed` read n=0 and one pooled figure summed realized results with
+  open positions' unrealized marks and counted those marks as WINNERS.
+  **An open position has NO result**: `net_pnl` and `winners` are both `None`,
+  never zero, and its size travels as `notional` (61,662 live). An EMPTY bucket
+  reports `None` too - a net of 0.00 says "measured and it came to nothing".
+  **No personal setup is called best without confirmed tags at the floor**:
+  `best_setup` is `None` until CONFIRMED tags reach
+  `evidence_stats.MIN_REPORTABLE_N` (30 against 1 live); above it the winner
+  ranks on `swing_headline`'s Wilson lower bound. **Both tag lanes share ONE
+  denominator, closed OR PARTLY CLOSED** - the live journal's single confirmed
+  tag sits on a CLOSED_PARTIAL trade, and counting confirmed over CLOSED while
+  counting provisional over everything made the headline say "No confirmed setup
+  tags" about a journal that holds one. The coverage line -
+  `Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting
+  review: 26. Planned risk recorded: 0 of 172.` - and the headline `1 confirmed
+  setup tag - under the n=30 floor (...) - no personal setup can be called best`
+  reach the Journal's Analytics tab and Weekend Prep through that one helper;
+  the "No confirmed" wording is reserved for a true zero.
+- **The whole tag backlog reaches the review screen, and a missing plan is a
+  worklist** (ST5.5, 2026-09-06, `ui/panels/weekend_prep_panel.py`).
+  `_read_week_tag_rows(bounds, *, store=None, path=None)` gained an injection
+  seam and lists EVERY `provisional` trade rather than the current week's (26
+  waiting on 2026-09-06 against a page scoped to one week - gate #36's
+  obstacle); `needs_review` stays week-scoped because those 145 rows carry no
+  proposal and would bury the ones that do, and the week's rows sort first with
+  a `Week` column naming the population. The new "Missing planned risk" table
+  lists closed trades with `planned_risk` null (0 of 204 live), newest first, on
+  the ten-row floor and capped at the newest `MISSING_RISK_ROWS_SHOWN` (50) with
+  `showing 50 of 165` printed, and a row only REFERS: `openTradeRequested` ->
+  `JournalPanel.show_trade` -> `TradesTab.select_trade`, the tab where
+  `save_risk_fields` already lives. **Nothing here writes `planned_risk` and
+  nothing computes one from an outcome**; a test spies `save_risk_fields` into a
+  raise and asserts every reader leaves it uncalled. The coverage sentence sits
+  UNDER the verdict card, never inside it - the card is five to eight lines by
+  the trader's own request.
 - **A dimension resting on almost nothing says so** (P6, 2026-09-01). Below 10%
   confirmed-tag coverage the journal's "My setups" group is prefixed with one
   sentence naming the coverage. **The group is never hidden**: hiding it would
@@ -1484,6 +1562,45 @@ which is evidence and must not be loaded as context.
   cost the tracker save, and the champion aggregates are pinned byte-identical by a
   two-directory reproduction test. Live gate #67.
 
+- **The tracker replay has a VERSIONED execution convention and level knowledge**
+  (packet ST3, 2026-09-06). `scripts/master_avwap_lib/execution_convention.py` names four
+  policies on two independent axes: `literal_level_v1` (DEFAULT, today's behaviour - a
+  touched level fills AT the level) / `gap_aware_v2`, and `same_session_v1` (DEFAULT -
+  bar D's high/low tested against day D's own bands) / `prior_session_v2`. Under
+  `gap_aware_v2` a bar that opened through the level fills at the OPEN (`gap_open`,
+  both directions - a stop gap and a target gap are the same mechanic), a bar with no
+  usable open fills at the level CLAMPED into `[low, high]` (`clamped_no_open`), and an
+  INVALID candle (`low <= open, close <= high` broken, or a NaN among high/low/close)
+  books NOTHING (`invalid_bar`) while the hold clock keeps running - an invalid bar on
+  the maximum-hold index DEFERS the `TIME_STOP` to the next valid bar
+  (`deferred_invalid_bar`), never cancels it. The fill price is always inside the bar
+  and `resolve_fill` raises rather than trusting a comment. Under `prior_session_v2` the
+  INTRABAR target tests read the LAST COMPLETED session's levels (a daily anchored-VWAP
+  band for day D is computed with day D's own bar folded in, so it is not knowable
+  intrabar); the hard stop is level-free and untouched, and the two-closes protective
+  stop and the maximum-hold force close stay CLOSE-based on day D. A prior-session level
+  that does not exist counts `intrabar_skip_reasons["no_prior_session_level"]` on the
+  scenario rather than reading as "not hit". `_evaluate_tracker_scenario_bar` and
+  `recompute_tracker_setup_record` take the two policies as keyword arguments; the
+  record carries `execution_convention` / `level_knowledge` ONLY for a non-default run
+  and a default run POPS them, so a record replayed once under v2 cannot keep a label
+  the desk did not use. `_apply_scenario_exit_event`'s `fill_basis` /
+  `execution_convention` are keyword-only and add a key only when passed. **The default
+  path is byte-identical and pinned** by `tests/fixtures/st3_replay_golden.json`, taken
+  from `main` before the repair existed. `scripts/tracker_execution_compare.py` is the
+  evidence CLI: it replays COPIES under both policy pairs and writes a stamped
+  `comparison_<stamp>.json` + `.csv` with per-setup R (clipped AND raw, never blended -
+  `TRACKER_SCORING_R_CLIP` is 4.0 and the tail hides behind it), changed flag, fill
+  bases, and per `(side, setup_family, priority_bucket)` n / changed n / expectancy /
+  win rate with the ONE Wilson bound / tail / rank impact; `--new-execution-convention`
+  and `--new-level-knowledge` isolate one axis. It prints `project_paths.DATA_DIR` and
+  REFUSES if it, `--out`, `--tracker` or `--bars` is under `C:\TradingBotData`; a SQLite
+  mirror is opened `mode=ro&immutable=1`. **Shadow only and NOT authorization**: nothing
+  in production passes a non-default policy, `calc_anchored_vwap_bands` and
+  `calc_anchored_vwap_band_history` are untouched (decision 0008), the cost model is
+  one, stop-first ordering is kept, and whether `gap_aware_v2` / `prior_session_v2`
+  becomes the scoring convention is the trader's separate decision. Live gate #77.
+
 Neither of the first two challengers is promoted, and the band challenger's ≥ 20
 sessions of forward accrual start at its first measured row. Their remaining evidence
 gates are in `plan.md`.
@@ -1491,6 +1608,126 @@ gates are in `plan.md`.
 ## Recent changes (the last two build days)
 
 ### 2026-09-06 - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders (branch `claude/st6-working-lately`, not merged)
+
+### 2026-09-06 - Packet ST5: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
+
+Trader: *"Fix the declared session-window mismatch with calendar tests... Deduplicate by
+trade identity when computing trade counts/P&L, while retaining all source statements.
+Audit option exposure/leg structure before interpreting direction as market bias; unknown
+facts remain unknown... Do not tell me a personal setup is best when there are no confirmed
+tags. Separate complete trades, partly closed trades, open exposure, and
+instrument/strategy uncertainty in summaries."* The journal is READ-ONLY to this packet: no
+broker call, no auto-confirm, no reconstructed risk.
+
+- **ST5.1 the window is sessions and says so.** `TRADE_WINDOW_SESSIONS` (10) replaces
+  `TRADE_WINDOW_DAYS`, kept one release as an alias (nothing in `scripts/` imported it).
+  `statement_window_end` walks `market_calendar` forward ten SESSIONS, so a statement on
+  Friday 2026-09-04 reaches 2026-09-21 rather than 2026-09-14 - the constant said DAYS
+  while every docstring said sessions, and over Labor Day that is five real sessions
+  discarded and with them a trade taken on the 18th. A calendar that refuses (outside its
+  validated 2000-2032 range) falls back to the OLD, strictly NARROWER arithmetic and logs:
+  uncertainty may never widen a window into a match nobody made. Confidence labels
+  unchanged.
+- **ST5.2 counts are by trade, statements are kept.** `trade_level_summary(rows)` reports
+  `n_statements_matched`, `n_trades_matched`, `duplicate_statement_rows`,
+  `statements_per_trade`, `planned_risk_recorded` and a P&L summed ONCE per `trade_id`.
+  Live: 538 report rows, 13 `traded=yes`, **10 distinct trade ids** - a statement-grain
+  total was three trades' P&L too large. Every row is still kept (the skip is the
+  interesting row), `summary_note` prints both denominators, `run_preference_trade_outcomes`
+  carries the pair, and Weekend Prep's note reads "13 were traded over 10 distinct trades".
+- **ST5.3 direction is ownership until the legs say otherwise.** New pure
+  `scripts/journal_exposure.py`. 53 of the 89 live option trades are SHORT and 39 of those
+  were winners; read as "short = bearish" that is a bearish trader with a bullish record,
+  and they are sold puts. A **LONG option is never a bullish setup**. `multi_leg` means
+  more than one distinct option CONTRACT among the legs, because a `trade_legs` row is a
+  FILL and every closed option trade carries at least two. The contract comes from the OCC
+  `trades.symbol` and from `raw_executions.raw_json["option"]`, so
+  `JournalStore.list_trade_legs` gained ONE column. **`partial_of_spread` could not be
+  derived** - two spread legs are two `trades` rows keyed by their own OCC symbols and
+  nothing links them - so the observable pattern is labelled
+  `partial_of_spread_candidate` and lands in the uncertain population.
+- **ST5.4 summaries separate what they can and cannot say.**
+  `journal_analytics.personal_evidence_summary(trades)` partitions every trade by STATUS
+  into `complete` / `partly_closed` / `open_exposure` (live: 165 / 7 / 32, summing to 204)
+  and carries uncertainty as a CROSS-CUTTING label - `n_uncertain` on each population plus
+  an `uncertain` block that names each member's status and pools no money (live: 120,
+  split 84 / 7 / 29). An open position's `net_pnl` AND `winners` are both `None`, never
+  zero; its notional is 61,662. Both tag lanes share ONE denominator, closed or partly
+  closed, so the journal's single confirmed tag - on a CLOSED_PARTIAL trade - is counted:
+  `Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting review:
+  26. Planned risk recorded: 0 of 172.` and `1 confirmed setup tag - under the n=30 floor
+  (26 provisional awaiting review) - no personal setup can be called best.` The first cut
+  of both of these was wrong and the review caught it; see the checkpoint entry.
+- **ST5.5 the 26 proposed tags reach the review flow.** Weekend Prep's tag list is widened
+  to the whole provisional backlog with an injection seam for tests; `needs_review` stays
+  week-scoped (145 rows with no proposal). A "Missing planned risk" table lists the closed
+  trades with no plan (0 of 204 carry one) and a row REFERS the trade to the Journal's
+  Trades tab, where `save_risk_fields` already lives. No new writer.
+- **Tests.** The tester's seven in `tests/test_st5_personal_evidence.py` were red at
+  `f6a28138` and are green; the builder added twelve in `tests/test_st5_review_flow.py`,
+  ten of which were proven red against the branch base's `scripts/`.
+- **One deviation, recorded.** The packet asked for the coverage line on Weekend Prep's
+  verdict card. The card is five to eight lines by the trader's own request (V2 item 2b)
+  and two tests pin it; a ninth line broke `test_one_unreadable_store_still_leaves_a_card`.
+  The sentence sits in its own label directly UNDER the card, filled from the tag page's
+  existing worker through `coverageChanged` - same screen, same seam, no second read.
+### 2026-09-06 - Packet ST3: no impossible fills, no same-day knowledge (builder, branch `claude/st3-gap-aware-fills`)
+
+Trader: *"Declare a versioned execution convention for long/short stop gaps, missing opens,
+invalid OHLC, and target gaps. Never book a fill outside the available bar through the
+current literal-level assumption."* ... *"Resolve intrabar target levels only from
+information available before they could be hit."* ... *"This is not authorization to
+overwrite live historical results or promote the repaired simulation into scoring."*
+
+- **The defect, reproduced on the real function.** Entry 100, risk 5, hard stop 95, next
+  bar O80/H85/L79/C82: `_evaluate_tracker_scenario_bar` booked `HARD_STOP` at **95**, a
+  price the bar never traded, for **-1.014R** after costs. The honest fill is the open at
+  80, for **-4.014R**. Separately, `calc_anchored_vwap_band_history` folds day D's own
+  OHLC and volume into the cumulative sums BEFORE writing `history[D]`, and the replay
+  tested day D's high/low against `history[D]` - a level knowable only at D's close.
+- **The repair is additive, opt-in and versioned**, and the DEFAULT path is byte-identical
+  (see the inventory bullet above for the full contract). Two axes:
+  `literal_level_v1` / `gap_aware_v2` for the fill, `same_session_v1` /
+  `prior_session_v2` for the level. Stop-first ordering, the maximum-hold force close,
+  the ONE cost model and the frozen AVWAP formula are all untouched; only WHICH DAY's
+  level a bar is tested against and WHAT PRICE a touch books can change, and only when a
+  caller asks.
+- **The lead's decision on the packet's one ambiguity (2026-09-06):** an INVALID bar that
+  lands on the maximum-hold index books nothing and the `TIME_STOP` fires on the next
+  VALID bar with `fill_basis` `deferred_invalid_bar`. Maximum hold is preserved, never
+  cancelled, and the record says which bar could not answer.
+- **The comparison, on copies, seed 20260906 across the whole 11,372-record mirror COPY**
+  with daily bars from the machine cache. **`n_setups` 794 is the denominator** - 800
+  records were offered, 6 carry no tradeable scenario, 0 lacked bars, 0 failed to replay;
+  `--limit` is what was OFFERED and is never the denominator, so the CLI prints the whole
+  split and the JSON carries a `population_note` saying so. The three JSON/CSV pairs are
+  copied to `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\`
+  (`both__comparison_20260906T110731.*`, `exec_only__…110814.*`, `levels_only__…110855.*`).
+  The first draft reported `min R -4.0 -> -4.0`, which is `TRACKER_SCORING_R_CLIP` and not
+  a tail, so the artifact carries the CLIPPED and the RAW R side by side, never blended:
+
+  | run | changed | expectancy (raw) | win rate | R < -2 | groups moved rank |
+  |---|---|---|---|---|---|
+  | both repairs | 472 of 794 | -0.0981 → **-0.1192** | 0.576 → 0.596 | 47 → 48 | 43 of 50, max 14 |
+  | execution only (`gap_aware_v2`) | 89 of 794 | -0.0981 → **-0.0811** | 0.576 → 0.597 | 47 → 47 | 33 of 50, max 9 |
+  | level knowledge only (`prior_session_v2`) | 458 of 794 | -0.0981 → **-0.1491** | 0.576 → 0.548 | 47 → 48 | 40 of 50, max 17 |
+
+  **The gap-aware convention is symmetric by design and, in this sample, mostly
+  HELPS**: of the 89 setups it moved, 84 got better and 5 got worse, because a resting
+  limit that opens through its price fills BETTER than the level and target gaps
+  outnumber stop gaps 166 to a handful. The prior-session level knowledge is what costs
+  expectancy (413 of 458 moved setups worse). Both numbers are evidence for a decision
+  the trader has not taken; nothing here promotes anything.
+- **The `invalid_bar` counter found a real one on its first run.** It fired 380
+  scenario-bars over 26 setups / 22 symbols, and each of those 22 cached daily-bar files
+  holds **exactly one invalid candle, all dated 2026-09-04**, every one with `low > open`
+  or `high < open` (AEE `O=105.81 H=106.96 L=106.11`; TWLO `O=239.52 H=239.29`) - the
+  signature of a FORMING bar written into `machine_cache\daily_bars` mid-session. Under
+  `literal_level_v1`, which is what the desk runs, those bars are still read for fills,
+  excursions and marks. A machine-local cache read, not a claim about the tracker or the
+  durable store, and outside ST3's scope - recorded because the counter is what made it
+  visible. **The reviewer's read-only sweep of the whole cache (all 1,980 files) widened it: 100 files end in an invalid candle, always the LAST row and one per file, on SEVEN sessions - 2026-09-04 x89, 09-02 x3, 09-01 x3, 08-20 x2, 07-07, 06-08, 05-15 - so it is a recurring mid-session write, not one day's glitch; it needs its own packet.**
+### 2026-09-06 - ST1: each outcome gets its true meaning and its true clock (branch `claude/st1-outcome-clock-build`)
 
 Trader: *"Implement the already-owed desk Working-lately surface, priority switch, and Away Recap
 around one deterministic evidence snapshot ... Reuse and correct the existing best-now banner rather
@@ -1523,6 +1760,40 @@ is owed at the first DESK session after merge.
 - Merged in: ST1 at `5cf0e681` and ST2 at `22aac5fb`, doc conflicts resolved by keeping both
   entries.
 
+- **The `win` column was never a win.** `master_avwap_tier_outcomes.csv`'s `win` is
+  `side_return_pct > 0` - the sign of a close-to-close percent move between two of a
+  symbol's OWN scan rows - while `swing_headline.headline_from_tracker_rows` told four
+  surfaces it was "the stop-at-a-level, two-closes rule". `outcome_kind` is APPENDED to
+  both writers (v1 value `favorable_direction_scanrow_v1`; an absent or empty cell reads
+  as v1 through `swing_evidence.outcome_kind_of`), `Headline.outcome_kind` decides the
+  words, and the setups table's header is now **Family favorable %**. Every existing
+  value and column is byte-identical - pinned by a golden generated from the pre-fix code.
+- **v2 walks the exchange calendar** (`master_avwap_lib/session_horizon_outcomes.py`,
+  new file `master_avwap_session_horizon_outcomes.csv`, no production reader). Missing
+  target-session data stays unmeasured with a reason; an unarrived horizon is `pending`,
+  never a loss; duplicates are counted, not swallowed.
+- **One eligible-row reader** (`scripts/swing_evidence.py`). `build_bot_tier_performance_rows`
+  now drops explicit `stale_horizon` rows like the two trader-facing readers - it is a
+  report export and its only consumers are the Setup Tracker's Tier performance tab, the
+  human-focus comparison table and the AI evidence list; no detector, score, gate or alert
+  reads it. Its cells span four horizons over a 365-day lookback, so it shares the
+  MISSINGNESS PREDICATE rather than a whole policy: `read_eligible_rows` and the export
+  both call `swing_evidence.is_stale_horizon`, and the export applies it to its BASELINE
+  observations too. Each read reconciles, and `describe(...)` states outcome kind, horizon
+  in its own unit, window and coverage on the setups panel, the setup docs and the AWAY
+  digest. `ai_jobs.digest._SECTION_NOTES["swing_win_rates"]` names the policy so a model
+  reading the index cannot call the rate a win rate either.
+- **The tier split is measured and shown.** Live file at `end=2026-09-03`: 2,642 horizon-5
+  rows in that 20-session window, **all `derived_from_bucket`, none `assigned`** (the 341
+  assigned rows are horizon 1 from 2026-09-02/03), 55 dropped stale, 2,587 eligible. The
+  window rolls, so the triple is only meaningful with its `end` beside it - on the default
+  window (2026-09-06) the same file reads 2,462 / 0 / 17,096.
+- **Deviation from the packet, deliberately:** v1's `sessions_spanned` / `stale_horizon`
+  keep the BUSINESS-DAY basis. `horizon_drift` gained `calendar=` and says "exchange
+  sessions" when given one, but passing it inside the v1 export would restate 19,558
+  historical rows, which the trader's prompt explicitly does not approve; the golden
+  proves the file unchanged. v2 needs no drift call - its span is the horizon.
+- Live gate **#75** owed at the next persisted tracker write (Tuesday 2026-09-08).
 ### 2026-09-06 - ST4: the selected opportunity is fixed before its outcome is seen (branch `claude/st4-first-actionable`, not merged; prepared, NOT decided)
 
 Trader: *"Prepare the golden comparison and obtain the explicit policy decision. Use a fixed
@@ -1668,6 +1939,18 @@ having high R."*
   they carry no exit date until ST4 adds `representative_exit_date`. The
   short-horizon export's identity: `n_wins + n_losses + n_flats == samples_2d`,
   and `samples_2d + n_unmeasured == tracked_setups`.
+- **A renderer that has a verdict renders the verdict** (re-check). The banner's
+  short-term block was guarded on "a discovery row OR a leader" and otherwise
+  printed a hardcoded "not enough 2-session samples yet", so `no_clear_leader` -
+  the live state for that horizon, 12 eligible families with the top two 0.001
+  of bound apart - rendered as "no samples" under a card saying "no clear
+  leader". `_verdict_block_html` now renders all four states unconditionally.
+  **The freshness clause is per kind** (`freshness_sentence(kind)`,
+  `DATING_BASIS_BY_KIND`): the 2-session line says *measured*, the swing line
+  says *entry-dated*, and an unknown kind takes the conservative reading - one
+  sentence for both made whichever surface it did not describe say something
+  false. `discovery_note` moved beside `discovery_basis_phrase` so the sentence
+  and the gate it belongs to cannot drift.
 - **The 2-session export counts its own wins** (the ask, answered 2026-09-06).
   `build_tracker_short_horizon_rows` gained additive `n_wins` / `n_losses` / `n_flats` /
   `n_unmeasured` / `outcome_kind` / `horizon_basis` / `latest_measured_session` at the end of its
@@ -1721,6 +2004,7 @@ performance."*
   historical rows, which the trader's prompt explicitly does not approve; the golden
   proves the file unchanged. v2 needs no drift call - its span is the horizon.
 - Live gate **#75** owed at the next persisted tracker write (Tuesday 2026-09-08).
+
 
 ### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
 

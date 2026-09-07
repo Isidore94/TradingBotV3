@@ -92,11 +92,32 @@ LEADER_MARGIN_LB = 0.05
 #: not fresh and never as a guess.
 LEADER_FRESHNESS_SESSIONS = 2
 
-#: How the freshness rule reads in a sentence, for every surface that shows one.
-FRESHNESS_SENTENCE = (
-    f"fresh = measured inside {LEADER_FRESHNESS_SESSIONS} exchange sessions of "
-    f"the last completed one"
-)
+#: Which DATE each kind of evidence row is stamped with, per kind.
+#:
+#: Re-check advisory 1: the two surfaces are dated differently and one sentence
+#: for both made whichever one it did not describe say something false. The
+#: 2-session rows carry the MEASURED bar's date; the recent family rows carry
+#: the ENTRY session, because they have nothing better until ST4's
+#: ``representative_exit_date`` lands. Default is `"entry"` - the conservative
+#: reading, and the one a new caller is most likely to have.
+DATING_BASIS_BY_KIND = {
+    "swing": "entry",
+    "swing_short_term": "measured",
+}
+
+
+def freshness_sentence(kind: Any = "") -> str:
+    """How the freshness rule reads for THIS kind of row, in one clause.
+
+    "fresh" without its clock is not a fact, and a clock the reader thinks is
+    the exit when it is the entry is worse than none.
+    """
+    basis = DATING_BASIS_BY_KIND.get(_text(kind), "entry")
+    stamped = "measured" if basis == "measured" else "entry-dated"
+    return (
+        f"fresh = {stamped} inside {LEADER_FRESHNESS_SESSIONS} exchange sessions "
+        f"of the last completed one"
+    )
 
 #: The states ``select_leader`` can return.
 LEADER_STATES = ("leader", "no_clear_leader", "last_reliable_reading", "no_evidence")
@@ -134,6 +155,20 @@ def discovery_basis_phrase(discovery_reason: Any) -> str:
     if reason == "no_session":
         return "leading on undated evidence"
     return "leading on thin evidence"
+
+
+def discovery_note(discovery_reason: Any) -> str:
+    """The extra sentence a discovery row earns, or "" - beside its phrase.
+
+    Re-check advisory 2. This lived in the panel as a `discovery_note=` argument
+    passed on every call and dropped inside for every reason but one, so the
+    caller and the condition were in different files and could drift. There is
+    exactly one reason that earns a sentence, and it lives next to the phrase
+    that names the same gate.
+    """
+    if _text(discovery_reason) == "no_session":
+        return "The export carries no measured session, so its freshness is unstated."
+    return ""
 
 
 @dataclass(frozen=True)
@@ -260,7 +295,8 @@ def _policy_line(row: Mapping[str, Any], *, kind: str, last_completed_session: d
     measured = _text(row.get("latest_measured_session"))
     bits.append(
         f"window through {measured or 'an unstated session'}"
-        f" (read against {last_completed_session.isoformat()}; {FRESHNESS_SENTENCE})"
+        f" (read against {last_completed_session.isoformat()};"
+        f" {freshness_sentence(kind)})"
     )
     coverage_bits = [f"{wins + losses} graded ({wins}W/{losses}L)"]
     for label, key in (

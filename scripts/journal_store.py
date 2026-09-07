@@ -1941,10 +1941,20 @@ class JournalStore:
             )
 
     def list_trade_legs(self, trade_id: str) -> list[dict[str, Any]]:
+        """The fills behind one trade, each carrying its broker payload.
+
+        ST5.3 widened this SELECT by ONE column, ``e.raw_json``. There are no
+        right/strike/expiry columns on ``trades``, so the only place a leg's
+        option CONTRACT is recorded is the raw execution's payload - and without
+        it `journal_exposure.classify_exposure` cannot tell two fills of one
+        contract from two contracts under one trade. Additive: every existing
+        key on the row is unchanged.
+        """
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT l.*, e.broker, e.account_number, e.symbol, e.security_type, e.currency
+                SELECT l.*, e.broker, e.account_number, e.symbol, e.security_type,
+                       e.currency, e.raw_json
                 FROM trade_legs l
                 LEFT JOIN raw_executions e ON e.execution_uid = l.execution_uid
                 WHERE l.trade_id = ?

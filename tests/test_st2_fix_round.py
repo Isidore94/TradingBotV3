@@ -722,7 +722,18 @@ def test_the_population_sentence_names_its_window_and_its_freshness_rule(panel_m
 
 
 def test_the_banner_states_the_freshness_rule_in_words(panel_module, tmp_path, monkeypatch):
-    from working_lately import FRESHNESS_SENTENCE
+    """...and states it PER KIND, because the two surfaces are dated differently.
+
+    Re-check advisory 1: one sentence for both made whichever surface it did not
+    describe say something false. The swing rows are ENTRY-dated until ST4's
+    `representative_exit_date` lands; the 2-session rows carry the measured bar.
+    """
+    from working_lately import freshness_sentence
+
+    assert "entry-dated inside" in freshness_sentence("swing")
+    assert "measured inside" in freshness_sentence("swing_short_term")
+    # An unknown kind takes the conservative reading, never the flattering one.
+    assert "entry-dated inside" in freshness_sentence("something_new")
 
     rows = [_evidence_row("supported", wins=24, losses=16)]
     csv_path = tmp_path / "recent.csv"
@@ -737,10 +748,10 @@ def test_the_banner_states_the_freshness_rule_in_words(panel_module, tmp_path, m
     finally:
         panel.deleteLater()
 
-    # It says MEASURED, not entered: the 2-session rows date themselves by the
-    # bar the R was read from since the re-review (advisory 4).
-    assert "fresh = measured inside" in FRESHNESS_SENTENCE
-    assert FRESHNESS_SENTENCE in html, html
+    # The SWING line is the one on screen here, so it must say entry-dated -
+    # and must not claim its evidence was measured two sessions ago.
+    assert freshness_sentence("swing") in html, html
+    assert freshness_sentence("swing_short_term") not in html, html
 
 
 def test_an_exported_zero_count_is_a_count_and_not_a_missing_column(panel_module):
@@ -774,6 +785,81 @@ def test_an_exported_zero_count_is_a_count_and_not_a_missing_column(panel_module
 # ===========================================================================
 # Advisory 7 - a flat is measured, and it is not in n
 # ===========================================================================
+
+
+def test_a_short_term_no_clear_leader_is_rendered_and_not_called_empty(
+    panel_module, tmp_path, monkeypatch
+):
+    """Re-check blocker: twelve eligible 2-session families whose top two bounds
+    are inside the declared margin.
+
+    The banner used to guard its short-term block on "a discovery row OR a
+    leader" and otherwise print "not enough 2-session samples yet (accrues
+    automatically each scan)" - which on today's live state (12 eligible, top
+    two 0.001 apart) was FALSE and contradicted the card three lines above
+    saying "no clear leader". A renderer that has a verdict renders the verdict.
+    """
+    import pandas as pd
+
+    from research_explanations import build_plain_english_whats_working
+    from working_lately import select_leader, short_term_evidence_rows
+
+    session = _last_completed_session().isoformat()
+    rows = []
+    for index, (wins, losses) in enumerate([(30, 20), (33, 22)]):
+        rows.append(
+            {
+                "side": "LONG" if index == 0 else "SHORT",
+                "namespace": "live",
+                "setup_family": f"neck_and_neck_{index}",
+                "tracked_setups": wins + losses,
+                "samples_2d": wins + losses,
+                "avg_r_2d": 0.4 + index * 0.05,
+                "win_rate_2d": wins / (wins + losses),
+                "n_wins": wins,
+                "n_losses": losses,
+                "n_flats": 0,
+                "n_unmeasured": 0,
+                "outcome_kind": "trade_r_close_2d",
+                "horizon_basis": "2 sessions after entry, close to close",
+                "latest_measured_session": session,
+            }
+        )
+
+    verdict = select_leader(
+        short_term_evidence_rows(rows),
+        kind="swing_short_term",
+        last_completed_session=_last_completed_session(),
+        min_n=panel_module.SHORT_TERM_MIN_SAMPLES,
+    )
+    assert verdict.state == "no_clear_leader", verdict.reason
+    assert verdict.coverage["discovery_leader"] is None
+    assert verdict.leader is None
+
+    short_path = tmp_path / "short.csv"
+    pd.DataFrame(rows).to_csv(short_path, index=False)
+    monkeypatch.setattr(panel_module, "SHORT_HORIZON_FILE", short_path)
+    monkeypatch.setattr(
+        panel_module, "RECENT_SETUP_TYPE_STATS_FILE", tmp_path / "absent_recent.csv"
+    )
+    panel = panel_module.SetupTrackerPanel()
+    try:
+        html = panel_module._best_now_banner_html(panel)
+        summary = panel_module._summary_html(panel)
+    finally:
+        panel.deleteLater()
+
+    assert "Short-term (1-2d), no clear leader" in html, html
+    assert "not enough 2-session samples yet" not in html, html
+    assert "neck_and_neck_0" in html and "neck_and_neck_1" in html, html
+
+    # ...and the card says the same thing, on the same page.
+    assert "no clear leader" in summary.lower(), summary
+    assert "not enough 2-session samples yet" not in summary, summary
+
+    card = build_plain_english_whats_working(short_term_rows=rows, verdicts={"swing_short_term": verdict})
+    bullet = next(text for text in card["bullets"] if "first two sessions" in text)
+    assert "no clear leader" in bullet.lower(), bullet
 
 
 def test_an_old_discovery_row_is_called_old_and_not_thin(panel_module, tmp_path, monkeypatch):

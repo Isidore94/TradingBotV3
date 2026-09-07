@@ -110,7 +110,14 @@ those gaps. Before going further the trader was asked what the program is for.
 - "What is working lately" is a Trading Desk surface with a 20-session window
   and a display-only priority switch. It is never a filter and never a mute.
 - The Research tab is the builder's surface, not the trader's. Nothing the
-  trader must see may live only there.
+  trader must see may live only there. **Amended 2026-09-06** (trader, on the
+  lead's recommendation, Desk Reshape Plan / plan.md Phase 0.22): Research
+  gains a **Results** landing page the trader may read - Bot setups / My
+  trades and Swing / Day trading kept as four separate populations, never
+  pooled. It is the FULL readout; the Desk's "what is working lately" line
+  remains the primary surface, and both read ONE evidence snapshot (P6). The
+  second sentence still binds: nothing the trader must see may live only in
+  Research.
 - Unused surfaces (Alerts tab, D1 Focus tab, Armed tab, the Universe page) are
   candidates for removal or folding, **after the trader confirms each one**;
   this record does not authorise their removal.

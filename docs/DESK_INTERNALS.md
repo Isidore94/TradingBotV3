@@ -1656,6 +1656,27 @@ measurement and the reasoning behind each rule.
   defect: `n_wins + n_losses + n_flats == samples_2d`, and
   `samples_2d + n_unmeasured == tracked_setups`.
 
+  *And once more: a renderer that has a verdict must render it.* The re-check
+  found the banner's short-term block still guarded on "a discovery row OR a
+  leader", falling through to a hardcoded *"not enough 2-session samples yet
+  (accrues automatically each scan)"*. `no_clear_leader` matches neither
+  condition, and it is the LIVE state for that horizon - twelve eligible
+  families with the top two 0.001 of bound apart - so the banner said "no
+  samples" three lines under a card saying "no clear leader". Both statements
+  were on one screen and one of them was false. The conditional is gone. The
+  general rule: a special case written beside a state machine will eventually
+  contradict it, and a hardcoded sentence is a state the machine does not know
+  about.
+
+  *One clock per surface, named.* `FRESHNESS_SENTENCE` was a single constant
+  saying "measured inside 2 sessions" while only the 2-session rows are
+  measured-dated - so the swing line claimed a clock it does not have.
+  `freshness_sentence(kind)` reads `DATING_BASIS_BY_KIND` and says
+  **entry-dated** on the swing line, **measured** on the 2-session one, and
+  entry-dated for any kind it does not know, which is the conservative reading
+  rather than the flattering one. When ST4's `representative_exit_date` lands
+  the swing entry flips to `"measured"` and the sentence follows on its own.
+
   *The floor is judged BEFORE the clock.* A family with three samples is under
   the floor whatever the clock says, and answering "not fresh" to three samples
   answers a question the reader did not ask. So `select_leader` splits
@@ -2077,6 +2098,237 @@ n=621.
 row reads `narrated K of N eligible cell(s)` with a `.narration.json` beside ONE pack for the
 date, and the pack markdown carries the coverage line.
 
+## ST5 - a window called sessions that counted days, and a bearish trader with a bullish record (2026-09-06)
+
+Four defects, one theme: the personal-evidence chain named things it was not measuring.
+
+**The window said SESSIONS and the arithmetic said DAYS.** `preference_trade_outcomes` had
+`TRADE_WINDOW_DAYS = 10` and `window_end = said_on + timedelta(days=TRADE_WINDOW_DAYS)`, under
+a docstring that read *"a trade opened on or within TRADE_WINDOW_DAYS SESSIONS after the
+statement"*. The two disagree by more than a rounding: `market_calendar.trading_days_between`
+puts ten sessions after Friday 2026-09-04 at **2026-09-21**, because 2026-09-07 is Labor Day,
+while ten calendar days is 2026-09-14. Five sessions on the floor, and with them every trade
+the trader took in the second week after saying something. `TRADE_WINDOW_SESSIONS` and
+`statement_window_end` replace it; the old name stays one release as an alias because nothing
+in `scripts/` imported it (grep, 2026-09-06). The FALLBACK matters: outside the calendar's
+validated 2000-2032 range `market_calendar` raises rather than extrapolate, and the fallback
+is the OLD, strictly NARROWER calendar-day arithmetic. A window that GREW on a refusal would
+manufacture a link the trader never made; a narrower one only loses a link, which is the
+direction uncertainty is allowed to fail in.
+
+**One row per statement is right; one P&L per statement is not.** The live export on
+2026-09-06 held 538 rows, **13 with `traded=yes`, over 10 distinct `trade_id`s**. Every row
+is worth keeping - a statement with no trade is the skip, which is the most interesting row
+in the file - but a summary summing `journal_net_pnl` across statements counted three trades'
+money twice. `trade_level_summary` sums once per `trade_id` and publishes both denominators
+plus `duplicate_statement_rows`, so the gap between the two grains is a number a reader can
+see rather than a discrepancy they have to find.
+
+**`trades.direction` is ownership and was being read as a market view.** The live journal:
+**53 of the 89 option trades are SHORT and 39 of those 53 were winners.** Read "short =
+bearish" and the desk describes a bearish trader with a bullish record. They are sold puts,
+and a sold put is bullish-to-neutral. `scripts/journal_exposure.py` splits the question four
+ways - instrument, ownership direction, market bias, structure - and answers each only as far
+as the store allows. **A LONG option is never a bullish setup**: LONG CALL `bullish`, LONG PUT
+`bearish`, SHORT PUT `bullish_or_neutral`, SHORT CALL `bearish_or_neutral`, stock follows
+`direction`, and `UNKNOWN` (86 rows), `BAG` (1) and `CASH` (1) stay `unknown` and uncertain.
+
+**A `trade_legs` row is a FILL, not a contract leg.** Every closed option trade in the live
+journal carries at least two of them and 39 carry exactly two, so "more than one option leg"
+would have called almost every ordinary option trade a spread. `multi_leg` means more than one
+distinct option CONTRACT among the legs. The contract itself is not a column: `trades` has no
+right, strike or expiry, so it is read from the OCC `trades.symbol` (`AA260522P00062000`) and
+from `raw_executions.raw_json["option"]`, which `journal_statement_import._execution_from_row`
+writes. `JournalStore.list_trade_legs` gained exactly ONE column, `e.raw_json`, to make the
+second source reachable.
+
+**`partial_of_spread` could not be derived and is therefore not claimed.** Two legs of a
+spread arrive as two separate `trades` rows keyed by their own OCC symbols; nothing links
+them, and this packet may not mint an identifier (plan.md P5.3/P5.4 own the canonical one).
+What is observable is a second option trade on the same underlying and expiry opened in the
+same session on a different contract - which is equally what two independent ideas on one name
+look like. The label is `partial_of_spread_candidate`, it puts the row in the UNCERTAIN
+population so its P&L never lands in a clean total, and it asserts nothing further.
+
+**Populations are by STATUS; uncertainty is a LABEL across them - and the first cut had that
+backwards.** `journal_analytics.personal_evidence_summary` partitions every trade into
+`complete` (CLOSED) / `partly_closed` (CLOSED_PARTIAL) / `open_exposure` (everything else),
+and carries the uncertainty question beside each as `n_uncertain` plus a cross-cutting
+`uncertain` block. The first cut checked `exposure.is_uncertain` FIRST, which made uncertainty
+a fourth bucket that ATE the other three. Reproduced on a copy of the live journal 2026-09-06:
+**`uncertain` came out n=120, holding 84 CLOSED trades, ALL 7 CLOSED_PARTIAL and 29 of the 32
+OPEN ones.** So `partly_closed` read **n=0** while seven exist; `open_exposure` read n=3 with
+a notional of 7,726 against a real **61,662**; and ONE pooled P&L figure summed realized
+results together with open positions' unrealized marks and **counted those marks as
+WINNERS** - which is the exact defect this whole summary exists to prevent, one level down.
+The correct numbers are 165 / 7 / 32 summing to 204, with `uncertain` a cross-cutting 120 split
+84 / 7 / 29 that pools no money and no winners at all: its members span three statuses, and one
+figure over a closed result and an open mark is the thing that went wrong. **An open position's
+`net_pnl` AND `winners` are both `None`** - none, not zero - and its size travels as
+`notional`. An EMPTY bucket reports `None` too: a net of 0.00 says "measured, and it came to
+nothing", where a blank says "nothing here". The tester's fixture used STK for its
+partly-closed and open rows, which is why it passed on a broken partition; the regression tests
+use OPT and BAG there.
+
+**No personal setup is called best without confirmed tags at the floor, and one tag is not
+zero tags.** Live: **1 confirmed tag, 26 provisional, 145 needs_review, `planned_risk`
+non-null on 0 of 204.** The first cut counted confirmed over CLOSED and provisional over ALL
+rows - and the one confirmed tag sits on a **CLOSED_PARTIAL** trade (EAT, 2026-08-21), so it
+fell out of the numerator while its 26 provisional siblings stayed in and the headline said
+"No confirmed setup tags" about a journal that holds one. That is a false statement about the
+trader's own work, not a conservative one. Both lanes now share ONE denominator - closed OR
+partly closed, 172 - and the headline names the count it has: `1 confirmed setup tag - under
+the n=30 floor (26 provisional awaiting review) - no personal setup can be called best.` "No
+confirmed setup tags" is reserved for a true zero. Below `evidence_stats.MIN_REPORTABLE_N`
+(30) `best_setup` stays `None`; above it the winner ranks on `swing_headline`'s Wilson lower
+bound, the same rule every other trader-facing swing surface uses. The coverage line -
+`Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting review: 26.
+Planned risk recorded: 0 of 172.` - reaches the Journal's Analytics tab and Weekend Prep
+through that one helper.
+
+**The whole-journal pass is linear, because it runs on the Qt thread.** The Journal's Analytics
+tab calls `personal_evidence_summary` through `build_analytics_summary`, so `classify_all` is
+on the paint path. Comparing every option trade against every other one and re-parsing the
+other's legs each time measured **130 ms at 1,020 trades**. Each trade's contracts are now
+parsed once and the sibling question is answered from a `(underlying, expiry, session)` index:
+**5.9 ms at 1,020**, 1.1 ms on the real 204. Same answers.
+
+**A missing plan is a worklist, never a calculation.** `journal_r` is blank on all 538 report
+rows because `planned_risk` is null on all 204 trades. An R worked backwards from what the
+trade did is a statement about the outcome wearing the plan's clothes, so nothing in this
+chain fills it: Weekend Prep lists the closed trades with no plan, newest first and capped at
+the newest fifty with `showing 50 of 165` printed (the packet's ten-row floor was a MINIMUM
+height, not a licence to build 165 `QTableWidgetItem`s on the Qt thread), and a row
+only REFERS the trade to the Journal's Trades tab where `JournalStore.save_risk_fields` sits
+behind the trader's own hand. Two tests spy that method into a raise and assert every reader
+leaves it uncalled. `journal_feed.suggest_planned_risk`, the only prefill in the chain, was
+checked in passing and is clean: it reads an ARMED ALERT's entry and stop - the trader's own
+plan at decision time - and returns `None` on anything but a unique match.
+
+**The tag backlog is wider than the week.** Weekend Prep's review list was scoped to the
+current week while 26 provisional tags waited, most of them older - which is why gate #36
+("confirm or edit at least ten of the 24") could not be worked from the screen built for it.
+The provisional half is now the whole backlog; `needs_review` stays week-scoped, because those
+145 rows carry no proposal and would bury the 26 that do. The week's rows sort first and a
+`Week` column names which population each row came from.
+
+**One deviation from the packet, and the reason.** The coverage line was asked for on Weekend
+Prep's verdict card. That card is five to eight lines by the trader's own request (V2 item 2b)
+and two tests pin it; a ninth line failed
+`tests/test_v2_weekend_verdict_and_refresh.py::test_one_unreadable_store_still_leaves_a_card`
+on the first full run. The sentence sits in its own label directly UNDER the card, filled from
+the tag page's existing worker through `TagWeekPage.coverageChanged` - same screen, same
+worker seam, no second read of the journal.
+
+**Live gate #79.**
+## ST3 - a stop filled at a level the bar never traded (2026-09-06)
+
+### What was measured, on `main` @ `84ee24d6`
+
+The review's fixture, reproduced by running the shipped `_evaluate_tracker_scenario_bar`
+itself rather than reading the code:
+
+| | entry | risk | hard stop | next bar | booked | R after the shipped costs |
+|---|---|---|---|---|---|---|
+| LONG, `literal_level_v1` | 100 | 5 | 95 | O80 / H85 / L79 / C82 | `HARD_STOP` @ **95** | **-1.014R** |
+| LONG, the honest fill | 100 | 5 | 95 | same bar | the open, **80** | **-4.014R** |
+| SHORT mirror | 100 | 5 | 105 | O120 / H121 / L115 / C118 | `HARD_STOP` @ **105** | 120 under v2 |
+
+The bar traded between 79 and 85. Nothing traded at 95. Three more shapes behaved the same
+way: a bar carrying no `open` at all still booked 95, a bar whose `open` was NaN still
+booked 95, and a candle whose own prices contradict each other (O93 / H90 / L95 / C92,
+`low` above both its `high` and its `open`) booked a fill off that `low`.
+
+Separately, `calc_anchored_vwap_band_history` folds day D's own OHLC and volume into the
+cumulative sums BEFORE it writes `history[D]`, so `history[D]` is a number that exists only
+once D has closed - and `recompute_tracker_setup_record` handed exactly that dict to the
+evaluator, whose target tests read the SAME day's `high` and `low`. The test that pins this
+builds a day whose typical price sits on the running VWAP with three times the accumulated
+volume, so folding it in leaves the VWAP where it was and halves the running deviation; the
+day's own `UPPER_3` then sits INSIDE its own range while the previous day's sits above it.
+`same_session_v1` books a target there. `prior_session_v2` does not.
+
+### The rules this produced
+
+- **A fill is a price that traded.** Under `gap_aware_v2` a bar that opened through the
+  level fills at the OPEN (basis `gap_open`), a bar with no usable open fills at the level
+  CLAMPED into `[low, high]` (`clamped_no_open`), and the price is always inside the bar -
+  `resolve_fill` raises rather than returning one that is not.
+- **The convention is SYMMETRIC.** A stop gap and a target gap are the same mechanic: a
+  resting order whose price is already through at the open fills at the open. That makes
+  the repair better for the trade as often as it is worse, and the measurement below says
+  which dominates. An asymmetric "stops honest, targets at the level" convention is a
+  different policy and would be a different version.
+- **An invalid candle answers nothing and cancels nothing.** It books no fill
+  (`invalid_bar`), no excursion is read off it, and the hold clock still advances: an
+  invalid bar on the maximum-hold index DEFERS the `TIME_STOP` to the next valid bar with
+  basis `deferred_invalid_bar` (lead decision, 2026-09-06).
+- **Only the INTRABAR tests move under `prior_session_v2`** - the partial-target and
+  final-target touches. The hard stop is `entry_price - risk x multiple`, fixed at entry
+  and point-in-time clean already. The two-closes protective stop, the recorded
+  `active_stop_level` and the maximum-hold force close are CLOSE-based and keep day D's
+  levels, because at the close day D's levels are known.
+- **A skip is counted, never read as "not hit".** A prior-session level that does not exist
+  increments `intrabar_skip_reasons["no_prior_session_level"]` on the scenario.
+- **A default run leaves no label.** The record carries `execution_convention` /
+  `level_knowledge` only for a non-default run, and a default run POPS them, so a record
+  replayed once under v2 cannot keep a name the desk did not use.
+- **An invalid bar skips the WHOLE bar, not just the fill.** Under v2 no excursion
+  (`max_favorable_r` / `max_adverse_r`) is read off an invalid candle and no unrealized
+  mark is written from it, because both would be derived from the same contradictory
+  prices. Under v1 all three are still taken - that difference is the point of naming the
+  two conventions. The skip is counted as `skipped_bar_reasons["invalid_bar"]`.
+- **The deferral label reaches the `TIME_STOP` and no other exit.** `time_stop_deferred`
+  says "an unusable bar sat on the max-hold index"; an exit that fires ahead of the time
+  stop on the same bar is its own decision and books `close` (or its own gap basis). The
+  flag is cleared on EVERY path that closes the scenario, so a closed record never carries
+  a stale `time_stop_deferred: True`.
+
+### The comparison, on copies (ST3.3)
+
+Seed 20260906 across the whole 11,372-record COPY of the SQLite mirror, daily bars from
+the machine cache (633 symbols). **The denominator is `n_setups` 794** - 800 records were
+OFFERED, 6 carry no tradeable scenario, 0 lacked bars, 0 failed to replay. `--limit` is
+what was offered and is never the denominator; the first write-up quoted 800 and invited
+exactly that confusion, so the CLI now prints
+`population: n_setups 794 compared (offered 800, untradeable skipped 6, no cached bars
+skipped 0, replay failed 0)` and the JSON carries a `population_note` saying the same.
+The three JSON/CSV pairs live at
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\`.
+
+| run | changed | expectancy (raw) | win rate (Wilson lower) | R < -2 | groups moved rank |
+|---|---|---|---|---|---|
+| both repairs | 472 of 794 | -0.0981 -> -0.1192 | 0.576 -> 0.596 (0.541 -> 0.561) | 47 -> 48 | 43 of 50, max 14 |
+| `gap_aware_v2` only | 89 of 794 | -0.0981 -> -0.0811 | 0.576 -> 0.597 (0.541 -> 0.562) | 47 -> 47 | 33 of 50, max 9 |
+| `prior_session_v2` only | 458 of 794 | -0.0981 -> -0.1491 | 0.576 -> 0.548 (0.541 -> 0.513) | 47 -> 48 | 40 of 50, max 17 |
+
+Three things the numbers say that the code alone does not. **The clip hides the tail**: the
+first draft reported `min R -4.0 -> -4.0`, which is `TRACKER_SCORING_R_CLIP` (4.0) inside
+`_summarize_tracker_setup_outcome`, not a measurement - a -6R gap fill and a -4R one are the
+same number after clipping, so the artifact carries the CLIPPED R (what scoring reads) and
+the RAW R (where the tail lives) side by side and never blends them. **The execution
+repair mostly HELPS**: of the 89 setups it moved, 84 got better and 5 got worse, because
+166 setups touched a `gap_open` and most of those are targets opening through their price.
+The prior-session level knowledge is what costs expectancy (413 of its 458 moved setups are
+worse). `min R` is -65.6011 under every policy - the sample's worst trade was already filled
+inside its own bar.
+
+And **the `invalid_bar` counter earned itself on the first run**: 380 scenario-bars over 26
+setups / 22 symbols, and each of those 22 cached daily-bar files holds exactly ONE invalid
+candle, all of them dated **2026-09-04**, every one with `low > open` or `high < open` -
+AEE `O=105.81 H=106.96 L=106.11`, TWLO `O=239.52 H=239.29 L=231.21`, GPGI `O=14.195
+H=13.925`. That is the signature of a FORMING bar written into
+`%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` mid-session, where the "low" is the
+low since the snapshot rather than the day's. Under `literal_level_v1` - what the desk runs
+today - those bars are still read for fills, excursions and marks. This is a read of a
+machine-local cache and NOT a claim about the tracker or the durable store; it is outside
+ST3's scope and is recorded because an uncounted skip would have hidden it.
+`no_prior_session_level`, by contrast, fired 4 bar-tests over 1 setup - real, and rare.
+
+**Live gate #77** is the artifact plus a negative: the desk's next persisted tracker write
+must carry no `execution_convention` and no `level_knowledge` key on any record, and no
+event dict a `fill_basis`. The trader's decision on whether the repaired pair becomes the
+scoring convention is asked separately; nothing on this branch takes it.
 ## ST1 - the family win was a favorable move at a scan-row offset (2026-09-06)
 
 Trader, 2026-09-06: *"Name and version favorable price-direction observations separately

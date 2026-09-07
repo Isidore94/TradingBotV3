@@ -545,6 +545,33 @@ class TradesTab(QFrame):
             self.statusChanged.emit(f"could not load trades: {exc}")
         self._populate_table()
 
+    def select_trade(self, trade_id: str) -> bool:
+        """Put one trade on screen by id. Returns whether it was found.
+
+        ST5.5's door: Weekend Prep's "Missing planned risk" list refers a trade
+        HERE, because this is where `save_risk_fields` lives and the trader's
+        own hand is the only writer of `planned_risk`. Selecting the row is all
+        this does - it clears the tag filter first when the row is loaded but
+        hidden by it, since a filter silently swallowing a referral looks
+        exactly like a trade that does not exist.
+        """
+        wanted = str(trade_id or "").strip()
+        if not wanted:
+            return False
+        if not any(trade.trade_id == wanted for trade in self._trades):
+            self.reload()
+        if not any(trade.trade_id == wanted for trade in self._trades):
+            return False
+        if not any(trade.trade_id == wanted for trade in self._visible_trades()):
+            self.tag_filter.setCurrentIndex(0)
+            self._populate_table()
+        visible = self._visible_trades()
+        for row, trade in enumerate(visible):
+            if trade.trade_id == wanted:
+                self.table.selectRow(row)
+                return True
+        return False
+
     def _on_tag_filter_changed(self, _index: int = -1) -> None:
         """Re-render the rows already loaded. The signal carries an index; the
         table does not need it, and `_populate_table` takes no argument."""

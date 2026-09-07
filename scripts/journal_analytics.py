@@ -969,7 +969,361 @@ def build_analytics_summary(
     #: setups" is otherwise two answers to the same question with nothing to
     #: separate them.
     summary["provisional_groups"] = ["provisional setups"]
+    # ST5.4: the four never-pooled populations, the coverage line and the
+    # refusal to name a best setup, computed over the SAME rows this summary
+    # already holds. Additive - every existing key is untouched - and it costs
+    # one pass in memory, so the tab that renders it opens no second query.
+    summary["personal_evidence"] = personal_evidence_summary(trades)
     return summary
+
+
+#: The three populations that PARTITION every trade, by STATUS (ST5.4, fixed
+#: after the reviewer's reproduction 2026-09-06). What finished, what is half
+#: out, and what is still on.
+PERSONAL_EVIDENCE_STATUS_POPULATIONS = (
+    "complete",
+    "partly_closed",
+    "open_exposure",
+)
+
+#: The blocks a reader iterates: the three status populations plus the
+#: CROSS-CUTTING `uncertain` label. `uncertain` is NOT a fourth bucket - its
+#: members are already counted in one of the three - so these four do not sum
+#: to the whole and are not meant to.
+PERSONAL_EVIDENCE_POPULATIONS = PERSONAL_EVIDENCE_STATUS_POPULATIONS + ("uncertain",)
+
+
+def _population_of(trade: dict[str, Any], exposure=None) -> str:
+    """Which STATUS population this trade belongs to. Exactly one, always.
+
+    **Status decides, and uncertainty is a LABEL on top of it.** The first cut
+    of this function checked ``exposure.is_uncertain`` FIRST, which made
+    "uncertain" a fourth bucket that ate the other three. Reproduced on a copy
+    of the live journal 2026-09-06: `uncertain` came out **n=120** holding 84
+    CLOSED trades, ALL 7 CLOSED_PARTIAL and 29 of the 32 OPEN ones - so
+    `partly_closed` read **n=0** while seven exist, `open_exposure` read n=3
+    with a notional of 7,726 against roughly 9% of the real open exposure, and
+    one pooled P&L figure summed realized results together with OPEN positions'
+    unrealized marks and counted those marks as WINNERS.
+
+    That is the exact defect this whole summary exists to prevent, one level
+    down. So: CLOSED is complete, CLOSED_PARTIAL is partly closed, everything
+    else is open exposure (an unrecognised status is open, never a result), and
+    whether the instrument or the structure can be named is carried beside each
+    of them as ``n_uncertain`` plus the cross-cutting ``uncertain`` block.
+
+    ``exposure`` is accepted and ignored so every existing caller still works.
+    """
+    status = str(trade.get("status") or "").upper()
+    if status == "CLOSED":
+        return "complete"
+    if status == "CLOSED_PARTIAL":
+        return "partly_closed"
+    return "open_exposure"
+
+
+def _cad_pnl(trade: dict[str, Any]) -> float | None:
+    for key in ("net_pnl_cad", "net_pnl"):
+        value = _coerce_float(trade.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _notional(trade: dict[str, Any]) -> float | None:
+    quantity = _coerce_float(trade.get("quantity_opened"))
+    price = _coerce_float(trade.get("average_entry_price"))
+    if quantity is None or price is None:
+        return None
+    return abs(quantity) * abs(price)
+
+
+def _bias_cell(rows: list[dict[str, Any]], *, with_pnl: bool) -> dict[str, Any]:
+    """One cell: how many, how many won, how much - or nothing, said as nothing.
+
+    ``with_pnl`` is False for open exposure, and there it means BOTH halves are
+    absent: ``net_pnl`` is ``None`` and ``winners`` is ``None``. An open
+    position's mark is not a result and counting it as a win is the blocker this
+    cell was rebuilt for. An EMPTY bucket also reports ``None`` rather than
+    ``0.0`` - a blank cell says "nothing here", where a net of 0.00 says
+    "measured, and it came to nothing".
+    """
+    pnls = [_cad_pnl(row) for row in rows]
+    measured = [value for value in pnls if value is not None]
+    return {
+        "n": len(rows),
+        "winners": (sum(1 for value in measured if value > 0) if with_pnl else None),
+        "net_pnl": (sum(measured) if with_pnl and measured else None),
+        "trade_ids": [str(row.get("trade_id") or "") for row in rows],
+    }
+
+
+def personal_evidence_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Four populations, a market-bias split, and what the journal cannot say.
+
+    ST5.4, from the trader's own words: *"Separate complete trades, partly
+    closed trades, open exposure, and instrument/strategy uncertainty in
+    summaries"* and *"Do not tell me a personal setup is best when there are no
+    confirmed tags."*
+
+    * **Never pooled.** The four populations partition the input - every trade
+      lands in exactly one, and their counts sum to the whole.
+    * **An open position has NO result.** ``open_exposure["net_pnl"]`` is
+      ``None``, not zero: an unrealized number read as a result is the defect
+      this separation exists to prevent. Its size travels as ``notional``.
+    * **The bias split is `journal_exposure`'s**, so a sold put counts as
+      ``bullish_or_neutral`` and a bought put as ``bearish``. ``unknown`` is its
+      own bucket and is printed, never dropped.
+    * **No "best" without confirmed tags at the floor.** ``best_setup`` is
+      ``None`` until the trader's own confirmed tags reach
+      ``evidence_stats.MIN_REPORTABLE_N``, and the headline says so with the
+      provisional count beside it. A provisional tag is a machine's guess and
+      has never been an answer.
+
+    Pure and read-only: no store is opened, and nothing here computes a
+    ``planned_risk`` from an outcome - that number is the trader's own and
+    ``JournalStore.save_risk_fields`` is its only writer.
+    """
+    from evidence_stats import MIN_REPORTABLE_N
+    from journal_exposure import BIAS_UNKNOWN, DIRECTIONAL_BIASES, classify_all
+    from swing_headline import wilson_lower_bound
+
+    rows = [row for row in trades if isinstance(row, dict)]
+    exposures = classify_all(rows)
+
+    def _exposure_of(row):
+        return exposures.get(str(row.get("trade_id") or ""))
+
+    buckets: dict[str, list[dict[str, Any]]] = {
+        name: [] for name in PERSONAL_EVIDENCE_STATUS_POPULATIONS
+    }
+    for row in rows:
+        buckets[_population_of(row)].append(row)
+
+    summary: dict[str, Any] = {}
+    for name, bucket in buckets.items():
+        # OPEN exposure has no result at all: no net, no winners, no USD total.
+        # The other two are measured populations.
+        with_pnl = name != "open_exposure"
+        by_bias: dict[str, list[dict[str, Any]]] = {BIAS_UNKNOWN: []}
+        structures: dict[str, int] = {}
+        uncertain_rows: list[dict[str, Any]] = []
+        for row in bucket:
+            exposure = _exposure_of(row)
+            bias = exposure.market_bias if exposure is not None else BIAS_UNKNOWN
+            by_bias.setdefault(bias, []).append(row)
+            key = exposure.structure if exposure is not None else "unknown"
+            structures[key] = structures.get(key, 0) + 1
+            if exposure is None or exposure.is_uncertain:
+                uncertain_rows.append(row)
+        cell = _bias_cell(bucket, with_pnl=with_pnl)
+        usd = [_coerce_float(row.get("net_pnl_usd")) for row in bucket]
+        cell.update(
+            {
+                # Both currencies, and USD only when EVERY row in the bucket
+                # booked one - a partial sum under a currency heading is the
+                # defect the journal's own `resolve_pnl_key` already refuses.
+                "net_pnl_usd": (
+                    sum(value for value in usd if value is not None)
+                    if with_pnl and bucket and all(value is not None for value in usd)
+                    else None
+                ),
+                "by_market_bias": {
+                    bias: _bias_cell(bias_rows, with_pnl=with_pnl)
+                    for bias, bias_rows in by_bias.items()
+                },
+                "by_structure": structures,
+                # The cross-cutting label, counted where it applies. A reader of
+                # `complete` sees at once how much of that population rests on
+                # an instrument or a structure the store cannot name.
+                "n_uncertain": len(uncertain_rows),
+                "uncertain_trade_ids": [
+                    str(row.get("trade_id") or "") for row in uncertain_rows
+                ],
+            }
+        )
+        if name == "open_exposure":
+            notionals = [_notional(row) for row in bucket]
+            cell["notional"] = (
+                sum(value for value in notionals if value is not None)
+                if any(value is not None for value in notionals)
+                else None
+            )
+            cell["notional_unmeasured"] = sum(1 for value in notionals if value is None)
+        summary[name] = cell
+
+    # ------------------------------------------------------------------
+    # `uncertain` - a LABEL across the three, never a bucket beside them
+    # ------------------------------------------------------------------
+    uncertain_all = [
+        row
+        for row in rows
+        if (_exposure_of(row) is None or _exposure_of(row).is_uncertain)
+    ]
+    uncertain_by_bias: dict[str, list[dict[str, Any]]] = {BIAS_UNKNOWN: []}
+    uncertain_structures: dict[str, int] = {}
+    for row in uncertain_all:
+        exposure = _exposure_of(row)
+        bias = exposure.market_bias if exposure is not None else BIAS_UNKNOWN
+        uncertain_by_bias.setdefault(bias, []).append(row)
+        key = exposure.structure if exposure is not None else "unknown"
+        uncertain_structures[key] = uncertain_structures.get(key, 0) + 1
+    # NO POOLED MONEY HERE. Its members span three statuses, and one figure over
+    # a closed result and an open mark is exactly what the reviewer measured.
+    # The money is already reported, once, inside whichever status population
+    # owns the row.
+    uncertain_cell = _bias_cell(uncertain_all, with_pnl=False)
+    uncertain_cell.update(
+        {
+            "net_pnl_usd": None,
+            "cross_cutting": True,
+            "by_market_bias": {
+                bias: _bias_cell(bias_rows, with_pnl=False)
+                for bias, bias_rows in uncertain_by_bias.items()
+            },
+            "by_structure": uncertain_structures,
+            "by_population": {
+                name: summary[name]["n_uncertain"]
+                for name in PERSONAL_EVIDENCE_STATUS_POPULATIONS
+            },
+            # Every member, named with the status it is ALSO counted under, so
+            # nobody has to guess which population a listed trade came from.
+            "members": [
+                {
+                    "trade_id": str(row.get("trade_id") or ""),
+                    "symbol": str(row.get("symbol") or ""),
+                    "status": str(row.get("status") or "").upper(),
+                    "population": _population_of(row),
+                    "instrument": (
+                        _exposure_of(row).instrument if _exposure_of(row) else "UNKNOWN"
+                    ),
+                    "structure": (
+                        _exposure_of(row).structure if _exposure_of(row) else "unknown"
+                    ),
+                    "market_bias": (
+                        _exposure_of(row).market_bias if _exposure_of(row) else BIAS_UNKNOWN
+                    ),
+                }
+                for row in uncertain_all
+            ],
+            "note": (
+                "Counted inside the population its status puts it in; listed here "
+                "because the instrument or the structure cannot be named. No money "
+                "is pooled across the three."
+            ),
+        }
+    )
+    summary["uncertain"] = uncertain_cell
+
+    # ------------------------------------------------------------------
+    # coverage - ONE denominator for both tag lanes
+    # ------------------------------------------------------------------
+    closed = [row for row in rows if str(row.get("status") or "").upper() == "CLOSED"]
+    partly = [row for row in rows if str(row.get("status") or "").upper() == "CLOSED_PARTIAL"]
+    # REVIEWABLE = closed OR partly closed. The first cut counted confirmed tags
+    # over CLOSED only and provisional over EVERY row, so the live journal's one
+    # confirmed tag - on a CLOSED_PARTIAL trade, EAT 2026-08-21 - fell out of the
+    # numerator while its 26 provisional siblings stayed in, and the headline
+    # said "No confirmed setup tags" about a journal that holds one. A tag on a
+    # half-closed trade is still the trader's answer.
+    reviewable = closed + partly
+    confirmed_rows = [row for row in reviewable if _confirmed_setup_tags(row)]
+    provisional_rows = [row for row in reviewable if _provisional_setup_tags(row)]
+    risk_rows = [row for row in reviewable if _coerce_float(row.get("planned_risk")) is not None]
+    total = len(reviewable)
+    coverage = {
+        "confirmed": len(confirmed_rows),
+        "closed": len(closed),
+        "partly_closed": len(partly),
+        "reviewable": total,
+        "provisional": len(provisional_rows),
+        "planned_risk": len(risk_rows),
+        "line": (
+            f"Confirmed tags: {len(confirmed_rows)} of {total} closed or partly "
+            f"closed trades. Provisional awaiting review: {len(provisional_rows)}. "
+            f"Planned risk recorded: {len(risk_rows)} of {total}."
+        ),
+    }
+
+    best, headline = _best_confirmed_setup(
+        confirmed_rows, coverage, floor=MIN_REPORTABLE_N, wilson=wilson_lower_bound
+    )
+    summary["coverage"] = coverage
+    summary["best_setup"] = best
+    summary["headline"] = headline
+    summary["populations"] = list(PERSONAL_EVIDENCE_POPULATIONS)
+    summary["status_populations"] = list(PERSONAL_EVIDENCE_STATUS_POPULATIONS)
+    summary["directional_biases"] = list(DIRECTIONAL_BIASES)
+    return summary
+
+
+def _best_confirmed_setup(
+    confirmed_rows: list[dict[str, Any]],
+    coverage: dict[str, Any],
+    *,
+    floor: int,
+    wilson,
+) -> tuple[dict[str, Any] | None, str]:
+    """The best CONFIRMED setup, or the refusal that stands in for it.
+
+    Two refusals, one sentence each, and the phrase *"no personal setup can be
+    called best"* survives in both because that is the claim being refused.
+    Above the floor the winner is chosen the way decision 0016 requires of every
+    trader-facing surface: **win rate first, ranked on the Wilson LOWER BOUND**
+    (`swing_headline`'s one z), with the raw rate and n beside it.
+    """
+    confirmed = int(coverage["confirmed"])
+    provisional = int(coverage["provisional"])
+    if confirmed <= 0:
+        return None, (
+            f"No confirmed setup tags ({provisional} provisional awaiting review) - "
+            "no personal setup can be called best."
+        )
+    if confirmed < int(floor):
+        # NAMES THE COUNT IT HAS. "No confirmed setup tags" is reserved for a
+        # true zero: the live journal holds ONE (on a CLOSED_PARTIAL trade, EAT
+        # 2026-08-21) and saying it holds none is a false statement about the
+        # trader's own work, not a conservative one.
+        tags = "tag" if confirmed == 1 else "tags"
+        return None, (
+            f"{confirmed} confirmed setup {tags} - under the n={int(floor)} floor "
+            f"({provisional} provisional awaiting review) - "
+            "no personal setup can be called best."
+        )
+
+    per_tag: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in confirmed_rows:
+        for tag in _confirmed_setup_tags(row):
+            per_tag[tag].append(row)
+    ranked: list[dict[str, Any]] = []
+    for tag, tag_rows in per_tag.items():
+        pnls = [_cad_pnl(row) for row in tag_rows]
+        measured = [value for value in pnls if value is not None]
+        if len(measured) < int(floor):
+            continue
+        wins = sum(1 for value in measured if value > 0)
+        ranked.append(
+            {
+                "label": tag,
+                "n": len(measured),
+                "wins": wins,
+                "win_rate": wins / len(measured),
+                "win_rate_lower_bound": wilson(wins, len(measured)),
+                "net_pnl": sum(measured),
+            }
+        )
+    if not ranked:
+        return None, (
+            f"{confirmed} confirmed setup tag(s), but no single setup reaches "
+            f"{int(floor)} closed trades - no personal setup can be called best."
+        )
+    ranked.sort(key=lambda row: (-(row["win_rate_lower_bound"] or 0.0), row["label"]))
+    best = ranked[0]
+    return best, (
+        f"Best confirmed setup: {best['label']} - win rate {best['win_rate'] * 100:.0f}% "
+        f"on n={best['n']} (Wilson lower bound "
+        f"{(best['win_rate_lower_bound'] or 0.0) * 100:.0f}%)."
+    )
 
 
 #: Below this share of closed trades, a confirmed-tag dimension is not a

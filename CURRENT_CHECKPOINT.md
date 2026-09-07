@@ -19,12 +19,12 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-06 morning (Sunday): the Q4 spot-audit done against the raw stores and RECORDED (`gate_met: true`), two stale packs (2026-08-28, 2026-09-02, both read before the frozen desk's sweep wrote the day) rebuilt through the new human-run `python -m ai_jobs.digest rebuild --pack <date>`, and the three open scoring questions DECIDED on the trader's *"go ahead and do this yourself"*: (a) swept-measured trades stay OUT of the eod-hold tier cells (golden characterization added), (b) `EXPIRED_UNMEASURED` stays IN the scoring population, (c) M3's 28 are `UNTRADEABLE` and already outside every count - see the 2026-09-06 entry. Before that, 2026-09-05 evening: Phases 0.19 and 0.21 (M1-M5) MERGED at `918445f3`** - the five measurement repairs from the trader's *"Fix all of these failures including the one we just queued"*: M1 the band challenger measures (the catch-up path carries the block; 0 of 11,292 measured since 08-26), M2 `unresolved` means UNMEASURED (3,607 swept trades that measured their bars were labelled unresolved), M3 the tracker keeps up (the purity gate honours the Yahoo pin that was refusing the only writer slot; two clocks; `EXPIRED_UNMEASURED`), M4 both band families in the lake with a twin swing recipe, M5 the control/study populations and the April exit framework reach the Setup Tracker. Every branch reviewed by reproduction (M1 GO, M2 GO, M3 GO after three blocker rounds incl. a NameError on the tracker-write path, M4 GO, M5 GO after one). Same evening: **INCIDENT** - two reviewer scratch scripts overwrote the live tracker and the leaderboard CSVs; restored byte-exact from the mirror copy and re-exported (see the 19:56 entry); the scratch-script rule is in CLAUDE.md. |
-| Working branch | `main` at `918445f3`. Phase 0.20 (N1-N3, the other session, afternoon) and Phases 0.19/0.21 (M1-M5, this session, evening) both merged through scratch worktrees; the M merge took main's cleaned-up control files as the base and re-inserted the M bullets, renumbered the M gates to #70-#74 (Phase 0.20 had taken #65-#67) and M4's decision to BD-102 (N3 took BD-101). |
-| Unmerged / open | **Repo cleaned 2026-09-05 ~21:30 PT** (trader: *"clean up the repo as needed"*): 42 merged branches deleted on `origin` and locally, 100 throwaway `worktree-agent-*` refs and 42 registered worktrees removed, every one proven contained in `main` first; the record is `docs/BRANCH_HISTORY.md` ("The 2026-09-05 cleanup"). Left: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree LOCKED by the other session), two local-only pre-consolidation branches. `claude/m1-band-variant-handoff`, `m2-unresolved-means-unmeasured`, `m3-tracker-keeps-up`, `m4-lake-band-variant`, `m5-shown-and-read`, the five Q branches and the three N branches are all CONTAINED in `main`. `claude/s1-quick-verbs` stays UNMERGED (S1.3 owed a decision). Open incident 2026-09-03 (13 reviewer PUBLISH rows in the lake) is the trader's call. `local_writer_lock` never unlinks its lock files - 89,406 stale ones removed by hand tonight; a sweep-on-release packet is owed. |
-| Next action | **Live gates #70-#74 at the next close slot - Tuesday 2026-09-08 13:00 PT; Monday 2026-09-07 is Labor Day, not a session (`market_calendar.is_session` checked 2026-09-06)**: the tracker writes (`saved_by: close_slot`, the purity line with `pin=yahoo`), the band-variant stats fill, the Controls / Studies / Exit frameworks tabs render, and the after-close sweep logs the four-way split. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63's audit half was met 2026-09-06).** The two scoring questions and M3's third population are DECIDED (2026-09-06 entry: (a) NO, (b) NO, (c) `UNTRADEABLE`), so nothing there is owed. Then V4. |
-| Trader actions owed | None from 2026-09-06: the spot-audit is recorded and the three decisions are taken (the trader may overrule any of them; each is one sentence in the 2026-09-06 entry and the CHANGELOG). Still owed from earlier: the 2026-09-03 lake incident call (13 reviewer PUBLISH rows), the lock-file sweep packet, restart the desk only when a code change lands (today's `rebuild` subcommand is CLI-only; the desk needs no restart for it). |
-| Last verified baseline | **`main` working tree of 2026-09-06 ~07:40 PT (the digest `rebuild` subcommand + four tests + docs), on the desk's checkout: `pytest tests/ -q` with NOTHING DESELECTED: 6928 passed, 1 skipped, 72 subtests passed, ZERO failures, exit 0, 5 min 20 s.** The first full run that morning had ONE failure that predates this work: `test_no_active_document_quotes_a_detail_string_the_code_no_longer_emits` guards the glance block for the `POSITION_SOURCE_IDS` sentence, which the 2026-09-05 cleanup commits (`ee325704`/`db58beeb`) dropped when they rewrote the Working-branch cell; restored in gate #62's row, re-run green. `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7. No packaging trigger (a subcommand inside an already-collected package). Previous: `918445f3`, 6924 passed. |
+| Latest work | **2026-09-06 (Sunday, 06:10-18:30 PT): the Setup Tracker review repairs - packets ST1-ST5 MERGED at `22cc84d3`**, from the trader's *"Please repair the Setup Tracker findings below, then finish the existing Working-lately experience"*: ST1 each outcome names its meaning (`outcome_kind` = favorable direction at a scan-row offset, NOT a stop-rule win; `swing_evidence.read_eligible_rows` the one reader; exact-session v2 rows in their own shadow file); ST2 integer counts at every table's grain and ONE leader (`working_lately.select_leader`, the Setup Types tab's own win rate - V3 item 1 complete); ST3 a versioned execution convention and prior-session level knowledge (default byte-identical; the comparison on 794 setups is evidence, not a change); ST4 the first-actionable selection policy prepared beside today's (default byte-identical; a cache-bypass that would have zeroed the live score deltas caught in review); ST5 personal evidence by status with uncertainty as a label, the 10-SESSION window, counts by trade, no best setup without confirmed tags. Every branch tester-first, built, and reviewed by reproduction (ST1 GO after two rounds, ST2 GO after three, ST3 GO, ST4 GO after one, ST5 GO after one). **ST6 (the Working-lately strip, the priority switch, the AWAY Recap) is BUILT on `claude/st6-working-lately` and NOT merged**: its reviewer found four blockers (switch OFF must restore arrival order, the row cap before the priority view, the day-trade bound on `held_run_score` itself, the favorable kind's clock is its measured session) and the fix round died on the session limit at 17:30 PT with the builder mid-way. The same morning the other session recorded the Q4 spot-audit and decided the three scoring questions (its 2026-09-06 entry), and a third session opened the Phase 0.22 layout lane. |
+| Working branch | `main` at `22cc84d3` (fast-forwarded from `lead/merge-st`, the scratch merge worktree). Merge order ST5, ST3, ST1, ST2, ST4 with the two Phase 0.22 docs commits from the layout lane folded in; every conflict was in the control docs and both entries were kept. |
+| Unmerged / open | **`claude/st6-working-lately` (ST6, built, NO-GO with four blockers, fix round interrupted)** - the builder's worktree `agent-a56c7e1940a60d707` holds partial fix-round work; resume it (SendMessage to that builder) or re-spawn against the reviewer's list in the 2026-09-06 ST6 entry, then re-merge ST2 `7e541514` and ST4 `9d75a27f` into it. Left from before: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree locked by another session), the 2026-09-03 lake incident call, the lock-file sweep packet. **New finding needing its own packet (ST3's counter, reviewer-widened): 100 of the 1,980 cached daily-bar files under `%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` end in a FORMING candle (open outside [low, high]) on seven sessions (2026-09-04 x89), and the live default replay reads them for fills, excursions and marks.** |
+| Next action | **Restart the desk (trader's call) so ST1-ST5 are live, then Tuesday 2026-09-08 13:00 PT (Monday is Labor Day): live gates #70-#74 from before plus #75 (ST1), #76 (ST2), #78 (ST4), #79 (ST5) at the first persisted tracker write and the first nightly run; #77 (ST3) is the comparison artifact.** Then finish ST6 (above). Then the trader's decisions (below). Phase 0.22 (the layout lane, G0-G7) runs in the other session on branches based on `lead/merge-st`. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63).** |
+| Trader actions owed | **Three scoring decisions, each with frozen before/after evidence on copies (nothing live changed):** (1) ST4 pending-stays-pending - v1 grades ~228 episodes as losses on an alternate exit that closed while the representative trade was still running; honouring `representative_status` moves the same 2,249 theses from 61.6% to 70.5% favorable and is 94% of the mean-R move - a pure honesty fix, could be authorised alone; (2) ST4 first-actionable re-entries - 463 second attempts after a closed first attempt, winning 80% AFTER the fix, but that population exists only because the first attempt closed (survivorship by construction) - decide whether a re-entry is its own trade; (3) ST3 `gap_aware_v2` / `prior_session_v2` - the execution repair HELPS (89 of 794 changed, expectancy -0.098 to -0.081) and the prior-session level knowledge HURTS (458 changed, -0.098 to -0.149) because same-day bands were peeking; decide whether either becomes the scoring convention, and whether targets should gap-fill at the open like stops or a stops-only convention needs its own name. Also: restart the desk; the 26 provisional tags await review in Weekend Prep; record planned risk on new trades (0 of 172 have it). |
+| Last verified baseline | **`lead/merge-st` at `22cc84d3` (== `main` after the ff), 2026-09-06 evening, in the scratch merge worktree, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 7063 passed, 3 skipped, 72 subtests passed, ZERO failures, exit 0, 7 min 20 s.** `ruff` clean, CLAUDE.md == AGENTS.md (trimmed from 53.0 KB to 50.1 KB this evening; a further pass to the ~45 KB rule is owed), smoke 7/7, source selftest 74/74. No packaging trigger (five new modules inside already-collected trees, no dependency, no non-`.py` asset). Previous: `main` 84ee24d6, 6928 passed. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
 | Desk | **RESTARTED 21:18 PT 2026-09-05 on `main` at `e1a2de15` (pid 9036, trampoline 25260) on the trader's "You restart the desk"**: the old desk (pid 29260, `a6fb1a8d`) closed cleanly through `CloseMainWindow` (both writer leases released in the log), and two launches through `trading_desk.cmd` from a hidden `cmd /c` left no process, so the lead started `.venv\Scripts\python.exe launch_gui.py` directly with stdout/stderr captured under the session scratchpad (`desk_stdout.log`: "desk slot held"); `trading_bot.log` shows Auto Pilot ON from saved state, weekend quiet hours, IB 502 (TWS off on a Saturday, expected), 668 MB at 60 s. N1-N3 and M1-M5 are LIVE on this desk. The heartbeat file is not refreshed on a weekend (still pid 600 / 09-04 14:11), as on the previous restart. |
 
@@ -33,8 +33,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | # | Gate | Owed by |
 |---|---|---|
 | 80 | **One reading, four surfaces, and a switch that only reorders (ST6)** - first DESK session after merge. (1) The **Working lately** strip at the TOP of the M5 alerts column prints a line for **all three kinds** - none may be silently absent - ending `as of <the last completed session>` and one `observational leader among K cells` PER KIND; the word *proven* appears nowhere on it. (2) `%LOCALAPPDATA%\TradingBotV3\working_lately\snapshot_latest.json` exists, is **under 48 KB**, and its `snapshot_id[:8]` is the SAME eight characters the Setup Tracker banner prints, with the words `panel read` ABSENT from that banner (their presence means the service never reached the page). (3) Clicking the strip lands on the Setup Tracker tab, where the Summary card and the banner name the SAME family. (4) The switch ON reorders the M5 list with the same row count and the same x N badges, and **OFF restores today's arrival order exactly** - toggle it twice on the running desk, which is the failure the re-review found. (5) `leader_change_events.jsonl` gains at most one line per kind per session, every `ts` carrying a market-local offset, and a desk RESTART adds none. **What a PASS looks like on day one, stated so it is not read as a defect:** `swing_trade_r` will read `no evidence - N cell(s) carry no measurable statistic` until the first post-merge CLOSE-SLOT tracker write, because today's live `master_avwap_setup_type_recent_stats.csv` predates ST2's integer columns; the swing verdict on the first snapshot that DOES have them will read `awaiting persistence (1 of 2)` rather than naming a leader, because the first build has no predecessor and a named leader on day one would mean the rule did not run; and a `daytrade_held_run` cell refused as `concentrated` is the rule working. **The day-trade line's bound must be BELOW its own statistic** (`held x ran 1.22 (>= 0.98, n=...)`) - the re-review found it printing `held x ran 1.21 (>= 2.070)` | 2026-09-06 ST6 entry |
+| 79 | **Personal evidence counts once and refuses to name a best setup (ST5)** - the next nightly `preference_trade_outcomes` slot writes a report whose ledger reason carries `n_trades_matched` beside `n_statements_matched` and names the window as `10 sessions`; on the current store expect **10 trades behind 13 matched statements** over a 45-day read (the pair is what makes the duplicate visible - equal numbers on a quiet window are not a failure, a MISSING `n_trades_matched` is). Then on the desk: Weekend Prep's "Tag this week" lists the **26 provisional rows** with `Week` reading `backlog` on the ones older than the current week, the "Missing planned risk" table lists closed trades with no plan (expect ~165, newest first) and one row opens that trade in the Journal's Trades tab; the coverage line under the verdict card reads `Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting review: 26. Planned risk recorded: 0 of 172.` and the Analytics tab shows that sentence beside `1 confirmed setup tag - under the n=30 floor (26 provisional awaiting review) - no personal setup can be called best.` **The Analytics tab's four population numbers must read 165 complete / 7 partly closed / 32 open summing to 204, with `uncertain` a cross-cutting 120 (84 / 7 / 29) carrying NO pooled money** - a `partly_closed` of 0 or an `uncertain` that sums beside the other three is the review's blocker back again. **Nothing here is a scoring change**: the champion's scoring population, every detector and every alert are untouched by construction | 2026-09-06 ST5 entry |
 | 78 | **The selection policy is stamped and the comparison is on the record (ST4)** - nothing live changes and nothing here promotes. (1) The desk's next persisted tracker write leaves `selection_policy = closed_first_v1` on EVERY recent family row, with an empty `as_of_session`, and those five ST4 columns sit at the END of the shipped header after ST2's - a row reading `first_actionable_v2` in an export is the defect this gate exists to catch. (2) **The scoring path is intact, which is the reviewer's blocker and the real check**: the first D1 scan after merge leaves `recent_tracker_score_delta` / `setup_type_score_delta` NONZERO on the setups that carried them, because the compact projection in `master_avwap_tracker_scoring_snapshot.json` has no `scenarios` and its `_scoring_outcome_summary` IS the record; on the 2026-09-05 snapshot the reproducible figures are **32 recent family rows and 74 nonzero `setup_type` score deltas over 11,372 projections**, and any run of those two builders that returns 0 is this gate failing. (3) `n_excluded`, `excluded_reasons` and `fully_excluded_groups` are present; the 28-day window on the 2026-09-03 mirror excluded 22 records under BOTH policies with 0 fully excluded groups, so expect a small number, never zero across all 32 cells. (4) The artifact stays readable at `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\selection_comparison_20260906T160305.json/.csv` with its README block, and its headline is the 2026-09-06 ST4 entry's (32 cells, 27 changed, 26 rank moves; v1 2,249 episodes / 61.6% / Wilson 0.593, v2 2,712 / 915 pending / 72.0% / Wilson 0.699). **A replay is blind to a COMPACTED record** (0 of 141,324 scenarios in this window, 99,562 of 206,341 across history), so an earlier `as_of_session` or a longer lookback must show `undatable_exit_in_population=N` rather than a swollen pending count. (5) **The trader's decision is OWED and this gate does not close without it**: keep `closed_first_v1`, or authorize `first_actionable_v2` as a separate change with its own golden fixtures - and v2 bundles TWO questions (the selection, and pending-stays-pending, which is 94% of the mean-R move). Until then no export, score, rank or alert may select v2 | 2026-09-06 ST4 entry |
-| 76 | **Real counts on the desk, and one honest leader (ST2)** - after the next persisted tracker write: (1) `master_avwap_setup_type_recent_stats.csv` and `master_avwap_setup_type_stats.csv` both carry `n_wins` / `n_losses` FILLED (not blank), and on the recent file `n_wins + n_losses + n_flats + n_unmeasured + n_pending == n_episodes` on every row, with `n_episodes == tracked_setups`. (2) The recent-types table shows **Win % (unweighted)** and **Win % (recency-weighted)** as two columns whose values DIFFER on at least one family - if every pair is equal the weighting had no bite that day, which is information, not a pass. (3) The Setup Types tab leads with **Win %**, and its population sentence names `trade_r_representative_exit`, states its window (`ALL HISTORY`) and ends with the expired clause - **`N expired unmeasured, excluded` when N > 0 and the literal `0 expired unmeasured` when none, never an empty tail** (M3's gate #72 clause 5 reads the first form). (4) The banner prints one of the four verdict states and, when it prints a leader, names the SAME family the recent table lists first by bound (pins are novelty badges and do not count); when it prints `discovery only`, the word "Leader" is absent from that line. (5) No study family is ever named as the leader, and the exclusion count is shown. (6) **The Summary card above the banner agrees with it - the same family AND the same verdict state**, on a fresh day and on a stale one (they are computed once per page, so a disagreement is a defect, not a race); its "Setup types working" block shows BOTH sides, and the Best Type Edge tile reads the biggest `score_delta` (live base `SHORT +23`), not the table's first row. (7) `master_avwap_setup_short_horizon.csv` carries `n_wins` / `n_losses` / `latest_measured_session` filled, with **`n_wins + n_losses + n_flats == samples_2d` and `samples_2d + n_unmeasured == tracked_setups`** on every row, and `latest_measured_session` at or near the last completed session rather than 40+ sessions back - it is the MEASURED bar's date, not the entry. (8) The 2-session block's label names its verdict state (`Short-term (1-2d), leader` when there is one) and the words "discovery" and "carries no session" are absent from a leader line | 2026-09-06 ST2 entry |
+| 77 | **The repaired execution convention is EVIDENCE and the desk did not move (ST3)** - not a live behaviour gate: (1) the artifacts exist and are READABLE by the lead - three JSON/CSV pairs in `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\` (`both__comparison_20260906T110731.*`, `exec_only__…110814.*`, `levels_only__…110855.*`), with the headline copied into the 2026-09-06 ST3 entry: **472 of 794 changed** (`n_setups` 794 is the artifact's OWN denominator - 800 were offered and 6 carried no tradeable scenario; `--limit` is never the denominator), raw expectancy -0.0981 -> -0.1192, 43 of 50 groups moved rank, plus the two single-axis runs, and (2) **the desk's next persisted tracker write carries NO `execution_convention` and NO `level_knowledge` key on any record** and no event dict carries a `fill_basis` - the default path is what runs. A record that grew either key is the failure this gate exists to catch. The trader's DECISION on whether `gap_aware_v2` / `prior_session_v2` becomes the scoring convention is asked separately and is not part of this gate | 2026-09-06 ST3 entry |
+| 76 | **Real counts on the desk, and one honest leader (ST2)** - after the next persisted tracker write: (1) `master_avwap_setup_type_recent_stats.csv` and `master_avwap_setup_type_stats.csv` both carry `n_wins` / `n_losses` FILLED (not blank), and on the recent file `n_wins + n_losses + n_flats + n_unmeasured + n_pending == n_episodes` on every row, with `n_episodes == tracked_setups`. (2) The recent-types table shows **Win % (unweighted)** and **Win % (recency-weighted)** as two columns whose values DIFFER on at least one family - if every pair is equal the weighting had no bite that day, which is information, not a pass. (3) The Setup Types tab leads with **Win %**, and its population sentence names `trade_r_representative_exit`, states its window (`ALL HISTORY`) and ends with the expired clause - **`N expired unmeasured, excluded` when N > 0 and the literal `0 expired unmeasured` when none, never an empty tail** (M3's gate #72 clause 5 reads the first form). (4) The banner prints one of the four verdict states and, when it prints a leader, names the SAME family the recent table lists first by bound (pins are novelty badges and do not count); when it prints `discovery only`, the word "Leader" is absent from that line. (5) No study family is ever named as the leader, and the exclusion count is shown. (6) **The Summary card above the banner agrees with it - the same family AND the same verdict state**, on a fresh day and on a stale one (they are computed once per page, so a disagreement is a defect, not a race); its "Setup types working" block shows BOTH sides, and the Best Type Edge tile reads the biggest `score_delta` (live base `SHORT +23`), not the table's first row. (7) `master_avwap_setup_short_horizon.csv` carries `n_wins` / `n_losses` / `latest_measured_session` filled, with **`n_wins + n_losses + n_flats == samples_2d` and `samples_2d + n_unmeasured == tracked_setups`** on every row, and `latest_measured_session` at or near the last completed session rather than 40+ sessions back - it is the MEASURED bar's date, not the entry. (8) The 2-session block's label names its verdict state (`Short-term (1-2d), leader` when there is one) and the words "discovery" and "carries no session" are absent from a leader line. **`not enough 2-session samples yet` appears ONLY when the block truly has no rows** - the live state is 12 eligible families 0.001 apart, which must render as `Short-term (1-2d), no clear leader`. (9) The swing line says **entry-dated** and the 2-session line says **measured**; neither claims the other's clock | 2026-09-06 ST2 entry |
 | 75 | **Each outcome carries its own clock (ST1)** - after the next persisted tracker write (Tuesday 2026-09-08 13:00 PT): (1) `master_avwap_session_horizon_outcomes.csv` exists beside `master_avwap_tier_outcomes.csv`, with `sessions_spanned == horizon_sessions` on EVERY measured row and a populated `unmeasured_reason` on every other one (expect `target_session_not_complete` on the newest scan dates and `no_bar_for_target_session` for symbols the scan held no frame for). (2) the v1 counts logged by the tier tracker on the same pass are UNCHANGED in shape. (3) The tier outcomes file's new `outcome_kind` column reads `favorable_direction_scanrow_v1` on every row, and the Master AVWAP setups table's header reads **Family favorable %** with a coverage line beside the status bar. (4) `setup_docs.family_record_coverage_line()` and `autopilot_core.swing_family_record_line()`, called in the same minute, print lines that are IDENTICAL TO EACH OTHER, and the tier performance export's population agrees with them on the stale rule. **Compare them to each other, never to a number written down here**: the window moves with the calendar, so the triple changes every session (`2587 / 0 / 16971` at `end=2026-09-03`, `2462 / 0 / 17096` on today's default window - both correct, and either would fail a stored-string check). (5) **`trading_bot.log` carries EXACTLY ONE line for this export**, and it is `Session-horizon outcomes exported N row(s), M measured, C same-session scan row(s) collapsed, D true duplicate(s) dropped` - the two counts SEPARATE. Expect D small (300 over the whole live history, 75 ids at four horizons) and C large (91,880); a four-figure D means a re-scan is being reported as a duplicate again. On a 30-session window over a history of this size, expect roughly 90,000 rows and ~25 MB. A run where the export FAILED logs `Session-horizon outcome export failed` instead and the run result carries `session_horizon_export_error` with NO counts - an absent count and a zero are different claims. **Nothing here promotes**: `POLICY_SESSION_V2` still has no production caller, and a decision to read v2 is the trader's | 2026-09-06 ST1 entry |
 | 74 | **The control and study populations are shown, and the April framework is read (M5)** - restated after the reviewer round so it can PASS (the first wording demanded an equal `n` the framework does not produce). After the next persisted tracker write: (1) `master_avwap_control_discovery.csv` and `master_avwap_study_discovery.csv` exist, the control file carrying its three cohort rows plus one family row per (side, family), in an `all` block AND a `lately` block, every row stamped `population_setups`. (2) The **Controls** tab's sentence reads `N graded episodes from the M control setups the scan REJECTED` with **N < M** and M near 401 (Studies likewise, M near 3,992) - the two numbers are different things and a tab printing one of them twice is the defect this clause replaces. (3) Both tables sort by the Wilson lower bound, not the raw rate. (4) The **Exit frameworks** tab shows `comparison_apr2026` rows beside `baseline` ones, grouped by side and bucket with the baseline above its twin, Experimental reading True. (5) **The denominators reconcile, which is the real check**: on a (side, bucket) where the template has no `blocked_stop_rules`, the comparison's `n` EQUALS the baseline's and `Filtered` is 0; on SHORT / near_favorite_zone for `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav`, `n + Filtered` equals the baseline's `n` (the reviewer measured 585 + 98 = 683 on the live tracker). A smaller `n` with a matching `Filtered` is the experiment working; a smaller `n` with `Filtered` 0 is a defect | 2026-09-05 M5 entry |
 | 73 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
@@ -120,6 +122,229 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 
 ### 2026-09-06 (Sunday) - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders
 
+### 2026-09-06 - ST5 BUILT: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
+
+**Branch note:** the tester's branch `claude/st5-personal-evidence` (tip `f6a28138`, base
+`main` at `84ee24d6`) was still held by the tester's worktree, so the build went on
+`claude/st5-personal-evidence-build` branched from that tip - the same convention ST3 used.
+The lead merges; both branches carry the same history and the build branch is ahead by two
+commits (`7a8c2ca0`, `6e06d5c2`) plus this documentation commit.
+
+**Baseline (after the review round):** `pytest tests/ -q` with nothing deselected, nightly
+AI lock probed FREE: **6955 passed, 1 skipped, 72 subtests passed, 0 failed, exit 0**,
+5 min 51 s. `ruff check .`
+clean. `scripts/smoke_check.py` 7/7. `launch_gui.py --selftest` 74/74. No packaging trigger:
+`scripts/journal_exposure.py` is a new MODULE inside the already-collected top-level
+`scripts/` tree, not a new package, not a new dependency, not a non-`.py` asset, and nothing
+imports it by string name.
+
+The first full run had ONE failure and it was mine, not pre-existing:
+`test_one_unreadable_store_still_leaves_a_card` asserts the Weekend Prep verdict card is
+5-8 lines, and the packet's coverage sentence made it 9. Fixed by placing the sentence in
+its own label under the card (see the deviation below), and re-run green.
+
+**What was built.** Every item of the packet:
+
+- **ST5.1** `preference_trade_outcomes.TRADE_WINDOW_SESSIONS` = 10, walked through
+  `market_calendar` by the new `statement_window_end`. The constant said DAYS and every
+  docstring in the module said SESSIONS; over Labor Day that is five real sessions
+  discarded - a statement on 2026-09-04 reached 2026-09-14 instead of 2026-09-21, so a
+  trade opened on the 18th read as "never taken". `TRADE_WINDOW_DAYS` stays one release as
+  an alias (grep: nothing in `scripts/` imported it). A calendar that refuses falls back to
+  the OLD, strictly NARROWER arithmetic - uncertainty may never widen a window into a match
+  nobody made. Confidence labels untouched.
+- **ST5.2** `trade_level_summary(rows)` and `summary_note(rows)`. The file stays one row per
+  STATEMENT; the money is summed ONCE per `trade_id`. Live: 538 rows, 13 `traded=yes`, **10
+  distinct trade ids**, so the statement-grain total was three trades' P&L too large.
+  `run_preference_trade_outcomes` now returns `n_statements_matched` / `n_trades_matched`
+  (live gate #79), and Weekend Prep's note prints both.
+- **ST5.3** new pure `scripts/journal_exposure.py`. `classify_exposure(trade)` ->
+  `Exposure(instrument, ownership_direction, market_bias, structure, certainty)`. A LONG
+  option is never a bullish setup; a bought put is `bearish`, a sold put
+  `bullish_or_neutral`, a sold call `bearish_or_neutral`; `UNKNOWN`, `BAG` and `CASH` are
+  `unknown` and uncertain. `multi_leg` = more than one distinct option CONTRACT among the
+  legs, because a `trade_legs` row is a FILL (39 live option trades carry exactly two).
+  `JournalStore.list_trade_legs` gained ONE column, `e.raw_json`, because the contract is
+  recorded nowhere else - there are no right/strike/expiry columns on `trades`.
+- **ST5.4** `journal_analytics.personal_evidence_summary(trades)`: three STATUS
+  populations that partition the input (`complete` / `partly_closed` / `open_exposure`),
+  uncertainty as a CROSS-CUTTING label, plus `coverage`, `headline` and `best_setup`. It
+  rides on `build_analytics_summary` as the additive `personal_evidence` key, so the
+  Analytics tab renders it from rows it already loaded - no second query on the Qt thread.
+
+**REVIEW ROUND (NO-GO -> fixed, 2026-09-06).** Two blockers, both reproduced by the
+reviewer on a COPY of the live journal, both fixed on this branch with fail-first tests:
+
+1. **Populations were by uncertainty, not status.** `_population_of` checked
+   `exposure.is_uncertain` BEFORE `status`, which made "uncertain" a fourth bucket that ATE
+   the other three: `uncertain` came out **n=120** holding 84 CLOSED, ALL 7 CLOSED_PARTIAL
+   and 29 of the 32 OPEN trades, so `partly_closed` read **n=0** while seven exist,
+   `open_exposure` read n=3 with a notional of 7,726 against a real 61,662, and ONE pooled
+   P&L figure summed realized results together with open positions' unrealized marks and
+   counted those marks as WINNERS - the exact defect the whole summary exists to prevent,
+   one level down. Now: `complete` = CLOSED, `partly_closed` = CLOSED_PARTIAL,
+   `open_exposure` = everything else, each carrying `n_uncertain` and
+   `uncertain_trade_ids`; the `uncertain` block is cross-cutting, lists every member with
+   the status it is counted under and a `by_population` split, and **pools no money and no
+   winners at all**. Verified on the copy: 165 / 7 / 32 summing to 204, `uncertain` 120
+   split 84 / 7 / 29, `open_exposure` net and winners both `None` with notional 61,662.
+   The tester's fixture used STK for its partly-closed and open rows, which is why it never
+   caught this; the new tests use OPT and BAG there.
+2. **The headline said "No confirmed setup tags" while the journal holds one.** Confirmed
+   was counted over CLOSED and provisional over ALL rows, and the one confirmed tag sits on
+   a CLOSED_PARTIAL trade (EAT, 2026-08-21), so it fell out of the numerator while its 26
+   provisional siblings stayed in. Both lanes now share ONE denominator - closed OR partly
+   closed - and the wording names the count it has. On the copy: `Confirmed tags: 1 of 172
+   closed or partly closed trades. Provisional awaiting review: 26. Planned risk recorded:
+   0 of 172.` and `1 confirmed setup tag - under the n=30 floor (26 provisional awaiting
+   review) - no personal setup can be called best.` "No confirmed setup tags" survives for a
+   true zero only.
+
+**Advisories, all taken.** `classify_all` builds a `(underlying, expiry, session)` index and
+parses each trade's contracts ONCE instead of comparing every option pair and re-parsing:
+the reviewer's **130 ms at 1,020 trades** is now **5.9 ms** (1.1 ms on the real 204), which
+matters because the Analytics tab calls it on the Qt thread. An empty bucket reports
+`net_pnl: None` rather than `0.00`, and `open_exposure` has no winners cell at all. The
+missing-planned-risk table is capped at the newest **50** (`MISSING_RISK_ROWS_SHOWN`) with
+`showing 50 of 165` printed - the packet's ten-row floor was a minimum height, not a licence
+to build 165 `QTableWidgetItem`s on the Qt thread.
+
+**Four assertions in the tester's file encode the SUPERSEDED contract and were updated in
+place, each annotated with the live numbers and the reason.** They are: the coverage-line
+wording (blocker 2); `unknown["trade_id"] not in complete["trade_ids"]`; the four-way
+partition sum; and `complete["n"] == 3`. Nothing was weakened - the properties those lines
+guarded are re-asserted exactly (the three-way partition is checked with the same
+set-union-and-sum, `complete["winners"] == 3` is unchanged, and the uncertain trade is now
+required to be LABELLED in the population that counts it). The lead should read those four
+diffs before merging; if any of them is wrong, the contract is the thing to revisit.
+- **ST5.5** the whole provisional backlog reaches Weekend Prep's tag list (26 waiting
+  against a page scoped to one week - gate #36's obstacle), `needs_review` stays
+  week-scoped, and a "Missing planned risk" table (newest 50, `showing 50 of 165`) refers a
+  trade to the Journal's Trades tab through `openTradeRequested` -> `JournalPanel.show_trade`
+  -> `TradesTab.select_trade`.
+
+**`partial_of_spread` could not be derived, and is labelled rather than invented.** The
+packet allowed either a sibling seam or a report that it does not exist. It does not: two
+legs of a spread are two `trades` rows keyed by their own OCC symbols and nothing links
+them. What is OBSERVABLE is a second option trade on the same underlying and expiry opened
+in the same session on a different contract - which is also what two independent ideas on
+one name look like. So the label is `partial_of_spread_candidate`, it puts the row in the
+UNCERTAIN population, and no claim is made that it is half a spread.
+
+**DEVIATION from the packet.** The coverage line was asked for "on Weekend Prep's verdict
+card". The card is five to eight lines by the trader's own request (V2 item 2b) and
+`test_the_card_is_five_to_eight_lines` + `test_one_unreadable_store_still_leaves_a_card` pin
+it. The sentence sits in its own label directly UNDER the card, filled from the tag page's
+existing worker through a new `coverageChanged` signal - same screen, same worker seam, no
+second read of the journal, card contract intact. A test records the choice.
+
+**Tests.** The tester's seven were re-proven red at `f6a28138` and are green. The builder
+added twelve in `tests/test_st5_review_flow.py`; ten of them were proven red by checking the
+branch base's `scripts/` over the working tree, and the two that passed there only exercise
+the already-committed `journal_exposure` module. Nothing in the tester's file was weakened.
+
+**Read-only, verified.** No broker call, no auto-confirm, nothing reconstructs a
+`planned_risk`. Two tests spy `JournalStore.save_risk_fields` into a raise and assert every
+read path on both surfaces leaves it uncalled, and check the `trade_annotations` table
+afterwards. `journal_feed.suggest_planned_risk` was inspected in passing and is clean: it
+prefills from an ARMED ALERT's entry and stop - the trader's own plan at decision time - and
+returns `None` on anything but a unique match. Nothing new reaches a detector, score, gate,
+alert, watchlist, Focus, review queue or `review_policy.json`.
+### 2026-09-06 (Sunday, ~06:40-08:00 PT) - Packet ST3: a versioned execution convention and level knowledge for the tracker replay (builder, branch `claude/st3-gap-aware-fills`)
+
+**Trader (ST0 header, verbatim):** *"Declare a versioned execution convention for long/short
+stop gaps, missing opens, invalid OHLC, and target gaps. Never book a fill outside the
+available bar through the current literal-level assumption."* ... *"Resolve intrabar target
+levels only from information available before they could be hit."* ... *"This is not
+authorization to overwrite live historical results or promote the repaired simulation into
+scoring without the required decision."*
+
+**What was wrong, reproduced on the shipped function.** Entry 100, risk 5, hard stop 95,
+next bar O80/H85/L79/C82: `_evaluate_tracker_scenario_bar` booked `HARD_STOP` at **95** -
+a price that bar never traded - for **-1.014R** after the shipped costs, where the honest
+fill is the open at 80 for **-4.014R**. The short mirror booked 105 on an O120/H121/L115/C118
+bar. A bar with no `open` at all still booked 95, and a broken candle (O93/H90/L95/C92)
+booked a fill off a `low` above its own `high`. Separately, the replay tested day D's
+high/low against `history[D]`, whose anchored-VWAP bands `calc_anchored_vwap_band_history`
+computes by folding D's OWN bar into the cumulative sums - a level knowable only at D's close.
+
+**What was built (all additive, opt-in, default byte-identical).**
+`scripts/master_avwap_lib/execution_convention.py` (new, stdlib-only leaf) names
+`literal_level_v1` (DEFAULT) / `gap_aware_v2` and `same_session_v1` (DEFAULT) /
+`prior_session_v2`, plus `Fill`, `bar_is_valid` and the pure `resolve_fill`.
+`_evaluate_tracker_scenario_bar` and `recompute_tracker_setup_record` take both policies as
+keyword arguments and pass them down; `_apply_scenario_exit_event` gained keyword-only
+`fill_basis` / `execution_convention` that add a key only when passed. The record carries
+`execution_convention` / `level_knowledge` only for a non-default run and a DEFAULT run
+POPS them, so a record replayed once under v2 cannot keep a label the desk did not use.
+`scripts/tracker_execution_compare.py` is the evidence CLI. `tests/test_tracker_methodology.py::_bar`
+gained an optional `open` (ST3.4) with every existing call and assertion untouched.
+
+**Which checks are intrabar and which are close-based** (the packet asked for this list, and
+it is in the function's own docstring): INTRABAR and therefore level-knowledge sensitive -
+the partial-target touch and the final-target touch. NOT level-dependent - the hard stop
+(its level is `entry_price - risk x multiple`, fixed at entry) and the excursion. CLOSE-BASED
+and keeping day D's levels - the two-closes protective stop, the recorded `active_stop_level`,
+and the maximum-hold force close.
+
+**The lead's decision on the packet's one ambiguity:** an INVALID bar that lands on the
+maximum-hold index books nothing, and the `TIME_STOP` fires on the next VALID bar with
+`fill_basis` `deferred_invalid_bar`. Maximum hold preserved, never cancelled.
+
+**The comparison (ST3.3), on copies, live gate #77's artifact.** 800 setups sampled seed
+20260906 across the whole 11,372-record COPY of the SQLite mirror, daily bars from the
+machine cache (633 symbols). **The denominator is `n_setups` 794, the artifact's own**:
+800 records were OFFERED and 6 carry no tradeable scenario, 0 were missing bars, 0 failed
+to replay. `--limit` is what was offered and is never the denominator - the CLI now prints
+the whole split (`population: n_setups 794 compared (offered 800, untradeable skipped 6,
+no cached bars skipped 0, replay failed 0)`) and the JSON carries a `population_note`
+saying the same thing, because the first write-up quoted 800 and invited exactly this
+confusion. **The three JSON/CSV pairs are copied where the lead can read them**, machine-local
+and outside the repo: `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\` -
+`both__comparison_20260906T110731.*`, `exec_only__comparison_20260906T110814.*`,
+`levels_only__comparison_20260906T110855.*`. The first draft reported `min R -4.0 -> -4.0`,
+which is `TRACKER_SCORING_R_CLIP` (4.0) inside `_summarize_tracker_setup_outcome` and not a
+tail; the artifact carries the CLIPPED R (what scoring reads) and the RAW R (where the tail
+lives) side by side, never blended.
+
+| run | changed | expectancy (raw) | win rate (Wilson) | R < -2 | rank moves |
+|---|---|---|---|---|---|
+| both repairs | 472 of 794 | -0.0981 → **-0.1192** | 0.576 → 0.596 (0.541 → 0.561) | 47 → 48 | 43 of 50 groups, max 14 |
+| execution only | 89 of 794 | -0.0981 → **-0.0811** | 0.576 → 0.597 (0.541 → 0.562) | 47 → 47 | 33 of 50, max 9 |
+| level knowledge only | 458 of 794 | -0.0981 → **-0.1491** | 0.576 → 0.548 (0.541 → 0.513) | 47 → 48 | 40 of 50, max 17 |
+
+`min R` is **-65.6011 under every policy** - the worst trade in the sample was already
+filled inside its bar, so the repair does not touch it. Of the 89 setups the execution
+repair moved, **84 got BETTER and 5 got worse**: the convention is symmetric by design, a
+resting limit that opens through its price fills better than the level, and in this sample
+target gaps (166 setups touched `gap_open`) outnumber stop gaps. The largest single rank
+move is `LONG|favorite_zone_watch|favorite_setup` 26 → 40 under both repairs.
+
+**The two skip counters, and what one of them found.** `no_prior_session_level` fired 4
+bar-tests over 1 setup - real but rare, as expected, since the band history almost always
+covers the previous session. `invalid_bar` fired **380 scenario-bars over 26 setups (22
+symbols)**, and the cause is specific: each of those 22 cached daily-bar files carries
+**exactly ONE invalid candle, all of them dated 2026-09-04**, every one with `low > open`
+or `high < open` - AEE `O=105.81 H=106.96 L=106.11`, TWLO `O=239.52 H=239.29 L=231.21`,
+GPGI `O=14.195 H=13.925`. That is the signature of a FORMING bar written into
+`%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` mid-session, where the "low" is
+the low since the snapshot rather than the day's. **Under `literal_level_v1` - which is
+what the desk runs today - those bars are still read for fills, excursions and marks.**
+This is a READ of a machine-local cache and NOT a claim about the tracker or the durable
+store; it is an advisory finding for the lead, outside ST3's scope, and the counter is
+what made it visible at all. **The reviewer's read-only sweep of the whole cache (all 1,980 files) widened it: 100 files end in an invalid candle, always the LAST row and one per file, on SEVEN sessions - 2026-09-04 x89, 09-02 x3, 09-01 x3, 08-20 x2, 07-07, 06-08, 05-15 - so it is a recurring mid-session write, not one day's glitch; it needs its own packet.**
+
+**Nothing here is authorization.** No production caller passes a non-default policy; the
+desk's next tracker write must carry no `execution_convention` key on any record. Whether
+`gap_aware_v2` / `prior_session_v2` becomes the scoring convention is the trader's separate
+decision, and the lead asks it - this branch does not take it.
+
+**Verification.** Fail-before-fix PROVEN by reverting `legacy.py` to `HEAD` with the new
+module present: 15 of the 19 ST3 tests fail (9 of the tester's 10 plus 6 of the 9 builder
+additions); the four that pass on the un-fixed code are the pure-function and
+default-event-dict characterizations, which are supposed to. Restored, all 19 pass.
+### 2026-09-06 (Sunday) - ST1: each outcome gets its true meaning and its true clock (branch `claude/st1-outcome-clock-build`)
+
 **Branch `claude/st6-working-lately`, NOT merged.** Packet ST6, on the trader's
 *"Implement the already-owed desk Working-lately surface, priority switch, and Away Recap around
 one deterministic evidence snapshot ... Reuse and correct the existing best-now banner rather than
@@ -200,6 +425,30 @@ would make the cell disagree with the file a reader opens next - and every COMPA
 `SWING_HORIZON_SESSIONS` from `evidence_stats` (the tester's module docstring imports it from
 there); it is a re-export, never a second literal.
 
+**Lead's size decision (2026-09-06), applied.** 127.5 MB per scan for a shadow file is not
+acceptable, and the v2 measurement for a `(symbol, side, scan_date, horizon)` is the same
+number for every scan run that day. So the build collapses to ONE row per that key,
+keeping the session's LAST scan row exactly as v1 does - which restores the 1:1
+`observation_id` join - and records the fold under its own honest name:
+`collapsed_same_session`, a per-row column AND a builder total in SCAN ROWS, kept separate
+from `dropped_duplicates` (still the true `(scan_row_id, horizon)` repeat count). The log
+line names both. `BUILD_WINDOW_SESSIONS` is 30. **The reviewer's blocker test stays
+green**: two runs on one day are still not duplicates - they are now counted as collapsed,
+which is what they are.
+
+**Verification:** `pytest tests/ -q` 6,952 passed, 2 skipped, 72 subtests, exit 0, with
+the nightly AI lock FREE. `ruff` clean. Smoke 7/7. `launch_gui.py --selftest` 74/74. No
+packaging trigger (two new modules inside `scripts/` and `master_avwap_lib`, both already
+collected; no new dependency and no new non-`.py` asset). Live gate **#75** owed at the
+next persisted tracker write.
+
+**One unrelated flake seen and diagnosed, NOT fixed here (outside the packet).**
+`tests/test_qt_alert_center.py::test_review_chart_auto_refresh_pulls_new_bars` failed in a
+full run started at ~11:22 desk-local and passed in isolation minutes later and in two
+other full runs. It builds its M5 bars as `datetime.now().replace(hour=12, ...)` and then
+`.replace(hour=11, minute=20 / 25)`, so between 11:20 and 11:25 local its second bar is
+still FORMING and the completed-bar rule correctly drops it. It is a wall-clock-dependent
+test, unrelated to ST1 - the fix is to build its bars relative to a frozen moment.
 ### 2026-09-06 (Sunday) - ST4: the selected opportunity is fixed before its outcome is seen (prepared, NOT decided)
 
 **Branch `claude/st4-first-actionable`, NOT merged.** Built on the tester's nine RED tests
@@ -459,8 +708,26 @@ says why: they carry no exit date until ST4 adds `representative_exit_date`. The
 is stated and tested: `n_wins + n_losses + n_flats == samples_2d` and
 `samples_2d + n_unmeasured == tracked_setups`.
 
-**Owed at integration:** ST1's `Headline.outcome_kind` wire, and ST4's `representative_exit_date`
-so the recent rows can date by the measured session too. ST1's tests-only branch was still at
+**Re-check round (same day), one blocker.** The banner guarded its short-term block on *"a
+discovery row OR a leader"* and otherwise printed the hardcoded *"not enough 2-session samples yet
+(accrues automatically each scan)"* - so `no_clear_leader`, which is TODAY'S LIVE STATE for that
+horizon (12 eligible families, the top two 0.001 of bound apart), rendered as "no samples" under a
+card three lines above saying "no clear leader". False, and self-contradicting on one screen. The
+conditional is gone: `_verdict_block_html` renders all four states. Two advisories with it:
+`freshness_sentence(kind)` replaces the single `FRESHNESS_SENTENCE`, because only the 2-session
+rows are measured-dated and the swing line was claiming a clock it does not have - it now reads
+**entry-dated** (`DATING_BASIS_BY_KIND`, defaulting to the conservative "entry" for an unknown
+kind); and the dead `discovery_note` parameter moved into `working_lately` beside
+`discovery_basis_phrase`, so the sentence and the gate it belongs to cannot drift apart.
+
+**Owed at integration:** ST1's `Headline.outcome_kind` wire, and ST4's `representative_exit_date`.
+**The ST4 switch is a one-line change** and the lead can make it at merge: ST4
+(`origin/claude/st4-first-actionable` at `9d75a27f`) stamps `representative_exit_date` onto the
+per-episode row inside `build_recent_tracker_setup_family_rows` - the SAME dict ST2's counting
+loop already reads as `closed_row`. In that loop, `session = str(closed_row.get("scan_date") or "")`
+becomes `str(closed_row.get("representative_exit_date") or closed_row.get("scan_date") or "")`,
+and `DATING_BASIS_BY_KIND["swing"]` flips from `"entry"` to `"measured"` so the sentence follows.
+Nothing else moves; the fallback keeps a still-running episode dated by its entry. ST1's tests-only branch was still at
 `29e36350` when this build started, so `outcome_kind` is a ROW column here and the headline kind
 is passed through the render text; when ST1 merges, `_counted_win_rate_rows` should pass it into
 `Headline`. **The ask-first question was answered** in the fix round (lead, same day):
@@ -577,6 +844,7 @@ other full runs. It builds its M5 bars as `datetime.now().replace(hour=12, ...)`
 `.replace(hour=11, minute=20 / 25)`, so between 11:20 and 11:25 local its second bar is
 still FORMING and the completed-bar rule correctly drops it. It is a wall-clock-dependent
 test, unrelated to ST1 - the fix is to build its bars relative to a frozen moment.
+
 
 ### 2026-09-06 (Sunday, ~06:00-07:30 PT) - The digest spot-audit done and recorded, two stale packs rebuilt, the three open scoring questions decided
 
