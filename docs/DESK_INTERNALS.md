@@ -2462,6 +2462,123 @@ and nothing said so.
 **Live gate #75** is owed at the next persisted tracker write: the v2 file beside the tier
 outcomes with `sessions_spanned == horizon_sessions` on every measured row, a reason on
 every other, and the three readers printing the same `eligible / pending / excluded` line.
+
+
+---
+
+## ST6 - one snapshot, four surfaces, and a declared margin (2026-09-06)
+
+### What was true before
+
+Four surfaces on this desk answered *"what is working"* and nothing tied their answers to
+one reading:
+
+* the Setup Tracker's **BEST PERFORMING RIGHT NOW** banner, which ST2 had just put on
+  `working_lately.select_leader`;
+* the Summary card three lines above it, which ST2's fix round put on the same function
+  after it was found crowning `max(avg_closed_r)` across both namespaces;
+* Weekend Prep's verdict card;
+* the AWAY Recap.
+
+Each read the files itself, at its own moment, with its own `previous`. Two of them could
+name different families on one afternoon and there was no way to tell which was older. The
+**Trading Desk itself had nothing** - decision 0016 says *"what is working lately"* belongs
+there and never only in Research, and the trader's own screen was the one surface with no
+answer at all. The priority switch had been written down in `CLAUDE.md` as *"NOT BUILT
+YET"* since V4 was scoped, with the identical-visible-rows test owed WITH it.
+
+A fifth thing was true and nobody had noticed: **`held_run_score.Segment.summary` called
+`evidence_stats.summarize` with the VALUES ALONE.** No `symbols=`, no `sessions=`. So
+`concentration.by_symbol`, `concentration.by_session` and the session-block `bootstrap`
+came back UNMEASURED for every held x ran cell the desk has ever drawn. The day-trade
+headline - decision 0016's own answer for every day-trade surface - had no way to say it
+was one name six times. The episodes have carried `symbol` and `trade_date` since V1;
+nothing had to be measured again, only handed over.
+
+### The rules this produced
+
+**The snapshot is PURE, and its identity is the EVIDENCE.** `working_lately.build_snapshot`
+opens no file, starts no thread and asks no store a question; the service reads on a worker
+and hands the rows in. `snapshot_id` is a sha1 over the SORTED cell tuples, the declared
+policy lines and `as_of` - and over nothing else. Not `built_at`. Not a source's mtime. Not
+the verdicts. The reason is the events file: a snapshot whose identity moved on every
+half-hourly tick would make `leader_change_events.jsonl` a log of the timer, and one that
+moved because a file was re-saved unchanged would announce news that never happened.
+
+**Three kinds, three verdicts, and `pool_cells` is a refusal.** A swing trade-R rate, a
+swing favorable-direction rate (ST1: the tier outcomes' `win` is the sign of a percent move
+at a scan-row offset) and a day-trade `held_run_score` are three questions with three
+outcome definitions, three horizons and three units. `pool_cells` is the one helper that
+would combine cells and it RAISES across kind, side or outcome kind, naming the axis. There
+is deliberately no formula behind it - the refusal IS the mechanism.
+
+**Dependence is answered by refusing; multiple testing is answered by printing.** The
+trader's condition was explicit: *"Any new confidence calculation must account for shared
+sessions and overlapping holdings and must be validated; ordinary Wilson bounds alone do
+not solve dependence or multiple testing."* A validated one was not affordable inside this
+packet, so none was written. Instead a cell whose top symbol or top session supplies MORE
+than `CONCENTRATION_LIMIT` (0.5) of its own sample is **not eligible to lead**, reason
+`concentrated` - and the exposure from having looked at K cells is PRINTED on every surface
+as `observational leader among K cells`. Nothing is called proven. The limit is `EXCEEDS`
+and not `reaches` on purpose: a cell split evenly over two sessions sits at exactly 0.5 and
+is the smallest honest spread the desk sees, so refusing it would refuse the ordinary case.
+
+**Both numbers were declared before any forward look.** `LEADER_PERSISTENCE_SNAPSHOTS` = 2
+and `CONCENTRATION_LIMIT` = 0.5, 2026-09-06, per the trader's *"Choose any margin/persistence
+rule before inspecting its forward evaluation."* Two is the smallest number that is not one:
+it costs a real leader a single session and it stops a one-session wobble - a correction
+landing, a stale export, one heavy name reporting - being announced as a change of regime.
+Until it is met the verdict is `no_clear_leader` with `awaiting persistence (1 of 2)`, which
+is a true sentence about the evidence rather than a hedge.
+
+**Cause precedence is REFUSAL-FIRST.** The packet listed `window_rollover` first ("when
+`as_of` moved"), but `as_of` moves on nearly every build, which would have made
+`corrected_data` and `lost_coverage` unreachable - the two causes actually worth reading. So
+the order is `lost_coverage`, `corrected_data`, `window_rollover`, `new_outcomes`. A
+`lost_coverage` event carries the SAME name in both slots, because nothing new was learned:
+the desk simply stopped being able to read it. And a session bucket that merely EMPTIED
+while the source's total row count held steady is a window moving forward, not a
+restatement - the recent-types export re-states one row per family under a new
+`latest_measured_session` at every close slot, so every previous session's bucket empties on
+a perfectly ordinary day.
+
+**An absent source is `rows is None`, never `0`.** A zero is an answer; an unreadable file
+is a question that was not asked, and the verdict says `source unavailable` rather than
+producing a leader out of nothing.
+
+**A share is a DECISION input, so it is not display-rounded.**
+`evidence_stats._concentration` rounded `top_share` to four places, which made 2/6 read
+0.3333. That share is now compared against a declared 0.5 and hashed into a snapshot id, and
+a display rounding inside a decision is how a cell sitting on the limit lands on the wrong
+side of it. Ten places: far below anything any surface prints, far above float noise, and
+every renderer formats it itself.
+
+**The switch reorders and never withholds, and the test is behavioural.**
+`prioritise_working_lately` is read AT SORT TIME and never at write time - the backing lists,
+every evidence write, the tier gate, the movers-only filter and the repetition fold are all
+computed before any sort. The WAITING list is sorted where `_advance_review_queue` picks the
+next chart, not where `_enqueue_review_alert` writes a row, because the backing list is the
+record of what the day produced and it must not depend on a display preference. The test
+drives all three surfaces through their real paths twice and asserts the same set of names,
+the same repeat badges and the same hidden set both ways, with only the order different.
+
+**The strip is mounted inside the alert bar, not beside it.** The M5 column is a saved,
+draggable two-pane splitter (the alert list over the swing favorites strip). A third child
+would have the trader's own saved sizes replayed onto a layout they never dragged, so the
+strip goes in at layout index 0 of `M5AlertBar` and `m5_column.widget(0)` is still the bar.
+
+**A cell keeps the case its own source spells.** The swing exports say `LONG`; the intraday
+outcome log says `long`. Rewriting either inside the snapshot would make the cell disagree
+with the file a reader opens next, so the case travels and every COMPARISON upper-cases
+(`EvidenceCell.name`, `pool_cells`, `priority_rank`).
+
+**Live gate #80** is owed at the first DESK session after merge: the strip with a verdict per
+kind, `snapshot_latest.json` carrying the same `snapshot_id[:8]` the banner prints (and the
+words `panel read` absent from it), the switch reordering the M5 list with the same row
+count, at most one event per kind per session, and a restart adding none. Expect the first
+session's swing verdict to read `awaiting persistence (1 of 2)`: the first build has no
+predecessor, so a named leader on day one would mean the rule did not run.
+
 ## ST4 - the rescan that happened to close was the one that counted (2026-09-06)
 
 ### What was true, read on `main` @ `84ee24d6`
@@ -2625,3 +2742,52 @@ bypass path can write.
 snapshot is the reproducible check); the artifact stays under
 `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`; and the policy decision is the
 trader's, as a separate change with its own golden fixtures.
+
+
+### ST6 re-review - four things the first build got wrong (2026-09-06)
+
+**A display preference that cannot be undone is not a display preference.** The
+switch re-sorted the M5 bar's QListWidget and rebound the review queue's own
+list, so a session that turned it on could never get today's arrival order back:
+the bar returned early when disabled and the sorted list simply stayed. The rule
+is now structural - the backing list is ARRIVAL-ordered and never touched, the
+priority order is a VIEW computed at draw time, and the review queue is not
+sorted at all (`_next_review_index` chooses an index). "Reorders and never
+withholds" has to be reversible or it is a rewrite of the record.
+
+**A cap over a sorted list deletes a different thing.** The `MAX_ROWS` trim took
+the tail of whatever order was displayed, so with the cap at 3 and the oldest
+arrival the highest-ranked cell, ON kept AAA/CCC/DDD and OFF kept BBB/CCC/DDD -
+the switch deciding which alert stopped existing. The cap belongs to the arrival
+list; the view is ordered afterwards.
+
+**An interval belongs to the number it stands beside.** `held_run_score` is
+P(held 30m) x the trimmed-mean MFE_R of the held ones - a product over two
+denominators - and the bound printed next to it was
+`session_block_bootstrap` over the MFEs alone. Live that read
+`held x ran 1.21 (>= 2.070)`: a lower bound ABOVE its own statistic, and the cell
+it ranked first (`LONG regime_pause_rs`) was not the cell with the best held x
+ran (`LONG lrsi_cross_50`). `evidence_stats.session_block_statistic_bootstrap`
+keeps the resampling in the one statistics contract and takes the FORMULA from
+the caller; `Segment.score_bootstrap` recomputes the whole score on each draw.
+**The day-trade kind ranks on the statistic** - it is the desk's declared
+day-trade headline (decision 0016 answer 4) - and its margin is
+`LEADER_MARGIN_HELD_RUN_R` (0.10, score units), declared 2026-09-06 before any
+forward look. The 0.05 win-rate margin is a margin on a quantity bounded in
+[0, 1] and never applies to an R scale.
+
+**Freshness asks when a thing was MEASURED, not when it was entered.**
+`swing_favorable` was dated by `scan_date` while the outcome is measured
+`horizon_sessions` later, so the live file - newest `scan_date` 2026-08-28,
+horizon 5, read against 2026-09-04 - was exactly one horizon behind and could
+never be fresh. The cell's clock is `future_scan_date` (v1) or `target_session`
+(v2). And a kind that is withheld now SAYS SO on the strip: it used to be printed
+only when it named a leader, so silence read as though the desk had two questions
+instead of three.
+
+**Two smaller rules from the same round.** The observational caveat counts ONE
+KIND's cells - the swing leader was never chosen against the day-trade cells and
+`pool_cells` refuses to make them comparable. And a share is not display-rounded
+and a concentration that was never taken says `concentration unmeasured` rather
+than `top symbol unmeasured`, which reads like a measurement that came back
+empty.

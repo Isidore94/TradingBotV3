@@ -86,6 +86,13 @@ def _alert_rows(alerts: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
                 "trigger": str(alert.get("trigger") or ""),
                 "time_text": str(alert.get("time_text") or ""),
                 "is_d1": bool(alert.get("is_d1")),
+                # ST6.6. The (bounce_type, side) CELL the M5 row already carries
+                # and the held x ran suffix already attached to it. Both travel;
+                # neither is recomputed here, because a second derivation is how
+                # the bar and the recap would come to disagree about which cell
+                # a row belongs to.
+                "cell": str(alert.get("cell") or ""),
+                "held_run_suffix": str(alert.get("held_run_suffix") or ""),
             }
         )
     return rows
@@ -107,13 +114,27 @@ def build_recap(
     digest_swings: Iterable[str] = (),
     focus_picks: Mapping[str, Any] | None = None,
     unavailable: Mapping[str, str] | None = None,
+    working_lately: Mapping[str, Any] | None = None,
+    leader_events: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Assemble one AWAY day's return view. Reads only; writes nothing."""
+    """Assemble one AWAY day's return view. Reads only; writes nothing.
+
+    `working_lately` is the desk's shared evidence snapshot and `leader_events`
+    that session's leader changes (ST6.6). Both are HANDED IN, like everything
+    else here: this page ranks nothing and reads nothing, and the snapshot's own
+    `snapshot_id` is printed so the recap and the desk can be reconciled.
+
+    **The best-swings table lists EVERY ranked row** the AWAY push produced -
+    there is no top-five cap here and never was; the cap the trader remembers is
+    the PHONE digest's, and that one is untouched.
+    """
     swing_rows = _rows_from_swings(digest_swings)
     alert_rows = _alert_rows(alerts)
     staged_rows = _side_rows(staged_picks or {})
     focus_rows = _side_rows(focus_picks or {})
     missing = {str(name): str(reason) for name, reason in (unavailable or {}).items()}
+
+    event_rows = _leader_event_rows(leader_events, session_date)
 
     counts = {
         "alerts": len(alert_rows),
@@ -124,6 +145,8 @@ def build_recap(
     return {
         "schema": RECAP_SCHEMA,
         "session_date": str(session_date or ""),
+        "working_lately": dict(working_lately or {}),
+        "leader_changes": event_rows,
         "best_swings": swing_rows,
         "classified_alerts": alert_rows,
         "staged_picks": staged_rows,
@@ -147,13 +170,70 @@ def build_recap(
                 "(AWAY stages, never adopts)"
             ),
             "focus_to_manage": "the current Focus lists, read as they stand",
+            "working_lately": (
+                "the desk's shared evidence snapshot, printed with its own id - "
+                "this page builds no reading of its own"
+            ),
+            "leader_changes": (
+                "the leader-change events the Working-lately service wrote for "
+                "this session, in the order it wrote them"
+            ),
         },
-        "summary": _summary(counts, missing, session_date),
+        "summary": _summary(counts, missing, session_date, working_lately, event_rows),
     }
 
 
-def _summary(counts: Mapping[str, int], missing: Mapping[str, str], session_date: str) -> str:
+def _leader_event_rows(
+    events: Iterable[Mapping[str, Any]], session_date: str
+) -> list[dict[str, Any]]:
+    """That session's leader changes, in the order they were written.
+
+    Filtered on `as_of` rather than on the write timestamp: an event is about a
+    SESSION, and a build that ran after midnight still describes the session it
+    read.
+    """
+    wanted = str(session_date or "")[:10]
+    rows: list[dict[str, Any]] = []
+    for event in events or ():
+        if not isinstance(event, Mapping):
+            continue
+        if wanted and str(event.get("as_of") or "")[:10] != wanted:
+            continue
+        rows.append(
+            {
+                "kind": str(event.get("kind") or ""),
+                "prior_leader": str(event.get("prior_leader") or ""),
+                "new_leader": str(event.get("new_leader") or ""),
+                "cause": str(event.get("cause") or ""),
+                "as_of": str(event.get("as_of") or ""),
+                "snapshot_id": str(event.get("new_snapshot_id") or ""),
+            }
+        )
+    return rows
+
+
+def _summary(
+    counts: Mapping[str, int],
+    missing: Mapping[str, str],
+    session_date: str,
+    working_lately: Mapping[str, Any] | None = None,
+    leader_changes: Iterable[Mapping[str, Any]] = (),
+) -> str:
     parts: list[str] = []
+    if working_lately:
+        import working_lately as _wl
+
+        parts.append(
+            f"{_wl.snapshot_line(working_lately)} [{_wl.snapshot_stamp(working_lately)}]."
+        )
+    changes = list(leader_changes or ())
+    if changes:
+        named = "; ".join(
+            f"{row.get('kind')}: {row.get('prior_leader') or 'nobody'} -> "
+            f"{row.get('new_leader') or 'nobody'} ({row.get('cause')})"
+            for row in changes
+        )
+        parts.append(f"{len(changes)} leader change(s) this session - {named}.")
     if any(counts.values()):
         parts.append(
             f"{counts['swings']} ranked swing(s), {counts['alerts']} alert(s), "

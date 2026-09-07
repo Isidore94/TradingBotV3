@@ -17,6 +17,7 @@ Two things this tab deliberately does not do:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -2055,7 +2056,19 @@ class WeekendPrepPanel(QFrame):
             week_trades=trades,
             awaiting_review=waiting,
             research_pack=pack,
+            # ST6.4. The desk's SHARED reading, handed over by the window's
+            # Working-lately service - never read here, so the weekend card and
+            # the weekday strip cannot be two answers to one question.
+            working_lately=getattr(self, "_working_lately_snapshot", None),
         ).rendered()
+
+    def set_working_lately_snapshot(self, payload) -> None:
+        """Take the desk's shared snapshot and rebuild the card (ST6.4)."""
+        self._working_lately_snapshot = dict(payload or {})
+        try:
+            self._start_verdict()
+        except Exception:  # noqa: BLE001 - a card is never worth the page
+            logging.debug("Weekend verdict rebuild skipped", exc_info=True)
 
     def _on_verdict_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
         lines = list(payload) if isinstance(payload, (list, tuple)) else []
