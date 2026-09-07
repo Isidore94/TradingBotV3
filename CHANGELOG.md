@@ -255,7 +255,8 @@ which is evidence and must not be loaded as context.
   six per-table ones**, which now have a real `reload` (it had none, so one
   Refresh counted the step and built nothing). `week_trades` moved off the Qt
   thread: it was 775 ms of the click. Every table carries the ten-row floor
-  through one constant, `TABLE_TEN_ROWS_PX`. The card's take rate READS `shown`
+  through one constant, `TABLE_TEN_ROWS_PX` - **except the nine on Focus
+  Review**, which took it off in G1 (below). The card's take rate READS `shown`
   and `overall_take_rate` off the state - it used to add `takes + skips +
   rejects`, and the state has never published the last two, so it printed
   "100% of 94" where the truth was 30% of 318. The card is a PURE builder
@@ -266,6 +267,32 @@ which is evidence and must not be loaded as context.
   rather than printing a zero. The RS/RW prose is retired - it duplicated a live
   board with a Saturday snapshot - and the log scans are kept UNCALLED with
   docstrings that say so.
+- **Weekend Prep's Focus Review page is ONE table behind a view selector, with
+  a detail pane** (G1, 2026-09-06). Nine `QTableWidget`s each carrying the 260 px
+  ten-row floor is 2,340 px of minimum height in the ~2,050 px a 2160 screen
+  gives the page - the overlap the trader reported is arithmetic, and the panel
+  could not be shown at 2160 at all (page 2,824 px, panel 2,934 px). The nine
+  are a `QStackedWidget` behind nine exclusive checkable `QToolButton`s in a
+  `QButtonGroup` - **Week's picks, Picks graded, Vetoes, Likes, After-like,
+  Passes, Not-today, Said vs did, Said at the time** - with the horizon combo on
+  the selector row, VISIBLE only on Vetoes and Likes. The floors come off THIS
+  page only (`_ten_row_table` and `TABLE_TEN_ROWS_PX` unchanged for the other
+  five) and the ONE VISIBLE table takes the height, so decision 0016 answer 10 is
+  kept on the VIEWPORT at 1440 rather than on a minimum height. Beside the stack,
+  behind a `QSplitter(Horizontal)` at 3:1, a read-only `QTextBrowser` shows every
+  column of the selected row as `header: value` with the long text IN FULL (the
+  cell elides at paint time; the pane does not) and clears to EMPTY on a view
+  change - never a placeholder. Each view carries a POPULATION SENTENCE saying
+  what a ROW is, and no count the render does not already have. **The read did
+  not move**: `_read_everything` is still one pass over all nine stores on the
+  page's worker, `_on_focus_ready` still fills all nine tables on every render,
+  and selecting a view is `setCurrentIndex` plus a cleared pane - no file, no
+  worker, no re-render. The chosen view is remembered for the session and
+  survives a refresh. Both new widgets are styled by object name in `theme.qss`
+  (`QToolButton#WeekendViewButton`, `QTextBrowser#WeekendRowDetail`); the page
+  sets no stylesheet. Layout lane: no number, no read, no sort key and no write
+  changed, `apply_width_rule_to_table_widget` calls are untouched, and the
+  verdict card is still uncapped (gate #49).
 - **"Tag this week" is a weekend step** (V2 item 2e, corrected by R4 A15). The
   week's provisional and needs_review trades, confirm-all-shown and
   confirm-selected through `JournalStore.confirm_tags`, ten visible rows, read AND
@@ -1523,6 +1550,69 @@ sessions of forward accrual start at its first measured row. Their remaining evi
 gates are in `plan.md`.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-06 - Packet G1: Weekend Prep › Focus Review is one table, a view selector and a detail pane (branch `claude/g1-weekend-focus-review`)
+
+Trader, 2026-09-06, prioritising the Desk Reshape Plan: the **"Weekend Prep
+overlap"** is the first layout repair of Phase 0.22 (lane G). It is a LAYOUT
+packet: positions, widths, words and defaults may change; a number, a read, a
+sort key's meaning and a write may not.
+
+**The overlap was arithmetic.** `FocusReviewPage` built nine `QTableWidget`s
+through `_ten_row_table`, each with the 260 px ten-row floor R4 A18 applied to
+every table on the tab, and stacked them in ONE `QVBoxLayout` with about twenty
+labels between them: 9 × 260 = **2,340 px of minimum height** in the roughly
+2,050 px a 2160 screen gives the page. Measured on the pre-fix code the page
+insisted on **2,824 px** and `WeekendPrepPanel.resize(3456, 2160)` came back
+**2,934 px** tall, because the panel could not go below the minimum this one
+page forced on it - Focus Review was the sole driver, the next worst page (Tag
+week) asking for 700. No font size fixes that.
+
+**One stack, nine buttons, one pane.** The nine tables are a `QStackedWidget`,
+one view each, behind a row of exclusive checkable `QToolButton`s in a
+`QButtonGroup`: Week's picks (`table`), Picks graded (`performance_table`),
+Vetoes (`cohort_table`), Likes (`like_table` + `claim_caveat`), After-like
+(`after_like_table`), Passes (`pass_table`), Not-today (`rejection_table`),
+Said vs did (`preference_table`), Said at the time (`feedback_table`). Default
+Week's picks, remembered for the session and unchanged by a refresh; persisting
+it across restarts was deliberately left out. The horizon combo moved onto the
+selector row and is VISIBLE only on Vetoes and Likes - a control that changes
+nothing in the table under it reads as a control that is broken. The floors come
+off THIS page only; `_ten_row_table` and `TABLE_TEN_ROWS_PX` are byte-identical
+and still applied on the other five pages, and
+`test_every_weekend_prep_table_shows_ten_rows` now EXCLUDES Focus Review rather
+than being deleted - the ten-row promise there is measured on the VIEWPORT at
+1440 instead (`viewport().height() // defaultSectionSize() >= 10`).
+
+**The detail pane.** Beside the stack, behind a `QSplitter(Horizontal)` at 3:1,
+a read-only `QTextBrowser` prints every column of the selected row as
+`header: value` with the reason / note / claimed setup / verdict IN FULL - the
+cell elides at PAINT time, the pane does not - and clears to EMPTY when the view
+changes, with no placeholder, because a sentence sitting where a row's own words
+belong reads as the row's own words. No "Chart it" button: this panel has no
+symbol route to the Desk and adding one is a different packet. Each view carries
+a POPULATION SENTENCE saying what a ROW is (a cohort row and a pick row look
+identical in a table), and it carries no count - the counts stay in the note
+under the table, written by the render that has them.
+
+**The read did not move and is still one pass.** `_read_everything` reads all
+nine stores on the page's `_ReadWorker`; `_on_focus_ready` fills all nine tables
+on every render regardless of which view is visible; selecting a view is
+`setCurrentIndex`, a cleared selection and a cleared pane - no file, no worker,
+no re-render, pinned by a test that monkeypatches all ten readers and asserts
+none is called. `apply_width_rule_to_table_widget` calls are unchanged, the
+verdict card is still uncapped (gate #49), and `Refresh everything`, Mark done
+and Skip are untouched. Both new widgets are styled by object name in
+`theme.qss` (`QToolButton#WeekendViewButton`, `QTextBrowser#WeekendRowDetail`);
+the page sets no stylesheet, and a test asserts no widget under it carries one.
+
+Tests: `tests/test_g1_weekend_focus_review.py` - the tester's seven (fit at
+2160, ten rows at 1440, one visible table per view, the read unchanged across
+all nine views, the view survives a reload, the pane, the floor's narrow
+exclusion) plus two the builder added (themed by object name; the horizon combo
+still re-filters both cohort tables from memory). **All nine proven RED first**
+against `scripts/ui/panels/weekend_prep_panel.py` and `scripts/ui/theme.qss`
+restored to the tester's tip.
 
 ### 2026-09-06 - Packet ST5: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
 

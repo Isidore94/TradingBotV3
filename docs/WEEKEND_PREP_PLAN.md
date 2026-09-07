@@ -449,3 +449,48 @@ the whole top level. The denominator was `takes + 0 + 0`, so the card read
 and `overall_take_rate` off the state now, and its tests are fixtured on REAL
 states built through `build_review_learning_state` — a hand-written dict is what
 let this ship, because it can carry any key the code happens to ask for.
+
+
+## Packet G1 (2026-09-06) — Focus Review is one table, a selector and a pane
+
+**The nine-table stack above is no longer how Focus Review is laid out, and the
+"ten rows is one constant" paragraph no longer describes this one page.** R4 A18
+put `TABLE_TEN_ROWS_PX` (260 px) on every `QTableWidget` on the tab through
+`_ten_row_table`, and on `FocusReviewPage` that is nine tables in one
+`QVBoxLayout` with about twenty labels between them: **2,340 px of minimum
+height in the roughly 2,050 px a 2160 screen gives the page.** Measured before
+the fix, the page insisted on 2,824 px and `WeekendPrepPanel.resize(3456, 2160)`
+came back 2,934 px tall, because the panel could not go below the minimum this
+one page forced on it — Focus Review was the sole driver, the next worst page
+(Tag week) asking for 700. The overlap the trader reported is arithmetic; no
+font size fixes it.
+
+The nine tables now live in a `QStackedWidget`, one view each, behind a row of
+exclusive checkable `QToolButton`s in a `QButtonGroup` — **Week's picks, Picks
+graded, Vetoes, Likes, After-like, Passes, Not-today, Said vs did, Said at the
+time** — with the horizon combo on that same row, visible only on the two views
+whose rows it filters. The floors come off THIS page only and the ONE VISIBLE
+table takes the height, so decision 0016 answer 10 is kept on the VIEWPORT
+(`viewport().height() // defaultSectionSize() >= 10` at 1440) instead of on a
+minimum height; `_ten_row_table` and the constant stay exactly as they are for
+the other five pages. Beside the stack, behind a `QSplitter(Horizontal)` at 3:1,
+a read-only `QTextBrowser` shows **every column of the selected row as
+`header: value` with the long text in full** — the cell elides at paint time,
+the pane does not — and it clears to EMPTY when the view changes, because a
+placeholder sitting where a row's own words belong reads as the row's own words.
+Each view carries a **population sentence** saying what a ROW is; the counts
+stay in the note under the table, written by the render that has them.
+
+**Nothing about the read moved.** `_read_everything` is still one pass over all
+nine stores on the page's worker, `_on_focus_ready` still fills all nine tables
+on every render regardless of which view is visible, and selecting a view is
+`setCurrentIndex` plus a cleared pane — no file, no worker, no re-render. The
+chosen view is remembered for the session and survives a refresh; persisting it
+across restarts was deliberately left out. Both new widgets are styled by object
+name in `theme.qss` (`QToolButton#WeekendViewButton`,
+`QTextBrowser#WeekendRowDetail`); the page sets no stylesheet of its own. The
+verdict card is still not capped (gate #49) and `Refresh everything`, Mark done
+and Skip are untouched. Tests: `tests/test_g1_weekend_focus_review.py` (nine,
+all proven red first), and
+`test_every_weekend_prep_table_shows_ten_rows` now EXCLUDES this page rather
+than being deleted.

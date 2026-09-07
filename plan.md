@@ -374,7 +374,8 @@ coordinate by message; the desk restarts only on the trader's word.
 | Packet | State |
 |---|---|
 | G0 measure first | in build 2026-09-06 (base `main` - it edits no panel) |
-| G1, G4, G3 | red tests being written 2026-09-06, based on `lead/merge-st` |
+| G1 Weekend Focus Review | **BUILT 2026-09-06** on `claude/g1-weekend-focus-review`, unmerged, live gate #80 owed. Nine tables into a `QStackedWidget` behind a nine-button `QButtonGroup` selector, the ten-row floors off THIS page only (the constant and `_ten_row_table` stay for the other five), a read-only `QTextBrowser` detail pane at 3:1 that clears on a view change, a population sentence per view. The read is still ONE pass over all nine tables and no number, sort key or write moved. **Base deviation:** the packet named `lead/merge-st` `e7c51409`; that work had already reached `main` `68762909` by build time, so the branch bases on the tester's `76eba3ae` with `main` merged in |
+| G4, G3 | red tests being written 2026-09-06 |
 | P2 | SUPERSEDED by ST2 (the other session) - stopped 16:50 PT, branch deleted, nothing built |
 | G2, G5, G4b, G7 | queued in the order above; G5 and G4b wait for ST2/ST6 in `lead/merge-st` |
 
