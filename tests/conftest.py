@@ -1002,39 +1002,54 @@ def _restore_the_results_selection():
     `test_qt_journal_panel::test_migration_failure_stays_visible_instead_of_claiming_no_accounts`
     exists to find the absence of. Measured, not guessed: that test fails with
     the G5 panel tests in front of it and passes with this fixture in place.
+
+    **Teardown reads NOTHING unless the file moved, and never raises.** A
+    fixture that read a file in teardown made `test_ai_evidence_coverage`'s
+    `test_a_huge_file_is_never_read_whole` error out, because that test
+    forbids `Path.read_text` for the length of its own body and the ban was
+    still standing when this teardown ran. The stamp comes from `stat()`, and
+    every failure here is swallowed: a cleanup that can fail a test is worse
+    than the leak it cleans.
     """
     import json as _json
 
     import project_paths as _project_paths
 
+    path = Path(_project_paths.LOCAL_SETTINGS_FILE)
+
+    def _stamp():
+        try:
+            status = path.stat()
+        except OSError:
+            return None
+        return (status.st_mtime_ns, status.st_size)
+
     def _read() -> dict:
-        path = Path(_project_paths.LOCAL_SETTINGS_FILE)
-        if not path.exists():
-            return {}
         try:
             payload = _json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
         return payload if isinstance(payload, dict) else {}
 
-    before = _read().get(RESULTS_SELECTION_KEY)
+    stamp_before = _stamp()
+    before = _read().get(RESULTS_SELECTION_KEY) if stamp_before is not None else None
     try:
         yield
     finally:
-        path = Path(_project_paths.LOCAL_SETTINGS_FILE)
-        # The suite points LOCALAPPDATA at a temp directory; never touch a real one.
-        if "pytest-localappdata" not in str(path):
-            return
-        payload = _read()
-        if payload.get(RESULTS_SELECTION_KEY) == before:
-            return
-        if before is None:
-            payload.pop(RESULTS_SELECTION_KEY, None)
-        else:
-            payload[RESULTS_SELECTION_KEY] = before
         try:
+            # The suite points LOCALAPPDATA at a temp directory; never touch a
+            # real one - and never touch the file at all if nothing wrote to it.
+            if "pytest-localappdata" not in str(path) or _stamp() == stamp_before:
+                return
+            payload = _read()
+            if payload.get(RESULTS_SELECTION_KEY) == before:
+                return
+            if before is None:
+                payload.pop(RESULTS_SELECTION_KEY, None)
+            else:
+                payload[RESULTS_SELECTION_KEY] = before
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
             _project_paths.invalidate_local_settings_cache()
-        except OSError:
+        except Exception:  # noqa: BLE001 - a cleanup never fails a test
             pass
