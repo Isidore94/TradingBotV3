@@ -21,8 +21,8 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 |---|---|
 | Latest work | **2026-09-06 (Sunday, 06:10-18:30 PT): the Setup Tracker review repairs - packets ST1-ST5 MERGED at `22cc84d3`**, from the trader's *"Please repair the Setup Tracker findings below, then finish the existing Working-lately experience"*: ST1 each outcome names its meaning (`outcome_kind` = favorable direction at a scan-row offset, NOT a stop-rule win; `swing_evidence.read_eligible_rows` the one reader; exact-session v2 rows in their own shadow file); ST2 integer counts at every table's grain and ONE leader (`working_lately.select_leader`, the Setup Types tab's own win rate - V3 item 1 complete); ST3 a versioned execution convention and prior-session level knowledge (default byte-identical; the comparison on 794 setups is evidence, not a change); ST4 the first-actionable selection policy prepared beside today's (default byte-identical; a cache-bypass that would have zeroed the live score deltas caught in review); ST5 personal evidence by status with uncertainty as a label, the 10-SESSION window, counts by trade, no best setup without confirmed tags. Every branch tester-first, built, and reviewed by reproduction (ST1 GO after two rounds, ST2 GO after three, ST3 GO, ST4 GO after one, ST5 GO after one). **ST6 (the Working-lately strip, the priority switch, the AWAY Recap) is BUILT on `claude/st6-working-lately` and NOT merged**: its reviewer found four blockers (switch OFF must restore arrival order, the row cap before the priority view, the day-trade bound on `held_run_score` itself, the favorable kind's clock is its measured session) and the fix round died on the session limit at 17:30 PT with the builder mid-way. The same morning the other session recorded the Q4 spot-audit and decided the three scoring questions (its 2026-09-06 entry), and a third session opened the Phase 0.22 layout lane. |
 | Working branch | `main` at `22cc84d3` (fast-forwarded from `lead/merge-st`, the scratch merge worktree). Merge order ST5, ST3, ST1, ST2, ST4 with the two Phase 0.22 docs commits from the layout lane folded in; every conflict was in the control docs and both entries were kept. |
-| Unmerged / open | **`claude/st6-working-lately` (ST6, built, NO-GO with four blockers, fix round interrupted)** - the builder's worktree `agent-a56c7e1940a60d707` holds partial fix-round work; resume it (SendMessage to that builder) or re-spawn against the reviewer's list in the 2026-09-06 ST6 entry, then re-merge ST2 `7e541514` and ST4 `9d75a27f` into it. Left from before: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree locked by another session), the 2026-09-03 lake incident call, the lock-file sweep packet. **New finding needing its own packet (ST3's counter, reviewer-widened): 100 of the 1,980 cached daily-bar files under `%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` end in a FORMING candle (open outside [low, high]) on seven sessions (2026-09-04 x89), and the live default replay reads them for fills, excursions and marks.** |
-| Next action | **Restart the desk (trader's call) so ST1-ST5 are live, then Tuesday 2026-09-08 13:00 PT (Monday is Labor Day): live gates #70-#74 from before plus #75 (ST1), #76 (ST2), #78 (ST4), #79 (ST5) at the first persisted tracker write and the first nightly run; #77 (ST3) is the comparison artifact.** Then finish ST6 (above). Then the trader's decisions (below). Phase 0.22 (the layout lane, G0-G7) runs in the other session on branches based on `lead/merge-st`. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63).** |
+| Unmerged / open | **`claude/st6-working-lately` (ST6, built, NO-GO with four blockers, fix round interrupted)** - the builder's worktree `agent-a56c7e1940a60d707` holds partial fix-round work; resume it (SendMessage to that builder) or re-spawn against the reviewer's list in the 2026-09-06 ST6 entry, then re-merge ST2 `7e541514` and ST4 `9d75a27f` into it. Left from before: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree locked by another session), the 2026-09-03 lake incident call, the lock-file sweep packet. **New finding needing its own packet (ST3's counter, reviewer-widened): 100 of the 1,980 cached daily-bar files under `%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` end in a FORMING candle (open outside [low, high]) on seven sessions (2026-09-04 x89), and the live default replay reads them for fills, excursions and marks.** **`claude/g3-market-journal-reader` (G3, the layout lane) is BUILT and pushed, `main` at `68762909` merged in, awaiting review and merge** - see the 2026-09-06 G3 entry; it carries NO live gate (layout only) and its check is the trader opening the page. |
+| Next action | **Restart the desk (trader's call) so ST1-ST5 are live, then Tuesday 2026-09-08 13:00 PT (Monday is Labor Day): live gates #70-#74 from before plus #75 (ST1), #76 (ST2), #78 (ST4), #79 (ST5) at the first persisted tracker write and the first nightly run; #77 (ST3) is the comparison artifact.** Then finish ST6 (above). Then the trader's decisions (below). Phase 0.22 (the layout lane, G0-G7) runs in the other session on branches based on `lead/merge-st`; **G3 is built and pushed (`claude/g3-market-journal-reader`, `main` merged in) and is the next of those to review and merge.** **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63).** |
 | Trader actions owed | **Three scoring decisions, each with frozen before/after evidence on copies (nothing live changed):** (1) ST4 pending-stays-pending - v1 grades ~228 episodes as losses on an alternate exit that closed while the representative trade was still running; honouring `representative_status` moves the same 2,249 theses from 61.6% to 70.5% favorable and is 94% of the mean-R move - a pure honesty fix, could be authorised alone; (2) ST4 first-actionable re-entries - 463 second attempts after a closed first attempt, winning 80% AFTER the fix, but that population exists only because the first attempt closed (survivorship by construction) - decide whether a re-entry is its own trade; (3) ST3 `gap_aware_v2` / `prior_session_v2` - the execution repair HELPS (89 of 794 changed, expectancy -0.098 to -0.081) and the prior-session level knowledge HURTS (458 changed, -0.098 to -0.149) because same-day bands were peeking; decide whether either becomes the scoring convention, and whether targets should gap-fill at the open like stops or a stops-only convention needs its own name. Also: restart the desk; the 26 provisional tags await review in Weekend Prep; record planned risk on new trades (0 of 172 have it). |
 | Last verified baseline | **`lead/merge-st` at `22cc84d3` (== `main` after the ff), 2026-09-06 evening, in the scratch merge worktree, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 7063 passed, 3 skipped, 72 subtests passed, ZERO failures, exit 0, 7 min 20 s.** `ruff` clean, CLAUDE.md == AGENTS.md (trimmed from 53.0 KB to 50.1 KB this evening; a further pass to the ~45 KB rule is owed), smoke 7/7, source selftest 74/74. No packaging trigger (five new modules inside already-collected trees, no dependency, no non-`.py` asset). Previous: `main` 84ee24d6, 6928 passed. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
@@ -118,6 +118,56 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-06 - G3 BUILT: the Market Journal's full thought is readable (branch `claude/g3-market-journal-reader`)
+
+Phase 0.22, the G (layout) lane, third of the trader's prioritised layout repairs
+(`.claude/packets/G3.md`). Tester first: six red tests committed at `705ad780`.
+
+**Branch note:** the packet named `lead/merge-st` at `e7c51409` as the base. The tester's
+branch was actually cut from `76eba3ae` (a merge of `main`'s `56569b1f` into
+`lead/merge-st`) and the lead directed a merge of `main` at `68762909` on top, which this
+build did — clean, no conflicts. The packet's own file:line pointers were verified against
+the code first and all held: `_render_entries` at `:379-430`, the layout at `:190-250`,
+and the early return in `_on_entry_selected` at `:500-512` (the packet said ~`:506-512`;
+the guard opens at `:505`).
+
+**What it does.** The page's whole job is re-reading what the trader thought, and the words
+were shown NOWHERE: the entire text went into a one-line `QListWidgetItem` in a narrow
+list, which elides it, and selecting the row repainted the four capture charts and did
+nothing else. Now the list carries a 90-character `_excerpt` (a 1,200-character entry's
+label: 1,221 → 112 characters, `…` printed only when there IS more), and the right half is
+a `QSplitter(Vertical)` with `thought_meta` + `thought_view` ABOVE at stretch 2 and the
+existing charts widget BELOW at 3, `setSizes` seeding the opening split (796 / 1194 at
+3456 × 2160 — stretch alone governs only resizes, and the empty chart grid's size hint was
+opening the reader at two lines). The reader is filled at the HEAD of `_on_entry_selected`
+from `self._entries[row]`, before the no-capture guard returns and before `_CaptureWorker`
+is constructed, so an entry with no capture is readable and one entry's words can never
+land under another entry's selection. The composer opens at four text lines (228 → 106 px).
+
+**What it does NOT do.** No store, `entry_id`, `created_at`, `session_date` or
+`written_after_the_session` change; no write path touched; the Desk tab
+(`alert_center_panel._build_journal_tab`) untouched; the dated newest-first contract and
+the two-space label separator both intact; the left half of the page unchanged (its
+splitter opens 673 / 2779 before AND after — measured both ways). Nothing new on the Qt
+thread beyond setting two widgets' text. No detector, score, gate, alert, watchlist, Focus
+list, review queue or `review_policy.json` is reachable from anything here.
+
+**Proof.** All nine tests in `tests/test_g3_market_journal_reader.py` fail on the pre-G3
+panel (restored with `git checkout 705ad780 -- scripts/ui/panels/market_journal_panel.py`,
+run, 9 failed; restored, run, 9 passed). Three of the nine were added by the builder and
+nothing the tester wrote was weakened. `test_r4_market_journal_page_and_tables.py`,
+`test_qt_market_journal_page.py` and `test_v2_market_journal_one_box.py` stay green with
+no edit.
+
+**No live gate.** This is a layout packet with no runtime behaviour to observe overnight;
+its check is the trader opening the page. The handoff screenshot is at 3456 × 2160 (offscreen
+Qt on this machine renders tofu for every glyph, so it was grabbed on the `windows` platform
+from an UNSHOWN widget — no window appeared on the desk).
+
+**Owed:** the trader opens Market Journal after the next desk restart and confirms the
+reader shows a long entry end to end, the list reads as dated one-line summaries, and the
+composer opens small.
 
 ### 2026-09-06 - ST5 BUILT: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
 

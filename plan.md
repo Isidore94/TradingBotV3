@@ -374,7 +374,8 @@ coordinate by message; the desk restarts only on the trader's word.
 | Packet | State |
 |---|---|
 | G0 measure first | in build 2026-09-06 (base `main` - it edits no panel) |
-| G1, G4, G3 | red tests being written 2026-09-06, based on `lead/merge-st` |
+| G1, G4 | red tests being written 2026-09-06, based on `lead/merge-st` |
+| G3 Market Journal reader | **BUILT 2026-09-06**, branch `claude/g3-market-journal-reader` (tester's six red tests at `705ad780`, `main` `68762909` merged in); the list shows a dated 90-character excerpt and the right half is a reader over the charts, filled at the head of `_on_entry_selected`. **No live gate** - layout only, checked by the trader opening the page. Awaiting review and merge |
 | P2 | SUPERSEDED by ST2 (the other session) - stopped 16:50 PT, branch deleted, nothing built |
 | G2, G5, G4b, G7 | queued in the order above; G5 and G4b wait for ST2/ST6 in `lead/merge-st` |
 
