@@ -2572,7 +2572,7 @@ outcome log says `long`. Rewriting either inside the snapshot would make the cel
 with the file a reader opens next, so the case travels and every COMPARISON upper-cases
 (`EvidenceCell.name`, `pool_cells`, `priority_rank`).
 
-**Live gate #80** is owed at the first DESK session after merge: the strip with a verdict per
+**Live gate #83** is owed at the first DESK session after merge: the strip with a verdict per
 kind, `snapshot_latest.json` carrying the same `snapshot_id[:8]` the banner prints (and the
 words `panel read` absent from it), the switch reordering the M5 list with the same row
 count, at most one event per kind per session, and a restart adding none. Expect the first

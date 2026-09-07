@@ -1189,6 +1189,17 @@ which is evidence and must not be loaded as context.
   Taken/Closed imports, structured reviews, free-form notes, tags, and analytics.
 - Deterministic novice explanations across Setup Tracker, Day Trade Tracker, and
   Move Forensics, plus an evidence-floor-aware “What’s Working” summary.
+- **A detail pane never outlives the context that opened it** (G4, 2026-09-06).
+  `ResearchExplanationView` and `SetupDetailView` each carry `shown_identity` and
+  an OVERRIDE of `clear()` that empties, HIDES and forgets - `QTextEdit.clear()`
+  alone leaves an empty pane standing. On the Day-trade Tracker the identity is
+  `(kind, dimension, direction, segment)` read from the ROW DICT, never the
+  display text; either tab strip changing clears the pane, and a data revision
+  (`_on_refresh_finished`, `_on_held_run_loaded`) looks that identity up in the
+  model that now holds the tab's rows and redraws from the **new** row dict, or
+  clears when the revision dropped the segment. Display only: no model, sort,
+  read or number changes, one dict lookup per revision on the Qt thread. The
+  Setup Tracker's `detail_view` gets the same rule in packet G4b, after ST6.
 - Review events partitioned by installation, merged/deduplicated by readers, capture
   audits, preference scoreboard, AI-curated `review_policy.json`, and a permanent
   no-suppression boundary.
@@ -1642,9 +1653,45 @@ against the reviewed tip first.
   builds its tooltip once, sets no stylesheet and renders 150 cells in under
   5 ms; `AutopilotService.setupTrackerWritten` is the CLOSE-SLOT trigger the
   manual scan service never fires; `built_at` and every event `ts` are
-  market-local and aware; gate #80 says what a PASS looks like on day one.
+  market-local and aware; gate #83 says what a PASS looks like on day one.
 - The snapshot now FEEDS `panel_verdicts`, so ST2's one-computation-per-page
   design holds with the shared reading as its source.
+### 2026-09-06 - Packet G4: the explanation pane clears when its context changes (branch `claude/g4-stale-research-detail`)
+
+The GUI review of 2026-09-06 found the Day-trade Tracker still showing the `lrsi_cross50`
+explanation with the **Combos** tab open and no combo selected. `show_row` set HTML and
+`setVisible(True)` and nothing ever took the pane back down: neither tab strip had a
+`currentChanged` handler, and `_on_refresh_finished` / `_on_held_run_loaded` replaced every
+model row without touching it. So the last row clicked stayed on screen through every tab
+switch and every re-aggregation, beside a table that no longer contained it - the numbers on
+the right are read as the numbers on the left, which makes this correctness rather than
+polish.
+
+- **G4.1 - the pane knows what it shows.** `ResearchExplanationView.show_row` takes an
+  optional `identity=` and stores it on `shown_identity`; `clear()` is an OVERRIDE, because
+  `QTextEdit.clear()` already existed and only empties the document, which would leave an
+  empty pane standing where the explanation was. The override empties, hides and forgets.
+  `SetupDetailView` gains the same pair - its identity is
+  `(kind, side, family, symbol-or-blank, dimension-or-blank)`, computed in `_render` from
+  the row it just drew, and its `clear()` also drops `_current` so a late levels callback
+  cannot re-open a cleared pane. Nothing calls `SetupDetailView`'s pair yet.
+- **G4.2 - Day-trade Tracker.** `_explanation_identity(kind, row)` is
+  `(kind, dimension, direction, segment)`, read from the row dict and never from the display
+  text; `direction` is in it because `long vwap` and `short vwap` are two measurements and
+  the learning store itself keys a segment `direction|segment`. `tabs.currentChanged` and
+  `decisions_tabs.currentChanged` clear the pane (the second is belt-and-braces: the outer
+  strip fires first in the live GUI, so it is only reached for a move between the My
+  Decisions sub-tabs). Both data-revision slots call `_reshow_or_clear_explanation`, which
+  looks the identity up in the model that now holds the tab's rows and re-shows from the NEW
+  row dict - re-showing the cached one would reproduce the defect wearing a number instead of
+  a name - or clears when the segment is gone.
+- **G4.3 (Setup Tracker) is DEFERRED to packet G4b**, with tests 5-6: `setup_tracker_panel.py`
+  is being rewritten by ST2/ST6 and is untouched here.
+
+Tests: `tests/test_g4_stale_research_detail.py` (tester-first, five red at `98668de3`) plus
+`tests/test_g4_setup_detail_view_identity.py` added by the builder for G4.1's second widget.
+All six proven failing with the three production files restored, then green. Layout lane: no
+number, model, sort or read changes.
 
 ### 2026-09-06 - Packet ST5: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
 
@@ -1775,7 +1822,7 @@ The first release can report an observational leader or no clear leader; do not 
 proven."*
 
 Closes plan.md Phase 0.14 **V1 item 4** (Working-lately + priority switch) and **V2 item 3** (AWAY
-Recap) - the last two "V4, NOT BUILT" rows apart from Weekend Prep's takes table. Live gate **#80**
+Recap) - the last two "V4, NOT BUILT" rows apart from Weekend Prep's takes table. Live gate **#83**
 is owed at the first DESK session after merge.
 
 - **No new confidence calculation was written, on purpose.** The trader's own condition made one
