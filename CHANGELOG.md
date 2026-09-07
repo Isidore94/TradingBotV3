@@ -1296,8 +1296,23 @@ They are evidence and must not be loaded as context.
   (`_on_refresh_finished`, `_on_held_run_loaded`) looks that identity up in the
   model that now holds the tab's rows and redraws from the **new** row dict, or
   clears when the revision dropped the segment. Display only: no model, sort,
-  read or number changes, one dict lookup per revision on the Qt thread. The
-  Setup Tracker's `detail_view` gets the same rule in packet G4b, after ST6.
+  read or number changes, one dict lookup per revision on the Qt thread.
+  **BOTH Research detail panes now carry the rule** (G4b, 2026-09-07): the Setup
+  Tracker's `detail_view` clears on any move of its fourteen-tab strip, and the
+  END of `refresh()` re-shows the open row from the NEW row dict or takes the
+  pane down. **The visibility question is asked FIRST** - the trader reaches the
+  hidden state by moving tabs, so a re-show keyed on a match alone would pop an
+  explanation open under someone who had closed it. The match is one linear scan
+  (`row_at`, no dict copied per row) of the CURRENT tab's model, found through
+  `_detail_tables` by asking which tab widget owns the table, never by tab
+  position, and re-shown through that tab's own `show_*` call. `shown_identity`
+  is coarse on this page - a Setup Types row has no `dimension` and no `symbol` -
+  so the scan widens with `DETAIL_WIDENING_KEYS` (`favorite_zone`,
+  `priority_bucket`), normalised so a row carrying neither compares equal on both
+  sides; a pair differing only in `retest_label` still collides and falls to the
+  first such row in the model's own order. The dead `_on_family_row_clicked` was
+  removed (`SetupDetailView.show_family` is untouched). Display only on this
+  panel too: a golden pins all fourteen tabs' render across the change.
 - Review events partitioned by installation, merged/deduplicated by readers, capture
   audits, preference scoreboard, AI-curated `review_policy.json`, and a permanent
   no-suppression boundary.
@@ -1797,6 +1812,48 @@ against the reviewed tip first.
   market-local and aware; gate #83 says what a PASS looks like on day one.
 - The snapshot now FEEDS `panel_verdicts`, so ST2's one-computation-per-page
   design holds with the shared reading as its source.
+### 2026-09-07 - Packet G4b: the Setup Tracker's detail pane clears when its context changes (branch `claude/g4b-setup-tracker-detail`)
+
+The second half of G4, deferred while ST2/ST6 rewrote `setup_tracker_panel.py`. Tester-first
+on `main` `7e018c99`: five tests committed RED at `9879aa4a` plus one golden green by design
+(it pins all FOURTEEN tabs' rendered header and rows through the sort proxy). Builder made the
+five pass without weakening any and added a sixth. `origin/main` `6d9f4b43` merged in after.
+
+**The widget half had shipped and nothing called it.** `SetupDetailView.shown_identity` and
+its overriding `clear()` landed with G4.1; on this panel the fourteen-tab strip had no
+`currentChanged` handler and `refresh()` replaced every model's rows without touching the
+pane. The pane here carries a stop price, a 1R and two targets, so what stayed on screen was
+a price plan read against a symbol the table no longer held.
+
+- **G4b.1 - a tab move is a context change.** `self.tabs.currentChanged` ->
+  `_on_context_tab_changed` -> `clear()`: empty, hidden, identity forgotten. Same verb G4 gave
+  the Day-trade Tracker.
+- **G4b.2 - a refresh re-shows from the NEW row or clears.** `_reshow_or_clear_detail()` runs
+  at the END of `refresh()`, after every `set_rows` and `fit_columns`. **It asks whether the
+  pane is VISIBLE first**, not whether a match exists - the trader reaches the hidden state by
+  moving tabs, and a scan that re-showed on a match alone would pop an explanation open under
+  someone who had closed it. Then one linear scan of the CURRENT tab's model (`row_at`, no
+  dict copied per row) for the matching identity, re-shown through that tab's own `show_*`
+  call and from the NEW row dict, so the pane prints the revised number rather than the cached
+  one; no match, `clear()`. The tab's model and show-kind come from `_detail_tables` by asking
+  which tab widget owns the table (`isAncestorOf`), never by tab position.
+- **The identity is widened where this page collides.** A Setup Types row has no `dimension`
+  and no `symbol`, so two rows of one (side, family) in different zones share the whole
+  identity. `DETAIL_WIDENING_KEYS` (`favorite_zone`, `priority_bucket`) separates them,
+  normalised so a row carrying neither compares equal on both sides and widening can never
+  turn a real match into a miss. A pair differing only in `retest_label` still collides and
+  falls to the first such row in the model's own order - stated, not hidden.
+- **`_on_family_row_clicked` removed**: defined since the panel was written, never connected.
+  `SetupDetailView.show_family` is untouched (a G4 test drives it).
+- **Layout lane.** No number, sort, column or read moved; the golden is green before and
+  after, including after a full click / tab-switch / refresh cycle. The Attributes tab lands
+  later on its own worker (`_on_attributes_loaded`) and is not one of the eight clickable
+  tables, so it is out of this packet's seam.
+
+Fail-before-fix: `scripts/ui/panels/setup_tracker_panel.py` restored from `9879aa4a` gives
+5 failed / 1 passed; restored, 7 passed. The builder's widening test was proven the same way
+with `DETAIL_WIDENING_KEYS = ()`. Live gate **#86**.
+
 ### 2026-09-07 - Packet G2a: the Trades and Tag Week tables name their text column (branch `claude/g2a-journal-and-tagweek-columns`)
 
 The layout half of G2, split from the Setup-Tracker/Desk/AWAY half (G2b, queued after ST6
