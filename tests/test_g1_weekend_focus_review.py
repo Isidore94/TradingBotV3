@@ -804,3 +804,237 @@ def test_the_horizon_combo_still_refilters_both_cohort_tables_from_memory(
     assert page.cohort_table.rowCount() == EXPECTED_ROWS["cohort_table"]
     assert page.like_table.rowCount() == EXPECTED_ROWS["like_table"]
     assert reads == [], f"changing the horizon touched a store: {reads}"
+
+
+# ---------------------------------------------------------------------------
+# G1 fix round (reviewer NO-GO, 2026-09-06). Added by the builder; nothing
+# above this line is weakened, skipped or rewritten.
+# ---------------------------------------------------------------------------
+
+
+def _feedback_payload(rows) -> dict:
+    """The fixture payload with a hand-written `feedback` section."""
+    payload = fixture_payload()
+    payload["feedback"] = rows
+    return payload
+
+
+#: The refreshed week: the SAME number of rows, every value on row 0
+#: different. A render that keeps the row count leaves the row SELECTED, so
+#: this is the shape that makes a stale pane visible.
+REFRESHED_REASON = (
+    "Re-read after the overnight grade landed: the band rebuilt on three "
+    "sessions of real two-sided volume rather than the earnings print, the "
+    "20-day turned up under it, and the sector tape closed green four days "
+    "running - the same name, the opposite read, which is exactly the change "
+    "the trader must not be shown last week's words for."
+)
+assert len(REFRESHED_REASON) >= 200, len(REFRESHED_REASON)
+
+
+def _refreshed_feedback_rows() -> list[dict]:
+    original = fixture_payload()["feedback"]
+    rows = [dict(row) for row in original]
+    rows[0] = {
+        "date": "2026-09-05",
+        "symbol": "ORCL",
+        "side": "short",
+        "verdict": "veto",
+        "category": "swing",
+        "origin": "manual",
+        "reason": REFRESHED_REASON,
+    }
+    assert len(rows) == len(original), "the refresh must keep the row count"
+    return rows
+
+
+def test_the_detail_pane_re_reads_the_row_after_a_refresh(make_panel, qapp):
+    """The pane describes the cells on screen NOW, never the previous read.
+
+    Reviewer's reproduction (packet G1, round 1): the pane is wired to
+    `itemSelectionChanged` only, and a re-render that keeps the row count
+    leaves the row SELECTED without re-emitting it - so the table shows the
+    new week and the pane goes on reading the old one, under the same row
+    number, with nothing on screen saying which is which.
+    """
+    panel = make_panel(3456, 2160)
+    page = panel.focus_review
+    _render_fixture(qapp, page)
+
+    _select_view(qapp, page, "Said at the time")
+    page.feedback_table.selectRow(0)
+    _process(qapp)
+
+    pane = _detail_pane(page)
+    before = pane.toPlainText()
+    assert "AMD" in before, before[:400]
+    assert LONG_REASON[:60] in before, before[:400]
+
+    # The same page, re-rendered with the same row COUNT and new values.
+    page._on_focus_ready(_feedback_payload(_refreshed_feedback_rows()))
+    _process(qapp)
+
+    assert page.feedback_table.rowCount() == EXPECTED_ROWS["feedback_table"], (
+        "the refresh must keep the row count - otherwise this test is not "
+        "reproducing the defect"
+    )
+    assert page.feedback_table.item(0, 1).text() == "ORCL"
+
+    after = pane.toPlainText()
+    assert "ORCL" in after, (
+        "the detail pane still describes the PREVIOUS read after a refresh: "
+        f"{after[:400]!r}"
+    )
+    assert REFRESHED_REASON[:60] in after, after[:400]
+    assert "AMD" not in after, (
+        f"the pane kept a value the refresh replaced: {after[:400]!r}"
+    )
+    assert LONG_REASON[:60] not in after, after[:400]
+
+
+def test_a_refresh_that_drops_the_selected_row_empties_the_detail_pane(
+    make_panel, qapp
+):
+    """A selection the new read cannot carry leaves the pane EMPTY, not frozen."""
+    panel = make_panel(3456, 2160)
+    page = panel.focus_review
+    _render_fixture(qapp, page)
+
+    _select_view(qapp, page, "Said at the time")
+    last = EXPECTED_ROWS["feedback_table"] - 1
+    page.feedback_table.selectRow(last)
+    _process(qapp)
+
+    pane = _detail_pane(page)
+    assert pane.toPlainText().strip(), "the pane must be filled before the refresh"
+
+    # A shorter week: the selected row no longer exists.
+    page._on_focus_ready(_feedback_payload(fixture_payload()["feedback"][:2]))
+    _process(qapp)
+
+    assert page.feedback_table.rowCount() == 2
+    assert not page.feedback_table.selectedItems(), (
+        "the shorter render must have dropped the selection"
+    )
+    assert not pane.toPlainText().strip(), (
+        "the pane must be EMPTY when the refresh dropped the selected row, "
+        f"not the row it used to describe: {pane.toPlainText()[:400]!r}"
+    )
+
+
+def test_the_horizon_re_render_also_re_reads_the_detail_pane(make_panel, qapp):
+    """The cohort re-render is a render too, and the pane follows it.
+
+    The horizon combo swaps the rows of both cohort tables from memory. When
+    the other horizon holds the SAME NUMBER of rows the selection survives, so
+    this is the second door onto the same staleness as a refresh - a different
+    horizon's numbers under the previous horizon's words.
+    """
+    import ui.panels.weekend_prep_panel as panel_module
+
+    panel = make_panel(3456, 2160)
+    page = panel.focus_review
+
+    other = next(
+        horizon
+        for horizon in panel_module.COHORT_HORIZONS
+        if horizon != panel_module.DEFAULT_COHORT_HORIZON
+    )
+    payload = fixture_payload()
+    at_other = []
+    for index, row in enumerate(payload["cohort"]):
+        twin = dict(row)
+        twin["horizon"] = other
+        twin["cohort"] = f"veto_only_at_h{other}_{index}"
+        at_other.append(twin)
+    # The same COUNT at both horizons: the switch keeps the row selected.
+    payload["cohort"] = list(payload["cohort"]) + at_other
+    page._on_focus_ready(payload)
+    _process(qapp)
+
+    _select_view(qapp, page, "Vetoes")
+    assert page.cohort_table.rowCount() == EXPECTED_ROWS["cohort_table"]
+    page.cohort_table.selectRow(0)
+    _process(qapp)
+
+    pane = _detail_pane(page)
+    before = pane.toPlainText()
+    assert before.strip()
+    first_cohort = page.cohort_table.item(0, 0).text()
+    assert first_cohort in before, before[:400]
+
+    page.cohort_horizon_input.setCurrentIndex(
+        page.cohort_horizon_input.findData(other)
+    )
+    _process(qapp)
+
+    assert page.cohort_table.rowCount() == EXPECTED_ROWS["cohort_table"], (
+        "both horizons must hold the same row count, or this test is not "
+        "reproducing the defect"
+    )
+    swapped = page.cohort_table.item(0, 0).text()
+    assert swapped != first_cohort, "the horizon switch must have swapped the rows"
+    after = pane.toPlainText()
+    assert swapped in after, (
+        "the pane still describes the row of the PREVIOUS horizon: "
+        f"{after[:400]!r}"
+    )
+    assert first_cohort not in after, after[:400]
+
+
+def test_clicking_the_view_already_shown_is_a_no_op(make_panel, qapp):
+    """Re-clicking the current view must not throw the trader's row away.
+
+    An exclusive checkable button still emits `clicked` when it is already
+    checked, so the selector re-ran the view change and cleared the selection
+    and the pane - a click that changed nothing on screen except the one thing
+    the trader was reading.
+    """
+    panel = make_panel(3456, 2160)
+    page = panel.focus_review
+    _render_fixture(qapp, page)
+
+    _select_view(qapp, page, "Vetoes")
+    page.cohort_table.selectRow(1)
+    _process(qapp)
+
+    pane = _detail_pane(page)
+    before = pane.toPlainText()
+    assert before.strip(), "the pane must be filled before the second click"
+    assert {item.row() for item in page.cohort_table.selectedItems()} == {1}
+
+    _select_view(qapp, page, "Vetoes")
+
+    assert _visible_tables(page) == ["cohort_table"]
+    assert {item.row() for item in page.cohort_table.selectedItems()} == {1}, (
+        "clicking the view already shown cleared the selected row"
+    )
+    assert pane.toPlainText() == before, (
+        "clicking the view already shown emptied the detail pane"
+    )
+
+    # Switching to a DIFFERENT view still clears - that rule is unchanged.
+    _select_view(qapp, page, "Likes")
+    assert not pane.toPlainText().strip()
+
+
+def test_the_two_cross_reference_notes_name_a_view_not_a_position(
+    make_panel, qapp
+):
+    """Nothing is "above" another table once the nine are a stack.
+
+    The like note pointed at "the veto table above" and the feedback note at
+    "the rollup above"; both are now views the trader reaches with a button,
+    and a note naming a position that no longer exists is a wrong direction.
+    """
+    panel = make_panel(3456, 2160)
+    page = panel.focus_review
+    _render_fixture(qapp, page)
+
+    like_note = page.like_note.text()
+    assert "Vetoes view" in like_note, like_note
+    assert "table above" not in like_note, like_note
+
+    feedback_note = page.feedback_note.text()
+    assert "Picks graded view" in feedback_note, feedback_note
+    assert "above" not in feedback_note, feedback_note
