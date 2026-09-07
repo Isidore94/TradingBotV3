@@ -1011,6 +1011,22 @@ def test_the_market_journal_builds_no_candle_chart_until_a_capture_is_rendered(
             }
         )
         app.processEvents()
+        # TRIGGER ONLY (builder, 2026-09-07). Selecting the entry above starts
+        # the panel's own `_CaptureWorker`, and this fixture's capture is built
+        # in memory rather than stored, so that worker lands an EMPTY payload
+        # for `mj-1` - which clears the charts. Whether it lands before or after
+        # the direct call below is a coin flip on machine load (green alone,
+        # red under `-k "market_journal or journal_capture or g3"`). In the real
+        # desk `_render_capture` is only ever called by that worker, once per
+        # selection, so two landings for one entry is a test artifact and not a
+        # behaviour to design around. Letting the empty one land FIRST is the
+        # deterministic order; not one assertion below moved.
+        _drain(
+            app,
+            lambda: panel._capture_worker is not None
+            and not panel._capture_worker.isRunning()
+            and "could not be read" in panel.charts_note.text(),
+        )
         panel._render_capture("mj-1", capture)
         app.processEvents()
 

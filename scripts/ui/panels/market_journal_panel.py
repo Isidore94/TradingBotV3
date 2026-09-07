@@ -327,26 +327,16 @@ class MarketJournalPanel(QFrame):
 
         # The right half: the tape the selected entry was written against.
         # Charts, not a note about charts - the whole point of the capture.
+        # G7.3: the four panes are BUILT on the first capture that needs them,
+        # not here. Four `CandleChart`s is the page's whole construction cost
+        # (299 ms in the G0 baseline), and the trader sees a chart only once
+        # they click an entry that has one - most sessions, never.
         self.charts: dict[str, CandleChart] = {}
         self.chart_titles: dict[str, QLabel] = {}
         self.chart_holders: dict[str, QWidget] = {}
-        charts_layout = QGridLayout()
-        charts_layout.setContentsMargins(0, 0, 0, 0)
-        for index, (key, _template, _timeframe) in enumerate(CAPTURE_PANES):
-            title = QLabel("")
-            title.setObjectName("SectionSubtitle")
-            chart = CandleChart()
-            chart.setMinimumHeight(160)
-            self.chart_titles[key] = title
-            self.charts[key] = chart
-            pane = QVBoxLayout()
-            pane.setContentsMargins(0, 0, 0, 0)
-            pane.addWidget(title)
-            pane.addWidget(chart, 1)
-            holder = QWidget()
-            holder.setLayout(pane)
-            self.chart_holders[key] = holder
-            charts_layout.addWidget(holder, index // 2, index % 2)
+        self._charts_layout = QGridLayout()
+        self._charts_layout.setContentsMargins(0, 0, 0, 0)
+        charts_layout = self._charts_layout
         charts_widget = QWidget()
         charts_body = QVBoxLayout(charts_widget)
         charts_body.setContentsMargins(0, 0, 0, 0)
@@ -768,9 +758,38 @@ class MarketJournalPanel(QFrame):
         self._capture_worker.loaded.connect(self._render_capture)
         self._capture_worker.start()
 
+    def _ensure_charts(self) -> None:
+        """Build the four capture panes, once, the first time one is needed.
+
+        G7.3. A `CandleChart` is a pyqtgraph plot and four of them were the
+        page's construction cost; a page with no entry selected shows no chart
+        at all, so nothing here belongs in `__init__`. Every reader of
+        `self.charts` tolerates the empty dict, which is what "not built yet"
+        looks like before the first capture.
+        """
+        if self.charts:
+            return
+        for index, (key, _template, _timeframe) in enumerate(CAPTURE_PANES):
+            title = QLabel("")
+            title.setObjectName("SectionSubtitle")
+            chart = CandleChart()
+            chart.setMinimumHeight(160)
+            self.chart_titles[key] = title
+            self.charts[key] = chart
+            pane = QVBoxLayout()
+            pane.setContentsMargins(0, 0, 0, 0)
+            pane.addWidget(title)
+            pane.addWidget(chart, 1)
+            holder = QWidget()
+            holder.setLayout(pane)
+            self.chart_holders[key] = holder
+            self._charts_layout.addWidget(holder, index // 2, index % 2)
+
     def _clear_charts(self, note: str) -> None:
         self.charts_note.setText(note)
         self.digest_label.setText("")
+        # Nothing built yet is already cleared: the loop over an empty dict is
+        # the "not built" case, not a missed reset.
         for key, chart in self.charts.items():
             chart.set_data([])
             self.chart_titles[key].setText("")
@@ -789,6 +808,9 @@ class MarketJournalPanel(QFrame):
             return
         import market_journal_capture
 
+        # G7.3: the first capture that has something to draw is what pays for
+        # the four panes.
+        self._ensure_charts()
         symbol = str(capture.get("symbol") or "").strip().upper() or "(no symbol)"
         benchmark = str(capture.get("benchmark") or market_journal_capture.BENCHMARK_SYMBOL)
         series = capture.get("series") or {}
