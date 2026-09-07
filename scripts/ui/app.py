@@ -768,6 +768,7 @@ class MainWindow(QMainWindow):
             if not button.icon().isNull():
                 button.setIconSize(QSize(theme.px(18), theme.px(18)))
         self.trading_panel.apply_scaled_metrics()
+        self.market_journal_panel.refresh_reader_measure()
 
     def _set_scan_status(self, message: str) -> None:
         self.scan_status.setText(f"Scan: {message}")
