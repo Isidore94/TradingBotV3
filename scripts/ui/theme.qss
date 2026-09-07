@@ -422,3 +422,21 @@ QLabel#SwingFavoriteTaken {
     color: @favorite@;
     font-weight: 700;
 }
+
+
+/* ST6 - the Working-lately strip at the top of the M5 alerts column.
+   The variant is a DYNAMIC PROPERTY, never a per-widget setStyleSheet: the
+   strip re-renders on every snapshot and a stylesheet set there recomputes the
+   whole subtree to say nothing (re-review advisory 4). */
+QFrame#WorkingLatelyStrip {
+    background: transparent;
+    border-bottom: 1px solid @border@;
+}
+
+QLabel#WorkingLatelyLine {
+    color: @text_secondary@;
+}
+
+QFrame#WorkingLatelyStrip[hasSnapshot="true"] QLabel#WorkingLatelyLine {
+    color: @text_primary@;
+}

@@ -13,24 +13,28 @@ This module names both policies so the choice can be compared instead of
 assumed:
 
 ``closed_first_v1``
-    Today's rule, byte-identical, and still the default everywhere. Prefer a
-    row that has closed, then the earliest scan date. One row per thesis, so a
-    genuine second entry on the same anchor is invisible.
+    The rule that shipped until 2026-09-06, byte-identical and still selectable
+    by name. Prefer a row that has closed, then the earliest scan date. One row
+    per thesis, so a genuine second entry on the same anchor is invisible, and
+    a thesis still running is graded off whichever alternate exit plan closed.
 
-``first_actionable_v2``
-    The challenger, evidence-only. The episode identity gains an
-    ``attempt_index`` and the selected row is fixed BEFORE any outcome is
-    known: attempt 1 is the earliest scan row of the thesis, and a later row
-    opens attempt k+1 only when the previous attempt's representative scenario
-    had already CLOSED. A rescan of a live attempt is one more observation of
-    the same episode, never a new one, and an attempt still running stays
-    pending.
+``first_actionable_v2`` (the DEFAULT since 2026-09-06)
+    The repaired rule. The episode identity gains an ``attempt_index`` and the
+    selected row is fixed BEFORE any outcome is known: attempt 1 is the
+    earliest scan row of the thesis, and a later row opens attempt k+1 only
+    when the previous attempt's representative scenario had already CLOSED. A
+    rescan of a live attempt is one more observation of the same episode, never
+    a new one, and an attempt still running stays pending.
 
-Nothing here reaches a detector, a score, a rank, an alert, a watchlist, Focus,
-the review queue or ``review_policy.json``. ``first_actionable_v2`` is reachable
-only through an explicit keyword argument and through
-``scripts/tracker_selection_compare.py``; the trader's decision on whether to
-switch is a separate question built on that comparison.
+The trader took both halves on 2026-09-06 - *"Yes a trade not yet completed
+should say pending. A second entry after a first close is its own trade yes."* -
+and packet ST7 made this the default (record
+``docs/decisions/0019-tracker-selection-and-execution-defaults.md``);
+``closed_first_v1`` is the "old" arm of ``scripts/tracker_selection_compare.py``
+and the rollback is one switch by name. Nothing here reaches a detector, an
+alert, a watchlist, Focus, the review queue or ``review_policy.json``: it names
+which observation of a thesis gets graded on an evidence surface, and no
+setup is promoted by it.
 """
 
 from __future__ import annotations
@@ -40,10 +44,12 @@ from typing import Iterable
 SELECTION_CLOSED_FIRST_V1 = "closed_first_v1"
 SELECTION_FIRST_ACTIONABLE_V2 = "first_actionable_v2"
 
-#: Today's policy. Every default call site resolves to this and moves no
-#: number; the golden `tests/fixtures/st4_family_rows_golden.csv` was pinned
-#: from `main` before this module existed and proves it.
-DEFAULT_SELECTION_POLICY = SELECTION_CLOSED_FIRST_V1
+#: The policy every default call site resolves to. Packet ST7 (2026-09-06,
+#: decision 0019) moved it from `closed_first_v1` to the repair; the v1
+#: characterization is `tests/fixtures/st4_family_rows_golden.csv`, still
+#: reproduced by naming `SELECTION_CLOSED_FIRST_V1`, and the new default is
+#: pinned by `tests/fixtures/st7_family_rows_v2_default_golden.csv`.
+DEFAULT_SELECTION_POLICY = SELECTION_FIRST_ACTIONABLE_V2
 
 SELECTION_POLICIES = (SELECTION_CLOSED_FIRST_V1, SELECTION_FIRST_ACTIONABLE_V2)
 

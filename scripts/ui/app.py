@@ -49,6 +49,7 @@ from ui.panels.trading_desk import TradingDeskPanel
 from ui.panels.universe_panel import UniversePanel
 from ui import theme
 from ui.services.strength_board_service import StrengthBoardService
+from ui.services.working_lately_service import WorkingLatelyService
 from ui.state import VALID_UI_SCALES, UiState
 from ui.theme import apply_theme
 from ui.widgets.price_alert_toast import PriceAlertToastManager
@@ -186,6 +187,41 @@ class MainWindow(QMainWindow):
         # a symbol looks like.
         self.away_recap_panel.symbolActivated.connect(
             self.trading_panel.alert_center.show_board_symbol
+        )
+        # ST6.3. ONE Working-lately snapshot for the whole desk, owned by the
+        # window because four surfaces read it and no one panel is their parent.
+        # Everything expensive is on its worker; the slots below only format.
+        # Four triggers, one coalesced reaction: the first show, the day roll,
+        # a finished scan (which is what rewrites the tracker exports) and its
+        # own thirty-minute timer.
+        self.working_lately_service = WorkingLatelyService(self)
+        self.working_lately_service.snapshotChanged.connect(
+            self.trading_panel.set_working_lately_snapshot
+        )
+        self.working_lately_service.snapshotChanged.connect(
+            self.research_panel.setup_tracker_panel.set_working_lately_snapshot
+        )
+        self.working_lately_service.snapshotChanged.connect(
+            self.weekend_prep_panel.set_working_lately_snapshot
+        )
+        self.working_lately_service.statusChanged.connect(self._set_scan_status)
+        self.trading_panel.workingLatelyOpenRequested.connect(
+            self._show_setup_tracker_page
+        )
+        self.trading_panel.alert_center.m5AlertsDayRolled.connect(
+            self.working_lately_service.on_day_roll
+        )
+        # Trigger (c), BOTH halves. The manual scan service fires only for a
+        # scan the trader started; the CLOSE-SLOT write - which is the one that
+        # produces the exports on a normal day, on a desk nobody is touching -
+        # comes from Auto Pilot's own scan service (re-review advisory 5). Both
+        # route through the same coalescer, so a manual scan that happens to
+        # land on the slot is still one build.
+        self.trading_panel.master_panel.scan_service.finished.connect(
+            lambda *_args: self.working_lately_service.on_tracker_export()
+        )
+        self.autopilot_panel.service.setupTrackerWritten.connect(
+            lambda *_args: self.working_lately_service.on_tracker_export()
         )
         # The page used to carry a second RS/RW view, so that the two reads
         # could be compared without flipping pages (trader, 2026-08-21). With
@@ -692,6 +728,7 @@ class MainWindow(QMainWindow):
         cost the page switch that asked for it.
         """
         try:
+            import working_lately
             from ui.panels.alert_center_panel import extract_alert_tier
 
             center = self.trading_panel.alert_center
@@ -710,6 +747,13 @@ class MainWindow(QMainWindow):
                         "trigger": str(getattr(alert, "trigger", "") or ""),
                         "time_text": str(getattr(alert, "time_text", "") or ""),
                         "is_d1": bool(getattr(alert, "is_d1", False)),
+                        # ST6.6. The cell the M5 row already carries and the
+                        # held x ran suffix already attached to it - travelling,
+                        # never recomputed. The recap classifies nothing.
+                        "cell": " ".join(working_lately.alert_priority_key(alert)).strip(),
+                        "held_run_suffix": str(
+                            getattr(alert, "held_run_suffix", "") or ""
+                        ),
                     }
                     for alert in ordered
                 ]
@@ -855,6 +899,28 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_tag_badge_started", False):
             self._tag_badge_started = True
             self._start_tag_review_badge()
+        # ST6.3 trigger (a): once, after the window is actually on screen - for
+        # the same reason the badge waits. The build opens three stores on a
+        # worker, and a thread started during construction runs while a test is
+        # still monkeypatching the module globals it reads.
+        self.working_lately_service.start()
+
+    def _show_setup_tracker_page(self) -> None:
+        """The Working-lately strip's click-through (ST6.4).
+
+        The Setup Tracker is a TAB inside the Research page, so this switches
+        the page by TITLE - never by index, which a reorder would silently
+        unwire - and then asks the Research panel to raise its own tab. The
+        banner there prints the same `snapshot_id` the strip just showed.
+        """
+        for index, spec in enumerate(PAGE_SPECS):
+            if spec.title == "Research":
+                self._select_page(index)
+                break
+        try:
+            self.research_panel.show_setup_tracker()
+        except Exception:  # noqa: BLE001 - a page switch never costs the desk
+            logging.debug("Setup Tracker tab could not be raised.", exc_info=True)
 
     def closeEvent(self, event) -> None:
         # V2: the badge reader, before the panels. It is one bounded read and it
@@ -886,6 +952,13 @@ class MainWindow(QMainWindow):
         # thing it holds.
         try:
             self.strength_board_service.shutdown()
+        except Exception:
+            pass
+        # Same reason, same list: the Working-lately service is owned by the
+        # window (four surfaces read it) and holds one timer and one bounded
+        # reader. ST6.3.
+        try:
+            self.working_lately_service.shutdown()
         except Exception:
             pass
         # Backstop for the shared writer lease: AutopilotService.shutdown

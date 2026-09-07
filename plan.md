@@ -475,12 +475,14 @@ nobody has to reconstruct it from four entries:
 | V1 | 1 Strength Board = TC2000 | **BUILT** (gates #44, #45). R4 A7/A8 made the RVOL session-relative, dropped the forming daily bar and widened the daily window to `2y` |
 | V1 | 2 `held_run_score` | **BUILT AND WIRED** (R4 A9/A10): the D1 dimension is fed, the tracker's second formula is deleted, and the M5 alert row carries the suffix. FOUR of the tracker's nine tabs fill (Bounce Types, Combos, Time of Day, Environment) and five read BLANK - the four `master_avwap_*` Swing tabs because the outcome log cannot be asked those dimensions, `rrs_alignment` because it is reachable and not derived yet (`UNDERIVED_DIMENSIONS` splits the two) |
 | V1 | 3 phone digest ranks across buckets | **BUILT** (R4 A11, horizon corrected in fix round 1) - Wilson lower bound on the family's realized win rate at ONE declared horizon (`SWING_DIGEST_HORIZON_SESSIONS` = 5, stale-horizon rows dropped the way the scan-factor leaderboard drops them), expected R as tiebreak, near cap after the ranking |
-| V1 | 4 Working-lately + priority switch | **NOT BUILT** - this is V4 |
+| V1 | 4 Working-lately + priority switch | **BUILT** (ST6, 2026-09-06; live gate #83). ONE deterministic evidence snapshot (`working_lately.build_snapshot`, PURE - `snapshot_id` is a sha1 over the sorted cells + the declared policy lines + `as_of` and nothing else, so a source's mtime and the half-hourly timer cannot move it), built off the Qt thread by `ui/services/working_lately_service.py`, persisted small at `%LOCALAPPDATA%\TradingBotV3\working_lately\snapshot_latest.json` with a deduplicated `leader_change_events.jsonl` beside it. THREE KINDS, three verdicts, never pooled (`pool_cells` RAISES across kind, side or outcome kind and names the axis). The one-line strip sits at the TOP of the M5 alerts column and clicks through to the Setup Tracker, whose banner renders the SAME payload (its own CSV read is the labelled `panel read` fallback, and the Summary card three lines above it takes the same verdict so ST2's fix round is not undone by a different door). The priority switch is `prioritise_working_lately`, default OFF, read AT SORT TIME: it stably reorders the M5 list, the WAITING review list and the setups table and withholds nothing - the identical-visible-rows test CLAUDE.md owed WITH the switch exists. Dependence is answered by REFUSING (`CONCENTRATION_LIMIT` 0.5, reason `concentrated`), not by a new interval; `LEADER_PERSISTENCE_SNAPSHOTS` = 2 and the concentration limit were both DECLARED 2026-09-06 before any forward evaluation; the multiple-testing exposure is printed (`observational leader among K cells`) and nothing is called proven |
 | V2 | 1 nightly auto-tagging | **BUILT** (gate #46) |
 | V2 | 2 Weekend Prep | (a)(b)(c)(e) **BUILT** (gate #49). R4 A13/A14/A15/A18 fixed the take rate, moved the 775 ms read off the Qt thread, gave Discovery a real `reload` and its six buttons the exit, stopped Confirm-all confirming a blank, added the per-row edit and put every table on a ten-row floor. The takes table and the collapsed notes are still owed |
-| V2 | 3 AWAY Recap | **NOT BUILT** - this is V4 |
+| V2 | 3 AWAY Recap | **BUILT** (ST6.6, 2026-09-06; live gate #83). The recap's summary leads with the shared snapshot line and its `snapshot_id`, then names that SESSION's leader changes with their cause; the best-swings table lists EVERY ranked row from `autopilot_today.txt` (there was no top-five cap here to remove - the cap the trader remembers is the PHONE digest's, and that one is untouched); the classified alerts carry the `alert_cell` and the held x ran suffix the M5 row already showed, TRAVELLING rather than recomputed, in an eighth column inserted BEFORE the chart affordance so the chart stays `columnCount() - 1`. `autopilot_today.txt` gains a `== WORKING LATELY ==` section in its EXISTING body - **no new push**: AWAY-only routine output, already inside the rule - and an absent snapshot is an ABSENT SECTION rather than a sentence about evidence nobody read |
 | V2 | 4 Market Journal one box | **BUILT** (gate #47). The Desk tab landed with V2; the LEFT-NAV PAGE landed with R4 A16, and R4 A17 moved the session roll to the open |
 | V2 | 5 hide the dead tabs | **BUILT** (gate #48) |
+| V3 | 1 win rate leads | **BUILT AND COMPLETE** (R4 B3 wired five surfaces; ST2 closed the sixth, 2026-09-06). WIRED: the AWAY digest ranking (A11), `setup_docs.family_record_sentence` and its two renderers (B2), the Master AVWAP setups table's family rate column, the Setup Tracker's **Last 30 Days** tab, all four Weekend Prep cohort tables, and - since ST2.2 - the Setup Tracker's **Setup Types** tab, each sorting by the Wilson lower bound. ONE Wilson: `swing_headline.WILSON_Z`. The Setup Types seam was blocked on evidence, not scheduling: `master_avwap_setup_type_stats.csv` carried no win column (only `target_hit_rate` / `stop_rate`, different questions) and `master_avwap_tier_outcomes.csv` cannot be joined at that table's grain - its 184 rows collapse to 71 (side, bucket, family, zone) groups, so one joined rate would repeat across up to six rows and read as each row's own. ST2.2 gave the export its OWN `n_wins`/`n_losses` at its own grain, so nothing is joined. ST2.1 also fixed the recent-types cell, which was rebuilding `round(rate * n)` from a RECENCY-WEIGHTED rate and printing a count nobody observed. **RELABELLED by ST1 (2026-09-06): the tier-outcomes surfaces are not showing a win rate at all.** `master_avwap_tier_outcomes.csv`'s `win` is the sign of a close-to-close percent move at a scan-row offset, so `outcome_kind` now declares it, `Headline.outcome_kind` chooses the words, and the setups table's column reads **Family favorable %**. The Weekend Prep cohort tables and the Setup Types tab are unaffected - they grade real decisions and count at their own grain. Decision 0016 answer 3 stands; `swing_evidence.read_eligible_rows` makes all three readers of that file agree on which rows they count |
+
 | V3 | 1 win rate leads | **BUILT AND COMPLETE** (R4 B3 wired five surfaces; ST2 closed the sixth, 2026-09-06). WIRED: the AWAY digest ranking (A11), `setup_docs.family_record_sentence` and its two renderers (B2), the Master AVWAP setups table's **Family Win %** column, the Setup Tracker's **Last 30 Days** tab, all four Weekend Prep cohort tables, and - since ST2.2 - the Setup Tracker's **Setup Types** tab, each sorting by the Wilson lower bound. ONE Wilson: `swing_headline.WILSON_Z`. The Setup Types seam was blocked on evidence, not scheduling: `master_avwap_setup_type_stats.csv` carried no win column (only `target_hit_rate` / `stop_rate`, different questions) and `master_avwap_tier_outcomes.csv` cannot be joined at that table's grain - its 184 rows collapse to 71 (side, bucket, family, zone) groups, so one joined rate would repeat across up to six rows and read as each row's own. ST2.2 gave the export its OWN `n_wins`/`n_losses` at its own grain, so nothing is joined. ST2.1 also fixed the recent-types cell, which was rebuilding `round(rate * n)` from a RECENCY-WEIGHTED rate and printing a count nobody observed. **RELABELLED by ST1 (2026-09-06): four of those five surfaces are not showing a win rate at all.** `master_avwap_tier_outcomes.csv`'s `win` is the sign of a close-to-close percent move at a scan-row offset, so `outcome_kind` now declares it, `Headline.outcome_kind` chooses the words, and the setups table's column reads **Family favorable %**. The Weekend Prep cohort tables are unaffected - they grade real decisions. Decision 0016 answer 3 stands, and `swing_evidence.read_eligible_rows` makes all three readers of that file agree on which rows they count |
 | V3 | 2 day-trade headline | **BUILT** - surfaces real since R4 A10, and since R4 B4 every number on the Daytrade Tracker names its own basis: the champion tier is a COLUMN (PROVEN / MUTED / active from the learning state, blank for a segment it never saw - live 4 / 2 / 185 / 104 of 295 rows), the aggregator's verdict is headed **Verdict (edge score)**, and the My Decisions tabs carry Held 30m / Held x Ran through the same helper on `held_run_score.ALL_DIRECTIONS`, a pooled cell accumulated from the EPISODES and never an average of the two sided cells |
 | V3 | 3 one `LATELY_SESSIONS` | **BUILT AND COMPLETE** (R4 B6). `review_learning.DEFAULT_WINDOW_SESSIONS` IS `LATELY_SESSIONS` and its cutoff walks the exchange calendar; Weekend Prep's week is `evidence_stats.WEEK_SESSIONS` (5). The state key, the report header, the CLI flag, the System Health audit and the Daytrade Tracker status line all say **sessions**, and a literal scan test fails if a `window_days` comes back |
@@ -509,11 +511,11 @@ Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breake
 for this phase: **when two packets compete, the one that improves WHICH NAMES ARE
 SHOWN beats the one that improves WHEN TO ENTER.**
 
-### Phase 0.14 packet V2 — The loop closes (2026-09-02) — items 1, 4 and 5 BUILT; 2 and 3 NOT BUILT
+### Phase 0.14 packet V2 — The loop closes (2026-09-02) — items 1, 3, 4 and 5 BUILT; 2 partial
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: the Phase 0.14 table above is the current state; V1 and V2 build records are in the archive. **V4 (Working-lately + priority switch, AWAY Recap, the Weekend Prep takes table and collapsed notes, the Setup Types tab) is NOT BUILT.** Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: the Phase 0.14 table above is the current state; V1 and V2 build records are in the archive. **V4 is now mostly BUILT**: the Setup Types tab landed with ST2 (2026-09-06) and the Working-lately surface, the priority switch and the AWAY Recap with ST6 the same day (live gate #80). **Still owed from V4: the Weekend Prep takes table and its collapsed notes.** Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
-### Phase 0.14 packet V1 — Names first (2026-09-02) — BUILT; V4 owed
+### Phase 0.14 packet V1 — Names first (2026-09-02) — BUILT; item 4 closed by ST6 (2026-09-06)
 
 Build record in the same archive file, unabridged.
 
@@ -670,17 +672,19 @@ Each item requires parity/rollback evidence before the next authority cutover.
 3. **P2.3 Repair remaining point-in-time defects.** Cover moving levels, history
    keys, backfill leakage, tracker identity, score ordering, factor horizons,
    corporate actions, and survivorship with intentional-difference fixtures.
-   **Partly done (packet ST3, 2026-09-06):** the tracker replay's two worst
-   point-in-time defects have their intentional-difference fixtures and a
-   versioned, opt-in repair - `literal_level_v1` / `gap_aware_v2` for the fill
-   and `same_session_v1` / `prior_session_v2` for the level, both defaulting to
-   what ships, with `tests/fixtures/st3_replay_golden.json` pinning the default
-   path byte-identical and `scripts/tracker_execution_compare.py` producing the
-   comparison. **Still owed here:** the trader's decision on whether the
-   repaired pair becomes the scoring convention (a sec-7 promotion if yes, with
-   a historical restatement question of its own), and the rest of the P2.3 list
-   - backfill leakage, tracker identity, score ordering, factor horizons,
-   corporate actions and survivorship - which ST3 did not touch. Live gate #77.
+   **Done for the tracker replay's two worst point-in-time defects (packet ST3,
+   2026-09-06; DEFAULT since ST7, 2026-09-07, decision 0019):** each has its
+   intentional-difference fixture and a versioned repair - `gap_aware_v2` for the
+   fill and `prior_session_v2` for the level, both now the DEFAULT, with
+   `literal_level_v1` / `same_session_v1` still selectable by name and pinned by
+   `tests/fixtures/st3_replay_golden.json`, the new defaults pinned by
+   `tests/fixtures/st7_v2_default_golden.json`, and
+   `scripts/tracker_execution_compare.py` producing the comparison. History IS
+   restated by the flip - the tracker rebuilds every record on each persisted
+   write - which was the decision, and the rollback is one switch by name.
+   **Still owed here:** the rest of the P2.3 list - backfill leakage, score
+   ordering, factor horizons and corporate actions - which neither ST3 nor ST7
+   touched. Live gates #77 (the comparison artifact) and #84 (the flip is live).
    **Factor horizons: HALF DONE by ST1 (2026-09-06), versioned rather than
    repaired in place.** `master_avwap_lib/session_horizon_outcomes.py` measures the
    exact exchange-session horizon from completed bars into its own file
@@ -689,11 +693,13 @@ Each item requires parity/rollback evidence before the next authority cutover.
    reads, because re-selecting its future row restates every historical number.
    What remains here is the DECISION to move a reader to `POLICY_SESSION_V2`,
    which needs the two files compared side by side over a declared window first.
-   **Tracker identity: the fixtures exist and the decision is owed** (ST4,
-   2026-09-06, branch `claude/st4-first-actionable`).
+   **Tracker identity: DECIDED and DEFAULT** (ST4 2026-09-06, flipped by ST7
+   2026-09-07 on the trader's *"Yes a trade not yet completed should say pending.
+   A second entry after a first close is its own trade yes."*, decision 0019).
    `scripts/master_avwap_lib/selection_policy.py` names `closed_first_v1` (the
-   shipped rule, still `DEFAULT_SELECTION_POLICY` everywhere) and the opt-in
-   `first_actionable_v2` (fixed first-actionable attempt identity, declared
+   rule that shipped until 2026-09-06, still selectable by name) and
+   `first_actionable_v2`, now `DEFAULT_SELECTION_POLICY` (fixed
+   first-actionable attempt identity, declared
    re-entry rule, declared `full_band2` representative exit, pending stays
    pending, replay through `as_of_session`).
    `tests/test_st4_first_actionable.py` is the intentional-difference set -
@@ -702,10 +708,16 @@ Each item requires parity/rollback evidence before the next authority cutover.
    from `main` before the code existed. `scripts/tracker_selection_compare.py`
    holds the frozen v1-vs-v2 evidence, and `tests/test_st4_compact_projection.py`
    pins that a compact scoring projection's `_scoring_outcome_summary` IS the
-   record. **Still owed: the trader's policy decision (live gate #78), and it
-   is TWO questions - the selection, and pending-stays-pending, which is 94% of
-   the measured mean-R move. A switch is a separate change with its own golden
-   fixtures.** A replay is blind to a COMPACTED record and names it
+   record - which survived the flip: a DEFAULT read still takes the cache
+   unconditionally, and a cache with no `representative_status` at all (every
+   pre-ST4 projection on disk) is graded from its own `closed_setups` rather
+   than read as "not closed", which would have zeroed the live scoring
+   population. **Still owed: live gate #84** - the flip proven on the first
+   persisted tracker write, with the three stamps on every record and no
+   `pending` representative graded. Gate #78's clause 1 (`selection_policy` =
+   `closed_first_v1` on every row) was written while the decision was still
+   owed and is superseded by #84; its clause 2, that the scoring path is
+   intact, still stands. A replay is blind to a COMPACTED record and names it
    `undatable_exit_in_population`, so the point-in-time work here is honest for
    the recent window and explicitly incomplete further back. Score ordering,
    moving levels, backfill leakage, factor horizons and corporate actions are

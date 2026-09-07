@@ -948,9 +948,58 @@ class MasterAvwapPanel(QWidget):
             style.unpolish(self.data_as_of_label)
             style.polish(self.data_as_of_label)
 
+    def set_working_lately_order(self, order) -> None:
+        """`[(SIDE, family)]`, best first - the priority switch (ST6.5).
+
+        The setups table arrives PRE-RANKED (conviction bucket, then
+        tracker-led Expected R) and that ordering is the secondary key here: the
+        switch lifts the families that are leading to the top and leaves
+        everything else exactly as it was. Presentation only - no row is
+        hidden, no score changes, and the column headers stay click-sortable.
+        """
+        self._working_lately_order = [
+            (str(side), str(family)) for side, family in (order or ())
+        ]
+        # Re-applied from the rows AS THEY ARRIVED, never from the currently
+        # displayed order: sorting a sorted list would make the secondary key
+        # the previous switch state instead of the report's own ranking, and
+        # switching off would no longer restore today's order exactly.
+        source = getattr(self, "_working_lately_source_rows", None)
+        if source:
+            self.set_rows(list(source))
+
+    def _prioritised(self, rows: list[SetupRow]) -> list[SetupRow]:
+        import working_lately
+
+        order = getattr(self, "_working_lately_order", None)
+        if not order or len(rows) < 2 or not working_lately.prioritise_enabled():
+            return list(rows)
+        return [
+            row
+            for _rank, _index, row in sorted(
+                (
+                    (
+                        working_lately.priority_rank(
+                            order,
+                            (
+                                str(getattr(row, "side", "") or ""),
+                                str((getattr(row, "raw", None) or {}).get("setup_family") or ""),
+                            ),
+                        ),
+                        index,
+                        row,
+                    )
+                    for index, row in enumerate(rows)
+                ),
+                key=lambda item: (item[0], item[1]),
+            )
+        ]
+
     def set_rows(self, rows: list[SetupRow]) -> None:
         if self._uses_default_feedback_paths:
             _apply_reviewed_today_badges(rows)
+        self._working_lately_source_rows = list(rows)
+        rows = self._prioritised(self._working_lately_source_rows)
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
         self._apply_filters()

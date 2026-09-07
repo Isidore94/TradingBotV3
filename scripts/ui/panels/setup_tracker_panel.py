@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -417,6 +418,11 @@ class SetupTrackerPanel(QFrame):
         self.catch_rate_rows: list[dict[str, Any]] = []
         self.human_pick_rows: list[dict[str, Any]] = []
         self.band_variant_rows: list[dict[str, Any]] = []
+        # ST6.4. The SHARED Working-lately snapshot, handed over by the desk's
+        # service. Empty means this page renders its own read and LABELS it
+        # `panel read`, which is the difference between "the desk's answer" and
+        # "this tab's answer" being visible instead of guessed at.
+        self._working_lately_snapshot: dict[str, Any] = {}
 
         self.min_closed_input = QSpinBox()
         self.min_closed_input.setRange(1, 100)
@@ -800,6 +806,20 @@ class SetupTrackerPanel(QFrame):
             f"closed-R edge. {under:,} are UNDER the reportable-n floor "
             f"(n < {_attribute_floor()}), greyed and sorted last."
         )
+
+    def set_working_lately_snapshot(self, payload: Any) -> None:
+        """Take the desk's shared reading (ST6.4). Formatting only, no read.
+
+        The banner then renders THIS snapshot rather than its own CSV pass, so
+        the tracker and the strip above the M5 list print the same
+        `snapshot_id`. Handing over an empty payload puts the page back on its
+        own labelled `panel read`.
+        """
+        self._working_lately_snapshot = dict(payload or {})
+        try:
+            self.summary_view.setHtml(_summary_html(self))
+        except Exception:  # noqa: BLE001 - a banner is never worth a traceback
+            logging.debug("Setup Tracker summary re-render skipped", exc_info=True)
 
     def refresh(self) -> None:
         min_closed = int(self.min_closed_input.value())
@@ -1842,9 +1862,36 @@ def panel_verdicts(panel: SetupTrackerPanel) -> dict[str, Any]:
     moment one of them gains an argument; there is now exactly one computation
     per page and both renderers are handed the same objects.
     """
-    from working_lately import short_term_evidence_rows
+    from working_lately import short_term_evidence_rows, verdicts_from_payload
 
     last_session = _last_completed_session_or_today()
+    # **ST6.4 re-review.** The desk's SHARED snapshot feeds THIS function, so
+    # there is still exactly one computation per page: the card, the banner and
+    # the strip above the M5 list cannot split, whichever of them renders first.
+    # The panel's own `select_leader` read is the labelled FALLBACK and only
+    # ever answers the horizons the snapshot does not carry.
+    payload = getattr(panel, "_working_lately_snapshot", None) or {}
+    shared = verdicts_from_payload(payload) if payload else {}
+    swing = shared.get("swing_trade_r")
+    if swing is not None:
+        return {
+            "swing": swing,
+            # The 2-session block is NOT in the snapshot (the short-horizon
+            # export is a different grain), so it stays a panel read. It is the
+            # only thing on this page that is one when a snapshot is present,
+            # and the banner says so beside it rather than under one label for
+            # the whole page.
+            "swing_short_term": _remembered_verdict(
+                panel,
+                short_term_evidence_rows(panel.short_term_rows),
+                kind="swing_short_term",
+                last_completed_session=last_session,
+                min_n=SHORT_TERM_MIN_SAMPLES,
+            ),
+            "swing_favorable": shared.get("swing_favorable"),
+            "daytrade_held_run": shared.get("daytrade_held_run"),
+            "snapshot": payload,
+        }
     return {
         "swing": _remembered_verdict(
             panel,
@@ -1948,8 +1995,54 @@ def _best_now_banner_html(panel: SetupTrackerPanel, verdicts: dict[str, Any] | N
                 f"<span style='color:{muted}'>({_esc(row.get('status'))}, closed {_int(row.get('closed_setups'))})</span>"
             )
         parts.append(f"<div><b>New &amp; rising (not favorites yet):</b> {' &middot; '.join(chips)}</div>")
+    parts.append(_banner_source_html(verdicts, muted=muted))
     parts.append("</div>")
     return "".join(parts)
+
+
+def _banner_source_html(verdicts: dict[str, Any], *, muted: str) -> str:
+    """Which reading this banner rendered, and its id when there is one (ST6.4).
+
+    An unlabelled fallback is how the desk grew two answers to one question in
+    the first place, so the panel's own pass says `panel read` out loud. When
+    the shared snapshot is present the two extra kinds it carries are printed
+    here too - the favorable-direction rate and the day-trade held x ran - so
+    the page shows the whole reading rather than the half of it that happens to
+    match the tables underneath.
+    """
+    import working_lately
+
+    payload = verdicts.get("snapshot") or {}
+    if not payload:
+        return (
+            f"<div style='color:{muted}'>Source: <b>panel read</b> - this page read the "
+            f"exports itself because the desk's Working-lately service has not handed "
+            f"it a snapshot. A desk session shows the shared reading and its id.</div>"
+        )
+    bits: list[str] = []
+    for kind, label in (
+        ("swing_favorable", "Swing (favorable direction, percent move)"),
+        ("daytrade_held_run", "Day trade (held x ran)"),
+    ):
+        verdict = verdicts.get(kind)
+        if verdict is None:
+            continue
+        bits.append(
+            f"<div style='color:{muted}'><b>{_esc(label)}:</b> "
+            f"{_esc(working_lately.kind_phrase(payload, kind, label))}</div>"
+        )
+    caveats = ", ".join(
+        working_lately.observational_caveat(payload, kind)
+        for kind in working_lately.SNAPSHOT_KINDS
+        if verdicts.get(kind) is not None or kind == "swing_trade_r"
+    )
+    bits.append(
+        f"<div style='color:{muted}'>Source: the desk's shared Working-lately reading "
+        f"({_esc(working_lately.snapshot_stamp(payload))}). The 2-session block above is "
+        f"this page's OWN read - the short-horizon export is a different grain and the "
+        f"snapshot does not carry it. {_esc(caveats)} - nothing here is proven.</div>"
+    )
+    return "".join(bits)
 
 
 def _best_type_label(rows: list[dict[str, Any]]) -> str:

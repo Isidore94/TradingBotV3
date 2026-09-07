@@ -21,7 +21,8 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from master_avwap_lib import legacy  # noqa: E402
+from master_avwap_lib import legacy
+from master_avwap_lib import selection_policy
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -517,12 +518,26 @@ def test_b6_the_default_moves_nothing():
 
 
 def test_b6_a_pinned_template_is_chosen_explicitly(monkeypatch):
+    """`REPRESENTATIVE_EXIT_TEMPLATE_ID` is the `closed_first_v1` knob.
+
+    Packet ST7 (2026-09-06, decision 0019) made `first_actionable_v2` the
+    default, and v2 reads the DECLARED `REPRESENTATIVE_EXIT_TEMPLATE_ID_V2`
+    instead - that declaration is the whole point of ST4.2, so this v1
+    characterization names its policy and the v2 answer is asserted beside it.
+    """
     monkeypatch.setattr(legacy, "REPRESENTATIVE_EXIT_TEMPLATE_ID", "half_band2_trail")
     scenarios = [
         {"stop_reference_label": "LOWER_1", "exit_template_id": "full_band2", "tradeable": True},
         {"stop_reference_label": "LOWER_1", "exit_template_id": "half_band2_trail", "tradeable": True},
     ]
-    assert legacy._representative_scenario(scenarios, "LOWER_1") is scenarios[1]
+    assert legacy._representative_scenario(
+        scenarios, "LOWER_1", policy=selection_policy.SELECTION_CLOSED_FIRST_V1
+    ) is scenarios[1]
+
+    # Under the default the declared v2 template wins and the v1 knob is not
+    # read at all.
+    assert legacy.REPRESENTATIVE_EXIT_TEMPLATE_ID_V2 == "full_band2"
+    assert legacy._representative_scenario(scenarios, "LOWER_1") is scenarios[0]
 
 
 def test_b6_a_pinned_template_nobody_carries_falls_back_rather_than_vanishing(monkeypatch):

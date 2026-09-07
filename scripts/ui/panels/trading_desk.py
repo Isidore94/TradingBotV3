@@ -30,6 +30,7 @@ from ui.services.group_tape_service import GroupTapeService
 from ui.services.swing_favorites_service import SwingFavoritesService
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
+from ui.widgets.working_lately_strip import WorkingLatelyStrip
 
 # v3 (2026-08-27): the M5 alert bar moved to the LEFT of the chart column, so a
 # v2 split saved with the bar in the middle must not be replayed onto it.
@@ -47,6 +48,10 @@ class TradingDeskPanel(QWidget):
     statusChanged = Signal(str)
     rowsChanged = Signal(int, int, int)
     connectionChanged = Signal(str)
+    #: The trader clicked the Working-lately strip - open the Setup Tracker,
+    #: where the same `snapshot_id` is printed above the table the line came
+    #: from (ST6.4). The desk owns the strip; the window owns the pages.
+    workingLatelyOpenRequested = Signal()
 
     def __init__(
         self,
@@ -131,6 +136,18 @@ class TradingDeskPanel(QWidget):
         self.alert_center.m5AlertPosted.connect(self.m5_alert_bar.post)
         self.alert_center.m5AlertsDayRolled.connect(self.m5_alert_bar.clear_all)
         self.m5_alert_bar.alertActivated.connect(self.alert_center.chart_alert)
+
+        # ST6.4. The Working-lately line sits at the TOP of the M5 alerts
+        # column, above the list - the arm bar stays under the chart and no new
+        # row goes between the charts and the tab strip. Mounted INSIDE the bar
+        # rather than as a third splitter child so the column keeps its two
+        # panes and the saved drag is not replayed onto a different layout.
+        self.working_lately_strip = WorkingLatelyStrip()
+        self.m5_alert_bar.mount_top_strip(self.working_lately_strip)
+        self.working_lately_strip.openRequested.connect(self.workingLatelyOpenRequested)
+        self.working_lately_strip.prioritiseToggled.connect(
+            lambda *_args: self._push_working_lately_order()
+        )
 
         # Trader, 2026-08-31: "at the end of the day I have a list of my top
         # swing targets... put it at the very bottom of the M5 alerts tab, the
@@ -350,6 +367,27 @@ class TradingDeskPanel(QWidget):
     def _remove_swing_favorite(self, symbol: str, side: str) -> None:
         if self.swing_favorites_service.remove(symbol, side):
             self.swing_favorites_bar.set_status(f"Dropped {symbol}.")
+
+    def set_working_lately_snapshot(self, payload) -> None:
+        """Take the desk's ONE reading and hand it to every surface (ST6.4/6.5).
+
+        Called from the GUI thread by `WorkingLatelyService.snapshotChanged`.
+        Formatting and sorting only: no read happens here, nothing is written,
+        and the three lists the priority switch reorders are handed an ORDER,
+        never a filter.
+        """
+        self._working_lately_snapshot = dict(payload or {})
+        self.working_lately_strip.set_snapshot(self._working_lately_snapshot)
+        self._push_working_lately_order()
+
+    def _push_working_lately_order(self) -> None:
+        """Re-hand the two orders. Cheap, and the only thing a toggle does."""
+        import working_lately
+
+        payload = getattr(self, "_working_lately_snapshot", None) or {}
+        self.m5_alert_bar.set_working_lately_order(working_lately.daytrade_order(payload))
+        self.alert_center.set_working_lately_order(working_lately.daytrade_order(payload))
+        self.master_panel.set_working_lately_order(working_lately.swing_order(payload))
 
     def _refresh_swing_favorites(self) -> None:
         """Show the current session's list and re-ask the journal about it.

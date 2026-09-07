@@ -1,6 +1,7 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-09-05** (repo cleanup: historical documents moved under `archive/`).
+Last reconciled: **2026-09-07** (ST7: decision 0019 added; `CHANGELOG.md`'s 2026-09-03 to
+2026-09-05 entries moved to `archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`).
 
 One line per file. Status and decisions live in the root control set, never here; if a
 row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
@@ -61,15 +62,20 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 
 ## Decision records — accepted constraints
 
-[`decisions/`](decisions/) holds 18 short records, 0001 (decision-support only) to 0018
-(deterministic stage before narration). Read one before changing a library, storage or
-architecture choice; **0016** is the trader's vision and priorities and breaks every
-prioritisation tie. Numbering is chronological.
+[`decisions/`](decisions/) holds 19 short records, 0001 (decision-support only) to
+[`0019`](decisions/0019-tracker-selection-and-execution-defaults.md) (the Setup
+Tracker's three replay defaults become the repaired ones — `first_actionable_v2`,
+`gap_aware_v2`, `prior_session_v2`; the v1 names stay selectable). Read one before
+changing a library, storage or architecture choice; **0016** is the trader's vision and
+priorities and breaks every prioritisation tie. Numbering is chronological.
 
 ## Archive — evidence, never context
 
-[`archive/`](archive/) holds everything that is history: the checkpoint, changelog and
-roadmap archives, the July GUI plans, the retired Desk Link design, the paste-ready
+[`archive/`](archive/) holds everything that is history: the checkpoint archives, the
+three changelog archives (the newest is
+[`archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`](archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md),
+holding the 25 entries from 2026-09-05 back to 2026-09-03), the roadmap archives, the
+July GUI plans, the retired Desk Link design, the paste-ready
 build prompts for phases already built, and the frozen August reviews under
 `archive/analysis/`. Nothing in the code reads any of it. Open one file there to answer
 one specific question; never load the folder as context, and never treat an entry

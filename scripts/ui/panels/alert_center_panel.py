@@ -515,6 +515,10 @@ class AlertCenterPanel(QFrame):
         #: What the filter withheld, newest per symbol, so the count is honest
         #: and one click can show exactly those names.
         self._hidden_inside_range: dict[str, BounceAlert] = {}
+        #: ST6.5. The day-trade verdict order off the desk's shared snapshot,
+        #: `[(bounce_type, SIDE)]` best first. Empty until the Working-lately
+        #: service hands one over, and honoured only while the switch is ON.
+        self._working_lately_order: list[tuple[str, str]] = []
         self._current_review_alert: BounceAlert | None = None
         self._embedded_detail_enabled = True
         # Decision-log dwell tracking: which symbol the review pane is showing
@@ -2442,6 +2446,49 @@ class AlertCenterPanel(QFrame):
         )
         self._render_current_review()
 
+    def set_working_lately_order(self, order) -> None:
+        """`[(bounce_type, SIDE)]`, best first - the priority switch (ST6.5).
+
+        Presentation only, and applied at the moment the panel decides the NEXT
+        chart, never when a row is written. The backing list, every evidence
+        write, the tier gate and the movers-only filter are untouched: the same
+        names are shown either way and only the order differs.
+        """
+        self._working_lately_order = [
+            (str(cell), str(side)) for cell, side in (order or ())
+        ]
+
+    def _next_review_index(self) -> int:
+        """Which WAITING row to take next. The list itself is never reordered.
+
+        **ST6 re-review, blocker 1.** This used to re-sort `_review_queue` in
+        place, which made the switch irreversible: the stored order was gone, so
+        turning the switch off left the queue in the order the switch had put it
+        and the next chart was still the prioritised one. The backing list is the
+        record of what the day produced and a display preference may not rewrite
+        it - so the priority order is applied HERE, at the moment the panel picks
+        the next chart, by choosing an index rather than by moving anything.
+        Ties keep arrival order; with the switch off this is always 0, which is
+        exactly today's behaviour.
+        """
+        import working_lately
+
+        order = getattr(self, "_working_lately_order", None)
+        if not order or len(self._review_queue) < 2:
+            return 0
+        if not working_lately.prioritise_enabled():
+            return 0
+        return min(
+            range(len(self._review_queue)),
+            key=lambda index: (
+                working_lately.priority_rank(
+                    order,
+                    working_lately.alert_priority_key(self._review_queue[index]),
+                ),
+                index,
+            ),
+        )
+
     def _advance_review_queue(self) -> None:
         """Show the next chart - measured NOW, not when it was queued.
 
@@ -2458,7 +2505,7 @@ class AlertCenterPanel(QFrame):
         hidden_before = len(self._hidden_inside_range)
         next_alert = None
         while self._review_queue:
-            candidate = self._review_queue.pop(0)
+            candidate = self._review_queue.pop(self._next_review_index())
             if (
                 self._review_movers_only
                 and not self._review_shows_regardless(candidate)

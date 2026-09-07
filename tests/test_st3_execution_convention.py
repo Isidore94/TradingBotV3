@@ -9,19 +9,25 @@ decision time could not have produced.
 
 These tests pin the ADDITIVE, OPT-IN repair:
 
-* `master_avwap_lib.execution_convention` - `literal_level_v1` (today, default)
-  and `gap_aware_v2`, plus `same_session_v1` (today, default) and
-  `prior_session_v2` level knowledge;
+* `master_avwap_lib.execution_convention` - `literal_level_v1` and
+  `gap_aware_v2`, plus `same_session_v1` and `prior_session_v2` level knowledge;
 * `_evaluate_tracker_scenario_bar(..., execution_convention=...)` routing every
   booked exit price through `resolve_fill`;
 * `recompute_tracker_setup_record(..., execution_convention=..., level_knowledge=...)`
-  carrying the two keys on the record only when a non-default is used;
+  carrying the two keys on the record;
 * `scripts/tracker_execution_compare.py`, the evidence CLI.
 
-**The default path is proved unchanged, not assumed.** Every v1 leg below calls
-the function with NO new keyword, so it exercises the shipped signature, and
-test 9 pins a whole `recompute_tracker_setup_record` record from `main` as a
-byte-identical golden.
+**Packet ST7 (2026-09-06, decision 0019) made `gap_aware_v2` / `prior_session_v2`
+the DEFAULT.** Nothing here was weakened for it: every v1 leg below now NAMES
+`literal_level_v1` / `same_session_v1` explicitly and asserts exactly the numbers
+it asserted while v1 was the default, so v1 stays reproducible forever; every leg
+that read "and the default does the same" now asserts that the DEFAULT produces
+the v2 answer. Test 9 pins both whole records - `st3_replay_golden` for v1 by
+name, `st7_v2_default_golden` for the default.
+
+The two stamps are unconditional since ST7: a record that does not say which
+convention produced it is unreadable after a default flip, so a v1 record says
+`literal_level_v1` and a default record says `gap_aware_v2`.
 
 Every expected R is DERIVED from `TRACKER_COST_COMMISSION_PER_SHARE` and
 `TRACKER_SLIPPAGE_FRACTION_PER_SIDE` by `_expected_r` below - there is one cost
@@ -128,28 +134,41 @@ def _reasons(events):
     return [str(event.get("reason")) for event in events]
 
 
+def _prior_session(levels, trade_date):
+    """The `prior_session_levels` block `prior_session_v2` reads (ST3), built
+    from levels a PREVIOUS session established. Only the default arms below
+    need it - `same_session_v1` never looks at it."""
+    return {
+        "trade_date": trade_date,
+        "anchor_levels": levels,
+        "indicator_row": None,
+        "dynamic_level_overrides": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 1-2. Opening gap through the stop, both sides
 # ---------------------------------------------------------------------------
 def test_a_long_gap_below_the_stop_books_the_open_not_the_untraded_level():
     """The review fixture: entry 100, risk 5, hard stop 95, next bar O80/H85/L79/C82.
 
-    The bar never traded at 95. v1 books it anyway (characterized, unchanged);
-    v2 books the open.
+    The bar never traded at 95. v1 books it anyway (characterized, unchanged
+    and now named explicitly); v2 books the open and is the default since ST7.
     """
+    ec = _execution_convention()
     gap_bar = _bar(open_=80, high=85, low=79, close=82)
 
-    # v1 = today, called through the SHIPPED signature (no new keyword).
+    # v1 = the convention that shipped until 2026-09-06, BY NAME.
     v1 = _scenario(hard_stop_r_multiple=1.0)
     v1_events = m._evaluate_tracker_scenario_bar(
-        v1, "LONG", "2026-01-05", gap_bar, None, None, is_entry_day=False, bar_index=2
+        v1, "LONG", "2026-01-05", gap_bar, None, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
     assert _reasons(v1_events) == ["HARD_STOP"]
     assert v1_events[0]["price"] == pytest.approx(95.0)
     assert v1["realized_r"] == pytest.approx(_expected_r(100.0, 95.0, 100, 1.0, 500.0))
     assert v1["realized_r"] == pytest.approx(-1.014)
 
-    ec = _execution_convention()
     v2 = _scenario(hard_stop_r_multiple=1.0)
     v2_events = m._evaluate_tracker_scenario_bar(
         v2,
@@ -170,22 +189,32 @@ def test_a_long_gap_below_the_stop_books_the_open_not_the_untraded_level():
     assert v2["realized_r"] == pytest.approx(-4.014)
     assert 79.0 <= v2_events[0]["price"] <= 85.0
 
-    assert ec.DEFAULT_EXECUTION_CONVENTION == ec.EXECUTION_LITERAL_LEVEL_V1
+    # ST7: the same call with NO keyword is now the v2 answer.
+    assert ec.DEFAULT_EXECUTION_CONVENTION == ec.EXECUTION_GAP_AWARE_V2
+    default = _scenario(hard_stop_r_multiple=1.0)
+    default_events = m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", gap_bar, None, None, is_entry_day=False, bar_index=2
+    )
+    assert _reasons(default_events) == ["HARD_STOP"]
+    assert default_events[0]["price"] == pytest.approx(80.0)
+    assert default_events[0]["fill_basis"] == "gap_open"
+    assert default["realized_r"] == pytest.approx(-4.014)
 
 
 def test_a_short_gap_above_the_stop_books_the_open_not_the_untraded_level():
     """Mirror of the long case: short entry 100, stop 105, bar O120/H121/L115/C118."""
+    ec = _execution_convention()
     gap_bar = _bar(open_=120, high=121, low=115, close=118)
 
     v1 = _scenario(direction=-1.0, hard_stop_r_multiple=1.0, stop_reference_label="UPPER_1", active_stop_label="UPPER_1")
     v1_events = m._evaluate_tracker_scenario_bar(
-        v1, "SHORT", "2026-01-05", gap_bar, None, None, is_entry_day=False, bar_index=2
+        v1, "SHORT", "2026-01-05", gap_bar, None, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
     assert _reasons(v1_events) == ["HARD_STOP"]
     assert v1_events[0]["price"] == pytest.approx(105.0)
     assert v1["realized_r"] == pytest.approx(_expected_r(100.0, 105.0, 100, -1.0, 500.0))
 
-    ec = _execution_convention()
     v2 = _scenario(direction=-1.0, hard_stop_r_multiple=1.0, stop_reference_label="UPPER_1", active_stop_label="UPPER_1")
     v2_events = m._evaluate_tracker_scenario_bar(
         v2,
@@ -205,6 +234,17 @@ def test_a_short_gap_above_the_stop_books_the_open_not_the_untraded_level():
     assert v2["realized_r"] == pytest.approx(-4.014)
     assert 115.0 <= v2_events[0]["price"] <= 121.0
 
+    # ST7: the default books the same short gap.
+    default = _scenario(
+        direction=-1.0, hard_stop_r_multiple=1.0,
+        stop_reference_label="UPPER_1", active_stop_label="UPPER_1",
+    )
+    default_events = m._evaluate_tracker_scenario_bar(
+        default, "SHORT", "2026-01-05", gap_bar, None, None, is_entry_day=False, bar_index=2
+    )
+    assert default_events[0]["price"] == pytest.approx(120.0)
+    assert default_events[0]["fill_basis"] == "gap_open"
+
 
 # ---------------------------------------------------------------------------
 # 3. Missing open -> clamped into the bar
@@ -212,6 +252,7 @@ def test_a_short_gap_above_the_stop_books_the_open_not_the_untraded_level():
 def test_a_bar_with_no_open_clamps_the_fill_inside_the_bar_under_v2():
     """Long stop 95 against H85/L79/C82. Nothing traded at 95; the honest worst
     case inside the bar is its high."""
+    ec = _execution_convention()
     v1 = _scenario(hard_stop_r_multiple=1.0)
     v1_events = m._evaluate_tracker_scenario_bar(
         v1,
@@ -222,10 +263,25 @@ def test_a_bar_with_no_open_clamps_the_fill_inside_the_bar_under_v2():
         None,
         is_entry_day=False,
         bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
     assert v1_events[0]["price"] == pytest.approx(95.0)
 
-    ec = _execution_convention()
+    # ST7: with no keyword at all the clamp is what happens.
+    default = _scenario(hard_stop_r_multiple=1.0)
+    default_events = m._evaluate_tracker_scenario_bar(
+        default,
+        "LONG",
+        "2026-01-05",
+        _bar(high=85, low=79, close=82, include_open=False),
+        None,
+        None,
+        is_entry_day=False,
+        bar_index=2,
+    )
+    assert default_events[0]["price"] == pytest.approx(85.0)
+    assert default_events[0]["fill_basis"] == "clamped_no_open"
+
     # Both realistic shapes of "no open": the key absent, and the key present
     # and NaN (which is what a real frame column gives you).
     for bar in (
@@ -272,19 +328,25 @@ def test_a_partial_and_its_remainder_each_pay_their_own_cost_under_v2():
 
     # --- v1 booked at the two prices v2 will reach: the hard stop level IS 90
     #     here (2R below entry), so no gap logic is needed to get there today.
+    ec = _execution_convention()
+    # This test isolates the EXECUTION axis, so both arms name the SAME level
+    # knowledge (`same_session_v1`); the level-knowledge axis is test 7's.
     v1 = _scenario(hard_stop_r_multiple=2.0, partial_target_label="UPPER_2")
     m._evaluate_tracker_scenario_bar(
         v1, "LONG", "2026-01-05", _bar(open_=105, high=111, low=99, close=105),
         levels, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
     )
     m._evaluate_tracker_scenario_bar(
         v1, "LONG", "2026-01-06", _bar(open_=90, high=92, low=88, close=89),
         levels, None, is_entry_day=False, bar_index=3,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
     )
     assert [round(e["price"], 6) for e in v1["events"]] == [110.0, 90.0]
     assert [e["shares"] for e in v1["events"]] == [50, 50]
 
-    ec = _execution_convention()
     # --- v2: partial fills at the level (open 105 is below the target), the
     #     remainder's stop fills at the gap open 90 rather than the level 95.
     v2 = _scenario(hard_stop_r_multiple=1.0, partial_target_label="UPPER_2")
@@ -298,6 +360,7 @@ def test_a_partial_and_its_remainder_each_pay_their_own_cost_under_v2():
         is_entry_day=False,
         bar_index=2,
         execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
     )
     assert _reasons(partial_events) == ["PARTIAL_TARGET"]
     assert partial_events[0]["price"] == pytest.approx(110.0)
@@ -313,6 +376,7 @@ def test_a_partial_and_its_remainder_each_pay_their_own_cost_under_v2():
         is_entry_day=False,
         bar_index=3,
         execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
     )
     assert _reasons(stop_events) == ["HARD_STOP"]
     assert stop_events[0]["price"] == pytest.approx(90.0)
@@ -331,6 +395,25 @@ def test_a_partial_and_its_remainder_each_pay_their_own_cost_under_v2():
         _expected_r(100.0, 110.0, 50, 1.0, 500.0) + _expected_r(100.0, 90.0, 50, 1.0, 500.0)
     )
 
+    # ST7: no keyword at all books the same two legs. The default level
+    # knowledge is `prior_session_v2`, so the caller hands the target level the
+    # PREVIOUS session established - the same 110 - and the two legs are
+    # unchanged. That is the point: the flip moved WHICH DAY's level is read,
+    # not the arithmetic.
+    default = _scenario(hard_stop_r_multiple=1.0, partial_target_label="UPPER_2")
+    m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", _bar(open_=105, high=111, low=99, close=105),
+        levels, None, is_entry_day=False, bar_index=2,
+        prior_session_levels=_prior_session(levels, "2026-01-02"),
+    )
+    m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-06", _bar(open_=90, high=92, low=88, close=89),
+        levels, None, is_entry_day=False, bar_index=3,
+        prior_session_levels=_prior_session(levels, "2026-01-05"),
+    )
+    assert [round(e["price"], 6) for e in default["events"]] == [110.0, 90.0]
+    assert default["realized_r"] == pytest.approx(v2["realized_r"])
+
 
 # ---------------------------------------------------------------------------
 # 5. Stop-first survives the gap
@@ -339,17 +422,18 @@ def test_a_gapped_stop_still_wins_the_same_bar_against_a_target():
     """The bar gaps below the stop AND its high reaches the target. Stop-first is
     kept: one event, the stop, at the open - never the target."""
     levels = {"bands": {"UPPER_3": 110.0}}
+    ec = _execution_convention()
     bar = _bar(open_=90, high=111, low=88, close=92)
 
     v1 = _scenario(hard_stop_r_multiple=1.0, final_target_label="UPPER_3")
     v1_events = m._evaluate_tracker_scenario_bar(
-        v1, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2
+        v1, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
     assert _reasons(v1_events) == ["HARD_STOP"]
     assert v1_events[0]["price"] == pytest.approx(95.0)
     assert v1["status"] == "STOPPED"
 
-    ec = _execution_convention()
     v2 = _scenario(hard_stop_r_multiple=1.0, final_target_label="UPPER_3")
     v2_events = m._evaluate_tracker_scenario_bar(
         v2,
@@ -369,23 +453,34 @@ def test_a_gapped_stop_still_wins_the_same_bar_against_a_target():
     assert v2["status"] == "STOPPED"
     assert v2["remaining_shares"] == 0
 
+    # ST7: stop-first survives the flip on the default path too.
+    default = _scenario(hard_stop_r_multiple=1.0, final_target_label="UPPER_3")
+    default_events = m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2
+    )
+    assert _reasons(default_events) == ["HARD_STOP"]
+    assert "FINAL_TARGET" not in _reasons(default["events"])
+    assert default_events[0]["price"] == pytest.approx(90.0)
+
 
 # ---------------------------------------------------------------------------
 # 6. Target gap
 # ---------------------------------------------------------------------------
 def test_an_open_above_the_target_fills_at_the_open_under_v2():
     levels = {"bands": {"UPPER_3": 110.0}}
+    ec = _execution_convention()
     bar = _bar(open_=114, high=116, low=112, close=115)
 
     v1 = _scenario(final_target_label="UPPER_3")
     v1_events = m._evaluate_tracker_scenario_bar(
-        v1, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2
+        v1, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
     )
     assert _reasons(v1_events) == ["FINAL_TARGET"]
     assert v1_events[0]["price"] == pytest.approx(110.0)
     assert v1["realized_r"] == pytest.approx(_expected_r(100.0, 110.0, 100, 1.0, 500.0))
 
-    ec = _execution_convention()
     v2 = _scenario(final_target_label="UPPER_3")
     v2_events = m._evaluate_tracker_scenario_bar(
         v2,
@@ -397,12 +492,24 @@ def test_an_open_above_the_target_fills_at_the_open_under_v2():
         is_entry_day=False,
         bar_index=2,
         execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
     )
     assert _reasons(v2_events) == ["FINAL_TARGET"]
     assert v2_events[0]["price"] == pytest.approx(114.0)
     assert v2_events[0]["fill_basis"] == "gap_open"
     assert v2["realized_r"] == pytest.approx(_expected_r(100.0, 114.0, 100, 1.0, 500.0))
     assert 112.0 <= v2_events[0]["price"] <= 116.0
+
+    # ST7: the symmetry (a target gap fills BETTER) is the default too, with
+    # the target level read off the PREVIOUS session, as the default level
+    # knowledge requires.
+    default = _scenario(final_target_label="UPPER_3")
+    default_events = m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2,
+        prior_session_levels=_prior_session(levels, "2026-01-02"),
+    )
+    assert default_events[0]["price"] == pytest.approx(114.0)
+    assert default_events[0]["fill_basis"] == "gap_open"
 
 
 # ---------------------------------------------------------------------------
@@ -498,15 +605,20 @@ def test_a_band_known_only_at_the_close_does_not_book_that_days_target_under_v2(
     # is inside its own range, yesterday's is not.
     assert target_today < day_high < target_yesterday
 
+    ec = _execution_convention()
     setup = _band_move_setup(df, anchor, prev_key)
 
-    same_session = m.recompute_tracker_setup_record(copy.deepcopy(setup), df)
+    # v1 BY NAME - the look-ahead that shipped until 2026-09-06, unchanged.
+    same_session = m.recompute_tracker_setup_record(
+        copy.deepcopy(setup),
+        df,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
+    )
     scenario = same_session["scenarios"]["s1"]
     assert scenario["status"] == "TARGET_HIT"
     assert _reasons(scenario["events"]) == ["FINAL_TARGET"]
     assert scenario["events"][0]["price"] == pytest.approx(target_today)
 
-    ec = _execution_convention()
     prior_session = m.recompute_tracker_setup_record(
         copy.deepcopy(setup),
         df,
@@ -516,9 +628,16 @@ def test_a_band_known_only_at_the_close_does_not_book_that_days_target_under_v2(
     assert _reasons(repaired["events"]) == []
     assert m._scenario_is_open(repaired["status"])
     assert prior_session["level_knowledge"] == ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
-    assert ec.DEFAULT_LEVEL_KNOWLEDGE == ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1
-    # The default run never grew the key.
-    assert "level_knowledge" not in same_session
+    # ST7: v2 is the default, and BOTH runs now NAME the policy that produced
+    # them - a record with no stamp could not be told apart from either.
+    assert ec.DEFAULT_LEVEL_KNOWLEDGE == ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
+    assert same_session["level_knowledge"] == ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1
+
+    default_record = m.recompute_tracker_setup_record(copy.deepcopy(setup), df)
+    default_scenario = default_record["scenarios"]["s1"]
+    assert _reasons(default_scenario["events"]) == []
+    assert m._scenario_is_open(default_scenario["status"])
+    assert default_record["level_knowledge"] == ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
 
 
 # ---------------------------------------------------------------------------
@@ -527,17 +646,26 @@ def test_a_band_known_only_at_the_close_does_not_book_that_days_target_under_v2(
 def test_an_invalid_ohlc_bar_books_no_fill_under_v2_and_the_hold_clock_advances():
     # low > high and low > open: the candle invariant `low <= open, close <= high`
     # is broken, so no sequence inside it can be believed.
+    ec = _execution_convention()
     broken = _bar(open_=93, high=90, low=95, close=92)
 
-    # v1 today: the broken bar's `low` clears the stop and books a fill at 95.
+    # v1 BY NAME: the broken bar's `low` clears the stop and books a fill at 95.
     v1 = _scenario(hard_stop_r_multiple=1.0)
     v1_events = m._evaluate_tracker_scenario_bar(
-        v1, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2
+        v1, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
     assert _reasons(v1_events) == ["HARD_STOP"]
     assert v1_events[0]["price"] == pytest.approx(95.0)
 
-    ec = _execution_convention()
+    # ST7: the default books NOTHING off a candle that contradicts itself.
+    default = _scenario(hard_stop_r_multiple=1.0)
+    default_events = m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2
+    )
+    assert default_events == []
+    assert m._scenario_is_open(default["status"])
+
     v2 = _scenario(hard_stop_r_multiple=1.0)
     events = m._evaluate_tracker_scenario_bar(
         v2,
@@ -723,8 +851,29 @@ def _write_golden_fixture(path: Path) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def test_the_default_replay_reproduces_the_pinned_golden_and_v2_only_adds_its_keys():
-    """Pinned from `main` before the repair existed (`ST3_REGEN_GOLDEN=1` re-pins)."""
+#: The stamps ST7 made unconditional. They are excluded from the byte-identity
+#: comparison against `st3_replay_golden` - which was pinned before they were
+#: always written - and asserted separately by name, so no stamp escapes the
+#: assertion and the v1 RECORD is otherwise byte-identical to the pin.
+POLICY_STAMP_KEYS = ("execution_convention", "level_knowledge")
+
+
+def _without_stamps(record: dict) -> dict:
+    stripped = dict(record)
+    for key in POLICY_STAMP_KEYS:
+        stripped.pop(key, None)
+    return stripped
+
+
+def test_v1_by_name_reproduces_the_pinned_golden_and_the_default_is_the_v2_pin():
+    """Two whole records, two pins.
+
+    `st3_replay_golden` was pinned from `main` before the repair existed and is
+    now reproduced by NAMING `literal_level_v1` / `same_session_v1`
+    (`ST3_REGEN_GOLDEN=1` re-pins it). `st7_v2_default_golden` was pinned on
+    `main` through the explicit v2 keywords, before the defaults flipped, and is
+    what a DEFAULT replay must now produce - so neither pin is a self-portrait.
+    """
     fixture_path = FIXTURES_DIR / f"{GOLDEN_FIXTURE_NAME}.json"
     if os.environ.get(REGEN_ENV) == "1":  # pragma: no cover - tester/reviewer door
         _write_golden_fixture(fixture_path)
@@ -739,40 +888,62 @@ def test_the_default_replay_reproduces_the_pinned_golden_and_v2_only_adds_its_ke
     assert _canonical(setup) == _canonical(_build_golden_setup(bars))
 
     frame = _golden_frame(bars)
-    default_record = m.recompute_tracker_setup_record(copy.deepcopy(setup), frame)
+    ec = _execution_convention()
+    v1_record = m.recompute_tracker_setup_record(
+        copy.deepcopy(setup),
+        frame,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
+    )
 
-    # (a) byte-identical default path - true today and after the repair.
-    assert _canonical(default_record) == _canonical(expected)
-    assert "execution_convention" not in default_record
-    assert "level_knowledge" not in default_record
+    # (a) byte-identical v1 path, by name - the characterization is permanent.
+    assert _canonical(_without_stamps(v1_record)) == _canonical(_without_stamps(expected))
+    assert v1_record["execution_convention"] == ec.EXECUTION_LITERAL_LEVEL_V1
+    assert v1_record["level_knowledge"] == ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1
     # The fixture is worth pinning: the replay really books through the gap bar.
-    booked = default_record["scenarios"]["full_band3"]["events"]
+    booked = v1_record["scenarios"]["full_band3"]["events"]
     assert [str(event["reason"]) for event in booked] == ["PARTIAL_TARGET", "HARD_STOP"]
     gap_open = float(bars[GOLDEN_GAP_IDX]["open"])
-    assert booked[-1]["price"] > gap_open  # today's fill is above anything that traded
+    assert booked[-1]["price"] > gap_open  # v1's fill is above anything that traded
 
-    # (b) the opt-in run names its policies and books the reachable price.
-    ec = _execution_convention()
-    v2_record = m.recompute_tracker_setup_record(
+    # (b) the DEFAULT run names its policies and books the reachable price,
+    #     and is the whole `st7_v2_default_golden` record.
+    default_record = m.recompute_tracker_setup_record(copy.deepcopy(setup), frame)
+    assert default_record["execution_convention"] == ec.EXECUTION_GAP_AWARE_V2
+    assert default_record["level_knowledge"] == ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
+    v2_pin = load_fixture_contract("st7_v2_default_golden")
+    assert _canonical(v2_pin["daily_bars"]) == _canonical(bars)
+    assert _canonical(_without_stamps(default_record)) == _canonical(v2_pin["record"])
+    assert _canonical(v2_pin["record"]) != _canonical(_without_stamps(expected))
+    # Same bars walked, same scenarios - only the fills moved.
+    assert [mark["trade_date"] for mark in default_record["daily_marks"]] == [
+        mark["trade_date"] for mark in expected["daily_marks"]
+    ]
+    assert set(default_record["scenarios"]) == set(expected["scenarios"])
+    v2_stop = [
+        e for e in default_record["scenarios"]["full_band3"]["events"]
+        if e["reason"] == "HARD_STOP"
+    ]
+    assert v2_stop and v2_stop[0]["price"] == pytest.approx(gap_open)
+    assert v2_stop[0]["fill_basis"] == "gap_open"
+
+    # The explicit v2 keywords are the same run as the default.
+    explicit_v2 = m.recompute_tracker_setup_record(
         copy.deepcopy(setup),
         frame,
         execution_convention=ec.EXECUTION_GAP_AWARE_V2,
         level_knowledge=ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2,
     )
-    assert v2_record["execution_convention"] == ec.EXECUTION_GAP_AWARE_V2
-    assert v2_record["level_knowledge"] == ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
-    # Same bars walked, same scenarios - only the fills may move.
-    assert [mark["trade_date"] for mark in v2_record["daily_marks"]] == [
-        mark["trade_date"] for mark in expected["daily_marks"]
-    ]
-    assert set(v2_record["scenarios"]) == set(expected["scenarios"])
-    v2_stop = [e for e in v2_record["scenarios"]["full_band3"]["events"] if e["reason"] == "HARD_STOP"]
-    assert v2_stop and v2_stop[0]["price"] == pytest.approx(gap_open)
-    assert v2_stop[0]["fill_basis"] == "gap_open"
+    assert _canonical(explicit_v2) == _canonical(default_record)
 
-    # (c) the opt-in run left no residue: the default still reproduces the golden.
-    again = m.recompute_tracker_setup_record(copy.deepcopy(setup), frame)
-    assert _canonical(again) == _canonical(expected)
+    # (c) no residue in either direction: v1 by name is still v1 afterwards.
+    again = m.recompute_tracker_setup_record(
+        copy.deepcopy(setup),
+        frame,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
+    )
+    assert _canonical(again) == _canonical(v1_record)
 
 
 # ---------------------------------------------------------------------------

@@ -169,13 +169,32 @@ def _jsonable(value):
     return str(value)
 
 
-def measure(bars: list[dict], row: dict) -> dict:
+def measure(
+    bars: list[dict],
+    row: dict,
+    *,
+    execution_convention: str | None = None,
+    level_knowledge: str | None = None,
+    selection_policy: str | None = None,
+) -> dict:
     """Build a tracker record, replay it forward, and return the JSON form.
 
     Importable so the parity test measures with exactly this recipe rather than
     a paraphrase of it - a parity test whose SETUP drifts is not a parity test.
+
+    The three policy arguments (packet ST7, 2026-09-06) default to whatever the
+    library's defaults are, so this script and the live path stay the same run.
+    The parity test passes the v1 names, because the fixture below was frozen
+    under `literal_level_v1` / `same_session_v1` / `closed_first_v1` and a
+    characterization re-read under a different policy is not a characterization.
     """
+    from master_avwap_lib import execution_convention as ec
     from master_avwap_lib import legacy, runner
+    from master_avwap_lib import selection_policy as sp
+
+    execution_convention = execution_convention or ec.DEFAULT_EXECUTION_CONVENTION
+    level_knowledge = level_knowledge or ec.DEFAULT_LEVEL_KNOWLEDGE
+    selection_policy = selection_policy or sp.DEFAULT_SELECTION_POLICY
 
     frame = _frame(bars)
     scan_frame = frame.iloc[:BARS_AT_SCAN]
@@ -208,8 +227,13 @@ def measure(bars: list[dict], row: dict) -> dict:
     setup = legacy.build_tracker_setup_record(
         dict(row), symbol_entry, {}, GENERATED_AT, None, scan_date=SCAN_DATE
     )
-    setup = legacy.recompute_tracker_setup_record(copy.deepcopy(setup), frame)
-    summary = legacy._summarize_tracker_setup_outcome(setup)
+    setup = legacy.recompute_tracker_setup_record(
+        copy.deepcopy(setup),
+        frame,
+        execution_convention=execution_convention,
+        level_knowledge=level_knowledge,
+    )
+    summary = legacy._summarize_tracker_setup_outcome(setup, policy=selection_policy)
     return {
         "record": _jsonable(setup),
         "outcome_summary": {key: _jsonable(summary.get(key)) for key in SUMMARY_KEYS},

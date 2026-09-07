@@ -38,7 +38,16 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from evidence_stats import LATELY_SESSIONS, MIN_REPORTABLE_N
+from evidence_stats import (  # noqa: F401 - SWING_HORIZON_SESSIONS is RE-EXPORTED (ST6), never redefined
+    LATELY_SESSIONS,
+    MIN_REPORTABLE_N,
+    SWING_HORIZON_SESSIONS,
+)
+
+#: `evidence_stats` owns the statistics contract; this module owns the
+#: headline. A caller that needs the declared horizon beside the Wilson bound
+#: should not have to import two modules to get one policy - and a second
+#: literal is exactly how the desk grew two answers to "5 what?" (ST1).
 
 #: The confidence level for the lower bound. 95% two-sided, so z = 1.96.
 #:

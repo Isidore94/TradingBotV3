@@ -2,6 +2,14 @@
 
   #1 episode de-duplication, #3 max-hold time stop, #4 representative-stop
   outcome, #5 stop-first same-bar resolution, #6 cost/slippage in realized R.
+
+These are characterizations of the SHIPPED tracker replay, written long before
+either policy axis existed. Packet ST7 (2026-09-06, decision 0019) moved the
+defaults to `first_actionable_v2` / `gap_aware_v2` / `prior_session_v2`, so each
+case below whose subject predates the flip now NAMES the v1 policy it was
+written against - the characterization is exactly as strong as it was - and
+where the flip changed the answer the NEW default is asserted beside it rather
+than instead of it.
 """
 
 import sys
@@ -16,6 +24,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import master_avwap as m  # noqa: E402
+from master_avwap_lib import execution_convention as ec  # noqa: E402
+from master_avwap_lib import selection_policy as sp  # noqa: E402
 
 
 def _open_scenario(**overrides):
@@ -90,14 +100,38 @@ class StopFirstSameBarTests(unittest.TestCase):
         self.assertTrue(any(e["reason"] == "HARD_STOP" for e in events))
 
     def test_target_still_books_when_stop_not_touched(self):
+        """Stop-first does not swallow a target the stop never reached.
+
+        The subject is the same-bar resolution ORDER, not which day's level is
+        read, so the level knowledge is named on both legs: `same_session_v1`
+        for the shipped characterization, and the default `prior_session_v2`
+        handed the same level off the previous session.
+        """
         scenario = _open_scenario(hard_stop_r_multiple=1.25, final_target_label="UPPER_3")
         levels = {"bands": {"UPPER_3": 110.0}}
         events = m._evaluate_tracker_scenario_bar(
             scenario, "LONG", "2026-01-05", _bar(111, 99, 110),
             levels, None, is_entry_day=False, bar_index=2,
+            level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
         )
         self.assertEqual(scenario["status"], "TARGET_HIT")
         self.assertTrue(any(e["reason"] == "FINAL_TARGET" for e in events))
+
+        default_scenario = _open_scenario(
+            hard_stop_r_multiple=1.25, final_target_label="UPPER_3"
+        )
+        default_events = m._evaluate_tracker_scenario_bar(
+            default_scenario, "LONG", "2026-01-05", _bar(111, 99, 110),
+            levels, None, is_entry_day=False, bar_index=2,
+            prior_session_levels={
+                "trade_date": "2026-01-02",
+                "anchor_levels": levels,
+                "indicator_row": None,
+                "dynamic_level_overrides": None,
+            },
+        )
+        self.assertEqual(default_scenario["status"], "TARGET_HIT")
+        self.assertTrue(any(e["reason"] == "FINAL_TARGET" for e in default_events))
 
 
 class TimeStopTests(unittest.TestCase):
@@ -132,10 +166,21 @@ class EpisodeDedupeTests(unittest.TestCase):
             {"symbol": "NVDA", "side": "LONG", "anchor_date": "2026-01-02", "setup_family": "f", "scan_date": "2026-01-07", "closed_setups": 1},
             {"symbol": "AMD", "side": "LONG", "anchor_date": "2026-01-03", "setup_family": "f", "scan_date": "2026-01-06", "closed_setups": 0},
         ]
-        out = m._dedupe_recent_tracker_family_rows(rows)
+        out = m._dedupe_recent_tracker_family_rows(
+            rows, policy=sp.SELECTION_CLOSED_FIRST_V1
+        )
         self.assertEqual(len(out), 2)  # one NVDA episode + one AMD episode
         nvda = next(r for r in out if r["symbol"] == "NVDA")
         self.assertEqual(nvda["closed_setups"], 1)  # closed record preferred
+
+        # ST7: the DEFAULT is `first_actionable_v2`, which fixes the episode
+        # BEFORE any outcome is read - so the earliest scan wins and the 01-07
+        # rescan of a still-live attempt is an observation, not the episode.
+        default_out = m._dedupe_recent_tracker_family_rows([dict(r) for r in rows])
+        self.assertEqual(len(default_out), 2)
+        default_nvda = next(r for r in default_out if r["symbol"] == "NVDA")
+        self.assertEqual(default_nvda["scan_date"], "2026-01-05")
+        self.assertEqual(default_nvda["closed_setups"], 0)
 
     def test_dedupe_prefers_earliest_when_none_closed(self):
         rows = [
@@ -171,8 +216,18 @@ class RepresentativeStopOutcomeTests(unittest.TestCase):
                 "s2": {"tradeable": True, "status": "STOPPED", "total_r": -1.0, "stop_reference_label": "SMA_100"},
             },
         }
-        outcome = m._summarize_tracker_setup_outcome(setup)
+        outcome = m._summarize_tracker_setup_outcome(
+            setup, policy=sp.SELECTION_CLOSED_FIRST_V1
+        )
         self.assertAlmostEqual(outcome["representative_closed_r"], outcome["avg_closed_r"])
+
+        # ST7: under the default the representative is DECLARED, and neither
+        # scenario carries the declared exit template, so there is no
+        # representative to report. The mean of the other exit plans is not
+        # substituted for it - that substitution is what ST4.2 removed.
+        default_outcome = m._summarize_tracker_setup_outcome(setup)
+        self.assertIsNone(default_outcome["representative_closed_r"])
+        self.assertAlmostEqual(default_outcome["avg_closed_r"], outcome["avg_closed_r"])
 
 
 if __name__ == "__main__":
