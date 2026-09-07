@@ -395,6 +395,27 @@ They are evidence and must not be loaded as context.
   sets no stylesheet. Layout lane: no number, no read, no sort key and no write
   changed, `apply_width_rule_to_table_widget` calls are untouched, and the
   verdict card is still uncapped (gate #49).
+- **The Journal's Trades table and Weekend Prep's Tag Week tables name their
+  text column** (G2a, 2026-09-07). Both used Qt's default resize mode with no
+  `apply_width_rule_to_table_widget` call anywhere in either file, so option
+  symbols and tag lists clipped on a 3,456 px desk while most of the row sat
+  blank. Journal Trades' `_populate_table` (the tab's ONE render seam) now ends
+  with the rule naming `Tags` (`TRADES_COLUMNS.index("Tags")`, a new module
+  constant replacing the header literal) as the text column that takes the
+  slack and `Symbol` as the middle-elide column; Weekend Prep's
+  `TagWeekPage._render` and `_render_missing_risk` do the same for `self.table`
+  (`TAG_WEEK_COLUMNS.index("Tag")` / `.index("Symbol")` — the tuple carries SIX
+  columns, `Week` having been added after the packet was written) and
+  `self.risk_table` (`MISSING_RISK_COLUMNS.index("Tag")` /
+  `.index("Symbol")` — `Tag` is that table's only free-text column; it carries
+  no description/reason column). Every index is looked up by NAME so a column
+  inserted tomorrow moves the lookup rather than silently breaking it; the risk
+  table's call runs BEFORE its empty-rows early return so a zero-row render
+  still names `Tag`. `_populate_table`'s existing NEEDS_REVIEW tooltip is
+  untouched — the rule's own tooltip write only fires where none exists.
+  Layout lane only: no number, sort key, read or write moved, and the Trades
+  splitter opening at 39/61 instead of its declared 3:2 is a separate,
+  unfixed defect (a later Journal packet).
 - **"Tag this week" is a weekend step** (V2 item 2e, corrected by R4 A15). The
   week's provisional and needs_review trades, confirm-all-shown and
   confirm-selected through `JournalStore.confirm_tags`, ten visible rows, read AND
@@ -1776,6 +1797,59 @@ against the reviewed tip first.
   market-local and aware; gate #83 says what a PASS looks like on day one.
 - The snapshot now FEEDS `panel_verdicts`, so ST2's one-computation-per-page
   design holds with the shared reading as its source.
+### 2026-09-07 - Packet G2a: the Trades and Tag Week tables name their text column (branch `claude/g2a-journal-and-tagweek-columns`)
+
+The layout half of G2, split from the Setup-Tracker/Desk/AWAY half (G2b, queued after ST6
+lands) so the G lane could touch neither file ST6 is rewriting. Tester-first: five tests
+committed RED at `b2798ec7` (four proven failing on `main` `a1dab8fa`, one golden proven
+green by design), builder made the four pass without weakening any.
+
+**The rule already existed and was never called.** `ui/widgets/data_table.py`'s
+`apply_width_rule_to_table_widget` (§12) stretches a named text column to the slack,
+clamps every other column to `[MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH]`, and middle-elides a
+named identifier column with the full value in its tooltip — but neither
+`scripts/ui/panels/journal/trades_tab.py` nor `scripts/ui/panels/weekend_prep_panel.py`
+called it, so a raw `QTableWidget` at Qt's default resize mode left option symbols and tag
+lists clipped on a 3,456 px desk with most of the row blank.
+
+Journal Trades' `_populate_table` (the tab's ONE render seam) now ends with the rule
+naming `Tags` (`TRADES_COLUMNS.index("Tags")`, a new module constant — `("Date", "Symbol",
+"Dir", "Status", "Qty", "P&L", "R", "Tags")` — replacing the header literal) as the
+stretching text column and `Symbol` (`TRADES_COLUMNS.index("Symbol")`) as the middle-elide
+column, so a 21-character OCC option symbol (`AAPL  260918C00230000`, whose identity is in
+the TAIL) elides in the middle with the full value in its tooltip. Weekend Prep's
+`TagWeekPage._render` does the same for `self.table` against `TAG_WEEK_COLUMNS` and
+`_render_missing_risk` for `self.risk_table` against `MISSING_RISK_COLUMNS`, both indexed
+by `.index("Tag")` / `.index("Symbol")`.
+
+**Two premises the packet got wrong, corrected against the live code:** `TAG_WEEK_COLUMNS`
+carries **six** entries, not five — `("Date", "Symbol", "Status", "Tag", "Net", "Week")`,
+`Week` having been added after the packet was drafted, which is why every index in the
+tests and the fix is looked up by name rather than a literal. And `MISSING_RISK_COLUMNS`
+(`"Date", "Symbol", "Direction", "Net", "Tag"`) carries no description/reason column at
+all — `Tag` is its only free-text column and the one named, not "whichever column carries
+the description/reason" as the packet described.
+
+The risk table's width-rule call runs BEFORE `_render_missing_risk`'s empty-rows early
+return, so a zero-row render still names `Tag` as the text column by NAME rather than by
+content — the same guarantee item 3.3 proves on the Trades table. `_populate_table`'s
+existing tooltip on a NEEDS_REVIEW row is untouched: the width rule's own tooltip write
+(`apply_width_rule_to_table_widget`'s elide-column loop) only fires where an item carries
+no tooltip already.
+
+**Layout lane only**: no number, sort key, read or write moved (a golden of every cell's
+text and the row order over the fixture, captured from `main` at `a1dab8fa` before any
+width rule existed, stays green throughout). The Trades tab's splitter declares
+`setStretchFactor(0, 3)` / `(1, 2)` but opens `[1347, 2105]` at 3,456 px — the table gets
+39% of the desk and the detail pane 61%, not the declared 3:2 — a real defect the tester
+found and named; it is not this packet's (the packet said nothing else in the tab moves)
+and is left for a later Journal packet. Fail-before-fix proven: `git stash` restored both
+files to `a1dab8fa`, the four RED tests failed again with the tester's exact messages
+(`Tags`/`Tag` 100 px on a 3,456 px desk; `Symbol` carrying no `MiddleElideDelegate`;
+`Interactive` where `Stretch` was expected), the golden stayed green, and `git stash pop`
+restored the fix with all five green again. No live gate beyond the trader seeing the wider
+columns after the next restart.
+
 ### 2026-09-07 - Packet G3b: three reviewer advisories on the Market Journal reader (branch `claude/g3b-reader-followups`)
 
 Three small follow-ups on G3, each tester-first (proven red on the pre-fix panel, then

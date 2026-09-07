@@ -40,6 +40,12 @@ from journal_store import (
 )
 from ui.models.journal import JournalTrade
 from ui.services import journal_feed
+from ui.widgets.data_table import apply_width_rule_to_table_widget
+
+#: The Trades table's own header, named once (G2a) so `_populate_table` can take
+#: `Symbol`'s and `Tags`' indices from the list rather than a literal - a column
+#: inserted tomorrow has to move this tuple, not silently break the width rule.
+TRADES_COLUMNS = ("Date", "Symbol", "Dir", "Status", "Qty", "P&L", "R", "Tags")
 
 #: The tag-review filter, in the order it is offered (P6a). The label is what
 #: the trader reads; the value is the ``tag_status`` it keeps, with "" meaning
@@ -375,10 +381,8 @@ class TradesTab(QFrame):
         self._visible: list[JournalTrade] = []
         self._current: JournalTrade | None = None
 
-        self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels(
-            ["Date", "Symbol", "Dir", "Status", "Qty", "P&L", "R", "Tags"]
-        )
+        self.table = QTableWidget(0, len(TRADES_COLUMNS))
+        self.table.setHorizontalHeaderLabels(list(TRADES_COLUMNS))
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
@@ -622,6 +626,15 @@ class TradesTab(QFrame):
                     item.setToolTip("Does not match the broker's reported position")
                 self.table.setItem(row, column, item)
         self._visible = visible
+        # G2a: Tags takes the slack, Symbol middle-elides with its full value
+        # in the tooltip - the width rule only writes a tooltip where the
+        # NEEDS_REVIEW branch above left none, so that tooltip is never
+        # overwritten.
+        apply_width_rule_to_table_widget(
+            self.table,
+            text_columns=(TRADES_COLUMNS.index("Tags"),),
+            elide_columns=(TRADES_COLUMNS.index("Symbol"),),
+        )
         self.dataChanged.emit()
 
     def _tags_cell(self, trade: JournalTrade) -> str:
