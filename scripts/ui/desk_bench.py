@@ -75,6 +75,52 @@ LIVE_STORE_ROOTS: tuple[str, ...] = (
     "//mini-pc/",
 )
 
+#: The SECOND guard's own literals, deliberately NOT built from
+#: `LIVE_STORE_ROOTS`: the two guards are independent so that breaking one -
+#: which is exactly what a reviewer does to prove a guard bites - leaves the
+#: other standing. Kept as a module constant only so a test can point BOTH at a
+#: fake root under `tmp_path`; no test may ever aim a sabotaged guard at the
+#: real live paths as a destination.
+WRITE_REFUSAL_PREFIXES: tuple[str, ...] = (
+    "c:\\tradingbotdata\\",
+    "\\\\mini-pc\\",
+)
+
+#: The machine-local settings keys the bench carries from the real
+#: `%LOCALAPPDATA%\TradingBotV3\local_settings.json` into its redirected one.
+#:
+#: An ALLOWLIST, and a short one, for two reasons. The real file holds five
+#: credentials (`market_prep_openai_api_key`, `journal_questrade_refresh_token`,
+#: `journal_ibkr_flex_token`, `push_ntfy_token`, `desk_link_token`) that have no
+#: business in a scratch directory, and it holds three PATH keys
+#: (`shared_data_dir`, `research_store_dir`, `ai_store_dir`) that point at the
+#: live home folder and the DAS - copying those into a bench whose entire point
+#: is that it never touches the live store would be the 2026-09-05 incident
+#: wearing a lab coat.
+#:
+#: What is carried is what CHANGES WHAT IS MEASURED: `qt_ui_scale` scales every
+#: `theme.px` and therefore every number the layout-fit check prints, and
+#: density, theme and mode change what a page builds. `daily_bars_source` is
+#: carried because it is the trader's pin and costs nothing (this bench runs no
+#: scan and fetches no bar).
+MACHINE_SETTINGS_CARRIED: tuple[str, ...] = (
+    "daily_bars_source",
+    "gui_mode",
+    "gui_performance_mode",
+    "qt_alert_min_tier",
+    "qt_compact_density",
+    "qt_explain_mode",
+    "qt_nav_collapsed",
+    "qt_setups_bucket_filter",
+    "qt_theme",
+    "qt_ui_scale",
+    "qt_workspace_mode",
+    "qt_alert_center_split_sizes_v2",
+    "qt_alert_tabs_row_split_sizes_v1",
+    "qt_desk_split_sizes_v2",
+    "qt_desk_split_sizes_v3",
+)
+
 #: What `stage` copies, relative to the source home folder. This is an
 #: ALLOWLIST on purpose: the live store holds a 1.2 GB tracker JSON, a 622 MB
 #: attributes CSV and a 142 MB scenarios CSV that no page on this bench opens,
@@ -131,8 +177,13 @@ STAGE_ALLOWLIST: tuple[str, ...] = (
     "alert_review_events/*.jsonl",
     # -- the trade journal, as a COPY -----------------------------------
     "data/runtime/trade_journal.sqlite3",
-    # -- settings -------------------------------------------------------
-    "local_settings.json",
+    # NO settings file here on purpose. `local_settings.json` was listed once
+    # against the home-folder root, where it does not live: the real file is at
+    # `%LOCALAPPDATA%\TradingBotV3\local_settings.json`, so the entry reported
+    # `absent` on every staging run and the first baseline was measured against
+    # a synthetic one-key file. The machine-local settings are now carried by
+    # `machine_settings_seed` at run time, key by key - see
+    # `MACHINE_SETTINGS_CARRIED` for why it is an allowlist and not a copy.
 )
 
 #: How long one operation may take before the settle wait gives up. A hit is
@@ -265,11 +316,42 @@ def _refuse_to_open_for_writing(target: Path) -> None:
     live file touched). One guard was one too few.
     """
     text = str(target).replace("/", "\\").casefold()
-    if text.startswith("c:\\tradingbotdata\\") or text.startswith("\\\\mini-pc\\"):
-        raise StageRefused(
-            f"refusing to open {target} for writing: that is inside the live "
-            "home folder or the DAS"
+    for prefix in WRITE_REFUSAL_PREFIXES:
+        if text.startswith(prefix.replace("/", "\\").casefold()):
+            raise StageRefused(
+                f"refusing to open {target} for writing: that is inside the live "
+                "home folder or the DAS"
+            )
+
+
+def refuse_live_destination(label: str, path: str | os.PathLike[str], stream) -> int | None:
+    """Both guards, run on a path BEFORE anything is created at it. 2, or None.
+
+    This is the fix for the defect the reviewer found on 2026-09-06: `main()`
+    called `_prepare_environment` first, which `mkdir`s the data directory and
+    writes a settings file into it, and only THEN asked whether that directory
+    was the live home folder. `--data-dir C:\\TradingBotData` therefore exited 2
+    having already created three directories and a file inside the live store -
+    the packet's own invariant broken by the code that states it, and the exact
+    shape of the 2026-09-05 incident.
+
+    Both guards are run because they are independent by design: `is_under_live_store`
+    resolves the path and compares against `LIVE_STORE_ROOTS`, and
+    `_refuse_to_open_for_writing` compares its own literals against the text.
+    """
+    if is_under_live_store(path):
+        print(
+            f"REFUSED: {label} {path} is inside the live home folder or the DAS. "
+            "desk_bench never writes there, and nothing has been created.",
+            file=stream,
         )
+        return 2
+    try:
+        _refuse_to_open_for_writing(Path(path) / "_")
+    except StageRefused as exc:
+        print(f"REFUSED: {exc}", file=stream)
+        return 2
+    return None
 
 
 def stage(
@@ -404,10 +486,19 @@ def settle(app, root, *, deadline_s: float = DEFAULT_DEADLINE_S) -> tuple[float,
     is the stall proxy: a slot that runs 800 ms inside one drain is invisible in
     the total and obvious here.
 
-    **Nothing is slept inside a timed region.** When the page is waiting on a
-    worker this loop yields for 2 ms between drains so the worker actually gets
-    the GIL - a spin would measure the bench fighting the thing it is measuring
-    - and that yield is outside every timer.
+    **The 2 ms yield is INSIDE `settle_ms` and outside `longest_iteration_ms`,
+    and that is the honest description of it.** While a worker is running this
+    loop sleeps 2 ms between drains so the worker actually gets the GIL - a
+    spin would measure the bench fighting the thing it is measuring - and the
+    trader waits through that time too, so it belongs in the settle total. It
+    is excluded from the longest-iteration timer, which brackets the
+    `processEvents()` call alone and is the stall proxy.
+
+    **Every settle carries the `QUIET_MS` (120 ms) floor**, because settling is
+    declared only after the page has been quiet for that long. A reading near
+    120-135 ms therefore means "nothing was measured here": the op finished
+    before the first drain and the number is the floor, not work. Compare such
+    ops on `sync_ms`.
     """
     start = time.perf_counter()
     longest = 0.0
@@ -987,7 +1078,47 @@ def _real_diagnostics_dir() -> Path:
     return Path.home() / ".tradingbotv3" / "diagnostics"
 
 
-def _prepare_environment(data_dir: Path, platform: str) -> None:
+def machine_settings_seed(real_settings: dict[str, Any]) -> dict[str, Any]:
+    """The settings the bench's redirected `local_settings.json` starts from.
+
+    `MACHINE_SETTINGS_CARRIED` keys only, plus the one setting a non-desk
+    process must never default - `qt_autopilot_auto_arm` - forced False and not
+    readable from the real file, so a trader who armed the desk cannot arm a
+    bench. Anything a credential or a path lives under is not on the list and
+    is not copied.
+    """
+    seed: dict[str, Any] = {}
+    for key in MACHINE_SETTINGS_CARRIED:
+        if key in real_settings:
+            seed[key] = real_settings[key]
+    seed["qt_autopilot_auto_arm"] = False
+    return seed
+
+
+def _read_real_machine_settings() -> tuple[dict[str, Any], str]:
+    """Read `%LOCALAPPDATA%\\TradingBotV3\\local_settings.json`, read-only.
+
+    Returns the payload and a one-line note for the printed output. A missing
+    or unreadable file is a RESULT: the bench runs on the defaults and says so,
+    because a measuring tool that refuses to start on a machine that never ran
+    the desk is worse than one that names what it could not read.
+    """
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return {}, "no LOCALAPPDATA on this machine; bench settings are defaults"
+    path = Path(local) / "TradingBotV3" / "local_settings.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}, f"{path} absent; bench settings are defaults"
+    except (OSError, ValueError) as exc:
+        return {}, f"{path} unreadable ({type(exc).__name__}); bench settings are defaults"
+    if not isinstance(payload, dict):
+        return {}, f"{path} is not an object; bench settings are defaults"
+    return payload, f"carried from {path}"
+
+
+def _prepare_environment(data_dir: Path, platform: str) -> str:
     """Point every store at the scratch BEFORE anything under `scripts/` loads."""
     data_dir.mkdir(parents=True, exist_ok=True)
     os.environ["TRADINGBOTV3_DATA_DIR"] = str(data_dir)
@@ -1002,10 +1133,17 @@ def _prepare_environment(data_dir: Path, platform: str) -> None:
     # and gets the one setting a non-desk process must never default:
     # `qt_autopilot_auto_arm`. This bench builds no `MainWindow`, so nothing can
     # arm - but the 2026-09-02 failure was a timer nobody expected to exist.
+    #
+    # The rest of the seed is the TRADER's display settings, carried key by key
+    # out of the real machine-local file BEFORE `LOCALAPPDATA` moves. This is
+    # not decoration: `qt_ui_scale` scales every `theme.px`, so a bench running
+    # on the default scale measures a layout the trader never sees. Credentials
+    # and path keys are not on the list (`MACHINE_SETTINGS_CARRIED`).
+    real_settings, settings_note = _read_real_machine_settings()
     local_appdata = data_dir / "_localappdata"
     (local_appdata / "TradingBotV3").mkdir(parents=True, exist_ok=True)
     (local_appdata / "TradingBotV3" / "local_settings.json").write_text(
-        json.dumps({"qt_autopilot_auto_arm": False}, indent=1) + "\n",
+        json.dumps(machine_settings_seed(real_settings), indent=1) + "\n",
         encoding="utf-8",
     )
     os.environ["LOCALAPPDATA"] = str(local_appdata)
@@ -1015,6 +1153,7 @@ def _prepare_environment(data_dir: Path, platform: str) -> None:
     scripts_dir = root / "scripts"
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
+    return settings_note
 
 
 def _abort_if_live(stream) -> int | None:
@@ -1073,11 +1212,26 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
     if not args.data_dir:
         parser.error("--data-dir is required: desk_bench never runs against the live store")
 
+    # BEFORE anything is created. `_prepare_environment` mkdirs the data
+    # directory and writes a settings file into it, so every refusal has to be
+    # decided here, on the ARGUMENT, and not afterwards on the resolved store.
+    # `_abort_if_live` still runs below: it answers a different question - what
+    # `project_paths` actually resolved to - and a scratch directory whose
+    # settings redirect the store elsewhere would pass this check and fail that
+    # one.
+    for label, candidate in (("--data-dir", args.data_dir), ("--out", args.out)):
+        if not candidate:
+            continue
+        refusal = refuse_live_destination(label, candidate, stream)
+        if refusal is not None:
+            return refusal
+
     out_default = _real_diagnostics_dir()
-    _prepare_environment(Path(args.data_dir), args.platform)
+    settings_note = _prepare_environment(Path(args.data_dir), args.platform)
     refusal = _abort_if_live(stream)
     if refusal is not None:
         return refusal
+    print(f"machine settings: {settings_note}", file=stream)
 
     if args.sizes:
         sizes = [parse_size(text) for text in args.sizes]
@@ -1133,6 +1287,13 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
     else:
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         out_path = out_default / f"desk_bench_{stamp}.json"
+    # The default lands under the real `%LOCALAPPDATA%`, which is neither the
+    # home folder nor the DAS - but it is resolved from the environment, so it
+    # is checked like everything else rather than trusted. A refusal here costs
+    # the run's numbers; that is the cheaper of the two mistakes.
+    refusal = refuse_live_destination("--out", out_path, stream)
+    if refusal is not None:
+        return refusal
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"\nWrote {out_path}", file=stream)

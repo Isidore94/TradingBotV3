@@ -19,6 +19,7 @@ The two that matter most are the ones about SAFETY rather than measurement:
 from __future__ import annotations
 
 import ast
+import io
 import os
 import sys
 from pathlib import Path
@@ -433,3 +434,141 @@ def test_parse_size_reads_the_trader_window_and_rejects_nonsense():
     for bad in ("3456", "0x100", "axb"):
         with pytest.raises(ValueError):
             desk_bench.parse_size(bad)
+
+
+# ---------------------------------------------------------------------------
+# The fix round, 2026-09-06: the guards run BEFORE anything is created
+#
+# The reviewer's blocker: `main()` called `_prepare_environment` first, which
+# mkdirs the data directory and writes
+# `_localappdata/TradingBotV3/local_settings.json` inside it, and only then
+# asked whether that directory was the live store. So `--data-dir
+# C:\TradingBotData` exited 2 with three new directories and a file already
+# sitting in the live home folder - the packet's own invariant, broken by the
+# code that states it.
+#
+# These tests drive the ORDERING with BOTH guards pointed at a FAKE root under
+# `tmp_path`. A sabotaged guard is never aimed at the real live paths as a
+# destination - doing exactly that is how the builder created
+# `C:\TradingBotData\scratch` on 2026-09-06 while proving the first guard
+# worked - and `_prepare_environment` is replaced by a raiser, so on the unfixed
+# code the test stops at that assertion instead of running on against whatever
+# store the environment happened to resolve.
+# ---------------------------------------------------------------------------
+def _point_both_guards_at(monkeypatch, fake_root: Path) -> None:
+    marker = str(fake_root).replace("/", "\\").casefold()
+    monkeypatch.setattr(desk_bench, "LIVE_STORE_ROOTS", (marker,))
+    monkeypatch.setattr(desk_bench, "WRITE_REFUSAL_PREFIXES", (marker + "\\",))
+
+
+def _explode_if_reached(*_args, **_kwargs):
+    raise AssertionError(
+        "_prepare_environment ran before the live-store guards: it mkdirs the "
+        "data directory and writes a settings file into it, so by the time the "
+        "refusal is printed the files already exist"
+    )
+
+
+def test_main_refuses_a_live_data_dir_before_anything_is_created(tmp_path, monkeypatch):
+    fake_root = Path(str(tmp_path)).resolve() / "fakelive"
+    _point_both_guards_at(monkeypatch, fake_root)
+    monkeypatch.setattr(desk_bench, "_prepare_environment", _explode_if_reached)
+
+    stream = io.StringIO()
+    code = desk_bench.main(["--data-dir", str(fake_root / "home")], stream=stream)
+
+    assert code == 2
+    assert "REFUSED" in stream.getvalue()
+    assert not fake_root.exists(), (
+        "the refusal created something under the (fake) live root: "
+        f"{sorted(str(p) for p in fake_root.rglob('*'))}"
+    )
+
+
+def test_main_refuses_a_live_out_path_before_anything_is_created(tmp_path, monkeypatch):
+    fake_root = Path(str(tmp_path)).resolve() / "fakelive"
+    scratch = Path(str(tmp_path)).resolve() / "scratch"
+    _point_both_guards_at(monkeypatch, fake_root)
+    monkeypatch.setattr(desk_bench, "_prepare_environment", _explode_if_reached)
+
+    stream = io.StringIO()
+    code = desk_bench.main(
+        ["--data-dir", str(scratch), "--out", str(fake_root / "bench.json")],
+        stream=stream,
+    )
+
+    assert code == 2
+    assert "--out" in stream.getvalue()
+    assert not fake_root.exists()
+    assert not scratch.exists(), "a refused --out still created the scratch data directory"
+
+
+def test_both_guards_run_and_either_one_alone_refuses(tmp_path, monkeypatch):
+    """Independence, checked on a fake root so nothing points at the live store."""
+    fake_root = Path(str(tmp_path)).resolve() / "fakelive"
+    marker = str(fake_root).replace("/", "\\").casefold()
+    target = fake_root / "home"
+
+    monkeypatch.setattr(desk_bench, "LIVE_STORE_ROOTS", (marker,))
+    monkeypatch.setattr(desk_bench, "WRITE_REFUSAL_PREFIXES", ("z:\\nothing\\",))
+    assert desk_bench.refuse_live_destination("--data-dir", target, io.StringIO()) == 2
+
+    monkeypatch.setattr(desk_bench, "LIVE_STORE_ROOTS", ("z:\\nothing",))
+    monkeypatch.setattr(desk_bench, "WRITE_REFUSAL_PREFIXES", (marker + "\\",))
+    assert desk_bench.refuse_live_destination("--data-dir", target, io.StringIO()) == 2
+
+    monkeypatch.setattr(desk_bench, "LIVE_STORE_ROOTS", ("z:\\nothing",))
+    monkeypatch.setattr(desk_bench, "WRITE_REFUSAL_PREFIXES", ("z:\\nothing\\",))
+    assert desk_bench.refuse_live_destination("--data-dir", target, io.StringIO()) is None
+    assert not fake_root.exists()
+
+
+# ---------------------------------------------------------------------------
+# The machine-local settings seed (advisory 2)
+# ---------------------------------------------------------------------------
+def test_the_settings_seed_carries_the_display_keys_and_no_credential_or_path():
+    real = {
+        "qt_ui_scale": 1.25,
+        "qt_theme": "dark",
+        "qt_compact_density": True,
+        "daily_bars_source": "yahoo",
+        "market_prep_openai_api_key": "sk-live-secret",
+        "journal_questrade_refresh_token": "refresh-secret",
+        "push_ntfy_token": "ntfy-secret",
+        "desk_link_token": "link-secret",
+        "journal_ibkr_flex_token": "flex-secret",
+        "shared_data_dir": r"C:\TradingBotData",
+        "research_store_dir": r"\\MINI-PC\Trading Bot Data\research_lake",
+        "ai_store_dir": r"\\MINI-PC\Trading Bot Data\ai_store",
+        "qt_autopilot_auto_arm": True,
+    }
+    seed = desk_bench.machine_settings_seed(real)
+
+    assert seed["qt_ui_scale"] == 1.25
+    assert seed["qt_theme"] == "dark"
+    assert seed["daily_bars_source"] == "yahoo", (
+        "the trader's pin is what makes the bench's settings real rather than synthetic"
+    )
+    assert seed["qt_autopilot_auto_arm"] is False, "a bench never arms, whatever the desk saved"
+    for forbidden in (
+        "market_prep_openai_api_key",
+        "journal_questrade_refresh_token",
+        "push_ntfy_token",
+        "desk_link_token",
+        "journal_ibkr_flex_token",
+        "shared_data_dir",
+        "research_store_dir",
+        "ai_store_dir",
+    ):
+        assert forbidden not in seed, f"{forbidden} reached a scratch directory"
+
+
+def test_the_settings_seed_is_defaults_when_the_real_file_is_missing():
+    assert desk_bench.machine_settings_seed({}) == {"qt_autopilot_auto_arm": False}
+
+
+def test_the_allowlist_no_longer_names_a_settings_file_that_is_never_there():
+    assert "local_settings.json" not in desk_bench.STAGE_ALLOWLIST, (
+        "the home-folder root holds no local_settings.json; the real one is "
+        "machine-local and is carried by machine_settings_seed"
+    )
