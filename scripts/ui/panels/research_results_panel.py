@@ -25,6 +25,7 @@ from datetime import date
 from typing import Any, Mapping
 
 from PySide6.QtCore import QDate, Qt
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDateEdit,
@@ -37,8 +38,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import evidence_stats
 import project_paths
 import research_results
+from ui import theme
 from ui.models.tracker_table_model import ROW_ROLE, TrackerTableModel
 from ui.read_worker import ReadWorker, join_worker
 from ui.services.journal_feed import load_trades
@@ -56,10 +59,40 @@ DEFAULT_SELECTION = ("bot", "swing", "recent")
 POPULATIONS = (("bot", "Bot setups"), ("mine", "My trades"))
 HORIZONS = (("swing", "Swing"), ("day", "Day trading"))
 WINDOWS = (
-    ("recent", "Recent 20 sessions"),
+    # "Lately" has ONE definition and this button reads it rather than
+    # restating it: `evidence_stats.LATELY_SESSIONS`, walked on the exchange
+    # calendar. A literal here would be a second definition that agreed with
+    # the first only until somebody changed one of them.
+    ("recent", f"Recent {evidence_stats.LATELY_SESSIONS} sessions"),
     ("all", "All history"),
     ("custom", "Custom…"),
 )
+
+#: Why the three window buttons are dead on the Bot page. Each snapshot cell
+#: was measured over the window its own aggregator walked, so choosing another
+#: one here would change the heading and not one number under it.
+WINDOW_ON_BOT_TOOLTIP = (
+    "The evidence snapshot owns its own window, so this control does nothing "
+    "to Bot setups. It applies to My trades."
+)
+
+#: The reader's MEASURE, in characters of its own font - G3's rule, one page
+#: later, and the same two constants as `market_journal_panel`. The first cut
+#: of this page set the section text as ONE 1,922-character line across a
+#: 3,456 px desk, where the eye loses the start of a line before it finds the
+#: end. Running text is readable at about 45-100 characters; the labels keep
+#: their place and the TEXT is capped, left-aligned, with the slack at the
+#: right.
+READER_MEASURE_CHARS = 100
+READER_MEASURE_MAX_PX = 1200
+READER_MEASURE_MIN_PX = 240
+
+
+def _reader_measure(metrics: QFontMetrics) -> int:
+    """The pixel width of `READER_MEASURE_CHARS` characters, capped and floored."""
+    per_char = max(1, int(metrics.averageCharWidth()))
+    wanted = min(per_char * READER_MEASURE_CHARS, theme.px(READER_MEASURE_MAX_PX))
+    return max(theme.px(READER_MEASURE_MIN_PX), wanted)
 
 #: The shortlist's columns, per population. One table, two shapes: a bot row is
 #: a snapshot cell and a My-trades row is a confirmed-tag bucket, and printing
@@ -98,10 +131,35 @@ BAND_TITLES = (
     ("not_enough", "Not enough evidence"),
 )
 
+#: How many rows one card prints per section. The shortlist below holds the
+#: rest, and the card's count says so.
+CARD_LINES = 3
+
 #: What the detail pane is told it is explaining. An unknown kind lands in
 #: `research_explanations`' generic branch, which is the right one: these rows
 #: are aggregate measurements and the pane says so.
 EXPLANATION_KIND = "research_results"
+
+
+def _mine_columns(sections) -> tuple[tuple[str, str], ...]:
+    """The My-trades headers, with the money column NAMING its currency.
+
+    A number in a column called "Net P&L" is not money until it says what
+    money it is; `research_results` reads the currency off `resolve_pnl_key`'s
+    own choice, so the header cannot claim a conversion the journal never made.
+    A refused total leaves the header bare rather than guessing.
+    """
+    currency = ""
+    for section in sections or ():
+        currency = str((section.stats or {}).get("currency") or "")
+        if currency:
+            break
+    if not currency:
+        return MINE_COLUMNS
+    return tuple(
+        (key, f"Net P&L ({currency})" if key == "net_pnl" else label)
+        for key, label in MINE_COLUMNS
+    )
 
 
 def _valid_selection(value: Any) -> tuple[str, str, str] | None:
@@ -148,14 +206,21 @@ class _BandCard(QFrame):
         """
         pairs = [(title, list(rows)) for title, rows in pairs]
         total = sum(len(rows) for _title, rows in pairs)
-        self.count_label.setText(f"{total} shown" if total else "nothing to show")
+        shown = sum(min(len(rows), CARD_LINES) for _title, rows in pairs)
+        # `N of M shown`, not `M shown`. The card prints at most three rows per
+        # section by design and the count above them used to state the BAND's
+        # size, so a card holding 27 cells said "27 shown" over six printed
+        # lines - a false count, and one that hid the fact that the rest of
+        # them are in the table below.
+        self.count_label.setText(f"{shown} of {total} shown" if total else "nothing to show")
         lines: list[str] = []
         full: list[str] = []
         for title, rows in pairs:
-            if len(pairs) > 1:
+            # A heading with nothing under it reads as a read that failed.
+            if len(pairs) > 1 and rows:
                 lines.append(f"{title}:")
                 full.append(f"{title}:")
-            for row in rows[:3]:
+            for row in rows[:CARD_LINES]:
                 head = row.display.get("headline") or row.line
                 if row.reason:
                     head = f"{head} - {row.reason}"
@@ -207,13 +272,19 @@ class ResearchResultsPanel(QFrame):
 
         self.freshness_label = QLabel("")
         self.freshness_label.setObjectName("MutedLabel")
-        self.freshness_label.setWordWrap(True)
         self.status_label = QLabel("")
         self.status_label.setObjectName("MutedLabel")
-        self.status_label.setWordWrap(True)
         self.section_label = QLabel("")
         self.section_label.setObjectName("SectionSubtitle")
-        self.section_label.setWordWrap(True)
+        # Every running-text label on this page reads at one measure, left,
+        # with the slack on the right (`_reader_measure`). Wrapped, because a
+        # capped line that could not wrap would just elide.
+        self._reading_labels = (self.freshness_label, self.section_label, self.status_label)
+        for label in self._reading_labels:
+            label.setWordWrap(True)
+            label.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            )
 
         self._cards = {key: _BandCard(title) for key, title in BAND_TITLES}
         self.shortlist = DataTable()
@@ -228,7 +299,19 @@ class ResearchResultsPanel(QFrame):
 
         self._build_layout()
         self._apply_selection_to_buttons()
+        self.refresh_reader_measure()
         self.refresh()
+
+    def refresh_reader_measure(self) -> None:
+        """Recompute the reading measure from the CURRENT font (G3b item 3).
+
+        Polished first: the theme sizes fonts in the stylesheet, so an
+        unpolished widget would be measured in the default font and the column
+        would not follow the theme it claims to follow.
+        """
+        for label in self._reading_labels:
+            label.ensurePolished()
+            label.setMaximumWidth(_reader_measure(label.fontMetrics()))
 
     # -- construction ------------------------------------------------------
 
@@ -243,10 +326,17 @@ class ResearchResultsPanel(QFrame):
             button.setCheckable(True)
             group.addButton(button, offset)
             store[key] = button
-        # `idClicked` and not `toggled`: an exclusive group un-checks the old
-        # button as it checks the new one, so a `toggled` connection would run
-        # the whole read twice for one click.
-        group.idClicked.connect(lambda _id, position=index: self._on_control_clicked(position))
+        # `idToggled` FILTERED on `checked`, not `idClicked`: an exclusive
+        # group un-checks the old button as it checks the new one, so an
+        # unfiltered `toggled` would run the whole read twice for one click -
+        # and `idClicked` never fires for a button the page disabled, which is
+        # what the three window buttons are on the Bot page. The filter keeps
+        # one reaction per change while leaving the state itself drivable.
+        group.idToggled.connect(
+            lambda _id, checked, position=index: (
+                self._on_control_clicked(position) if checked else None
+            )
+        )
         return group
 
     def _build_layout(self) -> None:
@@ -315,6 +405,23 @@ class ResearchResultsPanel(QFrame):
                 button.setChecked(key == wanted)
                 button.blockSignals(was)
         self._update_custom_visibility()
+        self._update_window_availability()
+
+    def _update_window_availability(self) -> None:
+        """The window control is live only where it changes a number.
+
+        On Bot setups every cell was measured over the window its own
+        aggregator walked, so the three buttons would move a heading and
+        nothing under it. A dead control that says why is honest; a live one
+        that does nothing is a lie the page tells once per click.
+        """
+        live = self._selection[0] == "mine"
+        for button in self.window_buttons.values():
+            button.setEnabled(live)
+            button.setToolTip("" if live else WINDOW_ON_BOT_TOOLTIP)
+        for widget in (self.custom_start, self.custom_end, *self._custom_labels):
+            widget.setEnabled(live)
+            widget.setToolTip("" if live else WINDOW_ON_BOT_TOOLTIP)
 
     def _update_custom_visibility(self) -> None:
         custom = self._selection[2] == "custom"
@@ -342,6 +449,7 @@ class ResearchResultsPanel(QFrame):
             return
         self._selection = selection
         self._update_custom_visibility()
+        self._update_window_availability()
         try:
             project_paths.save_local_setting(RESULTS_SELECTION_KEY, list(selection))
         except Exception:  # noqa: BLE001 - a preference is never worth the page
@@ -410,10 +518,18 @@ class ResearchResultsPanel(QFrame):
 
     def _render(self, view: research_results.ResultsView) -> None:
         self.freshness_label.setText(view.freshness_line)
+        self.freshness_label.setToolTip(view.freshness_line)
         sections = list(view.sections)
+        # ONE short verdict line per kind - the machine's own state and its own
+        # reason. The leader, the policy line and the population sentence go in
+        # the tooltip: all of it printed on the page came to 1,922 characters
+        # of running text, which at 3,456 px is one line nobody reads.
         self.section_label.setText(
-            "\n".join(
-                f"{section.title} - {section.sentence} [{section.verdict_line}]"
+            "\n".join(section.verdict_short or section.verdict_line for section in sections)
+        )
+        self.section_label.setToolTip(
+            "\n\n".join(
+                f"{section.title}\n{section.sentence}\n{section.verdict_line}"
                 for section in sections
             )
         )
@@ -427,7 +543,9 @@ class ResearchResultsPanel(QFrame):
         self._reshow_or_clear_explanation()
 
     def _fill_shortlist(self, view, sections) -> None:
-        columns = MINE_COLUMNS if view.population == "mine" else BOT_COLUMNS
+        columns = (
+            _mine_columns(sections) if view.population == "mine" else BOT_COLUMNS
+        )
         rows: list[dict[str, Any]] = []
         for section in sections:
             for row in list(section.rows) + list(section.studies):
@@ -448,7 +566,11 @@ class ResearchResultsPanel(QFrame):
                 entry["_payload"]["line"] = row.line
                 if row.reason:
                     entry["_payload"]["not_eligible_because"] = row.reason
-                if not row.eligible:
+                # A STUDY is muted the same way an ineligible cell is. The
+                # Population column alone told them apart, and a shortlist is
+                # read at a glance - an unpromoted idea in the live rows' own
+                # weight reads as a result.
+                if not row.eligible or str(row.values.get("namespace") or "live") != "live":
                     entry["_muted_row"] = True
                 rows.append(entry)
         self._shortlist_rows = rows
@@ -465,7 +587,9 @@ class ResearchResultsPanel(QFrame):
             head = sections[0] if sections else None
             self.status_label.setText(head.sentence if head is not None else research_results.NO_SNAPSHOT)
         else:
-            self.status_label.setText(view.window_label)
+            # The window the numbers were MEASURED over, which on the Bot page
+            # is the snapshot's and not the one the buttons name.
+            self.status_label.setText(view.window_sentence or view.window_label)
 
     def _on_row_clicked(self, index) -> None:
         row = index.data(ROW_ROLE)

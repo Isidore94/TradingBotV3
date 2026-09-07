@@ -181,6 +181,15 @@ def page(reads):
         _settle(panel)
         panel.deleteLater()
         _app.processEvents()
+        # The page WRITES its selection - real production behaviour, and this
+        # is one of the two files that make it happen. A remembered "My
+        # trades" makes every later `ResearchPanel` construction open the
+        # journal on its worker, which creates the journal database, which is
+        # the state `test_qt_journal_panel::test_migration_failure_stays_visible
+        # _instead_of_claiming_no_accounts` exists to find the absence of. The
+        # cure used to be an autouse fixture in `conftest.py` standing over
+        # 1,800 tests; the leak belongs to the tests that leak.
+        _forget_the_saved_selection()
 
 
 def _click(button) -> None:

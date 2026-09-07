@@ -51,6 +51,20 @@ NO_SNAPSHOT = "no snapshot yet - the desk builds one after the window shows"
 #: nobody asked.
 NO_CONFIRMED_TAGS = "no confirmed tags yet - nothing here names a setup"
 
+#: What the freshness line says when the snapshot recorded no source at all.
+#: `working_lately` writes `path: ""` and `mtime: null` for every source it
+#: computes, so the first cut of this line read `an unnamed file @ None` three
+#: times over on every real snapshot - a sentence that named nothing and
+#: printed a Python literal at the trader. What those entries DO carry is
+#: `rows`, which is the fact worth having.
+NO_SOURCES = "the snapshot did not record its sources"
+
+#: The bucket in `build_analytics_summary`'s "my setups" group that holds every
+#: trade with no confirmed tag. It is a fallback, not a setup the trader named,
+#: and it never appears as a row under a "Confirmed tag" heading - coverage is
+#: the section sentence's business (`confirmed / total`).
+UNTAGGED_BUCKET = "untagged"
+
 #: What a bot row copies out of its cell, verbatim. Every one of these is
 #: handed on as the cell's OWN object, so a reader can prove by identity that
 #: nothing was recomputed on the way to the screen.
@@ -160,6 +174,12 @@ class ResultsSection:
     studies: tuple[ResultsRow, ...]
     stats: Mapping[str, Any]
     analytics: Mapping[str, Any] | None = None
+    #: The ONE line a page prints above the cards: this kind's own verdict
+    #: STATE and its own REASON, and nothing else. `verdict_line` keeps the
+    #: leader, the policy line and the whole provenance for the tooltip - all
+    #: four sections' worth of it came to 1,922 characters on the fixture
+    #: snapshot, set as one running line across a 3,456 px desk.
+    verdict_short: str = ""
 
 
 @dataclass(frozen=True)
@@ -174,6 +194,14 @@ class ResultsView:
     window_end: str
     sections: tuple[ResultsSection, ...]
     freshness_line: str
+    #: Whether the CHOSEN window was applied to these numbers. True for My
+    #: trades, which filters its own closed trades by `closed_at`; False for
+    #: Bot setups, where each cell was measured over the window its own
+    #: aggregator walked and the page may not claim otherwise.
+    window_applies: bool = True
+    #: The window sentence this population may honestly print - the chosen
+    #: label when it applies, the SNAPSHOT's own window when it does not.
+    window_sentence: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +422,22 @@ def _verdict_line(snapshot: Mapping[str, Any] | None, kind: str) -> str:
     return " - ".join(bits)
 
 
+def _verdict_short(snapshot: Mapping[str, Any] | None, kind: str, title: str) -> str:
+    """The kind's verdict in ONE line: its own state and its own reason.
+
+    The page prints this and keeps `_verdict_line` for the tooltip. Still
+    verbatim - the state is the machine's word and the reason is the machine's
+    sentence - just without the leader's twelve-clause policy line, which is
+    what took the four sections to 1,922 characters of running text.
+    """
+    entry = ((snapshot or {}).get("verdicts") or {}).get(kind)
+    if not isinstance(entry, Mapping):
+        return f"{title}: no verdict in this snapshot"
+    state = str(entry.get("state") or "")
+    reason = str(entry.get("reason") or "")
+    return f"{title}: {state}" + (f" - {reason}" if reason else "")
+
+
 def _bot_section(snapshot: Mapping[str, Any] | None, kind: str) -> ResultsSection:
     cells = [
         cell
@@ -416,6 +460,11 @@ def _bot_section(snapshot: Mapping[str, Any] | None, kind: str) -> ResultsSectio
         kind=kind,
         sentence=sentence,
         verdict_line=_verdict_line(snapshot, kind) if cells else NO_SNAPSHOT,
+        verdict_short=(
+            _verdict_short(snapshot, kind, KIND_TITLES.get(kind, kind))
+            if cells
+            else f"{KIND_TITLES.get(kind, kind)}: {NO_SNAPSHOT}"
+        ),
         bands=bands,
         rows=tuple(_cell_row(cell) for cell in rows),
         studies=tuple(_cell_row(cell) for cell in _by_rank(studies)),
@@ -488,6 +537,44 @@ def _pnl_values(rows: Sequence[Mapping[str, Any]], key: str) -> list[float]:
     return out
 
 
+def _currency_label(analytics: Mapping[str, Any]) -> str:
+    """What currency the bucket's total is IN - the pnl key's own answer.
+
+    Read off `resolve_pnl_key`'s choice rather than guessed from the rows: it
+    is the function that decided which column may be summed, and a label that
+    disagreed with it would be the same mistake in words.
+    """
+    key = str(analytics.get("pnl_key") or "")
+    currencies = [str(name).upper() for name in (analytics.get("currencies") or ())]
+    if not key:
+        return ""
+    if key == "net_pnl":
+        return currencies[0] if len(currencies) == 1 else ""
+    if key.endswith("_cad"):
+        return "CAD"
+    if "usd" in key:
+        return "USD"
+    return ""
+
+
+def _money_text(stats: Mapping[str, Any]) -> str:
+    """The bucket's net, named in its own currency - or WHY there is no net.
+
+    `resolve_pnl_key` refuses a total across unconverted currencies, and that
+    refusal is a fact about the trades, not a failed measurement. "net
+    unmeasured" said the opposite; the reason and the currencies say what
+    happened and what the trader can do about it.
+    """
+    net = stats.get("net_pnl")
+    if net is None:
+        currencies = ", ".join(stats.get("currencies") or ()) or "none recorded"
+        note = str(stats.get("pnl_note") or "no single currency column may be summed")
+        return f"no net total - {note} (currencies: {currencies})"
+    currency = str(stats.get("currency") or "")
+    body = format(float(net), ",.2f")
+    return f"net {body} {currency}".rstrip()
+
+
 def _mine_stats(trades: Sequence[Any], analytics: Mapping[str, Any]) -> dict[str, Any]:
     """The bucket's counts. Integers at this table's own grain, never a rate scaled up."""
     rows = [_raw(trade) for trade in trades]
@@ -518,6 +605,7 @@ def _mine_stats(trades: Sequence[Any], analytics: Mapping[str, Any]) -> dict[str
         "confirmed_tagged": confirmed,
         "provisional_tagged": provisional,
         "total": len(trades),
+        "currency": _currency_label(analytics),
     }
 
 
@@ -566,11 +654,21 @@ def _exposure_text(trades: Sequence[Any]) -> str:
     )
 
 
-def _mine_section(key: str, trades: Sequence[Any], currency_mode: Any) -> ResultsSection:
+def _mine_section(
+    key: str, trades: Sequence[Any], currency_mode: Any, *, n_outside_window: int = 0
+) -> ResultsSection:
     rows = [_raw(trade) for trade in trades]
     analytics = journal_analytics.build_analytics_summary(rows, currency_mode)
     stats = _mine_stats(trades, analytics)
-    groups = (analytics.get("groups") or {}).get("my setups") or []
+    stats["n_outside_window"] = int(n_outside_window)
+    groups = [
+        entry
+        for entry in ((analytics.get("groups") or {}).get("my setups") or [])
+        # The fallback bucket is not a setup the trader named, and a row called
+        # "untagged" under a "Confirmed tag" header is a category error. The
+        # coverage it stood for is in the sentence below, where it belongs.
+        if str(entry.get("label") or "") != UNTAGGED_BUCKET
+    ]
     if stats["confirmed_tagged"]:
         table = tuple(_mine_row(entry) for entry in groups)
         sentence = (
@@ -583,8 +681,7 @@ def _mine_section(key: str, trades: Sequence[Any], currency_mode: Any) -> Result
         sentence = NO_CONFIRMED_TAGS
     bucket_line = (
         f"{stats['total']} trade(s), {stats['wins']}W / {stats['losses']}L / "
-        f"{stats['flats']} flat, net "
-        f"{'unmeasured' if stats['net_pnl'] is None else format(float(stats['net_pnl']), ',.2f')} "
+        f"{stats['flats']} flat, {_money_text(stats)} "
         f"({format(stats['fees'], ',.2f')} in fees and commission), "
         f"{stats['n_with_r']} with planned risk recorded"
     )
@@ -606,6 +703,7 @@ def _mine_section(key: str, trades: Sequence[Any], currency_mode: Any) -> Result
         kind="journal",
         sentence=sentence,
         verdict_line=bucket_line,
+        verdict_short=f"{MINE_TITLES.get(key, key)}: {bucket_line}",
         bands=ResultsBands(stronger=(summary_row,)),
         rows=table,
         studies=(),
@@ -614,17 +712,66 @@ def _mine_section(key: str, trades: Sequence[Any], currency_mode: Any) -> Result
     )
 
 
+def _closed_on(trade: Any) -> str:
+    """The DATE a trade closed on, as the journal stored it. `""` when absent."""
+    return str(getattr(trade, "closed_at", "") or "")[:10]
+
+
+def in_window(trade: Any, start: str, end: str) -> bool:
+    """Is this closed trade inside `[start, end]`? Inclusive at both ends.
+
+    An empty `start`/`end` is "no bound on that side", which is what All
+    history hands in. A trade whose `closed_at` the journal never carried
+    cannot be placed in a BOUNDED window - the honest answer is that it is not
+    known to be inside one, so it is counted out and reported as such rather
+    than folded in and silently changing the total.
+    """
+    if not start and not end:
+        return True
+    stamp = _closed_on(trade)
+    if not stamp:
+        return False
+    if start and stamp < start:
+        return False
+    if end and stamp > end:
+        return False
+    return True
+
+
 def _mine_sections(
-    trades: Sequence[Any], horizon: str, currency_mode: Any
+    trades: Sequence[Any],
+    horizon: str,
+    currency_mode: Any,
+    *,
+    window_start: str = "",
+    window_end: str = "",
 ) -> tuple[ResultsSection, ...]:
+    """The chosen window is APPLIED here, not merely printed above the numbers.
+
+    The first cut of this page labelled the window and filtered nothing, so a
+    trade closed in 2019 was counted under "2026-09-01 to 2026-09-04". A
+    heading is a claim; this is the claim being true.
+    """
     closed = [trade for trade in trades if _is_closed(trade)]
+    outside: dict[str, int] = {"day": 0, "swing": 0, "unknown_timing": 0}
     buckets: dict[str, list[Any]] = {"day": [], "swing": [], "unknown_timing": []}
     for trade in closed:
-        buckets[holding_bucket(trade)].append(trade)
+        bucket = holding_bucket(trade)
+        # Membership by the trade itself, never by equality: two identical
+        # fills are two trades, and `in` over a list would fold them into one.
+        if in_window(trade, window_start, window_end):
+            buckets[bucket].append(trade)
+        else:
+            outside[bucket] += 1
     key = "day" if horizon == "day" else "swing"
     return (
-        _mine_section(key, buckets[key], currency_mode),
-        _mine_section("unknown_timing", buckets["unknown_timing"], currency_mode),
+        _mine_section(key, buckets[key], currency_mode, n_outside_window=outside[key]),
+        _mine_section(
+            "unknown_timing",
+            buckets["unknown_timing"],
+            currency_mode,
+            n_outside_window=outside["unknown_timing"],
+        ),
     )
 
 
@@ -656,6 +803,28 @@ def _window_of(window: Any, as_of: Any) -> tuple[str, str, str, str]:
     )
 
 
+def _source_text(name: str, entry: Mapping[str, Any]) -> str:
+    """One source, stating only what the snapshot actually recorded about it.
+
+    `working_lately` writes `path: ""` and `mtime: null` for every source it
+    computes itself and fills in `rows` - so the honest line names the ROW
+    COUNT, and adds a path or an mtime only when one is there. Nothing here
+    may print `None`: a Python literal on a trader's screen is a bug wearing a
+    value's clothes.
+    """
+    parts: list[str] = []
+    rows = entry.get("rows")
+    if rows is not None:
+        parts.append(f"{rows} row(s)")
+    path = str(entry.get("path") or "").strip()
+    if path:
+        parts.append(f"from {path}")
+    mtime = entry.get("mtime")
+    if mtime not in (None, ""):
+        parts.append(f"@ {mtime}")
+    return f"{name} <- " + (" ".join(parts) if parts else "nothing recorded")
+
+
 def _bot_freshness(snapshot: Mapping[str, Any] | None) -> str:
     snapshot = snapshot or {}
     identity = str(snapshot.get("snapshot_id") or "")
@@ -666,21 +835,50 @@ def _bot_freshness(snapshot: Mapping[str, Any] | None) -> str:
         f"as of {snapshot.get('as_of') or 'an unstated session'}",
         f"built {snapshot.get('built_at') or 'at an unstated time'}",
     ]
-    for name, entry in sorted((snapshot.get("sources") or {}).items()):
-        if not isinstance(entry, Mapping):
-            continue
-        bits.append(f"{name} <- {entry.get('path') or 'an unnamed file'} @ {entry.get('mtime')}")
+    sources = [
+        _source_text(str(name), entry)
+        for name, entry in sorted((snapshot.get("sources") or {}).items())
+        if isinstance(entry, Mapping)
+    ]
+    bits.extend(sources or [NO_SOURCES])
     return "; ".join(bits)
 
 
-def _mine_freshness(trades: Sequence[Any]) -> str:
+def snapshot_window_sentence(snapshot: Mapping[str, Any] | None) -> str:
+    """The window the BOT numbers were actually measured over.
+
+    Each cell carries the `window_sessions` its own aggregator walked, ending
+    at the snapshot's `as_of`. The page states that instead of the window the
+    trader chose, because the trader's choice never reached these numbers -
+    printing "Custom window 2026-01-02 to 2026-02-03" over them would be the
+    page asserting a measurement nobody took.
+    """
+    cells = working_lately.cells_from_payload(snapshot)
+    if not cells:
+        return NO_SNAPSHOT
+    as_of = str((snapshot or {}).get("as_of") or "").strip()
+    sessions = sorted(
+        {int(cell.window_sessions) for cell in cells if cell.window_sessions is not None}
+    )
+    if not sessions:
+        span = "a window it did not record"
+    elif len(sessions) == 1:
+        span = f"{sessions[0]} sessions"
+    else:
+        span = ", ".join(f"{count} sessions" for count in sessions)
+    ending = f" ending {as_of}" if as_of else ""
+    return f"The snapshot owns this window: {span}{ending}"
+
+
+def _mine_freshness(trades: Sequence[Any], *, start: str, end: str, inside: int) -> str:
     closed = [trade for trade in trades if _is_closed(trade)]
     stamps = [str(getattr(trade, "closed_at", "") or "") for trade in closed]
     stamps = [stamp for stamp in stamps if stamp]
     newest = max(stamps) if stamps else ""
+    scope = f"{start} to {end}" if (start or end) else "every session"
     return (
-        f"My trades; {len(closed)} closed trade(s) read; newest closed "
-        f"{newest or 'never - no closed trade carries a time'}"
+        f"My trades; {len(closed)} closed trade(s) read; {inside} inside {scope}; "
+        f"newest closed {newest or 'never - no closed trade carries a time'}"
     )
 
 
@@ -712,11 +910,19 @@ def build_results_view(
     trades = list(journal_trades or ())
     name, start, end, label = _window_of(window, as_of)
     if population == "mine":
-        sections = _mine_sections(trades, horizon, currency_mode)
-        freshness = _mine_freshness(trades)
+        sections = _mine_sections(
+            trades, horizon, currency_mode, window_start=start, window_end=end
+        )
+        inside = sum(int(section.stats.get("total") or 0) for section in sections)
+        freshness = _mine_freshness(trades, start=start, end=end, inside=inside)
+        applies, sentence = True, label
     else:
         sections = _bot_sections(snapshot, horizon)
         freshness = _bot_freshness(snapshot)
+        # The window control does NOT reach the snapshot, so the page says
+        # whose window these numbers were measured over instead of repeating a
+        # choice that changed nothing.
+        applies, sentence = False, snapshot_window_sentence(snapshot)
     return ResultsView(
         population=population,
         horizon=horizon,
@@ -725,5 +931,7 @@ def build_results_view(
         window_start=start,
         window_end=end,
         sections=sections,
-        freshness_line=f"{label}. {freshness}",
+        freshness_line=f"{sentence}. {freshness}",
+        window_applies=applies,
+        window_sentence=sentence,
     )
