@@ -219,6 +219,7 @@ def test_the_tabs_render_their_exports(panel_module, tmp_path):
     _write(tmp_path / STUDY_CSV, DISCOVERY_FIELDS, DISCOVERY_ROWS)
     _write(tmp_path / FRAMEWORK_CSV, FRAMEWORK_FIELDS, FRAMEWORK_ROWS)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         assert panel.control_discovery_model.rowCount() == 2
         assert panel.study_discovery_model.rowCount() == 2
@@ -237,6 +238,7 @@ def test_the_sort_key_is_the_wilson_lower_bound(panel_module, tmp_path, attribut
     _write(tmp_path / CONTROL_CSV, DISCOVERY_FIELDS, DISCOVERY_ROWS)
     _write(tmp_path / STUDY_CSV, DISCOVERY_FIELDS, DISCOVERY_ROWS)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         rows = getattr(panel, attribute)
         assert [row["setup_family"] for row in rows] == [
@@ -273,6 +275,7 @@ def test_each_tab_says_what_its_population_is(panel_module, tmp_path):
     _write(tmp_path / STUDY_CSV, DISCOVERY_FIELDS, DISCOVERY_ROWS)
     _write(tmp_path / FRAMEWORK_CSV, FRAMEWORK_FIELDS, FRAMEWORK_ROWS)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         control = panel.control_discovery_status_label.text().lower()
         assert "reject" in control
@@ -387,6 +390,7 @@ def test_an_absent_export_renders_the_empty_state_sentence(
 ):
     """Never a blank table: a page with no words on it reads as 'no edge'."""
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         expected = getattr(panel_module, sentence_attribute)
         assert getattr(panel, label_attribute).text() == expected
@@ -398,6 +402,7 @@ def test_an_absent_export_renders_the_empty_state_sentence(
 def test_the_experimental_label_is_in_the_framework_row(panel_module, tmp_path):
     _write(tmp_path / FRAMEWORK_CSV, FRAMEWORK_FIELDS, FRAMEWORK_ROWS)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         keys = {key for key, _label in panel_module.EXIT_FRAMEWORK_COLUMNS}
         assert "experimental" in keys
@@ -465,3 +470,17 @@ def test_the_new_tables_carry_the_ten_row_floor(panel_module, tmp_path):
             assert table.minimumHeight() >= panel_module.TABLE_TEN_ROWS_PX
     finally:
         panel.deleteLater()
+
+
+def _load_the_tracker(panel) -> None:
+    """G7 trigger: the Setup Tracker's read is no longer a side effect of
+    building the widget, so the test asks for it.
+
+    `tests.conftest.refresh_setup_tracker` calls the panel's own `refresh()` -
+    the slot the Refresh button calls - and, once G7.2 moves the twelve export
+    reads onto a worker, waits for the render that lands on the Qt thread. It is
+    a trigger and nothing else: no assertion moved with it.
+    """
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)

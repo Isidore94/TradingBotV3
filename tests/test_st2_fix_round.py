@@ -188,6 +188,7 @@ def test_the_plain_english_block_reads_the_same_verdict_as_the_banner(
         writer.writerows(rows)
     monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", csv_path)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         banner = panel_module._best_now_banner_html(panel)
         summary = panel_module._summary_html(panel)
@@ -522,6 +523,7 @@ def test_a_current_two_session_export_renders_a_leader_and_never_says_discovery(
         panel_module, "RECENT_SETUP_TYPE_STATS_FILE", tmp_path / "absent_recent.csv"
     )
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         html = panel_module._best_now_banner_html(panel)
     finally:
@@ -564,6 +566,7 @@ def test_the_panel_carries_its_last_fresh_verdict_into_a_stale_refresh(
 
     monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", fresh_path)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         first = panel_module._best_now_banner_html(panel)
         assert "post_earnings_52w_break" in first
@@ -572,7 +575,7 @@ def test_the_panel_carries_its_last_fresh_verdict_into_a_stale_refresh(
         # The tracker stops writing: the same family, five sessions stale.
         panel_module.clear_setup_tracker_csv_cache()
         monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", stale_path)
-        panel.refresh()
+        _load_the_tracker(panel)
         second = panel_module._best_now_banner_html(panel)
     finally:
         panel.deleteLater()
@@ -614,13 +617,14 @@ def test_the_card_and_the_banner_agree_on_the_stale_path_too(
 
     monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", fresh_path)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         first = panel_module._summary_html(panel)
         assert "post_earnings_52w_break" in first
 
         panel_module.clear_setup_tracker_csv_cache()
         monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", stale_path)
-        panel.refresh()
+        _load_the_tracker(panel)
         summary = panel_module._summary_html(panel)
     finally:
         panel.deleteLater()
@@ -743,6 +747,7 @@ def test_the_banner_states_the_freshness_rule_in_words(panel_module, tmp_path, m
         writer.writerows(rows)
     monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", csv_path)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         html = panel_module._best_now_banner_html(panel)
     finally:
@@ -843,6 +848,7 @@ def test_a_short_term_no_clear_leader_is_rendered_and_not_called_empty(
         panel_module, "RECENT_SETUP_TYPE_STATS_FILE", tmp_path / "absent_recent.csv"
     )
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         html = panel_module._best_now_banner_html(panel)
         summary = panel_module._summary_html(panel)
@@ -897,6 +903,7 @@ def test_an_old_discovery_row_is_called_old_and_not_thin(panel_module, tmp_path,
         writer.writerows(rows)
     monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", csv_path)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         html = panel_module._best_now_banner_html(panel)
     finally:
@@ -924,3 +931,17 @@ def test_a_flat_reaches_the_headline_record_and_stays_out_of_n(panel_module):
     assert record.as_row()["flats"] == 5
     # The default is unchanged for every caller that does not count flats.
     assert headline_from_counts("x", wins=6, losses=4).flats == 0
+
+
+def _load_the_tracker(panel) -> None:
+    """G7 trigger: the Setup Tracker's read is no longer a side effect of
+    building the widget, so the test asks for it.
+
+    `tests.conftest.refresh_setup_tracker` calls the panel's own `refresh()` -
+    the slot the Refresh button calls - and, once G7.2 moves the twelve export
+    reads onto a worker, waits for the render that lands on the Qt thread. It is
+    a trigger and nothing else: no assertion moved with it.
+    """
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)

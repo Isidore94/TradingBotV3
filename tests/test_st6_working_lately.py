@@ -852,6 +852,7 @@ def test_every_surface_prints_the_same_snapshot_stamp(tmp_path):
         strip.deleteLater()
 
     panel = setup_tracker_panel.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         panel.set_working_lately_snapshot(payload)
         html = setup_tracker_panel._best_now_banner_html(panel)
@@ -1023,3 +1024,17 @@ def test_the_switch_reorders_three_lists_and_shows_exactly_the_same_rows(tmp_pat
     assert sorted(off_table) == sorted(on_table)
 
     _set_switch(False)
+
+
+def _load_the_tracker(panel) -> None:
+    """G7 trigger: the Setup Tracker's read is no longer a side effect of
+    building the widget, so the test asks for it.
+
+    `tests.conftest.refresh_setup_tracker` calls the panel's own `refresh()` -
+    the slot the Refresh button calls - and, once G7.2 moves the twelve export
+    reads onto a worker, waits for the render that lands on the Qt thread. It is
+    a trigger and nothing else: no assertion moved with it.
+    """
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)

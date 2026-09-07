@@ -516,6 +516,7 @@ def test_a_high_r_study_never_becomes_the_leader_over_a_supported_live_family(
     _write_csv(csv_path, RECENT_CSV_FIELDS, [study, live])
     monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", csv_path)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         html = panel_module._best_now_banner_html(panel)
     finally:
@@ -550,6 +551,7 @@ def test_the_banner_names_the_same_family_the_table_ranks_first_by_the_bound(
     _write_csv(csv_path, RECENT_CSV_FIELDS, [fat, tight])
     monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", csv_path)
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         ordered = [row["setup_family"] for row in panel.recent_type_rows]
         html = panel_module._best_now_banner_html(panel)
@@ -1010,3 +1012,17 @@ def test_the_recent_rows_no_longer_reconstruct_a_count_from_a_stored_rate():
     # to say what it must never be handed.
     doc = swing_headline.headline_from_rate.__doc__ or ""
     assert "weighted" in doc.lower(), doc
+
+
+def _load_the_tracker(panel) -> None:
+    """G7 trigger: the Setup Tracker's read is no longer a side effect of
+    building the widget, so the test asks for it.
+
+    `tests.conftest.refresh_setup_tracker` calls the panel's own `refresh()` -
+    the slot the Refresh button calls - and, once G7.2 moves the twelve export
+    reads onto a worker, waits for the render that lands on the Qt thread. It is
+    a trigger and nothing else: no assertion moved with it.
+    """
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)

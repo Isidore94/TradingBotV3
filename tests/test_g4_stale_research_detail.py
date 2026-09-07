@@ -188,6 +188,11 @@ def tracker(qapp, monkeypatch):
     )
 
     made = panel_module.DaytradeTrackerPanel()
+    # G7.1: the constructor no longer reads on the Qt thread - the first show
+    # does - so this fixture asks for the read the page under test needs. The
+    # trigger only; every assertion below is unchanged.
+    made.reload_from_disk()
+    made.start_decisions_refresh(rebuild=False)
     harness = _Panel(made, qapp, rows_box)
     # `start_decisions_refresh` is single-flight; the button coming back is
     # exactly "the construction read has landed and nothing is in flight".

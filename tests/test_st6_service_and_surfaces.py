@@ -418,6 +418,7 @@ def test_the_tracker_banner_labels_its_own_read_and_drops_the_label_with_a_snaps
 
     payload = _snapshot_payload(tmp_path)
     panel = setup_tracker_panel.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         fallback = setup_tracker_panel._best_now_banner_html(panel)
         assert "panel read" in fallback
@@ -451,6 +452,7 @@ def test_the_summary_card_and_the_banner_render_one_verdict_not_two(tmp_path):
     assert shared.state == "leader" and shared.leader is not None
 
     panel = setup_tracker_panel.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         panel.set_working_lately_snapshot(payload)
         # ONE computation per page, and the snapshot IS it.
@@ -494,3 +496,17 @@ def test_the_persisted_snapshot_is_small_enough_to_read_by_eye(tmp_path):
     }
     # An ABSENT source is None, never a zero: a question that was not asked.
     assert payload["sources"]["swing_favorable"]["rows"] is None
+
+
+def _load_the_tracker(panel) -> None:
+    """G7 trigger: the Setup Tracker's read is no longer a side effect of
+    building the widget, so the test asks for it.
+
+    `tests.conftest.refresh_setup_tracker` calls the panel's own `refresh()` -
+    the slot the Refresh button calls - and, once G7.2 moves the twelve export
+    reads onto a worker, waits for the render that lands on the Qt thread. It is
+    a trigger and nothing else: no assertion moved with it.
+    """
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)

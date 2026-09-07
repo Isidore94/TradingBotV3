@@ -41,6 +41,7 @@ import shutil
 import socket
 import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -583,6 +584,45 @@ def load_fixture_contract(fixture: str | Path) -> FixtureContract:
         raise  # pragma: no cover - _fail always raises
     contract = validate_fixture_contract(payload, name)
     return FixtureContract(name=name, path=path, data=contract.data)
+
+
+# ---------------------------------------------------------------------------
+# The Setup Tracker's read, as a TRIGGER a test can call (packet G7, 2026-09-07)
+# ---------------------------------------------------------------------------
+def refresh_setup_tracker(panel, *, timeout_s: float = 20.0) -> None:
+    """Ask a `SetupTrackerPanel` for its rows, and wait until it has them.
+
+    Two things move under G7 and both are trigger-only from a test's point of
+    view: the twelve export reads leave the constructor for the first `show()`,
+    and they leave the Qt thread for a worker. A test that wants ROWS therefore
+    has to say so and then wait, instead of relying on the side effect of
+    building the widget.
+
+    This is deliberately tolerant of both shapes, so the same call is correct
+    before and after the packet lands: a panel whose `refresh()` is synchronous
+    has nothing to wait for and returns as soon as it is called; a panel that
+    announces its render with `refreshFinished` is awaited until it does, with a
+    deadline, never forever.
+    """
+    signal = getattr(panel, "refreshFinished", None)
+    if signal is None or not hasattr(signal, "connect"):
+        panel.refresh()
+        return
+
+    from PySide6.QtWidgets import QApplication
+
+    application = QApplication.instance()
+    landed: list[bool] = []
+    signal.connect(lambda *_args: landed.append(True))
+    panel.refresh()
+    deadline = time.monotonic() + float(timeout_s)
+    while not landed and time.monotonic() < deadline:
+        if application is not None:
+            application.processEvents()
+        time.sleep(0.005)
+    if application is not None:
+        application.processEvents()
+    assert landed, "the Setup Tracker refresh never finished"
 
 
 # ---------------------------------------------------------------------------

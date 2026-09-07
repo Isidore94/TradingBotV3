@@ -214,9 +214,24 @@ def test_the_panel_renders_the_sentence_above_the_table(panel_module, tmp_path):
         ],
     )
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         assert panel.band_variant_status_label.text() == (
             f"Measured 0 of 15 setups (15 unmeasured: {PLACEHOLDER})."
         )
     finally:
         panel.deleteLater()
+
+
+def _load_the_tracker(panel) -> None:
+    """G7 trigger: the Setup Tracker's read is no longer a side effect of
+    building the widget, so the test asks for it.
+
+    `tests.conftest.refresh_setup_tracker` calls the panel's own `refresh()` -
+    the slot the Refresh button calls - and, once G7.2 moves the twelve export
+    reads onto a worker, waits for the render that lands on the Qt thread. It is
+    a trigger and nothing else: no assertion moved with it.
+    """
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)

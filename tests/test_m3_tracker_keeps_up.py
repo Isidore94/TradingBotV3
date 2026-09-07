@@ -1010,6 +1010,7 @@ def test_the_panel_renders_the_two_clocks_from_the_exports(panel_module, tmp_pat
     panel_module.clear_setup_tracker_csv_cache()
 
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         text = panel.status_label.text()
         assert "Tracker as of 2026-09-05T13:02:11 (close_slot)" in text
@@ -1358,3 +1359,17 @@ def test_the_scenario_stats_builder_takes_the_same_opt_in_flag():
     # The count is carried either way.
     for rows in (scoring, display):
         assert sum(int(row["n_expired_unmeasured"]) for row in rows) == 4
+
+
+def _load_the_tracker(panel) -> None:
+    """G7 trigger: the Setup Tracker's read is no longer a side effect of
+    building the widget, so the test asks for it.
+
+    `tests.conftest.refresh_setup_tracker` calls the panel's own `refresh()` -
+    the slot the Refresh button calls - and, once G7.2 moves the twelve export
+    reads onto a worker, waits for the render that lands on the Qt thread. It is
+    a trigger and nothing else: no assertion moved with it.
+    """
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)

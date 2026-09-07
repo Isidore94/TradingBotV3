@@ -176,6 +176,7 @@ def test_the_banner_prints_the_floor_sentence_and_never_the_word_leader_for_it(
     monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", csv_path)
 
     panel = panel_module.SetupTrackerPanel()
+    _load_the_tracker(panel)
     try:
         html = panel_module._best_now_banner_html(panel)
     finally:
@@ -336,3 +337,17 @@ def test_the_two_session_block_can_never_be_crowned_because_it_has_no_session():
     assert verdict.coverage["no_session_on_row"] == 1
     assert verdict.coverage["discovery_reason"] == "no_session"
     assert verdict.coverage["discovery_leader"]["setup_family"] == "fast_follow"
+
+
+def _load_the_tracker(panel) -> None:
+    """G7 trigger: the Setup Tracker's read is no longer a side effect of
+    building the widget, so the test asks for it.
+
+    `tests.conftest.refresh_setup_tracker` calls the panel's own `refresh()` -
+    the slot the Refresh button calls - and, once G7.2 moves the twelve export
+    reads onto a worker, waits for the render that lands on the Qt thread. It is
+    a trigger and nothing else: no assertion moved with it.
+    """
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)

@@ -543,8 +543,13 @@ class _Tracker:
         forget-everything helper runs first. Nothing else about the read path
         is bypassed.
         """
+        from tests.conftest import refresh_setup_tracker
+
         self.module.clear_setup_tracker_csv_cache()
-        self.panel.refresh()
+        # G7 moves the twelve export reads onto a worker, so the trigger waits
+        # for the render the panel announces. Before that packet lands this is
+        # `panel.refresh()` and nothing else.
+        refresh_setup_tracker(self.panel)
         self.app.processEvents()
         self.settle(self._attribute_read_finished)
 
@@ -655,8 +660,12 @@ def tracker(qapp, monkeypatch, tmp_path):
 
     made = panel_module.SetupTrackerPanel()
     harness = _Tracker(made, qapp, panel_module, tmp_path)
+    # G7.1: the constructor reads nothing and the first SHOW is what loads the
+    # page, so the read this fixture waited on is asked for explicitly. The
+    # harness's own refresh IS that trigger and settles on the same read.
+    harness.refresh()
     assert harness.settle(harness._attribute_read_finished), (
-        "the construction read never finished"
+        "the first read never finished"
     )
     try:
         yield harness

@@ -483,8 +483,12 @@ def _tracker_panel(app, panel_module, tmp_path, monkeypatch, *, populated: bool)
     panel.show()
     app.processEvents()
     # The Refresh button's own path, with the desk's geometry already applied -
-    # the rule measures what is on screen.
-    panel.refresh()
+    # the rule measures what is on screen. G7 moves the read to a worker, so the
+    # trigger goes through the shared helper that waits for the rows to land;
+    # the path driven is the same one the button drives.
+    from tests.conftest import refresh_setup_tracker
+
+    refresh_setup_tracker(panel)
     # The attribute leaderboard arrives through the worker's slot; calling the
     # slot directly is the same code the signal reaches, without racing a thread.
     panel._on_attributes_loaded(

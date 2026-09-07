@@ -195,8 +195,14 @@ def panel(qapp_guard):
     in flight".
     """
     made = panel_module.DaytradeTrackerPanel()
+    # G7.1: the constructor no longer reads on the Qt thread - the first show
+    # does - so the scoreboard read this fixture waits on is asked for. Single
+    # flight, so while the construction read is still in flight this is a no-op
+    # and the settle below is unchanged either way.
+    made.reload_from_disk()
+    made.start_decisions_refresh(rebuild=False)
     assert _settle(made, lambda: made.decisions_button.isEnabled()), (
-        "the construction read never finished"
+        "the decisions read never finished"
     )
     yield made
     made.shutdown()
