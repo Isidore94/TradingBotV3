@@ -340,7 +340,7 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
-## Phase 0.22 — Desk reshape and tracker evidence repairs (2026-09-06) — AUTHORIZED, in build
+## Phase 0.22 — Desk reshape and tracker evidence repairs (2026-09-06) — BUILT 2026-09-07 (G0–G7 and ST1–ST7 on `main`); live gates #75–#88 owed at the next desk restart and Tuesday's close
 
 Trader, 2026-09-06: *"lets use your recommendations for all 4 decsions. then go ahead and start the
 build order"* over the lead's Desk Reshape Plan (an artifact, per the 2026-09-04 rule; its inputs
