@@ -491,24 +491,58 @@ class SetupTrackerPanel(QFrame):
         self.exit_framework_status_label.setWordWrap(True)
 
         self.tabs = QTabWidget()
-        self.current_table, self.current_model = self._make_table(CURRENT_PICK_COLUMNS)
-        self.setup_type_table, self.setup_type_model = self._make_table(SETUP_TYPE_COLUMNS)
-        self.recent_type_table, self.recent_type_model = self._make_table(RECENT_TYPE_COLUMNS)
-        self.short_term_table, self.short_term_model = self._make_table(SHORT_TERM_COLUMNS)
-        self.playbook_table, self.playbook_model = self._make_table(PLAYBOOK_COLUMNS)
-        self.scan_factor_table, self.scan_factor_model = self._make_table(SCAN_FACTOR_COLUMNS)
-        self.tier_performance_table, self.tier_performance_model = self._make_table(TIER_PERFORMANCE_COLUMNS)
-        self.catch_rate_table, self.catch_rate_model = self._make_table(CATCH_RATE_COLUMNS)
-        self.human_pick_table, self.human_pick_model = self._make_table(HUMAN_PICK_COLUMNS)
-        self.band_variant_table, self.band_variant_model = self._make_table(BAND_VARIANT_COLUMNS)
+        # G2b.2: every tab NAMES the column that takes the slack and the
+        # identifiers that elide, by key. See `_make_table`.
+        self.current_table, self.current_model = self._make_table(
+            CURRENT_PICK_COLUMNS, text_key="scan_factor_matches"
+        )
+        self.setup_type_table, self.setup_type_model = self._make_table(
+            SETUP_TYPE_COLUMNS, text_key="sample_setups"
+        )
+        self.recent_type_table, self.recent_type_model = self._make_table(
+            RECENT_TYPE_COLUMNS, text_key="sample_setups"
+        )
+        self.short_term_table, self.short_term_model = self._make_table(
+            SHORT_TERM_COLUMNS, text_key="sample_setups"
+        )
+        # Exit Plan is what a playbook row is FOR; the samples beside it are
+        # longer, so the measured rule gave them the width Exit Plan needed.
+        self.playbook_table, self.playbook_model = self._make_table(
+            PLAYBOOK_COLUMNS, text_key="profit_take_summary", elide_keys=("sample_setups",)
+        )
+        self.scan_factor_table, self.scan_factor_model = self._make_table(
+            SCAN_FACTOR_COLUMNS, text_key="sample_observations"
+        )
+        self.tier_performance_table, self.tier_performance_model = self._make_table(
+            TIER_PERFORMANCE_COLUMNS, text_key="sample_observations"
+        )
+        # The GUI review's finding verbatim: the CAUGHT examples ate the width
+        # and the MISSED ones - the point of the tab - clipped.
+        self.catch_rate_table, self.catch_rate_model = self._make_table(
+            CATCH_RATE_COLUMNS,
+            text_key="sample_missed_winners",
+            elide_keys=("sample_caught_winners",),
+        )
+        # One identifier and ten measurements, and no free-text column at all,
+        # so the slack stays EMPTY rather than going to `cohort` or `Delta %`.
+        self.human_pick_table, self.human_pick_model = self._make_table(
+            HUMAN_PICK_COLUMNS, elide_keys=("cohort",), stretch_last=False
+        )
+        self.band_variant_table, self.band_variant_model = self._make_table(
+            BAND_VARIANT_COLUMNS, text_key="exit_template_id"
+        )
+        # `Family` takes the slack on both discovery tabs, so `Win % (low)`
+        # never takes it - which is what an EMPTY tab did, measuring headers.
         self.control_discovery_table, self.control_discovery_model = self._make_table(
-            DISCOVERY_COLUMNS
+            DISCOVERY_COLUMNS, text_key="setup_family", elide_keys=("cohort",)
         )
         self.study_discovery_table, self.study_discovery_model = self._make_table(
-            DISCOVERY_COLUMNS
+            DISCOVERY_COLUMNS, text_key="setup_family", elide_keys=("cohort",)
         )
         self.exit_framework_table, self.exit_framework_model = self._make_table(
-            EXIT_FRAMEWORK_COLUMNS
+            EXIT_FRAMEWORK_COLUMNS,
+            text_key="framework_family",
+            elide_keys=("exit_template_id",),
         )
         for table in (
             self.control_discovery_table,
@@ -517,7 +551,9 @@ class SetupTrackerPanel(QFrame):
         ):
             table.setMinimumHeight(TABLE_TEN_ROWS_PX)
         self.attribute_table, self.attribute_model = self._make_table(
-            ATTRIBUTE_LEADERBOARD_COLUMNS
+            ATTRIBUTE_LEADERBOARD_COLUMNS,
+            text_key="sample_setups",
+            elide_keys=("value_label",),
         )
 
         self.tabs.addTab(self.current_table, "Current Picks")
@@ -711,7 +747,26 @@ class SetupTrackerPanel(QFrame):
     def _make_table(
         self,
         columns: tuple[tuple[str, str], ...],
+        *,
+        text_key: str | None = None,
+        elide_keys: tuple[str, ...] = (),
+        stretch_last: bool = True,
     ) -> tuple[DataTable, TrackerTableModel]:
+        """Build one tab's table and NAME the column that takes the slack.
+
+        Packet G2b.2. Every table here ran `apply_width_rule`'s measured path,
+        which is content-dependent and moves: on a populated Catch Rate the
+        caught samples outgrew the missed ones and ate the width the Missed
+        Samples column exists to show, and on an EMPTY Controls tab the widest
+        thing on screen is a HEADER, so `Win % (low)` stretched while `Family`
+        sat at its floor. Naming the column fixes the answer to what the tab is
+        for, populated or empty.
+
+        `text_key` and `elide_keys` are KEYS, resolved through `_column_index`
+        against this table's own tuple. A literal index would be a defect
+        waiting for the next column insert - ST2 and M5 each added columns to
+        these tuples this month.
+        """
         numeric_keys = {key for key, _label in columns if _looks_numeric_key(key)}
         model = TrackerTableModel(
             columns,
@@ -725,6 +780,11 @@ class SetupTrackerPanel(QFrame):
         table = DataTable()
         table.setModel(proxy)
         table.setShowGrid(False)
+        table.set_width_rule(
+            text_columns=None if text_key is None else (_column_index(columns, text_key),),
+            elide_columns=tuple(_column_index(columns, key) for key in elide_keys),
+            stretch_last=stretch_last,
+        )
         return table, model
 
     def _make_explained_tab(
@@ -2223,6 +2283,19 @@ def _latest_mtime_text(paths: list[Path]) -> str:
 
 def _tier_rank(value: Any) -> int:
     return {"S": 0, "A": 1, "B": 2, "C": 3}.get(str(value or "").upper(), 9)
+
+
+def _column_index(columns: tuple[tuple[str, str], ...], key: str) -> int:
+    """Where a column sits in its own tuple, BY KEY (packet G2b.2).
+
+    Raises rather than guessing: a width rule that silently pointed at the
+    wrong column would be invisible until the trader read a clipped table, and
+    a construction-time `KeyError` names the typo on the spot.
+    """
+    for index, (column_key, _label) in enumerate(columns):
+        if column_key == key:
+            return index
+    raise KeyError(f"{key!r} is not a column of this table")
 
 
 def _looks_numeric_key(key: str) -> bool:

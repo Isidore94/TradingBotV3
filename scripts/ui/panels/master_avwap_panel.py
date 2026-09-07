@@ -12,7 +12,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -50,7 +50,13 @@ from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTa
 from ui.services.data_feed import copy_symbols, load_latest_setup_rows_with_meta
 from ui.services.scan_service import ScanService
 from ui.timer_utils import SignalCoalescer, start_staggered
-from ui.widgets.data_table import DataTable
+from ui.widgets.data_table import DataTable, MiddleElideDelegate, elide_middle
+
+# `_PAD` is the horizontal padding `SetupTableDelegate._text` draws inside, and
+# `_KeyLevelElideDelegate` below has to elide against exactly the rectangle that
+# helper will use - reading the constant keeps the two in step, where a second
+# copy of `10` would drift the first time the cell padding changed.
+from ui.widgets.setup_delegate import _PAD as SETUP_CELL_PAD
 from ui.widgets.setup_delegate import SetupTableDelegate
 from ui.widgets.empty_state import EmptyState
 from ui.widgets.setup_detail_view import SetupDetailView
@@ -163,6 +169,74 @@ COMPACT_COLUMN_WIDTHS = {
 }
 
 
+def _column_index(key: str) -> int:
+    """Where a setups column sits, BY KEY (packet G2b.3).
+
+    `SetupTableModel.COLUMNS` has grown three times this year and every literal
+    index in this file is a defect waiting for the fourth. Raises rather than
+    guessing.
+    """
+    for index, (column_key, _label) in enumerate(SetupTableModel.COLUMNS):
+        if column_key == key:
+            return index
+    raise KeyError(f"{key!r} is not a SetupTableModel column")
+
+
+class _ElidedDisplay:
+    """One `QModelIndex`, with its DisplayRole already shortened.
+
+    `SetupTableDelegate._text` reaches an index only through `data(role)`, so
+    this is the whole surface it needs. Anything else it ever asks for raises
+    on the spot rather than painting the wrong thing quietly - and the offscreen
+    Qt tests paint, so it would raise in the suite.
+    """
+
+    __slots__ = ("_index", "_display")
+
+    def __init__(self, index, display: str) -> None:
+        self._index = index
+        self._display = display
+
+    def data(self, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole:
+            return self._display
+        return self._index.data(role)
+
+
+class _KeyLevelElideDelegate(MiddleElideDelegate, SetupTableDelegate):
+    """`Key Level / Entry` elides in the MIDDLE and still paints as a setups row.
+
+    Packet G2b.3. `apply_width_rule` gives an elide column its own delegate, and
+    a per-column delegate REPLACES the view's delegate for that column - so a
+    plain `MiddleElideDelegate` here would leave `key_level` painted by Qt's
+    default while the other fifteen columns kept `SetupTableDelegate`'s
+    alternating background, favorite tint, selection fill and hairline
+    separator. One column drawn differently from its own row is worse than the
+    clipping this packet is fixing.
+
+    Inheriting both keeps every pixel `SetupTableDelegate` drew (its `paint` and
+    `sizeHint` win the MRO) and adds what `MiddleElideDelegate` exists for: the
+    full value as the tooltip, from `helpEvent`.
+
+    The elision itself needs the one override below. `SetupTableDelegate._text`
+    hard-codes `ElideRight`, which is the end elision §12 forbids for an
+    identifier - a key level's tail is its anchor and retest date, the part that
+    tells two levels on one symbol apart.
+    """
+
+    def _text(self, painter, option, rect, index, key, is_study, selected) -> None:
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if text:
+            # Elide against exactly the rectangle the base helper will draw
+            # into, so its own ElideRight has nothing left to cut. `key_level`
+            # is never the bold `symbol` column, so `option.font` is the font
+            # the base will measure with.
+            width = rect.adjusted(SETUP_CELL_PAD, 0, -SETUP_CELL_PAD, 0).width()
+            shortened = elide_middle(text, QFontMetrics(QFont(option.font)), width)
+            index = _ElidedDisplay(index, shortened)
+        super()._text(painter, option, rect, index, key, is_study, selected)
+
+
 def _row_context(row: SetupRow) -> str:
     """One-line setup-row summary stored with a verdict for later AI review."""
     parts = [f"bucket={row.bucket_label or row.bucket}"]
@@ -247,6 +321,10 @@ class MasterAvwapPanel(QWidget):
         self.table.setModel(self.proxy)
         self.delegate = SetupTableDelegate(self.table)
         self.table.setItemDelegate(self.delegate)
+        # G2b.3. Installed on `key_level` by the FULL profile only, and taken
+        # off again when the compact profile comes back - compact pins that
+        # column at 116px and its elision is not this packet's business.
+        self._key_level_delegate = _KeyLevelElideDelegate(self.table)
         self.table.setShowGrid(False)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
         self._bounce_service = None
@@ -535,11 +613,14 @@ class MasterAvwapPanel(QWidget):
             return
         self._column_profile = profile
         header = self.table.horizontalHeader()
+        key_level_column = _column_index("key_level")
         for column, (key, _label) in enumerate(self.model.COLUMNS):
             self.table.setColumnHidden(column, False)
             if profile == "compact" and key in COMPACT_HIDDEN_COLUMNS:
                 self.table.setColumnHidden(column, True)
         if profile == "compact":
+            # The compact profile is untouched by G2b, elision included.
+            self.table.setItemDelegateForColumn(key_level_column, None)
             header.setStretchLastSection(False)
             for column, (key, _label) in enumerate(self.model.COLUMNS):
                 width = COMPACT_COLUMN_WIDTHS.get(key)
@@ -551,7 +632,17 @@ class MasterAvwapPanel(QWidget):
             self._fit_compact_columns()
             header.setStretchLastSection(True)
         else:
+            # G2b.3: at full width the slack belongs to `Setup Tags`, which is
+            # the column with something to say and room to say it. Measured, it
+            # went to `Key Level / Entry` - the longest cell on the table - so
+            # the tags stayed pinned at their measured width and symbol, side
+            # and bucket were squeezed beside a level nobody needed 900px of.
+            self.table.set_width_rule(text_columns=(_column_index("setup_tags"),))
             self.table.fit_columns()
+            # The elision is installed HERE rather than through the rule's own
+            # `elide_columns`, which would put a plain `MiddleElideDelegate` on
+            # the column and drop `SetupTableDelegate`'s painting with it.
+            self.table.setItemDelegateForColumn(key_level_column, self._key_level_delegate)
             header.resizeSection(0, 36)
             header.resizeSection(1, 36)
 

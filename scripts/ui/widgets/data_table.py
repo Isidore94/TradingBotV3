@@ -204,6 +204,7 @@ def apply_width_rule(
     *,
     text_columns=None,
     elide_columns=(),
+    stretch_last: bool = True,
     min_width: int = MIN_COLUMN_WIDTH,
     max_width: int = MAX_COLUMN_WIDTH,
     sample_rows: int = CLASSIFY_SAMPLE_ROWS,
@@ -213,6 +214,18 @@ def apply_width_rule(
     `text_columns` names the columns allowed to take the slack; omit it and the
     widest measured text column is chosen. `elide_columns` gets the middle
     elision - identifier columns, whose tail carries the identity.
+
+    `stretch_last=False` is for the one shape §12's two answers both get wrong:
+    a table of one IDENTIFIER and a row of measurements, which is Setup Tracker
+    ▸ Human Picks. Measured, `cohort` is the only text column, so it takes the
+    slack and pushes the ten measurements off the right of a 4K window (packet
+    G2b, the GUI review's complaint); stretching the last section instead grows
+    `Delta %` for no reason. With it False and no text column named, NOTHING
+    stretches - every column keeps its measured width inside the floor and
+    ceiling and the remaining width simply stays empty. It suppresses the
+    MEASURED pick as well as the last section: leaving the auto-classify path on
+    would hand `cohort` the slack by the back door. A NAMED text column still
+    stretches, because naming one is saying where the slack goes.
 
     Safe on an empty table and safe to call repeatedly: it is the same call
     `fit_columns` already was.
@@ -229,6 +242,8 @@ def apply_width_rule(
         named = [int(column) for column in text_columns if 0 <= int(column) < columns]
     if named:
         stretching = set(named)
+    elif not stretch_last:
+        stretching = set()
     else:
         widest = _widest_text_column(classify_columns(view, sample_rows), widths)
         stretching = set() if widest is None else {widest}
@@ -240,10 +255,11 @@ def apply_width_rule(
         header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
         header.resizeSection(column, max(min_width, min(widths[column], max_width)))
 
-    # The last section stretches only when nothing else can. Qt's
+    # The last section stretches only when nothing else can, and only when the
+    # caller has not said the slack should stay empty. Qt's
     # `stretchLastSection` alone is what pinned every other column narrow while
     # the right-hand third of a 4K window sat empty.
-    if not stretching:
+    if not stretching and stretch_last:
         header.setStretchLastSection(True)
 
     for column in elide_columns:
@@ -316,20 +332,25 @@ class DataTable(QTableView):
         # their tail. Empty means "measure it" - see `apply_width_rule`.
         self._text_columns: list[int] | None = None
         self._elide_columns: tuple[int, ...] = ()
+        self._stretch_last: bool = True
 
     def add_row_action(self, label: str, callback) -> None:
         self._row_actions.append((label, callback))
 
-    def set_width_rule(self, *, text_columns=None, elide_columns=()) -> None:
+    def set_width_rule(
+        self, *, text_columns=None, elide_columns=(), stretch_last: bool = True
+    ) -> None:
         """Declare the §12 roles for this table. Applied by `fit_columns`."""
         self._text_columns = None if text_columns is None else [int(c) for c in text_columns]
         self._elide_columns = tuple(int(c) for c in elide_columns)
+        self._stretch_last = bool(stretch_last)
 
     def fit_columns(self) -> None:
         apply_width_rule(
             self,
             text_columns=self._text_columns,
             elide_columns=self._elide_columns,
+            stretch_last=self._stretch_last,
         )
 
     def copy_selection(self) -> None:
