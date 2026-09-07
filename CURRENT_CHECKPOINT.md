@@ -19,10 +19,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-06 evening: Phase 0.22's first LAYOUT packet, G1, is BUILT and pushed to `claude/g1-weekend-focus-review` (UNMERGED)** - Weekend Prep > Focus Review now stacks its nine tables behind a nine-button view selector with a read-only detail pane beside them. Nine 260 px ten-row floors is 2,340 px of minimum height in the ~2,050 px a 2160 screen gives the page, so `WeekendPrepPanel` could not be shown at 2160 at all (measured: page 2,824 px, panel 2,934 px) - the trader's "Weekend Prep overlap" was arithmetic. Layout lane only: no number, read, sort key or write moved, the read is still ONE pass over all nine tables, the verdict card is still uncapped. Nine tests proven RED first (the tester's seven plus two the builder added); see the 2026-09-06 G1 entry and gate #80. Before that, **2026-09-06 (Sunday, 06:10-18:30 PT): the Setup Tracker review repairs - packets ST1-ST5 MERGED at `22cc84d3`**, from the trader's *"Please repair the Setup Tracker findings below, then finish the existing Working-lately experience"*: ST1 each outcome names its meaning (`outcome_kind` = favorable direction at a scan-row offset, NOT a stop-rule win; `swing_evidence.read_eligible_rows` the one reader; exact-session v2 rows in their own shadow file); ST2 integer counts at every table's grain and ONE leader (`working_lately.select_leader`, the Setup Types tab's own win rate - V3 item 1 complete); ST3 a versioned execution convention and prior-session level knowledge (default byte-identical; the comparison on 794 setups is evidence, not a change); ST4 the first-actionable selection policy prepared beside today's (default byte-identical; a cache-bypass that would have zeroed the live score deltas caught in review); ST5 personal evidence by status with uncertainty as a label, the 10-SESSION window, counts by trade, no best setup without confirmed tags. Every branch tester-first, built, and reviewed by reproduction (ST1 GO after two rounds, ST2 GO after three, ST3 GO, ST4 GO after one, ST5 GO after one). **ST6 (the Working-lately strip, the priority switch, the AWAY Recap) is BUILT on `claude/st6-working-lately` and NOT merged**: its reviewer found four blockers (switch OFF must restore arrival order, the row cap before the priority view, the day-trade bound on `held_run_score` itself, the favorable kind's clock is its measured session) and the fix round died on the session limit at 17:30 PT with the builder mid-way. The same morning the other session recorded the Q4 spot-audit and decided the three scoring questions (its 2026-09-06 entry), and a third session opened the Phase 0.22 layout lane. |
+| Latest work | **2026-09-07: G1's fix round is done and pushed** - the reviewer's one blocker was that the detail pane went STALE after a refresh (wired to `itemSelectionChanged` only, so a render that KEPT the row count left the row selected, never re-emitted, and the pane described the PREVIOUS read under the same row number). Every render pass now ends in `_refresh_detail_pane`, which re-reads the visible view's selected row from the NEW cells and empties when the new render could not carry the selection - `_on_focus_ready` and also `_on_cohort_horizon_changed`, the horizon being the same staleness through a second door. Two advisories taken: clicking the button of the view ALREADY shown is now a no-op (it was clearing the trader's row), and two notes name a VIEW ("the Vetoes view", "the Picks graded view") instead of a position that no longer exists in a stack. The captions still carry no count and that stands as built - the count lives in each view's own note. `main` `18d3f91d` (G4) merged in and this packet's live gate renumbered **#82**. Five more tests, four proven RED first. Before that, **2026-09-06 evening: Phase 0.22's first LAYOUT packet, G1, was BUILT and pushed to `claude/g1-weekend-focus-review` (UNMERGED)** - Weekend Prep > Focus Review now stacks its nine tables behind a nine-button view selector with a read-only detail pane beside them. Nine 260 px ten-row floors is 2,340 px of minimum height in the ~2,050 px a 2160 screen gives the page, so `WeekendPrepPanel` could not be shown at 2160 at all (measured: page 2,824 px, panel 2,934 px) - the trader's "Weekend Prep overlap" was arithmetic. Layout lane only: no number, read, sort key or write moved, the read is still ONE pass over all nine tables, the verdict card is still uncapped. Nine tests proven RED first (the tester's seven plus two the builder added); see the 2026-09-06 G1 entry, the 2026-09-07 fix-round entry and gate #82. Before that, **2026-09-06 (Sunday, 06:10-18:30 PT): the Setup Tracker review repairs - packets ST1-ST5 MERGED at `22cc84d3`**, from the trader's *"Please repair the Setup Tracker findings below, then finish the existing Working-lately experience"*: ST1 each outcome names its meaning (`outcome_kind` = favorable direction at a scan-row offset, NOT a stop-rule win; `swing_evidence.read_eligible_rows` the one reader; exact-session v2 rows in their own shadow file); ST2 integer counts at every table's grain and ONE leader (`working_lately.select_leader`, the Setup Types tab's own win rate - V3 item 1 complete); ST3 a versioned execution convention and prior-session level knowledge (default byte-identical; the comparison on 794 setups is evidence, not a change); ST4 the first-actionable selection policy prepared beside today's (default byte-identical; a cache-bypass that would have zeroed the live score deltas caught in review); ST5 personal evidence by status with uncertainty as a label, the 10-SESSION window, counts by trade, no best setup without confirmed tags. Every branch tester-first, built, and reviewed by reproduction (ST1 GO after two rounds, ST2 GO after three, ST3 GO, ST4 GO after one, ST5 GO after one). **ST6 (the Working-lately strip, the priority switch, the AWAY Recap) is BUILT on `claude/st6-working-lately` and NOT merged**: its reviewer found four blockers (switch OFF must restore arrival order, the row cap before the priority view, the day-trade bound on `held_run_score` itself, the favorable kind's clock is its measured session) and the fix round died on the session limit at 17:30 PT with the builder mid-way. The same morning the other session recorded the Q4 spot-audit and decided the three scoring questions (its 2026-09-06 entry), and a third session opened the Phase 0.22 layout lane. |
 | Working branch | `main` at `22cc84d3` (fast-forwarded from `lead/merge-st`, the scratch merge worktree). Merge order ST5, ST3, ST1, ST2, ST4 with the two Phase 0.22 docs commits from the layout lane folded in; every conflict was in the control docs and both entries were kept. |
-| Unmerged / open | **`claude/g1-weekend-focus-review` (G1, BUILT, green, awaiting review and merge)** - built on `claude/g1-weekend-focus-review-build` because the tester's worktree still held the tester's branch, then fast-forwarded onto it; `main` at `68762909` is merged in. **`claude/st6-working-lately` (ST6, built, NO-GO with four blockers, fix round interrupted)** - the builder's worktree `agent-a56c7e1940a60d707` holds partial fix-round work; resume it (SendMessage to that builder) or re-spawn against the reviewer's list in the 2026-09-06 ST6 entry, then re-merge ST2 `7e541514` and ST4 `9d75a27f` into it. Left from before: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree locked by another session), the 2026-09-03 lake incident call, the lock-file sweep packet. **New finding needing its own packet (ST3's counter, reviewer-widened): 100 of the 1,980 cached daily-bar files under `%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` end in a FORMING candle (open outside [low, high]) on seven sessions (2026-09-04 x89), and the live default replay reads them for fills, excursions and marks.** |
-| Next action | **Review and merge G1** (`claude/g1-weekend-focus-review`, green on the merged tree), then G4 -> G3 -> G2 in the lane order; gate #80 is checked on the desk after the restart. Then: **restart the desk (trader's call) so ST1-ST5 are live, then Tuesday 2026-09-08 13:00 PT (Monday is Labor Day): live gates #70-#74 from before plus #75 (ST1), #76 (ST2), #78 (ST4), #79 (ST5) at the first persisted tracker write and the first nightly run; #77 (ST3) is the comparison artifact.** Then finish ST6 (above). Then the trader's decisions (below). Phase 0.22 (the layout lane, G0-G7) runs in the other session on branches based on `lead/merge-st`. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63).** |
+| Unmerged / open | **`claude/g1-weekend-focus-review` (G1, BUILT, reviewed, the one blocker FIXED 2026-09-07, awaiting re-review and merge)** - built on `claude/g1-weekend-focus-review-build` because the tester's worktree still held the tester's branch, then fast-forwarded onto it; `main` at `18d3f91d` (G4) is merged in and this packet's live gate is renumbered **#82**, G4 having taken #80. **`claude/st6-working-lately` (ST6, built, NO-GO with four blockers, fix round interrupted)** - the builder's worktree `agent-a56c7e1940a60d707` holds partial fix-round work; resume it (SendMessage to that builder) or re-spawn against the reviewer's list in the 2026-09-06 ST6 entry, then re-merge ST2 `7e541514` and ST4 `9d75a27f` into it. Left from before: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree locked by another session), the 2026-09-03 lake incident call, the lock-file sweep packet. **New finding needing its own packet (ST3's counter, reviewer-widened): 100 of the 1,980 cached daily-bar files under `%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` end in a FORMING candle (open outside [low, high]) on seven sessions (2026-09-04 x89), and the live default replay reads them for fills, excursions and marks.** |
+| Next action | **Re-review and merge G1** (`claude/g1-weekend-focus-review`, blocker fixed, green with `main` `18d3f91d` merged in), then G3 -> G2 in the lane order; G4 is already on `main` at `18d3f91d`. Gates #80 (G4) and #82 (G1) are both checked on the desk after the restart. Then: **restart the desk (trader's call) so ST1-ST5 are live, then Tuesday 2026-09-08 13:00 PT (Monday is Labor Day): live gates #70-#74 from before plus #75 (ST1), #76 (ST2), #78 (ST4), #79 (ST5) at the first persisted tracker write and the first nightly run; #77 (ST3) is the comparison artifact.** Then finish ST6 (above). Then the trader's decisions (below). Phase 0.22 (the layout lane, G0-G7) runs in the other session. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63).** |
 | Trader actions owed | **Three scoring decisions, each with frozen before/after evidence on copies (nothing live changed):** (1) ST4 pending-stays-pending - v1 grades ~228 episodes as losses on an alternate exit that closed while the representative trade was still running; honouring `representative_status` moves the same 2,249 theses from 61.6% to 70.5% favorable and is 94% of the mean-R move - a pure honesty fix, could be authorised alone; (2) ST4 first-actionable re-entries - 463 second attempts after a closed first attempt, winning 80% AFTER the fix, but that population exists only because the first attempt closed (survivorship by construction) - decide whether a re-entry is its own trade; (3) ST3 `gap_aware_v2` / `prior_session_v2` - the execution repair HELPS (89 of 794 changed, expectancy -0.098 to -0.081) and the prior-session level knowledge HURTS (458 changed, -0.098 to -0.149) because same-day bands were peeking; decide whether either becomes the scoring convention, and whether targets should gap-fill at the open like stops or a stops-only convention needs its own name. Also: restart the desk; the 26 provisional tags await review in Weekend Prep; record planned risk on new trades (0 of 172 have it). |
 | Last verified baseline | **`claude/g1-weekend-focus-review` (G1) with `main` `68762909` merged in, 2026-09-06 evening, in the builder's worktree, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 7072 passed, 3 skipped, 72 subtests passed, ZERO failures, exit 0, 10 min 18 s.** `ruff` clean, smoke 7/7, `launch_gui.py --selftest` green, no packaging trigger. Previous, on `main`: **`lead/merge-st` at `22cc84d3` (== `main` after the ff), 2026-09-06 evening, in the scratch merge worktree, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 7063 passed, 3 skipped, 72 subtests passed, ZERO failures, exit 0, 7 min 20 s.** `ruff` clean, CLAUDE.md == AGENTS.md (trimmed from 53.0 KB to 50.1 KB this evening; a further pass to the ~45 KB rule is owed), smoke 7/7, source selftest 74/74. No packaging trigger (five new modules inside already-collected trees, no dependency, no non-`.py` asset). Previous: `main` 84ee24d6, 6928 passed. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
@@ -32,7 +32,8 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 80 | **Weekend Prep opens at 2160 and Focus Review shows one table (G1)** - on the desk, at the trader's own screen: the Weekend Prep tab opens with **no table overlapping another and nothing drawn past the bottom edge**, Focus Review shows the nine view buttons with **Week's picks** checked and exactly ONE table under them, the horizon combo appears only when Vetoes or Likes is chosen, clicking a row fills the pane beside it with every column of that row and the full reason text, and switching view empties the pane. Then: **`Refresh everything` still fills all nine views in one pass** - click it, wait for the page, then click through all nine buttons and find every one of them populated without a second refresh. The other five Weekend pages still show ten rows. **Nothing here is a number**: no count, sort or window on this page may read differently from before | 2026-09-06 G1 entry |
+| 82 | **Weekend Prep opens at 2160, Focus Review shows one table, and the pane never lags the read (G1)** - on the desk, at the trader's own screen: the Weekend Prep tab opens with **no table overlapping another and nothing drawn past the bottom edge**, Focus Review shows the nine view buttons with **Week's picks** checked and exactly ONE table under them, the horizon combo appears only when Vetoes or Likes is chosen, clicking a row fills the pane beside it with every column of that row and the full reason text, and switching view empties the pane. Then: **`Refresh everything` still fills all nine views in one pass** - click it, wait for the page, then click through all nine buttons and find every one of them populated without a second refresh. **The pane's own check**: with a row selected on Vetoes, press `Refresh everything` and read the pane against the row beside it - **every value must agree**; then change the Horizon and read them again. A pane that still shows the old numbers under the same row number is this gate failing. Clicking the button of the view **already** shown must change nothing - the selected row stays selected and the pane keeps its text. The other five Weekend pages still show ten rows. **Nothing here is a number**: no count, sort or window on this page may read differently from before | 2026-09-06 G1 entry, fix round 2026-09-07 |
+| 80 | **An explanation never outlives its context (G4)** - on the next desk restart, on the Research tab's Day Trade Tracker: click a **Bounce Types** row so the right-hand pane explains it, switch to **Combos**, and the pane is GONE (not an empty box, not the previous explanation); (The My Decisions sub-tabs carry no clickable explanation, so nothing there can be checked - the reviewer's finding; the sub-tab clear is defence only.) Then with a pane open on a segment, press **Re-aggregate Outcomes**: the pane either shows that same segment with the REFRESHED numbers (compare Avg R against the row in the table beside it - they must agree) or disappears if the re-aggregation dropped the segment. **Display only**: the tables, their sort order and every number in them are unchanged by this packet, so a changed count or a changed order on that screen is a defect, not this gate passing. `setup_tracker_panel.py`'s detail pane is NOT in this gate - it is packet G4b | 2026-09-06 G4 entry |
 | 79 | **Personal evidence counts once and refuses to name a best setup (ST5)** - the next nightly `preference_trade_outcomes` slot writes a report whose ledger reason carries `n_trades_matched` beside `n_statements_matched` and names the window as `10 sessions`; on the current store expect **10 trades behind 13 matched statements** over a 45-day read (the pair is what makes the duplicate visible - equal numbers on a quiet window are not a failure, a MISSING `n_trades_matched` is). Then on the desk: Weekend Prep's "Tag this week" lists the **26 provisional rows** with `Week` reading `backlog` on the ones older than the current week, the "Missing planned risk" table lists closed trades with no plan (expect ~165, newest first) and one row opens that trade in the Journal's Trades tab; the coverage line under the verdict card reads `Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting review: 26. Planned risk recorded: 0 of 172.` and the Analytics tab shows that sentence beside `1 confirmed setup tag - under the n=30 floor (26 provisional awaiting review) - no personal setup can be called best.` **The Analytics tab's four population numbers must read 165 complete / 7 partly closed / 32 open summing to 204, with `uncertain` a cross-cutting 120 (84 / 7 / 29) carrying NO pooled money** - a `partly_closed` of 0 or an `uncertain` that sums beside the other three is the review's blocker back again. **Nothing here is a scoring change**: the champion's scoring population, every detector and every alert are untouched by construction | 2026-09-06 ST5 entry |
 | 78 | **The selection policy is stamped and the comparison is on the record (ST4)** - nothing live changes and nothing here promotes. (1) The desk's next persisted tracker write leaves `selection_policy = closed_first_v1` on EVERY recent family row, with an empty `as_of_session`, and those five ST4 columns sit at the END of the shipped header after ST2's - a row reading `first_actionable_v2` in an export is the defect this gate exists to catch. (2) **The scoring path is intact, which is the reviewer's blocker and the real check**: the first D1 scan after merge leaves `recent_tracker_score_delta` / `setup_type_score_delta` NONZERO on the setups that carried them, because the compact projection in `master_avwap_tracker_scoring_snapshot.json` has no `scenarios` and its `_scoring_outcome_summary` IS the record; on the 2026-09-05 snapshot the reproducible figures are **32 recent family rows and 74 nonzero `setup_type` score deltas over 11,372 projections**, and any run of those two builders that returns 0 is this gate failing. (3) `n_excluded`, `excluded_reasons` and `fully_excluded_groups` are present; the 28-day window on the 2026-09-03 mirror excluded 22 records under BOTH policies with 0 fully excluded groups, so expect a small number, never zero across all 32 cells. (4) The artifact stays readable at `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\selection_comparison_20260906T160305.json/.csv` with its README block, and its headline is the 2026-09-06 ST4 entry's (32 cells, 27 changed, 26 rank moves; v1 2,249 episodes / 61.6% / Wilson 0.593, v2 2,712 / 915 pending / 72.0% / Wilson 0.699). **A replay is blind to a COMPACTED record** (0 of 141,324 scenarios in this window, 99,562 of 206,341 across history), so an earlier `as_of_session` or a longer lookback must show `undatable_exit_in_population=N` rather than a swollen pending count. (5) **The trader's decision is OWED and this gate does not close without it**: keep `closed_first_v1`, or authorize `first_actionable_v2` as a separate change with its own golden fixtures - and v2 bundles TWO questions (the selection, and pending-stays-pending, which is 94% of the mean-R move). Until then no export, score, rank or alert may select v2 | 2026-09-06 ST4 entry |
 | 77 | **The repaired execution convention is EVIDENCE and the desk did not move (ST3)** - not a live behaviour gate: (1) the artifacts exist and are READABLE by the lead - three JSON/CSV pairs in `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\` (`both__comparison_20260906T110731.*`, `exec_only__…110814.*`, `levels_only__…110855.*`), with the headline copied into the 2026-09-06 ST3 entry: **472 of 794 changed** (`n_setups` 794 is the artifact's OWN denominator - 800 were offered and 6 carried no tradeable scenario; `--limit` is never the denominator), raw expectancy -0.0981 -> -0.1192, 43 of 50 groups moved rank, plus the two single-axis runs, and (2) **the desk's next persisted tracker write carries NO `execution_convention` and NO `level_knowledge` key on any record** and no event dict carries a `fill_basis` - the default path is what runs. A record that grew either key is the failure this gate exists to catch. The trader's DECISION on whether `gap_aware_v2` / `prior_session_v2` becomes the scoring convention is asked separately and is not part of this gate | 2026-09-06 ST3 entry |
@@ -120,6 +121,66 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
 
+### 2026-09-07 - G1 FIX ROUND: the detail pane follows the render (branch `claude/g1-weekend-focus-review`)
+
+**Item:** the reviewer's NO-GO on `4736388c` - one blocker, plus advisories 2
+and 4 taken now. Layout lane still: no number, no read, no sort key and no
+write moved. Ask-first does not apply - `weekend_prep_panel.py` houses no
+detector, scoring or alert code.
+
+**BLOCKER 1 - the pane went STALE after a refresh.** It is filled from
+`itemSelectionChanged` and nothing else, and `_on_focus_ready` re-fills all
+nine tables without touching it. `_render_*` sets `setRowCount(n)` rather than
+clearing first, so a render that KEEPS the row count leaves the row selected,
+never re-emits, and the pane goes on describing the previous read under the
+same row number - the reviewer's reproduction was table row 0 reading n=999 /
+0.99 after the refresh with the pane still reading n: 78 / 0.55. Two numbers
+side by side, both labelled, and nothing on screen saying one of them is last
+week's.
+
+`_refresh_detail_pane` re-reads the visible view's selected row from the NEW
+cells, and clears the pane when the new render could not carry the selection.
+It runs at the end of BOTH render passes. `_on_focus_ready` is the seam the
+packet named; `_on_cohort_horizon_changed` was added because it is the same
+staleness through a second door - the horizon swaps the cohort rows from
+memory, and another horizon holding the same number of rows keeps the
+selection exactly as a refresh does. **A render that SHRINKS a table was
+already correct**: dropping rows makes Qt re-emit the selection change by
+itself, so only the equal-count case rotted; the shrink case is kept as a
+passing regression guard rather than counted as part of the fix.
+
+**Advisory 4 - clicking the view already shown.** An exclusive checkable
+`QToolButton` still emits `clicked` when it is already checked, so the selector
+re-ran `_select_view` and cleared the selection and the pane: a click that
+moved nothing on screen except the one thing the trader was reading.
+`_on_view_button_clicked` returns early on an unchanged index and is what
+`idClicked` is wired to now. `_select_view` stays UNCONDITIONAL because the
+constructor calls it on a `_view_index` that already equals the default and
+must still check the button and set the horizon visibility.
+
+**Advisory 2 - two notes named positions that no longer exist.** The like
+note's "the veto table above" is now "the Vetoes view"; the feedback note's
+"the rollup above" is now "the Picks graded view, which is the rollup they
+should be weighed against". Wording only.
+
+**Advisory 3 stands as built.** The view captions carry no count on purpose:
+the count lives in each view's own note, which is where the render already
+holds it, and the population sentence's job is to say what a ROW is.
+
+**Advisory 5 stays** - the source-text assertion on `theme.qss` is the only way
+to prove a rule exists for an object name without rendering a pixel.
+
+**Proof.** Five tests added to `tests/test_g1_weekend_focus_review.py`; nothing
+the tester wrote was weakened, skipped, deleted or rewritten. Four proven RED
+with `scripts/ui/panels/weekend_prep_panel.py` restored to `4736388c`
+(**4 failed, 10 passed**), all 14 green with the change back; the whole Weekend
+suite is 102 passed.
+
+**Integration.** `main` `18d3f91d` merged in (G4 landed first and took gate
+#80), so this packet's live gate is renumbered **#82** in this file,
+`CHANGELOG.md` and `plan.md`. Every conflict was in the three control docs and
+both sides' entries were kept.
+
 ### 2026-09-06 - G1 BUILT: Weekend Prep › Focus Review is one table, a view selector and a detail pane (branch `claude/g1-weekend-focus-review-build`)
 
 **Branch note:** the tester committed the seven RED tests on
@@ -188,6 +249,62 @@ Offscreen screenshot at 3456 × 2160 with Vetoes selected and row 0 chosen:
 shows - one table, nine buttons with Vetoes checked, the horizon combo, the pane
 at 3:1, nothing past the bottom edge). The G0 bench had not merged when this was
 built, so there is no fit line for this page yet.
+
+### 2026-09-06 - G4 BUILT: the explanation pane clears when its context changes (branch `claude/g4-stale-research-detail`)
+
+**Item:** packet `.claude/packets/G4.md` (plan.md Phase 0.22, the Desk Reshape Plan), items
+**G4.1 and G4.2 only**. G4.3 and the tester's tests 5-6 stay DEFERRED to packet G4b:
+`setup_tracker_panel.py` is being rewritten by ST2/ST6 and is untouched on this branch.
+
+**Branch note:** the packet named `lead/merge-st` `e7c51409` as the base; the tester actually
+branched from `76eba3ae` and the lead directed a merge of `main` `68762909` instead, which is
+what this branch carries (merge `10f6fb95`, no conflicts). The tester's five red tests are
+`98668de3`; the fix is `b255fb31`.
+
+**What was wrong.** The GUI review that morning found the Day-trade Tracker still showing the
+`lrsi_cross50` explanation with the **Combos** tab open and no combo selected.
+`ResearchExplanationView.show_row` set HTML and `setVisible(True)`, and nothing ever took the
+pane back down: neither `tabs` nor `decisions_tabs` had a `currentChanged` handler, and
+`_on_refresh_finished` / `_on_held_run_loaded` replaced every model row without touching it.
+The last row clicked therefore survived every tab switch and every re-aggregation, beside a
+table that no longer held it - and the numbers on the right get read as the numbers on the
+left, which is why this is correctness rather than polish.
+
+**What was built.**
+- **G4.1** - `ResearchExplanationView.show_row(kind, row, *, identity=None)` records
+  `shown_identity`, and `clear()` is an **override**: `QTextEdit.clear()` already existed here
+  (the tester found this and said so - the packet had expected an `AttributeError`) and only
+  empties the document, which would leave an empty pane standing. The override empties, HIDES
+  and forgets. `SetupDetailView` gains the same pair; its identity is
+  `(kind, side, family, symbol-or-blank, dimension-or-blank)` computed in `_render` from the
+  row it just drew, and its `clear()` also drops `_current` so a late levels callback cannot
+  re-open a cleared pane. **Nothing calls `SetupDetailView`'s pair yet** - that caller is G4b.
+- **G4.2** - `_explanation_identity(kind, row)` is `(kind, dimension, direction, segment)`,
+  read from the ROW DICT and never from the display text. `direction` is in it because the
+  learning store keys a segment `direction|segment` and `long vwap` / `short vwap` are two
+  measurements; the packet wrote the identity as `(kind, dimension, segment key)` and this is
+  that key spelled the store's way. Both tab strips clear the pane on `currentChanged` - the
+  `decisions_tabs` connection is belt-and-braces (the outer strip fires first in the live GUI,
+  so it is only reached for a move BETWEEN the My Decisions sub-tabs) and the comment beside it
+  says so. Both data-revision slots call `_reshow_or_clear_explanation`, which looks the
+  identity up in the model that now holds the tab's rows and re-shows from the **new** row dict
+  - re-showing the cached one would reproduce the defect wearing a number instead of a name -
+  or clears when the revision dropped the segment.
+
+**Fail-before-fix, proven twice.** With the three production files restored to `98668de3`
+(`git checkout HEAD -- ...`), **6 failed in 1.45 s**: the four panel tests on `.isHidden()` and
+on the pre-refresh number, the tester's widget test on *"clear() emptied the pane and left the
+empty pane on screen"*, and the added `SetupDetailView` test on `AttributeError: 'SetupDetailView'
+object has no attribute 'shown_identity'`. Restored: 10 passed alongside
+`tests/test_research_explanations.py`. No tester assertion was weakened, skipped or rewritten;
+`tests/test_g4_setup_detail_view_identity.py` is the only test ADDED.
+
+**Baseline on this branch (after merging `main` `68762909`), nightly AI lock FREE (probed):**
+`pytest tests/ -q` with nothing deselected - **7069 passed, 3 skipped, 72 subtests passed,
+zero failures, exit 0, 8 min 2 s**; `ruff check .` clean; `smoke_check.py` 7/7; source
+`launch_gui.py --selftest` 74/74. **No packaging trigger**: no dependency, no non-`.py` asset,
+no new top-level `scripts/` package, no dynamic import. Live gate **#80** above; the desk
+restart that makes it observable is the trader's call.
 
 ### 2026-09-06 - ST5 BUILT: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
 

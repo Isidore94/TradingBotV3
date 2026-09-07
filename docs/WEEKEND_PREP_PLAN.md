@@ -481,6 +481,23 @@ placeholder sitting where a row's own words belong reads as the row's own words.
 Each view carries a **population sentence** saying what a ROW is; the counts
 stay in the note under the table, written by the render that has them.
 
+**The pane never outlives the read it describes** (fix round, 2026-09-07). It
+is filled from `itemSelectionChanged`, and the renders set `setRowCount(n)`
+rather than clearing first, so a render that KEEPS the row count leaves the row
+selected and never re-emits — the table showed the new week and the pane went on
+reading the old one under the same row number. Every render pass therefore ends
+in `_refresh_detail_pane`, which re-reads the visible view's selected row from
+the NEW cells and empties the pane when the new render could not carry the
+selection. Both passes: `_on_focus_ready` and `_on_cohort_horizon_changed`, the
+horizon being the same staleness through a second door, since another horizon
+with the same row count keeps the selection exactly as a refresh does. A render
+that SHRINKS a table was always correct — dropping rows makes Qt re-emit by
+itself — which is why only the equal-count case rotted. Clicking the button of
+the view **already shown is a no-op**: an exclusive checkable button still emits
+`clicked` when checked, and the only thing that click could change is the row
+the trader is reading. And a note names a VIEW, never a position — "the Vetoes
+view", "the Picks graded view" — because nothing is above anything in a stack.
+
 **Nothing about the read moved.** `_read_everything` is still one pass over all
 nine stores on the page's worker, `_on_focus_ready` still fills all nine tables
 on every render regardless of which view is visible, and selecting a view is

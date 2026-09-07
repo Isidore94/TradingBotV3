@@ -34,6 +34,12 @@ class SetupDetailView(QTextBrowser):
         self._symbol_levels: dict[str, dict] = {}
         self._levels_loading = False
         self._current: dict[str, Any] | None = None
+        #: Packet G4.1: what the pane is showing, as
+        #: `(kind, side, family, symbol-or-blank, dimension-or-blank)`, computed
+        #: by `_render` from the row it just drew. `None` means nothing is shown.
+        #: The widget gains the API here; its caller
+        #: (`setup_tracker_panel.py`) is packet G4b, after ST6 lands.
+        self.shown_identity: tuple | None = None
         self._levelsLoaded.connect(self._on_levels_loaded)
 
     def set_playbook_lookup(self, lookup: Callable[[str, str], dict | None] | None) -> None:
@@ -133,7 +139,26 @@ class SetupDetailView(QTextBrowser):
             parts.append(doc_html.replace(body_open, "").replace("</body>", ""))
         parts.append("</body>")
         self.setHtml("".join(parts))
+        research_row = current.get("research_row")
+        self.shown_identity = (
+            str(current.get("research_kind") or ("setup" if symbol else "family")),
+            side,
+            str(current.get("setup_family") or ""),
+            symbol,
+            str((research_row or {}).get("dimension") or ""),
+        )
         self.setVisible(True)
+
+    def clear(self) -> None:  # noqa: D401 - overrides QTextEdit.clear
+        """Empty the pane, HIDE it, and forget what it was showing.
+
+        Same rule as `ResearchExplanationView.clear` (packet G4.1):
+        `QTextEdit.clear()` alone would leave an empty pane standing.
+        """
+        super().clear()
+        self._current = None
+        self.shown_identity = None
+        self.setVisible(False)
 
     def _plan_html(self, current: dict[str, Any]) -> str:
         muted = theme.color("text_secondary")

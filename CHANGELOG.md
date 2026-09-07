@@ -288,7 +288,19 @@ which is evidence and must not be loaded as context.
   page's worker, `_on_focus_ready` still fills all nine tables on every render,
   and selecting a view is `setCurrentIndex` plus a cleared pane - no file, no
   worker, no re-render. The chosen view is remembered for the session and
-  survives a refresh. Both new widgets are styled by object name in `theme.qss`
+  survives a refresh. **The pane never outlives the read it describes**: it is
+  filled from `itemSelectionChanged`, and a render that KEEPS the row count
+  leaves the row selected without re-emitting, so every render pass ends in
+  `_refresh_detail_pane` - `_on_focus_ready` AND `_on_cohort_horizon_changed`,
+  the horizon being the second door onto the same staleness. It re-reads the
+  visible view's selected row from the NEW cells and empties when the new
+  render could not carry the selection; a render that SHRINKS the table drops
+  the selection and Qt re-emits by itself. Clicking the button of the view
+  ALREADY shown is a NO-OP (an exclusive checkable button still emits
+  `clicked` when checked, and the only thing that click could change is the
+  row the trader is reading). A note names a VIEW, never a position - "the
+  Vetoes view", "the Picks graded view", because nothing is above anything in
+  a stack. Both new widgets are styled by object name in `theme.qss`
   (`QToolButton#WeekendViewButton`, `QTextBrowser#WeekendRowDetail`); the page
   sets no stylesheet. Layout lane: no number, no read, no sort key and no write
   changed, `apply_width_rule_to_table_widget` calls are untouched, and the
@@ -1133,6 +1145,17 @@ which is evidence and must not be loaded as context.
   Taken/Closed imports, structured reviews, free-form notes, tags, and analytics.
 - Deterministic novice explanations across Setup Tracker, Day Trade Tracker, and
   Move Forensics, plus an evidence-floor-aware “What’s Working” summary.
+- **A detail pane never outlives the context that opened it** (G4, 2026-09-06).
+  `ResearchExplanationView` and `SetupDetailView` each carry `shown_identity` and
+  an OVERRIDE of `clear()` that empties, HIDES and forgets - `QTextEdit.clear()`
+  alone leaves an empty pane standing. On the Day-trade Tracker the identity is
+  `(kind, dimension, direction, segment)` read from the ROW DICT, never the
+  display text; either tab strip changing clears the pane, and a data revision
+  (`_on_refresh_finished`, `_on_held_run_loaded`) looks that identity up in the
+  model that now holds the tab's rows and redraws from the **new** row dict, or
+  clears when the revision dropped the segment. Display only: no model, sort,
+  read or number changes, one dict lookup per revision on the Qt thread. The
+  Setup Tracker's `detail_view` gets the same rule in packet G4b, after ST6.
 - Review events partitioned by installation, merged/deduplicated by readers, capture
   audits, preference scoreboard, AI-curated `review_policy.json`, and a permanent
   no-suppression boundary.
@@ -1613,6 +1636,79 @@ exclusion) plus two the builder added (themed by object name; the horizon combo
 still re-filters both cohort tables from memory). **All nine proven RED first**
 against `scripts/ui/panels/weekend_prep_panel.py` and `scripts/ui/theme.qss`
 restored to the tester's tip.
+
+**Fix round, 2026-09-07 (reviewer NO-GO, one blocker, two advisories taken).**
+
+- **The detail pane went STALE after a refresh** - the blocker. It was wired to
+  `itemSelectionChanged` and nothing else, and `_on_focus_ready` re-fills all
+  nine tables without touching it, so a render that KEEPS the row count left
+  the row selected, never re-emitted, and the pane went on describing the
+  PREVIOUS read under the same row number (the reviewer's reproduction: row 0
+  reads n=999 / 0.99 after the refresh, the pane still reads n: 78 / 0.55).
+  `_refresh_detail_pane` re-reads the visible view's selected row from the NEW
+  cells, and clears when the new render could not carry the selection. It runs
+  at the end of BOTH render passes: `_on_focus_ready`, and
+  `_on_cohort_horizon_changed`, which is the same staleness through a second
+  door - the horizon swaps the cohort rows from memory and another horizon
+  with the same row count keeps the selection exactly as a refresh does. A
+  render that SHRINKS the table already dropped the selection and Qt re-emitted
+  by itself, which is why only the equal-count case rotted and why that case is
+  a passing regression guard rather than part of the fix.
+- **Clicking the view already shown is a no-op.** An exclusive checkable
+  `QToolButton` still emits `clicked` when it is already checked, so the
+  selector re-ran the view change and threw away the selected row and the pane
+  - a click that moved nothing on screen except the one thing being read.
+  `_on_view_button_clicked` returns early on an unchanged index;
+  `_select_view` stays unconditional because the constructor calls it on a
+  `_view_index` that already equals the default and must still check the button
+  and set the horizon visibility.
+- **Two notes named positions that no longer exist.** The like note's "the veto
+  table above" is now "the Vetoes view"; the feedback note's "the rollup above"
+  is now "the Picks graded view". Wording only.
+- **The captions carry no count, and that stands as built**: the count lives in
+  each view's own note, which is where the render already has it, and the
+  population sentence says what a ROW is rather than how many there are.
+- Five more tests in the same file, four **proven RED first** with
+  `weekend_prep_panel.py` restored to `4736388c` (4 failed, 10 passed), 14
+  passed with the fix. Live gate renumbered to **#82**: G4 reached `main` at
+  `18d3f91d` first and took #80.
+
+### 2026-09-06 - Packet G4: the explanation pane clears when its context changes (branch `claude/g4-stale-research-detail`)
+
+The GUI review of 2026-09-06 found the Day-trade Tracker still showing the `lrsi_cross50`
+explanation with the **Combos** tab open and no combo selected. `show_row` set HTML and
+`setVisible(True)` and nothing ever took the pane back down: neither tab strip had a
+`currentChanged` handler, and `_on_refresh_finished` / `_on_held_run_loaded` replaced every
+model row without touching it. So the last row clicked stayed on screen through every tab
+switch and every re-aggregation, beside a table that no longer contained it - the numbers on
+the right are read as the numbers on the left, which makes this correctness rather than
+polish.
+
+- **G4.1 - the pane knows what it shows.** `ResearchExplanationView.show_row` takes an
+  optional `identity=` and stores it on `shown_identity`; `clear()` is an OVERRIDE, because
+  `QTextEdit.clear()` already existed and only empties the document, which would leave an
+  empty pane standing where the explanation was. The override empties, hides and forgets.
+  `SetupDetailView` gains the same pair - its identity is
+  `(kind, side, family, symbol-or-blank, dimension-or-blank)`, computed in `_render` from
+  the row it just drew, and its `clear()` also drops `_current` so a late levels callback
+  cannot re-open a cleared pane. Nothing calls `SetupDetailView`'s pair yet.
+- **G4.2 - Day-trade Tracker.** `_explanation_identity(kind, row)` is
+  `(kind, dimension, direction, segment)`, read from the row dict and never from the display
+  text; `direction` is in it because `long vwap` and `short vwap` are two measurements and
+  the learning store itself keys a segment `direction|segment`. `tabs.currentChanged` and
+  `decisions_tabs.currentChanged` clear the pane (the second is belt-and-braces: the outer
+  strip fires first in the live GUI, so it is only reached for a move between the My
+  Decisions sub-tabs). Both data-revision slots call `_reshow_or_clear_explanation`, which
+  looks the identity up in the model that now holds the tab's rows and re-shows from the NEW
+  row dict - re-showing the cached one would reproduce the defect wearing a number instead of
+  a name - or clears when the segment is gone.
+- **G4.3 (Setup Tracker) is DEFERRED to packet G4b**, with tests 5-6: `setup_tracker_panel.py`
+  is being rewritten by ST2/ST6 and is untouched here.
+
+Tests: `tests/test_g4_stale_research_detail.py` (tester-first, five red at `98668de3`) plus
+`tests/test_g4_setup_detail_view_identity.py` added by the builder for G4.1's second widget.
+All six proven failing with the three production files restored, then green. Layout lane: no
+number, model, sort or read changes.
 
 ### 2026-09-06 - Packet ST5: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
 

@@ -42,14 +42,41 @@ def render_research_explanation_html(
 
 
 class ResearchExplanationView(QTextBrowser):
-    """Shared click-to-explain pane for aggregate research rows."""
+    """Shared click-to-explain pane for aggregate research rows.
+
+    Packet G4: the pane knows WHAT it is showing (`shown_identity`) and can be
+    taken down (`clear()`), so a host can answer "is the row I am explaining
+    still the row on screen?" without parsing its own display text.
+    """
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setOpenExternalLinks(False)
         self.setMinimumWidth(340)
         self.setVisible(False)
+        #: What the pane is currently explaining, in the caller's own terms - a
+        #: tuple it hands to `show_row` and recognises again later. `None` means
+        #: "nothing is shown".
+        self.shown_identity: tuple | None = None
 
-    def show_row(self, kind: str, row: Mapping[str, Any] | None) -> None:
+    def show_row(
+        self,
+        kind: str,
+        row: Mapping[str, Any] | None,
+        *,
+        identity: tuple | None = None,
+    ) -> None:
         self.setHtml(render_research_explanation_html(kind, row))
+        self.shown_identity = identity
         self.setVisible(True)
+
+    def clear(self) -> None:  # noqa: D401 - overrides QTextEdit.clear
+        """Empty the pane, HIDE it, and forget what it was showing.
+
+        `QTextEdit.clear()` already existed here and only empties the document,
+        which would leave an empty pane standing where the explanation was. A
+        caller clears because its CONTEXT changed, so the pane goes away too.
+        """
+        super().clear()
+        self.shown_identity = None
+        self.setVisible(False)
