@@ -1542,6 +1542,166 @@ measurement and the reasoning behind each rule.
 
 **Headline statistics and the priority switch (V3, decision 0016)**
 
+- **The banner crowned max R on three and the table invented a count** (ST2,
+  2026-09-06). Two defects on one screen, both reproduced through the real code
+  before anything was changed.
+
+  *The invented count.* `legacy.build_recent_tracker_setup_family_rows` computes
+  `win_rate_closed` as a RECENCY-WEIGHTED mean of win flags - `exp(-ln2 *
+  age_days / 14.0)` times `TRACKER_REGIME_MISMATCH_WEIGHT` on a regime mismatch -
+  and the Setup Tracker's panel handed that rate to
+  `swing_headline.headline_from_rate`, whose whole job is to recover the integer
+  pair Wilson needs as `round(rate * n)`. That is exact when the stored rate was
+  computed as `wins / n`, which is how the veto and like cohort CSVs write theirs.
+  It is not how this one is written. Measured through the real writer: two
+  28-day-old wins at weight .25 plus two same-day losses at weight 1.0 give
+  **0.2**, and the cell printed **`25% (>=5%, n=4)`** - a 1-of-4 that never
+  happened, carrying a Wilson lower bound computed from it - where the family had
+  gone **2-2, 50%**. The fix is not a better reconstruction; there is no such
+  thing. The builders now export `n_wins` / `n_losses` / `n_flats` /
+  `n_unmeasured` / `n_pending` at each table's own grain, counted in the SAME
+  loop that builds `win_flags` so the counted and the weighted readings can never
+  read different episodes, and the panel uses `headline_from_counts`. The
+  weighted rate stays on the table under **Win % (recency-weighted)** beside
+  **Win % (unweighted)**: it is a real number that answers a different question,
+  and deleting it would be the mirror of the original mistake. A row from an
+  export written before the columns existed says **`counts not exported yet`**.
+  `headline_from_rate` survives for its legitimate callers and its docstring now
+  names them and forbids a weighted rate.
+
+  *The crown on three examples.* `_best_now_banner_html` picked
+  `max(avg_closed_r)` over any row with three closed setups, across the live AND
+  study namespaces, while the table directly underneath already ranked by the
+  Wilson lower bound. On the fixture that reproduces it the table lists
+  `tight_and_hot` (24-6, bound 0.627) first and the banner crowned
+  `fat_but_wide` (54-36 at +2.50R, bound 0.497); worse, a three-example STUDY
+  with a big R could be presented as the desk's best performer, which is exactly
+  the confusion between "interesting" and "working" that plan.md sec 7's
+  promotion ladder exists to prevent. Both now read
+  `working_lately.select_leader` on the same rows in the same order, so they
+  cannot disagree. **`LEADER_MARGIN_LB` = 0.05** (five points of *lower bound*,
+  not of raw rate: two rates can differ by fifteen points and still be one sample
+  apart when one is thin, and the bound is the number that already knows that)
+  and **`LEADER_FRESHNESS_SESSIONS` = 2** (one weekend plus a holiday; the
+  tracker writes at the close slot, so a reading older than that is news about
+  the desk, not about the family) were both declared 2026-09-06 BEFORE any
+  forward evaluation and are not tuned to make a winner appear. Four states, each
+  naming the gate that closed: `leader`, `no_clear_leader` (the reason names BOTH
+  families and the gap - printing the winner of a coin flip is how a banner
+  starts lying), `last_reliable_reading` (a stale input plus a `previous`
+  verdict; the leader and the `as_of` are the previous one's, unchanged) and
+  `no_evidence`. Lead decision the same day: `min_n` is an ARGUMENT (default
+  `MIN_REPORTABLE_N`) so the two-session block passes `SHORT_TERM_MIN_SAMPLES`
+  without declaring a second statistics contract, and a `no_evidence` verdict
+  carries `coverage["discovery_leader"]` - the best live row that was kept out -
+  which the banner prints as `No leader at the n=30 floor - leading on thin
+  evidence: <side> <family> (n=12), discovery only`. **Never the word leader for
+  it, and never beside a real one.** A NEW/RISING pin stays a NOVELTY badge on
+  the table and is not an input to the leader.
+
+  *The same defect, three more times.* The reviewer's NO-GO found it surviving
+  wherever the packet had not looked, which is the lesson worth keeping: fixing
+  the surface a defect was REPORTED on does not fix the defect. The Summary
+  card's plain-English block (`research_explanations`) sat THREE LINES ABOVE the
+  repaired banner still crowning `max(avg_closed_r)` on three closes across both
+  namespaces - live it read *"LONG top_pattern leads at +0.99R ... 3 closes"*
+  under a banner saying *"SHORT general"*, with 10 of its 17 candidates studies.
+  The **Best Type Edge** tile read `setup_type_rows[0]`, so ST2.2's new
+  bound-first sort silently moved it from `SHORT +23` to `LONG +14` - a tile
+  that borrows another surface's ordering has no meaning of its own, and it now
+  picks max `score_delta` explicitly. The Summary's **Setup types working**
+  block took `rows[:8]` of that same side-first list and so showed eight LONG
+  rows and no SHORT one (the first SHORT row sat at index 68 of 117); the CARD
+  now picks its eight by the bound across BOTH books, with the side shown, while
+  the TAB keeps side-first - a table you scroll and a card that shows eight are
+  different questions asked of the same rows.
+
+  *And twice more, in the re-review.* Both were the same shape as the three
+  above: a surface computing for itself what the page had already decided. The
+  plain-English card called `select_leader` directly while the banner went
+  through `_remembered_verdict`, which carries a `previous` - so on a STALE
+  refresh the card printed *"no clear leader. Leading on thin evidence, SHORT
+  general on n=88 - discovery only"* three lines above the banner's *"SHORT
+  general [last reliable reading, as of 2026-09-04]"*. Two renderers computing
+  the same thing will disagree the moment one of them gains an argument, so
+  `panel_verdicts(panel)` computes each horizon ONCE in `_summary_html` and both
+  renderers are handed the same objects; `build_plain_english_whats_working`
+  takes `verdicts=` and only computes its own when a caller has none. The second
+  was a LABEL that did not come from its verdict: the 2-session block hardcoded
+  "2-session discovery", which then sat over a real `leader`, and printed "the
+  export carries no session, so its freshness is unstated" beside "its newest
+  measured session is 58 sessions behind" - two contradictory facts in one line.
+  The label is now the horizon plus `verdict_label_suffix(verdict)`, and the
+  no-session sentence renders only when the gate was `no_session`.
+
+  *"Old" is not "thin".* `discovery_basis_phrase` gives one phrase per gate -
+  **leading on older evidence** for a stale row, **undated** for one with no
+  session, **thin** only under the floor - used by both renderers. A row kept
+  out for being old HAS the evidence; calling it thin names the wrong gate,
+  which is the same class of error as calling a weighted rate a count.
+
+  *A measured date, where the export can answer it.* Freshness was being read
+  off the ENTRY session everywhere, which is right for the recent family rows -
+  they carry no exit date, and a family whose newest entry is old cannot have a
+  newer measured close - but wrong for the 2-session block, where it made a
+  family entered eight weeks ago and MEASURED two sessions later read as 58
+  sessions stale on a file written that morning.
+  `legacy._short_horizon_measured_session` reads the trade date of
+  `post_marks[horizon - 1]`, the same mark the R itself was computed from, and
+  an episode whose marks cannot answer leaves the field EMPTY - undated, which
+  reads as not fresh, never a guess. The recent rows keep entry dating until ST4
+  lands `representative_exit_date`, and `LEADER_FRESHNESS_SESSIONS`' comment
+  says so rather than leaving the difference to be discovered. The short-horizon
+  export's identity, stated because a reader summing it wrong is the next
+  defect: `n_wins + n_losses + n_flats == samples_2d`, and
+  `samples_2d + n_unmeasured == tracked_setups`.
+
+  *And once more: a renderer that has a verdict must render it.* The re-check
+  found the banner's short-term block still guarded on "a discovery row OR a
+  leader", falling through to a hardcoded *"not enough 2-session samples yet
+  (accrues automatically each scan)"*. `no_clear_leader` matches neither
+  condition, and it is the LIVE state for that horizon - twelve eligible
+  families with the top two 0.001 of bound apart - so the banner said "no
+  samples" three lines under a card saying "no clear leader". Both statements
+  were on one screen and one of them was false. The conditional is gone. The
+  general rule: a special case written beside a state machine will eventually
+  contradict it, and a hardcoded sentence is a state the machine does not know
+  about.
+
+  *One clock per surface, named.* `FRESHNESS_SENTENCE` was a single constant
+  saying "measured inside 2 sessions" while only the 2-session rows are
+  measured-dated - so the swing line claimed a clock it does not have.
+  `freshness_sentence(kind)` reads `DATING_BASIS_BY_KIND` and says
+  **entry-dated** on the swing line, **measured** on the 2-session one, and
+  entry-dated for any kind it does not know, which is the conservative reading
+  rather than the flattering one. When ST4's `representative_exit_date` lands
+  the swing entry flips to `"measured"` and the sentence follows on its own.
+
+  *The floor is judged BEFORE the clock.* A family with three samples is under
+  the floor whatever the clock says, and answering "not fresh" to three samples
+  answers a question the reader did not ask. So `select_leader` splits
+  `at_floor` / `under_floor` first and only dates the at-floor rows; the
+  discovery pools and the reason branches run in the same order (stale, undated,
+  thin), so the sentence a verdict prints always names the gate that kept out the
+  row it is showing, and a row that CLEARS the floor and is merely old outranks a
+  current row with three samples. `min_n` therefore binds the stale and undated
+  pools by construction. **Freshness is measured on the ENTRY session** - these
+  rows carry no exit date, so `latest_measured_session` is the newest scan_date
+  among the episodes that produced a readable R, which is the conservative
+  reading - and `FRESHNESS_SENTENCE` says so on every surface, because "fresh"
+  without its clock is not a fact.
+
+  *What was NOT changed.* `ranking_score`, `score_delta`, the Expected-R
+  calibration and every pre-existing column of all THREE exports, pinned
+  byte-identical by goldens taken from `main` at `84ee24d6`: the two row goldens,
+  a shipped-header golden (the count columns belong at the END of the header the
+  trader opens, not at the end of the inner builder - they had landed at index 26
+  of 31 and 31 of 39), and `st2_short_horizon_golden.csv`. The two-session
+  export gained the same additive counts plus its own `latest_measured_session`
+  on the trader's answered ask, so that block is freshness-checked rather than
+  discovery by construction; `win_rate_2d` keeps its value, including its
+  treatment of an exactly-flat close as a zero flag, because moving it would be a
+  scoring change and this packet may not make one.
 - **The priority switch reorders and never withholds** - and it is **NOT BUILT
   YET** (V4 owns it; R4 B3 removed the sentence that cited a test for it). When
   it is built: "prioritise what is working" is display-only (decision 0016
@@ -2302,3 +2462,166 @@ and nothing said so.
 **Live gate #75** is owed at the next persisted tracker write: the v2 file beside the tier
 outcomes with `sessions_spanned == horizon_sessions` on every measured row, a reason on
 every other, and the three readers printing the same `eligible / pending / excluded` line.
+## ST4 - the rescan that happened to close was the one that counted (2026-09-06)
+
+### What was true, read on `main` @ `84ee24d6`
+
+The Setup Tracker rescans a thesis every day it still looks like a setup, so one
+`(symbol, side, anchor_date, setup_family)` leaves many rows behind and something has to pick
+which one gets graded. Three different places made that pick by reading the OUTCOME.
+
+1. **`_dedupe_recent_tracker_family_rows`** sorted `(0 if closed_setups > 0 else 1, scan_date)`.
+   A closed record wins, and only then does the earliest date. So the 08-10 open entry a trader
+   could actually have taken lost to the 08-15 rescan that had resolved by the time the tracker
+   looked. The docstring called the second key "the trade you would actually have taken at first
+   signal", which is true only when no row in the group has closed.
+2. **`_representative_scenario`** fell to `matching[0]`, and scenario insertion order is
+   `_build_tracker_scenarios`' `for stop in stop_candidates: for template in
+   SETUP_EXIT_TEMPLATES`. `REPRESENTATIVE_EXIT_TEMPLATE_ID` was `""` - the comment above it said
+   the choice was decided by dict order and that nothing had ever said which template the headline
+   R was measured on. Reordering the `scenarios` list moves one setup's headline **from +2.00R to
+   -1.00R** (`tests/test_st4_first_actionable.py::test_representative_exit_template_survives_a_scenario_dict_reorder`
+   pins BOTH readings).
+3. **`_summarize_tracker_setup_outcome`**: `representative_closed_r = rep_total_r if (rep_total_r
+   is not None and rep_is_closed) else avg_closed_r`. When the representative is still OPEN, the
+   headline becomes the mean of the OTHER closed scenarios - the alternate exit plans nobody
+   chose. A setup whose `full_band2` representative sits at +0.40R open, beside a `full_band3`
+   that closed +3.00R, **reports +3.00R for a trade still running**.
+
+### The premise the packet asked to verify
+
+**There is no exit-date field on a scenario.** `_apply_scenario_exit_event` appends one entry per
+exit LEG to `events` (`trade_date`, `reason`, `price`, `shares`, `pnl`, ...), so the recorded exit
+is the `trade_date` of the LAST entry, and an open scenario has that list PRESENT and EMPTY.
+`_scenario_recorded_exit_date` gates that read on the CLOSED status, because a PARTIAL leaves a
+dated event behind on a scenario still in the trade: read as an exit, it would let the challenger
+open a second attempt while the first one was still running - the exact thing the re-entry rule
+exists to prevent.
+
+### The rules this produced
+
+**The default did not move, and that is the point.** `closed_first_v1` is
+`DEFAULT_SELECTION_POLICY` and every caller still gets it, byte-identical
+(`tests/fixtures/st4_family_rows_golden.csv`, pinned from `main` before any of this code existed,
+reproduced under the bare default call AND under an explicit `DEFAULT_SELECTION_POLICY`).
+
+**The shipped rule has exactly ONE implementation.** `_v1_pick` in
+`scripts/master_avwap_lib/selection_policy.py` is the old body moved verbatim; the legacy function
+delegates. A challenger measured against a second copy of the champion measures the copy.
+
+**An episode under `first_actionable_v2` is `(symbol, side, anchor_date, setup_family,
+attempt_index)`.** Attempt 1 is the EARLIEST scan row - chosen on the date alone, before any
+outcome exists. A later row opens attempt k+1 **only** when the previous attempt's representative
+scenario closed strictly before it (`REENTRY_RULE_V2`): that is a declared entry rule, not "the
+rescan that happened to close". A rescan while the attempt is live is one more OBSERVATION of the
+same episode. An open attempt stays `pending` and grades nothing.
+
+**The representative exit is DECLARED, and declaring it reads no outcome.**
+`REPRESENTATIVE_EXIT_TEMPLATE_ID_V2` is `full_band2`, the first baseline entry of
+`SETUP_EXIT_TEMPLATES` - the one dict order has always practically handed back. Naming it fixes
+the answer against a reorder without preferring a better-performing plan.
+
+**`excluded_reasons` has two grains and the token name says which.** A bare `reason=N` counts
+records the population never admitted and is summed into `n_excluded`; an `_in_population` token
+counts counted episodes a decision deliberately KEPT and is never summed. That is how the
+2026-09-06 decisions are NAMED without being reopened: `untradeable` is (c),
+`expired_unmeasured_in_population` is (b) - it stays in the champion's scoring population - and
+(a), swept-measured M5 trades, is in another file and is named in the comparison's README.
+`no_representative_in_population` is a builder addition on the same principle: the packet listed
+`no_representative` as a drop, but no such record is dropped today and making one droppable would
+have changed the default's numbers, so it is named and kept.
+
+### The comparison, measured
+
+Provenance, precisely: the live SQLite mirror (`master_avwap_setup_tracker.sqlite`, 1,191,460,864
+bytes, `data_session` **2026-09-03**, 11,372 setups / 401 controls / 3,992 studies) was COPIED,
+and a scratch script read the copy through `TrackerStore.load_records("setups",
+scan_dates=<28-day window>)` and wrote a **windowed JSON extract of 5,696 setups**. The CLI ran on
+that extract, not on the mirror. Both policies at the same `as_of_session` (2026-09-03) and the
+same 28-day lookback. **32 cells, 27 changed, 26 rank moves.**
+
+| | episodes | pending | wins-losses | unweighted win rate | Wilson lower | episode-weighted mean R |
+|---|---|---|---|---|---|---|
+| `closed_first_v1` | 2,249 | 498 | 1,078-673 | 61.6% | 0.593 | -0.150 |
+| `first_actionable_v2` | 2,712 | 915 | 1,294-503 | 72.0% | 0.699 | +0.073 |
+
+`n_excluded` is 22 under both and `fully_excluded_groups` is 0. Largest single cell: LONG /
+favorite_setup / `avwape_to_1stdev`, 1,029 observations, 301 -> 409 episodes, 61.1% -> 73.4%,
+mean R -0.269 -> +0.002.
+
+**v2 bundles TWO policy questions, so the move is decomposed and neither half is answered here.**
+
+1. *Selection, or pending-stays-pending?* Overwhelmingly the second. Hold v2's SELECTION fixed and
+   grade it the old substituting way: 1,313-755, 63.5%, mean R **-0.138**. Honour
+   `representative_status`: 1,294-503, 72.0%, mean R **+0.044**. On the family-weighted figure the
+   whole move is -0.150 -> +0.073 and the substitution part is **+0.182 of +0.193, 94.2%**.
+2. *Is the win-rate move the 463 re-entries?* Under the OLD aggregation it is nothing else:
+   attempt >= 2 graded **72.5%** (235-89) against attempt 1 at **61.8%** (1,078-666), and v1's own
+   rate on those same 2,249 theses is 61.6%. After the fix both rise and the gap survives: attempt
+   1 **70.5%** (1,061-445), attempt >= 2 **80.1%** (233-58). Histogram: 2,249 first attempts, 393
+   seconds, 61 thirds, 9 fourths. **A second attempt exists only because the first one CLOSED, so
+   the attempt >= 2 population is survivorship by construction.** That is a question for the
+   trader; naming it is this packet's job, answering it is not.
+
+So the review's premise - that v1 flatters the rate - is not what the measurement shows. v1
+under-counts EPISODES (a genuine second entry is folded into its predecessor) and it over-counts
+GRADED ones (a pending representative was graded from the alternate plan's R). Those pull in
+opposite directions on the headline.
+
+### The two the reviewer caught
+
+**The compact scoring projection IS the record.** `_build_scoring_projection` writes a projection
+with no `scenarios` key and a `_scoring_outcome_summary`;
+`master_avwap_tracker_scoring_snapshot.json` holds 11,372 of them, and that summary is the only
+copy of the answer. The first ST4 build refused a cache lacking `representative_status` and
+recomputed, which on a scenario-less record returned `tradeable_scenario_count == 0` and dropped
+every setup: on a COPY of the live snapshot, `build_recent_tracker_setup_family_rows` gave **32
+rows on base and 0 on the branch** and `build_tracker_setup_type_rows` **74 nonzero `score_delta`
+on base and 0 on the branch**, which `runner.py`'s first D1 scan after a merge would have written
+into live `recent_tracker_score_delta` / `setup_type_score_delta`. **A missing key is never a
+reason to recompute.** A default read with no `as_of` takes the cache exactly as it did before
+ST4; a challenger or replay read of a scenario-less record answers `representative_status:
+"unknown_compact"` over the cached numbers, and under v2 such an episode is neither graded nor
+pending but NAMED (`unknown_compact_in_population`).
+
+**Pending has to stay pending in the AGGREGATE too, or the rule is decorative.** ST4.2 stopped the
+per-setup substitution, but the family loop selected `closed_rows` on `closed_setups > 0` (any
+tradeable scenario closed) and fell back to `avg_closed_r` when the representative's R was None -
+the same substitution, one level down, grading **271 of 2,712** v2 episodes whose representative
+was still running, 252 of them as losses. `_row_is_graded` is the single seam; under v1 it is the
+identical `closed_setups` test and every number is unchanged (golden).
+
+### A replay is blind to a compacted record
+
+History compaction empties a scenario's `events` (`scenario["events"] = []`), and
+`_scenario_recorded_exit_date` reads the last event, so a compacted CLOSED scenario cannot be
+dated and an `as_of_session` build reads it as still running. **0 of the 141,324 scenarios in the
+28-day window are compacted**, so the comparison above is unaffected; **99,562 of 206,341 across
+all history are**, so an earlier cutoff or a longer lookback walks straight into them. The rule:
+the row carries `representative_exit_undatable` and the family row names
+`undatable_exit_in_population=N`, because "still running" and "we cannot see when it closed" are
+different facts and only one of them is a trade still on. Related: a `(side, bucket, family)`
+whose every record was excluded produces NO row, so the build-level `fully_excluded_groups` is
+stamped on every row - the one number this accounting could otherwise lose with the group.
+
+### A scoring snapshot is not a tracker, and the tool says so
+
+The same compact-projection fact has a third edge, found on the re-review. Hand
+`tracker_selection_compare` a copy of `master_avwap_tracker_scoring_snapshot.json` and the two
+policies disagree for a reason that has nothing to do with either: v1 answers every setup out of
+the cached summary - a cache written with no cutoff, so a replay grades trades it could not have
+seen - while v2 cannot evaluate a scenario-less record and zeroes. Measured on the four-projection
+fixture: `v1 episodes 4 pending 0 wins 3 losses 1` beside `v2 episodes 4 pending 0 wins 0 losses
+0`. That report reads "v2 is broken" when the input was simply the wrong file. The CLI now counts
+setups carrying `_scoring_outcome_summary` with no `scenarios`, prints one line naming the
+snapshot, exits 2 and writes nothing. And `_row_is_unmeasurable` applies under **both** policies
+whenever an `as_of_session` is given, so a v1 replay of a compact record grades nothing either -
+the default read (v1, no `as_of`) is untouched, because `unknown_compact` is a status only the
+bypass path can write.
+
+**Live gate #78.** Nothing here promotes. The desk's next persisted tracker write must leave
+`selection_policy = closed_first_v1` on every recent family row AND leave the scan's
+`recent_tracker_score_delta` / `setup_type_score_delta` nonzero (32 / 74 on the 2026-09-05
+snapshot is the reproducible check); the artifact stays under
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`; and the policy decision is the
+trader's, as a separate change with its own golden fixtures.

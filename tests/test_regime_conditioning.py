@@ -29,7 +29,11 @@ def test_setup_regime_label_reads_feature_row():
 def test_regime_conditioning_downweights_cross_regime_history(monkeypatch):
     from master_avwap_lib import legacy
 
-    def fake_outcome(setup):
+    # `**_policy` because packet ST4 (2026-09-06) gave the real seam two
+    # opt-in keyword arguments (`policy`, `as_of_session`). The double takes
+    # and ignores them: this test is about the regime weighting, and no
+    # assertion below moves.
+    def fake_outcome(setup, **_policy):
         r = setup["_r"]
         return {
             "tradeable_scenario_count": 1,
