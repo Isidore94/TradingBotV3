@@ -46,10 +46,11 @@ OPEN representative's R as the mean of whichever ALTERNATE exit plans on the
 same stop had closed. A position still on the books was therefore printed as a
 realized result — usually a loss, because a stop closes before a target does. On
 the 2026-09-03 mirror, 271 of 2,712 v2 episodes had a pending representative and
-were being graded anyway: 252 as losses, 19 as wins. The same 2,249 theses move
-from **61.6% to 72.0% favorable**, and **94% of the mean-R move comes from
-pending-stays-pending alone**. It is not a new opinion about exits; it is the
-removal of a number the desk never measured.
+were being graded anyway: 252 as losses, 19 as wins. Honouring
+`representative_status` ALONE moves the same 2,249 theses from **61.6% to 70.5%
+favorable** and is **94% of the whole v2 mean-R move**; with (2) as well the
+reading is **72.0%** over 2,712 episodes. It is not a new opinion about exits;
+it is the removal of a number the desk never measured.
 
 **(2) A second entry after a first close is its own trade.** The tracker
 rescans a thesis every day it still looks like a setup, and
