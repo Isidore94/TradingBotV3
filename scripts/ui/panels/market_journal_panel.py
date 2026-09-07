@@ -30,10 +30,12 @@ from datetime import date, datetime
 from typing import Any
 
 from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -47,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui import theme
 from ui.widgets.candle_chart import CandleChart
 
 #: How many D1 charts the page shows. Six is the trader's own number.
@@ -73,6 +76,43 @@ EXCERPT_LIMIT = 90
 #: tall screen was half the page for an empty box. Four lines is a paragraph;
 #: the splitter handle still drags it as tall as the trader wants.
 COMPOSER_LINES = 4
+
+#: The reader's MEASURE, in characters of its own font (G3 fix round). The
+#: first cut of G3 gave `thought_view` the whole right half - 2,779 px at
+#: 3456 x 2160 - so a 68-character sentence was set as one 400-character
+#: line and the eye lost the start of it before it found the end. Typography
+#: has one rule here and it is old: a line of running text is readable at
+#: about 45-100 characters. The pane keeps its full width; the TEXT is capped
+#: and sits at the left of it, with the slack on the right.
+READER_MEASURE_CHARS = 100
+
+#: The same measure's ceiling in design pixels, so a large font on a small
+#: shell cannot push the column wider than the pane it lives in. Scaled
+#: through `theme.px`, and the SMALLER of the two wins.
+READER_MEASURE_MAX_PX = 1200
+
+#: The reader still needs a floor: a splitter dragged narrow must shrink the
+#: column, never hide it.
+READER_MEASURE_MIN_PX = 240
+
+#: How the left (entries + timeline + context) and right (reader + charts)
+#: halves of the page OPEN (G3 fix round). Stretch alone gave the entries
+#: column 655 px at 3456 x 2160, where a 90-character excerpt clipped after
+#: about 35 characters and the list read as nothing. One third is enough for
+#: the whole excerpt; the handle still drags it either way.
+LOWER_SPLIT_SHARES = (1000, 2000)
+
+
+def _reader_measure(metrics: QFontMetrics) -> int:
+    """The pixel width of `READER_MEASURE_CHARS` characters, capped and floored.
+
+    `averageCharWidth` is the font's own answer, so the measure follows the
+    theme instead of guessing at it; `theme.px` scales the ceiling the same
+    way every other Python-side pixel budget on this desk is scaled.
+    """
+    per_char = max(1, int(metrics.averageCharWidth()))
+    wanted = min(per_char * READER_MEASURE_CHARS, theme.px(READER_MEASURE_MAX_PX))
+    return max(theme.px(READER_MEASURE_MIN_PX), wanted)
 
 
 def _excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
@@ -299,12 +339,31 @@ class MarketJournalPanel(QFrame):
         charts_body.addWidget(self.digest_label)
         charts_body.addLayout(charts_layout, 1)
 
+        # G3 fix round: the words get a MEASURE. Left-aligned inside the pane
+        # with the slack on the right - a stretch after each row, so the pane
+        # keeps its full width and the text stops at about 100 characters.
+        # Polished first: the theme sizes fonts in the stylesheet, so an
+        # unpolished widget would be measured in the default font and the
+        # column would not follow the theme it claims to follow.
+        self.thought_view.ensurePolished()
+        reader_measure = _reader_measure(self.thought_view.fontMetrics())
+        self.thought_meta.setMaximumWidth(reader_measure)
+        self.thought_view.setMaximumWidth(reader_measure)
+        meta_row = QHBoxLayout()
+        meta_row.setContentsMargins(0, 0, 0, 0)
+        meta_row.addWidget(self.thought_meta, 1)
+        meta_row.addStretch(0)
+        view_row = QHBoxLayout()
+        view_row.setContentsMargins(0, 0, 0, 0)
+        view_row.addWidget(self.thought_view, 1)
+        view_row.addStretch(0)
+
         reader_widget = QWidget()
         reader_body = QVBoxLayout(reader_widget)
         reader_body.setContentsMargins(0, 0, 0, 0)
         reader_body.addWidget(QLabel("The thought, in full"))
-        reader_body.addWidget(self.thought_meta)
-        reader_body.addWidget(self.thought_view, 1)
+        reader_body.addLayout(meta_row)
+        reader_body.addLayout(view_row, 1)
 
         # G3.2: the right half is now READER over CHARTS. The charts are the
         # follow-on evidence; the trader opens this page to read what they
@@ -328,6 +387,12 @@ class MarketJournalPanel(QFrame):
         lower.addWidget(right)
         lower.setStretchFactor(0, 2)
         lower.setStretchFactor(1, 3)
+        # G3 fix round: 2:3 in STRETCH is only how a resize is shared, and the
+        # size hints opened the entries column at 655 px - where the 90-character
+        # excerpt clipped after about 35 and the list said nothing. These are
+        # proportions, not pixels (QSplitter scales them to the real width), so
+        # the column opens at a third of the page. The handle still moves.
+        lower.setSizes(list(LOWER_SPLIT_SHARES))
 
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(compose_widget)

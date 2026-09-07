@@ -322,3 +322,88 @@ def test_the_meta_line_keeps_the_zone_the_stored_stamp_carries(panel):
     # A naive stamp SAYS it is naive rather than being handed a zone.
     assert "no zone recorded" in _written_line("2026-09-02T13:36:35")
     assert _written_line("") == "written at an unrecorded time"
+
+
+# ==========================================================================
+# G3 FIX ROUND (2026-09-06) - the reader must be READABLE, which is the whole
+# point of the packet. The first cut put the words on the page and left them
+# unreadable: at 3456 x 2160 the thought was set across the full 2,779 px of
+# the right half (a 68-character sentence as one 400-character line), and the
+# entries column opened at 655 px, where the new 90-character excerpt clipped
+# after about 35 characters and the list read as nothing. Both are measured
+# at the trader's own screen size, offscreen.
+# ==========================================================================
+
+#: The trader's screen. Every number below is measured at it.
+DESK_SIZE = (3456, 2160)
+
+#: A line of running text is readable at about 45-100 characters. 100
+#: characters of this page's font measured 1,200 px; the bound is that plus
+#: slack for a frame, a scrollbar and a fatter font - anything near the pane's
+#: own 2,779 px is the defect.
+READABLE_MEASURE_MAX = 1250
+
+#: The excerpt is 90 characters. A column that cannot show most of one is a
+#: list of clipped fragments, which is what 655 px gave.
+ENTRIES_MIN_WIDTH = 1000
+
+
+def _at_desk_size(qapp, widget):
+    """Lay the page out at the trader's screen size, offscreen."""
+    widget.resize(*DESK_SIZE)
+    widget.show()
+    qapp.processEvents()
+    return widget
+
+
+def test_the_reader_is_capped_to_a_readable_measure_at_the_desks_own_size(qapp, panel):
+    """The words get a MEASURE, left-aligned, with the slack on the right.
+
+    The pane keeps its full width - the charts below it need it - so this is
+    read off the text widget inside the pane, not off the pane.
+    """
+    _at_desk_size(qapp, panel)
+    _render(panel, [_entry("mj-long", LONG_TEXT)])
+
+    pane = panel.thought_view.parent()
+    assert pane.width() > READABLE_MEASURE_MAX, (
+        "the right half is not wide enough for this measurement to mean anything: "
+        f"{pane.width()} px"
+    )
+
+    viewport = panel.thought_view.viewport().width()
+    assert viewport <= READABLE_MEASURE_MAX, (
+        f"the thought is set {viewport} px wide inside a {pane.width()} px pane - "
+        "one sentence becomes one very long line"
+    )
+    assert panel.thought_meta.width() <= READABLE_MEASURE_MAX, panel.thought_meta.width()
+    # ...and the reading starts at the LEFT of the pane, with the slack to the
+    # right. Centred text with a gutter on each side is not what was asked.
+    assert panel.thought_view.x() <= 24, panel.thought_view.x()
+    assert panel.thought_meta.x() <= 24, panel.thought_meta.x()
+    # A cap is not a hiding place: the column is still a real measure wide.
+    assert viewport >= 400, viewport
+
+
+def test_the_entries_column_opens_wide_enough_to_read_an_excerpt(qapp, panel):
+    """One third of the page, and the handle still moves."""
+    from PySide6.QtWidgets import QSplitter
+
+    from ui.panels.market_journal_panel import EXCERPT_LIMIT
+
+    _at_desk_size(qapp, panel)
+    _render(panel, [_entry("mj-long", LONG_TEXT)])
+
+    assert panel.entries.width() >= ENTRIES_MIN_WIDTH, (
+        f"the entries column opens at {panel.entries.width()} px, so a "
+        f"{EXCERPT_LIMIT}-character excerpt is clipped to a fragment"
+    )
+
+    # Still a splitter, still draggable: move it the other way and the column
+    # follows. A fixed third would be a different (and worse) answer.
+    lower = panel.entries.parent().parent()
+    assert isinstance(lower, QSplitter), type(lower).__name__
+    opened_at = panel.entries.width()
+    lower.setSizes([2400, 1000])
+    qapp.processEvents()
+    assert panel.entries.width() > opened_at, "the entries/charts handle no longer moves"
