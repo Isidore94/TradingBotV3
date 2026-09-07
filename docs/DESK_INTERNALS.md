@@ -2791,3 +2791,96 @@ KIND's cells - the swing leader was never chosen against the day-trade cells and
 and a concentration that was never taken says `concentration unmeasured` rather
 than `top symbol unmeasured`, which reads like a measurement that came back
 empty.
+**Live gate #78.** Nothing in ST4 promotes. The artifact stays under
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`, and the scan's
+`recent_tracker_score_delta` / `setup_type_score_delta` must stay nonzero (32 / 74 on the
+2026-09-05 snapshot is the reproducible check). Its `selection_policy = closed_first_v1`
+clause was written while the decision was still owed and is superseded by gate #84 below.
+
+## ST7 - the three decisions became the defaults, and a record has to say which (2026-09-07)
+
+The trader took two of them on 2026-09-06 ~21:15 PT - *"Yes a trade not yet completed should say
+pending. A second entry after a first close is its own trade yes. 3. This one is up to your
+discretion."* - and the lead took the third under that discretion. Decision record 0019 carries
+the reasoning, the numbers and the rollback; this entry carries the three things the CODE does
+that a reader would otherwise have to infer.
+
+**Why the stamp became unconditional.** ST3 wrote `execution_convention` / `level_knowledge` onto
+a record only for a non-default run and POPPED them otherwise, so a record replayed once under
+`gap_aware_v2` and then replayed again by the desk could not keep a label the desk did not use.
+That was exactly right while there had never been a flip: absent meant "the default", and the
+default was one thing forever. After 2026-09-07 absent means "written by some earlier version
+under some policy", which is not a fact anyone can act on. So `recompute_tracker_setup_record`
+writes both stamps on every run, including the v1 one, and `selection_policy` is on every family
+row and every `_scoring_outcome_summary`. The golden comparisons exclude the three stamp keys
+from byte-identity and assert them separately by name, so no stamp escapes assertion in either
+direction.
+
+**Why there is now a log line at the tracker write.** There was none - not a success line, not a
+count - so the packet's "state it in the log line the tracker write already emits" had nothing to
+extend. One was added at the CALL SITE (before `save_setup_tracker_payload`, not inside it,
+because the payload does not know which policies rebuilt it) reading
+`Setup tracker policies: selection=<..> execution=<..> levels=<..>`, logged unconditionally: an
+absent line and a line naming the v1 policies are different facts, and live gate #84 greps for
+the token.
+
+**The rule the flip needed that the packet did not name: an ABSENT `representative_status` is not
+a pending trade.** ST4's cache rule says a DEFAULT read of a compact scoring projection takes
+`_scoring_outcome_summary` verbatim, and it still does - `master_avwap_tracker_scoring_snapshot.json`
+holds 11,372 records with no `scenarios` key at all, and for the live scoring path that summary is
+the only copy of the answer. But v2's "pending stays pending" keys on `representative_status`, and
+a projection written BEFORE ST4 does not carry that column at all. `_row_is_graded` therefore
+reads the row's own `closed_setups` when the key is ABSENT, and `no_representative_in_population`
+counts those rows so the gap is visible rather than silent.
+
+**The size of the failure, measured rather than assumed** (reviewer, on a COPY of the 2026-09-06
+snapshot with the bridge reverted): the 32 recent family rows still appear - this is NOT the first
+ST4 build's total collapse - but their graded population goes **1,688 closed -> 0**, all 2,195
+episodes reading pending, and the nonzero `recent_tracker_score_delta` count goes **14 -> 7**. The
+`setup_type` deltas are **74 either way**, because `build_tracker_setup_type_rows` takes no policy
+argument at all and never consults one. Half the champion's recent-family score input going blank
+for one scan is a smaller fault than "everything zeroes" and is still the fault the bridge exists
+to prevent; quoting the bigger number would have been quoting the wrong incident.
+
+**The bridge is keyed on the key being ABSENT, never on the value being empty**, and the two are
+different measurements. A summary ST4+ wrote for a record whose scenarios carry no representative
+has the key with an EMPTY string - 48 such records on that snapshot - and it means "measured, and
+there is no representative", which is unmeasurable, not closed. Those rows are NOT bridged; 13
+episodes move pending -> unmeasured, so ST4's quoted 915 pending reads 902 + 13 on this branch.
+The coerced string on the row destroys the distinction, so the row carries
+`representative_status_known` (not exported; `TRACKER_RECENT_FAMILY_COLUMNS` is unchanged). A
+status that is PRESENT and reads `pending` is still never graded - that is the decision. The next
+persisted tracker write rebuilds every projection with the column filled, so this is a bridge, not
+a permanent second rule.
+
+**A record with NO representative scenario is UNMEASURED under the default, and that reaches the
+STUDY families.** `_representative_stop_label_for_setup` answers the protective band (`LOWER_1`
+long, `UPPER_1` short) unless the setup carries a first-band bounce signal, and
+`_representative_scenario` returns None when no tradeable scenario carries that stop label. v1 did
+not care - it graded on `closed_setups > 0` - so this never showed. The 1st-dev-breakout study's
+scenarios are stopped at the VWAP, so under the default their rows are produced, counted, and
+reported as `no_representative_in_population` with `closed_setups` 0 rather than graded. That is
+ST4's rule arriving somewhere ST4 did not measure, it is shadow evidence either way, and no
+champion pick is graded through it - but a reader of the study tables must not mistake the change
+for the study going quiet. It is pinned by
+`tests/test_first_dev_breakout.py::test_recent_family_rows_include_1stdev_breakout`, which now
+asserts BOTH readings.
+
+**The bypass moved with the default and the rule did not.** `unknown_compact` is what a read that
+cannot be answered from the cache says instead of returning an empty summary. That is any
+NON-default read - which is now `closed_first_v1` by name - or any `as_of_session` replay under
+either policy. Naming `first_actionable_v2` explicitly is the default read and takes the cache.
+
+**A test whose subject is one axis names the other.** Several ST3 cases isolate the execution
+convention while booking a target off a level; under the new default level knowledge that target
+is read from the PREVIOUS session, so with no `prior_session_levels` handed in they would have
+stopped booking and passed for the wrong reason. Those cases now name `same_session_v1` on both
+arms, or hand the same level in as the prior session's. The same applies to the Phase 0.10 B-2
+band-variant parity fixture: it is read under the policies it was FROZEN on, and a separate test
+re-runs its real subject - that a `VARIANT_*` scenario never enters a champion aggregate and never
+displaces a champion scenario - under whatever the defaults currently are.
+
+**Live gate #84.** The first persisted tracker write after merge logs the policies line, every
+record carries the three stamps, `n_pending` is non-zero, no `pending` representative is graded,
+the tables re-rank (expect the ST4 comparison's 2,249 -> 2,712 episodes and 61.6% -> 72.0%
+favorable), and the first D1 scan after it still writes NONZERO score deltas.

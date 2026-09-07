@@ -165,10 +165,22 @@ def test_v2_never_grades_an_episode_whose_representative_is_pending():
     assert int(v2["closed_setups"]) == 0
     assert v2["win_rate_closed_unweighted"] is None
 
-    v1 = m.build_recent_tracker_setup_family_rows(population, **kwargs)[0]
+    v1 = m.build_recent_tracker_setup_family_rows(
+        population,
+        selection_policy=selection_policy.SELECTION_CLOSED_FIRST_V1,
+        **kwargs,
+    )[0]
     assert int(v1["n_pending"]) == 0
     assert int(v1["n_losses"]) == 1, "characterized: the alternate's -1.00R is today's grade"
     assert int(v1["closed_setups"]) == 1
+
+    # ST7 (2026-09-06, decision 0019): v2 is the DEFAULT, so the bare call is
+    # the pending answer now. v1 keeps its name and its characterization above.
+    default = m.build_recent_tracker_setup_family_rows(population, **kwargs)[0]
+    assert default["selection_policy"] == selection_policy.SELECTION_FIRST_ACTIONABLE_V2
+    assert int(default["n_pending"]) == 1
+    assert int(default["n_losses"]) == 0
+    assert int(default["closed_setups"]) == 0
 
 
 def test_a_second_stamped_output_never_rewrites_the_first(tmp_path):

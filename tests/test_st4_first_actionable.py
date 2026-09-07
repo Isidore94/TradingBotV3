@@ -1,8 +1,17 @@
 """Packet ST4 - the selected opportunity is fixed before its outcome is seen.
 
 Written RED, before the fix, against the real seams in
-``scripts/master_avwap_lib/legacy.py``. The default policy must stay
-byte-identical; the challenger is opt-in evidence only.
+``scripts/master_avwap_lib/legacy.py``. When it was written the default policy
+had to stay byte-identical and the challenger was opt-in evidence only.
+
+**Packet ST7 (2026-09-06, decision 0019) made ``first_actionable_v2`` the
+DEFAULT**, on the trader's *"Yes a trade not yet completed should say pending. A
+second entry after a first close is its own trade yes."* Not one assertion below
+was removed for it: every leg that characterized v1 through the bare signature
+now NAMES ``SELECTION_CLOSED_FIRST_V1`` and asserts the same numbers, so v1 stays
+reproducible forever, and every "and the default agrees" leg now asserts the v2
+answer. Test 8 pins BOTH whole outputs - ``st4_family_rows_golden.csv`` for v1 by
+name, ``st7_family_rows_v2_default_golden.csv`` for the default.
 
 Everything this file pins, so the builder cannot satisfy it by inventing a
 different name (packet ST4, items ST4.1-ST4.5):
@@ -10,7 +19,8 @@ different name (packet ST4, items ST4.1-ST4.5):
 New module ``scripts/master_avwap_lib/selection_policy.py``
   * ``SELECTION_CLOSED_FIRST_V1`` - value ``"closed_first_v1"``, today's policy.
   * ``SELECTION_FIRST_ACTIONABLE_V2`` - value ``"first_actionable_v2"``.
-  * ``DEFAULT_SELECTION_POLICY`` - IS ``SELECTION_CLOSED_FIRST_V1``.
+  * ``DEFAULT_SELECTION_POLICY`` - was ``SELECTION_CLOSED_FIRST_V1``; since
+    packet ST7 it IS ``SELECTION_FIRST_ACTIONABLE_V2``.
   * ``REENTRY_RULE_V2`` - a non-empty documentation string.
   * ``assign_attempts(rows, *, policy) -> list[dict]`` - each returned row
     carries ``attempt_index`` (1-based int) and ``role``, one of the pinned
@@ -264,7 +274,8 @@ def test_closed_first_v1_named_explicitly_reproduces_todays_dedupe():
     """`tests/test_tracker_methodology.py` is untouched; the same two fixtures
     are replayed here with the policy NAMED, and must answer identically."""
     policy = _sp()
-    assert policy.DEFAULT_SELECTION_POLICY == policy.SELECTION_CLOSED_FIRST_V1
+    # ST7 moved the default; v1 keeps its name and its answers.
+    assert policy.DEFAULT_SELECTION_POLICY == policy.SELECTION_FIRST_ACTIONABLE_V2
 
     prefers_closed = [
         {"symbol": "NVDA", "side": "LONG", "anchor_date": "2026-01-02", "setup_family": "f",
@@ -295,6 +306,24 @@ def test_closed_first_v1_named_explicitly_reproduces_todays_dedupe():
     assert len(out) == 1
     assert out[0]["scan_date"] == "2026-01-05"
     assert out[0]["selection_policy"] == policy.SELECTION_CLOSED_FIRST_V1
+
+    # ST7: the DEFAULT dedupe is v2 and stamps its own name. Neither of these
+    # two fixtures holds a re-entry (the second row rescans a LIVE attempt in
+    # the first, and nothing has closed in the second), so v2 selects one row
+    # per thesis here too - and picks the EARLIEST scan, never the closed one.
+    default_prefers_closed = m._dedupe_recent_tracker_family_rows(
+        [dict(row) for row in prefers_closed]
+    )
+    assert len(default_prefers_closed) == 2
+    default_nvda = next(row for row in default_prefers_closed if row["symbol"] == "NVDA")
+    assert default_nvda["scan_date"] == "2026-01-05"
+    assert default_nvda["selection_policy"] == policy.SELECTION_FIRST_ACTIONABLE_V2
+    default_earliest = m._dedupe_recent_tracker_family_rows(
+        [dict(row) for row in earliest_when_none_closed]
+    )
+    assert len(default_earliest) == 1
+    assert default_earliest[0]["scan_date"] == "2026-01-05"
+    assert default_earliest[0]["selection_policy"] == policy.SELECTION_FIRST_ACTIONABLE_V2
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +382,11 @@ def test_open_representative_stays_pending_instead_of_borrowing_the_closed_mean(
     assert "representative_status" in m._summarize_tracker_setup_outcome(setup)
 
     policy = _sp()
+    # ST7: the DEFAULT is the repaired read - pending stays pending.
+    default = m._summarize_tracker_setup_outcome(setup)
+    assert default["representative_closed_r"] is None
+    assert default["representative_status"] == "pending"
+    assert default["selection_policy"] == policy.SELECTION_FIRST_ACTIONABLE_V2
     v2 = m._summarize_tracker_setup_outcome(setup, policy=policy.SELECTION_FIRST_ACTIONABLE_V2)
     assert v2["representative_closed_r"] is None
     assert v2["representative_status"] == "pending"
@@ -362,7 +396,7 @@ def test_open_representative_stays_pending_instead_of_borrowing_the_closed_mean(
     # mean of the OTHER closed scenarios - +3.00R for a trade still running.
     v1 = m._summarize_tracker_setup_outcome(setup, policy=policy.SELECTION_CLOSED_FIRST_V1)
     assert v1["representative_closed_r"] == pytest.approx(3.0)
-    assert m._summarize_tracker_setup_outcome(setup)["representative_closed_r"] == pytest.approx(3.0)
+    assert v1["selection_policy"] == policy.SELECTION_CLOSED_FIRST_V1
 
 
 # ---------------------------------------------------------------------------
@@ -396,11 +430,23 @@ def test_representative_exit_template_survives_a_scenario_dict_reorder():
     assert v2_reordered["representative_total_r"] == pytest.approx(2.0)
     assert v2_forward["representative_total_r"] == pytest.approx(2.0)
 
-    # Characterized: today the answer moves with the dict order, and so does
-    # the headline R (+2.00R becomes -1.00R for the same setup). That is the
-    # defect this fixture documents.
-    v1_forward = m._summarize_tracker_setup_outcome(forward)
-    v1_reordered = m._summarize_tracker_setup_outcome(reordered)
+    # ST7: the DEFAULT is v2, so the declared template survives the reorder.
+    assert m._summarize_tracker_setup_outcome(reordered)[
+        "representative_exit_template_id"
+    ] == "full_band2"
+    assert m._summarize_tracker_setup_outcome(reordered)[
+        "representative_total_r"
+    ] == pytest.approx(2.0)
+
+    # Characterized under v1 BY NAME: the answer moves with the dict order, and
+    # so does the headline R (+2.00R becomes -1.00R for the same setup). That is
+    # the defect this fixture documents and ST7 retired from the default.
+    v1_forward = m._summarize_tracker_setup_outcome(
+        forward, policy=policy.SELECTION_CLOSED_FIRST_V1
+    )
+    v1_reordered = m._summarize_tracker_setup_outcome(
+        reordered, policy=policy.SELECTION_CLOSED_FIRST_V1
+    )
     assert v1_forward["representative_exit_template_id"] == "full_band2"
     assert v1_reordered["representative_exit_template_id"] == "full_band3"
     assert v1_forward["representative_total_r"] == pytest.approx(2.0)
@@ -460,7 +506,12 @@ def test_a_second_attempt_needs_the_first_to_have_closed_first():
     assert len(policy.select_episode_rows(
         [dict(row) for row in rows], policy=policy.SELECTION_CLOSED_FIRST_V1
     )) == 1
-    assert len(m._dedupe_recent_tracker_family_rows([dict(row) for row in rows])) == 1
+    assert len(m._dedupe_recent_tracker_family_rows(
+        [dict(row) for row in rows], policy=policy.SELECTION_CLOSED_FIRST_V1
+    )) == 1
+
+    # ST7: the DEFAULT sees the second entry.
+    assert len(m._dedupe_recent_tracker_family_rows([dict(row) for row in rows])) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -577,11 +628,18 @@ def test_population_accounting_names_untradeable_and_expired_unmeasured(policy_a
 
 
 # ---------------------------------------------------------------------------
-# 8 (invariant) - the default call is byte-identical to today's output.
+# 8 (invariant) - two policies, two whole outputs, both pinned.
 # ---------------------------------------------------------------------------
-def test_default_policy_reproduces_the_golden_family_rows_byte_for_byte():
+V2_GOLDEN_CSV = FIXTURES_DIR / "st7_family_rows_v2_default_golden.csv"
+
+
+def test_v1_by_name_reproduces_the_golden_family_rows_and_the_default_is_the_v2_pin():
     """`tests/fixtures/st4_family_rows_golden.csv` was pinned from `main` at
-    84ee24d6 by a scratch script, BEFORE any ST4 code existed."""
+    84ee24d6 by a scratch script, BEFORE any ST4 code existed, and is reproduced
+    by NAMING `closed_first_v1`. `st7_family_rows_v2_default_golden.csv` was
+    pinned on `main` at 68762909 through the explicit `first_actionable_v2`
+    keyword, BEFORE the default flipped, and is what a DEFAULT build must now
+    produce - so neither pin is a self-portrait of the code under test."""
     golden_text = GOLDEN_CSV.read_text(encoding="utf-8")
     golden_columns = next(csv.reader(io.StringIO(golden_text)))
 
@@ -589,8 +647,20 @@ def test_default_policy_reproduces_the_golden_family_rows_byte_for_byte():
         _golden_setups(),
         reference_date=GOLDEN_REFERENCE_DATE,
         lookback_days=GOLDEN_LOOKBACK_DAYS,
+        selection_policy=_sp().SELECTION_CLOSED_FIRST_V1,
     )
     assert _rows_to_csv_text(rows, golden_columns) == golden_text
+
+    v2_text = V2_GOLDEN_CSV.read_text(encoding="utf-8")
+    v2_columns = next(csv.reader(io.StringIO(v2_text)))
+    assert v2_text != golden_text, "the new default really moves the rows"
+
+    default_rows = m.build_recent_tracker_setup_family_rows(
+        _golden_setups(),
+        reference_date=GOLDEN_REFERENCE_DATE,
+        lookback_days=GOLDEN_LOOKBACK_DAYS,
+    )
+    assert _rows_to_csv_text(default_rows, v2_columns) == v2_text
 
     explicit_default = m.build_recent_tracker_setup_family_rows(
         _golden_setups(),
@@ -598,7 +668,7 @@ def test_default_policy_reproduces_the_golden_family_rows_byte_for_byte():
         lookback_days=GOLDEN_LOOKBACK_DAYS,
         selection_policy=_sp().DEFAULT_SELECTION_POLICY,
     )
-    assert _rows_to_csv_text(explicit_default, golden_columns) == golden_text
+    assert _rows_to_csv_text(explicit_default, v2_columns) == v2_text
 
 
 # ---------------------------------------------------------------------------

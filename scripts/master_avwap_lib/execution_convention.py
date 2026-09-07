@@ -7,14 +7,17 @@ O80/H85/L79/C82 books the stop at 95 for -1.014R when the honest fill is the
 open at 80 for -4.014R. That is not a rounding difference; it is the tail of the
 distribution being deleted.
 
-This module declares the convention as a NAMED, VERSIONED policy so the repair
-is opt-in and the shipped behaviour keeps its own name:
+This module declares the convention as a NAMED, VERSIONED policy so both
+behaviours keep their own name. Packet ST7 (2026-09-06, decision 0019) made
+the repair the DEFAULT; v1 did not move and stays selectable:
 
-``EXECUTION_LITERAL_LEVEL_V1`` (``"literal_level_v1"``, the DEFAULT)
-    Today's behaviour exactly. A touched level fills at the level. Nothing in
-    this module changes it; ``resolve_fill`` is simply not consulted.
+``EXECUTION_LITERAL_LEVEL_V1`` (``"literal_level_v1"``)
+    The behaviour that shipped until 2026-09-06. A touched level fills at the
+    level. Nothing in this module changes it; ``resolve_fill`` is simply not
+    consulted. Still selectable by name, and the "old" arm of
+    ``scripts/tracker_execution_compare.py``.
 
-``EXECUTION_GAP_AWARE_V2`` (``"gap_aware_v2"``)
+``EXECUTION_GAP_AWARE_V2`` (``"gap_aware_v2"``, the DEFAULT since 2026-09-06)
     The repaired convention. Four rules, and no rule ever pretends that daily
     OHLC reveals the intrabar sequence:
 
@@ -57,13 +60,15 @@ is opt-in and the shipped behaviour keeps its own name:
 Level knowledge is a SEPARATE, independently versioned axis, declared here so
 the two policies a replay runs under are named in one place:
 
-``LEVEL_KNOWLEDGE_SAME_SESSION_V1`` (``"same_session_v1"``, the DEFAULT)
-    Today's behaviour: a bar's own high/low are tested against
+``LEVEL_KNOWLEDGE_SAME_SESSION_V1`` (``"same_session_v1"``)
+    The behaviour that shipped until 2026-09-06: a bar's own high/low are
+    tested against
     ``band_history[<that same day>]``, whose anchored-VWAP bands were computed
     by folding that same day's bar into the cumulative sums. The level is known
     only at the day's CLOSE, so an intrabar test against it is look-ahead.
 
-``LEVEL_KNOWLEDGE_PRIOR_SESSION_V2`` (``"prior_session_v2"``)
+``LEVEL_KNOWLEDGE_PRIOR_SESSION_V2`` (``"prior_session_v2"``, the DEFAULT
+since 2026-09-06)
     The levels handed to the INTRABAR tests for bar D are the LAST SESSION's
     strictly before D. CLOSE-based decisions (the two-closes protective stop,
     the maximum-hold force close) keep day D's levels, because at the close
@@ -71,13 +76,19 @@ the two policies a replay runs under are named in one place:
     intrabar test and the reason ``no_prior_session_level`` is counted on the
     scenario - never silently treated as "not hit" without a count.
 
-**Nothing here is authorization.** ``gap_aware_v2`` / ``prior_session_v2`` are
-shadow evidence, produced on copies by ``scripts/tracker_execution_compare.py``.
-The champion's scoring convention stays ``literal_level_v1`` /
-``same_session_v1`` until the trader decides otherwise, and
-``calc_anchored_vwap_bands`` / ``calc_anchored_vwap_band_history`` are frozen
-(decision 0008) - this module changes WHICH DAY's levels a bar is tested
-against and WHAT PRICE a touch books, never one line of the formula.
+**What ST7 authorised and what it did not.** The trader's 2026-09-06 decision
+(record ``docs/decisions/0019-tracker-selection-and-execution-defaults.md``)
+made ``gap_aware_v2`` / ``prior_session_v2`` the DEFAULT of the tracker replay,
+on the lead's discretion, because each is a pure correctness fix: a fill the
+market never printed, and a level that only that day's own close could have
+known. The tracker rebuilds every record on each persisted write, so history is
+restated by construction - that is the point of the decision, and the rollback
+is one switch by name. ``calc_anchored_vwap_bands`` /
+``calc_anchored_vwap_band_history`` are still frozen (decision 0008): this
+module changes WHICH DAY's levels a bar is tested against and WHAT PRICE a touch
+books, never one line of the formula. Nothing here promotes a setup, reaches a
+detector, an alert, a watchlist, Focus, the review queue or
+``review_policy.json``.
 """
 
 from __future__ import annotations
@@ -90,8 +101,10 @@ from typing import Any, Mapping
 EXECUTION_LITERAL_LEVEL_V1 = "literal_level_v1"
 #: The repaired convention: gaps, missing opens and invalid candles are honest.
 EXECUTION_GAP_AWARE_V2 = "gap_aware_v2"
-#: What every production caller gets when it says nothing.
-DEFAULT_EXECUTION_CONVENTION = EXECUTION_LITERAL_LEVEL_V1
+#: What every production caller gets when it says nothing. Packet ST7
+#: (2026-09-06, decision 0019) made the repair the default; `literal_level_v1`
+#: stays selectable by name and is the "old" arm of every comparison CLI.
+DEFAULT_EXECUTION_CONVENTION = EXECUTION_GAP_AWARE_V2
 
 EXECUTION_CONVENTIONS = (EXECUTION_LITERAL_LEVEL_V1, EXECUTION_GAP_AWARE_V2)
 
@@ -99,8 +112,10 @@ EXECUTION_CONVENTIONS = (EXECUTION_LITERAL_LEVEL_V1, EXECUTION_GAP_AWARE_V2)
 LEVEL_KNOWLEDGE_SAME_SESSION_V1 = "same_session_v1"
 #: The repaired level knowledge: intrabar tests read the prior session.
 LEVEL_KNOWLEDGE_PRIOR_SESSION_V2 = "prior_session_v2"
-#: What every production caller gets when it says nothing.
-DEFAULT_LEVEL_KNOWLEDGE = LEVEL_KNOWLEDGE_SAME_SESSION_V1
+#: What every production caller gets when it says nothing. Packet ST7
+#: (2026-09-06, decision 0019) made the repair the default; `same_session_v1`
+#: stays selectable by name.
+DEFAULT_LEVEL_KNOWLEDGE = LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
 
 LEVEL_KNOWLEDGE_POLICIES = (
     LEVEL_KNOWLEDGE_SAME_SESSION_V1,

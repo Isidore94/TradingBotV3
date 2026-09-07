@@ -40,9 +40,24 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from build_tracker_band_variant_parity_fixture import measure  # noqa: E402
+from master_avwap_lib import execution_convention as ec  # noqa: E402
+from master_avwap_lib import selection_policy as sp  # noqa: E402
 
 FIXTURE = "tracker_record_band_variant_parity_v1"
 VARIANT_LABELS = {"VARIANT_LOWER_1", "VARIANT_UPPER_1"}
+
+#: The policies this fixture was FROZEN under (2026-08-26). Packet ST7
+#: (2026-09-06, decision 0019) moved all three defaults, so the parity read
+#: names them: a characterization re-read under a policy it was not frozen on
+#: measures a different thing and proves nothing about the shadow fence, which
+#: is what this file exists for. The `measured_default` fixture below re-runs
+#: the same fence under whatever the defaults currently are, so neither the
+#: frozen pin nor today's behaviour goes unchecked.
+FROZEN_POLICIES = {
+    "execution_convention": ec.EXECUTION_LITERAL_LEVEL_V1,
+    "level_knowledge": ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
+    "selection_policy": sp.SELECTION_CLOSED_FIRST_V1,
+}
 
 
 @pytest.fixture(scope="module")
@@ -52,6 +67,17 @@ def contract():
 
 @pytest.fixture(scope="module")
 def measured(contract):
+    rules = contract["rules_under_test"]
+    bars = list(contract["bars"])
+    return {
+        "long": measure(bars, dict(rules["long_row"]), **FROZEN_POLICIES),
+        "short": measure(bars, dict(rules["short_row"]), **FROZEN_POLICIES),
+    }
+
+
+@pytest.fixture(scope="module")
+def measured_default(contract):
+    """The same recipe under the CURRENT defaults - no policy named."""
     rules = contract["rules_under_test"]
     bars = list(contract["bars"])
     return {
@@ -149,6 +175,45 @@ def test_the_shadow_scenarios_come_last(contract, measured, side):
         pytest.skip("no shadow scenarios on this record")
     assert min(variant_positions) == len(labels) - len(variant_positions), (
         f"shadow scenarios are interleaved with the champion's: {labels}"
+    )
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_the_shadow_fence_holds_under_the_current_defaults_too(
+    contract, measured_default, side
+):
+    """ST7 moved the replay's defaults; the FENCE is what must not move.
+
+    The frozen numbers above are a v1 characterization and are read under v1 by
+    name. This test asserts the property the fixture actually protects - a
+    band-variant scenario never enters a champion aggregate and never displaces
+    a champion scenario - under whatever the defaults are today, so a future
+    policy change cannot quietly unfence the shadow.
+    """
+    expected_ids = list(contract["expected"][side]["record"]["scenarios"])
+    scenarios = measured_default[side]["record"]["scenarios"]
+    labels = [
+        str(scenario.get("stop_reference_label") or "")
+        for scenario in scenarios.values()
+    ]
+    champion_ids = [
+        key
+        for key in scenarios
+        if str(scenarios[key].get("stop_reference_label") or "") not in VARIANT_LABELS
+    ]
+    assert champion_ids == expected_ids
+    variant_positions = [i for i, label in enumerate(labels) if label in VARIANT_LABELS]
+    assert variant_positions, "no shadow scenario was built under the defaults"
+    assert min(variant_positions) == len(labels) - len(variant_positions)
+
+    # The champion aggregate counts the champion's own non-experimental
+    # scenarios and no shadow one. The COUNT is a fence fact, not a v1 number:
+    # ST7 moved which fills and levels the replay books, never how many
+    # scenarios a record carries.
+    summary = measured_default[side]["outcome_summary"]
+    frozen = contract["expected"][side]["outcome_summary"]
+    assert int(summary["tradeable_scenario_count"]) == int(
+        frozen["tradeable_scenario_count"]
     )
 
 

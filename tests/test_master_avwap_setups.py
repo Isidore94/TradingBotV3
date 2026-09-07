@@ -437,6 +437,20 @@ def _build_tracker_setup(
                 "tradeable": True,
                 "status": scenario_status,
                 "total_r": total_r,
+                # ST7 (2026-09-07): the stub carries the two fields that make it
+                # a REPRESENTATIVE scenario, which every real tracker record has
+                # (`_build_tracker_scenarios_from_setup` writes both) and this
+                # stub simply never bothered with. Without them
+                # `_representative_scenario` finds no match, the summary reports
+                # `representative_status ""`, and under the default policy the
+                # row is unmeasurable rather than graded - so every aggregate
+                # assertion below would have been measuring "no representative"
+                # instead of the recency weighting it is named for. The values
+                # are the ones the champion picks for a LONG/SHORT setup with no
+                # bounce signal: `_representative_stop_label_for_setup` and
+                # `REPRESENTATIVE_EXIT_TEMPLATE_ID_V2`.
+                "stop_reference_label": "LOWER_1" if side.upper() == "LONG" else "UPPER_1",
+                "exit_template_id": "full_band2",
             }
         },
     }
@@ -3797,6 +3811,21 @@ class MasterAvwapSetupTests(unittest.TestCase):
             dynamic_level_overrides={
                 POST_EARNINGS_STOP_LABEL: 95.0,
                 "UPPER_2": 110.0,
+            },
+            # ST7 (2026-09-06, decision 0019): the DEFAULT level knowledge is
+            # `prior_session_v2`, so an intrabar target test reads the level the
+            # PREVIOUS session established. The subject of this test is the
+            # pre-earnings anchor OVERRIDE, not which day's level is read, so
+            # the same override is handed to both sessions and the override
+            # resolution is asserted exactly as it always was.
+            prior_session_levels={
+                "trade_date": "2026-05-06",
+                "anchor_levels": {"bands": {"UPPER_2": 200.0}, "vwap": 95.0},
+                "indicator_row": None,
+                "dynamic_level_overrides": {
+                    POST_EARNINGS_STOP_LABEL: 95.0,
+                    "UPPER_2": 110.0,
+                },
             },
         )
 

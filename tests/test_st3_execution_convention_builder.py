@@ -16,6 +16,13 @@ packet's one ambiguity was decided:
 
 Nothing here weakens or restates a tester assertion; it only covers ground the
 tester's file does not.
+
+**Packet ST7 (2026-09-06, decision 0019) made `gap_aware_v2` / `prior_session_v2`
+the DEFAULT.** No assertion below was removed for it. Every leg that used to
+exercise v1 through the bare signature now NAMES `literal_level_v1` /
+`same_session_v1` and asserts the same numbers, and each of those tests gained a
+DEFAULT leg asserting the v2 answer. A test whose subject is ONE axis names the
+other axis on both arms rather than letting it drift with the default.
 """
 
 from __future__ import annotations
@@ -81,13 +88,22 @@ def test_a_missing_prior_session_level_is_counted_and_the_target_is_not_booked()
     levels = {"bands": {"UPPER_3": 110.0}}
     bar = _bar(open_=105, high=111, low=104, close=110)
 
-    # Today's policy books it.
+    # v1 BY NAME books it - the look-ahead that shipped until 2026-09-06.
     same_session = _scenario(final_target_label="UPPER_3")
     events = m._evaluate_tracker_scenario_bar(
-        same_session, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2
+        same_session, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2,
+        level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1,
     )
     assert [event["reason"] for event in events] == ["FINAL_TARGET"]
     assert "intrabar_skip_reasons" not in same_session
+
+    # ST7: with NO keyword the skip is what happens, and it is counted.
+    default = _scenario(final_target_label="UPPER_3")
+    assert m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", bar, levels, None, is_entry_day=False, bar_index=2,
+        prior_session_levels=None,
+    ) == []
+    assert default["intrabar_skip_reasons"] == {ec.NO_PRIOR_SESSION_LEVEL: 1}
 
     prior = _scenario(final_target_label="UPPER_3")
     skipped = m._evaluate_tracker_scenario_bar(
@@ -231,10 +247,13 @@ def test_the_record_replay_counts_the_skip_when_the_anchor_starts_that_day():
         },
     }
 
-    same_session = m.recompute_tracker_setup_record(copy.deepcopy(setup), df)
+    same_session = m.recompute_tracker_setup_record(
+        copy.deepcopy(setup), df, level_knowledge=ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1
+    )
     booked = same_session["scenarios"]["s1"]
     assert [event["reason"] for event in booked["events"]] == ["FINAL_TARGET"]
     assert "intrabar_skip_reasons" not in booked
+    assert same_session["level_knowledge"] == ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1
 
     prior = m.recompute_tracker_setup_record(
         copy.deepcopy(setup), df, level_knowledge=ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
@@ -243,6 +262,13 @@ def test_the_record_replay_counts_the_skip_when_the_anchor_starts_that_day():
     assert repaired["events"] == []
     assert repaired["intrabar_skip_reasons"] == {ec.NO_PRIOR_SESSION_LEVEL: 1}
     assert prior["level_knowledge"] == ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
+
+    # ST7: the DEFAULT record is the repaired one, and it says so.
+    default = m.recompute_tracker_setup_record(copy.deepcopy(setup), df)
+    default_scenario = default["scenarios"]["s1"]
+    assert default_scenario["events"] == []
+    assert default_scenario["intrabar_skip_reasons"] == {ec.NO_PRIOR_SESSION_LEVEL: 1}
+    assert default["level_knowledge"] == ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2
 
 
 # ---------------------------------------------------------------------------
@@ -257,15 +283,24 @@ def test_an_invalid_bar_on_the_max_hold_index_defers_the_time_stop_to_the_next_v
     """
     broken = _bar(open_=93, high=90, low=95, close=92)
 
-    # v1 today, characterized: the broken candle's `low` clears the hard stop
+    # v1 BY NAME, characterized: the broken candle's `low` clears the hard stop
     # and books a fill at a level nothing traded at.
     v1 = _scenario(hard_stop_r_multiple=1.0)
     v1_events = m._evaluate_tracker_scenario_bar(
         v1, "LONG", "2026-01-05", broken, None, None,
         is_entry_day=False, bar_index=m.TRACKER_MAX_HOLD_DAYS,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
     assert [event["reason"] for event in v1_events] == ["HARD_STOP"]
     assert v1_events[0]["price"] == pytest.approx(95.0)
+
+    # ST7: with NO keyword the same bar books nothing and defers the clock.
+    default = _scenario(hard_stop_r_multiple=1.0)
+    assert m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", broken, None, None,
+        is_entry_day=False, bar_index=m.TRACKER_MAX_HOLD_DAYS,
+    ) == []
+    assert default["time_stop_deferred"] is True
 
     v2 = _scenario(hard_stop_r_multiple=1.0)
     nothing = m._evaluate_tracker_scenario_bar(
@@ -324,22 +359,42 @@ def test_a_time_stop_on_a_valid_bar_is_a_plain_close_fill_under_v2():
 
 
 # ---------------------------------------------------------------------------
-# The default path grew no keys
+# Which keys each convention's event dict carries
 # ---------------------------------------------------------------------------
-def test_the_default_event_dict_has_exactly_the_keys_it_always_had():
+SHIPPED_EVENT_KEYS = {
+    "trade_date", "reason", "price", "shares", "pnl", "gross_pnl", "cost"
+}
+
+
+def test_the_v1_event_dict_keeps_its_keys_and_the_default_adds_exactly_two():
+    """v1's event dict is the shipped one, key for key.
+
+    Until ST7 that was also the DEFAULT event dict. It is not any more: the
+    default is `gap_aware_v2`, whose events carry `fill_basis` and
+    `execution_convention` - two ADDITIVE keys and no more, which is what this
+    test now pins on both arms.
+    """
     scenario = _scenario(hard_stop_r_multiple=1.0)
     events = m._evaluate_tracker_scenario_bar(
         scenario, "LONG", "2026-01-05", _bar(open_=80, high=85, low=79, close=82),
         None, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
-    assert set(events[0]) == {
-        "trade_date", "reason", "price", "shares", "pnl", "gross_pnl", "cost"
-    }
+    assert set(events[0]) == SHIPPED_EVENT_KEYS
 
-    direct = m._apply_scenario_exit_event(_scenario(), 100, 110.0, "2026-01-02", "FINAL_TARGET")
-    assert set(direct) == {
-        "trade_date", "reason", "price", "shares", "pnl", "gross_pnl", "cost"
+    default_scenario = _scenario(hard_stop_r_multiple=1.0)
+    default_events = m._evaluate_tracker_scenario_bar(
+        default_scenario, "LONG", "2026-01-05", _bar(open_=80, high=85, low=79, close=82),
+        None, None, is_entry_day=False, bar_index=2,
+    )
+    assert set(default_events[0]) == SHIPPED_EVENT_KEYS | {
+        "fill_basis", "execution_convention"
     }
+    assert default_events[0]["execution_convention"] == ec.EXECUTION_GAP_AWARE_V2
+
+    # The low-level writer is convention-blind and still writes the seven.
+    direct = m._apply_scenario_exit_event(_scenario(), 100, 110.0, "2026-01-02", "FINAL_TARGET")
+    assert set(direct) == SHIPPED_EVENT_KEYS
 
 
 def test_a_close_based_stop_fail_is_named_close_under_v2_and_unnamed_under_v1():
@@ -474,6 +529,10 @@ def test_the_deferral_flag_is_cleared_when_a_final_target_closes_the_scenario():
     )
     assert scenario["time_stop_deferred"] is True
 
+    # ST7: the default level knowledge is `prior_session_v2`, so the target the
+    # replay may test against is the one the PREVIOUS session established. It
+    # is the same 110 here - the subject of this test is the deferral flag, not
+    # which day's level is read.
     events = m._evaluate_tracker_scenario_bar(
         scenario,
         "LONG",
@@ -484,6 +543,12 @@ def test_the_deferral_flag_is_cleared_when_a_final_target_closes_the_scenario():
         is_entry_day=False,
         bar_index=m.TRACKER_MAX_HOLD_DAYS + 1,
         execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+        prior_session_levels={
+            "trade_date": "2026-01-05",
+            "anchor_levels": levels,
+            "indicator_row": None,
+            "dynamic_level_overrides": None,
+        },
     )
     assert [event["reason"] for event in events] == ["FINAL_TARGET"]
     assert events[0]["fill_basis"] == ec.FILL_BASIS_GAP_OPEN
@@ -499,12 +564,20 @@ def test_an_invalid_bar_is_counted_the_way_a_missing_prior_level_is():
     """
     broken = _bar(open_=93, high=90, low=95, close=92)
 
-    # v1 books through it and counts nothing: the count is a v2 idea.
+    # v1 BY NAME books through it and counts nothing: the count is a v2 idea.
     v1 = _scenario(hard_stop_r_multiple=1.0)
     m._evaluate_tracker_scenario_bar(
-        v1, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2
+        v1, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
     assert "skipped_bar_reasons" not in v1
+
+    # ST7: the default counts it.
+    default = _scenario(hard_stop_r_multiple=1.0)
+    assert m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2
+    ) == []
+    assert default["skipped_bar_reasons"] == {ec.FILL_BASIS_INVALID_BAR: 1}
 
     v2 = _scenario(hard_stop_r_multiple=1.0)
     assert m._evaluate_tracker_scenario_bar(
@@ -537,7 +610,8 @@ def test_an_invalid_bar_under_v2_skips_the_excursion_and_the_unrealized_mark():
 
     v1 = _scenario()
     m._evaluate_tracker_scenario_bar(
-        v1, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2
+        v1, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_LITERAL_LEVEL_V1,
     )
     assert v1["max_adverse_r"] > 0.0
     assert v1["unrealized_pnl"] != 0.0
@@ -550,3 +624,12 @@ def test_an_invalid_bar_under_v2_skips_the_excursion_and_the_unrealized_mark():
     assert "max_adverse_r" not in v2
     assert "max_favorable_r" not in v2
     assert "unrealized_pnl" not in v2
+
+    # ST7: the DEFAULT reads nothing off it either.
+    default = _scenario()
+    m._evaluate_tracker_scenario_bar(
+        default, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2
+    )
+    assert "max_adverse_r" not in default
+    assert "max_favorable_r" not in default
+    assert "unrealized_pnl" not in default
