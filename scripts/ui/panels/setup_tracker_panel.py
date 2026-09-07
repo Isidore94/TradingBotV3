@@ -645,6 +645,14 @@ class SetupTrackerPanel(QFrame):
         # picks it shows the family mechanics plus THIS symbol's stop/target
         # prices from the current anchor bands.
         self.detail_view = SetupDetailView(self, playbook_lookup=self._best_playbook_row)
+        #: Packet G4b. `SetupDetailView.shown_identity` is deliberately coarse -
+        #: `(kind, side, family, symbol, dimension)` - and on the Setup Types
+        #: export two rows of one (side, family) live in different zones and
+        #: buckets, so the identity alone would re-show the wrong row after a
+        #: refresh. This is the SHOWN row's widening key, recorded beside the
+        #: identity by the two show helpers below and trusted only while the
+        #: pane is up. `None` means nothing is shown.
+        self._detail_widened_key: tuple | None = None
         self.current_table.clicked.connect(self._on_pick_clicked)
         explained_tables = (
             (self.setup_type_table, "setup_type"),
@@ -660,6 +668,35 @@ class SetupTrackerPanel(QFrame):
             table.clicked.connect(
                 lambda index, explanation_kind=kind: self._on_research_row_clicked(index, explanation_kind)
             )
+        #: Every table that can open the pane, with the model that holds its
+        #: rows and the `show_*` call its tab uses (`""` is `show_setup`).
+        #: Looked up by TAB rather than by position, so adding or reordering a
+        #: tab cannot silently re-point the re-show.
+        self._detail_tables: tuple[tuple[DataTable, TrackerTableModel, str], ...] = (
+            (self.current_table, self.current_model, ""),
+            *(
+                (table, model, kind)
+                for (table, kind), model in zip(
+                    explained_tables,
+                    (
+                        self.setup_type_model,
+                        self.recent_type_model,
+                        self.short_term_model,
+                        self.playbook_model,
+                        self.scan_factor_model,
+                        self.tier_performance_model,
+                        self.catch_rate_model,
+                        self.human_pick_model,
+                    ),
+                    strict=True,
+                )
+            ),
+        )
+        # G4b.1: any tab move is a context change and retires the explanation.
+        # The pane carries STOP AND TARGET PRICES on this page, so one left
+        # standing beside another tab's table is a price plan read against the
+        # wrong row.
+        self.tabs.currentChanged.connect(self._on_context_tab_changed)
 
         self._attributesLoaded.connect(self._on_attributes_loaded)
         self._build_layout()
@@ -928,6 +965,12 @@ class SetupTrackerPanel(QFrame):
         self.status_label.setText(status)
         self.statusChanged.emit(status)
 
+        # G4b.2, LAST: every model above now holds the new rows, so an open
+        # explanation is either re-drawn from the row that replaced it or taken
+        # down. Running it here rather than earlier is what keeps the tables
+        # themselves untouched by this packet.
+        self._reshow_or_clear_detail()
+
     # ------------------------------------------------------------------
     # Click-to-detail: family mechanics + this symbol's stop/target prices
     # ------------------------------------------------------------------
@@ -935,6 +978,16 @@ class SetupTrackerPanel(QFrame):
         row = index.data(ROW_ROLE)
         if not isinstance(row, dict):
             return
+        self._show_pick_row(row)
+
+    def _on_research_row_clicked(self, index, kind: str) -> None:
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, dict):
+            return
+        self._show_research_row(kind, row)
+
+    # -- the two show paths, shared by a click and by a refresh's re-show ---
+    def _show_pick_row(self, row: dict[str, Any]) -> None:
         self.detail_view.show_setup(
             symbol=str(row.get("symbol") or ""),
             side=str(row.get("side") or "LONG"),
@@ -942,18 +995,68 @@ class SetupTrackerPanel(QFrame):
             tier=str(row.get("tier") or ""),
             last_close=row.get("last_close"),
         )
+        self._detail_widened_key = _detail_widened_key(row)
 
-    def _on_family_row_clicked(self, index) -> None:
-        row = index.data(ROW_ROLE)
-        if not isinstance(row, dict):
-            return
-        self.detail_view.show_family(str(row.get("setup_family") or ""), side=str(row.get("side") or ""))
-
-    def _on_research_row_clicked(self, index, kind: str) -> None:
-        row = index.data(ROW_ROLE)
-        if not isinstance(row, dict):
-            return
+    def _show_research_row(self, kind: str, row: dict[str, Any]) -> None:
         self.detail_view.show_research_row(kind, row)
+        self._detail_widened_key = _detail_widened_key(row)
+
+    def _clear_detail(self) -> None:
+        self.detail_view.clear()
+        self._detail_widened_key = None
+
+    def _on_context_tab_changed(self, _index: int) -> None:
+        """Any tab move retires the explanation (packet G4b.1)."""
+        self._clear_detail()
+
+    def _reshow_or_clear_detail(self) -> None:
+        """After a re-read, redraw the open row from its NEW dict, or take it down.
+
+        **The first question is whether the pane is up**, not whether a match
+        exists: the trader reaches the hidden state by moving tabs, and a scan
+        that re-showed on a match alone would pop an explanation open under
+        someone who had closed it.
+
+        The row is then looked up in the model that now holds the CURRENT tab's
+        rows and the pane is redrawn from the new dict - never the cached one,
+        or it would keep printing a stop, a target or a mean R the table has
+        already revised. A row the re-read dropped takes its explanation with
+        it. One linear scan of that one model, no dict copied per row.
+        """
+        view = self.detail_view
+        identity = getattr(view, "shown_identity", None)
+        if view.isHidden() or not identity:
+            return
+        source = self._detail_source_for_current_tab()
+        if source is None:
+            self._clear_detail()
+            return
+        model, kind = source
+        wanted_widening = self._detail_widened_key
+        for position in range(model.rowCount()):
+            row = model.row_at(position)
+            if not isinstance(row, dict):
+                continue
+            if _detail_row_identity(row, kind) != identity:
+                continue
+            if wanted_widening is not None and _detail_widened_key(row) != wanted_widening:
+                continue
+            if kind:
+                self._show_research_row(kind, row)
+            else:
+                self._show_pick_row(row)
+            return
+        self._clear_detail()
+
+    def _detail_source_for_current_tab(self) -> tuple[TrackerTableModel, str] | None:
+        """The (model, show-kind) behind the tab the trader is looking at."""
+        widget = self.tabs.currentWidget()
+        if widget is None:
+            return None
+        for table, model, kind in self._detail_tables:
+            if widget is table or widget.isAncestorOf(table):
+                return model, kind
+        return None
 
     def _best_playbook_row(self, side: str, family: str) -> dict[str, Any] | None:
         side = str(side or "").strip().upper()
@@ -965,6 +1068,47 @@ class SetupTrackerPanel(QFrame):
             ):
                 return row
         return None
+
+
+#: Packet G4b. The two columns that make two rows of one (side, family)
+#: DIFFERENT rows on this page. Setup Types groups by side, bucket, family,
+#: zone, retest and compression, so `shown_identity` alone collides there; these
+#: two carry the collision that matters to the trader. A row that carries
+#: neither reads `("", "")` on both sides of the comparison, so widening never
+#: turns a real match into a miss. **A pair differing only in `retest_label`
+#: still collides** and falls to the first such row in the model's own order -
+#: deliberate, so the re-show never invents a grain the packet did not name.
+DETAIL_WIDENING_KEYS = ("favorite_zone", "priority_bucket")
+
+
+def _detail_widened_key(row: dict[str, Any]) -> tuple:
+    return tuple(str(row.get(key) or "") for key in DETAIL_WIDENING_KEYS)
+
+
+def _detail_row_identity(row: dict[str, Any], kind: str) -> tuple:
+    """The identity `SetupDetailView` will publish for this row under `kind`.
+
+    A MIRROR of `SetupDetailView._render`, kept here so the re-show can ask
+    "is this the row the pane is showing?" without drawing anything. `kind`
+    empty is the `show_setup` path (Current Picks); anything else is the
+    `show_research_row` path.
+    """
+    if kind:
+        return (
+            str(kind or ""),
+            str(row.get("side") or row.get("direction") or "LONG").strip().upper(),
+            str(row.get("setup_family") or ""),
+            "",
+            str(row.get("dimension") or ""),
+        )
+    symbol = str(row.get("symbol") or "").strip().upper()
+    return (
+        "setup" if symbol else "family",
+        str(row.get("side") or "LONG").strip().upper(),
+        str(row.get("setup_family") or ""),
+        symbol,
+        "",
+    )
 
 
 #: Parsed export rows, keyed by path, with the (mtime_ns, size) they came from.

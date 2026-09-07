@@ -1346,3 +1346,79 @@ def test_no_tab_table_renders_a_different_cell_after_the_pane_learns_to_clear(tr
 
     after = render_all_tables(tracker.panel)
     assert after == GOLDEN_TABLES, "the pane's own lifecycle moved a table cell"
+
+
+# ---------------------------------------------------------------------------
+# 6. BUILDER-ADDED: the widened identity, which the five above cannot see
+# ---------------------------------------------------------------------------
+
+
+def _zoned_setup_types(*, band1_r: str, below_r: str) -> list[dict]:
+    """Two rows of ONE (side, family) that differ only by zone.
+
+    `SetupDetailView.shown_identity` for both is
+    `("setup_type", "LONG", "avwape_to_1stdev", "", "")` - the Setup Types
+    export has no `dimension` and no `symbol`, so the pane's own identity
+    cannot tell them apart. The `band1_to_band2` row wins more, so it sorts
+    FIRST by the Wilson bound and is what an identity-only rescan would find.
+    """
+    band1 = _setup_type(
+        side="LONG",
+        setup_family="avwape_to_1stdev",
+        closed=30,
+        wins=18,
+        losses=12,
+        avg_closed_r=band1_r,
+        score_delta="12",
+    )
+    below = _setup_type(
+        side="LONG",
+        setup_family="avwape_to_1stdev",
+        closed=30,
+        wins=6,
+        losses=24,
+        avg_closed_r=below_r,
+        score_delta="2",
+    )
+    below["favorite_zone"] = "below_band1"
+    return [band1, below, *setup_types(drop_headline=True)]
+
+
+def test_a_refresh_repaints_the_zone_the_trader_clicked_not_its_twin(tracker):
+    """G4b.2's widened identity (builder, honouring the tester's finding).
+
+    Two Setup Types rows share the pane's whole identity and differ only in
+    `favorite_zone`. The trader clicked the LOSING one; a re-show keyed on the
+    identity alone would find the winning twin first and quietly swap a -0.75R
+    explanation for a +0.40R one under an unchanged heading - a worse defect
+    than the stale pane this packet exists to fix, because nothing on screen
+    says the row changed.
+    """
+    tracker.rewrite(
+        "SETUP_TYPE_STATS_FILE", _zoned_setup_types(band1_r="0.40", below_r="-0.75")
+    )
+    tracker.refresh()
+
+    tracker.switch_to("Setup Types")
+    tracker.click(
+        tracker.panel.setup_type_table,
+        setup_family="avwape_to_1stdev",
+        favorite_zone="below_band1",
+    )
+    assert tracker.view.shown_identity == (
+        "setup_type",
+        "LONG",
+        "avwape_to_1stdev",
+        "",
+        "",
+    ), "the two rows must share the pane's identity, or this proves nothing"
+    assert "-0.75R" in tracker.text, tracker.text[:400]
+
+    tracker.rewrite(
+        "SETUP_TYPE_STATS_FILE", _zoned_setup_types(band1_r="0.40", below_r="-1.60")
+    )
+    tracker.refresh()
+
+    assert not tracker.view.isHidden(), "the clicked row is still in the table"
+    assert "-1.60R" in tracker.text, "the pane is showing the pre-refresh number"
+    assert "+0.40R" not in tracker.text, "the pane swapped to the better-scoring twin"
