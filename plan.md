@@ -663,17 +663,19 @@ Each item requires parity/rollback evidence before the next authority cutover.
 3. **P2.3 Repair remaining point-in-time defects.** Cover moving levels, history
    keys, backfill leakage, tracker identity, score ordering, factor horizons,
    corporate actions, and survivorship with intentional-difference fixtures.
-   **Partly done (packet ST3, 2026-09-06):** the tracker replay's two worst
-   point-in-time defects have their intentional-difference fixtures and a
-   versioned, opt-in repair - `literal_level_v1` / `gap_aware_v2` for the fill
-   and `same_session_v1` / `prior_session_v2` for the level, both defaulting to
-   what ships, with `tests/fixtures/st3_replay_golden.json` pinning the default
-   path byte-identical and `scripts/tracker_execution_compare.py` producing the
-   comparison. **Still owed here:** the trader's decision on whether the
-   repaired pair becomes the scoring convention (a sec-7 promotion if yes, with
-   a historical restatement question of its own), and the rest of the P2.3 list
-   - backfill leakage, tracker identity, score ordering, factor horizons,
-   corporate actions and survivorship - which ST3 did not touch. Live gate #77.
+   **Done for the tracker replay's two worst point-in-time defects (packet ST3,
+   2026-09-06; DEFAULT since ST7, 2026-09-07, decision 0019):** each has its
+   intentional-difference fixture and a versioned repair - `gap_aware_v2` for the
+   fill and `prior_session_v2` for the level, both now the DEFAULT, with
+   `literal_level_v1` / `same_session_v1` still selectable by name and pinned by
+   `tests/fixtures/st3_replay_golden.json`, the new defaults pinned by
+   `tests/fixtures/st7_v2_default_golden.json`, and
+   `scripts/tracker_execution_compare.py` producing the comparison. History IS
+   restated by the flip - the tracker rebuilds every record on each persisted
+   write - which was the decision, and the rollback is one switch by name.
+   **Still owed here:** the rest of the P2.3 list - backfill leakage, score
+   ordering, factor horizons and corporate actions - which neither ST3 nor ST7
+   touched. Live gates #77 (the comparison artifact) and #84 (the flip is live).
    **Factor horizons: HALF DONE by ST1 (2026-09-06), versioned rather than
    repaired in place.** `master_avwap_lib/session_horizon_outcomes.py` measures the
    exact exchange-session horizon from completed bars into its own file
@@ -682,11 +684,13 @@ Each item requires parity/rollback evidence before the next authority cutover.
    reads, because re-selecting its future row restates every historical number.
    What remains here is the DECISION to move a reader to `POLICY_SESSION_V2`,
    which needs the two files compared side by side over a declared window first.
-   **Tracker identity: the fixtures exist and the decision is owed** (ST4,
-   2026-09-06, branch `claude/st4-first-actionable`).
+   **Tracker identity: DECIDED and DEFAULT** (ST4 2026-09-06, flipped by ST7
+   2026-09-07 on the trader's *"Yes a trade not yet completed should say pending.
+   A second entry after a first close is its own trade yes."*, decision 0019).
    `scripts/master_avwap_lib/selection_policy.py` names `closed_first_v1` (the
-   shipped rule, still `DEFAULT_SELECTION_POLICY` everywhere) and the opt-in
-   `first_actionable_v2` (fixed first-actionable attempt identity, declared
+   rule that shipped until 2026-09-06, still selectable by name) and
+   `first_actionable_v2`, now `DEFAULT_SELECTION_POLICY` (fixed
+   first-actionable attempt identity, declared
    re-entry rule, declared `full_band2` representative exit, pending stays
    pending, replay through `as_of_session`).
    `tests/test_st4_first_actionable.py` is the intentional-difference set -
@@ -695,10 +699,16 @@ Each item requires parity/rollback evidence before the next authority cutover.
    from `main` before the code existed. `scripts/tracker_selection_compare.py`
    holds the frozen v1-vs-v2 evidence, and `tests/test_st4_compact_projection.py`
    pins that a compact scoring projection's `_scoring_outcome_summary` IS the
-   record. **Still owed: the trader's policy decision (live gate #78), and it
-   is TWO questions - the selection, and pending-stays-pending, which is 94% of
-   the measured mean-R move. A switch is a separate change with its own golden
-   fixtures.** A replay is blind to a COMPACTED record and names it
+   record - which survived the flip: a DEFAULT read still takes the cache
+   unconditionally, and a cache with no `representative_status` at all (every
+   pre-ST4 projection on disk) is graded from its own `closed_setups` rather
+   than read as "not closed", which would have zeroed the live scoring
+   population. **Still owed: live gate #84** - the flip proven on the first
+   persisted tracker write, with the three stamps on every record and no
+   `pending` representative graded. Gate #78's clause 1 (`selection_policy` =
+   `closed_first_v1` on every row) was written while the decision was still
+   owed and is superseded by #84; its clause 2, that the scoring path is
+   intact, still stands. A replay is blind to a COMPACTED record and names it
    `undatable_exit_in_population`, so the point-in-time work here is honest for
    the recent window and explicitly incomplete further back. Score ordering,
    moving levels, backfill leakage, factor horizons and corporate actions are

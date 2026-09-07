@@ -7294,18 +7294,18 @@ def recompute_tracker_setup_record(
 
     setup["scenarios"] = working_scenarios
     setup["daily_marks"] = daily_marks
-    # ST3: the record NAMES a non-default policy and stays silent about the
-    # default one. Popping on the default path matters as much as writing on
-    # the other: a record replayed once under gap_aware_v2 and then replayed
-    # again by the desk must not keep carrying a label the desk did not use.
-    if str(execution_convention) != DEFAULT_EXECUTION_CONVENTION:
-        setup["execution_convention"] = str(execution_convention)
-    else:
-        setup.pop("execution_convention", None)
-    if str(level_knowledge) != DEFAULT_LEVEL_KNOWLEDGE:
-        setup["level_knowledge"] = str(level_knowledge)
-    else:
-        setup.pop("level_knowledge", None)
+    # ST7: the record ALWAYS names the two policies that produced it.
+    #
+    # ST3 wrote the stamp only for a non-default policy and popped it
+    # otherwise, which was legible while there had never been a flip. Once the
+    # default moved (2026-09-06, decision 0019) an absent stamp is ambiguous -
+    # it could mean literal_level_v1 written last week or gap_aware_v2 written
+    # tonight - so both are written unconditionally, on the v1 path too. The
+    # write is still a plain overwrite, so a record replayed under one
+    # convention and then replayed again by the desk carries the desk's label
+    # and never a stale one.
+    setup["execution_convention"] = str(execution_convention)
+    setup["level_knowledge"] = str(level_knowledge)
     # M3.2: the newest session whose bars were actually replayed against this
     # record's scenarios. `scan_date` is creation and answers a different
     # question; without this stamp there was no way to tell a setup being
@@ -8091,9 +8091,11 @@ def build_recent_tracker_setup_family_rows(
         not have seen. Counting it as pending would be the other lie - it says
         "still running" about a trade that finished.
 
-        The DEFAULT read (v1, no `as_of`) never reaches here: it returns the
-        cache verbatim and `unknown_compact` is a status only the bypass path
-        can write, so every shipped number is untouched.
+        The DEFAULT read never reaches here: it returns the cache verbatim and
+        `unknown_compact` is a status only the bypass path can write, so every
+        shipped number is untouched. Since ST7 the default is v2, so the
+        NON-default read is `closed_first_v1` by name - the bypass moved with
+        the default and the rule did not.
         """
         if str(row.get("representative_status") or "") != "unknown_compact":
             return False
@@ -8103,7 +8105,20 @@ def build_recent_tracker_setup_family_rows(
         if _row_is_unmeasurable(row):
             return False
         if is_v2:
-            return str(row.get("representative_status") or "") == "closed"
+            status = str(row.get("representative_status") or "")
+            # A cached summary written BEFORE ST4 has no `representative_status`
+            # column at all - the live `master_avwap_tracker_scoring_snapshot.json`
+            # is full of them until the next persisted tracker write rebuilds it
+            # (ST7.1). "Read it as-is" has to mean read it: the only closure fact
+            # such a row carries is `closed_setups`, so that is what is read, and
+            # `no_representative_in_population` counts them below. Treating an
+            # ABSENT column as "not closed" would zero the live scoring
+            # population the way the first ST4 build did (32 recent family rows
+            # -> 0, 74 nonzero `setup_type` deltas -> 0). An EMPTY status is
+            # different from a `pending` one, which is what v2 refuses to grade.
+            if not status:
+                return int(row.get("closed_setups", 0) or 0) > 0
+            return status == "closed"
         return int(row.get("closed_setups", 0) or 0) > 0
 
     baseline_groups = {}
@@ -13957,6 +13972,19 @@ def update_setup_tracker_from_scan(
         write_master_avwap_study_report(MASTER_AVWAP_STUDY_FILE, tracker)
     except Exception as exc:
         logging.warning("Could not write study report (%s).", exc)
+    # ST7 (2026-09-06, decision 0019): the persisted write NAMES the three
+    # policies every record above was rebuilt under. A compact scoring
+    # projection written before the flip carries no policy stamp, is read
+    # as-is, and is rebuilt under these defaults by THIS write - so the line is
+    # how the trader and the live gate tell which generation the tracker on
+    # disk belongs to. Logged unconditionally: an absent line and a line
+    # naming the v1 policies are different facts.
+    logging.info(
+        "Setup tracker policies: selection=%s execution=%s levels=%s",
+        selection_policy_lib.DEFAULT_SELECTION_POLICY,
+        DEFAULT_EXECUTION_CONVENTION,
+        DEFAULT_LEVEL_KNOWLEDGE,
+    )
     # The scan date this pass evaluated *is* the data vintage: every record
     # written above came from that session's completed bars.
     save_setup_tracker_payload(

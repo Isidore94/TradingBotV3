@@ -135,15 +135,16 @@ which is evidence and must not be loaded as context.
   `ranking_score`, `score_delta` and every pre-existing column keep their values
   (goldens). `build_tracker_short_horizon_rows` carries the same counts plus its
   own `latest_measured_session`.
-- **Which observation of a thesis becomes the graded episode is now a NAMED
-  policy, and today's answer is unchanged** (ST4, 2026-09-06).
-  `scripts/master_avwap_lib/selection_policy.py` owns both:
-  `SELECTION_CLOSED_FIRST_V1` (`closed_first_v1`) is what ships and is
-  `DEFAULT_SELECTION_POLICY` everywhere - prefer a record that has CLOSED, then
+- **Which observation of a thesis becomes the graded episode is a NAMED
+  policy, and since 2026-09-06 the default is the repaired one** (ST4, then ST7
+  and decision 0019). `scripts/master_avwap_lib/selection_policy.py` owns both:
+  `SELECTION_CLOSED_FIRST_V1` (`closed_first_v1`) is what shipped until
+  2026-09-06 and stays selectable BY NAME - prefer a record that has CLOSED, then
   the earliest scan date, which reads the OUTCOME to pick the entry, so a later
   rescan that happened to close beats the earlier open row a trader could have
-  taken. `SELECTION_FIRST_ACTIONABLE_V2` (`first_actionable_v2`) is the
-  shadow challenger: an episode is `(symbol, side, anchor_date, setup_family,
+  taken. `SELECTION_FIRST_ACTIONABLE_V2` (`first_actionable_v2`) is
+  `DEFAULT_SELECTION_POLICY` since 2026-09-06: an episode is
+  `(symbol, side, anchor_date, setup_family,
   attempt_index)`, attempt 1 is the EARLIEST scan row, and a later row opens
   attempt k+1 **only** when the previous attempt's representative scenario
   closed strictly before it (`REENTRY_RULE_V2`) - a rescan of a live attempt is
@@ -171,11 +172,16 @@ which is evidence and must not be loaded as context.
   `n_excluded`, an `_in_population` token counts counted episodes a decision
   deliberately KEPT. The 2026-09-06 decisions are NAMED, never reopened -
   `untradeable` is (c), `expired_unmeasured_in_population` is (b), and the M5
-  side (a) is another file this work does not touch. **Shadow only**: no export
-  selects v2, the default is byte-identical
-  (`tests/fixtures/st4_family_rows_golden.csv`, pinned from `main` before the
-  code existed), and the switch is the trader's decision on
-  `scripts/tracker_selection_compare.py`'s evidence.
+  side (a) is another file this work does not touch. **The switch was the
+  trader's** (2026-09-06: *"Yes a trade not yet completed should say pending. A
+  second entry after a first close is its own trade yes."*), recorded as decision
+  0019 and made the default by packet ST7. v1 is still reproducible byte for byte
+  (`tests/fixtures/st4_family_rows_golden.csv`, pinned from `main` before the code
+  existed, now read with `selection_policy=SELECTION_CLOSED_FIRST_V1`) and the new
+  default is pinned by `tests/fixtures/st7_family_rows_v2_default_golden.csv`,
+  frozen on `main` at `68762909` through the explicit v2 keyword before the flip.
+  Nothing here promotes a setup or reaches a detector, alert, watchlist, Focus,
+  the review queue or `review_policy.json`.
 - **The v1-vs-v2 comparison is a frozen artifact that decides nothing** (ST4.5,
   2026-09-06). `scripts/tracker_selection_compare.py` runs
   `build_recent_tracker_setup_family_rows` twice on a COPY at one
@@ -1479,11 +1485,13 @@ which is evidence and must not be loaded as context.
   cost the tracker save, and the champion aggregates are pinned byte-identical by a
   two-directory reproduction test. Live gate #67.
 
-- **The tracker replay has a VERSIONED execution convention and level knowledge**
-  (packet ST3, 2026-09-06). `scripts/master_avwap_lib/execution_convention.py` names four
-  policies on two independent axes: `literal_level_v1` (DEFAULT, today's behaviour - a
-  touched level fills AT the level) / `gap_aware_v2`, and `same_session_v1` (DEFAULT -
-  bar D's high/low tested against day D's own bands) / `prior_session_v2`. Under
+- **The tracker replay has a VERSIONED execution convention and level knowledge, and
+  since 2026-09-06 the defaults are the repaired ones** (packet ST3, then ST7 and
+  decision 0019). `scripts/master_avwap_lib/execution_convention.py` names four
+  policies on two independent axes: `literal_level_v1` (what shipped until 2026-09-06 -
+  a touched level fills AT the level) / `gap_aware_v2` (DEFAULT), and `same_session_v1`
+  (bar D's high/low tested against day D's own bands) / `prior_session_v2` (DEFAULT).
+  Under
   `gap_aware_v2` a bar that opened through the level fills at the OPEN (`gap_open`,
   both directions - a stop gap and a target gap are the same mechanic), a bar with no
   usable open fills at the level CLAMPED into `[low, high]` (`clamped_no_open`), and an
@@ -1498,13 +1506,16 @@ which is evidence and must not be loaded as context.
   stop and the maximum-hold force close stay CLOSE-based on day D. A prior-session level
   that does not exist counts `intrabar_skip_reasons["no_prior_session_level"]` on the
   scenario rather than reading as "not hit". `_evaluate_tracker_scenario_bar` and
-  `recompute_tracker_setup_record` take the two policies as keyword arguments; the
-  record carries `execution_convention` / `level_knowledge` ONLY for a non-default run
-  and a default run POPS them, so a record replayed once under v2 cannot keep a label
-  the desk did not use. `_apply_scenario_exit_event`'s `fill_basis` /
-  `execution_convention` are keyword-only and add a key only when passed. **The default
-  path is byte-identical and pinned** by `tests/fixtures/st3_replay_golden.json`, taken
-  from `main` before the repair existed. `scripts/tracker_execution_compare.py` is the
+  `recompute_tracker_setup_record` take the two policies as keyword arguments; since
+  ST7 the record carries `execution_convention` / `level_knowledge` on EVERY run,
+  including the v1 one, because after a default flip an absent stamp is ambiguous.
+  `_apply_scenario_exit_event`'s `fill_basis` / `execution_convention` are keyword-only
+  and add a key only under v2, so a v1 event dict is still the shipped seven keys.
+  **Both whole records are pinned**: `tests/fixtures/st3_replay_golden.json` (taken from
+  `main` before the repair existed, now read with the v1 policies NAMED) and
+  `tests/fixtures/st7_v2_default_golden.json` (frozen on `main` at `68762909` through
+  the explicit v2 keywords, before the flip, so it is not a self-portrait) - the default
+  reproduces the second. `scripts/tracker_execution_compare.py` is the
   evidence CLI: it replays COPIES under both policy pairs and writes a stamped
   `comparison_<stamp>.json` + `.csv` with per-setup R (clipped AND raw, never blended -
   `TRACKER_SCORING_R_CLIP` is 4.0 and the tail hides behind it), changed flag, fill
@@ -1512,17 +1523,89 @@ which is evidence and must not be loaded as context.
   win rate with the ONE Wilson bound / tail / rank impact; `--new-execution-convention`
   and `--new-level-knowledge` isolate one axis. It prints `project_paths.DATA_DIR` and
   REFUSES if it, `--out`, `--tracker` or `--bars` is under `C:\TradingBotData`; a SQLite
-  mirror is opened `mode=ro&immutable=1`. **Shadow only and NOT authorization**: nothing
-  in production passes a non-default policy, `calc_anchored_vwap_bands` and
-  `calc_anchored_vwap_band_history` are untouched (decision 0008), the cost model is
-  one, stop-first ordering is kept, and whether `gap_aware_v2` / `prior_session_v2`
-  becomes the scoring convention is the trader's separate decision. Live gate #77.
+  mirror is opened `mode=ro&immutable=1`. **The lead took the convention decision on
+  2026-09-06** under the discretion the trader granted (*"3. This one is up to your
+  discretion."*), recorded as decision 0019: each repair is a pure correctness fix, and
+  keeping a known look-ahead because the honest number is worse is the failure decision
+  0016 goal 8 names. `calc_anchored_vwap_bands` and `calc_anchored_vwap_band_history`
+  are still untouched (decision 0008), the cost model is one, stop-first ordering is
+  kept, and nothing here promotes a setup or reaches a detector, alert, watchlist,
+  Focus, the review queue or `review_policy.json`. Live gates #77 and #84.
 
-Neither of the first two challengers is promoted, and the band challenger's ≥ 20
-sessions of forward accrual start at its first measured row. Their remaining evidence
-gates are in `plan.md`.
+The band challenger is not promoted and its ≥ 20 sessions of forward accrual start at
+its first measured row; its remaining evidence gates are in `plan.md`. The selection and
+execution policies above are no longer challengers - decision 0019 made the repaired
+ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the comparison CLIs'
+"old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-07 - Packet ST7: the trader's three decisions become the tracker's defaults (branch `claude/st7-decisions-default`)
+
+Trader, 2026-09-06 ~21:15 PT: *"Yes a trade not yet completed should say pending. A second
+entry after a first close is its own trade yes. 3. This one is up to your discretion."*
+Decision (3) - the execution convention and the level knowledge - was taken by the lead
+under that discretion. All three are recorded as
+[`docs/decisions/0019-tracker-selection-and-execution-defaults.md`](docs/decisions/0019-tracker-selection-and-execution-defaults.md).
+ST3 and ST4 built the repairs as opt-in evidence; ST7 is the flip and nothing wider.
+
+- **The three defaults moved and the v1 names did not.**
+  `selection_policy.DEFAULT_SELECTION_POLICY` is `first_actionable_v2`,
+  `execution_convention.DEFAULT_EXECUTION_CONVENTION` is `gap_aware_v2` and
+  `DEFAULT_LEVEL_KNOWLEDGE` is `prior_session_v2`. `closed_first_v1`, `literal_level_v1`
+  and `same_session_v1` keep their values, stay selectable by keyword, and are the "old"
+  arm of `tracker_selection_compare.py` / `tracker_execution_compare.py`. **History is
+  restated by construction** - the tracker rebuilds every record on each persisted write -
+  and that is the point of the decision, not a side effect.
+- **Every record now NAMES the policies that produced it.** ST3 wrote the two execution
+  stamps only for a non-default run and POPPED them otherwise, which was legible only
+  while there had never been a flip; after one, an absent stamp could mean either policy.
+  `recompute_tracker_setup_record` now writes `execution_convention` and `level_knowledge`
+  unconditionally, on the v1 path too, and `selection_policy` is on every family row and
+  every `_scoring_outcome_summary`.
+- **The persisted tracker write says which generation is on disk.** There was NO success
+  log line at that seam; one was added at the call site, before
+  `save_setup_tracker_payload`, reading `Setup tracker policies: selection=<..>
+  execution=<..> levels=<..>` and logged unconditionally, because an absent line and a
+  line naming the v1 policies are different facts. It is what live gate #84 greps for.
+- **A compact scoring projection written before the flip is still read AS-IS.** ST4's
+  cache rule survives: a DEFAULT read of `_scoring_outcome_summary` takes it
+  unconditionally (naming `first_actionable_v2` explicitly is the same read), and only a
+  non-default policy - now `closed_first_v1` by name - or an `as_of_session` replay takes
+  the `unknown_compact` bypass. **One consequence needed its own rule**: a pre-ST4 cache
+  carries no `representative_status` at all, and v2's "pending stays pending" keys on that
+  column. An ABSENT column is not a pending trade, so the aggregate reads the row's own
+  `closed_setups` and counts it as `no_representative_in_population`; reading absence as
+  "not closed" would have zeroed the live scoring population exactly the way the first ST4
+  build did (32 recent family rows -> 0, 74 nonzero `setup_type` deltas -> 0). A PRESENT
+  `pending` status is still never graded.
+- **Both defaults are pinned to goldens frozen BEFORE the flip.**
+  `tests/fixtures/st7_v2_default_golden.json` (a whole replay record) and
+  `tests/fixtures/st7_family_rows_v2_default_golden.csv` were pinned on `main` at
+  `68762909` through the explicit v2 keywords that already shipped, so neither is a
+  self-portrait; the three stamp keys are excluded from the byte-identity check and
+  asserted separately by name. `st3_replay_golden.json` and `st4_family_rows_golden.csv`
+  are untouched and are now reproduced with the v1 policies NAMED.
+- **37 pre-existing tests were re-pinned, none weakened.** Every leg that reached v1
+  through the bare signature now passes the v1 policy by name and asserts the same numbers;
+  every leg that read "and the default agrees" now asserts the v2 answer beside it. Two
+  test functions were renamed because their names asserted something the flip made false
+  (`test_the_default_replay_reproduces_the_pinned_golden_and_v2_only_adds_its_keys` ->
+  `test_v1_by_name_reproduces_the_pinned_golden_and_the_default_is_the_v2_pin`;
+  `test_default_policy_reproduces_the_golden_family_rows_byte_for_byte` ->
+  `test_v1_by_name_reproduces_the_golden_family_rows_and_the_default_is_the_v2_pin`), and
+  `test_the_default_event_dict_has_exactly_the_keys_it_always_had` became
+  `test_the_v1_event_dict_keeps_its_keys_and_the_default_adds_exactly_two` - the default
+  event dict legitimately carries `fill_basis` and `execution_convention` now, and the
+  test pins that it adds exactly those two and no more.
+  `build_tracker_band_variant_parity_fixture.measure` gained three policy keywords so the
+  Phase 0.10 B-2 parity fixture is read under the policies it was FROZEN on; a new test
+  re-runs the same shadow FENCE under whatever the defaults currently are, so a future
+  policy change cannot quietly unfence the band challenger.
+- **Shadow only, still.** Nothing here promotes a setup or reaches a detector, a score, an
+  alert, a watchlist, Focus, the review queue or `review_policy.json`;
+  `calc_anchored_vwap_bands` and `calc_anchored_vwap_band_history` are untouched (decision
+  0008). Live gate #84.
 
 ### 2026-09-06 - Packet ST5: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
 

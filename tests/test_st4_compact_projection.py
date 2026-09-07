@@ -23,6 +23,21 @@ was before ST4 existed. The bypass applies only to a non-default policy or a
 replay, and on a record with no scenarios those answer
 ``representative_status == "unknown_compact"`` over the cached numbers rather
 than an empty summary.
+
+**Packet ST7 (2026-09-06, decision 0019) flipped the default to
+``first_actionable_v2``, and the rule above is unchanged - only which policy is
+"the default" moved.** So the bypass now fires for ``closed_first_v1`` NAMED
+explicitly, and a default (v2) read of a compact record takes the cache verbatim.
+That is what the ST7 tests require and what keeps the live scoring population
+alive across the flip; every leg below that used to reach one arm through the
+bare signature now NAMES its policy, and a DEFAULT leg was added beside it.
+
+One consequence is pinned here rather than inferred: a pre-ST4 cache carries no
+``representative_status`` AT ALL, and v2's "pending stays pending" rule keys on
+that column. An ABSENT column is not a pending trade - it is a row from before
+the column existed - so the aggregate reads its ``closed_setups`` instead and
+counts it as ``no_representative_in_population``. Reading an absent column as
+"not closed" would zero the live scoring population all over again.
 """
 
 from __future__ import annotations
@@ -180,8 +195,13 @@ def test_the_default_read_takes_a_pre_st4_cache_exactly_as_it_is():
     )
 
 
-def test_a_challenger_read_of_a_compact_record_is_named_not_empty():
-    """v2 and the replay cannot be evaluated without scenarios. They say so."""
+def test_a_non_default_read_of_a_compact_record_is_named_not_empty():
+    """A non-default policy and a replay cannot be evaluated without scenarios.
+
+    They say so. Since ST7 the non-default policy is `closed_first_v1` by name;
+    before it was `first_actionable_v2`. The RULE did not move - only which
+    policy the default is - and the default read still takes the cache verbatim.
+    """
     projection = _compact_projection(
         symbol="NVDA", side="LONG", anchor_date="2026-01-02", scan_date="2026-01-05",
         setup_family="avwape_bounce", closed=2, avg_closed_r=1.8, rep_closed_r=1.8,
@@ -189,8 +209,12 @@ def test_a_challenger_read_of_a_compact_record_is_named_not_empty():
     )
 
     for kwargs in (
-        {"policy": selection_policy.SELECTION_FIRST_ACTIONABLE_V2},
+        {"policy": selection_policy.SELECTION_CLOSED_FIRST_V1},
         {"as_of_session": "2026-01-20"},
+        {
+            "policy": selection_policy.SELECTION_FIRST_ACTIONABLE_V2,
+            "as_of_session": "2026-01-20",
+        },
     ):
         summary = m._summarize_tracker_setup_outcome(projection, **kwargs)
         assert int(summary["tradeable_scenario_count"]) == 2, (
@@ -199,12 +223,21 @@ def test_a_challenger_read_of_a_compact_record_is_named_not_empty():
         assert summary["representative_status"] == "unknown_compact"
         assert summary["avg_closed_r"] == 1.8
 
-    # And under v2 such an episode is neither graded nor pending; it is named.
+    # ST7: naming the new DEFAULT is the verbatim read, never the bypass.
+    named_default = m._summarize_tracker_setup_outcome(
+        projection, policy=selection_policy.SELECTION_FIRST_ACTIONABLE_V2
+    )
+    assert named_default == projection["_scoring_outcome_summary"]
+    assert "representative_status" not in named_default
+
+    # And under a replay such an episode is neither graded nor pending; it is
+    # named. (Under the default with no replay it is graded from the cache -
+    # `test_a_compact_projection_still_produces_recent_family_rows`.)
     rows = m.build_recent_tracker_setup_family_rows(
         _snapshot_population(),
         reference_date=REFERENCE_DATE,
         lookback_days=45,
-        selection_policy=selection_policy.SELECTION_FIRST_ACTIONABLE_V2,
+        as_of_session="2026-01-20",
     )
     assert rows
     for row in rows:
@@ -224,15 +257,18 @@ def test_a_v1_REPLAY_of_a_compact_record_grades_nothing_either():
     therefore unmeasurable under BOTH policies whenever an `as_of_session` is
     given.
 
-    The DEFAULT read (v1, no `as_of`) is untouched: it returns the cache
-    verbatim, so `unknown_compact` never appears and every shipped number
-    stands - the assertions at the end are that guard.
+    The DEFAULT read (no `as_of`) is untouched: it returns the cache verbatim,
+    so `unknown_compact` never appears and every shipped number stands - the
+    assertions at the end are that guard.
     """
     population = _snapshot_population()
     kwargs = {"reference_date": REFERENCE_DATE, "lookback_days": 45}
 
     replayed = m.build_recent_tracker_setup_family_rows(
-        population, as_of_session="2026-01-20", **kwargs
+        population,
+        as_of_session="2026-01-20",
+        selection_policy=selection_policy.SELECTION_CLOSED_FIRST_V1,
+        **kwargs,
     )
     assert replayed, "a replay must still produce rows, just ungraded ones"
     for row in replayed:
@@ -243,6 +279,22 @@ def test_a_v1_REPLAY_of_a_compact_record_grades_nothing_either():
         assert int(row["closed_setups"]) == 0
         assert int(row["n_pending"]) == 0, "not pending either - it is unmeasurable"
         assert f"unknown_compact_in_population={n_episodes}" in str(row["excluded_reasons"])
+
+    # ST7: the DEFAULT replay is v2 and grades nothing either, for the same
+    # reason - the cutoff cannot be applied to a summary written without one.
+    default_replay = m.build_recent_tracker_setup_family_rows(
+        population, as_of_session="2026-01-20", **kwargs
+    )
+    assert default_replay
+    for row in default_replay:
+        assert row["selection_policy"] == selection_policy.SELECTION_FIRST_ACTIONABLE_V2
+        assert int(row["n_wins"]) == 0
+        assert int(row["n_losses"]) == 0
+        assert int(row["n_pending"]) == 0
+        assert (
+            f"unknown_compact_in_population={int(row['n_episodes'])}"
+            in str(row["excluded_reasons"])
+        )
 
     # ...and the default build over the same population still grades normally.
     default = m.build_recent_tracker_setup_family_rows(population, **kwargs)

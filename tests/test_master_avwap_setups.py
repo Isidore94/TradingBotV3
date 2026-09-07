@@ -3798,6 +3798,21 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 POST_EARNINGS_STOP_LABEL: 95.0,
                 "UPPER_2": 110.0,
             },
+            # ST7 (2026-09-06, decision 0019): the DEFAULT level knowledge is
+            # `prior_session_v2`, so an intrabar target test reads the level the
+            # PREVIOUS session established. The subject of this test is the
+            # pre-earnings anchor OVERRIDE, not which day's level is read, so
+            # the same override is handed to both sessions and the override
+            # resolution is asserted exactly as it always was.
+            prior_session_levels={
+                "trade_date": "2026-05-06",
+                "anchor_levels": {"bands": {"UPPER_2": 200.0}, "vwap": 95.0},
+                "indicator_row": None,
+                "dynamic_level_overrides": {
+                    POST_EARNINGS_STOP_LABEL: 95.0,
+                    "UPPER_2": 110.0,
+                },
+            },
         )
 
         self.assertEqual(scenario["status"], "TARGET_HIT")

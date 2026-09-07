@@ -2619,9 +2619,68 @@ whenever an `as_of_session` is given, so a v1 replay of a compact record grades 
 the default read (v1, no `as_of`) is untouched, because `unknown_compact` is a status only the
 bypass path can write.
 
-**Live gate #78.** Nothing here promotes. The desk's next persisted tracker write must leave
-`selection_policy = closed_first_v1` on every recent family row AND leave the scan's
-`recent_tracker_score_delta` / `setup_type_score_delta` nonzero (32 / 74 on the 2026-09-05
-snapshot is the reproducible check); the artifact stays under
-`%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`; and the policy decision is the
-trader's, as a separate change with its own golden fixtures.
+**Live gate #78.** Nothing in ST4 promotes. The artifact stays under
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`, and the scan's
+`recent_tracker_score_delta` / `setup_type_score_delta` must stay nonzero (32 / 74 on the
+2026-09-05 snapshot is the reproducible check). Its `selection_policy = closed_first_v1`
+clause was written while the decision was still owed and is superseded by gate #84 below.
+
+## ST7 - the three decisions became the defaults, and a record has to say which (2026-09-07)
+
+The trader took two of them on 2026-09-06 ~21:15 PT - *"Yes a trade not yet completed should say
+pending. A second entry after a first close is its own trade yes. 3. This one is up to your
+discretion."* - and the lead took the third under that discretion. Decision record 0019 carries
+the reasoning, the numbers and the rollback; this entry carries the three things the CODE does
+that a reader would otherwise have to infer.
+
+**Why the stamp became unconditional.** ST3 wrote `execution_convention` / `level_knowledge` onto
+a record only for a non-default run and POPPED them otherwise, so a record replayed once under
+`gap_aware_v2` and then replayed again by the desk could not keep a label the desk did not use.
+That was exactly right while there had never been a flip: absent meant "the default", and the
+default was one thing forever. After 2026-09-07 absent means "written by some earlier version
+under some policy", which is not a fact anyone can act on. So `recompute_tracker_setup_record`
+writes both stamps on every run, including the v1 one, and `selection_policy` is on every family
+row and every `_scoring_outcome_summary`. The golden comparisons exclude the three stamp keys
+from byte-identity and assert them separately by name, so no stamp escapes assertion in either
+direction.
+
+**Why there is now a log line at the tracker write.** There was none - not a success line, not a
+count - so the packet's "state it in the log line the tracker write already emits" had nothing to
+extend. One was added at the CALL SITE (before `save_setup_tracker_payload`, not inside it,
+because the payload does not know which policies rebuilt it) reading
+`Setup tracker policies: selection=<..> execution=<..> levels=<..>`, logged unconditionally: an
+absent line and a line naming the v1 policies are different facts, and live gate #84 greps for
+the token.
+
+**The rule the flip needed that the packet did not name: an ABSENT `representative_status` is not
+a pending trade.** ST4's cache rule says a DEFAULT read of a compact scoring projection takes
+`_scoring_outcome_summary` verbatim, and it still does - `master_avwap_tracker_scoring_snapshot.json`
+holds 11,372 records with no `scenarios` key at all, and for the live scoring path that summary is
+the only copy of the answer. But v2's "pending stays pending" keys on `representative_status`, and
+a projection written BEFORE ST4 does not carry that column at all. Treating its absence as "not
+closed" would have dropped every one of those rows out of the graded population - the same 32
+recent family rows -> 0 and 74 nonzero `setup_type` deltas -> 0 that the first ST4 build produced,
+arriving through a different door. `_row_is_graded` therefore reads the row's own `closed_setups`
+when the status is ABSENT, and `no_representative_in_population` counts those rows so the gap is
+visible rather than silent. A status that is PRESENT and reads `pending` is still never graded -
+that is the decision. The next persisted tracker write rebuilds every projection with the column
+filled, so this is a bridge, not a permanent second rule.
+
+**The bypass moved with the default and the rule did not.** `unknown_compact` is what a read that
+cannot be answered from the cache says instead of returning an empty summary. That is any
+NON-default read - which is now `closed_first_v1` by name - or any `as_of_session` replay under
+either policy. Naming `first_actionable_v2` explicitly is the default read and takes the cache.
+
+**A test whose subject is one axis names the other.** Several ST3 cases isolate the execution
+convention while booking a target off a level; under the new default level knowledge that target
+is read from the PREVIOUS session, so with no `prior_session_levels` handed in they would have
+stopped booking and passed for the wrong reason. Those cases now name `same_session_v1` on both
+arms, or hand the same level in as the prior session's. The same applies to the Phase 0.10 B-2
+band-variant parity fixture: it is read under the policies it was FROZEN on, and a separate test
+re-runs its real subject - that a `VARIANT_*` scenario never enters a champion aggregate and never
+displaces a champion scenario - under whatever the defaults currently are.
+
+**Live gate #84.** The first persisted tracker write after merge logs the policies line, every
+record carries the three stamps, `n_pending` is non-zero, no `pending` representative is graded,
+the tables re-rank (expect the ST4 comparison's 2,249 -> 2,712 episodes and 61.6% -> 72.0%
+favorable), and the first D1 scan after it still writes NONZERO score deltas.
