@@ -374,7 +374,8 @@ coordinate by message; the desk restarts only on the trader's word.
 | Packet | State |
 |---|---|
 | G0 measure first | in build 2026-09-06 (base `main` - it edits no panel) |
-| G1, G4, G3 | red tests being written 2026-09-06, based on `lead/merge-st` |
+| G4 | **G4.1 + G4.2 BUILT and green on `claude/g4-stale-research-detail`** (tester-first, merged with `main` `68762909` rather than `lead/merge-st`); live gate #80 owed at the next desk restart. **G4.3 stays queued as G4b.** |
+| G1, G3 | red tests being written 2026-09-06, based on `lead/merge-st` |
 | P2 | SUPERSEDED by ST2 (the other session) - stopped 16:50 PT, branch deleted, nothing built |
 | G2, G5, G4b, G7 | queued in the order above; G5 and G4b wait for ST2/ST6 in `lead/merge-st` |
 
