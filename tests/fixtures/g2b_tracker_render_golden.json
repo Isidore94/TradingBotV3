@@ -1,285 +1,571 @@
 {
-  "attribute_table": [
-    [
-      "Relative volume",
-      "above the 80th percentile of the trailing 20 sessions",
-      "LONG",
-      "favorite_setup",
-      "240",
-      "212",
-      "ok",
-      "+0.62",
-      "+0.18",
-      "0.05",
-      "-0.03",
-      "NVDA; AMD"
-    ]
+  "acquired_at": "2026-09-07T00:00:00-07:00",
+  "as_of": "2026-09-07T00:00:00-07:00",
+  "expected_keys": [
+    "rendered"
   ],
-  "band_variant_table": [
-    [
-      "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
-      "LONG",
-      "favorite_setup",
-      "412",
-      "398",
-      "14",
-      "+0.51",
-      "+0.58",
-      "28.0%",
-      "24.0%",
-      "44.0%",
-      "47.0%",
-      "1.10",
-      "1.22",
-      "baseline_2r_trail"
-    ]
-  ],
-  "catch_rate_table": [
-    [
-      "5",
-      "LONG",
-      "318",
-      "96",
-      "29",
-      "30.0%",
-      "67",
-      "NVDA 2026-08-11 +2.14R; AMD 2026-08-12 -1.00R; SMCI 2026-08-13 +0.42R; MU 2026-08-14 +1.08R; AVGO 2026-08-15 -0.31R",
-      "TSLA; PLTR"
-    ]
-  ],
-  "control_discovery_table": [
-    [
-      "all",
-      "cohort",
-      "control_rejected_by_gate_second_dev_reclaim_long_favorite",
-      "LONG",
-      "avwap_reclaim",
-      "42.0%",
-      "33.0%",
-      "112",
-      "47",
-      "65",
-      "-0.08",
-      "9",
-      ""
-    ]
-  ],
-  "current_table": [
-    [
-      "S",
-      "NVDA",
-      "LONG",
-      "88.40",
-      "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
-      "above_2nd_dev",
-      "above_1st_dev",
-      "up",
-      "4",
-      "rvol; gap"
+  "feature_version": "setup_tracker_panel_pre_g2b",
+  "fixture_rows": {
+    "attribute": [
+      {
+        "attribute_label": "Relative volume",
+        "avg_closed_r": "0.62",
+        "avg_closed_r_edge": "0.18",
+        "closed_tradeable_setup_count": "212",
+        "meets_n_floor": "true",
+        "priority_bucket": "favorite_setup",
+        "sample_setups": "NVDA; AMD",
+        "setup_count": "240",
+        "side": "LONG",
+        "stop_rate_edge": "-0.03",
+        "target_hit_rate_edge": "0.05",
+        "value_label": "above the 80th percentile of the trailing 20 sessions"
+      }
     ],
-    [
-      "A",
-      "AMD",
-      "SHORT",
-      "71.20",
-      "avwap_breakdown",
-      "below_1st_dev",
-      "below_1st_dev",
-      "down",
-      "2",
-      "atr"
-    ]
-  ],
-  "exit_framework_table": [
-    [
-      "baseline",
-      "false",
-      "baseline_2r_then_trail_the_first_deviation_band",
-      "LONG",
-      "favorite_setup",
-      "55.0%",
-      "46.0%",
-      "140",
-      "128",
-      "+0.44",
-      "29.0%",
-      "46.0%",
-      "12",
-      "0"
+    "band_variant": [
+      {
+        "avg_total_r_champion": "0.51",
+        "avg_total_r_variant": "0.58",
+        "exit_template_id": "baseline_2r_trail",
+        "mean_stop_distance_atr_champion": "1.10",
+        "mean_stop_distance_atr_variant": "1.22",
+        "n": "412",
+        "n_variant": "398",
+        "n_variant_unmeasured": "14",
+        "priority_bucket": "favorite_setup",
+        "setup_family": "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "side": "LONG",
+        "stop_out_rate_champion": "0.28",
+        "stop_out_rate_variant": "0.24",
+        "target_hit_rate_champion": "0.44",
+        "target_hit_rate_variant": "0.47"
+      }
     ],
-    [
-      "comparison_apr2026",
-      "true",
-      "comparison_apr2026_atr_trail",
-      "LONG",
-      "favorite_setup",
-      "51.0%",
-      "42.0%",
-      "119",
-      "110",
-      "+0.39",
-      "31.0%",
-      "41.0%",
-      "9",
-      "21"
-    ]
-  ],
-  "human_pick_table": [
-    [
-      "Swing \u00b7 SECOND_DEV_BREAKOUT",
-      "LONG",
-      "5",
-      "44",
-      "57.0%",
-      "+1.82%",
-      "1.41",
-      "120",
-      "61.0%",
-      "+1.88%",
-      "-0.06%"
+    "catch_rate": [
+      {
+        "caught_winner_count": "29",
+        "caught_winner_rate": "0.30",
+        "factor_opportunity_count": "318",
+        "factor_winner_count": "96",
+        "horizon_sessions": "5",
+        "missed_winner_count": "67",
+        "sample_caught_winners": "NVDA 2026-08-11 +2.14R; AMD 2026-08-12 -1.00R; SMCI 2026-08-13 +0.42R; MU 2026-08-14 +1.08R; AVGO 2026-08-15 -0.31R",
+        "sample_missed_winners": "TSLA; PLTR",
+        "side": "LONG"
+      }
     ],
-    [
-      "M5 \u00b7 ALERTS_INTRADAY_BOUNCE",
-      "SHORT",
-      "5",
-      "18",
-      "44.0%",
-      "-0.31%",
-      "0.88",
-      "80",
-      "49.0%",
-      "+0.41%",
-      "-0.72%"
-    ]
-  ],
-  "playbook_table": [
-    [
-      "LONG",
-      "favorite_setup",
-      "avwap_reclaim",
-      "above_2nd_dev",
-      "below 1st dev",
-      "2R then trail the 1st dev",
-      "40",
-      "5",
-      "+0.62",
-      "+0.15",
-      "57.0%",
-      "48.0%",
-      "9.10",
-      "NVDA 2026-08-11 +2.14R; AMD 2026-08-12 -1.00R; SMCI 2026-08-13 +0.42R; MU 2026-08-14 +1.08R; AVGO 2026-08-15 -0.31R"
-    ]
-  ],
-  "recent_type_table": [
-    [
-      "NEW",
-      "live",
-      "LONG",
-      "favorite_setup",
-      "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
-      "60% (>=39%, n=20)",
-      "58.0%",
-      "20",
-      "31",
-      "+0.44",
-      "+0.10",
-      "40.0%",
-      "30.0%",
-      "+0.44",
-      "NVDA; AMD"
-    ]
-  ],
-  "scan_factor_table": [
-    [
-      "5",
-      "LONG",
-      "relative_volume_vs_20d_median_at_the_scan_bar_close",
-      "high",
-      "44",
-      "31",
-      "58.0%",
-      "+1.42%",
-      "+0.51%",
-      "+6.20",
-      "NVDA; AMD"
-    ]
-  ],
-  "setup_type_table": [
-    [
-      "LONG",
-      "favorite_setup",
-      "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
-      "above_2nd_dev",
-      "retested",
-      "60% (>=45%, n=40)",
-      "40",
-      "6",
-      "+0.51",
-      "+0.12",
-      "44.0%",
-      "28.0%",
-      "+1.40",
-      "NVDA; AMD"
-    ]
-  ],
-  "short_term_table": [
-    [
-      "LONG",
-      "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
-      "18",
-      "55.0%",
-      "+0.21",
-      "+0.34",
-      "+0.28",
-      "+0.91",
-      "-0.44",
-      "9",
-      "+0.30",
-      "+3.40",
-      "NVDA; AMD"
-    ]
-  ],
-  "study_discovery_table": [
-    [
-      "all",
-      "cohort",
-      "control_rejected_by_gate_second_dev_reclaim_long_favorite",
-      "LONG",
-      "avwap_reclaim",
-      "42.0%",
-      "33.0%",
-      "112",
-      "47",
-      "65",
-      "-0.08",
-      "9",
-      ""
-    ]
-  ],
-  "tier_performance_table": [
-    [
-      "5",
-      "S",
-      "LONG",
-      "120",
-      "74",
-      "61.0%",
-      "+1.88%",
-      "+0.62%",
-      "71.0%",
-      "NVDA 2026-08-11; AMD 2026-08-12"
+    "discovery": [
+      {
+        "avg_closed_r": "-0.08",
+        "cohort": "control_rejected_by_gate_second_dev_reclaim_long_favorite",
+        "flag": "",
+        "losses": "65",
+        "n": "112",
+        "n_expired_unmeasured": "9",
+        "row_kind": "cohort",
+        "setup_family": "avwap_reclaim",
+        "side": "LONG",
+        "win_rate": "0.42",
+        "win_rate_lb": "0.33",
+        "window": "all",
+        "wins": "47"
+      }
     ],
-    [
-      "5",
-      "A",
-      "SHORT",
-      "80",
-      "52",
-      "49.0%",
-      "+0.41%",
-      "+0.08%",
-      "55.0%",
-      "SMCI 2026-08-13"
+    "exit_framework": [
+      {
+        "avg_closed_r": "0.44",
+        "exit_template_id": "baseline_2r_then_trail_the_first_deviation_band",
+        "experimental": "false",
+        "framework_family": "baseline",
+        "n": "140",
+        "n_closed": "128",
+        "n_expired_unmeasured": "12",
+        "n_filtered_by_experiment": "0",
+        "priority_bucket": "favorite_setup",
+        "side": "LONG",
+        "stop_out_rate": "0.29",
+        "target_hit_rate": "0.46",
+        "win_rate": "0.55",
+        "win_rate_lb": "0.46"
+      },
+      {
+        "avg_closed_r": "0.39",
+        "exit_template_id": "comparison_apr2026_atr_trail",
+        "experimental": "true",
+        "framework_family": "comparison_apr2026",
+        "n": "119",
+        "n_closed": "110",
+        "n_expired_unmeasured": "9",
+        "n_filtered_by_experiment": "21",
+        "priority_bucket": "favorite_setup",
+        "side": "LONG",
+        "stop_out_rate": "0.31",
+        "target_hit_rate": "0.41",
+        "win_rate": "0.51",
+        "win_rate_lb": "0.42"
+      }
+    ],
+    "human_focus": [
+      {
+        "avg_side_return": "0.0182",
+        "cohort": "human_focus_swing_second_dev_breakout",
+        "horizon_sessions": "5",
+        "profit_factor": "1.41",
+        "sample_count": "44",
+        "side": "LONG",
+        "win_rate": "0.57"
+      },
+      {
+        "avg_side_return": "-0.0031",
+        "cohort": "human_focus_m5_alerts_intraday_bounce",
+        "horizon_sessions": "5",
+        "profit_factor": "0.88",
+        "sample_count": "18",
+        "side": "SHORT",
+        "win_rate": "0.44"
+      }
+    ],
+    "playbooks": [
+      {
+        "closed_setups": "40",
+        "experimental": "",
+        "favorite_zone": "above_2nd_dev",
+        "open_setups": "5",
+        "priority_bucket": "favorite_setup",
+        "profit_take_summary": "2R then trail the 1st dev",
+        "ranking_score": "9.1",
+        "robust_closed_r": "0.62",
+        "robust_closed_r_edge": "0.15",
+        "sample_setups": "NVDA 2026-08-11 +2.14R; AMD 2026-08-12 -1.00R; SMCI 2026-08-13 +0.42R; MU 2026-08-14 +1.08R; AVGO 2026-08-15 -0.31R",
+        "setup_family": "avwap_reclaim",
+        "side": "LONG",
+        "stop_reference_label": "below 1st dev",
+        "target_hit_rate": "0.48",
+        "win_rate_closed": "0.57"
+      }
+    ],
+    "recent_type": [
+      {
+        "avg_closed_r": "0.44",
+        "avg_closed_r_edge": "0.10",
+        "closed_setups": "20",
+        "n_losses": "8",
+        "n_wins": "12",
+        "namespace": "live",
+        "priority_bucket": "favorite_setup",
+        "representative_closed_r": "0.44",
+        "sample_setups": "NVDA; AMD",
+        "setup_family": "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "side": "LONG",
+        "status": "NEW",
+        "stop_rate": "0.30",
+        "target_hit_rate": "0.40",
+        "tracked_setups": "31",
+        "win_rate_closed": "0.58"
+      }
+    ],
+    "scan_factor": [
+      {
+        "avg_side_return_pct": "1.42",
+        "factor_label": "relative_volume_vs_20d_median_at_the_scan_bar_close",
+        "horizon_sessions": "5",
+        "impact_score": "2.1",
+        "observation_count": "44",
+        "sample_observations": "NVDA; AMD",
+        "side": "LONG",
+        "side_return_edge_pct": "0.51",
+        "success_score": "6.2",
+        "symbol_count": "31",
+        "value_label": "high",
+        "win_rate": "0.58"
+      }
+    ],
+    "setup_type": [
+      {
+        "avg_closed_r": "0.51",
+        "avg_closed_r_edge": "0.12",
+        "closed_setups": "40",
+        "favorite_zone": "above_2nd_dev",
+        "n_losses": "16",
+        "n_wins": "24",
+        "open_setups": "6",
+        "priority_bucket": "favorite_setup",
+        "ranking_score": "12.0",
+        "retest_label": "retested",
+        "sample_setups": "NVDA; AMD",
+        "score_delta": "1.4",
+        "setup_family": "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "side": "LONG",
+        "stop_rate": "0.28",
+        "target_hit_rate": "0.44"
+      }
+    ],
+    "short_horizon": [
+      {
+        "avg_mae_r_2d": "-0.44",
+        "avg_mfe_r_2d": "0.91",
+        "avg_r_1d": "0.21",
+        "avg_r_2d": "0.34",
+        "median_r_2d": "0.28",
+        "recent_avg_r_2d": "0.30",
+        "recent_samples_2d": "9",
+        "sample_setups": "NVDA; AMD",
+        "samples_2d": "18",
+        "setup_family": "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "short_term_score": "3.4",
+        "side": "LONG",
+        "win_rate_2d": "0.55"
+      }
+    ],
+    "tier_list": [
+      {
+        "current_band_zone": "above_1st_dev",
+        "favorite_zone": "above_2nd_dev",
+        "priority_score": "88.4",
+        "scan_factor_match_count": "4",
+        "scan_factor_matches": "rvol; gap",
+        "setup_family": "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "side": "LONG",
+        "symbol": "NVDA",
+        "tier": "S",
+        "trend_20d": "up"
+      },
+      {
+        "current_band_zone": "below_1st_dev",
+        "favorite_zone": "below_1st_dev",
+        "priority_score": "71.2",
+        "scan_factor_match_count": "2",
+        "scan_factor_matches": "atr",
+        "setup_family": "avwap_breakdown",
+        "side": "SHORT",
+        "symbol": "AMD",
+        "tier": "A",
+        "trend_20d": "down"
+      }
+    ],
+    "tier_performance": [
+      {
+        "avg_side_return_pct": "1.88",
+        "horizon_sessions": "5",
+        "observation_count": "120",
+        "positive_scan_factor_match_rate": "0.71",
+        "sample_observations": "NVDA 2026-08-11; AMD 2026-08-12",
+        "side": "LONG",
+        "side_return_edge_pct": "0.62",
+        "symbol_count": "74",
+        "tier": "S",
+        "win_rate": "0.61"
+      },
+      {
+        "avg_side_return_pct": "0.41",
+        "horizon_sessions": "5",
+        "observation_count": "80",
+        "positive_scan_factor_match_rate": "0.55",
+        "sample_observations": "SMCI 2026-08-13",
+        "side": "SHORT",
+        "side_return_edge_pct": "0.08",
+        "symbol_count": "52",
+        "tier": "A",
+        "win_rate": "0.49"
+      }
     ]
-  ]
+  },
+  "intentional_difference": "",
+  "numeric_tolerance": 0.0,
+  "provider_assumptions": "none - the rows are written to CSVs in tmp_path and read back through the panel's own reader; no network, no live store",
+  "raw_input_keys": [
+    "fixture_rows"
+  ],
+  "raw_input_sha256": "15a7e5e301f6cc574be1672c6e512cfdb424783e8174b9e97346c648152bc5ce",
+  "rendered": {
+    "attribute_table": [
+      [
+        "Relative volume",
+        "above the 80th percentile of the trailing 20 sessions",
+        "LONG",
+        "favorite_setup",
+        "240",
+        "212",
+        "ok",
+        "+0.62",
+        "+0.18",
+        "0.05",
+        "-0.03",
+        "NVDA; AMD"
+      ]
+    ],
+    "band_variant_table": [
+      [
+        "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "LONG",
+        "favorite_setup",
+        "412",
+        "398",
+        "14",
+        "+0.51",
+        "+0.58",
+        "28.0%",
+        "24.0%",
+        "44.0%",
+        "47.0%",
+        "1.10",
+        "1.22",
+        "baseline_2r_trail"
+      ]
+    ],
+    "catch_rate_table": [
+      [
+        "5",
+        "LONG",
+        "318",
+        "96",
+        "29",
+        "30.0%",
+        "67",
+        "NVDA 2026-08-11 +2.14R; AMD 2026-08-12 -1.00R; SMCI 2026-08-13 +0.42R; MU 2026-08-14 +1.08R; AVGO 2026-08-15 -0.31R",
+        "TSLA; PLTR"
+      ]
+    ],
+    "control_discovery_table": [
+      [
+        "all",
+        "cohort",
+        "control_rejected_by_gate_second_dev_reclaim_long_favorite",
+        "LONG",
+        "avwap_reclaim",
+        "42.0%",
+        "33.0%",
+        "112",
+        "47",
+        "65",
+        "-0.08",
+        "9",
+        ""
+      ]
+    ],
+    "current_table": [
+      [
+        "S",
+        "NVDA",
+        "LONG",
+        "88.40",
+        "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "above_2nd_dev",
+        "above_1st_dev",
+        "up",
+        "4",
+        "rvol; gap"
+      ],
+      [
+        "A",
+        "AMD",
+        "SHORT",
+        "71.20",
+        "avwap_breakdown",
+        "below_1st_dev",
+        "below_1st_dev",
+        "down",
+        "2",
+        "atr"
+      ]
+    ],
+    "exit_framework_table": [
+      [
+        "baseline",
+        "false",
+        "baseline_2r_then_trail_the_first_deviation_band",
+        "LONG",
+        "favorite_setup",
+        "55.0%",
+        "46.0%",
+        "140",
+        "128",
+        "+0.44",
+        "29.0%",
+        "46.0%",
+        "12",
+        "0"
+      ],
+      [
+        "comparison_apr2026",
+        "true",
+        "comparison_apr2026_atr_trail",
+        "LONG",
+        "favorite_setup",
+        "51.0%",
+        "42.0%",
+        "119",
+        "110",
+        "+0.39",
+        "31.0%",
+        "41.0%",
+        "9",
+        "21"
+      ]
+    ],
+    "human_pick_table": [
+      [
+        "Swing \u00b7 SECOND_DEV_BREAKOUT",
+        "LONG",
+        "5",
+        "44",
+        "57.0%",
+        "+1.82%",
+        "1.41",
+        "120",
+        "61.0%",
+        "+1.88%",
+        "-0.06%"
+      ],
+      [
+        "M5 \u00b7 ALERTS_INTRADAY_BOUNCE",
+        "SHORT",
+        "5",
+        "18",
+        "44.0%",
+        "-0.31%",
+        "0.88",
+        "80",
+        "49.0%",
+        "+0.41%",
+        "-0.72%"
+      ]
+    ],
+    "playbook_table": [
+      [
+        "LONG",
+        "favorite_setup",
+        "avwap_reclaim",
+        "above_2nd_dev",
+        "below 1st dev",
+        "2R then trail the 1st dev",
+        "40",
+        "5",
+        "+0.62",
+        "+0.15",
+        "57.0%",
+        "48.0%",
+        "9.10",
+        "NVDA 2026-08-11 +2.14R; AMD 2026-08-12 -1.00R; SMCI 2026-08-13 +0.42R; MU 2026-08-14 +1.08R; AVGO 2026-08-15 -0.31R"
+      ]
+    ],
+    "recent_type_table": [
+      [
+        "NEW",
+        "live",
+        "LONG",
+        "favorite_setup",
+        "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "60% (>=39%, n=20)",
+        "58.0%",
+        "20",
+        "31",
+        "+0.44",
+        "+0.10",
+        "40.0%",
+        "30.0%",
+        "+0.44",
+        "NVDA; AMD"
+      ]
+    ],
+    "scan_factor_table": [
+      [
+        "5",
+        "LONG",
+        "relative_volume_vs_20d_median_at_the_scan_bar_close",
+        "high",
+        "44",
+        "31",
+        "58.0%",
+        "+1.42%",
+        "+0.51%",
+        "+6.20",
+        "NVDA; AMD"
+      ]
+    ],
+    "setup_type_table": [
+      [
+        "LONG",
+        "favorite_setup",
+        "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "above_2nd_dev",
+        "retested",
+        "60% (>=45%, n=40)",
+        "40",
+        "6",
+        "+0.51",
+        "+0.12",
+        "44.0%",
+        "28.0%",
+        "+1.40",
+        "NVDA; AMD"
+      ]
+    ],
+    "short_term_table": [
+      [
+        "LONG",
+        "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
+        "18",
+        "55.0%",
+        "+0.21",
+        "+0.34",
+        "+0.28",
+        "+0.91",
+        "-0.44",
+        "9",
+        "+0.30",
+        "+3.40",
+        "NVDA; AMD"
+      ]
+    ],
+    "study_discovery_table": [
+      [
+        "all",
+        "cohort",
+        "control_rejected_by_gate_second_dev_reclaim_long_favorite",
+        "LONG",
+        "avwap_reclaim",
+        "42.0%",
+        "33.0%",
+        "112",
+        "47",
+        "65",
+        "-0.08",
+        "9",
+        ""
+      ]
+    ],
+    "tier_performance_table": [
+      [
+        "5",
+        "S",
+        "LONG",
+        "120",
+        "74",
+        "61.0%",
+        "+1.88%",
+        "+0.62%",
+        "71.0%",
+        "NVDA 2026-08-11; AMD 2026-08-12"
+      ],
+      [
+        "5",
+        "A",
+        "SHORT",
+        "80",
+        "52",
+        "49.0%",
+        "+0.41%",
+        "+0.08%",
+        "55.0%",
+        "SMCI 2026-08-13"
+      ]
+    ]
+  },
+  "schema": "g2b_tracker_render/v1",
+  "source": {
+    "generated_by": "tests/test_g2b_named_columns.py::_write_render_golden, run by the tester before any G2b fix existed",
+    "repo_commit": "7e018c99"
+  },
+  "universe_version": "synthetic-g2b-tracker-fixture"
 }

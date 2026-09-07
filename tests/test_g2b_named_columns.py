@@ -721,26 +721,65 @@ def test_no_cell_text_and_no_row_order_changes_on_any_tab(
     ``tests/fixtures/g2b_tracker_render_golden.json``, which was generated FROM
     THE BASE COMMIT by ``_write_render_golden`` below. The builder must never
     regenerate it - a fixture written by the code it pins is a self-portrait.
+
+    The fixture carries its Milestone 3 contract and its own INPUT, and the
+    input is checked against `_tracker_fixture_rows()` first: a golden whose
+    input drifted would otherwise pin nothing and still pass.
     """
+    from tests.conftest import load_fixture_contract
+
+    contract = load_fixture_contract(TRACKER_RENDER_GOLDEN)
+    assert contract["fixture_rows"] == _tracker_fixture_rows(), (
+        "the fixture rows in this test file no longer match the ones the golden "
+        "was rendered from, so the golden pins nothing"
+    )
+
     panel = _tracker_panel(app, panel_module, tmp_path, monkeypatch, populated=True)
     try:
         rendered = _render_grid(panel)
     finally:
         panel.deleteLater()
 
-    assert TRACKER_RENDER_GOLDEN.exists(), f"missing golden {TRACKER_RENDER_GOLDEN}"
-    expected = json.loads(TRACKER_RENDER_GOLDEN.read_text(encoding="utf-8"))
-    assert rendered == expected
+    contract.assert_matches(rendered, contract["rendered"], "setup tracker cells")
 
 
 def _write_render_golden(app, panel_module, tmp_path, monkeypatch) -> None:
     """Generator, run ONCE by the tester on ``7e018c99``. Never by the builder."""
+    import hashlib
+
     panel = _tracker_panel(app, panel_module, tmp_path, monkeypatch, populated=True)
     try:
+        rows = _tracker_fixture_rows()
+        payload = {
+            "schema": "g2b_tracker_render/v1",
+            "feature_version": "setup_tracker_panel_pre_g2b",
+            "raw_input_keys": ["fixture_rows"],
+            "raw_input_sha256": hashlib.sha256(
+                json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "acquired_at": "2026-09-07T00:00:00-07:00",
+            "universe_version": "synthetic-g2b-tracker-fixture",
+            "provider_assumptions": (
+                "none - the rows are written to CSVs in tmp_path and read back "
+                "through the panel's own reader; no network, no live store"
+            ),
+            "as_of": "2026-09-07T00:00:00-07:00",
+            "expected_keys": ["rendered"],
+            "numeric_tolerance": 0.0,
+            "intentional_difference": "",
+            "source": {
+                "repo_commit": "7e018c99",
+                "generated_by": (
+                    "tests/test_g2b_named_columns.py::_write_render_golden, run "
+                    "by the tester before any G2b fix existed"
+                ),
+            },
+            "fixture_rows": rows,
+            "rendered": _render_grid(panel),
+        }
         TRACKER_RENDER_GOLDEN.parent.mkdir(parents=True, exist_ok=True)
         TRACKER_RENDER_GOLDEN.write_text(
-            json.dumps(_render_grid(panel), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
     finally:
         panel.deleteLater()
