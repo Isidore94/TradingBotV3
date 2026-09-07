@@ -25,6 +25,7 @@ from typing import Any
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFrame,
@@ -34,11 +35,13 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -376,6 +379,108 @@ class WeekReviewPage(_StepPage):
 
 
 
+#: The nine views of the Focus Review page (packet G1, 2026-09-06), in the
+#: order the trader reads them: the week first, then how the week's picks were
+#: graded, then the four verdict cohorts, then the two "what did I say" joins.
+#:
+#: Nine tables each carrying the ten-row floor is 2,340 px of minimum height in
+#: the ~2,050 px a 2160 screen gives this page, which is why the trader saw
+#: them overlap - the arithmetic, not the font. They are now one stack behind
+#: this selector, and the ONE VISIBLE table takes the height.
+#:
+#: Each tuple is (selector label, table attribute, note attribute, POPULATION
+#: SENTENCE). The sentence says what a ROW IS - a cohort row and a pick row look
+#: identical in a table - and it carries no count: the counts are in the note
+#: under the table, written by the render that has them, and inventing one here
+#: would be a number this page does not measure.
+FOCUS_REVIEW_VIEWS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "Week's picks",
+        "table",
+        "note",
+        "One row per FOCUS PICK made in the reviewed week, carrying that same "
+        "pick's forward return at H1/H3/H5/H10. Scoped to the reviewed week. A "
+        "blank horizon has not matured - it is never a zero.",
+    ),
+    (
+        "Picks graded",
+        "performance_table",
+        "performance_note",
+        "One row per (cohort, side, horizon) of the focus picks' own forward "
+        "record. This is the WHOLE graded history, not the reviewed week: the "
+        "nightly rollup carries no trade date, so its as-of stamp is printed "
+        "under the table instead.",
+    ),
+    (
+        "Vetoes",
+        "cohort_table",
+        "cohort_note",
+        "One row per VETO REASON, graded forward - the whole record of what you "
+        "threw away, not the reviewed week. One horizon at a time, chosen on "
+        "the right. Returns are side-adjusted, so positive means the pick you "
+        "vetoed would have worked.",
+    ),
+    (
+        "Likes",
+        "like_table",
+        "like_note",
+        "One row per CLAIMED SETUP FAMILY you endorsed, graded forward over the "
+        "whole record. One horizon at a time, chosen on the right. This is the "
+        "mirror of Vetoes: here positive means the pick you liked worked.",
+    ),
+    (
+        "After-like",
+        "after_like_table",
+        "after_like_note",
+        "One row per ELIGIBLE (day, entry) cell of what happened AFTER a like. "
+        "Eligible cells only: a cell under the floor is not a weak answer, it "
+        "is no answer, and a blank table is the normal state until the "
+        "declared reserve window closes.",
+    ),
+    (
+        "Passes",
+        "pass_table",
+        "pass_note",
+        "One row per DAY-TRADE PASS reason, graded forward over the whole "
+        "record. The code cohorts OVERLAP - one pass with several codes is in "
+        "several rows - so they are never summed; only the pooled row counts "
+        "passes.",
+    ),
+    (
+        "Not-today",
+        "rejection_table",
+        "rejection_note",
+        "One row per REJECTION verdict, graded forward over the whole record. "
+        "`not_today` is one session thrown back and `dislike` is the name "
+        "itself: two different populations, never combined into a verdict.",
+    ),
+    (
+        "Said vs did",
+        "preference_table",
+        "preference_note",
+        "One row per STATEMENT you made in the reviewed week, beside whether "
+        "you traded it and what it then did. The match is a JUDGEMENT, not a "
+        "link - 'no match' is a real answer.",
+    ),
+    (
+        "Said at the time",
+        "feedback_table",
+        "feedback_note",
+        "One row per LIKE/DISLIKE VERDICT recorded in the reviewed week, dated "
+        "by the session it is ABOUT rather than when it was typed. These are "
+        "opinions, not outcomes.",
+    ),
+)
+
+#: The two views whose rows the horizon combo actually filters. It is hidden on
+#: the other seven: a control that changes nothing in the table under it reads
+#: as a control that is broken.
+FOCUS_REVIEW_HORIZON_VIEWS = frozenset({"Vetoes", "Likes"})
+
+#: The default view, by index into `FOCUS_REVIEW_VIEWS`.
+FOCUS_REVIEW_DEFAULT_VIEW = 0
+
+
 class FocusReviewPage(_StepPage):
     """Step 2: how the week's focus picks behaved."""
 
@@ -392,7 +497,7 @@ class FocusReviewPage(_StepPage):
         # One row per PICK, carrying its outcome - not picks and outcomes as
         # separate rows, which listed the same name twice and could not answer
         # "how did this pick do" (R8 retained scope, built 2026-08-18).
-        self.table = _ten_row_table(QTableWidget(0, 9))
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
             ["Date", "Symbol", "Side", "Source", "H1", "H3", "H5", "H10", "Matured"]
         )
@@ -418,7 +523,7 @@ class FocusReviewPage(_StepPage):
         )
         self.cohort_horizon_input.currentIndexChanged.connect(self._on_cohort_horizon_changed)
 
-        self.cohort_table = _ten_row_table(QTableWidget(0, len(COHORT_TABLE_COLUMNS)))
+        self.cohort_table = QTableWidget(0, len(COHORT_TABLE_COLUMNS))
         self.cohort_table.setHorizontalHeaderLabels(
             ["Veto reason", *COHORT_TABLE_HEADERS[1:]]
         )
@@ -429,7 +534,7 @@ class FocusReviewPage(_StepPage):
         # Packet 8b: R10.F's LIKE cohort, beside the veto one. The two are the
         # halves of one judgement - what you threw away and what you endorsed -
         # and reading either alone gives half an answer.
-        self.like_table = _ten_row_table(QTableWidget(0, len(COHORT_TABLE_COLUMNS)))
+        self.like_table = QTableWidget(0, len(COHORT_TABLE_COLUMNS))
         self.like_table.setHorizontalHeaderLabels(
             ["Claimed setup", *COHORT_TABLE_HEADERS[1:]]
         )
@@ -445,7 +550,7 @@ class FocusReviewPage(_StepPage):
         # page is read on a Sunday when there is time to act on what it says.
         # BLANK when nothing is eligible, which is the normal state for the first
         # twenty sessions and says so.
-        self.after_like_table = _ten_row_table(QTableWidget(0, len(AFTER_LIKE_COLUMNS)))
+        self.after_like_table = QTableWidget(0, len(AFTER_LIKE_COLUMNS))
         self.after_like_table.setHorizontalHeaderLabels(AFTER_LIKE_HEADERS)
         self.after_like_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.after_like_note = QLabel("")
@@ -458,7 +563,7 @@ class FocusReviewPage(_StepPage):
         # P5: the other two verdicts. With these four tables the page shows
         # every judgement the trader can record - thrown away, endorsed, passed
         # on, and thrown back - rather than only the two that had graders first.
-        self.pass_table = _ten_row_table(QTableWidget(0, len(P5_COHORT_COLUMNS)))
+        self.pass_table = QTableWidget(0, len(P5_COHORT_COLUMNS))
         self.pass_table.setHorizontalHeaderLabels(
             ["Pass reason", *P5_COHORT_HEADERS[1:]]
         )
@@ -466,7 +571,7 @@ class FocusReviewPage(_StepPage):
         self.pass_note = QLabel("")
         self.pass_note.setWordWrap(True)
 
-        self.rejection_table = _ten_row_table(QTableWidget(0, len(P5_COHORT_COLUMNS)))
+        self.rejection_table = QTableWidget(0, len(P5_COHORT_COLUMNS))
         self.rejection_table.setHorizontalHeaderLabels(
             ["Verdict", *P5_COHORT_HEADERS[1:]]
         )
@@ -477,7 +582,7 @@ class FocusReviewPage(_StepPage):
         # P6: what was said, whether it was taken, and what it then did. The
         # cohorts above answer "was I right"; this answers the question before
         # it - "did I act on what I said at all?".
-        self.preference_table = _ten_row_table(QTableWidget(0, len(PREFERENCE_COLUMNS)))
+        self.preference_table = QTableWidget(0, len(PREFERENCE_COLUMNS))
         self.preference_table.setHorizontalHeaderLabels(list(PREFERENCE_HEADERS))
         self.preference_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.preference_note = QLabel("")
@@ -487,7 +592,7 @@ class FocusReviewPage(_StepPage):
         # the two judgement mirrors - what was thrown away, what was endorsed.
         # These are the picks THEMSELVES: how they behaved, and what the trader
         # said about them at the time.
-        self.performance_table = _ten_row_table(QTableWidget(0, 11))
+        self.performance_table = QTableWidget(0, 11)
         self.performance_table.setHorizontalHeaderLabels(
             [
                 "Cohort", "Side", "Horizon", "n", "Win rate", "Avg return",
@@ -498,7 +603,7 @@ class FocusReviewPage(_StepPage):
         self.performance_note = QLabel("")
         self.performance_note.setWordWrap(True)
 
-        self.feedback_table = _ten_row_table(QTableWidget(0, 7))
+        self.feedback_table = QTableWidget(0, 7)
         self.feedback_table.setHorizontalHeaderLabels(
             ["Date", "Symbol", "Side", "Verdict", "Category", "Origin", "Reason"]
         )
@@ -509,40 +614,199 @@ class FocusReviewPage(_StepPage):
         # V2 item 2a: OUT OF THE LAYOUT, not deleted. One Refresh at the top of
         # the tab drives every page; the button object stays because `reload()`
         # still uses it as its own single-flight guard.
-        self._layout.addWidget(self.table, 1)
-        self._layout.addWidget(self.note)
-        horizon_row = QHBoxLayout()
-        horizon_row.setContentsMargins(0, 0, 0, 0)
-        horizon_row.addWidget(QLabel("Vetoed picks, graded forward"), 1)
-        horizon_row.addWidget(QLabel("Horizon"), 0)
-        horizon_row.addWidget(self.cohort_horizon_input, 0)
-        self._layout.addLayout(horizon_row)
-        self._layout.addWidget(self.cohort_caption)
-        self._layout.addWidget(self.cohort_table, 1)
-        self._layout.addWidget(self.cohort_note)
-        self._layout.addWidget(QLabel("Liked picks, graded forward"))
-        self._layout.addWidget(self.like_table, 1)
-        self._layout.addWidget(self.like_note)
-        self._layout.addWidget(self.claim_caveat)
-        self._layout.addWidget(QLabel("Your likes: best day and entry so far"))
-        self._layout.addWidget(self.after_like_table, 1)
-        self._layout.addWidget(self.after_like_note)
-        self._layout.addWidget(QLabel("Day-trade passes, graded forward"))
-        self._layout.addWidget(self.pass_table, 1)
-        self._layout.addWidget(self.pass_note)
-        self._layout.addWidget(QLabel("Not-today and dislike, graded forward"))
-        self._layout.addWidget(self.rejection_table, 1)
-        self._layout.addWidget(self.rejection_note)
-        self._layout.addWidget(QLabel("What I said, what I did, what happened"))
-        self._layout.addWidget(self.preference_table, 1)
-        self._layout.addWidget(self.preference_note)
-        self._layout.addWidget(QLabel("Focus picks, graded forward"))
-        self._layout.addWidget(self.performance_table, 1)
-        self._layout.addWidget(self.performance_note)
-        self._layout.addWidget(QLabel("What you said about them at the time"))
-        self._layout.addWidget(self.feedback_table, 1)
-        self._layout.addWidget(self.feedback_note)
+        # G1: the nine tables are ONE STACK behind a nine-button view selector,
+        # with a read-only detail pane beside it. Nine tables in one column did
+        # not fit any screen the trader owns; every one of them still fills on
+        # every render, because the READ is one pass and stays one pass.
+        self._build_view_selector()
         self._finish_layout()
+
+    # ------------------------------------------------------------------
+    # G1 - the view selector, the stack and the detail pane
+    # ------------------------------------------------------------------
+
+    def _build_view_selector(self) -> None:
+        """One stack, nine exclusive buttons, one detail pane.
+
+        Nothing here reads, renders or filters: it is furniture. Selecting a
+        view is `setCurrentIndex` plus a cleared pane, so a click costs a
+        layout pass and never a file.
+        """
+        #: The tables in view order, so the selected index answers "which table
+        #: is on screen" without a lookup by name.
+        self._view_tables: list[QTableWidget] = []
+        #: The view the trader last chose. Remembered for the session (this
+        #: page lives as long as the tab); persisting it across restarts is a
+        #: different packet.
+        self._view_index = FOCUS_REVIEW_DEFAULT_VIEW
+
+        # A widget that belongs ABOVE its table (the veto caption, which the
+        # render fills) or BELOW its note (the claim caveat).
+        above = {"cohort_table": (self.cohort_caption,)}
+        below = {"like_table": (self.claim_caveat,)}
+
+        self.view_selector = QButtonGroup(self)
+        self.view_selector.setExclusive(True)
+        selector_row = QHBoxLayout()
+        selector_row.setContentsMargins(0, 0, 0, 0)
+
+        self.view_stack = QStackedWidget()
+        for index, (label, table_attr, note_attr, population) in enumerate(
+            FOCUS_REVIEW_VIEWS
+        ):
+            button = QToolButton()
+            button.setObjectName("WeekendViewButton")
+            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setText(label)
+            button.setCheckable(True)
+            button.setToolTip(population)
+            self.view_selector.addButton(button, index)
+            selector_row.addWidget(button, 0)
+
+            view = QWidget()
+            view_layout = QVBoxLayout(view)
+            view_layout.setContentsMargins(0, 0, 0, 0)
+            # The population sentence: what a ROW IS. A cohort row and a pick
+            # row look identical in a table, and this is the only thing that
+            # keeps them apart.
+            sentence = QLabel(population)
+            sentence.setObjectName("SectionSubtitle")
+            sentence.setWordWrap(True)
+            view_layout.addWidget(sentence)
+            for extra in above.get(table_attr, ()):
+                view_layout.addWidget(extra)
+            table = getattr(self, table_attr)
+            # No ten-row floor on this page: the ONE VISIBLE table takes the
+            # height, which is what makes ten rows readable at 1440 as well.
+            view_layout.addWidget(table, 1)
+            view_layout.addWidget(getattr(self, note_attr))
+            for extra in below.get(table_attr, ()):
+                view_layout.addWidget(extra)
+            self.view_stack.addWidget(view)
+            self._view_tables.append(table)
+            table.itemSelectionChanged.connect(
+                lambda _table=table: self._show_selected_row(_table)
+            )
+
+        selector_row.addStretch(1)
+        # The horizon combo drives the two cohort views and nothing else, so it
+        # rides the selector row and is hidden on the other seven.
+        self.horizon_holder = QWidget()
+        horizon_layout = QHBoxLayout(self.horizon_holder)
+        horizon_layout.setContentsMargins(0, 0, 0, 0)
+        horizon_layout.addWidget(QLabel("Horizon"), 0)
+        horizon_layout.addWidget(self.cohort_horizon_input, 0)
+        selector_row.addWidget(self.horizon_holder, 0)
+
+        self.detail_pane = QTextBrowser()
+        # theme.qss owns how this looks (`QTextBrowser#WeekendRowDetail`); a
+        # per-widget stylesheet is the cost the fluidity rules forbid.
+        self.detail_pane.setObjectName("WeekendRowDetail")
+        self.detail_pane.setReadOnly(True)
+        self.detail_pane.setLineWrapMode(QTextBrowser.WidgetWidth)
+        self.detail_pane.setOpenExternalLinks(False)
+
+        self.view_split = QSplitter(Qt.Horizontal)
+        self.view_split.addWidget(self.view_stack)
+        self.view_split.addWidget(self.detail_pane)
+        self.view_split.setStretchFactor(0, 3)
+        self.view_split.setStretchFactor(1, 1)
+        self.view_split.setChildrenCollapsible(False)
+        # The stretch factors govern a RESIZE; the first layout is taken from
+        # the two size hints, and a scroll area's hint would leave the pane a
+        # sliver. These are ratios, not pixels - QSplitter scales them to the
+        # width it is actually given.
+        self.view_split.setSizes([3000, 1000])
+
+        self._layout.addLayout(selector_row)
+        self._layout.addWidget(self.view_split, 1)
+
+        self.view_selector.idClicked.connect(self._on_view_button_clicked)
+        self._select_view(FOCUS_REVIEW_DEFAULT_VIEW)
+
+    def _on_view_button_clicked(self, index: int) -> None:
+        """A click on the view ALREADY shown does nothing at all.
+
+        An exclusive checkable button still emits `clicked` when it is already
+        checked, so without this the selector re-ran the view change on every
+        re-click: nothing on screen moved except the trader's selected row and
+        the pane reading it, which is the only thing the click could destroy.
+        The unconditional `_select_view` stays for the constructor, which has
+        to check the button and set the horizon visibility on a `_view_index`
+        that already equals the default.
+        """
+        if int(index) == self._view_index:
+            return
+        self._select_view(int(index))
+
+    def _select_view(self, index: int) -> None:
+        """Show one of the nine views. A VIEW change: no read, no render."""
+        index = max(0, min(int(index), self.view_stack.count() - 1))
+        self._view_index = index
+        button = self.view_selector.button(index)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
+        self.view_stack.setCurrentIndex(index)
+        label = FOCUS_REVIEW_VIEWS[index][0]
+        self.horizon_holder.setVisible(label in FOCUS_REVIEW_HORIZON_VIEWS)
+        # The pane described a row of the table that just left the screen, so
+        # it goes with it. Empty, not a placeholder: a sentence sitting where a
+        # row's own words belong reads as the row's own words.
+        for table in self._view_tables:
+            table.clearSelection()
+        self.detail_pane.clear()
+
+    def _show_selected_row(self, table) -> None:
+        """Every column of the selected row, `header: value`, the text in full.
+
+        The cell elides at PAINT time; this is where the trader reads the whole
+        reason, note, claimed setup or verdict without widening a column.
+        """
+        if not self._view_tables or table is not self._view_tables[self._view_index]:
+            return
+        items = table.selectedItems()
+        if not items:
+            self.detail_pane.clear()
+            return
+        self.detail_pane.setHtml(self._row_detail_html(table, items[0].row()))
+
+    def _refresh_detail_pane(self) -> None:
+        """Re-read the pane from the cells that are on screen NOW.
+
+        The pane is filled from `itemSelectionChanged`, and a render that keeps
+        the row COUNT leaves the row selected without re-emitting it - so the
+        table showed the new read and the pane went on describing the previous
+        one, under the same row number, with nothing saying which was which. A
+        render that SHRINKS the table drops the selection and Qt re-emits by
+        itself, which is why only the equal-count case rotted.
+
+        Re-reading is the whole repair: the same row is rebuilt from the new
+        cells, and a selection the new render could not carry empties the pane
+        rather than freezing it. Every render pass ends here.
+        """
+        if not self._view_tables:
+            return
+        self._show_selected_row(self._view_tables[self._view_index])
+
+    def _row_detail_html(self, table, row: int) -> str:
+        from html import escape
+
+        label = FOCUS_REVIEW_VIEWS[self._view_index][0]
+        parts = [f"<p><b>{escape(label)}</b></p>"]
+        for column in range(table.columnCount()):
+            header_item = table.horizontalHeaderItem(column)
+            header = (
+                header_item.text()
+                if header_item is not None
+                else f"Column {column + 1}"
+            )
+            item = table.item(row, column)
+            value = item.text() if item is not None else ""
+            parts.append(
+                f"<p><b>{escape(header)}</b>: "
+                f"{escape(value) if value else '&#8212;'}</p>"
+            )
+        return "".join(parts)
 
     def reload(self) -> None:
         """Start all five reads on this page's worker. Single-flight.
@@ -595,6 +859,8 @@ class FocusReviewPage(_StepPage):
         self._render_performance(data.get("performance") or [])
         self._render_feedback(data.get("feedback") or [])
         self._render_week(data.get("week") or [])
+        # The nine tables just changed under a selection that survived them.
+        self._refresh_detail_pane()
 
     def _on_focus_failed(self, message: str) -> None:  # pragma: no cover - signal seam
         """State the failure; keep every row already on screen.
@@ -707,7 +973,10 @@ class FocusReviewPage(_StepPage):
         note = (
             f"{len(rows)} verdict(s) in the reviewed week ({tally}), dated by the "
             "session they are ABOUT rather than when they were typed. These are "
-            "opinions, not outcomes - read them against the rollup above."
+            # "the rollup above" was `performance_table`, which is a button away
+            # now rather than a scroll away: name the VIEW, not a position.
+            "opinions, not outcomes - read them against the Picks graded view, "
+            "which is the rollup they should be weighed against."
         )
         if len(rows) > len(shown):
             note += f" {len(rows) - len(shown)} row(s) beyond the first {len(shown)} are not shown."
@@ -730,6 +999,9 @@ class FocusReviewPage(_StepPage):
         """
         self._render_cohort(self._cohort_rows)
         self._render_like_cohort(self._like_rows)
+        # A horizon with the same row count keeps the selection, so this is the
+        # second door onto the staleness `_refresh_detail_pane` exists for.
+        self._refresh_detail_pane()
 
     def _render_like_cohort(self, rows) -> None:
         """R10.F's cohort, rendered under the same honesty rules as the veto one."""
@@ -764,7 +1036,9 @@ class FocusReviewPage(_StepPage):
             f"{len(shown)} row(s) at the {self._cohort_horizon()}-session horizon, "
             f"of {len(rows)} across all horizons, one per claimed setup family. "
             "Returns are side-adjusted, so POSITIVE means the pick you liked "
-            "WORKED - the opposite reading from the veto table above, where "
+            # The nine tables are a stack now: nothing is above anything, and a
+            # note that names a position sends the trader nowhere.
+            "WORKED - the opposite reading from the Vetoes view, where "
             "positive means the one you rejected would have."
             + quick_sentence
             + " "
