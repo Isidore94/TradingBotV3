@@ -401,8 +401,15 @@ def session_block_statistic_bootstrap(
         "measured": True,
         "sessions": len(keys),
         "resamples": len(drawn_values),
-        "low": round(_quantile(drawn_values, BOOTSTRAP_LOW / 100.0), 4),
-        "high": round(_quantile(drawn_values, BOOTSTRAP_HIGH / 100.0), 4),
+        # Ten places, not four - the same rule as `top_share` above and for the
+        # same reason (re-review round 2). This bound is COMPARED against the
+        # statistic it stands beside, and rounding it up by as little as 5e-5
+        # put one live cell's low 3.3e-5 ABOVE its own `held_run_score`
+        # (SHORT ema_21) - which is precisely the sentence blocker 3 exists to
+        # make impossible. A display rounding inside a comparison is not a
+        # display rounding; every renderer formats this itself.
+        "low": round(_quantile(drawn_values, BOOTSTRAP_LOW / 100.0), 10),
+        "high": round(_quantile(drawn_values, BOOTSTRAP_HIGH / 100.0), 10),
         "interval": f"{BOOTSTRAP_LOW:.0f}-{BOOTSTRAP_HIGH:.0f} percentile of a "
                     "session-block bootstrap on the statistic itself",
     }

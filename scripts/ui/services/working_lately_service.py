@@ -342,7 +342,13 @@ class WorkingLatelyService(QObject):
 
     def _write_snapshot(self, snapshot: EvidenceSnapshot) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(snapshot.to_payload(), indent=2, default=str)
+        # COMPACT, and the reason is that the size cap is about this file rather
+        # than about a shape (re-review round 2): `indent=2` cost 12,876 bytes on
+        # live data - a quarter of the file - purely in leading spaces, so the
+        # test measured 40,045 while the desk wrote 52,921 and blew the 48 KB
+        # gate. Nothing reads this by eye that cannot pipe it through a
+        # formatter; every surface reads it through `json.loads`.
+        payload = json.dumps(snapshot.to_payload(), default=str)
         temp = self.snapshot_path.with_suffix(".json.tmp")
         temp.write_text(payload, encoding="utf-8")
         os.replace(temp, self.snapshot_path)

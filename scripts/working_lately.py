@@ -1177,6 +1177,17 @@ def daytrade_held_run_cells(summaries: Mapping[Any, Mapping[str, Any]] | None) -
         # with the best held x ran.
         bootstrap = summary.get("score_bootstrap") or {}
         measured_interval = bool(bootstrap.get("measured"))
+        statistic = summary.get("held_run_score")
+        low = bootstrap.get("low") if measured_interval else None
+        clamped = False
+        if low is not None and statistic is not None and float(low) > float(statistic):
+            # A percentile of a resampled statistic CAN sit above the point
+            # estimate when the block distribution is skewed - it is arithmetic,
+            # not a defect. But `held x ran 1.21 (>= 2.07)` is unreadable
+            # whatever produced it, so the printed bound is clamped to the
+            # statistic and the clamp is NAMED rather than applied in silence.
+            low = float(statistic)
+            clamped = True
         cells.append(
             EvidenceCell(
                 kind="daytrade_held_run",
@@ -1200,9 +1211,13 @@ def daytrade_held_run_cells(summaries: Mapping[Any, Mapping[str, Any]] | None) -
                 top_session_share=by_session.get("top_share"),
                 statistic=summary.get("held_run_score"),
                 statistic_name=HELD_RUN_STATISTIC_NAME,
-                uncertainty_low=bootstrap.get("low") if measured_interval else None,
+                uncertainty_low=low,
                 uncertainty_kind=(
-                    "held_run_score_session_block_low"
+                    (
+                        "held_run_score_session_block_low_clamped_to_the_statistic"
+                        if clamped
+                        else "held_run_score_session_block_low"
+                    )
                     if measured_interval
                     else f"held_run_score_session_block_unmeasured ({bootstrap.get('reason') or 'no reason given'})"
                 ),

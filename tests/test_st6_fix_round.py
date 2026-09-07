@@ -556,9 +556,17 @@ def test_the_observational_caveat_counts_one_kinds_own_cells(tmp_path):
 SNAPSHOT_SIZE_CAP_BYTES = 48_000
 
 
-def test_the_persisted_snapshot_stays_small_on_a_hundred_and_fifty_cells():
-    """Advisory 2. The cap and its reason are declared above."""
+def test_the_persisted_snapshot_stays_small_on_a_hundred_and_fifty_cells(tmp_path):
+    """Advisory 2. The cap and its reason are declared above.
+
+    **It measures the bytes the SERVICE WROTE, not a shape** (re-review round 2).
+    This used to size `json.dumps(payload)` while the service wrote the same
+    payload with `indent=2`: 40,045 measured against 52,921 on disk, so the test
+    passed and the desk blew the 48 KB gate on a quarter-file of leading spaces.
+    A size test that does not open the file is a test of the test.
+    """
     import working_lately
+    from ui.services.working_lately_service import WorkingLatelyService
 
     session = _sessions(1)[0]
     recent = [
@@ -580,12 +588,19 @@ def test_the_persisted_snapshot_stays_small_on_a_hundred_and_fifty_cells():
         }
         for index in range(150)
     ]
-    payload = working_lately.build_snapshot(
+    snapshot = working_lately.build_snapshot(
         recent_rows=recent, last_completed_session=session, previous_verdicts={}
-    ).to_payload()
+    )
+    payload = snapshot.to_payload()
     assert len(payload["cells"]) == 150
-    size = len(json.dumps(payload))
-    assert size < SNAPSHOT_SIZE_CAP_BYTES, f"{size} bytes for 150 cells"
+
+    service = WorkingLatelyService(store_dir=tmp_path / "wl")
+    service.publish(snapshot)
+    size = service.snapshot_path.stat().st_size
+    assert size < SNAPSHOT_SIZE_CAP_BYTES, f"{size} bytes ON DISK for 150 cells"
+    # And what came back off disk is the same reading, not a smaller one.
+    assert service.load_snapshot()["snapshot_id"] == snapshot.snapshot_id
+    assert len(service.load_snapshot()["cells"]) == 150
 
     # Nothing the trader's requirement asks the snapshot to identify was lost:
     # it moved into `kind_policy` and comes back on read.
@@ -676,6 +691,44 @@ def _timed(fn, *args) -> float:
     start = time.perf_counter()
     fn(*args)
     return (time.perf_counter() - start) * 1000.0
+
+
+def test_a_day_trade_bound_is_never_printed_above_its_own_statistic():
+    """Re-review round 2. Rounding the bootstrap `low` to four places pushed one
+    live cell's bound 3.3e-5 ABOVE its `held_run_score` (SHORT ema_21) - the
+    exact sentence blocker 3 exists to make impossible. Ten places, and a clamp
+    behind it that NAMES itself, because a percentile of a resampled statistic
+    can genuinely sit above the point estimate on a skewed block distribution."""
+    import evidence_stats
+    import working_lately
+
+    # The rounding, at its source.
+    result = evidence_stats.session_block_statistic_bootstrap(
+        {"a": 1.000_000_04, "b": 1.000_000_06},
+        lambda payloads: sum(payloads) / len(payloads),
+    )
+    assert result["measured"] is True
+    assert result["low"] != round(result["low"], 4), (
+        "a bound rounded to four places cannot describe a statistic this close "
+        "to its own interval"
+    )
+
+    # And the clamp, which is what a reader actually sees.
+    cell = working_lately.daytrade_held_run_cells(
+        {
+            ("bounce_type", "short", "ema_21"): {
+                "held_run_score": 1.2,
+                "score_bootstrap": {"measured": True, "low": 1.2 + 3.3e-5, "sessions": 4},
+                "concentration": {"by_symbol": {"top_share": 0.2, "distinct": 5},
+                                  "by_session": {"top_share": 0.3, "distinct": 4}},
+                "n_measured": 40, "n_held": 30, "n_pending": 0, "n_unmeasured": 0,
+                "n_symbols": 5, "n_sessions": 4, "n_floor": 30, "meets_floor": True,
+                "latest_session": _sessions(1)[0].isoformat(),
+            }
+        }
+    )[0]
+    assert cell.uncertainty_low == cell.statistic
+    assert "clamped_to_the_statistic" in cell.uncertainty_kind, cell.uncertainty_kind
 
 
 def test_the_close_slot_write_is_a_refresh_trigger_not_only_a_manual_scan():
