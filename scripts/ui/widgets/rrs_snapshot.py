@@ -23,16 +23,34 @@ class RrsSnapshotWidget(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._payload: dict[str, Any] = {}
+        # Three scopes abreast (the tab's layout) or one under another (the
+        # Strength page's, 2026-09-07). Layout only; the rows are the same.
+        self._stacked = False
 
         self.env_label = QLabel("RRS Snapshot")
         self.env_label.setObjectName("SectionTitle")
+        # Wrapped: the environment label shares its row with the two copy
+        # buttons, and unwrapped the row demanded ~630 px at the desk's scale
+        # - wider than the Strength page this widget is a block on since
+        # 2026-09-07, which would have given the whole page a sideways
+        # scrollbar. Wrapped it asks for its longest word.
+        self.env_label.setWordWrap(True)
         self.meta_label = QLabel("Connect BounceBot to stream relative-strength scans.")
         self.meta_label.setObjectName("MutedLabel")
         self.meta_label.setWordWrap(True)
 
-        self.copy_rs_button = QPushButton("Copy All RS")
+        # "Copy RS", not "Copy All RS": a QPushButton demands its whole label
+        # (180 px each measured), and two of them beside the environment label
+        # are this widget's widest row. The tooltip still says the whole thing.
+        self.copy_rs_button = QPushButton("Copy RS")
+        self.copy_rs_button.setToolTip(
+            "Copy every relative-strength symbol across all three scopes to the clipboard."
+        )
         self.copy_rs_button.clicked.connect(lambda: self._copy_side("RS"))
-        self.copy_rw_button = QPushButton("Copy All RW")
+        self.copy_rw_button = QPushButton("Copy RW")
+        self.copy_rw_button.setToolTip(
+            "Copy every relative-weakness symbol across all three scopes to the clipboard."
+        )
         self.copy_rw_button.clicked.connect(lambda: self._copy_side("RW"))
 
         top_row = QHBoxLayout()
@@ -67,12 +85,30 @@ class RrsSnapshotWidget(QWidget):
         focus = self._focus_service.all_focus()
         return {"long": set(focus.get("long", [])), "short": set(focus.get("short", []))}
 
+    def set_stacked_scopes(self, on: bool) -> None:
+        """Stack the three scope tables one under another (the Strength page).
+
+        Three four-column tables side by side in 40% of the alert column read
+        at ~50 px a cell; stacked, each gets the whole width. Presentation
+        only - the payload, the rows, the threshold and the copy buttons are
+        untouched. Re-renders from the payload already in hand, no fetch.
+        """
+        on = bool(on)
+        if on == self._stacked:
+            return
+        self._stacked = on
+        if self._payload:
+            self.board.setHtml(_board_html(self._payload, self._focus_map(), stacked=on))
+
+    def stacked_scopes(self) -> bool:
+        return self._stacked
+
     def update_snapshot(self, payload: Any) -> None:
         self._payload = payload if isinstance(payload, dict) else {}
         env = self._payload.get("market_environment_label") or self._payload.get("market_environment") or "Environment"
         self.env_label.setText(str(env))
         self.meta_label.setText(self._meta_text())
-        self.board.setHtml(_board_html(self._payload, self._focus_map()))
+        self.board.setHtml(_board_html(self._payload, self._focus_map(), stacked=self._stacked))
 
     def _on_anchor_clicked(self, url) -> None:
         if url.scheme().lower() != "snapshot":
@@ -104,7 +140,12 @@ class RrsSnapshotWidget(QWidget):
         return f"Timeframe {timeframe} - Threshold {threshold_text} - Updated {_stamp(self._payload.get('timestamp'))}"
 
 
-def _board_html(payload: dict[str, Any], focus: dict[str, set] | None = None) -> str:
+def _board_html(
+    payload: dict[str, Any],
+    focus: dict[str, set] | None = None,
+    *,
+    stacked: bool = False,
+) -> str:
     if not payload:
         return _empty_html()
 
@@ -117,10 +158,15 @@ def _board_html(payload: dict[str, Any], focus: dict[str, set] | None = None) ->
         "<html><body",
         f" style='color:{body_c}; background:{panel_c}; font-size:9pt;'>",
     ]
-    parts.append("<table width='100%' cellspacing='0' cellpadding='0'><tr>")
-    for scope in _SCOPES:
-        parts.append(f"<td valign='top' width='33%' style='padding-right:8px'>{_scope_html(payload, scope, focus)}</td>")
-    parts.append("</tr></table>")
+    if stacked:
+        # One scope under another, each a full-width table (the Strength page).
+        for scope in _SCOPES:
+            parts.append(f"<div style='margin-bottom:10px'>{_scope_html(payload, scope, focus)}</div>")
+    else:
+        parts.append("<table width='100%' cellspacing='0' cellpadding='0'><tr>")
+        for scope in _SCOPES:
+            parts.append(f"<td valign='top' width='33%' style='padding-right:8px'>{_scope_html(payload, scope, focus)}</td>")
+        parts.append("</tr></table>")
     parts.append(f"<div style='height:8px; border-bottom:1px solid {border_c}'></div>")
     parts.append(_environment_html(payload))
     parts.append(f"<p style='color:{head_c}; margin-top:8px'>RS = relative strength; RW = relative weakness.</p>")

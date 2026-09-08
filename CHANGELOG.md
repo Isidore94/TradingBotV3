@@ -589,6 +589,9 @@ They are evidence and must not be loaded as context.
   board left the Alert Center's tab stack for the strength column, above the M5
   Strength section, in a scroll area - hosted bare its minimum took the column's
   floor from 190 px to 452, past the alert column's whole 360 px budget.
+  **Superseded 2026-09-07: the two sections are gone and the window is ONE flat
+  scrolling page** (`ui/widgets/strength_page.py`; Recent changes below) - the
+  same reads, one under another, each sized to its own content.
 - **The AWAY digest ranks swing picks by the tracker's record, not by the
   bucket** (V1 item 3, built R4 A11; decision 0016 answer 8: *"the best pick is
   often in the near bucket, not the favourite bucket, so the cream is not being
@@ -707,11 +710,13 @@ They are evidence and must not be loaded as context.
   writing through the STORE plus `mark_auto_adopted` and **never
   `FocusService.add`** - a machine placement is not a trader like. It never
   removes, never re-marks an existing entry, and writes one
-  `strength_board_auto_focus` review event per refresh. **Since 2026-08-31 it is a collapsible section under the Desk's
-  Strength window rather than a left-nav page** (trader request): starting closed so
-  it costs the charts nothing, sides stacked vertically for the column, its own
-  RS/RW half retired to the Alert Center's RS/RW Board tab (one tab-click away in
-  the same column), and a row click charting into the **Visual Alert Review pane**
+  `strength_board_auto_focus` review event per refresh. **Since 2026-08-31 it lives under the Desk's
+  Strength window rather than a left-nav page** (trader request), and **since
+  2026-09-07 at the foot of that window's ONE flat page** (`ui/widgets/strength_page.py`:
+  no sections, no tabs, every block sized to its content, its two tables sized to
+  their rows and capped at `FIT_ROWS_CAP`): sides stacked vertically for the
+  column, its own RS/RW half retired (the Alert Center's RS/RW read is a block on
+  the same page), and a row click charting into the **Visual Alert Review pane**
   through `chart_symbol` rather than opening the snapshot popup. **Since 2026-09-03
   every ticker click on the Trading Desk does the same** (trader: *"the main tab
   should always be centralized with the main chart"*): the Alert Center's RS/RW,
@@ -1908,6 +1913,48 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-07 - The Strength window is one flat page (branch `claude/strength-page`)
+
+Trader: *"For the main trading desk, the strength tab is unusable there's like 2
+tabs and they get no space each. Create a solution that removes the tabs and just
+collates all the data to be more easily readable."*
+
+- **`ui/widgets/strength_page.py` (new): `StrengthPage`**, one `QScrollArea`
+  hosting the four strength reads one under another - `FocusStrengthBoard`,
+  `EntryAssistBoard`, `RrsSnapshotWidget`, then `StrengthBoardPanel` under a
+  page-owned "M5 Strength Board (TC2000)" heading. The two `CollapsibleSection`s
+  ("RS/RW Board", "M5 Strength Board (TC2000)") and the stretch-factor column are
+  gone from `AlertCenterPanel`; `strength_column`, `rrs_board_section`,
+  `strength_board_section` and `rrs_board_tab` no longer exist (`strength_page`
+  does; `attach_strength_board` hands the panel to the page). Vertical scrollbar
+  ALWAYS ON (an as-needed bar reflows the boards and can loop); floor 170 px, so
+  the alert column's 360 px budget is unchanged.
+- **`fit_height_to_document`**: every text board is exactly as tall as its
+  document (vertical bar off, `Fixed` policy, re-fitted on `textChanged` and
+  `documentSizeChanged`); the first fit lays out at the viewport width itself,
+  because a never-shown `QTextEdit`'s document reads `(0, 0)` (measured).
+- **`strength_board_panel.py`**: `FIT_ROWS_CAP` (30),
+  `_SideTable.set_fit_rows` / `fit_rows` / `_fit_height` (header + rows + frame,
+  capped; off by default, the page turns it on), `StrengthBoardPanel.set_fit_rows`.
+  The cap bounds the height, never the rows.
+- **`rrs_snapshot.py`**: `set_stacked_scopes` / `stacked_scopes`,
+  `_board_html(..., stacked=)` - the three scope tables one under another on the
+  page, side by side elsewhere; rows identical.
+- Tests: `tests/test_qt_strength_board_in_the_desk.py` section 5 rewritten
+  (seven tests: reading order with no sections or tabs, nothing scrolls on its
+  own, stacked scopes, the desk widget is stacked, tables fit their rows and the
+  cap, the 360 px floor, the arm bar never on the page);
+  `test_focus_strength_board.py` and `test_qt_strength_board_sort_and_chart.py`
+  follow the widget to its new address. RED first
+  (`ModuleNotFoundError: ui.widgets.strength_page`).
+- Docs: `CLAUDE.md`/`AGENTS.md` "Charts and boards", `docs/DESK_INTERNALS.md`
+  "The Strength window is one flat page, long form", this inventory (two
+  sentences superseded), `CURRENT_CHECKPOINT.md`.
+- Not changed: any detector, score, alert, queue, fold or evidence writer, the
+  adoption gate, the `StrengthBoardService` (one owner, one timer), any click
+  route. `alert_center_panel.py` is an ask-first file; the trader's message is
+  the instruction for this window and the edit is hosting only.
 
 ### 2026-09-07 - Packet G7: the speed pass - first loads on first show, the tracker's refresh off the Qt thread (branch `claude/g7-speed-pass`)
 

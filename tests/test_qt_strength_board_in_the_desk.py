@@ -247,54 +247,165 @@ def test_the_board_fetch_goes_through_the_batched_yfinance_helper():
 
 
 # ---------------------------------------------------------------------------
-# 5. Where it sits
+# 5. Where it sits: ONE flat page (trader, 2026-09-07: "the strength tab is
+#    unusable there's like 2 tabs and they get no space each. Create a solution
+#    that removes the tabs and just collates all the data to be more easily
+#    readable"). No tabs, no collapsible sections: the four reads sit one under
+#    another on a single scrolling page, each sized to its own content.
 # ---------------------------------------------------------------------------
-def test_the_board_sits_under_the_strength_window_not_beside_the_charts(qt_desk):
+def _rrs_payload() -> dict:
+    return {
+        "timeframe_key": "M5",
+        "threshold": 0.5,
+        "timestamp": "10:42:00",
+        "results": [
+            ("RS", "NVDA", 1.8), ("RS", "AMD", 1.4), ("RS", "AVGO", 1.1),
+            ("RW", "SOFI", -1.2), ("RW", "RIVN", -0.9),
+        ],
+        "results_sector": [("RS", "AVGO", 2.4), ("RW", "HOOD", -1.5)],
+        "results_industry": [("RS", "MU", 3.1)],
+    }
+
+
+def test_the_strength_window_is_one_flat_page_in_reading_order(qt_desk):
+    from PySide6.QtWidgets import QTabWidget
+
+    from ui.panels.strength_board_panel import StrengthBoardPanel
     from ui.widgets.collapsible_section import CollapsibleSection
+    from ui.widgets.entry_assist_board import EntryAssistBoard
     from ui.widgets.focus_strength_board import FocusStrengthBoard
+    from ui.widgets.rrs_snapshot import RrsSnapshotWidget
+    from ui.widgets.strength_page import StrengthPage
 
     center = qt_desk.trading_panel.alert_center
-    column = center.strength_column
-    order = [column.layout().itemAt(i).widget() for i in range(column.layout().count())]
-    assert isinstance(order[0], FocusStrengthBoard)
-    # V1 (decision 0016 answer 7): ONE WINDOW, TWO SECTIONS, RS/RW FIRST. The
-    # RS/RW board moved out of the tab stack and into this column above the M5
-    # Strength section - the trader was opening one of them by accident while
-    # looking for the other.
-    assert isinstance(order[1], CollapsibleSection)
-    assert order[1] is center.rrs_board_section
-    assert isinstance(order[2], CollapsibleSection)
-    assert order[2] is center.strength_board_section
-    # Both bodies are scroll areas so neither board's own minimum width reaches
-    # the desk splitter and widens the alert column at the charts' expense.
-    # Hosting the RS/RW board bare took this column's floor to 452 px, past the
-    # alert column's whole 360 px budget.
-    assert order[2].content().widget() is center.strength_board
-    assert order[1].content().widget() is center.rrs_board_tab
+    page = center.strength_page
+    assert isinstance(page, StrengthPage)
+    assert center.tabs_row.widget(1) is page
+    # Reading order, top to bottom: my names, the auto RS/RW read, the RRS
+    # sweep, then the TC2000 board - the order the two sections had, flattened.
+    blocks = page.blocks()
+    assert [type(block) for block in blocks] == [
+        FocusStrengthBoard, EntryAssistBoard, RrsSnapshotWidget, StrengthBoardPanel,
+    ]
+    assert blocks[0] is center.focus_strength
+    assert blocks[1] is center.entry_board
+    assert blocks[2] is center.rrs_snapshot
+    assert blocks[3] is center.strength_board
+    # Nothing on the page hides behind a header or a tab.
+    assert page.findChildren(CollapsibleSection) == []
+    assert page.findChildren(QTabWidget) == []
+    for block in blocks:
+        assert not block.isHidden()
+    # The TC2000 board has no title of its own; the page names it.
+    assert not page.strength_board_title.isHidden()
+    assert "TC2000" in page.strength_board_title.text()
+    # The old names are gone, not aliased - a second name for one widget is
+    # how the next reader ends up looking for a section that no longer exists.
+    for gone in ("strength_column", "rrs_board_section", "strength_board_section", "rrs_board_tab"):
+        assert not hasattr(center, gone), gone
 
 
-def test_the_section_starts_collapsed_so_it_steals_no_space(qt_desk):
-    """Default-off costs the charts nothing; the trader opens it when wanted."""
+def test_nothing_on_the_page_scrolls_on_its_own(qt_desk):
+    """One scrollbar, the page's. Every text board is sized to its document."""
+    import math
+
+    from PySide6.QtCore import Qt
+
     center = qt_desk.trading_panel.alert_center
-    section = center.strength_board_section
-    assert section.is_expanded() is False
-    assert section.content().isVisible() is False
-    # And closed, it costs the alert column nothing: the header takes the width
-    # it is given rather than demanding its title, and the board's own 270 px
-    # minimum is held behind the scroll area.
-    tabs_floor = center.tabs.minimumWidth()
-    assert tabs_floor + center.strength_column.minimumSizeHint().width() <= 360
+    page = center.strength_page
+    assert page.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+    browsers = (center.focus_strength.board, center.entry_board.view, center.rrs_snapshot.board)
+    for browser in browsers:
+        assert browser.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        assert browser.minimumHeight() == browser.maximumHeight() > 0
+    before = center.rrs_snapshot.board.maximumHeight()
+    center.rrs_snapshot.update_snapshot(_rrs_payload())
+    browser = center.rrs_snapshot.board
+    after = browser.maximumHeight()
+    assert after > before, "a fuller document is a taller board, never a scrollbar"
+    assert after == math.ceil(browser.document().size().height()) + 2 * browser.frameWidth()
 
 
-def test_expanding_the_section_never_moves_the_arm_bar(qt_desk):
-    """The charts own the review pane. This section is in the ALERT column."""
+def test_the_rrs_scopes_stack_on_the_page():
+    """Three scope tables side by side in 40% of a column read at ~50 px a
+    cell. On the page they sit one under another, each a full-width table."""
+    from ui.widgets import rrs_snapshot
+
+    focus = {"long": set(), "short": set()}
+    stacked = rrs_snapshot._board_html(_rrs_payload(), focus, stacked=True)
+    side_by_side = rrs_snapshot._board_html(_rrs_payload(), focus)
+    for title in ("vs SPY", "vs Sector", "vs Industry"):
+        assert title in stacked and title in side_by_side
+    assert "width='33%'" in side_by_side
+    assert "width='33%'" not in stacked
+    # Same rows either way - stacking is layout, not selection.
+    for symbol in ("NVDA", "SOFI", "AVGO", "HOOD", "MU"):
+        assert symbol in stacked and symbol in side_by_side
+
+
+def test_the_desk_snapshot_widget_is_stacked(qt_desk):
     center = qt_desk.trading_panel.alert_center
-    before = center.chart_review.arm_bar.parentWidget()
-    center.strength_board_section.set_expanded(True)
+    assert center.rrs_snapshot.stacked_scopes() is True
+
+
+def test_the_strength_tables_fit_their_rows_on_the_page(qt_desk):
+    """A table sized to its rows (capped) is a table the page scrolls past,
+    not a 192 px window the trader scrolls INSIDE."""
+    from ui.panels.strength_board_panel import FIT_ROWS_CAP
+
+    center = qt_desk.trading_panel.alert_center
+    board = center.strength_board
+    assert board.longs.fit_rows() is True and board.shorts.fit_rows() is True
+    live = qt_desk.strength_board_service.board()
     try:
-        assert center.chart_review.arm_bar.parentWidget() is before
+        rows = [_row(f"L{i}", last=105.0, prev_high=100.0, prev_low=98.0, vwap=101.0) for i in range(3)]
+        board.set_board({"long": rows, "short": []})
+        table = board.longs.table
+        # Header, the rows, the frame, and the sideways scrollbar's height
+        # RESERVED (nine columns rarely fit the page; a bar that arrives
+        # unbudgeted would cover the last row).
+        chrome = (
+            table.horizontalHeader().sizeHint().height()
+            + 2 * table.frameWidth()
+            + table.horizontalScrollBar().sizeHint().height()
+        )
+        expected = chrome + sum(table.rowHeight(i) for i in range(3))
+        assert table.minimumHeight() == table.maximumHeight() == expected
+        empty = board.shorts.table
+        assert empty.maximumHeight() == (
+            empty.horizontalHeader().sizeHint().height()
+            + 2 * empty.frameWidth()
+            + empty.horizontalScrollBar().sizeHint().height()
+        )
+
+        many = [_row(f"L{i}", last=105.0, prev_high=100.0, prev_low=98.0, vwap=101.0) for i in range(FIT_ROWS_CAP + 10)]
+        board.set_board({"long": many, "short": []})
+        assert table.rowCount() == FIT_ROWS_CAP + 10, "the cap bounds the HEIGHT, never the rows"
+        capped = chrome + sum(table.rowHeight(i) for i in range(FIT_ROWS_CAP))
+        assert table.maximumHeight() == capped
     finally:
-        center.strength_board_section.set_expanded(False)
+        board.set_board(live)
+
+
+def test_the_page_keeps_the_alert_column_floor(qt_desk):
+    """The page's floor is the one the column had: 170 px, so 170 + the tab
+    stack's 170 stays inside the alert column's 360 px budget and the charts
+    pay nothing for the flattening."""
+    from ui import theme
+
+    center = qt_desk.trading_panel.alert_center
+    page = center.strength_page
+    assert page.minimumWidth() == theme.px(170)
+    assert center.tabs.minimumWidth() + page.minimumWidth() <= 360
+    # The boards' own minimums stop at the page: a scroll area's minimum hint
+    # is its frame and bars, never its content.
+    assert page.minimumSizeHint().width() <= page.minimumWidth()
+
+
+def test_the_page_never_hosts_the_arm_bar(qt_desk):
+    """The charts own the review pane; the page is in the ALERT column."""
+    center = qt_desk.trading_panel.alert_center
+    assert not center.strength_page.isAncestorOf(center.chart_review.arm_bar)
 
 
 # ---------------------------------------------------------------------------

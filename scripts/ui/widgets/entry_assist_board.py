@@ -30,6 +30,13 @@ class EntryAssistBoard(QWidget):
 
         self.title_label = QLabel("Auto RS/RW Board")
         self.title_label.setObjectName("SectionTitle")
+        # Wrapped, so the title asks the layout for its longest WORD rather
+        # than the whole "Auto RS/RW Board - <env> (bar <time>)" line (663 px
+        # measured at the desk's scale). Since 2026-09-07 this board is a
+        # block on the Strength page, ~475 px wide at the trader's 3456 px, and
+        # an unwrapped title would have given the whole page a sideways
+        # scrollbar.
+        self.title_label.setWordWrap(True)
         self.view = QTextBrowser()
         self.view.setOpenLinks(False)
         self.view.setOpenExternalLinks(False)

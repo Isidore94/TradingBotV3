@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -101,6 +102,15 @@ def sort_rows(rows: list[dict], column: int, descending: bool) -> list[dict]:
     return present + missing
 
 
+#: On the Strength page (2026-09-07) a table is sized to its ROWS so the page
+#: scrolls past it rather than the trader scrolling inside it. Capped, because
+#: parity OFF shows the whole top quarter of an ~1,100-name universe per side
+#: and a 275-row table would push the shorts a screen and a half down; past
+#: the cap the table keeps every row and scrolls them itself. The cap bounds
+#: the HEIGHT and never the rows.
+FIT_ROWS_CAP = 30
+
+
 class _SideTable(QWidget):
     """One side's rows plus its add buttons."""
 
@@ -111,6 +121,8 @@ class _SideTable(QWidget):
     def __init__(self, side: str, parent=None) -> None:
         # V1: TC2000 parity is the DEFAULT view. See `set_parity_only`.
         self._parity_only = True
+        # Off by default: only the Strength page asks (`set_fit_rows`).
+        self._fit_rows = False
         super().__init__(parent)
         self._side = side
         self._rows: list[dict] = []
@@ -128,7 +140,11 @@ class _SideTable(QWidget):
         header = QHBoxLayout()
         self._title = QLabel(f"{side.title()}s (0)")
         self._title.setStyleSheet("font-weight: 600;")
-        header.addWidget(self._title)
+        # Wrapped: "Longs (8)  ·  12 below the filters" unwrapped demanded its
+        # whole line beside the Add-all button (270 px measured), and on the
+        # Strength page that width is the page's, not this row's.
+        self._title.setWordWrap(True)
+        header.addWidget(self._title, 1)
         header.addStretch(1)
         # "Add all", not "Add all shown": the board lives in the alert column
         # now, and a QPushButton demands its whole label (208 px measured for
@@ -148,7 +164,15 @@ class _SideTable(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        # Every data column sized to its contents, not Qt's 100 px default:
+        # on the Strength page (~475 px wide, 2026-09-07) the default widths
+        # showed four of the eight numbers and hid the rest behind a sideways
+        # scroll; measured to their contents about seven fit. The button
+        # column still stretches to take the remainder.
+        for column in range(len(_COLUMNS)):
+            self.table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeToContents
+            )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.cellDoubleClicked.connect(self._on_double_click)
         # Selecting a row IS the request to see it (trader 2026-08-19: "I need
@@ -238,6 +262,34 @@ class _SideTable(QWidget):
         self._parity_only = bool(on)
         self._render()
 
+    def set_fit_rows(self, on: bool) -> None:
+        """Size the table to its rows (capped at `FIT_ROWS_CAP`) on every render.
+
+        For a host that is itself a scrolling page: a 192 px table window
+        inside a page is a scroll inside a scroll. Presentation only.
+        """
+        self._fit_rows = bool(on)
+        self._fit_height()
+
+    def fit_rows(self) -> bool:
+        return self._fit_rows
+
+    def _fit_height(self) -> None:
+        if not self._fit_rows:
+            return
+        table = self.table
+        height = table.horizontalHeader().sizeHint().height() + 2 * table.frameWidth()
+        for index in range(min(table.rowCount(), FIT_ROWS_CAP)):
+            height += table.rowHeight(index)
+        # The sideways scrollbar's height is RESERVED whether or not it shows:
+        # nine columns rarely fit the page's width, the bar appears after the
+        # layout pass this height feeds, and a bar that arrives unbudgeted
+        # covers the last row. Reserved and unused it is a blank strip the
+        # height of a scrollbar; the alternative is a row the trader cannot
+        # read.
+        height += table.horizontalScrollBar().sizeHint().height()
+        table.setFixedHeight(height)
+
     def _render(self) -> None:
         rows = sort_rows(self._rows, self._sort_column, self._sort_descending)
         hidden = 0
@@ -292,6 +344,7 @@ class _SideTable(QWidget):
             )
             self.table.setCellWidget(index, len(_COLUMNS), button)
         self.table.blockSignals(False)
+        self._fit_height()
         if keep:
             # A sort or a refresh must not silently move the chart to whatever
             # name landed on the old row number.
@@ -368,6 +421,11 @@ class StrengthBoardPanel(QWidget):
         # failure reason, so it can be long, and an unwrapped label would have
         # made a bad refresh widen the alert column at the charts' expense.
         self.status.setWordWrap(True)
+        # Ignored horizontally: it takes whatever the parity switch and the
+        # Refresh button leave, and asks the page for nothing. Measured on the
+        # Strength page (2026-09-07): with the label's longest word counted,
+        # this row was the page's widest at 468 px against a ~475 px page.
+        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         controls.addWidget(self.status, 1)
         controls.addStretch(1)
         # V1: the parity switch. DEFAULT ON - the trader reads this board beside
@@ -449,6 +507,11 @@ class StrengthBoardPanel(QWidget):
         """Both tables, one switch. It re-renders; it never re-fetches."""
         for table in (self.longs, self.shorts):
             table.set_parity_only(bool(on))
+
+    def set_fit_rows(self, on: bool) -> None:
+        """Both tables sized to their rows - the Strength page's hosting mode."""
+        for table in (self.longs, self.shorts):
+            table.set_fit_rows(bool(on))
 
     def _on_status(self, text: str) -> None:
         self.status.setText(text)

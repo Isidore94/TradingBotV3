@@ -304,10 +304,11 @@ def test_the_alert_center_still_owns_the_rs_rw_board():
     )
     assert "self.rrs_snapshot = RrsSnapshotWidget()" in source
     # V1 (decision 0016 answer 7) MOVED it out of the tab stack and into the
-    # strength column, above the M5 Strength section - re-hosted, never retired.
-    # The assertion follows the widget rather than the address it used to have.
-    assert 'CollapsibleSection("RS/RW Board")' in source
-    assert "self.rrs_board_section.set_content(rrs_scroll)" in source
+    # strength column; since 2026-09-07 that column is one flat Strength page
+    # and the snapshot is a block on it - re-hosted twice, never retired. The
+    # assertion follows the widget rather than the address it used to have.
+    assert "rrs_snapshot=self.rrs_snapshot," in source
+    assert "self.strength_page = StrengthPage(" in source
     assert "service.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)" in source
 
 

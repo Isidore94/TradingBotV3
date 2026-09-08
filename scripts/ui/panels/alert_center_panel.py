@@ -112,11 +112,11 @@ from ui.models.bounce import (
 from ui.widgets.alert_chart_review import AlertChartReview
 from ui.widgets.alert_feed_item import AlertFeedItem
 from ui.widgets.armed_watch_list import ArmedWatchList
-from ui.widgets.collapsible_section import CollapsibleSection
 from ui.widgets.entry_assist_board import EntryAssistBoard
 from ui.widgets.focus_strength_board import FocusStrengthBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 from ui.widgets.section_header import SectionHeader
+from ui.widgets.strength_page import StrengthPage
 from ui.widgets.setup_detail_view import SetupDetailView
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, never imported at runtime
@@ -785,19 +785,14 @@ class AlertCenterPanel(QFrame):
             lambda symbol, side: self._chart_board_symbol(symbol, side, "the RS/RW board")
         )
 
-        # RS/RW Board tab: the automatic entry-assist board on top (regime +
-        # pause detection + live window / preview rankings + 30m movers, no
-        # clicks) over the RRS sweep snapshot.
+        # The automatic entry-assist board (regime + pause detection + live
+        # window / preview rankings + 30m movers, no clicks). It and the RRS
+        # sweep snapshot above are two reads on the Strength page built below
+        # the tab strip; nothing here is a tab any more.
         self.entry_board = EntryAssistBoard()
         self.entry_board.symbolActivated.connect(
             lambda symbol, side: self._chart_board_symbol(symbol, side, "the entry board")
         )
-        board_tab = QWidget()
-        board_layout = QVBoxLayout(board_tab)
-        board_layout.setContentsMargins(0, 0, 0, 0)
-        board_layout.setSpacing(8)
-        board_layout.addWidget(self.entry_board, 3)
-        board_layout.addWidget(self.rrs_snapshot, 2)
 
         # The armed-watch inventory. Built before the tab bar that hosts it.
         self.armed_list = ArmedWatchList(self)
@@ -879,13 +874,11 @@ class AlertCenterPanel(QFrame):
         # moment the trader selects an S/A gate, and the separate 100-item
         # retention would be lost.
         self._d1_tab_index = self.tabs.addTab(d1_section, "D1 Focus")
-        # V1 (decision 0016 answer 7): the RS/RW board MOVED OUT of the tab
-        # stack and into the strength column below, above the M5 Strength
-        # section. Trader: *"The Strength tab loses to the trader's own TC2000
-        # scan; the RS/RW board should sit where Strength is."* It is RE-HOSTED,
-        # not retired - same widgets, same signals, same owner - so `board_tab`
-        # is still built above and is simply given a different parent.
-        self.rrs_board_tab = board_tab
+        # V1 (decision 0016 answer 7) moved the RS/RW board OUT of this tab
+        # stack (trader: *"The Strength tab loses to the trader's own TC2000
+        # scan; the RS/RW board should sit where Strength is."*); since
+        # 2026-09-07 it is a block on the Strength page beside this stack -
+        # same widgets, same signals, same owner.
 
         # The Armed tab is the INVENTORY across every symbol. The controls that
         # fill it live under the chart, on the arm bar, where the symbol they
@@ -948,64 +941,33 @@ class AlertCenterPanel(QFrame):
         # render - the coalescing lives at the listener.
         self.focusFadedChanged.connect(self.focus_strength.request_refresh)
 
-        # The M5 Strength Board moved in under it (trader, 2026-08-31: "it
-        # really should be modified to fit in the 'strength' window in the
-        # trading desk - either integrated directly or be positioned below
-        # it"). Positioned below, in a section that starts CLOSED: the alert
-        # column has a 360 px floor and everything left of it is chart, so a
-        # board that claimed space at startup would take it from the chart the
-        # trader is reading. Closed it is one header row.
+        # THE STRENGTH PAGE (trader, 2026-09-07: *"the strength tab is unusable
+        # there's like 2 tabs and they get no space each. Create a solution
+        # that removes the tabs and just collates all the data to be more
+        # easily readable"*). Until then this half of the row was a column:
+        # the Focus board over two collapsible sections - RS/RW Board (open,
+        # V1 / decision 0016 answer 7) and the M5 Strength Board (closed,
+        # trader 2026-08-31) - sharing the column's height by stretch factor,
+        # so each open section was a small window with its own scrollbar onto
+        # a document several times taller. Now it is ONE scrolling page with
+        # the four reads one under another, each sized to its own content
+        # (`ui.widgets.strength_page`). Same widgets, same signals, same owner
+        # - only the hosting changed.
         #
         # This panel only HOSTS. `MainWindow` still owns the one
         # `StrengthBoardService`, its one timer and its one fetch, and hands
-        # it here through `attach_strength_board` - the board changed address,
-        # not owner, and nothing here refreshes, schedules or caches.
+        # it here through `attach_strength_board`, which puts the board at the
+        # foot of the page; nothing here refreshes, schedules or caches.
         self.strength_board: "StrengthBoardPanel | None" = None
-        self.strength_board_section = CollapsibleSection("M5 Strength Board (TC2000)")
-
-        # V1: ONE WINDOW, TWO SECTIONS, RS/RW FIRST (decision 0016 answer 7).
-        # The RS/RW board was a tab in the stack to the left; it now sits here,
-        # above the M5 Strength section, because those two answer the same
-        # question - which names are strong right now - and the trader was
-        # opening one of them by accident while looking for the other.
-        #
-        # RS/RW starts OPEN and Strength starts CLOSED, which is the order the
-        # trader named and also the cheaper default: the alert column has a
-        # 360 px floor and everything left of it is chart, so only one of the
-        # two may claim height at startup.
-        self.rrs_board_section = CollapsibleSection("RS/RW Board")
-        # IN A SCROLL AREA, for the reason `attach_strength_board` spells out at
-        # length: a widget's minimum reaches the splitter, and hosted bare this
-        # board's own minimum took the strength column's floor from 190 px to
-        # 452 - past the alert column's whole 360 px budget, so the charts would
-        # have paid for the move. Inside a scroll area the minimum stops here.
-        rrs_scroll = QScrollArea()
-        rrs_scroll.setWidgetResizable(True)
-        rrs_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        rrs_scroll.setWidget(board_tab)
-        rrs_scroll.setMinimumWidth(theme.px(170))
-        self.rrs_board_section.set_content(rrs_scroll)
-        self.rrs_board_section.set_expanded(True)
-
-        self.strength_column = QWidget()
-        strength_layout = QVBoxLayout(self.strength_column)
-        strength_layout.setContentsMargins(0, 0, 0, 0)
-        strength_layout.setSpacing(theme.px(4))
-        strength_layout.addWidget(self.focus_strength, 1)
-        strength_layout.addWidget(self.rrs_board_section, 0)
-        strength_layout.addWidget(self.strength_board_section, 0)
-        self.rrs_board_section.toggled.connect(
-            lambda expanded: strength_layout.setStretch(1, 3 if expanded else 0)
-        )
-        # A closed section asks for nothing; an open one earns the larger half
-        # of the column, and closing hands every pixel straight back.
-        self.strength_board_section.toggled.connect(
-            lambda expanded: strength_layout.setStretch(2, 2 if expanded else 0)
+        self.strength_page = StrengthPage(
+            focus_strength=self.focus_strength,
+            entry_board=self.entry_board,
+            rrs_snapshot=self.rrs_snapshot,
         )
 
         self.tabs_row = QSplitter(Qt.Orientation.Horizontal)
         self.tabs_row.addWidget(self.tabs)
-        self.tabs_row.addWidget(self.strength_column)
+        self.tabs_row.addWidget(self.strength_page)
         self.tabs_row.setStretchFactor(0, 3)
         self.tabs_row.setStretchFactor(1, 2)
         self.tabs_row.setChildrenCollapsible(False)
@@ -5813,6 +5775,7 @@ class AlertCenterPanel(QFrame):
         """Re-apply the column's scale-dependent floors after a scale change."""
         self.tabs.setMinimumWidth(theme.px(170))
         self.focus_strength.apply_scaled_metrics()
+        self.strength_page.apply_scaled_metrics()
         self.chart_review.arm_bar.apply_scaled_metrics()
 
     def set_embedded_detail_enabled(self, enabled: bool) -> None:
@@ -5913,18 +5876,18 @@ class AlertCenterPanel(QFrame):
             self.tabs.setCurrentIndex(self._capture_tab_index)
 
     def attach_strength_board(self, service, focus_service=None) -> None:
-        """Host the M5 Strength Board under the Strength window.
+        """Host the M5 Strength Board at the foot of the Strength page.
 
         `MainWindow` builds and owns the one `StrengthBoardService`; this
-        panel is given it. Called once at startup - a second call would
-        replace the section's body, not add a second board, but nothing does.
+        panel is given it. Called once at startup - a second call would add a
+        second board to the page, but nothing does.
 
         Deliberately NOT here: any refresh, timer, thread or fetch. The
         service's single-flight owner and its 15-minute clock are unchanged by
         the move, and the board is still batched yfinance over
         `universe_all.txt` with **zero IB traffic**. The only thing this panel
-        adds is a parent and a snapshot popup for a row click - the same popup
-        every other board on this panel opens.
+        adds is a parent and the chart route for a row click - the same route
+        every other board on this panel takes.
         """
         from ui.panels.strength_board_panel import StrengthBoardPanel
 
@@ -5957,17 +5920,12 @@ class AlertCenterPanel(QFrame):
         # The alert column's floor is 360 px and the tab stack already claims
         # 170 of it. The board asks for 270 (two side tables, each with a
         # heading row and an "Add all" button), and a widget's minimum reaches
-        # the splitter, so hosting it bare would have raised the floor the
-        # charts are sized against - the one thing this move must not do.
-        # Inside a scroll area the board's minimum stops here: at a normal
-        # column width nothing scrolls, and a trader who drags the column
-        # narrower gets a scrollbar instead of narrower charts.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(board)
-        scroll.setMinimumWidth(theme.px(170))
-        self.strength_board_section.set_content(scroll)
+        # the splitter, so hosting it bare would raise the floor the charts
+        # are sized against - the one thing this move must not do. The page
+        # is a scroll area, so the board's minimum stops there: at a normal
+        # column width nothing scrolls sideways, and a trader who drags the
+        # column narrower gets a scrollbar instead of narrower charts.
+        self.strength_page.attach_strength_board(board)
 
     #: The `symbol` on the ONE review-event row the board's auto-join writes.
     #: `record_review_event` refuses a row with no symbol, and this event is

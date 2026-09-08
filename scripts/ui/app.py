@@ -172,10 +172,11 @@ class MainWindow(QMainWindow):
         #
         # Since 2026-08-31 the board is not a page. The trader asked for it in
         # the Desk's Strength window ("either integrated directly or be
-        # positioned below it"), so the Alert Center hosts it in a collapsible
-        # section under `FocusStrengthBoard` and the nav entry is gone. The
-        # SERVICE still lives here: one instance, one timer, one fetch, owned
-        # by the window that shuts it down. Only the wiring moved.
+        # positioned below it"), so the Alert Center hosts it at the foot of
+        # its Strength page (one flat scrolling page since 2026-09-07) under
+        # `FocusStrengthBoard`, and the nav entry is gone. The SERVICE still
+        # lives here: one instance, one timer, one fetch, owned by the window
+        # that shuts it down. Only the wiring moved.
         self.strength_board_service = StrengthBoardService(self)
         self.trading_panel.alert_center.attach_strength_board(
             self.strength_board_service,
