@@ -365,6 +365,11 @@ AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
 # Lives in the shared home so it syncs across machines and can be handed to an
 # AI for review ("why did I like/hate these picks -> tune the scans").
 PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
+# The point system's evidence (trader, 2026-09-08): the append-only log of every
+# ranked setup's parts, and the proposed weight multipliers with their grade.
+# Shadow only; `setup_points_evidence` is the one writer of both.
+SETUP_POINTS_LOG_FILE = PERSISTENT_DATA_DIR / "setup_points_log.jsonl"
+SETUP_POINTS_WEIGHTS_FILE = PERSISTENT_DATA_DIR / "setup_points_weights.json"
 # Legacy single-writer JSONL plus the partitioned store used by current
 # builds.  New review decisions go to one file per stable machine-local
 # installation so two PCs sharing the folder never append to the same file;

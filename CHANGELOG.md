@@ -301,6 +301,30 @@ They are evidence and must not be loaded as context.
   Working-lately order, from the rows AS THEY ARRIVED, re-applied when the
   family record lands. `legacy.py` untouched; nothing hidden, written or
   scored. Tests: `tests/test_setup_points.py`.
+- **The point system is GRADED, and it corrects itself only on the trader's
+  word** (trader, 2026-09-08 *"do higher ranked setups perform better? ... a way
+  for the system to correct itself"*; `scripts/setup_points_evidence.py`).
+  Every report refresh, the panel's `_PointsEvidenceWorker` (off the Qt thread,
+  default-store panels only) appends one row per ranked-bucket setup per scan
+  date to `SETUP_POINTS_LOG_FILE` (`setup_points_log.jsonl`, append-only,
+  de-duplicated on `(scan_date, symbol, side)`: the RAW four parts, the shown
+  total, the multipliers used), joins the whole log to the tracker's outcome
+  rows through the ONE reader (`swing_evidence.read_eligible_rows`,
+  `POLICY_SCANROW_V1`, the declared 5-session horizon, window = the log's own
+  dates) on the same key, and reads TERCILES by total - each with `n`, win rate
+  and the Wilson lower bound; the headline is the LIFT (top third minus bottom
+  third), refused as "not enough per third yet" under `MIN_REPORTABLE_N`, and
+  every part gets its own top-half-minus-bottom-half lift (a constant part has
+  none). The grade sentence sits on the setups status row and in the Points
+  tooltip. The correction: `propose_weights` writes `SETUP_POINTS_WEIGHTS_FILE`
+  (`setup_points_weights.json`: one multiplier per part, `1 + 2 x lift` clamped
+  to [0.5, 1.5], proposed only when BOTH halves hold the floor, else 1.0 with
+  the reason, plus the grade payload). The desk APPLIES it only when the
+  `... > Points: learned weights` menu switch (`setup_points_learned_weights`,
+  default OFF) is on - `setup_points.active_weights` reads the file, never
+  recomputes - and the tooltip names every multiplier in force. Shadow only:
+  nothing reaches a detector, a score, an alert, a watchlist or the tracker.
+  Tests: `tests/test_setup_points_evidence.py`.
 - **The desk surface, and the AWAY Recap** (ST6.4/ST6.6). A one-line **Working
   lately** strip sits at the TOP of the M5 alerts column - mounted INSIDE
   `M5AlertBar` rather than as a third child of the saved two-pane splitter -
@@ -1966,6 +1990,23 @@ bounce."* then *"Put it in wishlist.md then start working on it block by block."
   first); industry is the curated index the row already carries, not a new
   membership file; the weights are a first cut for the trader to feel on the
   desk and every one is a named constant at the top of the module.
+- **Later the same evening - the evidence loop** (trader: *"ensure that we
+  track how this system performs ... a way for the system to correct itself"*).
+  `scripts/setup_points_evidence.py` (new): `append_log` / `read_log`,
+  `grade` -> `PointsGrade` (terciles, lift, per-part lift, `sentence()`),
+  `propose_weights` / `write_proposal` / `read_proposal` /
+  `proposal_multipliers`, `log_and_grade` (the worker's one pass).
+  `setup_points.score_row(weights=...)` keeps `raw_parts` and `weights` on the
+  result and `log_row` builds the evidence row; `active_weights` /
+  `learned_weights_enabled` gate the proposal on the trader's switch.
+  `SetupTableModel.set_points_weights`; `MasterAvwapPanel`: `_PointsEvidenceWorker`
+  started from `refresh_from_reports` (default-store panels only),
+  `points_evidence_payload`, the grade label on the status row, the
+  `Points: learned weights` overflow action. `project_paths`:
+  `SETUP_POINTS_LOG_FILE`, `SETUP_POINTS_WEIGHTS_FILE` (both under the shared
+  home, beside `pick_feedback.jsonl`). Eight tests in
+  `tests/test_setup_points_evidence.py`. Baseline after: 7299 passed, 3 skipped, 72 subtests passed, exit 0; ruff
+  clean; smoke 7/7.
 
 ### 2026-09-07 - The Strength window is one flat page (branch `claude/strength-page`)
 

@@ -280,6 +280,42 @@ class _FamilyRecordWorker(QThread):
         self.done.emit((records, coverage))
 
 
+class _PointsEvidenceWorker(QThread):
+    """Log today's ranked rows, grade the log against the tracker's outcomes,
+    write the weight proposal (trader, 2026-09-08). Never raises into Qt.
+
+    Emits the grade sentence, or "" when nothing could be read. The payload
+    is a plain list of dicts built on the Qt thread from the points the table
+    already computed - no SetupRow and no model crosses the thread.
+    """
+
+    done = Signal(object)
+
+    def __init__(self, payload: list[dict], parent=None) -> None:
+        super().__init__(parent)
+        self._payload = list(payload)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            import setup_points_evidence
+            from project_paths import (
+                MASTER_AVWAP_TIER_OUTCOMES_FILE,
+                SETUP_POINTS_LOG_FILE,
+                SETUP_POINTS_WEIGHTS_FILE,
+            )
+
+            result = setup_points_evidence.log_and_grade(
+                self._payload,
+                log_path=SETUP_POINTS_LOG_FILE,
+                weights_path=SETUP_POINTS_WEIGHTS_FILE,
+                outcomes_path=MASTER_AVWAP_TIER_OUTCOMES_FILE,
+            )
+            sentence = result.sentence()
+        except Exception:  # noqa: BLE001 - evidence never costs the table
+            sentence = ""
+        self.done.emit(sentence)
+
+
 class MasterAvwapPanel(QWidget):
     setupSelected = Signal(object)
     rowsChanged = Signal(int, int, int)
@@ -496,6 +532,7 @@ class MasterAvwapPanel(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.addWidget(self.status_label)
         status_row.addStretch(1)
+        status_row.addWidget(self.points_grade_label)
         status_row.addWidget(self.family_record_label)
         status_row.addWidget(self.last_run_label)
 
@@ -545,6 +582,92 @@ class MasterAvwapPanel(QWidget):
         )
         self.points_toggle.setChecked(setup_points.rank_enabled())
         self.points_toggle.toggled.connect(self._on_points_toggled)
+        self._points_grade_sentence = ""
+        self.points_grade_label = QLabel("")
+        self.points_grade_label.setObjectName("MutedLabel")
+        self._refresh_points_tooltip()
+
+    def _refresh_points_tooltip(self) -> None:
+        """The checkbox tooltip carries the grade and the weights in force."""
+        import setup_points
+
+        weights = {p: v for p, v in setup_points.active_weights().items() if v != 1.0}
+        lines = [
+            "Rank the favourite, near-favourite and high-conviction rows by the point system "
+            "(family win-rate bound, nearby S/R, RS/RW in the trade's direction, recent bounce). "
+            "Every other row keeps its place after them. Nothing is hidden.",
+        ]
+        if self._points_grade_sentence:
+            lines.append(self._points_grade_sentence)
+        lines.append(
+            "Learned weights ON: " + ", ".join(f"{p} x{v:.2f}" for p, v in sorted(weights.items()))
+            if weights
+            else (
+                "Learned weights ON, all still x1.00 (each part needs the floor per half)."
+                if setup_points.learned_weights_enabled()
+                else "Learned weights OFF (default weights; turn on under the ... menu)."
+            )
+        )
+        self.points_toggle.setToolTip("\n".join(lines))
+        self.points_grade_label.setText(self._points_grade_sentence)
+        self.points_grade_label.setToolTip("\n".join(lines))
+
+    def _on_learned_weights_toggled(self, checked: bool) -> None:
+        try:
+            import project_paths
+            import setup_points
+
+            project_paths.save_local_setting(setup_points.LEARNED_SETTING_KEY, bool(checked))
+            project_paths.invalidate_local_settings_cache()
+        except Exception:  # noqa: BLE001 - a preference never costs the table
+            pass
+        self._apply_points_weights()
+
+    def _apply_points_weights(self) -> None:
+        """Hand the multipliers in force to the model and re-sort from the arrival order."""
+        import setup_points
+
+        self.model.set_points_weights(setup_points.active_weights())
+        self._refresh_points_tooltip()
+        source = getattr(self, "_working_lately_source_rows", None)
+        if source and setup_points.rank_enabled():
+            self.set_rows(list(source))
+
+    def points_evidence_payload(self, rows: list[SetupRow], data_date: str) -> list[dict]:
+        """The evidence rows for the worker: ranked buckets only, plain dicts."""
+        import setup_points
+
+        payload: list[dict] = []
+        for row in rows:
+            if str(row.bucket or "").strip().lower() not in setup_points.RANKED_BUCKETS:
+                continue
+            scan_date = str(row.last_trade_date or data_date or "").strip()
+            if not scan_date or not row.symbol or not row.side:
+                continue
+            payload.append(
+                self.model.points_for(row).log_row(
+                    scan_date=scan_date,
+                    symbol=row.symbol,
+                    side=row.side,
+                    family=str((row.raw or {}).get("setup_family") or ""),
+                    bucket=row.bucket,
+                )
+            )
+        return payload
+
+    def _start_points_evidence(self, rows: list[SetupRow], data_date: str) -> None:
+        worker = getattr(self, "_points_evidence_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        payload = self.points_evidence_payload(rows, data_date)
+        worker = _PointsEvidenceWorker(payload, self)
+        worker.done.connect(self._on_points_grade_ready)
+        self._points_evidence_worker = worker
+        worker.start()
+
+    def _on_points_grade_ready(self, sentence: object) -> None:  # pragma: no cover - signal seam
+        self._points_grade_sentence = str(sentence or "")
+        self._apply_points_weights()
 
     def _on_points_toggled(self, checked: bool) -> None:
         try:
@@ -580,6 +703,20 @@ class MasterAvwapPanel(QWidget):
         self._scheduler_action = menu.addAction("Start Scheduler", self.toggle_scheduler)
         self._scheduler_status_action = menu.addAction("")
         self._scheduler_status_action.setEnabled(False)
+        menu.addSeparator()
+        self._learned_weights_action = menu.addAction("Points: learned weights")
+        self._learned_weights_action.setCheckable(True)
+        try:
+            import setup_points
+
+            self._learned_weights_action.setChecked(setup_points.learned_weights_enabled())
+        except Exception:  # noqa: BLE001
+            pass
+        self._learned_weights_action.setToolTip(
+            "Let the proposed multipliers (from how higher-point rows actually performed) "
+            "apply to the Points column. OFF = the default weights."
+        )
+        self._learned_weights_action.toggled.connect(self._on_learned_weights_toggled)
         menu.addSeparator()
         copy_menu = menu.addMenu("Copy visible")
         for label, kind in (
@@ -1069,6 +1206,9 @@ class MasterAvwapPanel(QWidget):
             self.set_rows(rows)
             self.status_label.setText("Loaded latest report rows." if rows else "No report rows found.")
             self.statusChanged.emit(self.status_label.text())
+        if rows and self._uses_default_feedback_paths:
+            # The evidence log and grade, off this thread; test panels stay silent.
+            self._start_points_evidence(rows, str(meta.get("data_date") or ""))
         self._apply_data_as_of(meta)
         self._refresh_watcher_paths()
         self._report_signatures = self._current_report_signatures()

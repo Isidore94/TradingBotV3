@@ -41,6 +41,8 @@ from typing import Any, Mapping, Sequence
 RANKED_BUCKETS = frozenset({"favorite_setup", "near_favorite_zone", "high_conviction"})
 
 SETTING_KEY = "rank_setups_by_points"
+#: The trader's switch that lets the PROPOSED multipliers apply (default OFF).
+LEARNED_SETTING_KEY = "setup_points_learned_weights"
 
 SETUP_BOUND_WEIGHT = 40.0
 SETUP_EXPECTED_R_WEIGHT = 10.0
@@ -67,13 +69,36 @@ class SetupPoints:
     rs: float
     bounce: float
     notes: tuple[str, ...] = field(default_factory=tuple)
+    #: The parts BEFORE any learned multiplier - what the evidence log records.
+    raw_parts: dict[str, float] = field(default_factory=dict)
+    #: The multipliers in force when this was computed (all 1.0 unless learned).
+    weights: dict[str, float] = field(default_factory=dict)
 
     def text(self) -> str:
         return f"{self.total:+.0f}"
 
+    def log_row(self, *, scan_date: str, symbol: str, side: str, family: str, bucket: str) -> dict[str, Any]:
+        """One evidence-log row: raw parts, the shown total, the weights used."""
+        return {
+            "scan_date": str(scan_date or ""),
+            "symbol": str(symbol or "").upper(),
+            "side": str(side or "").upper(),
+            "family": str(family or ""),
+            "bucket": str(bucket or ""),
+            "total": float(self.total),
+            **{part: float(self.raw_parts.get(part, 0.0)) for part in ("setup", "sr", "rs", "bounce")},
+            "multipliers": dict(self.weights),
+        }
+
     def tooltip(self) -> str:
+        learned = {part: value for part, value in self.weights.items() if value != 1.0}
         lines = [
-            f"Points {self.total:+.1f}",
+            f"Points {self.total:+.1f}"
+            + (
+                "  (learned weights: " + ", ".join(f"{p} x{v:.2f}" for p, v in sorted(learned.items())) + ")"
+                if learned
+                else ""
+            ),
             f"  setup {self.setup:+.1f}  (family bound x {SETUP_BOUND_WEIGHT:.0f}, expected R x {SETUP_EXPECTED_R_WEIGHT:.0f})",
             f"  S/R {self.sr:+.1f}  (clean path {SR_CLEAN_PATH:+.0f}, levels ahead knock it down)",
             f"  RS/RW {self.rs:+.1f}  (vs SPY / sector / industry, in the trade's direction, +-{RS_LEG_CAP:.0f} each)",
@@ -204,22 +229,39 @@ def score_row(
     family_record: Mapping[str, Any] | None = None,
     d1_vs_sector: Any = None,
     d1_vs_industry: Any = None,
+    weights: Mapping[str, float] | None = None,
 ) -> SetupPoints:
-    """The four parts and their sum for one setup row. Pure."""
+    """The four parts and their sum for one setup row. Pure.
+
+    `weights` are the learned multipliers (`setup_points_evidence`), applied
+    to each part AFTER it is measured; the raw parts are kept on the result so
+    the evidence log records the measurement, never the weighting.
+    """
     raw = raw or {}
     side = str(side or raw.get("side") or "").strip().upper()
     setup, notes = setup_part(family_record, raw.get("expected_r"))
     sr, sr_notes = sr_part(raw, side)
     rs, rs_notes = rs_part(raw, side, d1_vs_sector=d1_vs_sector, d1_vs_industry=d1_vs_industry)
     bounce, bounce_notes = bounce_part(raw)
-    total = round(setup + sr + rs + bounce, 2)
+    raw_parts = {"setup": setup, "sr": sr, "rs": rs, "bounce": bounce}
+    used = {part: 1.0 for part in raw_parts}
+    for part, value in dict(weights or {}).items():
+        if part in used:
+            try:
+                used[part] = float(value)
+            except (TypeError, ValueError):
+                continue
+    weighted = {part: round(value * used[part], 2) for part, value in raw_parts.items()}
+    total = round(sum(weighted.values()), 2)
     return SetupPoints(
         total=total,
-        setup=setup,
-        sr=sr,
-        rs=rs,
-        bounce=bounce,
+        setup=weighted["setup"],
+        sr=weighted["sr"],
+        rs=weighted["rs"],
+        bounce=weighted["bounce"],
         notes=tuple(notes + sr_notes + rs_notes + bounce_notes),
+        raw_parts=raw_parts,
+        weights=used,
     )
 
 
@@ -240,6 +282,35 @@ def rank_order(items: Sequence[tuple[str, float | None]]) -> list[int]:
             rest.append(index)
     ranked.sort()
     return [index for _missing, _neg, index in ranked] + rest
+
+
+def learned_weights_enabled() -> bool:
+    """The trader's switch for the proposed multipliers. Default OFF."""
+    try:
+        import project_paths
+
+        return bool(project_paths.get_local_setting(LEARNED_SETTING_KEY, False))
+    except Exception:  # noqa: BLE001 - a display preference never costs a list
+        return False
+
+
+def active_weights() -> dict[str, float]:
+    """The multipliers in force: the proposal's when the switch is ON, else all 1.0.
+
+    Read from the proposal FILE, never recomputed here; the proposal is written
+    by the panel's worker (`setup_points_evidence.log_and_grade`) and every
+    multiplier in it is floored on n before it is proposed.
+    """
+    if not learned_weights_enabled():
+        return {}
+    try:
+        import project_paths
+        import setup_points_evidence
+
+        proposal = setup_points_evidence.read_proposal(project_paths.SETUP_POINTS_WEIGHTS_FILE)
+        return setup_points_evidence.proposal_multipliers(proposal)
+    except Exception:  # noqa: BLE001 - no proposal is "defaults"
+        return {}
 
 
 def rank_enabled() -> bool:

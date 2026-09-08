@@ -76,6 +76,8 @@ class SetupTableModel(QAbstractTableModel):
         #: `{normalized family: swing_headline row}`. Injected by the panel from
         #: a worker - this model never reads a file.
         self._family_records: dict[str, dict] = {}
+        #: The learned point multipliers in force, handed in by the panel.
+        self._points_weights: dict[str, float] = {}
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -157,6 +159,12 @@ class SetupTableModel(QAbstractTableModel):
         """The injected swing record for this row's family (`{}` when ungraded)."""
         return self._family_record(row)
 
+    def set_points_weights(self, weights) -> None:
+        """The learned multipliers (all 1.0 / empty = defaults). Repaints the column."""
+        self.beginResetModel()
+        self._points_weights = dict(weights or {})
+        self.endResetModel()
+
     def points_for(self, row: SetupRow):
         """The point system's reading for one row - pure, from fields already here."""
         import setup_points
@@ -167,6 +175,7 @@ class SetupTableModel(QAbstractTableModel):
             family_record=self._family_record(row),
             d1_vs_sector=row.d1_vs_sector,
             d1_vs_industry=row.d1_vs_industry,
+            weights=self._points_weights,
         )
 
     def row_at(self, source_row: int) -> SetupRow | None:
