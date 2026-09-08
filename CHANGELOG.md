@@ -283,6 +283,24 @@ They are evidence and must not be loaded as context.
   fold are untouched; no row is hidden, parked, muted or dropped; the
   identical-visible-rows test CLAUDE.md owed WITH the switch exists and checks
   the fold counts and the hidden set byte-for-byte both ways.
+- **The setups table can be ranked by a POINT system, and it only reorders**
+  (trader, 2026-09-08; `scripts/setup_points.py`, pure). Four named parts, each
+  from a field the scan already writes on a focus row or the family record the
+  panel already injects: `setup` (0-50: the family's Wilson lower bound x 40 +
+  expected R clamped to +-1 x 10; an ungraded family scores 0 and says so),
+  `sr` (-20..+10: a clean path starts at +10 and loses points per HV level
+  blocking / nearby, per cloud level, for a trendline in play, for an MA inside
+  1 ATR AHEAD of price, for the nearest level inside 0.5 ATR), `rs` (-15..+15:
+  vs SPY / sector / industry, +-5 each, sign-flipped for a SHORT), `bounce`
+  (+15 today, +8 by name). The `Points` column (appended LAST, compact width 58,
+  tooltip = the four parts and why) shows the total on every row; the
+  **Points** checkbox on the setups strip persists `rank_setups_by_points`
+  (default OFF, read AT SORT TIME) and, ON, re-orders the favourite /
+  near-favourite / high-conviction rows by total with ties keeping arrival
+  order and every other row after them in its own order. Applied AFTER the
+  Working-lately order, from the rows AS THEY ARRIVED, re-applied when the
+  family record lands. `legacy.py` untouched; nothing hidden, written or
+  scored. Tests: `tests/test_setup_points.py`.
 - **The desk surface, and the AWAY Recap** (ST6.4/ST6.6). A one-line **Working
   lately** strip sits at the TOP of the M5 alerts column - mounted INSIDE
   `M5AlertBar` rather than as a third child of the saved two-pane splitter -
@@ -1914,6 +1932,41 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 
 ## Recent changes (the last two build days)
 
+### 2026-09-08 - The setups table ranked by a point system (lead, on `main`)
+
+Trader: *"how hard would it be to get master avwap setups output to be ranked
+instead by a point system? ... 1. its setup, higher WR/PF setups get ranked
+higher. 2. nearby S/R. lots of nearby trendlines and SMAs knock it down. 3. RS/RW
+to its industry/sector/SPY based on its direction. 4. the presence of a recent
+bounce."* then *"Put it in wishlist.md then start working on it block by block."*
+
+- **`scripts/setup_points.py` (new, pure)**: `score_row` -> `SetupPoints(total,
+  setup, sr, rs, bounce, notes)`, `rank_order` (ranked buckets by total, ties in
+  arrival order, the rest after them unchanged), `rank_enabled` (the
+  `rank_setups_by_points` switch, default OFF, read at sort time). Every input
+  is a field already on the focus row (`hv_level_*`, `cloud_level_nearby_count`,
+  `trendline_note`, `ema21`, `sma_breakout_sma_level`, `previous_close`, `atr20`,
+  `daily_relative_strength_score`, `rs_vs_industry`, `has_bounce_event_today`,
+  `favorite_signals`, `expected_r`) or on the `SetupRow` (`d1_vs_sector`,
+  `d1_vs_industry`) or the injected family record (`win_rate_lb`). The scan and
+  `legacy.py` are untouched; no PF exists on any surface, so the setup part is
+  the Wilson bound and expected R.
+- **`SetupTableModel`**: a `points` column appended last (display = the total,
+  sort = the total, tooltip = the parts and why); `points_for(row)` and
+  `family_record_for(row)`. **`MasterAvwapPanel`**: the `Points` checkbox on the
+  control strip, `_by_points` after `_prioritised` in `set_rows`, a re-sort when
+  the family record lands and the switch is on; compact width 58 pinned in the
+  G2b golden (`points` is now the stretch section, `family_win_rate` an exact
+  132). `tests/test_setup_group_context.py`'s column tail widens by one.
+- **Tests**: `tests/test_setup_points.py` - eleven, including the
+  identical-visible-rows test both ways and the lift of a higher-point row over
+  a higher-score row that the toggle undoes. Baseline after: 7291 passed, 3
+  skipped, 72 subtests, exit 0; ruff clean; smoke 7/7.
+- **Not done, by choice**: the AWAY digest keeps its Wilson-bound order (ask
+  first); industry is the curated index the row already carries, not a new
+  membership file; the weights are a first cut for the trader to feel on the
+  desk and every one is a named constant at the top of the module.
+
 ### 2026-09-07 - The Strength window is one flat page (branch `claude/strength-page`)
 
 Trader: *"For the main trading desk, the strength tab is unusable there's like 2
@@ -2132,44 +2185,6 @@ the decoy and the assertion can only pass by naming.
 
 Layout lane: no number, sort key, read or write moved. Live gate **#85**.
 
-### 2026-09-06 - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders (branch `claude/st6-working-lately`, not merged)
-
-**Re-review fix round (same day, same branch).** Four blockers and eight
-advisories; fourteen tests in `tests/test_st6_fix_round.py`, every one proven RED
-against the reviewed tip first.
-
-- **The switch is a VIEW, not a mutation.** Both the M5 bar and the waiting
-  review list re-sorted their BACKING lists, so turning the switch off could not
-  put them back: the bar returned early when disabled and stayed sorted for the
-  session, and `_review_queue` was rebound to the sorted order permanently. The
-  bar now keeps `_arrival` and draws a view of it; the review queue is never
-  reordered and `_next_review_index` picks the next chart by rank instead.
-- **The cap applies to the arrival list.** The `MAX_ROWS` trim ran on the sorted
-  list, so the switch decided WHICH alert stopped existing on the bar.
-- **The day-trade bound is on `held_run_score` itself.** It was the bootstrap of
-  the held episodes' MFEs - a different quantity - so live it printed
-  `held x ran 1.21 (>= 2.070)`, a lower bound ABOVE its own statistic, and
-  ranking on it crowned a different cell from the headline's leader.
-  `evidence_stats.session_block_statistic_bootstrap` resamples whole sessions and
-  recomputes a caller's statistic; `Segment.score_bootstrap` recomputes
-  hold_rate x trimmed-mean MFE per draw. The day-trade kind ranks on the
-  STATISTIC with a declared `LEADER_MARGIN_HELD_RUN_R` (0.10, score units) -
-  the 0.05 win-rate margin is a margin on a quantity bounded in [0, 1].
-- **`swing_favorable` is dated by its MEASURED session** (`future_scan_date` /
-  `target_session`), not by the entry: dated by the entry, a horizon-5 file whose
-  newest scan was 5 sessions back was stale by construction and the kind could
-  never lead. And `snapshot_line` prints all three kinds ALWAYS - a withheld kind
-  says `no evidence - <reason>` rather than vanishing from the strip.
-- Advisories: the observational caveat counts one KIND's cells; the payload went
-  from 133 KB to 44,411 bytes on a pessimistic 150-cell fixture (`_kind_policy`
-  lifts every field a kind's cells all agree on, losslessly, and the declared cap
-  is 48,000); a counts-only export says `concentration unmeasured`; the strip
-  builds its tooltip once, sets no stylesheet and renders 150 cells in under
-  5 ms; `AutopilotService.setupTrackerWritten` is the CLOSE-SLOT trigger the
-  manual scan service never fires; `built_at` and every event `ts` are
-  market-local and aware; gate #83 says what a PASS looks like on day one.
-- The snapshot now FEEDS `panel_verdicts`, so ST2's one-computation-per-page
-  design holds with the shared reading as its source.
 ### 2026-09-07 - Packet G4b: the Setup Tracker's detail pane clears when its context changes (branch `claude/g4b-setup-tracker-detail`)
 
 The second half of G4, deferred while ST2/ST6 rewrote `setup_tracker_panel.py`. Tester-first

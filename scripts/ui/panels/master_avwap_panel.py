@@ -16,6 +16,7 @@ from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
@@ -166,6 +167,8 @@ COMPACT_COLUMN_WIDTHS = {
     # `62% (>=52%, n=90)` and now says WHICH rate it is. The 76px squeeze floor
     # below is unchanged.
     "family_win_rate": 132,
+    # The point total is at most four characters (`+62`).
+    "points": 58,
 }
 
 
@@ -438,6 +441,7 @@ class MasterAvwapPanel(QWidget):
         self.max_dte_input.valueChanged.connect(self._apply_filters)
 
         self._build_bucket_toggle()
+        self._build_points_toggle()
         self._build_overflow_menu()
         self._column_profile = ""
         self._build_layout()
@@ -483,6 +487,7 @@ class MasterAvwapPanel(QWidget):
         for button in self.bucket_buttons.values():
             strip.addWidget(button)
         strip.addSpacing(6)
+        strip.addWidget(self.points_toggle)
         strip.addWidget(self.search_input, 1)
         strip.addWidget(self.data_as_of_label)
         strip.addWidget(self.overflow_button)
@@ -521,6 +526,48 @@ class MasterAvwapPanel(QWidget):
             )
             self._bucket_group.addButton(button)
             self.bucket_buttons[key] = button
+
+    def _build_points_toggle(self) -> None:
+        """The point-system switch (trader, 2026-09-08): reorders, never hides.
+
+        Persisted as `rank_setups_by_points`, default OFF, read at sort time
+        by `setup_points.rank_enabled`. Same contract as the Working-lately
+        switch: the rows are re-sorted from the list AS IT ARRIVED, so
+        switching off restores today's order exactly.
+        """
+        import setup_points
+
+        self.points_toggle = QCheckBox("Points")
+        self.points_toggle.setToolTip(
+            "Rank the favourite, near-favourite and high-conviction rows by the point system "
+            "(family win-rate bound, nearby S/R, RS/RW in the trade's direction, recent bounce). "
+            "Every other row keeps its place after them. Nothing is hidden."
+        )
+        self.points_toggle.setChecked(setup_points.rank_enabled())
+        self.points_toggle.toggled.connect(self._on_points_toggled)
+
+    def _on_points_toggled(self, checked: bool) -> None:
+        try:
+            import project_paths
+            import setup_points
+
+            project_paths.save_local_setting(setup_points.SETTING_KEY, bool(checked))
+            project_paths.invalidate_local_settings_cache()
+        except Exception:  # noqa: BLE001 - a preference never costs the table
+            pass
+        source = getattr(self, "_working_lately_source_rows", None)
+        if source:
+            self.set_rows(list(source))
+
+    def _by_points(self, rows: list[SetupRow]) -> list[SetupRow]:
+        """The point ranking, applied AFTER the Working-lately order so that
+        order is the tiebreak. Same rows in, same rows out."""
+        import setup_points
+
+        if len(rows) < 2 or not setup_points.rank_enabled():
+            return list(rows)
+        items = [(row.bucket, self.model.points_for(row).total) for row in rows]
+        return [rows[index] for index in setup_points.rank_order(items)]
 
     def _build_overflow_menu(self) -> None:
         """Everything removed from standing height, one click away."""
@@ -991,6 +1038,14 @@ class MasterAvwapPanel(QWidget):
         records, coverage = payload if isinstance(payload, tuple) else (payload, "")
         self.model.set_family_records(records if isinstance(records, dict) else {})
         self.set_family_record_coverage(str(coverage or ""))
+        # The setup part of the points reads this record, so a switched-on
+        # ranking is re-applied from the rows as they arrived.
+        source = getattr(self, "_working_lately_source_rows", None)
+        if source:
+            import setup_points
+
+            if setup_points.rank_enabled():
+                self.set_rows(list(source))
 
     def set_family_record_coverage(self, line: str) -> None:
         """The one line saying WHAT the Family favorable % column is - ST1 item 3.
@@ -1090,7 +1145,7 @@ class MasterAvwapPanel(QWidget):
         if self._uses_default_feedback_paths:
             _apply_reviewed_today_badges(rows)
         self._working_lately_source_rows = list(rows)
-        rows = self._prioritised(self._working_lately_source_rows)
+        rows = self._by_points(self._prioritised(self._working_lately_source_rows))
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
         self._apply_filters()

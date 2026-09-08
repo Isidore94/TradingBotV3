@@ -962,6 +962,10 @@ COMPACT_WIDTHS_AT_BASE = {
     "d1_vs_sector": 84,
     "d1_vs_industry": 88,
     "family_win_rate": 132,
+    # 2026-09-08: the point system's total (`scripts/setup_points.py`),
+    # appended LAST so it is the stretch section; `family_win_rate` keeps its
+    # 132 px pin as an exact width now that it is no longer last.
+    "points": 58,
 }
 COMPACT_HIDDEN_AT_BASE = {"score", "supports", "sector", "last_trade_date"}
 

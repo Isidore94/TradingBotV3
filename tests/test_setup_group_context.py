@@ -102,7 +102,9 @@ def test_master_setup_columns_carry_group_strength_and_expected_r():
     # R4 B3 appended `family_win_rate` behind Expected R under the SAME rule, so
     # the window widens by one rather than the assertion loosening: the point is
     # that new columns go on the END, and an exact tail is what proves it.
-    assert keys[-7:] == [
+    # 2026-09-08: the point system's `points` column, appended under the same
+    # rule, widens the window once more.
+    assert keys[-8:] == [
         "sector",
         "d1_vs_sector",
         "industry",
@@ -110,5 +112,6 @@ def test_master_setup_columns_carry_group_strength_and_expected_r():
         "last_trade_date",
         "expected_r",
         "family_win_rate",
+        "points",
     ]
     assert not {"theta", "days_to_earnings"} & set(keys)

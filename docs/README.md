@@ -72,9 +72,11 @@ priorities and breaks every prioritisation tie. Numbering is chronological.
 ## Archive — evidence, never context
 
 [`archive/`](archive/) holds everything that is history: the checkpoint archives, the
-three changelog archives (the newest is
-[`archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`](archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md),
-holding the 25 entries from 2026-09-05 back to 2026-09-03), the roadmap archives, the
+four changelog archives (the newest is
+[`archive/CHANGELOG_ARCHIVE_2026-09-06.md`](archive/CHANGELOG_ARCHIVE_2026-09-06.md),
+holding the ST6 entry of 2026-09-06; before it
+[`archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`](archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md)
+holds the 25 entries from 2026-09-05 back to 2026-09-03), the roadmap archives, the
 July GUI plans, the retired Desk Link design, the paste-ready
 build prompts for phases already built, and the frozen August reviews under
 `archive/analysis/`. Nothing in the code reads any of it. Open one file there to answer

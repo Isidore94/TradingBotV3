@@ -62,6 +62,12 @@ class SetupTableModel(QAbstractTableModel):
         # string typed here: this column and `format_win_rate`'s cells must
         # never disagree about what the number is called.
         ("family_win_rate", FAMILY_RATE_HEADER),
+        # Trader, 2026-09-08: the POINT system (`scripts/setup_points.py`).
+        # Appended for the same reason as the two above. The cell is the
+        # total; the tooltip is the four parts and why. Computed from the
+        # row's own fields and the injected family record - this model still
+        # never reads a file.
+        ("points", "Points"),
     )
 
     def __init__(self, rows: list[SetupRow] | None = None, parent=None) -> None:
@@ -99,6 +105,7 @@ class SetupTableModel(QAbstractTableModel):
                 "d1_vs_sector",
                 "d1_vs_industry",
                 "family_win_rate",
+                "points",
             }:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -118,6 +125,8 @@ class SetupTableModel(QAbstractTableModel):
                     return QColor(theme.color("long" if value > 0 else "short"))
             return None
         if role == Qt.ItemDataRole.ToolTipRole:
+            if key == "points":
+                return self.points_for(row).tooltip()
             return _tooltip(row, key)
         return None
 
@@ -143,6 +152,22 @@ class SetupTableModel(QAbstractTableModel):
     def _family_record(self, row: SetupRow) -> dict:
         family = _normalize_family((row.raw or {}).get("setup_family"))
         return self._family_records.get(family) or {}
+
+    def family_record_for(self, row: SetupRow) -> dict:
+        """The injected swing record for this row's family (`{}` when ungraded)."""
+        return self._family_record(row)
+
+    def points_for(self, row: SetupRow):
+        """The point system's reading for one row - pure, from fields already here."""
+        import setup_points
+
+        return setup_points.score_row(
+            row.raw or {},
+            side=row.side,
+            family_record=self._family_record(row),
+            d1_vs_sector=row.d1_vs_sector,
+            d1_vs_industry=row.d1_vs_industry,
+        )
 
     def row_at(self, source_row: int) -> SetupRow | None:
         if 0 <= source_row < len(self._rows):
@@ -184,6 +209,8 @@ class SetupTableModel(QAbstractTableModel):
 
             record = self._family_record(row)
             return format_win_rate(record) if record else "-"
+        if key == "points":
+            return self.points_for(row).text()
         return ""
 
     def _sort_value(self, row: SetupRow, key: str) -> Any:
@@ -204,6 +231,8 @@ class SetupTableModel(QAbstractTableModel):
             # is not "measured badly".
             bound = self._family_record(row).get("win_rate_lb")
             return float(bound) if bound is not None else -1.0
+        if key == "points":
+            return float(self.points_for(row).total)
         return self._display_value(row, key)
 
 
