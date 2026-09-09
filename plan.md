@@ -249,6 +249,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1–V3/R4 merged; V4's Working-lately switch and AWAY Recap remain NOT BUILT - they are P6 and G6 of Phase 0.22** |
 | **0.22** | Desk reshape + tracker evidence repairs (G0–G7, P1–P6) | Two lanes that never share a branch: the layout lane (Weekend overlap, clipped tables, Market Journal reader, stale Research detail, a Research › Results landing page, AWAY Recap, speed) and the measurement lane (the six Setup Tracker packets). **AUTHORIZED 2026-09-06; G0/G1/G3/G4/G2a merged to `main`, G2b built (unmerged), G4b/G5/G7 queued** |
 | **0.23** | Setups ranked by a point system | Trader 2026-09-08: the setups table ordered by four graded inputs (family record, nearby S/R, RS/RW by direction, recent bounce) as a switch that only reorders, graded against the tracker's outcomes with a trader-gated self-correction. **BUILT 2026-09-08; gates #90-#91 owed.** |
+| **0.24** | Keep the desk snappy all day (SN1-SN6) | Trader 2026-09-08: cut the M5 scanner's hold on the interpreter without losing a scan, alert, board or evidence row. **SN5 (breathe) and SN6 (trader picks first) BUILT 2026-09-08 on `main`; live gate #92 owed. SN1-SN4 stay in WISHLIST until the trader moves them here.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -356,6 +357,20 @@ file applied only under the trader's `Points: learned weights` switch (default O
 Remaining, trader's call: turn the learned weights on once the grade line shows a lift over the
 floor; the AWAY digest's swing order by points (it ranks by the Wilson bound today); the base
 weights - every one is a named constant at the top of `setup_points.py`.
+
+## Phase 0.24 — Keep the desk snappy all day (2026-09-08) — SN5/SN6 BUILT the same evening on `main`; live gate #92 owed
+
+Trader, 2026-09-08: the desk was *"really quite laggy"* at the close; `run_strategy` held
+0.62-0.88 of a core while the GUI thread got 0.10-0.15. The full prompt (SN1-SN6) is in
+WISHLIST; the trader authorized the two smallest packets under a usage cap. **BUILT:** SN5 -
+`BounceBot._breathe` yields the interpreter for `SYMBOL_BREATH_SECONDS` on the stop event after
+each symbol's compute (fast lane + both sweep loops); SN6 - `BounceBot._fast_lane_order` scans
+the trader's own Focus names before the auto-adopted ones, set unchanged (CHANGELOG inventory,
+"The M5 scanner breathes"). **Gate #92:** on the next live day, `thread_cpu.jsonl`'s
+`run_strategy` core fraction and `ui_stalls.jsonl`'s blocked seconds per hour against
+2026-09-08's numbers. **Remaining, NOT authorized:** SN4 (diff the feed), SN3 (one RRS pass),
+SN2 (new bars only), SN1 (the scanner in its own child process) - each an ask-first edit to a
+detector or alert file, each with golden fixtures first (sections 5 and 7).
 
 ## Phase 0.22 — Desk reshape and tracker evidence repairs (2026-09-06) — BUILT 2026-09-07 (G0–G7 and ST1–ST7 on `main`); live gates #75–#88 owed at the next desk restart and Tuesday's close
 

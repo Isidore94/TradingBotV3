@@ -693,6 +693,13 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **The M5 scanner breathes and scans the trader's picks first (SN5/SN6, 2026-09-08).**
+  `BounceBot._breathe` waits `SYMBOL_BREATH_SECONDS` (0.02 s) on the stop event after each
+  symbol in the fast lane and both sweep loops - pacing only, never `time.sleep`, nothing
+  produced changes. `BounceBot._fast_lane_order` scans the trader's own Focus names before
+  the auto-adopted ones (`focus_picks.load_auto_pick_symbols`, today's markers only, a
+  failed read = every name is the trader's); the set is unchanged. Tests:
+  `tests/test_sn5_sn6_scanner_breath_and_fast_lane_order.py`.
 - Master AVWAP D1 swing scanning with earnings anchors, current/previous AVWAP
   families, running-deviation bands, focus buckets, Expected-R ranking, study tags,
   theta candidates, tracker history, and durable daily-bar storage.
@@ -1955,6 +1962,37 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-08 - SN5 / SN6: the M5 scanner breathes, and scans the trader's picks first (lead, on `main`)
+
+Trader, 2026-09-08 evening, on 9% of the week's usage: *"Anything we can get done from
+wishlist.md that's quick and cheap?"* then *"Go"* on the two smallest packets of the
+"keep the desk snappy" prompt. Measured that day: `Thread-4 (run_strategy)` held 0.62 of
+a core in hour 13 and 71-88% per minute at the close while the GUI thread got 0.10-0.15;
+13,031 GUI stalls over 50 ms. The fast lane scanned 258 Focus names alphabetically with
+the trader's own names mixed among 107 auto-adopted ones.
+
+- **SN5 - breathe.** `BounceBot._breathe` waits `SYMBOL_BREATH_SECONDS` (0.02) on the
+  STOP EVENT after each symbol's compute in the fast lane and in both main-sweep loops
+  (`scripts/bounce_bot_lib/legacy.py`). Never `time.sleep`, so a set stop event returns at
+  once and shutdown latency is unchanged. Pacing only: nothing scanned, detected, stored or
+  alerted changes; `ScanCycleClock` still never sleeps.
+- **SN6 - order the fast lane.** `BounceBot._fast_lane_order` puts the trader's own Focus
+  names first (alphabetical), then the auto-adopted ones (alphabetical), then the sweep
+  follows as before. The SET is unchanged; every name still scans every cycle. The engine
+  learns which names are auto-adopted through the new read-only
+  `focus_picks.load_auto_pick_symbols()` (today's `focus_auto_picks.json` markers, the
+  same per-entry `session_date` rule as the store, now ONE reader
+  `_read_todays_auto_pick_markers`); a failed read is an empty set, so every name then
+  scans as the trader's - the safe order. The fast-lane log line now prints both counts.
+- **Ask-first:** `bounce_bot_lib/legacy.py` is a detector file; the trader's "Go" of
+  2026-09-08 is the yes for the two named seams (`run_strategy`'s loop pacing and the fast
+  lane's ordering) only. `_breathe` is called in three places and nothing else moved.
+- **Tests:** `tests/test_sn5_sn6_scanner_breath_and_fast_lane_order.py` (13; 12 fail with
+  the fix reverted, the clock pin passes either way). Suite, ruff and smoke in the checkpoint.
+- **Remaining from the same prompt (WISHLIST, not authorized):** SN4 (diff the feed), SN3
+  (one RRS pass), SN2 (new bars only), SN1 (the scanner in its own process) - each measures
+  itself against the 2026-09-08 numbers in `thread_cpu.jsonl` / `ui_stalls.jsonl`.
 
 ### 2026-09-08 - The setups table ranked by a point system (lead, on `main`)
 

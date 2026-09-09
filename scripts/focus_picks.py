@@ -1230,38 +1230,7 @@ class FocusPickStore:
         marker rather than on the file's header alone: a half-rolled file
         cannot smuggle yesterday's entries in under today's stamp.
         """
-        try:
-            payload = json.loads(self._auto_pick_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        if not isinstance(payload, dict):
-            return {}
-        picks = payload.get("picks")
-        if not isinstance(picks, dict):
-            return {}
-        today_text = (today or date.today()).isoformat()
-        kept: dict[str, dict] = {}
-        dropped = 0
-        for key, marker in picks.items():
-            if not isinstance(marker, dict):
-                dropped += 1
-                continue
-            if str(marker.get("session_date") or "") != today_text:
-                dropped += 1
-                continue
-            kept[str(key)] = marker
-        if dropped:
-            # Loud, because a marker disappearing changes who owns an entry.
-            # Silently dropping them would look identical to the trader having
-            # typed those names, which is the safe direction but not one to
-            # take quietly.
-            logging.info(
-                "Focus provenance: ignored %d marker(s) not from today's session (%s).",
-                dropped,
-                today_text,
-            )
-        return kept
-
+        return _read_todays_auto_pick_markers(self._auto_pick_path, today=today)
     def _save_auto_picks(self) -> None:
         try:
             self._auto_pick_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1299,6 +1268,69 @@ class FocusPickStore:
             and self._focus_paths["m5"]["short"] == Path(FOCUS_SHORTS_FILE)
             and self._membership_path == Path(FOCUS_PICK_MEMBERSHIP_FILE)
         )
+
+
+def _read_todays_auto_pick_markers(path: Path, *, today: date | None = None) -> dict[str, dict]:
+    """The provenance markers that are valid TODAY, straight from the sidecar.
+
+    Shared by the store (`_load_auto_picks`) and the engine's read-only view
+    (`load_auto_pick_symbols`) so the two can never disagree on which marker
+    counts: per-entry `session_date`, never the file header. Unreadable,
+    malformed or not-from-today reads as NO marker - the trader-owned default.
+    """
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    picks = payload.get("picks")
+    if not isinstance(picks, dict):
+        return {}
+    today_text = (today or date.today()).isoformat()
+    kept: dict[str, dict] = {}
+    dropped = 0
+    for key, marker in picks.items():
+        if not isinstance(marker, dict):
+            dropped += 1
+            continue
+        if str(marker.get("session_date") or "") != today_text:
+            dropped += 1
+            continue
+        kept[str(key)] = marker
+    if dropped:
+        # Loud, because a marker disappearing changes who owns an entry.
+        # Silently dropping them would look identical to the trader having
+        # typed those names, which is the safe direction but not one to
+        # take quietly.
+        logging.info(
+            "Focus provenance: ignored %d marker(s) not from today's session (%s).",
+            dropped,
+            today_text,
+        )
+    return kept
+
+
+def load_auto_pick_symbols(
+    *,
+    focus_longs_path: Path | None = None,
+    today: date | None = None,
+) -> set[str]:
+    """Read-only: the M5 Focus symbols the desk adopted AUTOMATICALLY today.
+
+    SN6 (trader, 2026-09-08): the scanner's fast lane puts the trader's own
+    Focus names ahead of the auto-adopted ones, so it needs to know which is
+    which. Absence of a marker means the trader owns the name (R2), so this is
+    the ONLY set the engine may treat as "not the trader's". Any read failure
+    is an empty set: every name then counts as the trader's, the safe order.
+    """
+    path = _auto_pick_state_path_for(Path(focus_longs_path or FOCUS_LONGS_FILE))
+    symbols: set[str] = set()
+    for key in _read_todays_auto_pick_markers(path, today=today):
+        head = str(key).split("|", 1)[0].strip().upper()
+        if head:
+            symbols.add(head)
+    return symbols
 
 
 def load_focus_map(

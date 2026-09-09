@@ -487,6 +487,10 @@ def test_human_focus_fast_lane_runs_before_broad_scan_and_reuses_bars():
         _human_focus_symbols=lambda: {"AAPL", "TSLA"},
         get_scan_symbol_set=lambda: {"AAPL", "TSLA", "NVDA"},
         is_scanning_enabled=lambda: True,
+        # SN6 / SN5 (2026-09-08): the real order helper (no auto-pick markers on
+        # this stub, so alphabetical) and a breath that costs nothing here.
+        _fast_lane_order=lambda symbols: BounceBot._fast_lane_order(stub, symbols),
+        _breathe=lambda: None,
         request_and_detect_bounce=lambda symbol, allowed_bounce_types=None: calls.append(
             ("bounce", symbol, frozenset(allowed_bounce_types or ()))
         ),

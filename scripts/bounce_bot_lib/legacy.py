@@ -89,7 +89,7 @@ from master_avwap_shared import (
     load_master_avwap_focus_map,
     normalize_master_avwap_event_row,
 )
-from focus_picks import load_focus_map
+from focus_picks import load_auto_pick_symbols, load_focus_map
 # Packet M2. The status a finalizing row carries, and the terminal kind a reader
 # gets back from it, are ONE decision - kept in a pure, import-light module so
 # the writer here and every reader of the outcome CSV cannot drift apart.
@@ -1130,6 +1130,16 @@ class ScanCycleClock:
             # reads as a complete account of the time and is not one.
             parts.append(f"+{len(rest)} other {sum(item[1] for item in rest):.1f}s")
         return f"{total:.1f}s total: " + ", ".join(parts)
+
+
+#: SN5 (trader, 2026-09-08): how long the scanner yields the interpreter lock
+#: after each symbol's compute. Measured that day: `run_strategy` held 0.62 of a
+#: core in hour 13 and 71-88% per minute at the close while the GUI thread got
+#: 0.10-0.15, with 13,031 GUI stalls over 50 ms. A CPU-bound thread never
+#: releases the GIL on its own; 20 ms on the stop event hands the GUI a slot per
+#: symbol and shortens nothing else, because a set stop event returns at once.
+#: Pacing only - nothing scanned, detected, stored or alerted changes.
+SYMBOL_BREATH_SECONDS = 0.02
 
 
 def wait_for_candle_close(stop_event=None):
@@ -5878,6 +5888,17 @@ class BounceBot(EWrapper, EClient):
         except Exception as exc:
             logging.debug(f"Failed loading human focus picks: {exc}")
             focus = {}
+        # SN6: which Focus names the desk adopted itself (`focus_auto_picks.json`).
+        # Read-only, best-effort: a failed read is an EMPTY set, so every name
+        # then scans as the trader's own - the safe order, never a lost name.
+        try:
+            auto_symbols = set(load_auto_pick_symbols())
+        except Exception as exc:
+            logging.debug(f"Failed loading focus auto-pick markers: {exc}")
+            auto_symbols = set()
+        self.human_focus_auto_symbols = {
+            str(item or "").strip().upper() for item in auto_symbols if str(item or "").strip()
+        }
         self.human_focus_map = {
             "long": {
                 str(item or "").strip().upper()
@@ -13563,6 +13584,32 @@ class BounceBot(EWrapper, EClient):
     def is_stopping(self) -> bool:
         return self._stop_event.is_set()
 
+    def _breathe(self):
+        """SN5: yield the interpreter for `SYMBOL_BREATH_SECONDS` after one symbol.
+
+        Waits on the stop event, never `time.sleep`, so a shutdown is not one
+        symbol slower. Pacing only: the caller's loop, set and output are
+        unchanged.
+        """
+        stop_event = getattr(self, "_stop_event", None)
+        if stop_event is not None:
+            stop_event.wait(SYMBOL_BREATH_SECONDS)
+
+    def _fast_lane_order(self, symbols):
+        """SN6: the trader's own Focus names first, then the auto-adopted ones.
+
+        Same SET as before - every name still scans every cycle - only the
+        order changes, and inside each group it stays alphabetical. A name
+        without a marker is the trader's (R2: absence of a marker means the
+        trader owns it), so a lost marker file only promotes names, never
+        demotes or drops one.
+        """
+        wanted = {str(item or "").strip().upper() for item in symbols if str(item or "").strip()}
+        auto = set(getattr(self, "human_focus_auto_symbols", None) or set())
+        trader_first = sorted(wanted - auto)
+        auto_next = sorted(wanted & auto)
+        return trader_first + auto_next
+
     def _scan_human_focus_fast_lane(self, enabled_bounce_types):
         """Refresh trader-picked M5 names before the broad RRS/watchlist pass.
 
@@ -13571,13 +13618,17 @@ class BounceBot(EWrapper, EClient):
         then reuse those bars in the broad scan.  Returning the processed set
         prevents a second historical request later in the same cycle.
         """
-        focus_symbols = sorted(self._human_focus_symbols() & self.get_scan_symbol_set())
+        focus_symbols = self._fast_lane_order(self._human_focus_symbols() & self.get_scan_symbol_set())
         processed = set()
         if not focus_symbols:
             return processed
+        auto_count = len(set(focus_symbols) & set(getattr(self, "human_focus_auto_symbols", None) or set()))
         logging.info(
-            "M5 Focus fast lane: scanning %s trader-picked symbol(s) before the broad sweep.",
+            "M5 Focus fast lane: scanning %s Focus symbol(s) before the broad sweep "
+            "(%s trader-picked first, then %s auto-adopted).",
             len(focus_symbols),
+            len(focus_symbols) - auto_count,
+            auto_count,
         )
         for symbol in focus_symbols:
             if not self.is_scanning_enabled():
@@ -13586,6 +13637,7 @@ class BounceBot(EWrapper, EClient):
                 continue
             self.request_and_detect_bounce(symbol, allowed_bounce_types=enabled_bounce_types)
             processed.add(symbol)
+            self._breathe()
         # These two M5 pattern families consume the bars just fetched above.
         self.check_orb_break_setups(symbols=processed)
         self.check_ema8_grind_setups(symbols=processed)
@@ -13809,6 +13861,7 @@ class BounceBot(EWrapper, EClient):
                     self.request_and_detect_bounce(sym, allowed_bounce_types=enabled_bounce_types)
                     processed_symbols.add(sym)
                     outcome_update_symbols.add(sym)
+                    self._breathe()
 
                 # 2) Then scan all remaining symbols for non-EMA-8/15 bounce types.
                 for sym in sorted(scannable_symbols - processed_symbols):
@@ -13818,6 +13871,7 @@ class BounceBot(EWrapper, EClient):
                         continue
                     self.request_and_detect_bounce(sym, allowed_bounce_types=non_ema_extreme_bounce_types)
                     outcome_update_symbols.add(sym)
+                    self._breathe()
 
                 # Keep EOD outcome tracking alive even if a confirmed bounce was
                 # removed from the watchlist or skipped by live-scan gates before
