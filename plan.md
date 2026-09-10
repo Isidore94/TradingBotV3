@@ -234,6 +234,10 @@ Their old phase lists do not reorder Section 12.
 
 ## 12. Remaining work, in execution order
 
+Agent operations, trader-authorized 2026-09-09: Astra lead with Luna/Terra delegation
+is configured in `.codex/` and governed by `docs/AGENT_TEAM.md`. This is repository
+setup, not a product phase; build order and all live/promotion gates below are unchanged.
+
 The phases below are dependency order, not a menu. `CURRENT_CHECKPOINT.md` names the
 one active item. Finish that item before moving down the list unless the trader
 explicitly redirects the work. Elapsed evidence collection may run in parallel only

@@ -1,11 +1,35 @@
 # The agent team: one lead, its builders, its reviewers
 
-Document role: **active runbook**. How a Claude Code session in this repo plans, builds,
-reviews and integrates work using project-defined sub-agents instead of pasting prompts
-between windows. The agent definitions live in `.claude/agents/` (tracked); this file is
-the contract they share with the lead session and with the trader.
+Document role: **active runbook**. How Claude Code and Codex sessions in this repo plan,
+build, review and integrate work using project-defined sub-agents instead of pasting
+prompts between windows. The role definitions live in `.claude/agents/` and
+`.codex/agents/`; this file is the contract shared with the lead and trader.
 
-## The roles
+## Codex-specific policy
+
+Codex roles are Astra for the lead; Luna at medium effort for reconnaissance, bounded
+docs and simple implementation; and Terra at high effort for normal implementation,
+tests and independent review. Astra decides, plans, orchestrates, accepts and integrates.
+
+- Escalate uncertainty Luna -> Terra -> Astra for targeted judgment. Never silently
+  substitute a paid higher model.
+- Delegate concrete independent work when the lead has useful local work. Avoid duplicate
+  investigation and nested fanout by default. Tiny edits and checks stay with the lead
+  when spawning costs more.
+- Give each child named files or responsibility and a worktree. Handoffs say facts,
+  files, checks and blockers. Tester -> builder -> reviewer is sequential; concurrent
+  work needs unrelated ownership and must honor the actual runtime cap.
+- Use `fork_turns: "none"` or a small positive context and an explicit spawn model. A
+  cached role with a wrong fixed model or effort falls back to a default agent carrying
+  the role instructions and explicit model.
+- Codex standalone role files support explicit `model` keys; see [OpenAI's subagent
+  configuration guide](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+  The current session can cache roles, so a new session may be needed for automatic
+  loading; an explicit spawn model works now.
+- A docs-only packet with assigned files uses static parsing or lint checks. It needs no
+  tester, code worktree, or full suite. This exception never applies to sensitive code.
+
+## Claude-specific roles
 
 | Agent | Model | Where it runs | What it may do | What it must never do |
 |---|---|---|---|---|
@@ -91,7 +115,7 @@ is the same job with this repo's rules baked in.
   the question goes in the handoff. `CLAUDE.md` lists the files.
 - **Chat to the trader is short.** Detail lives in commits, docs and handoffs.
 
-## Delegation policy for the lead
+## Claude-specific delegation policy
 
 The lead's job is routing, not typing. The cheapest correct agent does each job.
 
@@ -128,6 +152,15 @@ each packet-sized run is a real spend. The lead does not spawn a reviewer for a 
 branch, and does not spawn two builders on the same files.
 
 ## Setup on a machine
+
+### Codex setup
+
+`.codex/config.toml` selects the Astra lead, the Luna medium default for a helper whose
+model is unspecified, and at most three child threads excluding the lead. A higher-
+priority runtime setting may override these defaults. The tracked `.codex/agents/` files
+select their explicit role models. No desk restart or live-store write is needed here.
+
+### Claude-specific setup
 
 1. The agent files are tracked under `.claude/agents/` (`.gitignore` un-ignores that
    folder; the rest of `.claude/` stays machine-local). A fresh checkout has them.

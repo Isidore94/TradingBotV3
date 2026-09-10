@@ -36,6 +36,10 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Codex agent operations (2026-09-09):** project defaults select Astra as lead and
+  Luna for unspecified helpers; recon uses Luna, builder/tester/reviewer use Terra.
+  `docs/AGENT_TEAM.md` owns routing, escalation, isolation and final lead acceptance.
+
 - **Win rate leads every trader-facing SWING surface** (V3, decision 0016 answer
   3). `scripts/swing_headline.py` is the one implementation: win rate first, `n`
   and a **Wilson lower bound** beside it, mean R beside that and never instead of
@@ -1962,6 +1966,15 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-09 - Codex delegation defaults (trader-directed)
+
+Added shareable `.codex/config.toml`; pinned the four Codex roles to Luna/Terra instead
+of inheriting the lead model. Root instructions remain identical for Claude and
+Codex, with each tool's model policy scoped separately in `docs/AGENT_TEAM.md`.
+Astra plans, routes, judges and integrates; helpers get bounded work and narrow
+context. Existing testing, independent review and live-data safeguards still apply.
+Configuration/documentation only: no application baseline or promotion gate changed.
 
 ### 2026-09-08 - SN5 / SN6: the M5 scanner breathes, and scans the trader's picks first (lead, on `main`)
 

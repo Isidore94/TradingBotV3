@@ -7,6 +7,11 @@ live monitoring with alerts, unattended Auto/Away scanning with a phone report, 
 journal, and a controlled research/promotion program for new setups. Order execution
 is permanently out of scope (plan.md sec 1).
 
+## Agent routing - read before doing work
+
+- **The agent team.** Read [`docs/AGENT_TEAM.md`](docs/AGENT_TEAM.md) before delegating: `.claude/agents/` serves Claude; `.codex/agents/` serves Codex. Tester proves failures, builder fixes, reviewer reproduces; the lead checks handoffs against the diff and alone integrates, with code workers isolated from the desk checkout.
+- **Codex delegation (trader, 2026-09-09).** Astra owns planning, orchestration and final acceptance; explicitly delegate bounded recon and simple work to Luna, and implementation, tests and independent review to Terra wherever useful work can run alongside the lead. Use explicit model selection and narrow context, escalate Luna to Terra before asking Astra for a focused decision, and never silently spend on Astra helpers; `.codex/config.toml` and the runbook own defaults and runtime fallback details. These Codex rules do not change Claude's model choices.
+
 ## How to talk to the trader (trader rule 2026-08-26)
 
 **Write every message to the trader as if they are five years old.** Very short.
@@ -231,7 +236,6 @@ Build: `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm`
 
 ## Working agreement for agents
 - **Edit surgically.** Use `Edit` for a small or medium change; rewrite a file only when it is short or most of it is changing.
-- **The agent team.** A session builds and reviews through the sub-agents in `.claude/agents/` (`tester` writes the failing tests first, `builder` makes them pass, `reviewer` reproduces, `recon` looks things up); the contract is [`docs/AGENT_TEAM.md`](docs/AGENT_TEAM.md). Read it before spawning one. The lead checks every handoff against `git diff --stat`. Builders and reviewers work in their own worktrees and never touch the desk's checkout; the lead session merges. `.codex/agents/` holds the same four roles for Codex.
 - Follow the mandatory documentation workflow above. `plan.md` owns build order; `CURRENT_CHECKPOINT.md` owns the active item. Do not re-implement anything in `CHANGELOG.md` or implement anything directly from `WISHLIST.md`.
 - `main` is the trunk; branch per milestone/packet, merge back after a live-session validation day passes (plan.md sec 6). Commit small and green; push after each commit.
 - First live session on any new build: run plan.md sec 6 checklist; do NOT tune thresholds from one session.

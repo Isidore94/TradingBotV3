@@ -22,7 +22,7 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 
 | File | Use |
 |---|---|
-| [`AGENT_TEAM.md`](AGENT_TEAM.md) | How a session plans, builds, reviews and merges through `.claude/agents/` |
+| [`AGENT_TEAM.md`](AGENT_TEAM.md) | Claude and Codex delegation; Astra leads Luna/Terra through `.codex/agents/`, with repo defaults in `.codex/config.toml` |
 | [`FIRST_SESSION_CHECKLIST.md`](FIRST_SESSION_CHECKLIST.md) | Live-session validation for a new build |
 | [`DESK_TESTING_PLAN.md`](DESK_TESTING_PLAN.md) | Trader's step-by-step testing sequence; shipped in the exe, rendered at Settings ▸ Testing Plan |
 | [`AWAY_SCANNER_RUNBOOK.md`](AWAY_SCANNER_RUNBOOK.md) | Auto/Away operation and report recovery |
