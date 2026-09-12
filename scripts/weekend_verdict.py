@@ -17,8 +17,9 @@ The lines, in the order a Saturday reader wants them:
 1. the take rate — how much of what the desk showed the trader acted on;
 2. the blind spots, BY NAME — segments the trader passes on that go on to work;
 3. the leaks, BY NAME — segments they take that do not;
-4. the best liked claim at h3, with n;
-5. the worst veto reason at h3, with n;
+4. the liked cohort that worked best over three sessions, with n;
+5. the rejected cohort worth another look - the one that ran hardest after
+   it was thrown away - over the same three sessions, with n;
 6. the week's journal net P&L and win rate, **confirmed tags only**;
 7. how many trades are waiting for a tag review.
 
@@ -32,13 +33,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
-#: The horizon the card reads. h3 is the desk's own three-session forward mark,
-#: and it is the shortest one that has had time to say anything by Saturday.
-CARD_HORIZON = "h3"
+#: The horizon the card reads, IN SESSIONS. Three is the desk's own
+#: three-session forward mark - the shortest one that has had time to say
+#: anything by Saturday - and it is the integer the rollup's `horizon_sessions`
+#: column carries (1/3/5/10). It was the string `"h3"` until WS-5A, which is
+#: why the card composed a column name out of it instead of comparing it.
+CARD_HORIZON = 3
 
-#: A cohort under this is named and NOT ranked. `evidence_stats` owns the floor
-#: everywhere else; this card states its own because it prints ONE row per
-#: family and a top row resting on two observations is worse than no row.
+#: What the rollup writes on the row that pools both sides. A pooled row is
+#: both sides added together, so it can be READ but it is never a reason to
+#: act on and never leads a ranking of reasons. `BOTH` is carried too because
+#: the pass and rejection rollups have used it.
+POOLED_SIDES = frozenset({"ALL", "BOTH"})
+
+#: A cohort under this is named and NOT ranked. `evidence_stats.MIN_REPORTABLE_N`
+#: (30) is the floor for a REPORTABLE claim and stays the floor everywhere it
+#: already rules; this card keeps its own 5, deliberately, because the card is a
+#: pointer at a row the trader then opens the table to read, and because raising
+#: it to 30 would silence the like line entirely on the live rollup (2 of 21
+#: three-session side rows clear 30, against 8 that clear 5). Moving this floor
+#: is a trader decision about what the card may say, not a repair.
 MIN_COHORT_N = 5
 
 
@@ -173,36 +187,77 @@ def best_cohort_line(
     *,
     key: str,
     label: str,
-    horizon: str = CARD_HORIZON,
-    best: bool = True,
+    family: str,
+    value_suffix: str = "",
+    horizon: int = CARD_HORIZON,
     min_n: int = MIN_COHORT_N,
 ) -> VerdictLine:
-    """The best (or worst) cohort at one horizon, with its n.
+    """The cohort with the HIGHEST side-adjusted return at one horizon, with n.
 
-    Rows under `min_n` are EXCLUDED from the ranking and counted in the line, so
-    a thin week reads as "nothing has enough behind it yet" rather than as a
-    confident answer resting on two observations.
+    WS-5A. This read `avg_r_{horizon}` and `n_{horizon}` - columns nothing on
+    the desk has ever written - off rows whose return was already a formatted
+    percent string. Every cell was skipped, so both lines printed "nothing with
+    enough behind it yet" against 115 graded rejection rows and 129 graded like
+    rows; and the first row that had matched would have printed a PERCENT with
+    an `R` after it. The contract is now numeric and explicit:
+
+    - ``horizon_sessions`` is compared to `CARD_HORIZON` as an INT, so a better
+      number at another horizon cannot leak into a three-session claim;
+    - ``side`` must be a real side. `ALL` is what the rollup writes for the
+      pooled row (both sides added together) and it is not a reason anyone can
+      act on, so it is excluded from a ranking of reasons and named in neither
+      line;
+    - ``avg_side_return_pct`` is a PERCENT number and is printed as a percent.
+
+    Polarity: HIGHEST, on both lines. For likes that is "which claim worked".
+    For rejections it is the one worth questioning - the name that went on to
+    run after it was thrown away. `min()` named the rejection that was RIGHT,
+    which is the one reading a trader never has to do anything about.
+
+    Rows under `min_n` are EXCLUDED and the line says the best n it saw against
+    the floor, so a thin week reads as thin rather than as a confident answer
+    resting on two observations.
     """
-    column = f"avg_r_{horizon}"
     usable: list[tuple[str, float, int]] = []
+    best_thin_n = 0
     thin = 0
     for row in rows or ():
-        value = _as_float(row.get(column))
-        count = _as_int(row.get(f"n_{horizon}") or row.get("n") or 0)
-        name = str(row.get("source") or row.get("cohort") or row.get("reason_code") or "").strip()
+        if _as_int(row.get("horizon_sessions")) != int(horizon):
+            continue
+        side = str(row.get("side") or "").strip()
+        if not side or side.upper() in POOLED_SIDES:
+            continue
+        value = _as_float(row.get("avg_side_return_pct"))
+        count = _as_int(row.get("n"))
+        name = str(
+            row.get("cohort") or row.get("source") or row.get("reason_code") or ""
+        ).strip()
         if value is None or not name:
             continue
         if count < min_n:
             thin += 1
+            best_thin_n = max(best_thin_n, count)
             continue
-        usable.append((name, value, count))
+        usable.append((f"{name} {side}", value, count))
     if not usable:
-        tail = f" ({thin} cohort(s) under n={min_n})" if thin else ""
+        if not thin:
+            return VerdictLine(
+                key=key,
+                text=f"{label}: no {family} cohorts measured yet.",
+                measured=False,
+            )
         return VerdictLine(
-            key=key, text=f"{label}: nothing with enough behind it yet{tail}.", measured=False
+            key=key,
+            text=(
+                f"{label}: nothing with enough behind it yet "
+                f"(best n was {best_thin_n} against a floor of {min_n})."
+            ),
+            measured=False,
         )
-    name, value, count = (max if best else min)(usable, key=lambda item: item[1])
-    return VerdictLine(key=key, text=f"{label}: {name} at {value:+.2f}R", n=count)
+    name, value, count = max(usable, key=lambda item: (item[1], item[2], item[0]))
+    return VerdictLine(
+        key=key, text=f"{label}: {name} {value:+.2f}%{value_suffix}", n=count
+    )
 
 
 def journal_week_line(trades: Iterable[Mapping[str, Any]]) -> VerdictLine:
@@ -325,7 +380,7 @@ def build_verdict(
     week_trades: Iterable[Mapping[str, Any]] = (),
     awaiting_review: int = 0,
     research_pack: Mapping[str, Any] | None = None,
-    horizon: str = CARD_HORIZON,
+    horizon: int = CARD_HORIZON,
     working_lately: Mapping[str, Any] | None = None,
 ) -> Verdict:
     """The whole card. Pure: every input is passed in, nothing is read here.
@@ -353,16 +408,29 @@ def build_verdict(
     verdict.lines.append(
         _callout_line(learning_state, "leaks", "Leaks", "taken, and did not work")
     )
+    # WS-5A. Eight lines is the cap the trader set and these two are lines five
+    # and six of eight (take rate, blind spots, leaks, THESE TWO, the week's
+    # record, the tag backlog, research) - so there is no room for a third
+    # cohort line and "Rejections that were right" is not printed. It is the
+    # reading a trader never has to act on, and it would cost a line that does.
     verdict.lines.append(
-        best_cohort_line(like_rows, key="best_like", label=f"Best liked claim at {horizon}", horizon=horizon)
+        best_cohort_line(
+            like_rows,
+            key="best_like",
+            label="Likes that work",
+            family="like",
+            value_suffix=f" over {int(horizon)} sessions",
+            horizon=horizon,
+        )
     )
     verdict.lines.append(
         best_cohort_line(
             veto_rows,
-            key="worst_veto",
-            label=f"Weakest veto reason at {horizon}",
+            key="veto_second_look",
+            label="Rejections worth another look",
+            family="veto",
+            value_suffix=" side-adjusted",
             horizon=horizon,
-            best=False,
         )
     )
     verdict.lines.append(journal_week_line(week_trades))

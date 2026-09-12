@@ -202,10 +202,14 @@ def _cohort_row(cohort: str, side: str, *, n: int, meets: bool, lb: float) -> di
     return {
         "cohort": cohort,
         "side": side,
-        "horizon": "3",
-        "n": str(n),
+        # WS-5A: the readers publish NUMBERS for the horizon, the sample count
+        # and the side-adjusted return; the `+1.20%` cell is built at the
+        # display edge. Only the fixture's SHAPE moved - nothing asserted here
+        # changed.
+        "horizon_sessions": 3,
+        "n": n,
+        "avg_side_return_pct": 1.2,
         "win_rate": "0.55",
-        "avg_return": "0.012",
         "median": "0.009" if meets else "",
         "trimmed": "0.010",
         "profit_factor": "1.4",
@@ -944,7 +948,9 @@ def test_the_horizon_re_render_also_re_reads_the_detail_pane(make_panel, qapp):
     at_other = []
     for index, row in enumerate(payload["cohort"]):
         twin = dict(row)
-        twin["horizon"] = other
+        # WS-5A: `horizon_sessions`, as an int - the selector's text is
+        # converted once, at the filter.
+        twin["horizon_sessions"] = int(other)
         twin["cohort"] = f"veto_only_at_h{other}_{index}"
         at_other.append(twin)
     # The same COUNT at both horizons: the switch keeps the row selected.

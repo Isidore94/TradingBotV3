@@ -2586,7 +2586,7 @@ def _join_focus_week(bounds) -> list[dict[str, Any]]:
     return joined
 
 
-def _read_veto_cohort() -> list[dict[str, str]]:
+def _read_veto_cohort() -> list[dict[str, Any]]:
     """The graded veto cohort - R8 §6's last DEFERRED join (AI-P1).
 
     The Focus Pick Review subtitle has promised "the veto cohort beside them"
@@ -2626,43 +2626,18 @@ def _read_veto_cohort() -> list[dict[str, str]]:
     except OSError:
         return []
 
-    def _pct(value: str) -> str:
-        """A percentage, or BLANK. Never a substituted zero."""
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        try:
-            return f"{float(text) * 100:.1f}%"
-        except (TypeError, ValueError):
-            return text
-
-    def _signed_pct(value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        try:
-            return f"{float(text) * 100:+.2f}%"
-        except (TypeError, ValueError):
-            return text
-
-    def _ratio(value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        try:
-            return f"{float(text):.2f}"
-        except (TypeError, ValueError):
-            return text
-
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, Any]] = []
     for raw in raw_rows:
         row = {
             "cohort": veto_cohort.canonical_veto_cohort(raw.get("cohort") or ""),
             "side": str(raw.get("side") or "").strip(),
-            "horizon": str(raw.get("horizon_sessions") or "").strip(),
-            "n": str(raw.get("sample_count") or "").strip(),
-            "avg_return": _signed_pct(raw.get("avg_side_return")),
-            "profit_factor": _ratio(raw.get("profit_factor")),
+            "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+            # WS-5A: the typed half. `horizon_sessions`, `n` and
+            # `avg_side_return_pct` are NUMBERS here and are formatted at the
+            # display edge (`_fill_cohort_table`), because the verdict card
+            # reads this row too and a formatted percent read as an R multiple
+            # is the defect this replaced.
+            **_cohort_numeric_fields(raw),
         }
         # R4 B3: the rate, its bound and n in one cell, and the bound as the sort
         # key. Written AFTER the base row so it owns `win_rate` outright.
@@ -2701,7 +2676,7 @@ def _read_after_like_block() -> dict:
         return {}
 
 
-def _read_like_cohort() -> list[dict[str, str]]:
+def _read_like_cohort() -> list[dict[str, Any]]:
     """The graded LIKE cohort - R10.F's output, given its surface (packet 8b).
 
     The mirror of :func:`_read_veto_cohort`, and read the same way: by NAMED
@@ -2732,15 +2707,16 @@ def _read_like_cohort() -> list[dict[str, str]]:
     except OSError:
         return []
 
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, Any]] = []
     for raw in raw_rows:
         row = {
             "cohort": str(raw.get("cohort") or "").strip(),
             "side": str(raw.get("side") or "").strip(),
-            "horizon": str(raw.get("horizon_sessions") or "").strip(),
-            "n": str(raw.get("sample_count") or "").strip(),
-            "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
             "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+            # WS-5A: the same typed half the veto reader publishes. The two
+            # cohorts are the halves of one judgement and the card reads both,
+            # so they must not disagree about what a column MEANS.
+            **_cohort_numeric_fields(raw),
         }
         row.update(_cohort_headline_fields(raw))
         row.update(_cohort_robust_fields(raw))
@@ -2761,6 +2737,51 @@ COHORT_TABLE_HEADERS = (
 )
 
 
+def _cohort_numeric_fields(raw) -> dict[str, Any]:
+    """The typed half of a cohort row - WS-5A.
+
+    The two judgement tables are not the only reader of these rows: the
+    weekend verdict card reads them too. It used to look for `avg_r_h3` and
+    `n_h3`, keys nothing has ever written, so every cell was skipped and both
+    of its cohort lines said "nothing with enough behind it yet" against 115
+    graded veto rows and 129 graded like rows on the live desk. Had one
+    matched, the card would have printed a PERCENT return with an `R` after it.
+
+    So the row carries NUMBERS and the display edge does the formatting:
+
+    - ``horizon_sessions`` - the CSV's `horizon_sessions`, as an int (1/3/5/10);
+    - ``n`` - the CSV's `sample_count`, as an int;
+    - ``avg_side_return_pct`` - the CSV's `avg_side_return`, which is a
+      FRACTION on disk (`0.019011`), carried here as a PERCENT (`1.9011`).
+      The unit is in the name because the mistake this repairs was a unit
+      mistake.
+
+    A blank or unparseable cell is ``None``, never a substituted zero: old rows
+    have every key PRESENT and EMPTY, and "not measured" and "measured at zero"
+    are different facts.
+    """
+    return {
+        "horizon_sessions": _cohort_int(raw.get("horizon_sessions")),
+        "n": _cohort_int(raw.get("sample_count")),
+        "avg_side_return_pct": _cohort_fraction_as_pct(raw.get("avg_side_return")),
+    }
+
+
+def _cohort_cell_text(row, key: str) -> str:
+    """One table cell, built from the row's TYPED fields where it has them.
+
+    The trader's two tables read exactly as they did - `21`, `+1.90%` - but the
+    text is now made here rather than carried in the row, so a reader that
+    wants the number gets the number (WS-5A).
+    """
+    if key == "avg_return":
+        return _format_signed_pct_value(row.get("avg_side_return_pct"))
+    if key == "n":
+        value = row.get("n")
+        return "" if value is None else str(value)
+    return str(row.get(key) or "")
+
+
 def _fill_cohort_table(table, rows) -> None:
     """Write one horizon's rows, greying anything under the n floor.
 
@@ -2778,7 +2799,7 @@ def _fill_cohort_table(table, rows) -> None:
     for index, row in enumerate(rows):
         under_floor = not row.get("_meets_floor")
         for column, key in enumerate(COHORT_TABLE_COLUMNS):
-            item = QTableWidgetItem(str(row.get(key) or ""))
+            item = QTableWidgetItem(_cohort_cell_text(row, key))
             if under_floor and muted is not None:
                 item.setForeground(muted)
             if key == "ci" and row.get("ci_basis"):
@@ -2923,8 +2944,11 @@ def _cohort_view(rows, horizon: str) -> list[dict]:
     sample has no bound and sorts last inside its own group rather than being
     promoted by a default of zero.
     """
-    wanted = str(horizon or "").strip()
-    kept = [row for row in rows if str(row.get("horizon") or "").strip() == wanted]
+    # WS-5A: the horizon is compared as a NUMBER. The selector's data is the
+    # session count as text ("3"), the row carries `horizon_sessions` as an int,
+    # and `"3" == 3` is False - so the comparison happens in one type, here.
+    wanted = _cohort_int(horizon)
+    kept = [row for row in rows if row.get("horizon_sessions") == wanted]
     return sorted(
         kept,
         key=lambda row: (
@@ -2958,6 +2982,43 @@ def _cohort_signed_pct(value) -> str:
         return f"{float(text) * 100:+.2f}%"
     except (TypeError, ValueError):
         return text
+
+
+def _cohort_int(value) -> int | None:
+    """An integer, or `None`. Never a substituted zero (WS-5A)."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _cohort_fraction_as_pct(value) -> float | None:
+    """The CSV's fraction as a PERCENT number: `0.019011` -> `1.9011`.
+
+    `None` for a blank or unparseable cell, which is what the table prints as
+    an empty Avg and what the verdict card refuses to rank.
+    """
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number * 100.0
+
+
+def _format_signed_pct_value(value) -> str:
+    """A percent NUMBER as the cell the trader has always read: `+1.90%`."""
+    if value is None:
+        return ""
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return ""
 
 
 def _cohort_ratio(value) -> str:
