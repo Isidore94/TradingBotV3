@@ -1911,21 +1911,12 @@ class AutopilotService(QObject):
             swing_data_date = str(swing_feed.get("data_date") or "")
             current_session_data = swing_data_date == datetime.now().date().isoformat()
             swing_rows = list(swing_feed.get("rows") or []) if current_session_data else []
-            picks = []
-            for row in swing_rows[:60]:
-                expected = getattr(row, "expected_r", None)
-                raw = getattr(row, "raw", None)
-                family = str((raw or {}).get("setup_family") or "") if isinstance(raw, dict) else ""
-                picks.append(
-                    {
-                        "symbol": getattr(row, "symbol", ""),
-                        "side": getattr(row, "side", ""),
-                        "bucket": getattr(row, "bucket_label", "") or getattr(row, "bucket", ""),
-                        "expected_r": expected,
-                        "family": family,
-                        "key_level": str(getattr(row, "key_level", "") or ""),
-                    }
-                )
+            # WS-PT4: ONE projection, in `autopilot_core`, so the digest's pick
+            # rows carry the point system's inputs (the scan row plus the two
+            # group-context readings) as well as the six display fields. The
+            # rows are the SAME enriched display rows the setups table shows,
+            # so the digest and the table score one reading, never two.
+            picks = [core.swing_pick_projection(row) for row in swing_rows[:60]]
             # The roster is built from the FULL feed, not the ten ranked picks:
             # "which names are favorites right now" is a membership question,
             # and answering it from a top-ten slice would silently shorten it.
