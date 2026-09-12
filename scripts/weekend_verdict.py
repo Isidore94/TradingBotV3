@@ -221,8 +221,10 @@ def best_cohort_line(
     usable: list[tuple[str, float, int]] = []
     best_thin_n = 0
     thin = 0
+    off_horizon = 0
     for row in rows or ():
         if _as_int(row.get("horizon_sessions")) != int(horizon):
+            off_horizon += 1
             continue
         side = str(row.get("side") or "").strip()
         if not side or side.upper() in POOLED_SIDES:
@@ -241,6 +243,19 @@ def best_cohort_line(
         usable.append((f"{name} {side}", value, count))
     if not usable:
         if not thin:
+            # Three absences, three sentences. "Never graded", "graded but only
+            # at another horizon" and "graded and too thin to rank" are
+            # different facts, and printing one of them for another is the
+            # class of false statement this whole packet repaired.
+            if off_horizon:
+                return VerdictLine(
+                    key=key,
+                    text=(
+                        f"{label}: nothing has matured to {int(horizon)} sessions "
+                        f"yet ({off_horizon} row(s) at other horizons)."
+                    ),
+                    measured=False,
+                )
             return VerdictLine(
                 key=key,
                 text=f"{label}: no {family} cohorts measured yet.",

@@ -544,9 +544,12 @@ HIGHEST side-adjusted return** — "Likes that work: `<cohort> <side>` +x.xx% ov
 side-adjusted (n=..)". The veto line used `min()`, which named the rejection
 that was RIGHT: the one reading a trader never has to act on. A separate
 "Rejections that were right" line is NOT printed — these are lines five and six
-of the eight the trader capped the card at. Thin and absent stay different
-sentences: under the floor, "nothing with enough behind it yet (best n was N
-against a floor of F)"; no rows at all, "no like|veto cohorts measured yet". The
+of the eight the trader capped the card at. THREE absences get three sentences,
+because printing one of them for another is the class of false statement this
+repairs: under the floor, "nothing with enough behind it yet (best n was N
+against a floor of F)"; graded only at other horizons, "nothing has matured to 3
+sessions yet (K row(s) at other horizons)"; no rows at all, "no like|veto
+cohorts measured yet". The
 floor stays the card's own `MIN_COHORT_N` (5) rather than
 `evidence_stats.MIN_REPORTABLE_N` (30), because the card points at a table row
 the trader then opens, and 30 would silence the like line outright — 2 of the 21

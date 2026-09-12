@@ -258,6 +258,36 @@ def test_no_rows_at_all_says_no_cohorts_measured_yet():
     assert like.measured is False and veto.measured is False
 
 
+def test_rows_only_at_another_horizon_say_so(tmp_path, monkeypatch):
+    """"Never graded" and "graded, but not yet at three sessions" differ too."""
+    import project_paths
+    import weekend_verdict
+    from ui.panels.weekend_prep_panel import _read_like_cohort
+
+    runtime = tmp_path / "data" / "runtime"
+    monkeypatch.setattr(project_paths, "PERSISTENT_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        project_paths, "LIKE_COHORT_PERFORMANCE_FILE",
+        runtime / "like_cohort_performance.csv",
+    )
+    _write(
+        runtime / "like_cohort_performance.csv",
+        [
+            _row("like_only_at_h10", "LONG", "10", "44", "0.021000"),
+            _row("like_only_at_h5", "SHORT", "5", "38", "0.014000"),
+        ],
+    )
+
+    line = _line(
+        weekend_verdict.build_verdict(like_rows=_read_like_cohort()), "best_like"
+    )
+
+    assert line.measured is False
+    assert "matured to 3 sessions" in line.text, line.text
+    assert "2 row(s) at other horizons" in line.text, line.text
+    assert "no like cohorts measured yet" not in line.text
+
+
 # ---------------------------------------------------------------------------
 # The typed contract, and the display edge that still prints the same cell
 # ---------------------------------------------------------------------------
