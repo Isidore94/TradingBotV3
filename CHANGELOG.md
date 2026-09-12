@@ -702,6 +702,25 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **A watchlist edit is a dated event, never a verdict (WS-5D, 2026-09-12, sweep branch).**
+  `scripts/watchlist_intent_events.py` (schema `watchlist_intent_event_v1`,
+  `WATCHLIST_INTENT_EVENTS_FILE` in the shared home) appends one row per symbol that joins or
+  leaves `longs.txt` / `shorts.txt` / `swinglongs.txt` / `shortswings.txt`, carrying the
+  OBSERVATION time (aware, market-local), the list, side and horizon, an optional reason that
+  is never prompted for, and a `source` that keeps the trader's typing (`trader_edit` /
+  `trader_paste`) distinct from the Focus store's injection (`machine_inject` /
+  `machine_uninject`) and from a difference merely SEEN at load time after an edit outside
+  the app (`observed_external`, stamped at the load, never back-dated).
+  `WatchlistEditorPanel._write_symbols` writes the FILE first and appends after, so a failed
+  append shows `(intent not recorded)` and costs nothing; a sort and an unchanged save append
+  nothing; a re-add is a new `add`. A list the stream cannot reconstruct gets ONE small
+  `baseline_recorded` row (comma-joined symbols, count, digest) and no invented adds.
+  Membership means interest - never a setup claim, a position or a prediction - and a
+  `remove` is not a dislike. Known gap: `autopilot_core`'s auto-populate is a third machine
+  writer and is unlabelled (its adds surface as `observed_external`). Read with
+  `read_events()` or `python -m watchlist_intent_events tail --list longs`; nothing consumes
+  it yet and it reaches no detector, score, alert, Focus list, scanner or
+  `review_policy.json`. Tests: `tests/test_ws_5d_watchlist_intent.py`.
 - **The M5 scanner breathes and scans the trader's picks first (SN5/SN6, 2026-09-08).**
   `BounceBot._breathe` waits `SYMBOL_BREATH_SECONDS` (0.02 s) on the stop event after each
   symbol in the fast lane and both sweep loops - pacing only, never `time.sleep`, nothing
@@ -816,6 +835,21 @@ They are evidence and must not be loaded as context.
 
 ### Charts, review, alerts, and phone surfaces
 
+- **The AWAY digest ranks swing picks by points when the trader's Points switch is on
+  (WS-PT4, 2026-09-12, sweep branch).** `autopilot_core.swing_pick_projection` is the ONE
+  projection of a digest pick (`AutopilotService._write_report_locked` calls it) and now
+  carries the scan row, `d1_vs_sector`, `d1_vs_industry` and `bucket_key` beside the display
+  fields; `autopilot_core.order_swing_picks` reads `setup_points.rank_enabled()` AT SORT TIME
+  and, when on, orders the favourite / near / high-conviction rows by `setup_points.rank_order`
+  over `swing_pick_points(...)` totals (the same `setup_points.score_row` the setups table
+  uses - one scorer, two callers), every other row after them in arrival order; off is the
+  identity. `RANKED_BUCKETS` is matched on the bucket KEY, never the display label. The
+  `Ranked on:` line ends `| order: Wilson bound` or `| order: points (switch on)`; the near
+  cap is applied after ranking as before; the bucket is printed, never ranked on; an ungraded
+  family scores its setup part 0 with the note and is never dropped. Known, not built: the
+  hourly phone push `build_swing_push` iterates the picks in arrival order and never followed
+  either order. Tests: `tests/test_ws_pt4_digest_points.py` (golden
+  `tests/fixtures/ws_pt4_away_digest_switch_off.txt` pinned by the pre-change code).
 - Chart-first review flow, current forming D1 preview, D1/M5 shared snapshot widget,
   log scale, crosshair/OHLCV readout, source/age strip, fallback warning, cache
   invalidation, background loading, prewarming, and stall watchdog. **The
@@ -1074,6 +1108,22 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **The Weekend Prep verdict card's two cohort lines read NUMBERS** (WS-5A,
+  2026-09-12; `scripts/weekend_verdict.py` + `scripts/ui/panels/weekend_prep_panel.py`).
+  Neither line had ever printed a cohort: `best_cohort_line` read `avg_r_h3` /
+  `n_h3`, columns nothing writes, off rows whose return was already the table's
+  formatted `+1.23%` - so both said "nothing with enough behind it yet" against
+  115 graded veto and 129 graded like rows, and a percent was about to be printed
+  as R. `_cohort_numeric_fields` types the row (`horizon_sessions: int`, `n: int`,
+  `avg_side_return_pct: float | None`, a blank staying `None`), `_cohort_cell_text`
+  formats at the display edge so the two tables read exactly as before, and
+  `_cohort_view` compares the horizon as an int. The card's `CARD_HORIZON` is the
+  integer 3 SESSIONS, the pooled `ALL` side never leads a ranking of reasons, and
+  BOTH lines take the HIGHEST side-adjusted return: "Likes that work: ... over 3
+  sessions (n=..)" and "Rejections worth another look: ... side-adjusted (n=..)" -
+  `min()` named the rejection that was right. Thin says "(best n was N against a
+  floor of F)" and empty says "no like|veto cohorts measured yet"; the floor stays
+  the card's own `MIN_COHORT_N` (5). Tests: `tests/test_ws_5a_weekend_verdict.py`.
 - **`unresolved` means UNMEASURED** (M2, 2026-09-05). `scripts/outcome_semantics.py`
   gained a second half beside `claim_kind`: `terminal_kind(row)` returns
   `measured_eod` / `measured_swept` / `unmeasured` / `open` from the outcome row's
@@ -1874,6 +1924,28 @@ They are evidence and must not be loaded as context.
 
 ### Shadow challengers
 
+- **Exit frameworks, split by setup family (WS-EF1, WISHLIST item 3, 2026-09-12, sweep
+  branch).** `master_avwap_exit_framework_by_family.csv` is written beside
+  `master_avwap_exit_framework_stats.csv` in the same guarded tracker save pass, by the SAME
+  builder: `legacy.build_exit_framework_stats_rows(setups, by_family=False)` takes the grouping
+  key as a parameter, so the two files can never disagree on a rate, and there is still one
+  scenario walker (the band-variant fence holds). The by-family key adds `setup_family` (blank
+  or missing is `unlabelled`, counted never dropped) and `population` (`champion` / `study` /
+  `control`, read from the record's own `is_study` / `is_control` joined on `setup_id`, never
+  the family name; part of the key, so a study and a champion sharing a name stay apart), and
+  those two columns lead `EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS`. The by-family export reads all
+  three namespaces; the pooled export still reads `setups` alone and stays byte-identical
+  (golden), and a raising by-family export costs neither the save nor the pooled file. The Exit
+  frameworks tab gains ONE control, `exit_framework_family_combo`: `All setups (pooled)` first,
+  rendering today's table unchanged, then families sorted by name; a family view filters before
+  the 300-row cap, ranks by the same Wilson lower bound, names the family with the LARGEST
+  `n_closed` among its rows (never the sum across templates) and says BELOW FLOOR under
+  `evidence_stats.MIN_REPORTABLE_N` while still showing the rows; the table renders through
+  `_apply_exit_framework_view` with its own memo so a refresh does not re-fit it. On a copy of
+  the 2026-09-11 tracker mirror: 24 pooled cells reconcile to 672 by-family rows over 35
+  families with zero mismatches; the `1stdev_breakout` study's eight cells close 8-26 (under the
+  floor of 30) - band 3 leads on mean R, band 2 on the bound, and nothing here promotes a
+  template. Shadow only. Tests: `tests/test_ws_ef1_exit_by_family.py` (19).
 - Side-symmetric SPY market-state/pullback engine runs beside the legacy pause
   detector, emits replayable evidence, and cannot affect candidates, alerts, or rank.
 - Greatness Monitor persists ordered touch/wick/close/acceptance/retest/failure/re-arm
@@ -1971,6 +2043,29 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-12 - WISHLIST sweep: one feature dump on `claude/wishlist-sweep-2026-09-12` (trader-directed)
+
+Every WISHLIST item built as one feature dump for a week of trader testing; Astra reviews
+after code completion; nothing merges to `main` before that. One bullet per packet as it lands
+(the resume table is `CURRENT_CHECKPOINT.md` "2026-09-12 - WISHLIST SWEEP").
+- **WS-5D (WISHLIST 5D) - watchlist intent events**, branch `claude/ws-5d-watchlist-intent`
+  `e8770233`: `scripts/watchlist_intent_events.py` + the panel's write-first-then-append seam,
+  machine labels on the Focus store's injection, `observed_external` at load time, one
+  baseline row per list, a tail CLI. Suite 7327 green, ruff clean, smoke 7/7, selftest 75/75
+  (+1 lazy module). Gate #94.
+- **WS-PT4 (WISHLIST item 4, block 4) - the AWAY digest ranks by points when the switch is on**,
+  branch `claude/ws-pt4-digest-points` `c2215b19`: one projection (`swing_pick_projection`),
+  `order_swing_picks` reading `setup_points.rank_enabled()` at sort time, `RANKED_BUCKETS`
+  matched on the key, the `order:` clause on the `Ranked on:` line. Suite 7323 green, ruff
+  clean, smoke 7/7, selftest 74/74. Gate #95.
+- **WS-5A (WISHLIST 5A) - the weekend verdict card reads numbers, not strings**, branch
+  `claude/ws-5a-weekend-verdict` `df475e45`: typed cohort rows (`horizon_sessions`, `n`,
+  `avg_side_return_pct`), formatting at the display edge, the pooled `ALL` side excluded, both
+  lines ranked by the HIGHEST side-adjusted return, three explicit absence sentences, the card's
+  floor kept at 5. Six existing test files re-fixtured to the typed shape. Suite 7324 green, ruff
+  clean, smoke 7/7, selftest 74/74. Gate #96.
+- **WS-EF1 (WISHLIST item 3) - exit frameworks split by setup family**, branch `claude/ws-ef1-exit-by-family` `a55cf320`: the by-family export from the SAME builder (`by_family=True`), `population` from the record, the family picker on the Exit frameworks tab, 24 pooled cells reconciled to 672 family rows with zero mismatches. Suite 7331 green, ruff clean, smoke 7/7, selftest 74/74. Gate #97.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
