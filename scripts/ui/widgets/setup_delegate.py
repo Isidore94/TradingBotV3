@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QSize, Qt
+from datetime import datetime
+
+from PySide6.QtCore import QEvent, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate
+from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QToolTip
 
 from ui import theme
 from ui.models.setup import SetupRow
@@ -13,6 +15,40 @@ _COLUMN_KEYS = [key for key, _label in SetupTableModel.COLUMNS]
 _ROW_HEIGHT = 40
 _CHIP_HEIGHT = 22
 _PAD = 10
+
+#: WS-SX tooltip wording. The MARK says that a decision exists; the tooltip says
+#: WHICH and WHEN. The kinds are `pick_feedback.LIKE_KINDS` / `REJECT_KINDS`; a
+#: kind with no entry here is printed as itself rather than swallowed, so a new
+#: verdict shows up as text instead of disappearing.
+_LIKE_LABELS = {"quick": "quick", "claimed": "claimed", "like": "star"}
+_REJECT_LABELS = {
+    "veto": "Vetoed today",
+    "dislike": "Disliked today",
+    "not_today": "Not today",
+    "pass": "Passed today",
+    "m5_click_away": "Passed today",
+    "remove_today": "Removed from today",
+}
+_REJECT_SUFFIXES = {"m5_click_away": "(M5 click-away)"}
+
+
+def _clock_text(stamp: object) -> str:
+    """`HH:MM` as the row was written - the stamp's own wall clock, unconverted.
+
+    The three ledgers spell time differently (`ts` with seconds, `created_at`
+    with microseconds and an explicit offset). Nothing here re-zones a stamp:
+    the trader wants to know when THEY clicked, which is what the row already
+    says.
+    """
+    text = str(stamp or "").strip()
+    if not text:
+        return ""
+    try:
+        return datetime.fromisoformat(text).strftime("%H:%M")
+    except ValueError:
+        pass
+    marker = text.find("T")
+    return text[marker + 1 : marker + 6] if marker != -1 else ""
 
 
 def _resized(font: QFont, delta: float, *, minimum: float = 1.0) -> QFont:
@@ -57,10 +93,20 @@ class SetupTableDelegate(QStyledItemDelegate):
     """
 
     _focus_lookup = None
+    _decision_lookup = None
 
     def set_focus_lookup(self, lookup) -> None:
         """`lookup(symbol) -> bool` flags Focus Picks with a star in the Symbol cell."""
         self._focus_lookup = lookup
+
+    def set_decision_lookup(self, lookup) -> None:
+        """`lookup(symbol) -> SymbolDecisions` - today's likes and rejects (WS-SX).
+
+        Presentation only, and NEVER a file read: the panel hands in a lookup
+        over one already-parsed, mtime-keyed snapshot, because `paint` runs once
+        per visible cell per repaint.
+        """
+        self._decision_lookup = lookup
 
     def _is_focus(self, row) -> bool:
         if self._focus_lookup is None or not isinstance(row, SetupRow) or not row.symbol:
@@ -69,6 +115,66 @@ class SetupTableDelegate(QStyledItemDelegate):
             return bool(self._focus_lookup(row.symbol))
         except Exception:
             return False
+
+    def _decisions(self, row):
+        """Today's decisions for this row's symbol, or None when unknown.
+
+        A lookup that raises is the same as no lookup: the table is never worth
+        an exception, and an unanswered column is simply today's plain mark.
+        """
+        if self._decision_lookup is None or not isinstance(row, SetupRow) or not row.symbol:
+            return None
+        try:
+            return self._decision_lookup(row.symbol)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _liked_today(decisions) -> tuple:
+        return tuple(getattr(decisions, "liked", ()) or ())
+
+    @staticmethod
+    def _rejected_today(decisions) -> tuple:
+        return tuple(getattr(decisions, "rejected", ()) or ())
+
+    def helpEvent(self, event, view, option, index):  # noqa: N802 (Qt override)
+        """The ★/✕ tooltips say which decision and when (WS-SX item 3).
+
+        The delegate owns them rather than the model's `ToolTipRole`, because
+        the answer is the same already-parsed decision snapshot `paint` reads -
+        putting it in the model would mean the lookup living in two places and
+        the model re-emitting `dataChanged` for a hover.
+        """
+        if event is not None and event.type() == QEvent.Type.ToolTip:
+            text = self._decision_tooltip(index)
+            if text:
+                QToolTip.showText(event.globalPos(), text, view)
+                return True
+        return super().helpEvent(event, view, option, index)
+
+    def _decision_tooltip(self, index) -> str:
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key not in {"favorite", "dislike"}:
+            return ""
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, SetupRow):
+            return ""
+        decisions = self._decisions(row)
+        lines: list[str] = []
+        if key == "favorite":
+            if self._is_focus(row):
+                lines.append("In Focus")
+            for kind, stamp in self._liked_today(decisions):
+                label = _LIKE_LABELS.get(str(kind), str(kind))
+                when = _clock_text(stamp)
+                lines.append(f"Liked today ({label}, {when})" if when else f"Liked today ({label})")
+        else:
+            for kind, stamp in self._rejected_today(decisions):
+                label = _REJECT_LABELS.get(str(kind), str(kind))
+                when = _clock_text(stamp)
+                suffix = _REJECT_SUFFIXES.get(str(kind), "")
+                lines.append(" ".join(part for part in (label, when, suffix) if part))
+        return "\n".join(lines)
 
     def sizeHint(self, option, index):  # noqa: N802 (Qt override)
         size = super().sizeHint(option, index)
@@ -106,9 +212,12 @@ class SetupTableDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(QRect(rect.left() + 2, rect.top() + 6, 3, rect.height() - 12), 1.5, 1.5)
 
         if key == "favorite" and is_setup:
-            self._favorite_star(painter, option, rect, self._is_focus(row))
+            # WS-SX: in Focus OR liked today - one boolean, one filled star.
+            liked = bool(self._liked_today(self._decisions(row)))
+            self._favorite_star(painter, option, rect, self._is_focus(row) or liked)
         elif key == "dislike" and is_setup:
-            self._dislike_mark(painter, option, rect)
+            rejected = bool(self._rejected_today(self._decisions(row)))
+            self._dislike_mark(painter, option, rect, rejected)
         elif key == "side" and is_setup and row.side in {"LONG", "SHORT"}:
             self._chip(painter, option, rect, row.side, "long" if row.side == "LONG" else "short")
         elif key == "bucket" and is_setup and row.bucket:
@@ -126,10 +235,15 @@ class SetupTableDelegate(QStyledItemDelegate):
         painter.setPen(QColor(theme.color("favorite")) if focused else _alpha("text_secondary", 150))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "★" if focused else "☆")
 
-    def _dislike_mark(self, painter, option, rect) -> None:
-        """Clickable dislike column: ✕ prompts for a why and logs it for AI review."""
+    def _dislike_mark(self, painter, option, rect, rejected: bool = False) -> None:
+        """Clickable dislike column: ✕ prompts for a why and logs it for AI review.
+
+        WS-SX: BRIGHT RED (`reject_today`, solid) once the trader has rejected
+        this name today - vetoed, disliked, passed, or clicked away from its M5
+        alert. Otherwise the same dimmed mark it has always been.
+        """
         painter.setFont(_resized(option.font, 1.0))
-        painter.setPen(_alpha("short", 140))
+        painter.setPen(QColor(theme.color("reject_today")) if rejected else _alpha("short", 140))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "✕")
 
     def _text(self, painter, option, rect, index, key, is_study, selected) -> None:

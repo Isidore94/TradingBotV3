@@ -68,6 +68,25 @@ os.environ["TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE"] = "1"
 os.environ.setdefault("TRADINGBOT_DESIGNATED_WRITER", socket.gethostname())
 os.environ.setdefault("TRADINGBOT_WRITER_ROLE", "designated_writer")
 
+# A real font database for the offscreen renders (WS-SX, 2026-09-12).
+#
+# Measured: under `QT_QPA_PLATFORM=offscreen` this process starts with an EMPTY
+# font database - `QFontDatabase.families()` is `[]` and every glyph paints as
+# the .notdef box. The first test that builds a `MainWindow` imports
+# `qtawesome`, which registers its twelve ICON fonts, and from that moment they
+# are the only families Qt knows: "Sans Serif", "MS Shell Dlg 2" and the system
+# font all resolve into Font Awesome / Material Icons. `✕` happens to exist
+# there; `★` and `☆` do not, so a star painted after that test renders NOTHING
+# and a pixel assertion about it passes alone and fails in the full suite.
+#
+# Pointing the offscreen plugin at the machine's real font directory makes the
+# database real from the start (66 families here), which is both deterministic
+# and closer to what the desk actually paints. Set only if the directory exists,
+# and never over a value the caller chose.
+_FONT_DIR = os.environ.get("WINDIR", r"C:\Windows") + os.sep + "Fonts"
+if os.path.isdir(_FONT_DIR):
+    os.environ.setdefault("QT_QPA_FONTDIR", _FONT_DIR)
+
 
 
 def _forbid_the_autopilot_from_arming_itself() -> None:

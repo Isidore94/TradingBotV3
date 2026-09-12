@@ -3195,3 +3195,54 @@ for app work.
 
 **Reopen trigger.** The trader changes the recall policy, the tags, the caps or the scope
 of what memory may hold; or the root instruction-file trim moves this section.
+
+---
+
+## SX - the star and the X are the day's decisions (2026-09-12, WISHLIST item 8)
+
+**The trader, verbatim (2026-09-10, WISHLIST item 8):** the ★ is filled for anything in
+Focus **and** anything liked today, and the ✕ is painted **bright red** when the trader
+has "vetoed, disliked, passed or skipped that symbol today", with the tooltip saying
+which decision and when. The lead's answer to the one open question (2026-09-12): a name
+both liked and vetoed today shows **both** marks - they are two independent facts and
+neither cancels the other.
+
+**Presentation only.** Nothing is hidden, re-ordered, muted or written by this. The
+movers-only filter, the Points switch, the bucket filter and the sort are untouched, and
+no row moves because a decision was made about it.
+
+**The wider read, from the same parse.** `pick_feedback.decisions_today()` answers a
+WIDER question than its sibling `reviewed_symbols_today()`: the day-trade PASS annotation
+and the M5 click-away (`action: "skip"` with `detail.reason ==
+"clicked_away_from_m5_alert"`, written at `alert_center_panel.py`'s skip branch - a click
+away IS a pass, trader 2026-09-01) are decisions the trader made and were never in the
+"Reviewed today" badge's filters. Widening that badge would have moved a shipped surface,
+so both answers now come out of ONE cached, mtime-keyed parse (`_read_day_ledgers`), and
+`reviewed_symbols_today`'s returned set is what it always was. `unfavorite` is in NEITHER
+map: taking a name out of Focus is not a verdict on it (P5).
+
+**The kinds are fixed, because the tooltip is built from them.** Liked: `quick`,
+`claimed` (a `like_claim` row with no `like_mode` key at all reads `claimed` - a claim was
+required until P9), `like` (a `pick_feedback` star). Rejected: `veto`, `dislike`,
+`not_today`, `pass`, `m5_click_away`, `remove_today`. A bare rail `skip` ("skip for now")
+is not one of them and is not modelled here.
+
+**The colour is a token, in both themes.** `theme.color()` answers an unknown name with
+`neutral`, so a `reject_today` present in only one `THEMES` dict would paint the mark grey
+in the other and nothing would raise. It is deliberately not `short`: that one is a SIDE
+and has to sit calmly beside `long` in every chip and score bar.
+
+**Never a file read in `paint`.** The delegate holds a lookup over one already-parsed
+snapshot (`SetupTableDelegate.set_decision_lookup`, per-symbol views memoized inside
+`DayDecisions`); the panel rebuilds it on a `_DayDecisionsWorker` QThread and repaints
+only when the payload actually changed. Every trigger - a capture verb, a scan's
+`set_rows`, `showEvent`, the day roll checked on the 30 s report poll - goes through the
+SAME `SignalCoalescer` a Focus change uses, so three verbs in one event-loop slot are one
+repaint (the 2026-08-31 rule; that viewport pass was the hottest stack in the stall log).
+
+**Tests:** `tests/test_ws_sx_star_x.py` - 14 red on the pre-fix branch tip, all green
+after. The marks are asserted by rendering the two cells offscreen and sampling the
+PIXELS for the exact token, because "bright red" is a claim about what the trader sees.
+
+**Reopen trigger.** A new capture verb joins the decision family; the trader asks for a
+third mark or for one of the two to mean something else.

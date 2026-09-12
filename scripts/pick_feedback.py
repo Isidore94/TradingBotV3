@@ -23,6 +23,7 @@ their own cohort next to D1-sourced ones.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -47,7 +48,7 @@ PICK_VERDICTS = ("like", "dislike", "unfavorite", "not_today")
 # hand-typed swing name.
 PICK_ORIGINS = ("h1", "d1", "m5", "setups", "manual", "chart_review", "auto_pick", "vetted")
 
-_REVIEWED_TODAY_CACHE: dict[tuple, frozenset[str]] = {}
+_REVIEWED_TODAY_CACHE: dict[tuple, "_DayLedgerRead"] = {}
 _PICK_DECISIONS = {"like", "dislike", "unfavorite", "not_today"}
 _REVIEW_EVENT_DECISIONS = {
     "favorite",
@@ -58,6 +59,91 @@ _REVIEW_EVENT_DECISIONS = {
     "toggle_m5_focus",
 }
 _ANNOTATION_DECISIONS = {"veto", "like_claim", "note"}
+
+# WS-SX. `decisions_today` answers a WIDER question than `reviewed_symbols_today`
+# and the difference is deliberate. "Reviewed today" means the trader touched the
+# name on a review surface; a day-trade PASS and a click away from an M5 alert
+# were never in its filters and adding them there would move a shipped badge, so
+# the two answers are built from ONE parse and kept apart at the end of it.
+#
+# Which rows are a LIKE (the ★) and which are a REJECT (the ✕):
+LIKE_KINDS = ("quick", "claimed", "like")
+REJECT_KINDS = ("veto", "dislike", "not_today", "pass", "m5_click_away", "remove_today")
+#: `unfavorite` is in NEITHER map. Taking a name out of Focus is not a verdict on
+#: it (CLAUDE.md, P5: "`unfavorite` is never graded").
+_LIKE_PICK_VERDICTS = {"like"}
+_REJECT_PICK_VERDICTS = {"dislike", "not_today"}
+_REJECT_REVIEW_ACTIONS = {"dislike", "remove_today"}
+#: A day-trade pass is an annotation event type of its own (`pass_reasons`
+#: family), outside `_ANNOTATION_DECISIONS`.
+_PASS_ANNOTATION = "pass"
+#: A click away from an M5 alert IS a pass (trader, 2026-09-01). It has no verb
+#: of its own: it is an `action: "skip"` review event whose detail reason is this
+#: string, written by `alert_center_panel._render_current_review`'s skip branch.
+#: Never rename it - `review_learning` keys on it too.
+M5_CLICK_AWAY_REASON = "clicked_away_from_m5_alert"
+
+
+@dataclass(frozen=True)
+class SymbolDecisions:
+    """One symbol's decisions on one trade date. Two independent facts.
+
+    A name can be liked AND vetoed on the same day; neither mark cancels the
+    other (lead's answer to WS-SX, 2026-09-12).
+    """
+
+    symbol: str = ""
+    liked: tuple[tuple[str, str], ...] = ()
+    rejected: tuple[tuple[str, str], ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.liked or self.rejected)
+
+
+_NO_DECISIONS = SymbolDecisions()
+
+
+@dataclass(frozen=True)
+class DayDecisions:
+    """Today's likes and rejects, by symbol, each entry `(kind, timestamp)`.
+
+    Presentation only: nothing here hides, mutes, re-orders or scores a row.
+    """
+
+    trade_date: str = ""
+    liked: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    rejected: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    # Memoized per-symbol views: the setups delegate asks once per painted cell,
+    # so the answer is built once per symbol and handed back, never rebuilt.
+    _views: dict[str, SymbolDecisions] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    def for_symbol(self, symbol: object) -> SymbolDecisions:
+        """The per-symbol view. Never None - an undecided name is an empty one."""
+        key = str(symbol or "").strip().upper()
+        if not key:
+            return _NO_DECISIONS
+        view = self._views.get(key)
+        if view is None:
+            liked = tuple(self.liked.get(key, ()))
+            rejected = tuple(self.rejected.get(key, ()))
+            view = (
+                SymbolDecisions(key, liked, rejected) if (liked or rejected) else _NO_DECISIONS
+            )
+            self._views[key] = view
+        return view
+
+    def symbols(self) -> set[str]:
+        return set(self.liked) | set(self.rejected)
+
+
+@dataclass(frozen=True)
+class _DayLedgerRead:
+    """What ONE parse of the three ledgers answers: both questions."""
+
+    reviewed: frozenset[str]
+    decisions: DayDecisions
 
 
 def _trade_date_text() -> str:
@@ -153,6 +239,60 @@ def reviewed_symbols_today(
     Presentation only. ``shown`` impressions and hypothesis stops are excluded:
     this marker means the trader made a decision (star/x, veto, like, or note),
     not merely that a row appeared on screen.
+
+    Narrower than :func:`decisions_today` on purpose - see `_PASS_ANNOTATION`.
+    """
+    return set(
+        _read_day_ledgers(
+            market_date=market_date,
+            pick_feedback_path=pick_feedback_path,
+            review_events_path=review_events_path,
+            annotations_path=annotations_path,
+        ).reviewed
+    )
+
+
+def decisions_today(
+    *,
+    market_date: str | None = None,
+    pick_feedback_path: Path = PICK_FEEDBACK_FILE,
+    review_events_path: Path = ALERT_REVIEW_EVENTS_FILE,
+    annotations_path: Path = TRADER_ANNOTATIONS_FILE,
+) -> DayDecisions:
+    """Today's likes and rejects by symbol, with the kind and time of each.
+
+    The same cached, mtime-keyed read :func:`reviewed_symbols_today` uses: one
+    parse of the three ledgers answers both questions. Presentation only.
+    """
+    return _read_day_ledgers(
+        market_date=market_date,
+        pick_feedback_path=pick_feedback_path,
+        review_events_path=review_events_path,
+        annotations_path=annotations_path,
+    ).decisions
+
+
+def _add_decision(
+    mapping: dict[str, list[tuple[str, str]]], symbol: str, kind: str, stamp: object
+) -> None:
+    entry = (kind, str(stamp or ""))
+    entries = mapping.setdefault(symbol, [])
+    if entry not in entries:
+        entries.append(entry)
+
+
+def _read_day_ledgers(
+    *,
+    market_date: str | None = None,
+    pick_feedback_path: Path = PICK_FEEDBACK_FILE,
+    review_events_path: Path = ALERT_REVIEW_EVENTS_FILE,
+    annotations_path: Path = TRADER_ANNOTATIONS_FILE,
+) -> _DayLedgerRead:
+    """ONE parse of the three review ledgers, memoized on (paths, mtime, size).
+
+    Both the "Reviewed today" badge and the setups table's ★/✕ are answered from
+    the result, because the delegate asks per painted cell and the 2026-08-31
+    stall log named that viewport pass as its hottest stack.
     """
     target_date = str(market_date or _trade_date_text())
     pick_path = Path(pick_feedback_path)
@@ -178,17 +318,25 @@ def reviewed_symbols_today(
     )
     cached = _REVIEWED_TODAY_CACHE.get(key)
     if cached is not None:
-        return set(cached)
+        return cached
 
     symbols: set[str] = set()
+    liked: dict[str, list[tuple[str, str]]] = {}
+    rejected: dict[str, list[tuple[str, str]]] = {}
+
     for row in load_pick_feedback(pick_path):
-        if (
-            str(row.get("trade_date") or "") == target_date
-            and str(row.get("verdict") or "").strip().lower() in _PICK_DECISIONS
-        ):
-            symbol = str(row.get("symbol") or "").strip().upper()
-            if symbol:
-                symbols.add(symbol)
+        if str(row.get("trade_date") or "") != target_date:
+            continue
+        verdict = str(row.get("verdict") or "").strip().lower()
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        if verdict in _PICK_DECISIONS:
+            symbols.add(symbol)
+        if verdict in _LIKE_PICK_VERDICTS:
+            _add_decision(liked, symbol, "like", row.get("ts"))
+        elif verdict in _REJECT_PICK_VERDICTS:
+            _add_decision(rejected, symbol, verdict, row.get("ts"))
 
     try:
         from review_events import load_review_events
@@ -200,34 +348,63 @@ def reviewed_symbols_today(
     except Exception:
         review_rows = []
     for row in review_rows:
-        if (
-            str(row.get("trade_date") or "") == target_date
-            and str(row.get("action") or "").strip().lower() in _REVIEW_EVENT_DECISIONS
-        ):
-            symbol = str(row.get("symbol") or "").strip().upper()
-            if symbol:
-                symbols.add(symbol)
+        if str(row.get("trade_date") or "") != target_date:
+            continue
+        action = str(row.get("action") or "").strip().lower()
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        if action in _REVIEW_EVENT_DECISIONS:
+            symbols.add(symbol)
+        if action in _REJECT_REVIEW_ACTIONS:
+            _add_decision(rejected, symbol, action, row.get("ts"))
+        elif action == "skip":
+            detail = row.get("detail")
+            reason = ""
+            if isinstance(detail, dict):
+                reason = str(detail.get("reason") or "").strip().lower()
+            if reason == M5_CLICK_AWAY_REASON:
+                _add_decision(rejected, symbol, "m5_click_away", row.get("ts"))
 
     try:
-        from ui.annotations.store import load_annotations
+        from ui.annotations.store import like_mode_of, load_annotations
 
         annotation_rows = load_annotations(
             annotation_path,
             session_date=target_date,
-            event_types=tuple(sorted(_ANNOTATION_DECISIONS)),
+            event_types=tuple(sorted(_ANNOTATION_DECISIONS | {_PASS_ANNOTATION})),
         )
     except Exception:
         annotation_rows = []
+        like_mode_of = None  # type: ignore[assignment]
     for row in annotation_rows:
         symbol = str(row.get("symbol") or "").strip().upper()
-        if symbol:
+        if not symbol:
+            continue
+        kind = str(row.get("event_type") or "").strip().lower()
+        if kind in _ANNOTATION_DECISIONS:
             symbols.add(symbol)
+        if kind == "veto":
+            _add_decision(rejected, symbol, "veto", row.get("created_at"))
+        elif kind == _PASS_ANNOTATION:
+            _add_decision(rejected, symbol, "pass", row.get("created_at"))
+        elif kind == "like_claim":
+            mode = like_mode_of(row) if like_mode_of is not None else "claimed"
+            _add_decision(liked, symbol, str(mode), row.get("created_at"))
 
+    read = _DayLedgerRead(
+        reviewed=frozenset(symbols),
+        decisions=DayDecisions(
+            trade_date=target_date,
+            liked={symbol: tuple(entries) for symbol, entries in liked.items()},
+            rejected={symbol: tuple(entries) for symbol, entries in rejected.items()},
+        ),
+    )
     # Bound the cache naturally to recent signatures/days.
     if len(_REVIEWED_TODAY_CACHE) >= 16:
         _REVIEWED_TODAY_CACHE.clear()
-    _REVIEWED_TODAY_CACHE[key] = frozenset(symbols)
-    return symbols
+    _REVIEWED_TODAY_CACHE[key] = read
+    return read
 
 
 def latest_like_origins(
