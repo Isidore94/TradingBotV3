@@ -1,0 +1,44 @@
+TRADINGBOT AUTO PILOT - TODAY
+Updated: 2026-09-12 10:00:00
+Freshness: next planned update (none left today) - if Updated is hours old, automation is NOT running; do not trade this as current.
+Mode: AUTO - AWAY | IB: connected | Regime: trend_up
+Report schedule: hourly from 07:00 local through market close; scan completions may add updates.
+
+== BEST SWING TRADES ==
+1. AAA (LONG) | favorite_setup | 0.90R | avwape retest @ 123.45
+2. DDD (LONG) | watch | 0.20R | avwape retest @ 123.45
+3. BBB (LONG) | near_favorite_zone | 1.20R | first dev hold @ 123.45
+4. CCC (LONG) | high_conviction | 0.50R | thin thing @ 123.45
+5. EEE (LONG) | favorite_setup | 0.30R | no such family @ 123.45
+TV paste: AAA,DDD,BBB,CCC,EEE
+Swing data: current session 2026-09-12 (focus)
+Ranked on: favorable_direction_scanrow_v1 over 5 scan rows, last 20 sessions (2026-06-02..2026-06-30): 94 eligible / 0 pending / 1 excluded (stale_horizon 1)
+
+== DAY TRADE LONGS (longs.txt) ==
+AAA, BBB
+TV paste: AAA,BBB
+
+== DAY TRADE SHORTS (shorts.txt) ==
+ZZZ
+TV paste: ZZZ
+
+== BOT PICKS - LONGS (autolongs.txt) ==
+(none)
+TV paste: (none)
+
+== BOT PICKS - SHORTS (autoshorts.txt) ==
+(none)
+TV paste: (none)
+
+== TODAY'S ALERTS (latest first) ==
+(none)
+
+== SCHEDULE ==
+Swing slots done: (none)
+Next swing slot: (none left today)
+
+== OPERATIONS ==
+(none)
+
+== ACTIVITY LOG (latest first) ==
+(none)

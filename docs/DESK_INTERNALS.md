@@ -3124,6 +3124,52 @@ incident sections elsewhere in this file remain the deeper record.
 
 ---
 
+## WS-PT4 - the AWAY digest ranks by points when the trader's switch is on (2026-09-12)
+
+**What the trader said** (WISHLIST item 4, points, block 4): *"rank the AWAY digest's
+swing picks by points too (today it ranks by the family's Wilson bound)"* - marked "open,
+your call". The lead's ruling, which the trader may overrule: the digest uses the EXISTING
+Points switch and nothing new. `setup_points.rank_enabled()` (local setting
+`rank_setups_by_points`, default OFF) is read AT SORT TIME inside
+`autopilot_core.order_swing_picks`; OFF is the identity function and the digest keeps the
+Wilson order exactly, which is what the golden `tests/fixtures/ws_pt4_away_digest_switch_off.txt`
+pins. ON, `setup_points.rank_order` puts the `RANKED_BUCKETS` rows (favourite,
+near-favourite, high-conviction) first by total and every other pick after them; the list
+handed to it is already in the Wilson order, so that order is the tiebreak and the order
+the unranked rows keep - the same shape as the setups table, where the point ranking is
+applied after the Working-lately order. The near cap is still applied AFTER the ranking by
+the renderer, so what a cap hides is the weakest near row by whichever order is in force
+and never the best one; the bucket is still printed and never ranked on.
+
+**One scorer, two callers.** The digest scores with `setup_points.score_row` itself -
+there is no second formula - so `autopilot_core.swing_pick_projection` widens the digest's
+pick row to carry the SCAN ROW (`raw`) and the two group-context readings
+(`d1_vs_sector`, `d1_vs_industry`) the display enrichment already attached, plus
+`bucket_key`: the phone prints the bucket LABEL ("Favorite") and `RANKED_BUCKETS` matches
+the KEY (`favorite_setup`), so a ranking that matched the label would quietly rank nothing.
+The family record is `swing_family_points_record`, which turns the digest's own
+`swing_family_read()` counts into the `win_rate_lb` shape the desk panel injects - the
+same `swing_evidence.read_eligible_rows` under `POLICY_SCANROW_V1` in the same lately
+window, the same `swing_headline.wilson_lower_bound`, so the bound the digest scores on is
+the bound it used to order on and the one the setups table shows. Nothing is re-derived
+from a different source. A pick missing an input scores that part 0 with the note and is
+never dropped (an ungraded family scores 0 on `setup` and says so), and any failure in the
+whole path falls back to the Wilson order rather than costing the swing block.
+
+**The digest says which order it used.** The `Ranked on:` line now ends in
+`| order: Wilson bound` or `| order: points (switch on)`, and is written whenever picks
+were ranked even if the record line is missing - a points ranking that never says so is
+the defect ST1 item 3 fixed for the Wilson one. Presentation only: nothing here reaches a
+detector, a score, an alert, a watchlist, Focus or `review_policy.json`, no weight is
+tuned (`setup_points.active_weights()` is read, never written), and the phone PUSH
+(`build_swing_push`) is deliberately untouched - it is a different, shorter list.
+
+**Tests:** `tests/test_ws_pt4_digest_points.py` - 10 of 11 fail with
+`scripts/autopilot_core.py` and `scripts/ui/services/autopilot_service.py` restored
+(proved 2026-09-12); the eleventh asserts the switch-OFF near cap, which must pass both ways.
+
+---
+
 ## Workspace memory is recall, never authority (2026-09-12, WISHLIST 11)
 
 **The trader, verbatim:** *"we will begin integrating wishlist.md this week. for now
