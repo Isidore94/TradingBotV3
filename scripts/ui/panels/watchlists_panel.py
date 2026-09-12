@@ -33,6 +33,14 @@ from project_paths import (
 from watchlist_utils import extract_watchlist_symbols
 from ui.widgets.section_header import SectionHeader
 
+# WS-5D. The names are literals here and the module is imported lazily at the
+# seam, so a missing or broken evidence module can never stop the Watchlists
+# page from loading - the list is the product, the stream is evidence about it.
+_INTENT_TRADER_EDIT = "trader_edit"
+_INTENT_TRADER_PASTE = "trader_paste"
+_INTENT_WRITER = "ui.panels.watchlists_panel"
+_INTENT_FAILED_SUFFIX = " (intent not recorded)"
+
 
 class _SymbolTextEdit(QPlainTextEdit):
     """Watchlist text area; double-clicking a symbol line opens the D1+M5
@@ -310,6 +318,10 @@ class WatchlistEditorPanel(QFrame):
         self.path = path
         self.on_symbols_saved = on_symbols_saved
         self._loading = False
+        # WS-5D: what this panel last READ from or WROTE to the file. Every
+        # membership event is the diff against it, so a save that changed
+        # nothing (a sort, an autosave after a cursor move) appends nothing.
+        self._last_saved_symbols: list[str] = []
 
         self.add_symbol_input = QLineEdit()
         self.add_symbol_input.setPlaceholderText("Add ticker")
@@ -377,6 +389,8 @@ class WatchlistEditorPanel(QFrame):
             raw = ""
         symbols = extract_watchlist_symbols(raw)
         self._set_symbols(symbols)
+        self._last_saved_symbols = list(symbols)
+        self._observe_external(symbols)
         self._set_status(symbols, "loaded")
 
     def force_save(self) -> None:
@@ -395,7 +409,11 @@ class WatchlistEditorPanel(QFrame):
         incoming = extract_watchlist_symbols(QApplication.clipboard().text())
         if not incoming:
             return
-        self._write_symbols(_merge_symbols(self.current_symbols(), incoming), notify=True)
+        self._write_symbols(
+            _merge_symbols(self.current_symbols(), incoming),
+            notify=True,
+            source=_INTENT_TRADER_PASTE,
+        )
 
     def copy_symbols(self) -> None:
         symbols = self.current_symbols()
@@ -409,7 +427,13 @@ class WatchlistEditorPanel(QFrame):
         current = self.current_symbols()
         filtered = [symbol for symbol in current if symbol not in symbols_to_remove]
         if filtered != current:
-            self._write_symbols(filtered, notify=False)
+            # The trader put this name on the other side; the desk is keeping
+            # one name off both. Still the trader's edit, with its cause named.
+            self._write_symbols(
+                filtered,
+                notify=False,
+                reason="taken off this side when the trader put it on the other",
+            )
 
     def current_symbols(self) -> list[str]:
         return extract_watchlist_symbols(self.text.toPlainText())
@@ -422,13 +446,76 @@ class WatchlistEditorPanel(QFrame):
     def _save_current(self, notify: bool) -> None:
         self._write_symbols(self.current_symbols(), notify=notify)
 
-    def _write_symbols(self, symbols: list[str], notify: bool) -> None:
+    def _write_symbols(
+        self,
+        symbols: list[str],
+        notify: bool,
+        *,
+        source: str = _INTENT_TRADER_EDIT,
+        reason: str = "",
+    ) -> None:
+        previous = list(self._last_saved_symbols)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # The save happens FIRST and unconditionally: the trader's list is the
+        # product, the intent stream is evidence about it, and an evidence
+        # store never costs the event it records (plan.md sec 5).
         self.path.write_text("\n".join(symbols), encoding="utf-8")
         self._set_symbols(symbols)
-        self._set_status(symbols, "saved")
+        self._last_saved_symbols = list(symbols)
+        recorded = self._record_intent(previous, symbols, source=source, reason=reason)
+        self._set_status(symbols, "saved", suffix="" if recorded else _INTENT_FAILED_SUFFIX)
         if notify:
             self.on_symbols_saved(self, symbols)
+
+    # ------------------------------------------------------- WS-5D evidence
+    def _record_intent(
+        self, previous: list[str], current: list[str], *, source: str, reason: str
+    ) -> bool:
+        """Append one row per name that joined or left. Never raises.
+
+        Re-ordering is not a membership change, so a sort and an autosave that
+        moved nothing append nothing. A re-add after a removal is a new `add`.
+        """
+        before, after = set(previous), set(current)
+        added = [symbol for symbol in current if symbol not in before]
+        removed = [symbol for symbol in previous if symbol not in after]
+        if not added and not removed:
+            return True
+        try:
+            import watchlist_intent_events as intent
+
+            list_name = intent.list_for_path(self.path)
+            if not list_name:
+                return True  # not one of the four plain watchlists
+            written = intent.record_changes(
+                list_name=list_name,
+                added=added,
+                removed=removed,
+                source=source,
+                writer=_INTENT_WRITER,
+                reason=reason,
+            )
+        except Exception:
+            return False
+        return written == len(added) + len(removed)
+
+    def _observe_external(self, symbols: list[str]) -> None:
+        """Reconcile the loaded file against what the stream can account for.
+
+        An edit made outside the app (a text editor, the DAS, another machine)
+        is recorded at THIS load time and labelled `observed_external` - it is
+        an observation, never an assertion that the trader decided anything at
+        a time nobody measured.
+        """
+        try:
+            import watchlist_intent_events as intent
+
+            list_name = intent.list_for_path(self.path)
+            if not list_name:
+                return
+            intent.observe_list(list_name=list_name, symbols=symbols, writer=_INTENT_WRITER)
+        except Exception:
+            return
 
     def _set_symbols(self, symbols: list[str]) -> None:
         self._loading = True
@@ -437,9 +524,9 @@ class WatchlistEditorPanel(QFrame):
         finally:
             self._loading = False
 
-    def _set_status(self, symbols: list[str], action: str) -> None:
+    def _set_status(self, symbols: list[str], action: str, *, suffix: str = "") -> None:
         label = "symbol" if len(symbols) == 1 else "symbols"
-        message = f"{self.path.name} | {len(symbols)} {label} | {action} | {self.path}"
+        message = f"{self.path.name} | {len(symbols)} {label} | {action}{suffix} | {self.path}"
         self.status_label.setText(message)
         self.statusChanged.emit(message)
 

@@ -1070,6 +1070,9 @@ class FocusPickStore:
         shared_path = self._shared_paths[category][side]
         if symbol not in read_watchlist_symbols(shared_path):
             _append_symbol_to_file(shared_path, symbol)
+            _record_watchlist_intent(
+                category, side, symbol, "add", "machine_inject", "focus pick injected into the shared list"
+            )
             self._membership[_membership_key(symbol, side, category)] = {
                 "symbol": symbol,
                 "side": side,
@@ -1084,7 +1087,16 @@ class FocusPickStore:
         key = _membership_key(symbol, side, category)
         if key not in self._membership:
             return  # we did not inject it; leave the broad watchlist untouched
-        _remove_symbol_from_file(self._shared_paths[category][side], symbol)
+        shared_path = self._shared_paths[category][side]
+        # Only record what actually left the file: a name already gone was not
+        # removed by this call, and an event for it would be an invention.
+        was_present = symbol in read_watchlist_symbols(shared_path)
+        _remove_symbol_from_file(shared_path, symbol)
+        if was_present:
+            _record_watchlist_intent(
+                category, side, symbol, "remove", "machine_uninject",
+                "the focus pick this store injected was withdrawn",
+            )
         del self._membership[key]
         if not defer_membership_save:
             self._save_membership()
@@ -1394,6 +1406,34 @@ def _write_symbols(path: Path, symbols: Iterable[str]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(symbols), encoding="utf-8")
     except OSError:
+        pass
+
+
+def _record_watchlist_intent(
+    category: str, side: str, symbol: str, action: str, source: str, reason: str = ""
+) -> None:
+    """WS-5D: say that the DESK put this name on a plain watchlist, not the trader.
+
+    Imported at call time and silent on failure: the pick is the product, and a
+    membership event must never cost the injection it describes.
+    """
+    try:
+        import watchlist_intent_events as intent
+
+        list_name = intent.list_for(category, side)
+        if not list_name:
+            return
+        added = [symbol] if action == intent.ACTION_ADD else []
+        removed = [symbol] if action == intent.ACTION_REMOVE else []
+        intent.record_changes(
+            list_name=list_name,
+            added=added,
+            removed=removed,
+            source=source,
+            writer="focus_picks.FocusPickStore",
+            reason=reason,
+        )
+    except Exception:
         pass
 
 
