@@ -56,6 +56,23 @@ to surface the best alerts.
   the queue front). Rank and annotate only - never auto-suppress an alert
   (house rule: mute -> CAUTION, focus picks always surface), and the
   policy format deliberately has no suppression field - do not add one.
+- **Watchlist membership is INTEREST, not a claim** (WS-5D, 2026-09-12):
+  `<shared home>/watchlist_intent_events.jsonl` (`watchlist_intent_events.py`,
+  schema `watchlist_intent_event_v1`) records one append-only row per symbol
+  that joined or left `longs.txt` / `shorts.txt` / `swinglongs.txt` /
+  `shortswings.txt`, with the observation time (aware, market-local), the list,
+  side and horizon, and a `source` that keeps the trader's own typing
+  (`trader_edit` / `trader_paste`) apart from the Focus store's injection
+  (`machine_inject` / `machine_uninject`) and from a difference merely SEEN when
+  the page loaded after an edit outside the app (`observed_external`, stamped at
+  the load, never back-dated). Read it as interest and nothing more: a name on a
+  list is not a setup claim, not a position and not a prediction, and **a
+  `remove` is not a dislike** - the dislike lives in `pick_feedback.jsonl` with
+  the trader's own reason. Nothing in the loop consumes this stream yet; it
+  ranks, annotates and gates nothing. Tail it with `python -m
+  watchlist_intent_events tail --list longs` from `scripts/`. The long form is
+  `docs/DESK_INTERNALS.md` "5D - a watchlist edit is a dated event, never a
+  verdict".
 - Capture only starts once the GUI restarts onto a build >= c45d965; expect
   ~2-3 weeks of sessions before segment samples clear the n>=8 gates.
 - **Ordering is gated to annotation-only** (`GUI_TRADE_DISCOVERY_LEARNING_PLAN.md`

@@ -3195,3 +3195,64 @@ for app work.
 
 **Reopen trigger.** The trader changes the recall policy, the tags, the caps or the scope
 of what memory may hold; or the root instruction-file trim moves this section.
+
+## 5D - a watchlist edit is a dated event, never a verdict (2026-09-12, WISHLIST sweep)
+
+**The gap.** The four plain watchlists - `longs.txt`, `shorts.txt`, `swinglongs.txt`,
+`shortswings.txt` - are the oldest surface on the desk and the only trader act that kept
+no history at all. `WatchlistEditorPanel._write_symbols` wrote the joined symbols to the
+file and that was the entire record: a name appeared, a name vanished, and nothing said
+who did it or when. Every other verdict already has a forward record (P5: veto, like,
+pass, rejection), so the act the trader performs most often was the one the evidence loop
+could not see. `focus_membership_events` covers Focus-pick episodes, which is a different
+membership - hence a new stream, in the same shape, not a new schema style.
+
+**The rule.** `scripts/watchlist_intent_events.py` (schema `watchlist_intent_event_v1`,
+stream `WATCHLIST_INTENT_EVENTS_FILE` in the shared home) appends one JSONL row per symbol
+that joined or left one of the four lists: `ts` (aware, market-local, the OBSERVATION
+time), `market_date`, `list`, `side`, `horizon`, `symbol`, `action`, `source`, `reason`
+and `writer`. Five clauses bind it:
+
+- **Membership is interest, never a claim.** Not a setup, not a position, not a
+  prediction. A `remove` is not a dislike - the dislike has its own store
+  (`pick_feedback.jsonl`) and the trader's own words.
+- **Nothing is invented.** `ts` is when the desk SAW the change. An edit made in Notepad
+  or on the DAS while the app was closed is stamped at the moment the panel next loaded
+  the file and labelled `observed_external`; it is never back-dated to a time nobody
+  measured, and it is never asserted to be a trader decision.
+- **A machine write is distinguishable.** `FocusPickStore._inject_into_shared` /
+  `_uninject_from_shared` write `machine_inject` / `machine_uninject` through the same
+  writer; the panel writes `trader_edit`, and a clipboard drop `trader_paste`. The
+  cross-side removal (`WatchlistEditorArea._handle_symbols_saved`) is the trader's edit
+  with its cause in `reason`, because the trader caused it.
+- **The evidence never costs the save.** `_write_symbols` writes the FILE first, then
+  appends; every writer returns a count and swallows its own failure; a failed append
+  shows `(intent not recorded)` as a status suffix and nothing more. Hand-entered names
+  are untouched by every path (plan.md sec 5).
+- **Re-ordering is not a change.** The diff is against what the panel last read or wrote,
+  so `sort_symbols` and an autosave that moved nothing append nothing, and a re-add after
+  a removal is a new `add`.
+
+**The baseline row, and why it stays small.** Reconstructing membership needs a starting
+point, and the file's current contents are not one - they are today's state, not the state
+when the stream began. So the first time a list is seen with no reconstructable history,
+ONE `baseline_recorded` row names the symbols then present and NO `add` rows are written,
+because nobody observed those additions. It is written at most once per list (never per
+load), encodes the symbols as one comma-joined string rather than a list of objects, and
+carries `symbol_count` and a 12-character `symbols_digest`. After that the stream grows
+with CHANGES, never with loads: three reopenings of the page write nothing.
+
+**What reads it.** Nothing, yet. No detector, score, alert, Focus list, scanner or
+`review_policy.json` touches it. 10G's Watchlist tab will render source badges from it and
+the WS-DR work may join on it; until then `python -m watchlist_intent_events tail --list
+longs` (run from `scripts/`) is the whole consumer.
+
+**Known gap.** `autopilot_core`'s auto-populate (`write_bouncebot_watchlists` and the
+append helper near `autopilot_core.py:3225`) is a THIRD machine writer of `longs.txt` /
+`shorts.txt` and is not labelled: its adds surface as `observed_external` at the next
+panel load. That is honest - the desk did observe them late - but coarse, and labelling
+that seam is the obvious follow-on. The packet named only the Focus store's two seams.
+
+**Reopen trigger.** A second reader appears (10G, WS-DR), the auto-populate seam is
+labelled, or the trader asks to be prompted for a reason on an edit - which this packet
+deliberately does not do.

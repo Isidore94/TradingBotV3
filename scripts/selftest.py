@@ -79,6 +79,9 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "outcome_path",
     "setup_tracker_ledger",
     "focus_membership_events",
+    # WS-5D: the Watchlists page and the Focus store both import it at call
+    # time, so a bundle missing it dies at the first watchlist edit.
+    "watchlist_intent_events",
     "market_context_ledger",
     "market_journal",
     # Imported at call time by both journal surfaces and by the auto-mode flip
