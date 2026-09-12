@@ -258,8 +258,33 @@ def filter_writable_rows(
 ) -> tuple[pd.DataFrame, DropCounts]:
     """The rows of ``frame`` that may be stored, and what was refused.
 
-    Pure apart from the DEBUG line per dropped row and the per-scan totals. The
-    frame comes back in its original order with its ``attrs`` intact, so the
+    Never raises. A guard that can break the scan's cache write is a worse
+    failure than the row it exists to catch: a cache that silently stops
+    updating is invisible, while a row that slips through is counted, logged and
+    repairable. So an unexpected internal error refuses NOTHING and says so at
+    WARNING.
+    """
+    try:
+        return _filter_writable_rows(frame, symbol=symbol, now=now)
+    except Exception:  # pragma: no cover - the guard must not cost the write
+        logging.warning(
+            "%s: the daily-bar write guard failed; the frame was written unfiltered.",
+            str(symbol or "?").strip().upper() or "?",
+            exc_info=True,
+        )
+        rows = int(len(frame)) if isinstance(frame, pd.DataFrame) else 0
+        return frame, DropCounts(fetched=rows, kept=rows)
+
+
+def _filter_writable_rows(
+    frame: pd.DataFrame | None,
+    *,
+    symbol: str = "",
+    now: datetime | None = None,
+) -> tuple[pd.DataFrame, DropCounts]:
+    """The rule itself.
+
+    The frame comes back in its original order with its ``attrs`` intact, so the
     caller's provenance stamp survives, and the frame OBJECT is returned
     unchanged when nothing was dropped - the common case must not cost a copy.
     """
@@ -275,6 +300,9 @@ def filter_writable_rows(
     # the common case (nothing dropped) must not walk the rows in Python. Only
     # the refused rows are iterated, for their DEBUG line.
     stamps = pd.to_datetime(frame["datetime"], errors="coerce")
+    if stamps.dtype == object:
+        # Mixed offsets in one column: normalise THROUGH utc, never by stripping.
+        stamps = pd.to_datetime(stamps, errors="coerce", utc=True)
     if getattr(stamps.dt, "tz", None) is not None:
         # astimezone, then drop - never `replace(tzinfo=None)` on an aware stamp.
         stamps = stamps.dt.tz_convert(market_calendar.MARKET_TZ).dt.tz_localize(None)
