@@ -57,8 +57,12 @@ def test_every_measured_line_carries_its_n():
         # `skips` or `rejects` - the hand-written dict this used to carry is
         # what let the card's denominator be wrong.
         learning_state={"shown": 17, "takes": 4, "overall_take_rate": 0.235},
-        like_rows=[{"source": "like_avwap_breakout", "avg_r_h3": 0.42, "n_h3": 9}],
-        veto_rows=[{"source": "veto_v2_compressed", "avg_r_h3": 0.31, "n_h3": 7}],
+        # WS-5A: the readers' real shape - numbers, an explicit side and an
+        # explicit horizon in sessions.
+        like_rows=[{"cohort": "like_avwap_breakout", "side": "LONG",
+                    "horizon_sessions": 3, "n": 9, "avg_side_return_pct": 0.42}],
+        veto_rows=[{"cohort": "veto_v2_compressed", "side": "SHORT",
+                    "horizon_sessions": 3, "n": 7, "avg_side_return_pct": 0.31}],
         week_trades=[
             {"tag_status": "confirmed", "setup_tags": "x", "net_pnl": 120.0},
             {"tag_status": "confirmed", "setup_tags": "x", "net_pnl": -40.0},
@@ -80,7 +84,12 @@ def test_a_missing_input_says_so_rather_than_printing_a_zero():
     text = "\n".join(verdict.rendered())
 
     assert "nothing was shown for review" in text
-    assert "nothing with enough behind it yet" in text
+    # WS-5A: "never graded" and "graded but too thin to rank" are different
+    # absences and the card now says which one it is. This asserted the THIN
+    # sentence for a card with no rows at all, which states the second fact
+    # about the first.
+    assert "no like cohorts measured yet" in text
+    assert "no veto cohorts measured yet" in text
     assert "none with a confirmed tag yet" in text
     assert "0.00R" not in text
     assert "0%" not in text
@@ -111,9 +120,14 @@ def test_a_thin_cohort_is_never_the_headline():
     import weekend_verdict
 
     verdict = weekend_verdict.build_verdict(
+        # WS-5A: the REAL row shape. `avg_r_h3` / `n_h3` are keys nothing has
+        # ever written - the phantom columns that made both cohort lines print
+        # an empty sentence on a desk holding 244 graded rows.
         like_rows=[
-            {"source": "like_lucky", "avg_r_h3": 9.9, "n_h3": 2},
-            {"source": "like_real", "avg_r_h3": 0.31, "n_h3": 40},
+            {"cohort": "like_lucky", "side": "LONG", "horizon_sessions": 3,
+             "n": 2, "avg_side_return_pct": 9.9},
+            {"cohort": "like_real", "side": "LONG", "horizon_sessions": 3,
+             "n": 40, "avg_side_return_pct": 0.31},
         ]
     )
     line = next(item for item in verdict.lines if item.key == "best_like")
@@ -239,4 +253,7 @@ def test_one_unreadable_store_still_leaves_a_card(qapp, monkeypatch):
     lines = panel._read_verdict()
 
     assert 5 <= len(lines) <= 8
-    assert any("nothing with enough behind it yet" in line for line in lines)
+    # WS-5A: an unreadable store degrades to NO ROWS, and the sentence for no
+    # rows is now "no like cohorts measured yet" - the thin sentence carries a
+    # best n and a floor, which an unreadable file has neither of.
+    assert any("no like cohorts measured yet" in line for line in lines)
