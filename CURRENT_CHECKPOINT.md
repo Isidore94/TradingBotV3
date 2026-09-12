@@ -182,7 +182,7 @@ completion. **No merge to `main`** - the trader tests the sweep branch for a wee
 | 10H more chart history | `WS-CH` / `claude/ws-ch-chart-history` | PACKET | Wave 2. |
 | 10I thesis/context/setup join | `WS-10I` / `claude/ws-10i-context-join` | QUEUED | Deterministic join contract + module after WS-ENV; wave 3. |
 | 10J Trade Mentor | `WS-TM` / `claude/ws-tm-trade-mentor` | PACKET | Steps 1-2 (scheduler/presence + raw reads; missing-field questionnaire). AI form filling (step 3) deferred. Wave 2. |
-| 10K one measured review | `WS-AI1` / `claude/ws-ai1-enrichment-status` (step 1); `WS-RP` / `claude/ws-rp-shared-report` (steps 2 + 5) | PACKET (AI1); QUEUED (RP) | Step 1 first (the confirmed enrichment defect + honest completion status). Shared report + frontier export after WS-DR/WS-ENV. |
+| 10K one measured review | `WS-AI1` / `claude/ws-ai1-enrichment-status` (step 1); `WS-RP` / `claude/ws-rp-shared-report` (steps 2 + 5) | TESTS RED dec34365, builder running (AI1); QUEUED (RP) | Step 1 first (the confirmed enrichment defect + honest completion status). Shared report + frontier export after WS-DR/WS-ENV. |
 | 11 workspace memory | - | DONE on main 8baf643b | Gate #93 still owed. |
 
 **Waves** (parallel builders never share a file): wave 1 = FC1, EF1, SX, 5A, PT4, AI1, 5D, ENV;
@@ -191,7 +191,7 @@ then the docs pass (CHANGELOG inventory per packet, plan.md phase, CLAUDE.md tri
 lines). Merge order inside a wave is the order the handoffs arrive. Gate numbers for the sweep start
 at **#94** and are recorded per packet in this entry's sub-bullets as they land.
 
-**Landed so far:** packets written for wave 1 (`.claude/packets/WS0_COMMON.md`, `WS-FC1`, `WS-EF1`, `WS-SX`, `WS-5A`, `WS-PT4`, `WS-AI1`, `WS-5D`, `WS-ENV`) and for SN4/SN3/SN2; testers spawned for FC1, EF1, SX, AI1 and builders for 5A, PT4 at ~15:30 PT 2026-09-12. Check `origin` for branches `claude/ws-*` before re-spawning anything. FC1 tester finding: the live count is now 66 of 1,988 cache files (ongoing, dates rolled to 2026-09-11) and `market_calendar` has no early-close model. Wave-2 packets written ~16:10 PT: `WS-TH`, `WS-10B`, `WS-CH`, `WS-WS`, `WS-J1`, `WS-5B`, `WS-TM`, `WS-10A`.
+**Landed so far:** packets written for wave 1 (`.claude/packets/WS0_COMMON.md`, `WS-FC1`, `WS-EF1`, `WS-SX`, `WS-5A`, `WS-PT4`, `WS-AI1`, `WS-5D`, `WS-ENV`) and for SN4/SN3/SN2; testers spawned for FC1, EF1, SX, AI1 and builders for 5A, PT4 at ~15:30 PT 2026-09-12. Check `origin` for branches `claude/ws-*` before re-spawning anything. FC1 tester finding: the live count is now 66 of 1,988 cache files (ongoing, dates rolled to 2026-09-11) and `market_calendar` has no early-close model. AI1 tester findings outside its packet: `operations_audit._ai_jobs_check` counts `degraded` while the ledger writes `degraded_no_narrative`, and reads `ts` while the ledger writes `started_at` (both fixed inside AI1); `tests/test_g7_speed_pass.py::test_showing_the_research_tab_loads_only_the_child_whose_tab_is_open` is an order-dependent flake on the sweep branch (passes alone). Wave-2 packets written ~16:10 PT: `WS-TH`, `WS-10B`, `WS-CH`, `WS-WS`, `WS-J1`, `WS-5B`, `WS-TM`, `WS-10A`.
 
 ### 2026-09-12 - WISHLIST 11 built: workspace memory adopted from JumpStarter (docs and agent config only)
 
