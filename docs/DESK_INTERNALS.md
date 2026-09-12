@@ -3121,3 +3121,77 @@ incident sections elsewhere in this file remain the deeper record.
 - **What did not change:** `request_and_detect_bounce`, the RRS passes, `_rebuild_feed`, every detector, threshold, tier, fold and evidence row. SN1-SN4 remain in WISHLIST as ideas until the trader moves them into `plan.md`.
 - **File-scoped ask-first:** `bounce_bot_lib/legacy.py` is a detector file; the "Go" of 2026-09-08 is the yes for these two seams only.
 - **Tests:** `tests/test_sn5_sn6_scanner_breath_and_fast_lane_order.py` - 12 of 13 fail with the fix reverted (proved on the lead's checkout, 2026-09-08).
+
+---
+
+## Workspace memory is recall, never authority (2026-09-12, WISHLIST 11)
+
+**The trader, verbatim:** *"we will begin integrating wishlist.md this week. for now
+integrate the memory changes then standby"* (2026-09-12). The item itself was added on
+2026-09-11 when the trader asked to bring the memory changes from their JumpStarter repo
+into this wishlist.
+
+**The source.** `Isidore94/JumpStarter`, `main` at `664e083` (2026-09-11): commits
+`48d86e9` (hierarchical memory), `3234bd2` (index authority), `556cffd` (maintenance and
+role guidance), `664e083` (integration and Codex verification). Read there: `CLAUDE.md`
+"Workspace memory", `MEMORY.md`, `memory/`, `docs/INTERNALS.md` "Workspace memory is
+request-grounded", `docs/CODEX_NOTES.md` and the `.codex/agents/*.toml` paragraphs. M1
+changed JumpStarter's own workspace guidance and not its templates, so `jumpstart init`
+installs none of it; everything here was adapted by hand and the clean local checkout at
+`C:\Users\Aaron\JumpStarter` matched GitHub at that revision.
+
+**What carried over unchanged.** A root `MEMORY.md` that routes (name, file, trigger
+keywords) and states no fact; detail under `memory/` split into `people/`, `projects/`,
+`decisions/`, dated daily notes and a prunable `context/`; "search memory first" before
+answering about prior work, decisions, dates, people or preferences, at most five sources
+for that answer, every fact cited by file, tag and date; the four provenance tags with a
+date and a source on every non-blank detail line; supersession in place (strike the old
+line with its date, the replacement beside it); the index updated in the same commit as
+the detail; the weighted lesson threshold (three independent signals across two sessions,
+a signal older than 30 days counting half, a trader correction applying at once, a failure
+memory describing and never instructing); the 15,000-character file convention; and the
+role split (recon and reviewer propose, tester proposes while writing red tests, a builder
+records only an in-scope durable detail, the lead integrates).
+
+**What this repo changed, and why.**
+
+- *Authority.* JumpStarter says "detail files are authoritative". Here that clause is
+  scoped to detail versus its own index. `CURRENT_CHECKPOINT.md` stays the brief,
+  `plan.md` the build order and promotion authority, `CHANGELOG.md` the inventory, the
+  decision records and specs the contracts, and the code the fact. A memory line that
+  disagrees with any of those is the defect. The reason is the repo's own history: every
+  rule in `CLAUDE.md` exists because something broke, and a recalled preference must never
+  outrank a measured one.
+- *The lesson threshold authorizes nothing.* Three signals across two sessions may promote
+  a line from `[inferred]` to a standing lesson inside `memory/`. They never authorize a
+  detector, score or alert change, never overwrite an accepted decision, never promote a
+  WISHLIST item and never bypass the file-scoped ask-first rule. Only the trader does those.
+- *Idle boot never weakens the narrow reads.* JumpStarter reads only identity plus
+  `MEMORY.md` at idle boot. So does this repo, but the moment a task exists the mandatory
+  workflow (glance block, plan sections 5-7, the CHANGELOG inventory search, `docs/README.md`)
+  applies exactly as before; memory adds a read, it removes none.
+- *A live-status question is never answered from memory.* "Where are we", "is the desk
+  running", "which branch" go to the checkpoint and the code. Memory lines carry dates for
+  this reason; an undated or stale line is unknown, not true.
+- *Claude's auto-memory stays machine-local.* Claude Code keeps a private memory folder
+  under the Claude project directory on this machine. It was inventoried (28 files on
+  2026-09-12) and only the trader's standing statements and the non-re-derivable lessons
+  were seeded into `memory/`; dated audit and assessment notes stayed there because the
+  checkpoint archives already hold them, and broker or tax facts are never written into
+  the repository. That folder is scratch for one tool on one machine; `memory/` is the
+  record both tools share.
+- *No sync tool.* JumpStarter verifies `AGENTS.md` against `CLAUDE.md` by sha256 through
+  `jumpstart check`. This repo copies by hand and proves it with `cmp`; nothing from
+  JumpStarter's CLI, operator facts, decision 0002 or approval record was imported.
+
+**Verification.** Static, on the commit: every `MEMORY.md` route resolves to a file or
+directory; every non-blank line in `people/`, `projects/` and `decisions/` carries a tag,
+a date and a source; `CLAUDE.md` and `AGENTS.md` are byte-identical; the eight role files
+carry the paragraph. Owed as gate #93: in a fresh Claude session and a fresh Codex session,
+a bounded prior-preference question reads only the matching detail file and cites file,
+tag and date; a live-status question reads the checkpoint and the code; a recon or
+reviewer run writes nothing under `memory/`; nothing recalled is offered as authorization
+for app work.
+
+**Reopen trigger.** The trader changes the recall policy, the tags, the caps or the scope
+of what memory may hold; or the root instruction-file trim moves this section.

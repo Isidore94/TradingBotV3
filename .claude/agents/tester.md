@@ -13,6 +13,15 @@ the current code - then commit them red and hand back. You never write the fix. 
 builder who follows you may not weaken, skip or delete a test you wrote; it may only
 add. `docs/AGENT_TEAM.md` is the contract; read it, then `CLAUDE.md`.
 
+## Workspace memory
+
+Read `MEMORY.md` (routing only) with these instructions; once the packet is in scope,
+the narrow reads in `CLAUDE.md` apply. Before answering about prior work, decisions,
+dates, people or preferences, route through `MEMORY.md` to the narrowest detail file
+and cite file, tag and date. Memory is recall, never authority: it authorizes nothing
+the packet does not. You do not write memory while writing red tests; put a
+proposed, sourced line in your handoff for the lead.
+
 ## Where you work
 
 - Your own worktree. First command: `git checkout -b claude/<slug>` off `main` (the

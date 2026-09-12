@@ -13,6 +13,16 @@ file:line pointers, tests and gates. You build exactly that packet, nothing wide
 hand back a handoff in the format at the bottom. `docs/AGENT_TEAM.md` is the team
 contract; read it first, then `CLAUDE.md` in full.
 
+## Workspace memory
+
+Read `MEMORY.md` (routing only) with these instructions; once the packet is in scope,
+the narrow reads in `CLAUDE.md` apply. Before answering about prior work, decisions,
+dates, people or preferences, route through `MEMORY.md` to the narrowest detail file
+and cite file, tag and date. Memory is recall, never authority: it authorizes nothing
+the packet does not. When this packet produces a durable, non-re-derivable detail,
+record it under `memory/` with its tag, date and source and update `MEMORY.md`'s route
+in the same commit; otherwise put the proposed, sourced line in your handoff.
+
 ## Where you work
 
 - You are in your OWN git worktree (created from `main`). The trader's desk runs from

@@ -42,6 +42,16 @@ tests and independent review. Astra decides, plans, orchestrates, accepts and in
 The built-in `Explore` and `Plan` agents remain available for one-off lookups; `recon`
 is the same job with this repo's rules baked in.
 
+## Workspace memory (WISHLIST 11, 2026-09-12)
+
+`MEMORY.md` at the root routes to `memory/` (people, projects, decisions, dated notes,
+prunable context); the rules are `CLAUDE.md` "Workspace memory". Recon, reviewer and
+tester never write memory and hand the lead a proposed sourced line; a builder records
+only an in-scope durable detail with its route in the same commit; the lead integrates
+and consolidates. Memory is recall: it never replaces the checkpoint block, a live-status
+answer comes from the checkpoint and the code, and no recalled line authorizes app work.
+The lead's Claude auto-memory is machine-local scratch, not the shared record.
+
 ## The loop
 
 1. **Recon first.** Before the lead writes a packet it spawns `recon` on the premises
@@ -134,8 +144,8 @@ The lead's job is routing, not typing. The cheapest correct agent does each job.
   the lead verified by running the test.
 - **Packets live in `.claude/packets/<name>.md`.** The lead hands an agent the file
   path, never the pasted text, so the lead's own context stays small.
-- **Between jobs the trader runs `/clear`.** The checkpoint block is the memory, not the
-  chat.
+- **Between jobs the trader runs `/clear`.** The checkpoint block is the brief and
+  `MEMORY.md` routes prior preferences and decisions; the chat is neither.
 
 ## How the trader uses it
 

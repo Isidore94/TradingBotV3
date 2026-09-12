@@ -36,6 +36,11 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Workspace memory (2026-09-12, WISHLIST 11):** root `MEMORY.md` is a routing index
+  only; `memory/` holds provenance-tagged detail (`people/`, `projects/`, `decisions/`,
+  dated notes, prunable `context/`); rules in `CLAUDE.md` "Workspace memory", role
+  paragraphs in `.claude/agents/*.md` and `.codex/agents/*.toml`. Recall only, never
+  authority; adapted from JumpStarter M1 (`664e083`). Verification gate #93 owed.
 - **Codex agent operations (2026-09-09):** project defaults select Astra as lead and
   Luna for unspecified helpers; recon uses Luna, builder/tester/reviewer use Terra.
   `docs/AGENT_TEAM.md` owns routing, escalation, isolation and final lead acceptance.
@@ -1966,6 +1971,22 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
+
+Added the root `MEMORY.md` routing index and `memory/` (a trader file, a project file, a
+decision record, today's daily note, an empty `context/`), every detail line tagged
+`[stated]`/`[observed]`/`[inferred]`/`[suggested]` with a date and a source, seeded from an
+inventory of the 28 Claude auto-memory files (dated audit notes and broker facts stayed
+machine-local). `CLAUDE.md` gained a "Workspace memory" section (recall before answering
+about prior work, a five-source cap on the recall answer, memory never authority over the
+control set or the code, supersede in place, 15,000-character files) and `AGENTS.md` was
+re-copied byte-identical; the eight agent role files and `docs/AGENT_TEAM.md` carry the
+role split (recon, reviewer and tester propose, a builder records in scope, the lead
+integrates); `docs/DESK_INTERNALS.md` holds the long form. Source: `Isidore94/JumpStarter`
+`664e083`; its operator facts, approval record and `jumpstart check` were not imported.
+No application code, test, detector, store or gate changed; gate #93 (the fresh-session
+recall check) is owed.
 
 ### 2026-09-09 - Codex delegation defaults (trader-directed)
 

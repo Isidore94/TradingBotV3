@@ -1,6 +1,7 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-09-07** (ST7: decision 0019 added; `CHANGELOG.md`'s 2026-09-03 to
+Last reconciled: **2026-09-12** (WISHLIST 11: `MEMORY.md` and `memory/` added as workspace
+memory; before that 2026-09-07, ST7: decision 0019 added; `CHANGELOG.md`'s 2026-09-03 to
 2026-09-05 entries moved to `archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`).
 
 One line per file. Status and decisions live in the root control set, never here; if a
@@ -16,6 +17,7 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 | [`plan.md`](../plan.md) | Remaining work in order, invariants (§5), live validation (§6), promotion (§7) |
 | [`CHANGELOG.md`](../CHANGELOG.md) | `Current implemented inventory` (search it) plus the last two build days |
 | [`WISHLIST.md`](../WISHLIST.md) | Ideas and their open trader questions; never authorized work |
+| [`MEMORY.md`](../MEMORY.md) / [`memory/`](../memory/) | Workspace memory: routing index and provenance-tagged detail (people, projects, decisions, dated notes, prunable context); recall only, never status or authorization (`CLAUDE.md` "Workspace memory") |
 | [`BRANCH_HISTORY.md`](BRANCH_HISTORY.md) | What each branch held, where it landed, the containment proof before deleting one |
 
 ## Runbooks — actions an operator performs now
@@ -90,5 +92,6 @@ After every repository change and before handoff: refresh `CURRENT_CHECKPOINT.md
 record behavior/contract changes in `CHANGELOG.md`, advance `plan.md` while keeping
 every owed gate, touch `WISHLIST.md` only for trader-directed idea changes, update the
 governing spec when its contract changed, classify every added/moved/removed Markdown
-file here, and keep `CLAUDE.md` and `AGENTS.md` identical. A document that stops being
+file here, keep `CLAUDE.md` and `AGENTS.md` identical, and keep every `MEMORY.md` route
+resolving whenever `memory/` changes. A document that stops being
 current moves to `archive/`; it is never deleted, and never left beside the live specs.

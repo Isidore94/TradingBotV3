@@ -19,12 +19,12 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-09: trader-directed Codex setup - Astra leads; Luna handles recon/simple work; Terra builds, tests and reviews. Configuration and docs only; verification in the dated entry below.** Earlier today: preference-learning assessment and proposed Claude blocks added to WISHLIST item 5 for Fable to select; no implementation authorized. Last app work: SN5/SN6 scanner pacing and trader-pick order, Points ranking/evidence, Strength page, and the G/ST lanes are built; live gates remain below. |
-| Working branch | `main` at `ff4126aa` (verified 2026-09-09); agent setup changes are in the working tree. Pre-existing CURRENT_CHECKPOINT/WISHLIST changes are preserved. No branch switch or desk restart for this task. |
+| Latest work | **2026-09-12 (later): WISHLIST 11 BUILT on `main` - workspace memory adopted from JumpStarter M1: root `MEMORY.md` routing index, `memory/` provenance-tagged detail seeded from the Claude auto-memory inventory, the `CLAUDE.md`/`AGENTS.md` "Workspace memory" section, the eight agent role files, `docs/AGENT_TEAM.md`, the DESK_INTERNALS long form; plan.md Phase 0.25; verification gate #93 owed. Docs and agent config only; no app code, store or detector touched.** Earlier the same day: WISHLIST 10K records the trader's clarified integration plan: one measured Daily Review, faithful hourly theses/weekly-forecast summaries, setup-by-environment evidence and a compact frontier handoff.** It joins items 5/7 and 10D/E/F/I/J; item 11 remains separate. The overnight assessment found blank enrichment and repeated synthesis timeouts; planning only, no app changes or gate closures. |
+| Working branch | `main`; the WISHLIST 11 build is committed on top of `7635d09a` (see the 2026-09-12 entry for the hash). `WISHLIST.md` stays the trader's uncommitted working copy (its item 11 status line was updated in place, unstaged). No branch switch, live repair or desk restart. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | Agent setup complete: use Luna/Terra on the next suitable task; new sessions load the saved defaults, and this session already used explicit Luna/Terra spawns. App follow-up stays gate #92 on the next live day from thread_cpu/ui_stalls logs, on-screen gates #89-#91, first persisted tracker/default-policy checks (#70-#79, #83-#84 as applicable), and first non-refused journal_enrichment (#63). AWAY swing ordering by points still needs the trader decision. |
-| Trader actions owed | No desk restart for this configuration change. Existing asks remain: inspect live gates, review the 26 provisional tags in Weekend Prep, record planned trade risk, and resolve the 2026-09-03 lake incident call. The three tracker policy decisions are already taken (decision 0019); do not ask again. |
-| Last verified baseline | **Recorded app baseline: 2026-09-08 SN5/SN6, 7312 passed, 3 skipped, 72 subtests, zero failures, exit 0; ruff clean; smoke 7/7.** This docs/config task does not rerun or replace that baseline. Earlier baselines remain in the dated build entries. |
+| Next action | Standby on the trader's word (2026-09-12: "integrate the memory changes then standby"); WISHLIST integration begins this week on the trader's next direction. Gate #93 (fresh-session recall check) closes on the first Claude and Codex sessions that boot with `MEMORY.md`. Then Fable: start at WISHLIST 10K, verify its source owners, and present the first bounded repair/shared-results selection before moving approved work to plan.md. Tie Daily Recap and AI export to the same facts; preserve the separate discovery/watchlist/history requests. Gates #92, #89-#91 and tracker checks remain; 10K records successful enrichment jobs with blank saved advice as a separate defect; this edit does not close or redefine #63. |
+| Trader actions owed | No restart or key needed for these plans. Existing asks remain: inspect live gates, review provisional tags (26 was the prior checkpoint count, not re-counted today), record planned trade risk and resolve the 2026-09-03 lake incident call. Decision 0019 is already taken; do not ask again. |
+| Last verified baseline | **2026-09-12 (WISHLIST 11 build, docs and agent config only): full suite 7312 passed, 3 skipped, 72 subtests passed, zero failures, exit 0 (447 s); ruff clean; `cmp CLAUDE.md AGENTS.md` identical; every `MEMORY.md` route resolves; every detail line tagged, dated and sourced; the four `.codex/agents/*.toml` parse.** Recorded app baseline before it: 2026-09-08 SN5/SN6, 7312 passed, 3 skipped, 72 subtests, zero failures, exit 0; smoke 7/7 (not rerun - no app code changed). The 2026-09-12 planning check covers request/metric/dependency coverage, source anchors, independent review, preserved prior edits and whitespace. No app tests/model jobs run and no app baseline replaced. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
 | Desk | **Last recorded restart: 20:45 PT 2026-09-08, main becd1923, trampoline 22916 / python 17240**, via launch_gui.py after selftest 74/74 and clean lease release; IB connected 20:45:56. This task has not re-probed or changed the running desk. SN5/SN6, Points and Strength page were included. Older restart instructions in dated history are superseded. |
 
@@ -32,6 +32,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 93 | **Workspace memory recalls and never authorizes (WISHLIST 11, trader 2026-09-12)** - in a fresh Claude session and a fresh Codex session: (1) a bounded question about a prior trader preference (for example the options strategy or the chat rule) is answered by reading `MEMORY.md` and ONLY the matching detail file, citing file, tag and date; (2) a live-status question ("where are we", "which branch") is answered from this checkpoint and the code, never from `memory/`; (3) a recon or reviewer run leaves `memory/` untouched (`git status` clean there); (4) no recalled line is offered as authorization for app work. | First Claude and Codex sessions that boot with `MEMORY.md` |
 | 92 | **The scanner breathes and scans the trader's picks first (SN5/SN6, trader 2026-09-08)** - on the next live day after a restart: (1) `trading_bot.log` shows the fast-lane line `scanning N Focus symbol(s) ... (T trader-picked first, then A auto-adopted)` and the first symbols scanned are the trader's own; (2) `%LOCALAPPDATA%\TradingBotV3\diagnostics\thread_cpu.jsonl` gives `run_strategy` a lower core fraction in hour 13 than 2026-09-08's 0.62 and `ui_stalls.jsonl` fewer blocked seconds per hour than that day's 245-365; (3) every Focus name still appears in the cycle (the set is unchanged); (4) shutdown is not slower. A worse number is a finding, not a revert - SN1-SN4 are the real fix. | Next live day |
 | 91 | **The point system grades itself (trader, 2026-09-08)** - (1) after the first report refresh on the restarted desk, `setup_points_log.jsonl` exists in the shared home with one row per favourite / near / high-conviction setup for that scan date and NO duplicate `(scan_date, symbol, side)` across refreshes; (2) the setups status row reads `Points grade: N ranked rows logged, none graded yet (outcomes arrive 5 sessions after the scan).`; (3) five sessions later the same line reads `Points grade over N graded rows at 5 sessions: ...` with a tercile per side, and says `not enough per third yet` until each third holds 30; (4) `setup_points_weights.json` holds four multipliers, all `1.0` with a `kept at 1.0` reason until a part's halves reach 30 each; (5) the `...` menu's `Points: learned weights` is OFF and the Points tooltip says so. | Trader, next restart + 5 sessions |
 | 90 | **The setups table ranks by points and hides nothing (trader, 2026-09-08)** - the next desk restart: the Master AVWAP setups table has a `Points` column at its right edge with a signed total on every row and a four-part tooltip; the **Points** checkbox on the control strip is OFF; ticking it re-orders the favourite / near / high-conviction rows by the total (highest first) with every other row after them, the status counts unchanged; unticking restores today's order exactly; the choice survives a restart. | Trader, next restart |
@@ -130,6 +131,79 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-12 - WISHLIST 11 built: workspace memory adopted from JumpStarter (docs and agent config only)
+
+- Trader, 2026-09-12: *"we will begin integrating wishlist.md this week. for now integrate the
+  memory changes then standby"* - the explicit authorization for WISHLIST item 11, moved to
+  `plan.md` as Phase 0.25 and built the same morning on `main` by the lead (docs-only packet;
+  no tester/builder/reviewer round per `docs/AGENT_TEAM.md`'s docs-only exception).
+- Source re-verified: `C:\Users\Aaron\JumpStarter` clean at `664e083` (48d86e9, 3234bd2,
+  556cffd, 664e083 read); its `CLAUDE.md` "Workspace memory", `MEMORY.md`, `memory/`,
+  `docs/INTERNALS.md` "Workspace memory is request-grounded", `docs/CODEX_NOTES.md` and the
+  four `.codex/agents/*.toml` paragraphs were the inputs. Nothing from its CLI, operator facts,
+  decision 0002 or approval record was imported.
+- Added: root `MEMORY.md` (routing only, 945 bytes); `memory/people/trader.md` (12 lines, the
+  trader's standing statements), `memory/projects/tradingbotv3.md` (9 non-re-derivable
+  lessons), `memory/decisions/2026-09-12-workspace-memory.md`, `memory/2026-09-12.md`,
+  `memory/context/.gitkeep`. Seeded from an inventory of the 28 Claude auto-memory files; dated
+  audit/assessment notes, packet state and broker/tax facts stayed machine-local.
+- Rules: `CLAUDE.md` "Workspace memory" (idle boot reads `MEMORY.md`, task reads unchanged;
+  search memory first for prior-work questions, five sources, cite file/tag/date; memory is
+  recall never authority; tags, dates, sources on every line; supersede in place; 15,000
+  characters; role split), the root-control-set sentence and "Where to read more" amended;
+  `AGENTS.md` re-copied (`cmp` identical). `CLAUDE.md` is now 51,962 bytes - the trim stays
+  owed and unauthorized.
+- Role files: `.claude/agents/{builder,tester,reviewer,recon}.md` and
+  `.codex/agents/*.toml` carry the memory paragraph (recon/reviewer/tester propose, builder
+  records in scope). `docs/AGENT_TEAM.md` gained the "Workspace memory" section;
+  `docs/DESK_INTERNALS.md` the long form "Workspace memory is recall, never authority";
+  `docs/README.md` the row and maintenance clause; `plan.md` the 0.25 row and stub;
+  `CHANGELOG.md` the inventory bullet and the dated entry.
+- Verification: full suite 7312 passed, 3 skipped, 72 subtests passed, zero failures, exit 0 (447 s); ruff `All checks passed`; targeted docs tests
+  (`test_q3_ai_grounding`, `test_testing_plan_view`, `test_packaging_spec_drift`) 62 passed;
+  toml parse of the four Codex roles; every `MEMORY.md` route resolves; zero untagged detail
+  lines. Smoke and selftest not rerun (no app code). Gate #93 recorded above.
+- `WISHLIST.md` is left UNSTAGED as the trader's working copy (its 10A-10K and item 11 text is
+  uncommitted); only item 11's STATUS line was edited, in place. This checkpoint's 2026-09-11
+  and 2026-09-12 planning entries, written uncommitted by earlier sessions, are committed with
+  this build unchanged.
+
+### 2026-09-11 - Eleven trader requests planned in WISHLIST (docs only)
+
+- Added WISHLIST item 11 on the trader's request: adapt JumpStarter's integrated M1
+  memory changes. GitHub main and clean local JumpStarter checkout both resolve to
+  664e083; read the index, memory rules and M1 follow-ups. No MEMORY.md/memory directory
+  exists here at inspection. Plan preserves root-control authority, role boundaries and
+  narrow reads; no retrofit or memory installation run. Docs diff/whitespace checked.
+- Added item 10A-H covering all eleven requests: D1 freshness/usefulness, TC2000 M5
+  membership, opt-in H1/H4 retests and trendline breaks, hierarchical Market Journal
+  narrative, trade auto-tags, durable visual Daily Recap, one Desk Watchlist, more history.
+- Follow-up 10I plans the shared thesis/context/opportunity/trade join and local-AI
+  effectiveness checks. Source inspection confirms the default nightly summary already
+  receives market notes, journal review and tracker reports; those inputs alone do not
+  establish a joined setup-by-environment result. No model or live job was started.
+- Follow-up 10J plans Trade Mentor: persistent Settings opt-in, skip/no-backlog hourly
+  M5 and fixed Pacific D1 prompts, prior-session missing-field check, raw-text-first
+  capture and reviewed AI form filling. Records no-target/unknown and retrospective
+  risk distinctly; names schedule/presence/quiet-hours decisions, tests and optional
+  low-burden coaching. Docs/whitespace checked; app baseline and runtime unchanged.
+- Read-only AI ledger check: session Sep 8 has 11/11 OK rows; Sep 9/10 each 16/16.
+  Sep 10 enrichment reports 3/3 trades, but AI summary says “NOT synthesized”; research
+  narration covers 63/632 eligible cells. Runtime success is not a quality verdict;
+  dated facts and next audit targets are in WISHLIST 10I. Earlier missing-completion
+  observations in item 5C remain historical, not a current outage claim.
+- Read-only Luna recon mapped scan/board/alert seams; lead inspected journal, nightly,
+  recap and navigation owners. TC2000 adoption and tagging already exist. The recap's
+  process-scoped feed/current-file reads are a verified limit; the late-scan cause and
+  exact live data coverage remain unproven. No live stores or app code were changed.
+- Preserved the trader's uncommitted item 9; added a top entry point so old pasted
+  build/cleanup prompts cannot be mistaken for the current queue. Plans include source
+  owners, dependencies, candidate definitions, tests and live gates, not build approval.
+- Verification: docs diff/whitespace, all eleven requests mapped, referenced source paths
+  checked, prior item 9 retained. App baseline unchanged. `plan.md`, CHANGELOG and specs
+  unchanged because no implementation status or runtime contract changed; no Markdown
+  file added/moved/reclassified, so docs/README is unchanged. No commit/push/restart.
 
 ### 2026-09-09 - Codex agent routing (trader-directed, docs/config only)
 

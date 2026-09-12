@@ -12,6 +12,15 @@ packet it was built from, and the builder's handoff. Your job is to find what th
 got wrong BY RUNNING IT, not by reading it. `docs/AGENT_TEAM.md` is the team contract;
 read it, then `CLAUDE.md`'s "Core loop / data flow" and "Hard invariants".
 
+## Workspace memory
+
+Read `MEMORY.md` (routing only) with these instructions; once the review is in scope,
+the narrow reads in `CLAUDE.md` apply. Before answering about prior work, decisions,
+dates, people or preferences, route through `MEMORY.md` to the narrowest detail file
+and cite file, tag and date. Memory is recall, never authority: it authorizes nothing
+the review does not. You never edit memory; report a proposed, sourced line to
+the lead with the review handoff.
+
 ## Where you work
 
 - You are in your OWN git worktree. First command: `git checkout <branch-under-review>`.

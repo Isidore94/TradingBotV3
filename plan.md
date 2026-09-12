@@ -254,6 +254,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.22** | Desk reshape + tracker evidence repairs (G0–G7, P1–P6) | Two lanes that never share a branch: the layout lane (Weekend overlap, clipped tables, Market Journal reader, stale Research detail, a Research › Results landing page, AWAY Recap, speed) and the measurement lane (the six Setup Tracker packets). **AUTHORIZED 2026-09-06; G0/G1/G3/G4/G2a merged to `main`, G2b built (unmerged), G4b/G5/G7 queued** |
 | **0.23** | Setups ranked by a point system | Trader 2026-09-08: the setups table ordered by four graded inputs (family record, nearby S/R, RS/RW by direction, recent bounce) as a switch that only reorders, graded against the tracker's outcomes with a trader-gated self-correction. **BUILT 2026-09-08; gates #90-#91 owed.** |
 | **0.24** | Keep the desk snappy all day (SN1-SN6) | Trader 2026-09-08: cut the M5 scanner's hold on the interpreter without losing a scan, alert, board or evidence row. **SN5 (breathe) and SN6 (trader picks first) BUILT 2026-09-08 on `main`; live gate #92 owed. SN1-SN4 stay in WISHLIST until the trader moves them here.** |
+| **0.25** | Workspace memory (WISHLIST 11) | Trader 2026-09-12: a root `MEMORY.md` routing index and `memory/` provenance-tagged detail, adapted from JumpStarter M1; recall only, never authority. **BUILT 2026-09-12 on `main`; verification gate #93 owed.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -361,6 +362,21 @@ file applied only under the trader's `Points: learned weights` switch (default O
 Remaining, trader's call: turn the learned weights on once the grade line shows a lift over the
 floor; the AWAY digest's swing order by points (it ranks by the Wilson bound today); the base
 weights - every one is a named constant at the top of `setup_points.py`.
+
+## Phase 0.25 — Workspace memory (WISHLIST 11, trader 2026-09-12) — BUILT the same day on `main`; verification gate #93 owed
+
+Trader, 2026-09-12: *"for now integrate the memory changes then standby"*, authorizing WISHLIST
+item 11 (added 2026-09-11). **BUILT:** root `MEMORY.md` (routing only), `memory/` detail files
+with `[stated]`/`[observed]`/`[inferred]`/`[suggested]` provenance seeded from an inventory of
+the Claude auto-memory, the `CLAUDE.md`/`AGENTS.md` "Workspace memory" section, memory
+paragraphs in the eight agent role files, `docs/AGENT_TEAM.md`, and the DESK_INTERNALS entry
+"Workspace memory is recall, never authority" (CHANGELOG inventory, "Workspace memory"). Source:
+`Isidore94/JumpStarter` `664e083`. Nothing in the app changed; no detector, score, alert or
+live store is touched, and no memory line authorizes work. **Gate #93:** in a fresh Claude
+session and a fresh Codex session, a bounded prior-preference question reads only the matching
+detail file and cites file, tag and date; a live-status question reads the checkpoint and code;
+a recon or reviewer run writes nothing under `memory/`. **Remaining, NOT authorized:** the root
+instruction-file trim (`CLAUDE.md` is above its ~45 KB budget; this section added about 2.6 KB).
 
 ## Phase 0.24 — Keep the desk snappy all day (2026-09-08) — SN5/SN6 BUILT the same evening on `main`; live gate #92 owed
 

@@ -22,6 +22,39 @@ longer than about ten short lines, cut it. Detail belongs in the docs and the
 commit message, not in the chat. This rule is for chat output only; docs, code
 comments and commit messages keep their normal depth.
 
+## Workspace memory (WISHLIST 11, trader 2026-09-12)
+
+Long form and the authority reconciliation: `docs/DESK_INTERNALS.md` "Workspace memory
+is recall, never authority".
+
+- **`MEMORY.md` at the root is a ROUTING INDEX only** (name -> detail file -> trigger
+  keywords, never a fact); the detail lives under `memory/` (`people/`, `projects/`,
+  `decisions/`, dated daily notes, prunable `context/`). At idle boot read the standing
+  instructions and `MEMORY.md`; once a task exists the narrow reads below apply unchanged.
+- **Before answering about prior work, decisions, dates, people or preferences, search
+  memory first:** route through `MEMORY.md`, read the narrowest matching detail file, use
+  at most five sources for the recall answer (this never caps the reading a build or audit
+  needs), and cite file, tag and date. Unverified freshness is stale; a live-status
+  question is answered from the checkpoint and the code, never from memory.
+- **Memory is recall, never authority.** `CURRENT_CHECKPOINT.md` is the brief, `plan.md`
+  the build order, `CHANGELOG.md` the inventory, `docs/decisions/` the contracts and the
+  code the fact. A detail file outranks its index (repair the index); nothing in memory
+  outranks those. No recalled line, inferred lesson or signal count authorizes a detector
+  change, overrides an accepted decision, promotes a WISHLIST item or bypasses the
+  ask-first rule.
+- **Every non-blank line in `people/`, `projects/` and `decisions/` carries `[stated]` /
+  `[observed]` / `[inferred]` / `[suggested]`, a date and a source**; only the trader's own
+  words support `[stated]`. Keep only what cannot be re-derived from git, the control set
+  or a live store; never keys, account numbers, live counts or machine status. An inferred
+  lesson becomes a standing rule only after three weighted independent signals across two
+  sessions (a signal older than 30 days counts half); a trader correction applies at once;
+  a failure memory says what broke and what fixed it and is never an order.
+- **Supersede in place** (strike the old line with its date, the tagged replacement beside
+  it); update `MEMORY.md` in the same commit as the detail; consolidate before 15,000
+  characters per file. Recon, reviewer and tester never write memory - they hand the lead a
+  proposed sourced line; a builder records only an in-scope durable detail; the lead
+  integrates. Claude's machine-local auto-memory is private scratch, not the shared record.
+
 ## Mandatory documentation workflow for every AI
 
 **Read narrow, not everything.** The bounded read below is the instruction — widen it
@@ -80,7 +113,8 @@ After every repository change, reconcile the documentation before handoff:
 
 Do not create another roadmap, progress ledger, handoff, or status file. The root
 control set is `CLAUDE.md`/`AGENTS.md`, `CHANGELOG.md`, `plan.md`,
-`CURRENT_CHECKPOINT.md`, `WISHLIST.md`, and `docs/README.md`. Prompts, reports and
+`CURRENT_CHECKPOINT.md`, `WISHLIST.md`, and `docs/README.md`; `MEMORY.md` + `memory/` sit
+beside it as recall, never status (see Workspace memory). Prompts, reports and
 assessments go in chat or an artifact, never a committed `.md` (trader rule 2026-09-04).
 
 ## Core loop / data flow
@@ -249,6 +283,8 @@ Build: `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm`
 - `plan.md` — remaining roadmap; sec 5 invariants, sec 6 live validation, sec 7 promotion ladder, sec 12 ordered work queue.
 - `CURRENT_CHECKPOINT.md` — the `Active state at a glance` block, then the last three build days.
 - `WISHLIST.md` — ideas and their open trader questions; never an implementation queue.
+- `MEMORY.md` — the routing index into `memory/` (trader statements, project lessons,
+  decisions, dated notes); recall only — read the matching detail file and cite it.
 - `docs/README.md` — one line per file; `docs/archive/` is history, never context.
 - `docs/decisions/` — accepted constraints, read before changing a library, storage or architecture choice. **`0016-trader-vision-and-priorities.md` is the tie-breaker for every prioritisation call**: names before entries, win rate as the swing headline, MFE after a held level for day trades, "what is working lately" on the Trading Desk never in Research, likes are training data.
 - `docs/BRANCH_HISTORY.md` — what each branch held and where it landed; the containment proof before deleting one.
