@@ -3195,3 +3195,84 @@ for app work.
 
 **Reopen trigger.** The trader changes the recall policy, the tags, the caps or the scope
 of what memory may hold; or the root instruction-file trim moves this section.
+
+## AI1 - an enrichment row is never blank on success (2026-09-12, WISHLIST sweep)
+
+**The trader, verbatim** (WISHLIST 10K, "Fable's integration sequence", step 1):
+*"Repair trustworthy output. Reproduce enrichment failure before fixing its
+schema/extractors, refusal of empty success and retry/supersession of existing blank
+records. Verify a real saved suggestion reaches the trader. Distinguish published,
+synthesized, useful-empty/abstained, failed and partial outputs. ... do not bypass gates,
+raise timeouts blindly or change model."*
+
+**What was measured, code against code, 2026-09-12.** `ai_jobs/enrichment.py`'s
+`_proposed_tags` read `tags` / `setups` / `families` and `_summary_text` read `headline` /
+`summary` / `what_worked` / `lessons`. The response it validated was
+`ai_summary.AI_SUMMARY_JSON_SCHEMA`: `additionalProperties: False` over
+`executive_summary` plus `what_is_working`, `what_is_not_working`, `best_candidates`,
+`lessons_for_tomorrow`, `risk_notes`. **Not one of the seven keys the two extractors read
+could survive that validation.** Six distinct trades over 2026-09-09..11 therefore carried
+a blank `ai_trade_enrichment` row while the `journal_enrichment` ledger row said `ok`, and
+`_trades_for_session` skipped a trade when ANY row existed for the session - so the blank
+satisfied "already done" permanently, and fixing the schema alone would still not have
+produced a single non-blank row.
+
+Two nights earlier the same shape of defect had eaten the main summary. `briefs.py`
+returned `STATUS_OK` for the chunked branch whatever the reason said, and `map_reduce`
+signalled a lost synthesis only as `map_reduce.synthesized`, a boolean two levels inside
+the result that `briefs.py` did not read. The 900 s synthesis timeouts of 2026-09-10 and
+-11 published an unsynthesized fallback and were ledgered as clean nights.
+
+**Three failures, one cause.** In each case a document said one thing and its reader
+assumed another, and nothing in between ever compared the two. The fixes are all the same
+move: put the fact in the payload as a WORD, and make the reader read it.
+
+**The rules this produced.**
+
+1. **One provider path, two contracts.** `ENRICHMENT_JSON_SCHEMA` (`summary`, `tags`,
+   `confidence`, `sources`, `unknowns`, closed) is the per-trade contract;
+   `request_ai_summary` gained `schema` / `schema_name` / `prompt_version` with the
+   session summary's schema as the default, so every existing caller's request payload is
+   byte-identical. A second provider function was rejected on sight: it would be a second
+   place for the timeout, the retry, the truncation tripwire and the length-stop rule to
+   drift. `_proposed_tags` / `_summary_text` remain the ONE extraction seam and read this
+   schema's keys and no others - the old fallback chains looked tolerant and were three
+   chances at a key the contract forbade.
+2. **An empty answer is an ANSWER.** `status` is `enriched` / `abstained` / `failed`,
+   `reason` is the model's own `unknowns` or the error class, and the slot reports
+   `enriched A, abstained B, failed C of N` with `STATUS_OK` only for `A + B == N, C == 0`.
+   A provider failure is now RECORDED against the trade it happened to; before, nothing
+   was written and the outage lived in one log sentence.
+3. **A blank row is not a finished trade.** The legacy blank is blank summary AND blank
+   tags AND no status - all three, because an abstention is blank in the first two and is
+   real. The repair APPENDS a row naming the one it replaces (`supersedes_row_id`);
+   nothing is rewritten, so the history of a repaired night stays readable. A settled row
+   ends the trade's attempt for the session; a `failed` row does not, so a second firing
+   in the window retries rather than reporting "nothing to enrich".
+4. **Every published summary names its completion.** `synthesized` / `partial` /
+   `unsynthesized_fallback` / `failed`, top level, always present; a lost synthesis
+   outranks a lost slice. `STATUS_OK` only for `synthesized`; the document is still
+   published, because losing the findings would be worse than publishing them
+   unsynthesized. **The timeout was not raised and the model was not changed.**
+5. **The advice has a reader.** `journal_feed.latest_ai_enrichment` (newest row nothing
+   supersedes) rendered by `TradesTab._show_trade`, marked advisory, with status,
+   confidence and `written_at`. An `abstained` or `failed` row is SHOWN. A table nobody
+   could open was indistinguishable from a table nobody wrote to.
+6. **The preference section is selected by size, never by result.** `preference_to_trade`
+   in the nightly package: three grains kept apart, coverage derived from the report's own
+   `match_basis` plus the 10-SESSION window, 20 examples by `(session_date, row order)`
+   descending. `journal_r` may be READ in an example and may never RANK one - the live
+   report's single best row is also its oldest, and a section that surfaced it would be
+   teaching the model that the trader's stated preferences work better than they do.
+
+**Two defects found beside it, both in the completion-word path.**
+`operations_audit._ai_jobs_check` counted `statuses.get("degraded")` while the ledger's
+constant is `degraded_no_narrative`, so no AI job has EVER been able to show as degraded on
+the System Health strip; and it read `ts` / `timestamp` while `ledger.record` writes
+`started_at` / `finished_at`, so every AI row read as undated and the freshness branch
+could never fire. Both fixed here because both stood between the new word and the trader's
+eye.
+
+**Reopen trigger.** The enrichment schema gains or loses a field; the completion
+vocabulary changes; a second provider path is proposed; or the preference section's
+selection key is asked to consider a result.
