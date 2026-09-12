@@ -78,9 +78,14 @@ PROTECTED_DATA_ROOT = Path(r"C:\TradingBotData")
 FORMING_DROPPED_COUNTER = "daily_bars_forming_dropped"
 INVALID_DROPPED_COUNTER = "daily_bars_invalid_dropped"
 
-#: How much history the repair asks the provider for when it refetches one
-#: session. Small on purpose: the repair needs one bar, not a backfill.
+#: The floor on how much history the repair asks the provider for. The window
+#: is widened to REACH the bad session - MCW's bad row is 2026-06-08 and a
+#: ten-day window answers "the provider has no bar for that session", which is a
+#: measurement of the request, not of Yahoo.
 REPAIR_REFETCH_DAYS = 10
+
+#: Calendar days of slack added past the bad session so the window contains it.
+REPAIR_REFETCH_BUFFER_DAYS = 5
 
 _PRICE_COLUMNS = ("open", "high", "low", "close")
 
@@ -263,57 +268,75 @@ def filter_writable_rows(
         return empty, DropCounts()
 
     moment = _aware(now)
-    cutoff = last_completed_session(moment)
+    cutoff = pd.Timestamp(last_completed_session(moment))
     name = str(symbol or "").strip().upper() or "?"
 
-    keep: list[bool] = []
-    forming = invalid = 0
-    for _, row in frame.iterrows():
-        day = _row_date(row.get("datetime"))
-        if day is None:
-            invalid += 1
-            keep.append(False)
-            logging.debug(
-                "%s: daily-bar row dropped from the cache (unreadable session date).", name
-            )
-            continue
-        if day > cutoff:
-            forming += 1
-            keep.append(False)
-            logging.debug(
-                "%s: daily-bar row %s dropped from the cache - the session has not closed "
-                "(last completed session %s).",
-                name,
-                day.isoformat(),
-                cutoff.isoformat(),
-            )
-            continue
-        if not candle_is_possible(row):
-            invalid += 1
-            keep.append(False)
-            logging.debug(
-                "%s: daily-bar row %s dropped from the cache - impossible candle "
-                "O=%s H=%s L=%s C=%s.",
-                name,
-                day.isoformat(),
-                row.get("open"),
-                row.get("high"),
-                row.get("low"),
-                row.get("close"),
-            )
-            continue
-        keep.append(True)
+    # Vectorised: this runs once per symbol per scan over a thousand symbols, so
+    # the common case (nothing dropped) must not walk the rows in Python. Only
+    # the refused rows are iterated, for their DEBUG line.
+    stamps = pd.to_datetime(frame["datetime"], errors="coerce")
+    if getattr(stamps.dt, "tz", None) is not None:
+        # astimezone, then drop - never `replace(tzinfo=None)` on an aware stamp.
+        stamps = stamps.dt.tz_convert(market_calendar.MARKET_TZ).dt.tz_localize(None)
+    days = stamps.dt.normalize()
+    undated = stamps.isna()
+
+    prices = {
+        column: pd.to_numeric(frame[column], errors="coerce")
+        if column in frame.columns
+        else pd.Series(float("nan"), index=frame.index)
+        for column in _PRICE_COLUMNS
+    }
+    possible = (
+        (prices["low"] <= prices["open"])
+        & (prices["open"] <= prices["high"])
+        & (prices["low"] <= prices["close"])
+        & (prices["close"] <= prices["high"])
+    )
+
+    forming_mask = (~undated) & (days > cutoff)
+    invalid_mask = undated | ((~undated) & (~forming_mask) & (~possible))
+    keep_mask = ~(forming_mask | invalid_mask)
 
     counts = DropCounts(
-        fetched=len(keep),
-        kept=int(sum(1 for value in keep if value)),
-        forming_dropped=forming,
-        invalid_dropped=invalid,
+        fetched=int(len(frame)),
+        kept=int(keep_mask.sum()),
+        forming_dropped=int(forming_mask.sum()),
+        invalid_dropped=int(invalid_mask.sum()),
     )
     if not counts.dropped:
         return frame, counts
+
+    # Positional on purpose: a merged frame can carry duplicate index labels,
+    # and a label lookup would answer with a Series rather than a row.
+    for position, dropped in enumerate(forming_mask.tolist()):
+        if not dropped:
+            continue
+        logging.debug(
+            "%s: daily-bar row %s dropped from the cache - the session has not closed "
+            "(last completed session %s).",
+            name,
+            days.iat[position].date().isoformat(),
+            cutoff.date().isoformat(),
+        )
+    for position, dropped in enumerate(invalid_mask.tolist()):
+        if not dropped:
+            continue
+        stamp = days.iat[position]
+        row = frame.iloc[position]
+        logging.debug(
+            "%s: daily-bar row %s dropped from the cache - impossible candle "
+            "O=%s H=%s L=%s C=%s.",
+            name,
+            "(unreadable date)" if pd.isna(stamp) else stamp.date().isoformat(),
+            row.get("open"),
+            row.get("high"),
+            row.get("low"),
+            row.get("close"),
+        )
+
     record_drops(counts)
-    kept_frame = frame.loc[pd.Series(keep, index=frame.index)].copy()
+    kept_frame = frame.loc[keep_mask.to_numpy()].copy()
     kept_frame.attrs.update(dict(frame.attrs))
     return kept_frame, counts
 
@@ -403,9 +426,11 @@ def _repair_one_file(path: Path, *, apply: bool, now: datetime) -> RepairFinding
     replacement = None
     if day is not None:
         fetched = None
+        span = (now.astimezone(market_calendar.MARKET_TZ).date() - day).days
+        window = max(REPAIR_REFETCH_DAYS, span + REPAIR_REFETCH_BUFFER_DAYS)
         try:
             fetched = legacy._normalize_daily_bar_frame(
-                legacy.fetch_daily_bars_from_yahoo(symbol, REPAIR_REFETCH_DAYS)
+                legacy.fetch_daily_bars_from_yahoo(symbol, window)
             )
         except Exception as exc:
             finding.new_text = f"(refetch failed: {exc})"

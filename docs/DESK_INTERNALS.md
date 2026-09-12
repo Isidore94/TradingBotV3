@@ -3195,3 +3195,80 @@ for app work.
 
 **Reopen trigger.** The trader changes the recall policy, the tags, the caps or the scope
 of what memory may hold; or the root instruction-file trim moves this section.
+
+## FC1 - a forming bar never reaches the daily-bar cache (2026-09-12, WISHLIST sweep)
+
+### What was measured, read-only on the live machine cache
+
+`%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` held **1,988 per-symbol CSVs, 66 of
+which ended in a candle that could not have happened**: the last row's open sits outside
+its own `[low, high]`. `ADC 2026-09-11 O=71.870 H=71.805 L=70.970 C=71.230` is the shape.
+Always exactly one bad row, always the last. The last-row dates cluster on the sessions the
+desk scanned while they were still open - 2026-09-11 x55, 2026-09-10 x4, 2026-09-04 x2, one
+each on 2026-09-02, 2026-09-01, 2026-07-07, 2026-06-08, 2026-05-15 - which is the signature
+of a FORMING session bar: Yahoo returns today's partial bar during the session, the high had
+not yet grown to contain the open, the scan wrote it, and no later refresh replaced it.
+
+The count moved with the calendar (the trader's own 2026-09-06 read was 100 of 1,980 on the
+2026-09-04 cluster, this one 66 of 1,988 on the 2026-09-11 cluster), which is itself the
+finding: this was not one bad afternoon, it was every scan that ran before the close.
+
+The writer seam was `master_avwap_lib.legacy._write_cached_daily_bar_frame`, reached from
+`fetch_daily_bars` after `_merge_daily_bar_frames`. Neither the merge nor the write consulted
+`scripts/completed_bars.py` or the candle invariant, so whatever the provider returned at
+11:00 is what landed on disk. `_seed_daily_bar_cache_from_durable` is the second writer of
+the same CSV and had the same gap.
+
+### The rules this produced
+
+- **A daily bar may be stored only once the exchange session for its date has closed**, and
+  the comparison is made in exchange time with `astimezone`, never `replace(tzinfo=None)`.
+  That is `completed_bars.py`'s rule stated for a session-length bar.
+- **`market_calendar` models no early close**, deliberately (its own docstring), so every
+  session is judged against 16:00 ET. That is conservative in the only direction that
+  matters: a half-day's bar is called complete at 16:00 rather than at 13:00, so a forming
+  bar is never called finished. A 13:00-close session's bar simply waits three hours.
+- **A stored candle must be possible** (`low <= open, close <= high`). Completion alone does
+  not make a candle real: MCW 2026-06-08 and TERN 2026-05-15 are months old and still
+  impossible.
+- **A row that is both forming and impossible counts ONCE, as forming**, because forming is
+  the cause. That is what makes `kept + forming_dropped + invalid_dropped == fetched` hold
+  exactly, and the run manifest publishes both counts under `daily_bars_forming_dropped` and
+  `daily_bars_invalid_dropped` with one INFO line per scan naming both - **even at zero**,
+  because a counter that only appears on a bad day cannot be checked on a good one.
+- **The rule, the counters and the repair live in `scripts/master_avwap_lib/daily_bar_cache.py`,
+  not in `legacy.py`.** The trader's FC1 prompt is the ask-first yes for the cache WRITER
+  seam only, so the ask-first file gained an import and two call sites and nothing else.
+- **When every offered row is refused, the cache file is left alone** rather than replaced by
+  an empty one. Missing data is uncertainty, never confirmation.
+- **The seed filters the FILE and not the answer.** `_seed_daily_bar_cache_from_durable`
+  writes the filtered frame to the CSV and hands the caller the durable store's own frame
+  unchanged, so no reader sees a different series because of this packet.
+
+### The repair, and what the bad rows touched
+
+`cd scripts && python -m master_avwap_lib.daily_bar_cache repair [--apply]` - dry run by
+default. It prints `project_paths.DATA_DIR` and the cache directory before it reads anything,
+refuses a target under `C:\TradingBotData`, and for a file whose LAST row is forming or
+impossible refetches that session through the pinned Yahoo path and writes temp-and-rename.
+**Only the last row is ever touched**: an interior oddity is a data question this tool does
+not get to answer. The refetch window is widened to REACH the bad session - a fixed ten-day
+window answered "the provider has no bar for that session" for PRKS 2026-07-07, which
+measures the request and not Yahoo. A session that is still open replaces nothing and says so.
+
+Dry run on a COPY of the live cache (2026-09-12): 1,988 files read, 66 repairable, 64 with a
+completed replacement bar; MCW and TERN return no data from Yahoo at all, so their rows would
+be removed with no replacement. On a COPY of the tracker's SQLite mirror, 625 records carry
+one of the 66 symbols and **443 have the bad date inside their replay window** (270 setups,
+169 studies, 4 controls): 443 had AVWAP band levels recomputed from that bar, 441 were marked
+to market on it, and **zero had a fill booked on it** - `gap_aware_v2` already refuses an
+invalid bar (`skipped_bar_reasons: invalid_bar`, 4,660 times across those scenarios). The next
+persisted tracker write rebuilds every record, so no tracker repair is owed.
+
+### Reopen trigger
+
+`market_calendar` gains an early-close model (then the 16:00 ET judgement becomes the
+session's real close); the daily source stops being Yahoo; or a second writer of the
+per-symbol CSV appears. The durable Parquet mirror (`_persist_durable_daily_bars`) still
+receives the unfiltered merged frame - it is outside the FC1 yes and is an open question for
+the trader, not a silent edit.
