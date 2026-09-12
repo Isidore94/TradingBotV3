@@ -541,4 +541,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry
-    raise SystemExit(main())
+    # `python -m` re-executes this file as `__main__` while the package has
+    # already imported it, so delegate to the package's copy rather than run a
+    # second one with its own counters.
+    from master_avwap_lib.daily_bar_cache import main as _package_main
+
+    raise SystemExit(_package_main())
