@@ -546,7 +546,14 @@ def repair(
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
+    """``now`` is the same injectable clock seam ``repair`` takes.
+
+    Deliberately not a command-line flag: a caller that can claim an arbitrary
+    instant can talk the repair into writing a bar whose session has not closed,
+    which is the defect this module exists to prevent. A test injects it; the
+    command line always gets the real clock through ``market_now``.
+    """
     parser = argparse.ArgumentParser(
         prog="python -m master_avwap_lib.daily_bar_cache",
         description="Guard and repair the per-symbol daily-bar cache (packet WS-FC1).",
@@ -563,7 +570,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "repair":
-        return repair(cache_dir=args.cache_dir, apply=bool(args.apply))
+        return repair(cache_dir=args.cache_dir, apply=bool(args.apply), now=now)
     parser.print_help()  # pragma: no cover - argparse requires a subcommand
     return 2
 

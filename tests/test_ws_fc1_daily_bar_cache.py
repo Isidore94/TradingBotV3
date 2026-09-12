@@ -562,12 +562,27 @@ def _refetch_stub(day: date, seen: list[str]):
     return _fetch
 
 
+def _after_the_close(day: date) -> datetime:
+    """16:30 ET on ``day``.
+
+    Added by the builder (2026-09-12): every repair test below judged
+    completeness against the REAL wall clock, so the same test read differently
+    depending on the hour it ran - a weekday mid-session run would have called
+    the seeded row *forming*, refused to refetch a file the test says must be
+    left alone, and refused the replacement the test says must land. The instant
+    is now STATED. No assertion is changed and no clause is relaxed; the clock
+    the repair reads is simply named instead of inherited.
+    """
+    return datetime.combine(day, datetime.min.time(), tzinfo=ET).replace(hour=16, minute=30)
+
+
 def test_the_repair_replaces_an_invalid_last_row_with_the_refetched_session_bar(
-    cache_dir, daily_bar_cache, monkeypatch, capsys
+    cache_dir, daily_bar_cache, freeze_clock, monkeypatch, capsys
 ):
     day = _latest_session()
     history = _sessions_ending(day, 6)
     bad_day, earlier = history[-1], history[:-1]
+    freeze_clock(_after_the_close(bad_day))
     path = _seed_repairable_file(cache_dir, "TEST", bad_day, earlier)
 
     seen: list[str] = []
@@ -589,12 +604,13 @@ def test_the_repair_replaces_an_invalid_last_row_with_the_refetched_session_bar(
 
 
 def test_the_repair_leaves_an_invalid_interior_row_alone(
-    cache_dir, daily_bar_cache, monkeypatch, capsys
+    cache_dir, daily_bar_cache, freeze_clock, monkeypatch, capsys
 ):
     """Only the LAST row is the forming-bar signature. An interior oddity is a
     data question this tool does not get to answer."""
     day = _latest_session()
     history = _sessions_ending(day, 6)
+    freeze_clock(_after_the_close(history[-1]))
     rows = [_ordinary_row(d, 65.0 + index * 0.01) for index, d in enumerate(history)]
     rows[2] = _partial_row(history[2])
     path = cache_dir / "TEST.csv"
@@ -610,9 +626,12 @@ def test_the_repair_leaves_an_invalid_interior_row_alone(
     assert path.read_bytes() == before
 
 
-def test_the_repair_leaves_a_valid_file_untouched(cache_dir, daily_bar_cache, monkeypatch):
+def test_the_repair_leaves_a_valid_file_untouched(
+    cache_dir, daily_bar_cache, freeze_clock, monkeypatch
+):
     day = _latest_session()
     history = _sessions_ending(day, 6)
+    freeze_clock(_after_the_close(history[-1]))
     rows = [_ordinary_row(d, 65.0 + index * 0.01) for index, d in enumerate(history)]
     path = cache_dir / "TEST.csv"
     _write_csv(path, rows)
@@ -628,11 +647,12 @@ def test_the_repair_leaves_a_valid_file_untouched(cache_dir, daily_bar_cache, mo
 
 
 def test_the_repair_dry_run_writes_nothing_and_still_reports(
-    cache_dir, daily_bar_cache, monkeypatch, capsys
+    cache_dir, daily_bar_cache, freeze_clock, monkeypatch, capsys
 ):
     day = _latest_session()
     history = _sessions_ending(day, 6)
     bad_day, earlier = history[-1], history[:-1]
+    freeze_clock(_after_the_close(bad_day))
     path = _seed_repairable_file(cache_dir, "TEST", bad_day, earlier)
     before = path.read_bytes()
 
@@ -648,12 +668,13 @@ def test_the_repair_dry_run_writes_nothing_and_still_reports(
 
 
 def test_the_repair_apply_writes_through_a_temp_file_and_renames(
-    cache_dir, daily_bar_cache, monkeypatch
+    cache_dir, daily_bar_cache, freeze_clock, monkeypatch
 ):
     """A half-written cache file is the corruption this tool exists to remove."""
     day = _latest_session()
     history = _sessions_ending(day, 6)
     bad_day, earlier = history[-1], history[:-1]
+    freeze_clock(_after_the_close(bad_day))
     path = _seed_repairable_file(cache_dir, "TEST", bad_day, earlier)
 
     seen: list[str] = []
@@ -679,13 +700,14 @@ def test_the_repair_apply_writes_through_a_temp_file_and_renames(
 
 
 def test_the_repair_refuses_a_cache_directory_under_the_protected_data_root(
-    cache_dir, daily_bar_cache, monkeypatch, tmp_path
+    cache_dir, daily_bar_cache, freeze_clock, monkeypatch, tmp_path
 ):
     """`PROTECTED_DATA_ROOT` is pointed at the scratch tree so the refusal is
     proven without ever addressing `C:\\TradingBotData` (the 2026-09-05 rule)."""
     day = _latest_session()
     history = _sessions_ending(day, 6)
     bad_day, earlier = history[-1], history[:-1]
+    freeze_clock(_after_the_close(bad_day))
     path = _seed_repairable_file(cache_dir, "TEST", bad_day, earlier)
     before = path.read_bytes()
 
@@ -700,11 +722,12 @@ def test_the_repair_refuses_a_cache_directory_under_the_protected_data_root(
 
 
 def test_the_repair_prints_the_data_dir_and_the_cache_directory_first(
-    cache_dir, daily_bar_cache, monkeypatch, capsys
+    cache_dir, daily_bar_cache, freeze_clock, monkeypatch, capsys
 ):
     day = _latest_session()
     history = _sessions_ending(day, 6)
     bad_day, earlier = history[-1], history[:-1]
+    freeze_clock(_after_the_close(bad_day))
     _seed_repairable_file(cache_dir, "TEST", bad_day, earlier)
 
     seen: list[str] = []

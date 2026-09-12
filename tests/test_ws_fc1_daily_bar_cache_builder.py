@@ -140,6 +140,9 @@ def test_the_repair_widens_its_refetch_window_to_reach_an_old_bad_session(
     day = _latest_session()
     history = _sessions_ending(day, 90)
     bad_day = history[0]  # ~90 sessions back, far outside a ten-day window
+    # The repair's clock is STATED, never the hour the suite happens to run.
+    now = datetime.combine(day, datetime.min.time(), tzinfo=ET).replace(hour=16, minute=30)
+    monkeypatch.setattr(daily_bar_cache, "market_now", lambda: now)
 
     # The bad row is the LAST row of the file but is dated long ago: this is the
     # MCW / TERN / PRKS shape, a symbol the scan stopped refreshing.
@@ -166,7 +169,7 @@ def test_the_repair_widens_its_refetch_window_to_reach_an_old_bad_session(
     assert daily_bar_cache.main(["repair", "--cache-dir", str(cache_dir)]) == 0
 
     assert windows, "the repair never refetched the bad session"
-    span = (date.today() - bad_day).days
+    span = (now.date() - bad_day).days
     assert windows[0] >= span, (
         f"the refetch window {windows[0]} cannot reach a session {span} days back"
     )
