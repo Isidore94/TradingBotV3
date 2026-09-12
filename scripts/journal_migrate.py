@@ -174,7 +174,11 @@ NEW_TABLES_V3: dict[str, str] = {
             tags TEXT NOT NULL DEFAULT '',
             evidence_json TEXT NOT NULL DEFAULT '',
             model TEXT NOT NULL DEFAULT '',
-            generated_at TEXT NOT NULL DEFAULT ''
+            generated_at TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            confidence TEXT NOT NULL DEFAULT '',
+            supersedes_row_id TEXT NOT NULL DEFAULT ''
         )
     """,
 }
@@ -217,6 +221,19 @@ NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     ("trades", "fx_usd_rate_date", "TEXT NOT NULL DEFAULT ''"),
     ("trades", "reconcile_status", "TEXT NOT NULL DEFAULT ''"),
     ("trades", "anchor_execution_uid", "TEXT NOT NULL DEFAULT ''"),
+    # WS-AI1 (2026-09-12). The advisory enrichment row learns to say WHAT it
+    # is: `enriched`, `abstained` or `failed`, and why. Before this, an empty
+    # row and a refused one and a crashed one were the same three blank
+    # columns, and `_trades_for_session` read all three as "already done" -
+    # which is how six trades over 2026-09-09..11 carried a blank row while the
+    # ledger said `ok`. Additive and append-only: existing rows keep their
+    # blank status, which is exactly what the supersession rule looks for.
+    ("ai_trade_enrichment", "status", "TEXT NOT NULL DEFAULT ''"),
+    ("ai_trade_enrichment", "reason", "TEXT NOT NULL DEFAULT ''"),
+    ("ai_trade_enrichment", "confidence", "TEXT NOT NULL DEFAULT ''"),
+    # The enrichment_id this row replaces, or "" when it replaces nothing.
+    # A POINTER, never a rewrite: the row it names stays in the table.
+    ("ai_trade_enrichment", "supersedes_row_id", "TEXT NOT NULL DEFAULT ''"),
     ("trade_annotations", "planned_entry", "REAL"),
     ("trade_annotations", "planned_stop", "REAL"),
     ("trade_annotations", "planned_risk", "REAL"),

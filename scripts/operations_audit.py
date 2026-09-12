@@ -400,6 +400,17 @@ AI_STORE_DIR_ENV = "TRADINGBOTV3_AI_STORE_DIR"
 AI_STORE_DIR_SETTING = "ai_store_dir"
 AI_JOB_LEDGER_NAME = "ai_job_ledger.jsonl"
 
+#: Statuses that mean "the job ran and produced less than a trustworthy
+#: result". `degraded_no_narrative` is `ai_jobs.ledger.STATUS_DEGRADED`; the
+#: bare `degraded` is here only so a hand-written row is not silently ignored.
+#: Spelled out rather than imported because this module is read by the
+#: read-only System Health viewer and must not pull the AI package in.
+AI_JOB_DEGRADED_STATUSES = ("degraded_no_narrative", "degraded")
+
+#: Ledger field naming how complete the published document is (WS-AI1). Blank
+#: on every row written before 2026-09-12 and on jobs that publish no document.
+AI_JOB_COMPLETION_FIELD = "completion"
+
 
 def _ai_store_dir() -> Path | None:
     """The configured AI store root, or None when the batch layer is off."""
@@ -642,26 +653,68 @@ def _ai_jobs_check(now: datetime, local_tz) -> dict[str, Any]:
         )
 
     last = rows[-1]
-    updated_at = str(last.get("ts") or last.get("timestamp") or "")
+    # WS-AI1. The ledger writes `started_at` and `finished_at`
+    # (`ai_jobs.ledger.record`); `ts`/`timestamp` were the names this reader
+    # guessed, so EVERY AI row read as undated and the freshness branch could
+    # never fire. The guessed names stay first because a hand-written or
+    # older row may carry them, and `finished_at` is the one that answers
+    # "when did this job end".
+    updated_at = str(
+        last.get("ts")
+        or last.get("timestamp")
+        or last.get("finished_at")
+        or last.get("started_at")
+        or ""
+    )
     age = _age_minutes(updated_at, now, local_tz)
     statuses = Counter(str(row.get("status") or "") for row in rows)
     failed = statuses.get("failed", 0)
-    degraded = statuses.get("degraded", 0)
+    # The ledger's constant is `degraded_no_narrative`
+    # (`ai_jobs.ledger.STATUS_DEGRADED`); this counted `degraded`, which no job
+    # has ever written, so a degraded night showed here as healthy. Both names
+    # are counted: the bare one so a hand-written row is not silently ignored.
+    degraded = sum(statuses.get(name, 0) for name in AI_JOB_DEGRADED_STATUSES)
 
     # Freshness is deliberately generous: the layer is nightly, so a run that
     # is hours old is normal and only a run that is more than a day-and-a-half
     # old suggests the schedule itself stopped firing.
+    # WS-AI1 item 4: the strip shows the completion WORD. The newest row that
+    # carries one wins - only the summary jobs publish a document, so the
+    # answer is "how complete was the last narrative this layer published",
+    # and a later deterministic slot must not blank it.
+    completion = ""
+    completion_job = ""
+    for row in reversed(rows):
+        word = str(row.get(AI_JOB_COMPLETION_FIELD) or "").strip()
+        if word:
+            completion = word
+            completion_job = str(row.get("job") or "")
+            break
+    completion_note = (
+        f" Last published summary completion: {completion}"
+        + (f" ({completion_job})." if completion_job else ".")
+        if completion
+        else ""
+    )
+
     if failed:
         status = STATUS_UNHEALTHY
-        summary = f"{failed} AI job(s) failed in the ledger; last row {updated_at or 'undated'}."
+        summary = (
+            f"{failed} AI job(s) failed in the ledger; last row "
+            f"{updated_at or 'undated'}.{completion_note}"
+        )
     elif degraded:
         status = STATUS_DEGRADED
-        summary = f"{degraded} AI job(s) degraded in the ledger; last row {updated_at or 'undated'}."
+        summary = (
+            f"{degraded} AI job(s) degraded in the ledger; last row "
+            f"{updated_at or 'undated'}.{completion_note}"
+        )
     else:
         status = _freshness_status(age, healthy_minutes=36 * 60, unhealthy_minutes=72 * 60)
         summary = (
             f"Last AI job row {updated_at or 'undated'}"
             + (f" ({age / 60:.1f}h ago)." if age is not None else " (age unknown).")
+            + completion_note
         )
 
     return _check(
@@ -678,6 +731,9 @@ def _ai_jobs_check(now: datetime, local_tz) -> dict[str, Any]:
             "last_job": str(last.get("job") or ""),
             "last_status": str(last.get("status") or ""),
             "age_hours": round(age / 60, 2) if age is not None else None,
+            "completion": completion,
+            "completion_job": completion_job,
+            "last_reason": str(last.get("reason") or ""),
         },
     )
 

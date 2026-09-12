@@ -487,6 +487,17 @@ class TradesTab(QFrame):
         self.confirm_tags_button.clicked.connect(self._confirm_tags)
         self.confirm_tags_button.setVisible(False)
 
+        # WS-AI1 item 5. The advisory enrichment, where the trade is. One label,
+        # hidden when there is nothing to say, and every word in it says whose
+        # opinion it is: the tags here are a SUGGESTION and carry no privilege -
+        # `journal_bulk_tag.py` is the only machine writer of a real tag, and
+        # this pane has no button that accepts one.
+        self.ai_enrichment_note = QLabel("")
+        self.ai_enrichment_note.setObjectName("AiEnrichmentNote")
+        self.ai_enrichment_note.setWordWrap(True)
+        self.ai_enrichment_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.ai_enrichment_note.setVisible(False)
+
         self.review_outcome = QComboBox()
         self.review_outcome.addItems(
             [
@@ -526,6 +537,8 @@ class TradesTab(QFrame):
         layout.addWidget(self.notes_input)
         layout.addWidget(self.save_notes_button)
         layout.addWidget(self.confirm_tags_button)
+        layout.addWidget(QLabel("Overnight AI note (advisory)"))
+        layout.addWidget(self.ai_enrichment_note)
         review_form = QFormLayout()
         review_form.addRow("Review outcome", self.review_outcome)
         review_form.addRow("Decision reason", self.decision_reason)
@@ -727,6 +740,7 @@ class TradesTab(QFrame):
         self.tags_input.setText(str(raw.get("setup_tags") or ""))
         self.notes_input.setPlainText(str(raw.get("notes") or ""))
         self._show_tag_status(raw)
+        self._show_ai_enrichment(trade.trade_id)
         self.review_outcome.setCurrentIndex(0)
         latest_review = journal_feed.latest_trade_review(trade.trade_id) or {}
         review_payload = latest_review.get("payload") or {}
@@ -757,6 +771,44 @@ class TradesTab(QFrame):
             self.adjustments_list.addItem(
                 f"{record.get('created_at')} {record.get('action')}{superseded} - {record.get('reason')}"
             )
+
+    def _show_ai_enrichment(self, trade_id: str) -> None:
+        """Show the latest non-superseded advisory row for this trade (WS-AI1).
+
+        On the existing detail read path, beside every other `journal_feed`
+        read `_show_trade` already does - one indexed query against a table with
+        a handful of rows per trade, never on the paint path.
+
+        An `abstained` or `failed` row is SHOWN, not hidden. "The model looked
+        at this trade and declined, and here is why" is information; a pane that
+        showed only the successes would make the enrichment look more complete
+        than it is, which is the defect this packet exists to end.
+        """
+        row = journal_feed.latest_ai_enrichment(trade_id) or {}
+        if not row:
+            self.ai_enrichment_note.setText("")
+            self.ai_enrichment_note.setVisible(False)
+            return
+        status = str(row.get("status") or "").strip() or "unlabelled (written before 2026-09-12)"
+        summary = str(row.get("summary") or "").strip()
+        tags = str(row.get("tags") or "").strip()
+        confidence = str(row.get("confidence") or "").strip()
+        reason = str(row.get("reason") or "").strip()
+        written_at = str(row.get("generated_at") or "").strip()
+        lines = [summary or "(no summary - the model wrote none)"]
+        if tags:
+            lines.append(f"Suggested setups (advisory, not your tags): {tags}")
+        if reason:
+            lines.append(f"Why: {reason}")
+        lines.append(
+            f"status {status}"
+            + (f" - confidence {confidence}" if confidence else "")
+            + (f" - written {written_at}" if written_at else "")
+            + f" - model {row.get('model') or 'unrecorded'}. Advisory only; it changes"
+            " nothing and accepts no tag."
+        )
+        self.ai_enrichment_note.setText("\n".join(lines))
+        self.ai_enrichment_note.setVisible(True)
 
     def _show_tag_status(self, raw: dict) -> None:
         """Say whose tags these are, and offer the one-click confirmation (P6a)."""
