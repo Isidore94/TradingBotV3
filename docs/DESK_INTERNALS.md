@@ -3095,6 +3095,66 @@ incident sections elsewhere in this file remain the deeper record.
 
 - **The control, study and experimental-exit populations are SURFACED, LABELLED, and never mixed with picks** (M5, 2026-09-05): three Setup Tracker tabs - Controls (`N graded episodes from the M setups`, never one number under the other noun), Studies, Exit frameworks (`comparison_apr2026` beside `baseline`, `n_filtered_by_experiment` reconciling the two n's) - read three CSVs written in the tracker's own guarded save pass. Win rate leads with `n` and the ONE Wilson bound, the sort is the bound, each tab carries a population sentence and `experimental` is a COLUMN. Shadow only; the champion aggregates are pinned byte-identical.
 
+**EF1 - the same comparison, split by setup family** (trader, 2026-09-08; built in the
+2026-09-12 WISHLIST sweep). The trader asked whether taking profit at the 3rd band beats
+the 2nd for the 1st-dev breakout study, and the M5 export could not answer it: it pools
+every scan row by `(framework_family, exit_template_id, side, priority_bucket)` and never
+by SETUP, so "full at band 3 loses" (LONG favorite: 47% win, -0.15 R, n_closed 8,018) is a
+whole-population answer. A 1st-dev breakout starts one band from its target; an AVWAPE
+bounce starts two.
+
+- **The grouping key is a PARAMETER of the one builder, never a second builder.**
+  `legacy.build_exit_framework_stats_rows(setups, by_family=False)`; with `by_family=True`
+  the key gains `setup_family` and `population` in front and the rows carry those two
+  columns first (`EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS`, derived from the pooled tuple so
+  the two files can never disagree on a column, and pinned that way by a test). One builder
+  is what makes the two files agree on a rate; one scenario walker
+  (`_flatten_tracker_scenarios`) is what keeps the band-variant fence - a second walk of
+  `setup["scenarios"]` here would be the eighth unfenced reader
+  `test_band_variant_fence_guard.py` exists to prevent.
+- **A SECOND file, never a finer grain inside the shipped one.**
+  `master_avwap_exit_framework_by_family.csv` beside `master_avwap_exit_framework_stats.csv`,
+  written in the same guarded save pass under its OWN `try`, after the pooled one. The
+  pooled file stays byte-identical (golden) and a raising by-family export costs neither
+  the tracker save nor the pooled file. The pooled file's 24 live rows sit under the
+  table's 300-row cap; splitting it by family would blow the cap and change the grain of a
+  shipped table.
+- **`population` is the RECORD's flag, joined on `setup_id`, never the family name.**
+  `champion` / `study` / `control` from `is_study` / `is_control`, so a champion family
+  called `study_1stdev_breakout_probe` is still `champion` and a study family with no such
+  word is still `study`; population is part of the key, so a study and a champion sharing a
+  family name keep separate rows. The by-family export reads all three namespaces (the
+  study and control records carry the same exit scenarios, built by the same
+  `build_tracker_setup_record`); the pooled export still reads `setups` alone. So the
+  reconciliation - family sums of `n`, `n_closed`, `wins`, `losses`,
+  `n_expired_unmeasured`, `n_filtered_by_experiment` equal to the pooled row - holds over
+  the CHAMPION rows. A setup with no `setup_family` is `unlabelled`, counted, never dropped:
+  a dropped row would make the pooled row bigger than the sum of its families with nothing
+  on the page saying so.
+- **The tab gains ONE control and nothing else.** `exit_framework_family_combo` above the
+  population sentence, first entry `All setups (pooled)` rendering today's table unchanged
+  (golden order), then every family in the by-family export sorted by NAME - never by a
+  result, which would make the choice for the reader and move under them between scans. A
+  family view FILTERS BEFORE the 300-row cap (sixty families of six rows is 360; a view
+  capped before it filtered would show a late family nothing) and re-ranks nothing:
+  `_rank_exit_frameworks` has already ordered both files by the same Wilson lower bound.
+  The family sentence prints the LARGEST `n_closed` among the family's rows, never the sum -
+  the four templates are simulated on the SAME setups, so 30+33+31+32 is a claim about 126
+  setups that do not exist - and says `BELOW FLOOR` when every row is under
+  `evidence_stats.MIN_REPORTABLE_N`, with the rows still SHOWN. Hiding a study's rows is
+  how a study never gets looked at, and a study is what the split was built to read.
+- **The table keeps its OWN render memo** (`_exit_framework_rendered_from`) rather than an
+  entry in `_rendered_from`: that dict is replaced wholesale at the end of every render
+  pass, so a key written into it there would be dropped and the table would re-fit on every
+  refresh - the defect G7.2 measured and fixed. A picker click re-renders one table from
+  rows already in memory and reads no file.
+- **Shadow only.** No detector, score, alert, template, stop rule or default exit changes;
+  nothing here promotes a template - T4's criteria decide. File-scoped ask-first: the
+  trader's EF1 prompt is the yes for the exit-framework export seam only.
+- **Tests:** `tests/test_ws_ef1_exit_by_family.py` (19; 18 failed with the fix reverted,
+  proved 2026-09-12).
+
+
 ### The M5 Strength Board's auto-adoption, long form
 
 - **M5 Strength Board:** batched yfinance over `universe_all.txt` PLUS the four trader watchlists, zero IB traffic; relative volume is SESSION-RELATIVE and is not one of the seven fenced formula functions (byte-identical to the R8 baseline); D1 SMA floors read `2y` with today's forming bar dropped. Its parity rows auto-join M5 Focus (`_auto_adopt_strength_board`: DESK only, empty `failed_floors` only, the ONE adoption gate re-run per row, skipping `_ignored_symbols` and `FocusPickStore.declined_today`, one `add_many` per side plus `mark_auto_adopted`, never `FocusService.add`, never removing). Every Focus add is injected into `longs.txt` / `shorts.txt` by `FocusPickStore._inject_into_shared` and a removal un-injects it.
