@@ -19,10 +19,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-12: WISHLIST 10K integration plan completed and independently reviewed (GO, no blockers): one measured Daily Review, faithful market notes/weekly forecast, setup-by-environment evidence and a compact frontier handoff.** Joins items 5/7 and 10D/E/F/I/J; planning only, no app changes or gate closures. Separate work already built: WISHLIST 11 workspace memory, `8baf643b`, plan.md Phase 0.25; gate #93 remains owed. |
-| Working branch | `main`; trader 2026-09-12: "make sure its on main" authorizes saving the complete WISHLIST planning copy and this checkpoint in `docs(wishlist): save the shared daily review and AI integration plan`. Base before this documentation commit: `ff19f91f`; publish target `origin/main`. No app build, branch switch, live repair or desk restart. |
+| Latest work | **2026-09-12 (afternoon): the WISHLIST SWEEP began on the trader's word - every WISHLIST item is being built as one feature dump on the side branch `claude/wishlist-sweep-2026-09-12` for a week of trader testing; Astra reviews after code completion.** The per-item status table is the dated entry "2026-09-12 - WISHLIST SWEEP" below: it is the resume point for every new session. Before it: 10K planning (reviewed GO) and WISHLIST 11 workspace memory built on `main` `8baf643b`. |
+| Working branch | **`claude/wishlist-sweep-2026-09-12`** off `main` `d31a3923`, pushed to `origin`; the desk checkout is ON this branch by the trader's instruction ("ensure local reflects the new side branch"), so a desk restart runs the sweep. Packet branches `claude/ws-<slug>` come off it in agent worktrees and are merged into it by the lead in a scratch worktree. Nothing merges to `main` until the trader's test week and Astra's review are done. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | Standby on the trader's word (2026-09-12: "integrate the memory changes then standby"); WISHLIST integration begins this week on the trader's next direction. Gate #93 (fresh-session recall check) closes on the first Claude and Codex sessions that boot with `MEMORY.md`. Then Fable: start at WISHLIST 10K, verify its source owners, and present the first bounded repair/shared-results selection before moving approved work to plan.md. Tie Daily Recap and AI export to the same facts; preserve the separate discovery/watchlist/history requests. Gates #92, #89-#91 and tracker checks remain; 10K records successful enrichment jobs with blank saved advice as a separate defect; this edit does not close or redefine #63. |
+| Next action | **Continue the WISHLIST sweep from its status table** (dated entry "2026-09-12 - WISHLIST SWEEP"): pick the first row not MERGED, read `WISHLIST.md` for that item and the packet at `.claude/packets/<name>.md` (or the packet text in the branch's first commit message), check the branch on `origin` for a tester's red tests or a builder's handoff, and carry on - tester -> builder -> lead merge into the sweep branch, suite green, fast-forward the desk checkout, push. Waves and lead decisions are on the entry. The docs pass (CHANGELOG inventory, plan.md Phase 0.26, WISHLIST status lines, CLAUDE.md trim) comes last. Gate #93 and the older gates remain as recorded. |
 | Trader actions owed | No restart or key needed for these plans. Existing asks remain: inspect live gates, review provisional tags (26 was the prior checkpoint count, not re-counted today), record planned trade risk and resolve the 2026-09-03 lake incident call. Decision 0019 is already taken; do not ask again. |
 | Last verified baseline | **2026-09-12 (WISHLIST 11 build, docs and agent config only): full suite 7312 passed, 3 skipped, 72 subtests passed, zero failures, exit 0 (447 s); ruff clean; `cmp CLAUDE.md AGENTS.md` identical; every `MEMORY.md` route resolves; every detail line tagged, dated and sourced; the four `.codex/agents/*.toml` parse.** Recorded app baseline before it: 2026-09-08 SN5/SN6, 7312 passed, 3 skipped, 72 subtests, zero failures, exit 0; smoke 7/7 (not rerun - no app code changed). The completed 10K planning check covers request/metric/dependency coverage, source anchors, preserved edits and whitespace; independent Terra review: GO, no blockers. This planning task ran no app tests or model jobs and does not replace that baseline. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
@@ -131,6 +131,67 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-12 - WISHLIST SWEEP (branch `claude/wishlist-sweep-2026-09-12`) - THE RESUME BRIEF FOR EVERY SESSION
+
+**Trader, 2026-09-12 (afternoon):** *"Start incorporating features from [WISHLIST.md]. Analyze the
+entire document and integrate in whatever order seems more efficient ... Expect to be stopped out by
+the 5 hour usage limits so ensure each step that you complete is reflected in an .md file somewhere
+so a new ai can always check that .md file against wishlist.md and knows where to continue. Commit
+and push to a new side branch and ensure local reflects the new side branch. Do not wait for me to
+test each feature I want one big feature dump then I will test it over a week. Astra will review but
+we will do that after code completion."* Also: *"make use of subagents as per the directions of the
+system .md files as well as the new memory changes we made today."*
+
+**This table is the resume point.** A new session reads it, then `WISHLIST.md`, then the packet file
+named on the row it picks up. Rows are updated as work lands; the status vocabulary is
+`QUEUED` (packet not yet written) / `PACKET` (`.claude/packets/<name>.md` written, local, gitignored;
+the packet text is ALSO pasted into the builder's branch commit message so a stop-out loses nothing)
+/ `TESTS RED` (tester pushed failing tests on the branch) / `BUILT` (builder pushed, handoff checked
+against the diff) / `MERGED` (in the sweep branch at the named tip) / `DEFERRED` (reason on the row).
+Process per `docs/AGENT_TEAM.md`: recon -> packet -> tester -> builder in their own worktrees,
+branch `claude/ws-<slug>` off the sweep branch; the lead merges into the sweep branch in a scratch
+worktree, runs the suite, fast-forwards the desk checkout (the trader asked that "local reflects the
+new side branch") and pushes. **No reviewer round** - the trader said Astra reviews after code
+completion. **No merge to `main`** - the trader tests the sweep branch for a week first.
+
+| WISHLIST item | Packet / branch | Status | Notes and lead decisions (trader may overrule) |
+|---|---|---|---|
+| 1 GUI leftovers (Journal splitter 39/61 + blank space; Day-trade Tracker first click; CLAUDE.md trim) | `WS-J1` / `claude/ws-j1-journal-splitter` | QUEUED | Splitter + blank space as one small packet. The CLAUDE.md trim is a docs pass at the END of the sweep (the lead). The DT first-click read stays as it is (G7 recorded it as the accepted cost). |
+| 2 FC1 forming candles in the daily-bar cache | `WS-FC1` / `claude/ws-fc1-forming-candles` | QUEUED | Build the writer guard + manifest counts + `python -m master_avwap_lib.daily_bar_cache repair` (dry run default). `--apply` on the live cache stays the TRADER's action. legacy.py writer seam only - the trader's FC1 prompt is the recorded yes. |
+| 3 EF1 exit frameworks by family | `WS-EF1` / `claude/ws-ef1-exit-by-family` | QUEUED | Second export + family picker on the Exit frameworks tab. legacy.py export seam only - the EF1 prompt is the recorded yes. |
+| 4 SN1-SN4 (SN5/SN6 built 2026-09-08) | `WS-SN4` / `claude/ws-sn4-feed-diff`; `WS-SN3` / `claude/ws-sn3-one-rrs-pass`; `WS-SN2` / `claude/ws-sn2-incremental-bars` | QUEUED | Land SN4, SN3, SN2 in that order (wave 2). **SN1 DEFERRED**: the trader's own prompt says it lands LAST after SN2-SN6 have proven themselves on a live day; that proof cannot exist inside this sweep. |
+| 4 (points) block 4 - AWAY digest ranks swing picks by points | `WS-PT4` / `claude/ws-pt4-digest-points` | QUEUED | Decision: the digest ranks by points ONLY when the existing Points switch is ON; OFF keeps today's Wilson order. Weight tuning stays the trader's. |
+| 5A weekend verdict (confirmed defect) | `WS-5A` / `claude/ws-5a-weekend-verdict` | QUEUED | Typed numeric contract, horizon/side explicit, percent never labelled R, "weakest veto reason" becomes "rejected names with the highest side-adjusted return". |
+| 5B symmetric actual-trade comparison | `WS-5B` / `claude/ws-5b-preference-symmetric` | QUEUED | Extend `preference_trade_outcomes` with rejections + `like_mode`; wave 2. |
+| 5C verify the night + coaching inputs | folded into `WS-AI1` | QUEUED | The runtime cause was found by 10K's audit (enrichment schema mismatch, briefs OK-after-fallback). A bounded preference summary joins the AI package in WS-AI1. |
+| 5D watchlist intent events | `WS-5D` / `claude/ws-5d-watchlist-intent` | QUEUED | Append-only dated add/remove event at the trader-edit seam; machine writers labelled; an external diff labelled `observed_external`. |
+| 5E identity / journal coverage | - | DEFERRED | Investigation only; the identity repair belongs to the canonical-opportunity roadmap (plan.md Phase 4). The tag backlog is already exposed (Weekend Prep "Tag this week"). |
+| 5F coaching view (four questions) | folded into `WS-DR` (10F) | QUEUED | Daily Recap views 3 and 4 ARE the four questions over the same evidence snapshot. |
+| 6 Theta pick tracker | `WS-TH` / `claude/ws-th-theta-tracker` | QUEUED | Decisions: one row per (symbol, scan_date); graded at the sold put's expiry AND marked at 5/10/20 sessions; the readout's cohort is FIRST appearance with a repeat count. Written from the runner after the scan (never legacy.py's save pass). |
+| 7 D1 market environments | `WS-ENV` / `claude/ws-env-d1-environment` | QUEUED | One pure rule (`scripts/indicators/d1_environment.py`, versioned), append-only daily store, runner hook, reader join by SCAN DATE, a "By environment" block on Research > Results. The legacy.py stamp on the outcome row is NOT built (ask owed) - the dated store gives the same point-in-time label. |
+| 8 Setups star / X reflect the day's decisions | `WS-SX` / `claude/ws-sx-star-x` | QUEUED | Both marks when both facts hold. Presentation only. |
+| 9 Longs below AVWAPE / shorts above it | `WS-WS` / `claude/ws-ws-wrong-side` | QUEUED | Decision (display only, hides nothing): a `wrong side` badge on the setups table and a `[wrong side]` tag in the AWAY digest line, current anchor only. Hiding or a detector change stays the trader's decision. |
+| 10A D1 discovery freshness | `WS-10A` / `claude/ws-10a-scan-freshness` | QUEUED | Build the truthful freshness surface (last successful scan / latest input bar / latest shown result, stale label) + a replay CLI over recorded manifests. The live trace is a gate. |
+| 10B TC2000 picks reach the M5 watchlist | `WS-10B` / `claude/ws-10b-board-to-scan` | QUEUED | Verify/repair + a visible "watching / staged / not adopted because" surface. |
+| 10C H1/H4 retester | `WS-10C` / `claude/ws-10c-h1-retester` | QUEUED | Step 1 only (H1 15-EMA bounce watch, opt-in arm button, versioned rule sheet). Wave 3. |
+| 10D Market Journal story + thesis | `WS-10D` / `claude/ws-10d-market-story` | QUEUED | Steps 1-2 deterministic (daily story, active-thesis view); step 3 rollups through the existing runner slot. Wave 3. |
+| 10E journal tags from setup notes | `WS-10E` / `claude/ws-10e-note-tags` | QUEUED | After WS-AI1. Wave 2. |
+| 10F Daily Recap | `WS-DR` / `claude/ws-dr-daily-recap` | QUEUED | Session reader over durable stores first, then the four views. Wave 2/3. |
+| 10G one Watchlist tab | `WS-WL` / `claude/ws-wl-watchlist-tab` | QUEUED | Wave 3. |
+| 10H more chart history | `WS-CH` / `claude/ws-ch-chart-history` | QUEUED | Wave 2. |
+| 10I thesis/context/setup join | `WS-10I` / `claude/ws-10i-context-join` | QUEUED | Deterministic join contract + module after WS-ENV; wave 3. |
+| 10J Trade Mentor | `WS-TM` / `claude/ws-tm-trade-mentor` | QUEUED | Steps 1-2 (scheduler/presence + raw reads; missing-field questionnaire). AI form filling (step 3) deferred. Wave 2. |
+| 10K one measured review | `WS-AI1` / `claude/ws-ai1-enrichment-status` (step 1); `WS-RP` / `claude/ws-rp-shared-report` (steps 2 + 5) | QUEUED | Step 1 first (the confirmed enrichment defect + honest completion status). Shared report + frontier export after WS-DR/WS-ENV. |
+| 11 workspace memory | - | DONE on main 8baf643b | Gate #93 still owed. |
+
+**Waves** (parallel builders never share a file): wave 1 = FC1, EF1, SX, 5A, PT4, AI1, 5D, ENV;
+wave 2 = SN4, SN3, SN2, TH, 10B, CH, WS, J1, 5B, TM, 10E, 10A; wave 3 = DR, WL, 10D, 10I, 10C, RP;
+then the docs pass (CHANGELOG inventory per packet, plan.md phase, CLAUDE.md trim, WISHLIST status
+lines). Merge order inside a wave is the order the handoffs arrive. Gate numbers for the sweep start
+at **#94** and are recorded per packet in this entry's sub-bullets as they land.
+
+**Landed so far:** nothing yet (this entry is the first commit on the branch).
 
 ### 2026-09-12 - WISHLIST 11 built: workspace memory adopted from JumpStarter (docs and agent config only)
 

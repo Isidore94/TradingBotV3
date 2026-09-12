@@ -1,5 +1,12 @@
 # Wishlist
 
+**SWEEP IN PROGRESS (trader, 2026-09-12 afternoon): every item below is being built as one feature
+dump on branch `claude/wishlist-sweep-2026-09-12`.** The per-item status (packet, branch, MERGED tip,
+lead decisions, deferrals) is the `CURRENT_CHECKPOINT.md` entry "2026-09-12 - WISHLIST SWEEP"; a new
+session checks that table against this file and continues from the first row not MERGED. The item
+texts below are the specs and stay as written; a `SWEEP:` line under an item's heading is the only
+edit made here as it lands.
+
 **Start here, Fable (2026-09-12): read 10K, then its linked items.**
 10K is the trader's clarified integration plan: one measured daily review, faithful
 market-thesis summaries, and a compact handoff for a frontier model. It connects

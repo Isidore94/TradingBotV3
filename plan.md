@@ -255,6 +255,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.23** | Setups ranked by a point system | Trader 2026-09-08: the setups table ordered by four graded inputs (family record, nearby S/R, RS/RW by direction, recent bounce) as a switch that only reorders, graded against the tracker's outcomes with a trader-gated self-correction. **BUILT 2026-09-08; gates #90-#91 owed.** |
 | **0.24** | Keep the desk snappy all day (SN1-SN6) | Trader 2026-09-08: cut the M5 scanner's hold on the interpreter without losing a scan, alert, board or evidence row. **SN5 (breathe) and SN6 (trader picks first) BUILT 2026-09-08 on `main`; live gate #92 owed. SN1-SN4 stay in WISHLIST until the trader moves them here.** |
 | **0.25** | Workspace memory (WISHLIST 11) | Trader 2026-09-12: a root `MEMORY.md` routing index and `memory/` provenance-tagged detail, adapted from JumpStarter M1; recall only, never authority. **BUILT 2026-09-12 on `main`; verification gate #93 owed.** |
+| **0.26** | WISHLIST sweep (trader 2026-09-12) | Every WISHLIST item built as ONE feature dump on the side branch `claude/wishlist-sweep-2026-09-12` for a week of trader testing, Astra review after code completion, then a merge decision. **IN BUILD; the per-item status table is the checkpoint entry "2026-09-12 - WISHLIST SWEEP".** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -362,6 +363,23 @@ file applied only under the trader's `Points: learned weights` switch (default O
 Remaining, trader's call: turn the learned weights on once the grade line shows a lift over the
 floor; the AWAY digest's swing order by points (it ranks by the Wilson bound today); the base
 weights - every one is a named constant at the top of `setup_points.py`.
+
+## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — IN BUILD on `claude/wishlist-sweep-2026-09-12`
+
+Trader, 2026-09-12: *"Start incorporating features from [WISHLIST.md]. Analyze the entire document and
+integrate in whatever order seems more efficient ... one big feature dump then I will test it over a
+week. Astra will review but we will do that after code completion."* This is the explicit move of
+every WISHLIST item into the build sequence, with these exclusions recorded by the lead (the trader
+may overrule): **SN1** (the scanner child process) waits for SN2-SN6's live proof as the trader's own
+prompt requires; **5E** (identity/journal coverage) is investigation that belongs to Phase 4's
+canonical-opportunity identity; **item 7's legacy.py outcome-row stamp** and **item 9's hide-or-detector
+change** stay ask-first and are replaced inside the sweep by a dated label store and a display-only
+badge. Sections 5-7 bind every packet: no detector, score, alert or order change; golden fixtures
+before any bar-frame or RRS change; completed bars only; evidence stores never cost the event; shadow
+evidence only. The status table, waves, packet names, branch names and lead decisions live in
+`CURRENT_CHECKPOINT.md` "2026-09-12 - WISHLIST SWEEP" and are updated as work lands; gates start
+at #94. Live validation (section 6) is the trader's test week on the sweep branch; nothing merges to
+`main` before it and Astra's review.
 
 ## Phase 0.25 — Workspace memory (WISHLIST 11, trader 2026-09-12) — BUILT the same day on `main`; verification gate #93 owed
 
