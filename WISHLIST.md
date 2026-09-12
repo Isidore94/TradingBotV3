@@ -1,3 +1,14 @@
+# Wishlist
+
+**Start here, Fable (2026-09-12): read 10K, then its linked items.**
+10K is the trader's clarified integration plan: one measured daily review, faithful
+market-thesis summaries, and a compact handoff for a frontier model. It connects
+10D/E/F/I/J with items 5 and 7; their detailed contracts still apply. Item 11 remains
+the separate workspace-memory work (built September 12). This plan starts no app build.
+Older pasted instructions below describe their writing-date state, not today's build queue.
+Recheck the checkpoint and code before acting on them; do not run their old cleanup,
+merge or restart commands. Only trader-approved selections move into `plan.md`.
+
 1. Finish up the GUI work
 
 Resume Phase 0.22 (the desk reshape, G lane) as the lead session. Follow AGENTS.md and docs/AGENT_TEAM.md
@@ -657,3 +668,1007 @@ STATUS: CANDIDATE. Brief only. Presentation only - hides nothing, writes nothing
 - Refresh on the day roll and after each capture verb, coalesced (one repaint per burst).
 - Open question: does a symbol both liked and vetoed today (e.g. "Veto D1 - but M5 today")
   show both marks? Proposed: yes, both - the two columns are independent facts.
+
+
+9. Stop putting up longs below AVWAPE and shorts above it (trader, 2026-09-11)
+
+STATUS: CANDIDATE. Brief only; plan and build later when the trader points Claude here.
+
+Trader's words: "stop putting up longs below avwape and shorts above it."
+
+- Meaning: a LONG candidate whose price sits under its AVWAPE line, or a SHORT candidate
+  whose price sits over it, is on the wrong side of the anchor and should not be shown
+  as a pick.
+- Open questions for the trader: which surfaces - the D1 scan output, the setups table,
+  the AWAY digest, the M5 alerts, or all of them? Hide the row, or keep it and mark it
+  "wrong side"? Which AVWAPE - the current anchor only, or the previous one too?
+- Any change here touches detector/scoring output, so the ask-first rule and the golden
+  fixtures (plan.md sections 5 and 7) apply before anything is built.
+
+
+10. Better daily discovery, entry watches, journals and review — Fable 5.1 queue (2026-09-11)
+
+STATUS: PLANNED CANDIDATES. The trader asked for plans in this file, not implementation.
+No new product phase is authorized by this entry. Fable can investigate and prepare a
+concrete first selection; move only explicitly approved work into `plan.md` before building.
+The governing process is AGENTS.md + docs/AGENT_TEAM.md, plan.md sections 5–7 and
+decision 0016. Before code changes, read the matching DESK_INTERNALS entry, characterize
+the current behavior, then use tester → builder → independent reviewer in isolated
+worktrees. File-scoped detector/scoring/alert approval still applies to a selected build.
+No desk restart, live-store repair or provider switch is part of this planning request.
+
+Request map: 1 → A; 2 → B; 3/4/5 → C; 6 → D; 7 → E; 8 → F;
+9/10 → G; 11 → H. This merges overlapping work without dropping any request.
+Source anchors below were inspected at `main` 7635d09a; line numbers are starting points.
+The existing item 9 was already uncommitted and is preserved. No live-session diagnosis
+or new runtime baseline is claimed by this planning pass.
+
+### 10A. Find useful D1 candidates before the final hour (request 1)
+
+Trader observation: the strongest Master AVWAP updates seem to arrive in the final hour
+or at EOD, even when the app says it updated earlier. Treat this as an unresolved report
+of freshness AND usefulness; a recent file timestamp proves neither fresh input bars nor
+good discovery. Do not assume the scheduler is the cause or promise an earlier EOD signal.
+
+First packet: trace one candidate end to end at the open, midday, final hour and close:
+scheduled/requested time → actual start → universe/side → provider/cache → last input bar
+and completed/forming status → detector result → export publication → desk read/render.
+Use exchange-session boundaries, including early closes. Compare scan manifests, logs and
+report contents, not just mtimes. Daily bars are intentionally pinned to Yahoo; IB serves
+intraday. Identify which earlier runs reused yesterday's completed D1 inputs, which used
+a labelled current-session preview, and which failed, queued or published old output.
+
+Then split any fix into (1) truthful freshness/publication and (2) discovery coverage.
+Show last successful scan separately from latest input-bar time and latest shown result.
+Preserve the last good report on failure, labelled stale. Check existing early/intraday
+slots before adding a timer. An intraday candidate may be a preview, but only completed
+bars can confirm a state transition. Do not relax the champion's rules to manufacture
+more names; use the existing intraday monitoring path where D1 confirmation is unavailable.
+
+Acceptance: replay several recorded sessions with only data known at each checkpoint.
+For names that later moved, record first eligibility, first publication, delay and reason
+for absence; also include failed candidates, false positives and total universe coverage.
+Maximum later movement is a retrospective measure, never an input to the earlier scan.
+Freeze the comparison window/rules first; separate an eligible name delivered late from
+a pattern that only became valid late. If historic intermediate snapshots do not exist,
+collect them prospectively and label the missing proof rather than reconstructing certainty.
+Tests: stale cache/new mtime, failed publish, queued runs, partial universe, timezone/early
+close, forming-bar preview, last-good preservation and GUI responsiveness. Live gate:
+one complete session trace and then representative day-part comparisons, not one good close.
+
+Related work: item 2 daily-cache integrity; item 4 scanner pacing (SN5/SN6 already built,
+SN1–SN4 still candidates); item 9 wrong-side AVWAPE proposal is a separate decision.
+Governing docs: BROKER_ADAPTERS, AUTO_MODES_AND_QUIET_HOURS, SWING_QUALITY_AND_FEEDBACK,
+GUI_FLUIDITY_MEASUREMENT_RUNBOOK. Recon anchors: `master_avwap_lib/runner.py:886`
+calls the daily fetch and `:2569` writes the post-scan watchlist output;
+`master_avwap_lib/legacy.py:3402`/`:3415` check cache day/mtime, and `:2128` owns the
+last-hour/close windows. These are inspection targets, not a proven explanation of the
+trader's late discoveries. Keep the date/mtime check separate from bar-content freshness.
+
+### 10B. TC2000 picks reach the M5 watchlist automatically (request 2)
+
+This is a verify/repair candidate first: the inventory already records TC2000-parity board
+rows joining M5 Focus (T2, 2026-09-04). Distinguish the bot's TC2000-style Strength Board
+from an external TC2000 export/paste; do not promise a direct TC2000 connection that has
+not been found. The current wording is assumed to mean the board's picks, with external
+lists accepted through the existing paste/import route if that is what the trader uses.
+
+Verified owner: `ui/panels/alert_center_panel.py:5906` wires `boardChanged` and the initial
+attachment; `_auto_adopt_strength_board` at `:5938` checks parity floors, adoption gate
+and ignored/taken-off names, batches membership writes and stamps machine provenance.
+Start with `test_m5_strength_characterization`, `test_t1_capture_and_board_focus`,
+`test_qt_alert_center` and `test_focus_auto_pick_provenance`.
+
+Trace board publication → eligible long/short names → mode/adoption gate → persisted
+membership → actual BounceBot scan universe. Surface “watching”, “staged” or the measured
+reason it is not adopted. Repair a broken link at its existing owner; do not add a second
+poller or append repeatedly to the trader's plain-text lists. G will give all these names
+one visible Watchlist home. Scanner inclusion and Focus adoption are distinct contracts;
+if the trader wants every board row scanned even when adoption fails, present that exact
+change as a separate selection rather than silently bypassing the gate.
+
+Tests/live gate: long and short, repeat refresh/restart, removed then reappearing row,
+trader-owned overlap, UNKNOWN/stale bars, DESK/AWAY/EVENING/OFF, no manual-name deletion,
+and proof that accepted names actually enter a scan. AWAY must still stage, not adopt.
+Read M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN and AUTO_MODES_AND_QUIET_HOURS_PLAN.
+
+### 10C. One opt-in H1/H4 retester with named triggers (requests 3, 4, 5)
+
+Trader intent: on selected “TOP weekly pattern” names, wait for a better entry instead
+of jumping in. Add a quick **H1/H4 retester** arm button below the chart, using the shared
+arm surface. A like or weekly-pattern tag alone does not arm it. Keep the existing tag
+meaning intact; this watch expresses entry timing, not a new setup claim or an order.
+
+Reuse candidates, not assumed finished alerts: `bounce_bot_lib/legacy.py:2387` builds
+completed H1 bars and `:2589` evaluates H1 15-EMA riding; its H1 alert emission is retired.
+`master_avwap_lib/legacy.py:28105` aggregates H4 by session. M5 retest/trendline tags at
+`bounce_bot_lib/legacy.py:4095` and D1 trendline logic at
+`master_avwap_lib/legacy.py:20634` are not a persisted, opt-in H1/H4 retester. Preserve
+retired H1 and M5 LRSI emissions and their evidence; implement a separately selected
+watch seam rather than flipping global retirement flags. Reuse indicator math only
+after checking that its rule means the requested bounce, not merely riding an EMA.
+
+Proposed small steps, not one giant detector:
+1. H1 15-EMA bounce first: selected symbol/side, timeframe, expiry and a visible reason.
+2. Add H4 pullbacks and LRSI pullback/recovery as separately named options in the SAME
+   watch. Do not require all conditions at once or emit three alerts for one episode.
+3. Add a direct trendline-break option for a chart-generated line, plus **break then
+   retest** for trendlines and compression boundaries. A direct break alert and a retest
+   alert are different choices; “watch for a retest” must not fire just because it broke.
+
+Before tests, freeze a versioned rule sheet: regular/extended hours and H1/H4 session
+alignment; EMA warmup; proximity tolerance in ATR; touch and rejection/reclaim definition;
+LRSI pullback/recovery levels; break close threshold; retest window; invalidation; expiry;
+cooldown/re-arm and handling multiple matching reasons. Proposed retest sequence is
+armed → completed-bar break → later retest → completed-bar confirmation → fired/invalid/
+expired. Keep one event per watch/episode, recording all measured reasons. A same-candle
+break/touch with unknown ordering must not claim a confirmed retest.
+
+Persist the selected trendline/boundary identity, endpoints, version and knowledge time.
+Never backdate a newly redrawn line or silently substitute another line into an armed
+watch. Project the frozen line forward; explicitly show invalidation/re-arm if needed.
+Use completed, session-aligned bars; forming H1/H4 bars are previews and end-session
+stubs cannot confirm these patterns. Missing history is “not measured”. Do not revive
+the retired M5 LRSI emitters or promote the warehouse's HTF LRSI study as a live signal.
+
+Phone behavior: trader-armed retester notifications should follow the existing armed
+Research/Focus alert delivery path in every mode. Record this proposed exception to
+routine AWAY-only push in the mode spec when selected; route through one sender with
+persistent deduplication and quiet-hours behavior stated. No automatic arming is implied.
+
+Tests: symmetric sides, exact EMA-15 input, completed/forming/stub bars, gaps and invalid
+candles, stale data, no lookahead from pivots, line redraw, compression boundary changes,
+same-bar ambiguity, repeated polls, restart during retest, expiry in trading sessions,
+disarm/re-arm and one phone event. Replay on fixed fixtures before an opt-in live check.
+Measure usefulness later; a pattern firing is not proof that it offers a profitable entry.
+Read M5_SIGNAL_ENGINES_PLAN, DESK_CHART_UNIFICATION_PLAN, AUTO_MODES_AND_QUIET_HOURS
+and existing expiry/price-alert contracts. Reuse the owners cited above.
+
+### 10D. Market Journal tells the market story and challenges my thesis (request 6)
+
+Existing foundation: `market_journal.py:78` keeps text, symbols, session and actual write
+time; `ui/services/market_journal_service.py:77` owns writes, `:200` reads captures and
+`:249` reads recorded market context. `ui/panels/market_journal_panel.py:219` is the
+existing reader. Reuse it. G3/G7 made notes readable and charts lazy; that is not the
+requested daily-to-quarterly synthesis. `ai_jobs/runner.py:452` owns the nightly stages;
+the optional `weekly_synthesis` at `:760` is not automatically in the default schedule.
+Existing trade enrichment is about trades and must not become this market narrative.
+
+Primary scope: SPY, QQQ, IWM, VXX, TLT and USO, plus explicitly mentioned major markets.
+Tell the sequence: what I expected, what the market did, what changed, what remains open
+and which evidence would change my mind. Relate the trader's chosen tactics to the stated
+environment: put selling, directional swings, pure day trading, or sitting out. Do not
+infer a strategy recommendation from a ticker moving or from a strategy's later payoff.
+
+Build in steps:
+1. A daily story beside the price-action captures: original dated notes plus deterministic
+   index facts and links back to each source. Clearly distinguish the trader's words,
+   measured price action and AI interpretation. No note means no invented trader thesis.
+2. A compact active-thesis view inside Market Journal: claim, original timestamp, intended
+   horizon, catalyst/condition, caution stance, invalidation if actually stated, and later
+   supporting/contradicting notes. Missing timing/invalidation stays unstated. Offer one
+   or two grounded questions, such as whether the stated condition for caution still holds.
+   A proposed interpretation is editable and never overwrites the original thought.
+3. Weekly summaries from daily summaries; monthly from weekly summaries and uncovered
+   daily periods; quarterly from monthly summaries. Keep session coverage explicit at
+   month/quarter boundaries so overlapping weeks do not count the same day twice. Offer
+   yearly later only if useful. Open theses carry forward even when their source is older.
+
+Prefer the existing overnight AI runner and local models. Optional API-backed synthesis
+uses the existing provider configuration when selected; no new key is needed for planning.
+Use bounded incremental inputs, stable source IDs/hashes, a schema/prompt version, cached
+unchanged results and per-job token/time caps. Changed notes invalidate their day and
+affected parent summaries only. Reuse summaries but retain source pointers and a bounded
+check of original notes to prevent repeated summarization from changing their meaning.
+Never discard contradictory notes to fit a budget; report coverage and truncation.
+Use current job-ledger/status surfaces for last success, pending/refused/stale/failed and
+bounded retry. Model failure leaves notes/charts and the last verified summary usable.
+
+Tests: absent notes/bars, opposing notes, late-written notes, superseding edits, ambiguous
+predictions, unfulfilled predictions, unsupported AI claims, corrected price inputs,
+overlapping weeks, incomplete periods, repeat runs, budget exhaustion and model failure.
+No model writes Focus, alerts, scores, policy or executed trades. Live acceptance: trace
+each daily claim to its note/bar, then inspect a weekly/monthly rollup and an unresolved
+thesis; a retrospective note must never look like a prediction made before the event.
+Governing docs: LOCAL_AI_AUTOMATION_PLAN, REVIEW_LEARNING_LOOP, decision 0016 and
+DESK_INTERNALS “The Market Journal is what the trader thought”. Link item 7's proposed
+D1 environment labels if built, but qualitative synthesis does not depend on that study.
+
+### 10E. Journal uses my setup notes to tag the trades I actually took (request 7)
+
+Already built: `journal_analytics.py:173` AutoTagger and its trader-capture lane,
+`journal_bulk_tag.py:184` / `:290` plan/apply provisional tags, and the nightly
+`journal_auto_tag` slot. `ai_jobs/enrichment.py:151` provides gated advisory enrichment;
+the runner's `journal_enrichment` slot at `:719` does not authorize confirmed-tag writes.
+Item 5C/5E already covers job completion and the tag backlog. Repair or extend these
+paths; do not build another auto-tagger. September 9's assessment counts are historical,
+not today's proof that the job failed or succeeded.
+
+First inspect recent ledger results, unmatched trades, current provisional/needs-review
+counts and the actual input package for one trade with a relevant stock note. Follow the
+note or like event through identity/time matching to a visible tag recommendation.
+Explicit setup claims outrank fuzzy inference; a quick like is interest, not a setup.
+Free text may support an AI suggestion with the source quote/ID, match basis, confidence
+and unknowns. Do not infer tags from future returns or match opposite sides merely because
+the ticker agrees. Date-only broker fills cannot establish an intraday note window.
+Option direction comes from legs/exposure, not the LONG label on a purchased option.
+
+Use the existing advisory enrichment destination for inferred text-based suggestions.
+Only the existing bounded provisional writer may populate unconfirmed setup tags on
+closed trades; retain its store-level refusal to overwrite confirmed tags. A broader
+write privilege would require a separate explicit contract decision. Let the trader
+confirm/correct in the existing Journal/Tag Week flow; show evidence and abstain when weak.
+Tests: claimed/quick likes, conflicting notes, pre/post-trade timing, ambiguous/date-only
+fills, unknown setup name, confirmed/provisional tags, repeated nights, failed enrichment,
+and no outcome leakage. Reuse `test_journal_bulk_tag`, `test_v2_journal_auto_tag_slot`
+and `test_ai_enrichment_and_policy_draft`; preserve digest audit gates and lane priority.
+Live gate: a closed trade with a known note reaches a traceable suggestion; confirmation
+remains the trader's. Read JOURNAL_RELIABILITY_AND_UX_PLAN §2/auto-tagging and LOCAL_AI.
+
+### 10F. Replace AWAY Recap with a visual Daily Recap (request 8)
+
+Verified gap: `ui/app.py:711` hands the recap a capped process-scoped alert list, so a
+restart or midnight crossing is not a complete session record. `_RecapWorker` in
+`ui/panels/away_recap_panel.py:72` reads the current report, pending picks and Focus;
+`away_recap.py:109` assembles those inputs without historical outcome ranking. Merely
+renaming the heading or filtering today's data by the selected date cannot meet this ask.
+
+Build the session reader first over existing durable evidence/outcome stores and dated
+scan artifacts. Inventory coverage per source; if a required snapshot is not retained,
+add the smallest append-only capture at its existing owner after selection. Historical
+membership that was never recorded stays unknown. Do not load the giant tracker on the
+GUI thread or start a competing outcome grader. This reader also feeds item 5F coaching.
+
+Then replace the existing recap page with Daily Recap, available for every Auto mode and
+still selectable/sortable by exchange session. Suggested default: latest completed session,
+with Today explicitly provisional, and a 1/2/3 prior-session lookback (default 3).
+Four visual views, all opening the shared chart at the original observation/decision:
+1. What worked today: sort by maximum favorable movement OR movement held at EOD.
+2. Recent swing picks: the previous 1–3 sessions' picks that followed through promptly.
+3. My likes and swing favorites: winners AND failures, including all my swing picks.
+4. My rejected picks that worked: what I missed, with my original reason alongside it.
+
+Keep max favorable excursion, EOD return and actual journal P&L separate. Use existing
+versioned measurement conventions where available, state the reference price/time and
+side-adjust the return. R is unavailable without known risk, and “max profit” in a paper
+view is labelled best available movement, not money I earned or an achievable fill.
+For recent swings, propose first next-session favorable movement plus next-session close
+as the explicit “instant follow-through” read; show the selected 1–3-session end as a
+separate column. Ratify the precise definition before tests; never choose it after seeing
+which metric makes a pick look good. A decision made midday cannot take credit for the
+morning's high. Unknown intraday timing yields unavailable, not an assumed opening entry.
+
+Pin each view's cohort/date window, label observation age and pending horizons, retain
+capture IDs/source/category/side, dedupe at the opportunity grain and link repeated clicks
+without inflating n. Likes, claimed likes, passes, vetoes and not-today/dislike remain
+separate facts; unfavorite is not a rejection. Show rejection reasons and adverse movement:
+a later rise alone does not prove a timing/risk veto wrong. Raw single-example review is
+allowed below statistical floors; claims about best setups or edge still use evidence_stats.
+
+Chart review should show decision marker, relevant level, later path and the original note,
+with quick previous/next and an easy view of failures. Preserve AWAY staged-pick management
+and its no-return-queue behavior while replacing the page; Daily Recap does not imply
+routine phone pushes in DESK/EVENING/OFF. Explicit display sorting must never rerank live
+candidates. Link item 5A's verified verdict-unit defect before reusing those summaries.
+Tests: restart/midnight/session change, old date with current files, missing source, short
+returns, late picks, repeated likes, retractions, overlapping cohorts, incomplete horizons,
+and source counts that reconcile. Reuse `test_away_day_recap`, return-surface tests and
+existing preference/human-focus graders. Live gate: review one past and one current session
+after restart, trace winning AND losing examples to their source and chart.
+Read AUTO_MODES_AND_QUIET_HOURS, CHART_REVIEW_WORKSPACE, REVIEW_LEARNING_LOOP and
+the current outcome-semantics contracts. This is descriptive learning, not a new ranking model.
+
+### 10G. One Trading Desk Watchlist for Focus and positions (requests 9, 10)
+
+Resolve the placement overlap in favor of the trader's final instruction: the main
+**Watchlist tab belongs on Trading Desk**. Journal can link to the Positions view of that
+same component; do not create two independent lists. Retire the standalone Chart Review
+and Focus Picks navigation pages only after their useful actions are reachable here.
+Keep the Trading Desk's Visual Alert Review chart and capture verbs; “Chart Review tab”
+does not mean deleting that chart, evidence or the Focus services behind monitoring.
+
+Existing seams: `ui/panels/watchlists_panel.py:52` edits shared/swing lists and exposes
+bot-owned lists; `ui/app.py:83`/`:84` register the separate pages; `journal_panel.py:67`
+has Trades/Calendar/Analytics/Health/Fees, not a position watchlist; shared
+`ui/services/price_alert_service.py:31` already owns armed price monitoring.
+
+Proposed views in one list: My watchlist, M5/TC2000, Swing favorites, Open positions and
+All. Show source badges and side/horizon without turning source into priority. Easy
+single-symbol add and paste-many, with side/horizon selection and useful duplicate handling.
+Manual “positions today” entry is a monitoring note unless the trader explicitly saves
+an execution using the Journal's existing trade-entry flow; never manufacture a trade
+just to add a ticker. Journal-derived positions are read-only projections of open/partly
+closed exposure, with account, quantity/exposure, source and last sync time shown.
+Unknown or stale sync must not silently remove a position. Closed journal positions leave
+the auto view after verified refresh while independently hand-added watch names survive.
+
+Click a row → the shared visual chart with capture and alert controls. Keep the arm bar
+under the chart. Existing price alerts go to the phone through the current service; C's
+retester can join the same controls later. Preserve price-alert identity, disarm/expiry,
+Focus provenance/adoption gates, fade/restore, swing favorite retractions and keyboard
+shortcuts. UI consolidation must not change who owns a name or what the scanner watches.
+No alert is automatically armed just because a broker position exists.
+
+Build membership/projection and actions first, then move navigation and saved-layout
+routes. Maintain the existing Focus writer/service internally. Inventory old page-only
+actions before removal, including arm, fade restore, paste, reasons and strength access.
+Tests: manual + auto + journal overlap, separate sides/accounts/options, partial closes,
+failed sync, external watchlist edit, restart, selection retention, shortcuts when old
+pages are hidden, no lost alerts and no broker writes. Use existing watchlist/Focus tests
+and Qt render checks at the trader's size plus one windowed size. Live gate: paste a name,
+see an open journal position, chart each, arm/disarm a phone alert and retain both after
+restart. Read M5_FOCUS_GATING, DESK_CHART_UNIFICATION and JOURNAL_RELIABILITY_AND_UX.
+
+### 10H. More chart history without making the desk slow (request 11)
+
+Treat “200 candles is not enough” as the requested outcome, not a verified universal cap.
+Inventory each chart's provider request, cache retention, payload truncation and visible
+viewport. Separate how many bars exist from how many are initially visible. Reuse
+ChartDataService; never raise every provider request blindly or fetch from the paint path.
+
+Verified differences: `chart_snapshot.py:310` loads the stored D1 history; `:488` builds
+indicators before applying the display tail, whose default is 90 sessions (`:26`).
+`ui/panels/chart_review_panel.py:67`/`:347` requests 520 D1 sessions already.
+`ui/widgets/symbol_snapshot_dialog.py:424` and the Alert Center at `:2546`/`:2715`
+request two M5 sessions. `ui/services/chart_data_service.py:184` passes supplied bars
+through, and `ui/widgets/candle_chart.py:660` clips/downsamples the viewport rather than
+imposing a universal 200-candle cap. Fix request/display seams by surface; do not confuse
+symbol-count cache limits or the scan's AI OHLC excerpt with chart-history limits.
+
+Proposed UI: useful initial zoom plus Load older / pan-left loading with a clear oldest
+available date and provider limit. Suggested starting targets, pending provider/replay
+checks: at least 1,000 available D1 candles and 500 H1/H4 candles; M5 history loads in
+bounded session chunks rather than one huge startup request. These are targets, not a
+claim that a provider supplies them. Preserve zoom/selection as older bars arrive, cancel
+stale symbol requests, cache off-thread, dedupe overlapping chunks and leave charts usable
+on provider failure. Fetch enough warmup before the visible span for EMA/LRSI/AVWAP and
+retain actual anchor history; do not fabricate earlier bands from a truncated series.
+
+Tests: >200 bars reachable, initial view unchanged, chunk overlap/order/timezones, sparse
+history, exhausted provider, rapid ticker changes, warmup/anchor correctness and bounded
+paint/memory cost. Live gate: pan further back on D1/M5/H1/H4 with the scanner running,
+check oldest dates and freshness and compare GUI responsiveness to the existing bench.
+Read BROKER_ADAPTERS, DESK_CHART_UNIFICATION and GUI_FLUIDITY_MEASUREMENT_RUNBOOK.
+
+### 10I. Connect thesis, actual trades and setup evidence by market environment (2026-09-11 follow-up)
+
+Trader asks: can the Market Journal, Journal and Setup Tracker together answer “what
+works in what market environment?”, and are we using the local AI well? This is the
+shared evidence connection for 10D/E/F and existing item 7, not a fourth journal or a
+replacement tracker. The trader intends to work through the wishlist over the coming
+week after Fable resets; prepare this dependency alongside those plans, not after all
+three have been built independently. This entry implements nothing or promotes no model.
+
+Verified starting point (source inspection, 2026-09-11):
+- `scripts/ai_jobs/briefs.py:37` DEFAULT_SCOPES already includes market_conditions,
+  setup_trackers, journal_review and market_journal. `scripts/ai_summary.py:868` supplies
+  recorded context, chart digests and original notes. Do not propose merely adding access
+  to data it already receives; inspect how much of each source actually survives packaging.
+- `scripts/market_context_ledger.py:92` records measured daily context and distinguishes
+  late completion; regime-shift evidence distinguishes machine reads and user overrides.
+  A close-time summary cannot serve as the market state known at a morning entry.
+- `scripts/ai_jobs/digest.py:209` reads environment/day-part keys from recorded rows.
+  The digest's declared v1 slice is environment × day-part × side, without setup-family
+  slicing. This is useful evidence, not the requested full setup/environment/trade join.
+- `scripts/journal_analytics.py:919` provides separate setup and regime breakdowns.
+  Journal regime fields exist, but separate totals do not establish how one specific
+  setup performed under one market state. Missing labels remain unset.
+
+Proposed shared contract, before building the new screens:
+1. Keep two distinct accounts: the trader's thesis (what was expected) and the observed
+   market state (what was measured). A thesis carries its original note ID, symbols/index,
+   write time, horizon, stance and explicit conditions. An AI extraction is a suggestion
+   with source pointers, never the authoritative market label or a silently confirmed
+   trader claim. Preserve revisions; a later correction must not rewrite earlier intent.
+2. Define a small, versioned environment vocabulary through item 7. Start with existing
+   recorded states and one or two measured dimensions, such as trend/range and volatility,
+   only where available. Separate daily and intraday context. Name the benchmark and
+   mapping rule (SPY primary, explicit QQQ/IWM context where appropriate); do not choose
+   whichever index explains a winner best after the fact. Avoid dozens of thin categories.
+3. Attach the state known at opportunity observation and actual trade entry, separately.
+   Record context ID/version, observed_at/available_at, relevant setup/occurrence ID,
+   source and match certainty. Link a thesis by its scope and validity window, not by
+   ticker/date alone. A market view may cover many names; a stock-specific note may not.
+   No explicit thesis is a valid state. A changed intraday stance requires a new version.
+4. Reuse current opportunity/trade/capture identities and named store owners. One thesis
+   may link many opportunities; one opportunity may link several decisions/fills. Count
+   a trade's money once, even with several tags or thesis links. Ambiguous matches stay
+   ambiguous. Date-only broker fills cannot select a midday regime; use only justified
+   prior/completed-session context or report the intraday link unknown.
+5. Backfill only what contemporaneous evidence establishes, on copies first. Label a
+   later historical reconstruction and keep it out of claims about what was known live.
+   Do not stamp today's regime or today's AI interpretation onto an old trade as fact.
+
+One drillable answer in the existing Daily Recap/Research views, with separate populations:
+- Opportunity evidence: how all recorded eligible examples of setup S behaved in state E,
+  including names the trader never took. This estimates the setup's observed behavior.
+- Personal execution: how confirmed actual trades in S/E did, including losses, fees and
+  valid risk measures. Keep paper movement, alternative exit-policy returns and broker
+  money separate; a hypothetical best move is never the trader's expected profit.
+- Thesis review: what the trader expected, what later supported/contradicted it, and
+  whether the chosen tactic matched the trader's own stated plan. “Market call right”,
+  “setup held” and “trade profitable” are different verdicts. Missing entry/risk/timing
+  can prevent an execution diagnosis; do not explain every loss as poor discipline.
+
+Each cell shows n, distinct sessions/symbols, coverage, window, outcome definition and
+uncertainty through evidence_stats. Compare against the same setup's overall baseline
+and suitable contemporaneous opportunities. Account for overlapping trades, repeated
+signals, concentration and differing hold periods; do not pool theta, day trades and
+swings into a single win rate. Start with descriptive association, not causal claims.
+Choose cuts before reading outcomes and validate promising observations on later sessions
+under the existing trial/promotion rules. Thin personal history can still show examples,
+but cannot justify a “best environment” claim borrowed from the bot's larger sample.
+
+Local AI's best role in this connection:
+- Code computes joins, prices, returns, coverage and statistics. The model extracts
+  tentative thesis structure, collates notes, explains the computed results, highlights
+  contradictions and proposes a small question to test. It never invents measurements.
+- Feed a bounded joined fact pack with source IDs and examples, not just three unrelated
+  reports and a request to infer links. Show both supporting and opposing examples under
+  a fixed selection rule, with omitted counts. This extends existing packaging/runner
+  owners; no competing nightly pipeline or result-based narration selection is implied.
+- Reuse 10D's incremental local daily summaries and cached period rollups. Reserve any
+  optional frontier review for compact difficult/periodic cases after the trader selects
+  the provider and budget. A larger model cannot repair absent timestamps or wrong joins.
+- Check effective use, not activity: job completion/refusal/failure, source coverage in
+  the actual package, artifact freshness, elapsed time, token counts where measured,
+  unsupported-claim rate on an audited sample, and whether the report reaches the trader.
+  A successful deterministic digest is not proof that later narration or enrichment ran.
+  A model output file is not proof that its claims are useful or that a user saw it.
+- Keep current gates and bounded retries. Explain refused/stale output in existing status
+  surfaces. Audit a small set of notes → extracted claims → joins → numerical facts →
+  narrated conclusions, then inspect counterexamples and compare against a simple
+  deterministic summary. Spend more inference only where it adds a traceable benefit.
+
+Read-only local-AI snapshot (2026-09-11; these are dated observations, not permanent status):
+- Configured model: `gemma3:12b-tbv3ctx-64k`. The configured AI store is
+  `\\MINI-PC\Trading Bot Data\ai_store`. Its `logs/ai_job_ledger.jsonl` records
+  11/11 OK rows for session September 8 and 16/16 for September 9 and September 10.
+  No failed/degraded ledger rows were found in those inspected sessions. This supersedes
+  item 5C's September 9 uncertainty about later completion, not its general audit proposal.
+- Session September 10: journal enrichment reports 3/3 trades; ticker briefs reports
+  265 briefs, 91 model calls and zero failed calls. Some membership-only names are
+  intentionally skipped; no model call is warranted when there is no grounded evidence.
+- The AI summary's successful row says “NOT synthesized”. Inspect the reason and actual
+  output before calling this a runtime defect; successful component reports do not prove
+  the combined coaching answer exists. This is a concrete next quality-audit target.
+- `digests/facts/2026/2026-09-10.json` reports 481 usable outcomes and 16 environment/side
+  slices, but explicitly has no journal block and no setup-family slice. Those outcome
+  counts are not counts of actual journal trades. They cannot establish the three-way join.
+- `retros/setup_research/2026/2026-09-10` artifacts report 632 eligible cells, 63 narrated;
+  the inspected narration has a generic summary and empty candidate/lesson/risk arrays.
+  Bounded coverage is intentional, not a reason to remove the size rule. Audit whether
+  the selected evidence supports useful specific conclusions and whether abstention is
+  warranted. More calls or longer output is not the acceptance criterion.
+
+Tests before any selected implementation: mid-session regime/thesis changes, EOD
+lookahead, late notes, overlapping theses, opposite sides, one trade/many tags, ambiguous
+or date-only fills, missing context, short/theta exposure, repeated observations,
+partial exits, sparse/concentrated cells, model omissions/fabricated references and
+rerun idempotence. Golden existing aggregates remain unchanged; new views have explicit
+population definitions and no detector/score/alert influence. Live gate: trace one
+winning and one losing opportunity and trade to their original thesis/context, then
+verify a later-session comparison without retrospectively relabelling the inputs.
+
+Read the current LOCAL_AI_AUTOMATION_PLAN, JOURNAL_RELIABILITY_AND_UX_PLAN,
+REVIEW_LEARNING_LOOP, item 7 and matching DESK_INTERNALS evidence/AI contracts before
+selecting source owners. Expected seams are the existing context ledger, journal/capture
+joins, evidence summaries, AI packaging and Daily Recap/Research readers. Define the
+shared contract early; ship the deterministic join before asking the AI to explain it.
+
+### 10J. Trade Mentor — a steady, low-friction stream of trader context (2026-09-11)
+
+Trader request: a Settings checkbox named **Trade Mentor**. While enabled, ask hourly
+for an M5 market read, at 08:00 and 12:00 Pacific for a D1 read, and around 10:00 for
+missing information on the previous session's trades. Skip missed prompts when away;
+ask at the next scheduled hour. Accept natural-language replies and have local AI put
+the information into the right fields. Purpose: reduce procrastination and feed 10D/E/I
+with consistent, time-stamped thoughts. This is a planning addition for next week's work,
+not an instruction to change the running desk now.
+
+Existing foundations: `ui/panels/settings_panel.py:48` and `ui/state.py` own Settings;
+`ui/services/market_journal_service.py:77` owns market-note capture; `market_journal.py:78`
+records actual write time; `journal_store.py` owns trade fields and annotations;
+`ui/panels/journal/trades_tab.py` owns trade editing. Existing local-AI packaging and
+the overnight runner can read the resulting evidence. A dedicated mentor scheduler and
+reliable free-text-to-field workflow have not been verified as existing; inspect before
+adding them. Do not mistake ordinary overnight advisory enrichment for interactive form
+filling. Verify existing target/thesis field support before proposing a schema migration.
+
+Scheduling contract to select before implementation:
+- Persist the checkbox, default OFF. Show the next prompt and a simple Pause today.
+  Interpret the trader's “PST” as Pacific wall time (`America/Los_Angeles`, including
+  daylight saving), not fixed UTC-8. State that assumption in Settings and test DST.
+- Proposed hourly M5 schedule: whole hours during the exchange's regular session,
+  starting at 07:00 Pacific on normal days and ending before the actual close. This
+  excludes the opening half-hour and after-close prompts; make the window adjustable
+  if the trader wants those. Weekends/holidays have no automatic prompts.
+- Fixed D1 prompts: 08:00 and 12:00 Pacific on exchange sessions. Keep the noon read
+  on an early-close day if the trader is present, labelled post-close, since the trader
+  explicitly requested that time. “D1 read” describes the trader's horizon; it does not
+  assert that today's D1 candle is complete. Show the current chart as a labelled preview.
+- At 10:00 Pacific, inspect the PREVIOUS EXCHANGE SESSION's actual trades and ask only
+  for missing material fields. Monday normally reviews Friday. No trades or complete
+  entries means no repair questionnaire. Missing broker coverage means “journal not
+  ready”, not “no trades”; one bounded retry within the current slot may be considered.
+- At 08:00/12:00 combine M5 and D1 into one card with separately stored answers. At
+  10:00 combine the current read and the missing-trade-data task into one card with
+  separate sections; never stack dialogs or merge market notes into trade notes.
+- One scheduler owns all slots. Persist slot identity (session/date, scheduled instant,
+  prompt kind), delivery and answer state. A restart, timer drift or clock correction
+  cannot duplicate a slot. Proposed response window: until the next hour, then expire
+  unanswered prompts. A new hour replaces an untouched card; never discard typed text.
+  Preserve a draft separately without representing it as a submitted market read.
+- AWAY, paused, locked/asleep or otherwise absent: skip; no queue and no catch-up burst
+  on return. Re-evaluate presence at each future slot; missing one must not disable the
+  day. Resume/restart midway through a missed slot does not suddenly demand its answer.
+  Define presence from explicit mode/lock signals first, with a configurable idle grace;
+  a trader quietly watching charts is not necessarily away. Do not record raw activity.
+- Keep Trade Mentor independent of the scanner's Auto setting: it does not enable scans
+  or change DESK/AWAY adoption. Proposed behavior is opt-in, present-user prompts in
+  DESK/EVENING/OFF, none in AWAY. Its fixed-time/early-close schedule is an explicit
+  proposed exception to the broad automatic-starter quiet-hours rule; record that narrow
+  contract in AUTO_MODES_AND_QUIET_HOURS/AGENTS/CLAUDE when selected. No phone push is
+  included in this request. Manual “Give a read” remains available at any time.
+
+Capture experience:
+- Use a small, non-modal card near the chart; no focus stealing or blocked trading
+  controls. One text box, Submit, “Read unchanged”, and Skip. Keep action keys scoped
+  to the card so typing or trading shortcuts elsewhere cannot submit an answer.
+- Default question: “What changed? What do you expect next? What would change your
+  mind?” Show the previous read and relevant index chart as context. One sentence is
+  enough; optional detail can cover SPY/QQQ/IWM, other indexes, preferred tactics and
+  caution. Do not force answers to every dimension each hour.
+- “Read unchanged” writes a NEW, explicit reaffirmation referencing the previous read,
+  at the current time. It is not a copied prediction or an independent thesis sample.
+  An unanswered prompt means no observation, not unchanged, neutral or bearish.
+- Link each submitted read to its prompt, actual response time, horizon and available
+  chart/context snapshot through 10I. A response at 09:50 cannot claim to describe the
+  market at 09:00. Capture raw text first using the existing store owner; chart capture
+  and parsing happen off the GUI thread. Failed journal writes are visible and retryable.
+
+The 10:00 trade check and AI form filling:
+- Name the trade clearly (symbol, side/exposure, account and entry/date as needed) and
+  show fields already known. Ask for thesis/reason, original stop or invalidation,
+  target IF one existed, and relevant support: setup claim, levels, timeframe, market
+  thesis and reason for choosing the tactic. Ask only what is missing; “all support
+  data” is contextual evidence, not an ever-growing compulsory questionnaire.
+- Treat **not supplied**, **explicitly no fixed target**, **not remembered**, and
+  **not applicable** distinctly. No fixed target is a complete answer. Apply the same
+  honesty to a stop: no stop is not a numeric zero or permission to invent one. A later
+  current stop and the original plan are different facts. Allow free text such as
+  “exit if the H1 level fails”; do not invent a precise price from it.
+- Local AI extracts a schema-checked draft into the relevant form fields, with exact
+  source spans and units. It must distinguish underlying price, option premium, dollars
+  of risk and percent; ambiguity stays blank with one focused follow-up. Deterministic
+  validation checks types/units; confidence is not proof. Do not guess position sizing
+  or risk from future price movement, exit price or broker money.
+- Save the original reply immediately, then show the populated fields for one combined
+  Save/Correct action through the existing trader-edit service. Do not ask permission
+  for every extracted field. This is a trader-reviewed edit, not a new unattended AI
+  writer of confirmed tags/risk. Preserve existing values and show any proposed conflict;
+  model output never silently overwrites a trader entry. A wrong trade link cannot be
+  repaired by simply giving its text a high confidence score.
+- If the local model is busy/offline, keep the reply and offer manual completion; queue
+  bounded parsing without repeated prompts. Give a small on-demand parsing task priority
+  only through the existing model resource owner; do not launch a competing model load
+  that starves scanners or overnight jobs. Measure latency before selecting the model.
+- All next-day answers carry actual write time and “recalled after the session” status.
+  Never backdate them or present remembered risk as a documented pre-entry plan. Keep
+  any analysis using recalled risk separately labelled from prospectively recorded risk.
+- Cap the morning task by time/trade count (suggest five minutes or three incomplete
+  trades, configurable). Keep the rest in the existing Journal completeness view with
+  an explicit count. Do not silently forget it, but do not nag again hourly about it.
+
+Suggested refinements, separate from the requested schedule:
+1. **Ask for changes, not essays.** Reuse known data; one useful new sentence beats an
+   hourly repeated form. Never reward word count, trading frequency or a winning answer.
+2. **Catch intent before results.** Offer a tiny “Why this trade / invalidation” capture
+   when the trader explicitly records a trade or arms a watch. Do not assume an armed
+   watch is a taken trade. If broker sync arrives late, label capture timing honestly.
+3. **One useful follow-up.** If a read names a concrete condition, offer one bounded
+   check after new measured evidence contradicts/supports it. Phrase it as a question,
+   not a trade instruction. This is opt-in extra scope, with cooldown and no new scanner.
+4. **Close the loop briefly.** Put “what I expected / what happened / one lesson” in the
+   existing Daily Recap. Carry one trader-chosen habit into the next session and review
+   it against future examples, including counterexamples, rather than creating a grade
+   for every thought. Daily/weekly Mentor feedback reuses 10D/I, not a separate AI report.
+5. **Measure burden and usefulness.** Show completed opportunities to give a read out of
+   prompts actually delivered while present, skip reasons only when known, missing-field
+   reduction and typical completion time. Separately count scheduled-but-away slots.
+   No guilt streaks, punitive scores, escalating reminders or forced answers. A pause
+   should be easy; record the coverage gap instead of manufacturing data.
+
+Build in small selected steps: scheduler/presence + raw market reads first; missing-field
+questionnaire second; validated AI draft filling third; useful coaching last. 10I's
+identity/time contract must precede joins, but Mentor's raw capture need not wait for
+every environment study or summary feature to finish. Coordinate Settings, Journal and
+shared chart edits with 10D/E/G. Reconcile LOCAL_AI_AUTOMATION_PLAN,
+JOURNAL_RELIABILITY_AND_UX_PLAN, AUTO_MODES_AND_QUIET_HOURS and matching DESK_INTERNALS
+entries; mirror AGENTS/CLAUDE only if the selected contract changes operating rules.
+
+Tests/live acceptance for a selected build: DST, holiday/early close, previous-session
+lookup, 08:00/10:00/12:00 collisions, skipped hour then next-hour delivery, lock/sleep,
+restart, Auto OFF vs Mentor OFF, pause, idle-but-present, existing typed draft, duplicate
+submit, no-target vs missing, conflicting/mis-unit numbers, wrong-trade association,
+stale broker import, AI unavailable/invalid output, confirmed-field preservation and
+post-session provenance. Test the real scheduler with an injected clock and the actual
+store/form path; do not sleep through hours in tests. Live check: miss one slot while
+away, return without backlog, answer the next, fill one trade with “no target”, correct
+one AI field, and trace both saved records into the next grounded AI package. No app
+change, API call or runtime test is part of this planning update.
+
+### 10K. One measured review for the trader, local AI and frontier model (2026-09-12)
+
+STATUS: TRADER-REQUESTED INTEGRATION PLAN, NOT IMPLEMENTED. This conversation authorizes
+planning in WISHLIST, not app changes, live repairs, a model/provider change or automatic
+frontier calls. Fable uses this as the integration brief for selected work in items
+5/7 and 10D/E/F/I/J, then records the bounded build selections in `plan.md`. Existing
+contracts in those entries remain; this section supersedes their disconnected build
+ordering and earlier assumptions that a successful AI job means useful advice exists.
+
+#### Product outcome and division of work
+
+The trader cannot watch every setup or variant. The program should record the observed
+opportunities, measure what worked and failed, preserve the trader's changing market
+view, and make the answers quick to read. The Daily Review and the frontier handoff
+must be two views of the SAME versioned facts, with local-AI explanations alongside.
+“Daily Review” here is 10F's Daily Recap, not a second page or a replacement tracker.
+
+- **Python measures:** eligibility, coverage, prices, outcome paths, speed, returns,
+  setup/variant comparisons and market features. It computes the best/worst tables.
+- **Local AI distills:** the core of the trader's notes, conditions and concerns;
+  concise explanations of the computed tables; contradictions and explicit missing
+  measurements. It does not need to reinvent the analysis or crunch raw rows itself.
+- **The trader reads:** charts, numerical results and a short local-AI review in the
+  app, with originals one click away and an easy way to correct an interpretation.
+- **The frontier model reasons:** receives those compact facts, the trader's intent,
+  and the relevant Setup Tracker evidence/version. It can test explanations and ask
+  deeper questions without re-reading giant stores to reconstruct routine answers.
+
+The learning question is “which setup and variant worked, how, and in what conditions?”
+It covers recorded names the trader never took as well as actual trades. Post-earnings
+success is the trader's stated observation and a useful first example, not a verified
+edge claim or a reason to select only winning examples. Nothing here changes live
+detectors, scores, alerts or orders; evidence/promotion rules remain in force.
+
+#### Starting point: what exists and what the September 12 audit found
+
+Read the named seams again before building; these are dated findings, not permanent
+runtime status. The September 11 session ran overnight into September 12 Pacific.
+
+- The nightly default already includes Market Journal, trade journal and setup reports
+  (`ai_jobs/briefs.py:37`, `ai_summary.py:763`). Its latest package held 28 market notes
+  and 26 chart digests. It lacked the daily machine-context and user-environment sources.
+  Access to several sources is not the thesis/context/setup/trade join in 10I.
+- Main summaries for September 10 and 11 took 309.0 and 264.1 minutes; both final
+  synthesis calls timed out at 900 seconds. September 9 synthesized 25/25 slices;
+  September 11 read 54/54 but published unsynthesized findings. `briefs.py:250` still
+  returns OK after `map_reduce.py:483` falls back. Fix meaningful completion/status,
+  not just the green count; do not assume an output-length error caused a read timeout.
+- **Confirmed enrichment contract defect:** six distinct trades over September 9–11
+  have blank `summary` and `tags` in `ai_trade_enrichment`, although jobs report success.
+  `enrichment.py:353/:363` reads fields excluded by `ai_summary.py:433/:484`'s schema.
+  A read-only reproduction with a real validated summary returned blank text. Existing
+  blank rows also satisfy `_trades_for_session`'s “already done” check at `:268`.
+  The separate deterministic provisional-tag job exists and must not be replaced.
+- September 11 ticker work recovered its one failed symbol: 91 analyzed, 246
+  membership-only, zero failed after retry. The original failed manifest row remains
+  valid history. Three sampled briefs largely restate membership/truncation. Digest
+  narration repeats its computed headline; research narrates 63/660 eligible cells
+  with largely generic advice. More tokens or model calls are not proof of usefulness.
+- Broker import failed three times, with other import work partially successful;
+  source completeness needs a separate check. No planned risk was recorded on the
+  14 distinct preference-matched trades in that night's report. Never fill it from
+  their results. No Journal UI reader of the enrichment table was found; the manual
+  AI Summary page does not load the nightly main review (`ai_summary_panel.py:390`).
+
+Audit sources: `ai_store/logs/ai_job_ledger.jsonl`, September 9–11 main-summary JSON
+and paired evidence under `ai_store/briefs/2026`, September 11 digest/research packs,
+`C:\TradingBotData\ai_morning_brief.txt`, and a read-only query of the journal database
+at its `project_paths.JOURNAL_DB_FILE` path. Inspect bounded fields, not raw credential-
+bearing broker error URLs. Older 5C/10I completion counts do not supersede this audit.
+
+#### One numerical contract, with separate answers rather than one “best” score
+
+Freeze these definitions and their availability map BEFORE examining the comparison
+results. Reuse existing measures where equivalent; otherwise label the gap. Never
+silently substitute an endpoint return for maximum movement or mix exit policies.
+
+| Requested answer | Proposed report meaning and controls |
+|---|---|
+| Total profit | Actual closed-trade broker net P&L, counted once per trade and with currency/fees/partial exposure handled by current Journal rules. Rank actual trades or aggregate setups within the same declared population/window; show n. Hypothetical recipe net R is a separate result, never dollars earned or a realizable portfolio total. A paper-dollar comparison would need a separately selected capital, sizing, overlap and cost convention. |
+| Biggest opportunity | Maximum favorable movement AFTER observation/defined entry within the chosen horizon, side-adjusted, plus adverse movement. Use measured MFE_R only with known risk; show percent or ATR as separate named units where available. Label it best available movement, not an achievable fill or profit taken. |
+| Quickest result | Proposed first view: time to the recipe's predeclared first target, with target-hit count/rate and unhit/pending/unknown counts beside median elapsed trading minutes among hits. Compare only equivalent targets/entry rules. Keep `time_to_mfe_min` as a separate hindsight timing fact; fast failures must not disappear from the cohort. No universal 1R threshold is assumed when risk is missing. |
+| End of day | Side-adjusted mark at the stated session close, with its entry/reference clock and existing exit-policy convention. Keep an EOD hold measure separate from a stopped strategy's realized result. An entry at the close has no same-session forward opportunity; use unavailable and an explicitly named next-session measure. |
+| Last day or two | Two independent controls: which observation sessions are included, and how long each observation is followed. Proposed observation choices: selected session or latest two completed sessions. Forward choices include entry-session close and exact next 1/2 exchange-session endpoints, with pending horizons shown. Preserve 10F's existing 1–3-session lookback as an additional view; never rename a 48-hour calendar period “two sessions”. |
+
+Individual examples may be sorted by the chosen measured result for retrospective
+review. Setup/variant/environment cells show good AND bad results, n, distinct sessions
+and symbols, missing coverage, policy/version and uncertainty via `evidence_stats`.
+Use its floors before “best setup” claims; ties/thin samples say no clear leader.
+An impressive single move is still visible below the floor, as an example only.
+Keep champion/study/control, entry/exit recipes, band families, long/short, day/swing/
+theta and actual trades distinct. Pair variant comparisons on shared occurrence IDs;
+report unpaired counts and overlapping exposure instead of adding correlated trials.
+
+Existing owners: `research_warehouse/outcomes.py:171/:912` already has session/minute
+checkpoints, MFE/MAE, `time_to_mfe_min`, `first_hit_at`, gross/net R and maturity;
+`:982` defines entry-session EOD. `master_avwap_lib/session_horizon_outcomes.py:82/:372`
+has exact session endpoint returns, NOT speed or MFE. `evidence_stats.py:431` owns
+statistics. Warehouse data can be disabled/unreachable; it must show unavailable,
+not block the desk or relocate the research store. Inventory all recorded families/
+variants and their eligible/measured/pending/missing counts before claiming coverage.
+Do not promise to measure setups or variants that were never captured.
+
+#### Market thoughts, weekly forecast and chart facts
+
+Keep three source kinds: **trader thesis**, **external model forecast**, and **measured
+market state**. The local summary is a fourth, derived interpretation with source IDs.
+
+- Accept the trader's hourly natural-language reads through 10J's raw-first capture.
+  Preserve actual write time, horizon, index/symbol scope and later revisions. Extract
+  expectation, supporting cues, concerns, preferred tactics and stated invalidation.
+  Keep “maybe”, alternative scenarios and unstated fields; do not strengthen a tentative
+  note into a confident prediction. “Read unchanged” is reaffirmation, not a new thesis.
+- Add an explicit paste/import route for the weekly ChatGPT forecast inside Market
+  Journal, using its existing writer where the schema permits. Save the original text,
+  source/model if supplied, original creation time if known, import time, target week,
+  assumptions/scenarios and source links if supplied. Unknown creation time stays unknown.
+  A forecast is outside commentary, not market fact or the trader's adopted view; an
+  explicit adoption links to a new trader statement. Later imports cannot count as
+  information known at an earlier entry. No ChatGPT connection, automatic pull or paid
+  API is assumed; imported instructions cannot change app policy or start actions.
+- Summarize cross-market reasoning: SPY, QQQ, IWM, bonds/yields and other explicitly
+  named markets. An index mentioned in prose must not inherit a selected stock chart's
+  identity. Keep each claim's scope. Separate yields from bond-price proxies such as
+  TLT; show source, unit and observation time, and do not invent a yield feed.
+- Use cached bars and `market_journal_capture.py:280` chart digests plus
+  `market_context_ledger.py:88` and ChartDataService. A compact chart fact includes
+  symbol/timeframe/session, data known through, completed/preview status, named measured
+  levels/features with units and rule versions, and a pointer to the original chart/bars.
+  Compress repetitive candles into computed facts; do not discard the evidence needed
+  to check a claimed trend or manufacture an earlier pivot from later candles.
+- Daily summary: what the trader expected, what changed in that view, what the measured
+  market did, and which questions remain. Preserve disagreements with the weekly forecast
+  rather than blending them away. Reuse 10D's incremental daily/weekly/monthly/quarterly
+  rollups, unique session coverage, open-thesis carry-forward and source-linked corrections.
+
+#### Measure environment, then connect it to setup performance
+
+Implement 10I's identity/time contract before joining screens. Attach the environment
+known at opportunity observation and the environment known at actual entry separately.
+Use the original benchmark/rule, never the index or closing state that best explains
+a winner afterwards. A late reconstruction is labelled and excluded from forward proof.
+
+Start with a small set of measured dimensions from item 7, not a grid of dozens of
+labels. Candidate dimensions grounded in the trader's words: compression/expansion;
+trend/range and lower-high structure; asymmetric downward versus upward impulse size
+and speed; and days since a known earnings event. “Downward wedge” remains a trader
+description until a causal, versioned geometric rule is selected and tested. Bond/yield
+and cross-index context stays unmeasured unless the needed dated data exists. Keep
+dimensions independent where possible; do not choose thresholds by their later profit.
+
+For each setup/variant, show the same metrics by environment and against its overall
+baseline on comparable dates/hold conventions. Separate (a) all recorded opportunities,
+(b) the trader's chosen/rejected names and reasons, and (c) actual execution. Reuse the
+10I thesis/context/opportunity/trade links and count money once. “My market call was
+right”, “the setup moved”, and “my trade made money” remain different conclusions.
+
+The local AI may flag a gap: “your notes often mention weaker rallies, but no measured
+field captures that.” Each suggestion names source notes, existing proxy if any,
+missing observations, and a small proposed measurement/test with cost and coverage.
+Store such proposals in existing research outputs, not live detector settings. Fable/
+trader selects a versioned shadow study before new collection or trial grids; register
+trials before reading outcomes and test promising associations on later sessions.
+No automatic feature mining, confidence-based promotion or AI changes to scoring.
+
+#### Shared report, UI and compact frontier handoff
+
+Extend the existing evidence/digest/entry-index owners with versioned, source-linked
+sections. First inventory which old readers must remain compatible; do not fill the
+current digest's empty journal/swing sections with values of another grain. No second
+grader, timer, competing ledger or giant tracker read on the Qt thread.
+
+The logical report has separate sections for market thoughts/forecast, measured market
+context, opportunity/setup results, preference decisions, actual trades, and missing
+evidence. Each numeric cell has an ID, metric/units, population, window, reference clock,
+source path/row IDs, version and measured/pending/unknown state. Narration cites these
+IDs; it never owns their numeric values. Snapshots have a common report ID and as-of
+time across UI and export; later matured results are explicit new/superseding versions,
+not backdated knowledge or an implicit rebuild of immutable historic digest packs.
+
+- **Daily Review:** reuse 10F's page, with a visible local-AI review area/tab alongside
+  its numeric tables. Show selected session, horizon, metric, coverage and output age.
+  Click a cell/example to the shared chart at the observation; click a thesis/forecast
+  to its original. Show failures and counterexamples beside winners. A missing model
+  leaves tables/charts useful; a failed import leaves a visible coverage warning.
+- **Frontier handoff:** offer export/copy of a small readable brief and versioned JSON,
+  a report manifest, relevant Setup Tracker snapshot/version, and drill-down paths to
+  detailed partitions. Include the numerical answers, condensed notes/forecast, observed
+  context, competing explanations, unresolved questions and missing fields. Do not make
+  the frontier model recompute basic tables or infer joins from unrelated prose reports.
+  Export is user-initiated; no automatic external upload or frontier call is selected.
+- **Bounded work:** proposed first budget is 32 KiB UTF-8 for the headline handoff plus
+  manifest (detailed partitions remain available separately). Measure actual token use
+  as well as bytes; provider limits may be stricter. Ratify a measured bound before
+  tests. Reuse unchanged source hashes and incremental period summaries; cap local task
+  size/time, retain omitted counts, preserve open concerns and avoid a full-history
+  reread each night. Summaries retain links to originals to prevent meaning drift.
+- **Selection honesty:** the requested numeric best/worst tables are explicitly
+  retrospective, result-selected views, with the full denominator, fixed metric/window
+  and comparison coverage. They do not become a representative research sample. The
+  existing N3 `setup_research` narration selection remains n-descending, never R-ranked;
+  do not change it to implement this report. Any new compact review section needs its
+  own explicit selection/omission contract and balanced examples, not a hidden change
+  to the N3 pack or the Setup Tracker's current sort. Thin cells cannot be promoted.
+
+#### Fable's integration sequence and acceptance
+
+These are bounded selections for the existing roadmap, not a parallel progress ledger.
+Fable should present the first concrete code scope after recon; no runtime changes are
+authorized by this entry. Coordinate shared Journal/chart edits, and retain all live
+validation and promotion gates. The dependency order within this work is:
+
+1. **Repair trustworthy output.** Reproduce enrichment failure before fixing its
+   schema/extractors, refusal of empty success and retry/supersession of existing blank
+   records. Verify a real saved suggestion reaches the trader. Distinguish published,
+   synthesized, useful-empty/abstained, failed and partial outputs. Inspect broker
+   completeness and the synthesis timeout using captured inputs; do not bypass gates,
+   raise timeouts blindly or change model as a substitute for this investigation.
+2. **Define and publish shared measured results.** Freeze metric/population/time/identity
+   contracts and a coverage inventory. Reuse the session/outcome readers, add only proven
+   missing measures, and publish the shared report without requiring narration. Start
+   an end-to-end slice with one recorded post-earnings family and one comparator chosen
+   before reading results; include losses and unknowns. Expand to all supported families
+   and recorded variants before claiming whole-universe coverage. Theta joins when its
+   own capture exists; its absence must not block the first useful report.
+3. **Preserve and condense intent.** Add weekly-forecast import and source-faithful
+   thesis extraction, plus 10J raw capture first. This can run alongside independent
+   numerical work once identities are agreed. Daytime capture need not wait for inference;
+   current market-hours inference protection stays. Interactive parsing requires 10J's
+   separately selected resource contract, latency proof and trader-reviewed field writes.
+4. **Join measured context and show the daily review.** Add the small versioned market
+   feature set, point-in-time joins and setup/environment comparisons. Wire the SAME
+   report to 10F's tables/charts and local-AI review. A view with sparse evidence should
+   still work and say what is unknown. Preserve manual/auto provenance and chart controls.
+5. **Deliver and audit the frontier pack.** Add the compact export and incremental
+   rollups. From the pack alone, a reader should answer: which recorded setups moved
+   most, hit their target fastest, held best to the close, and followed through after
+   1/2 sessions; what the trader expected/feared; and what remains unmeasured. A query
+   whose data is absent must receive that answer instead of an invented winner. Source
+   drill-down is for verification/deeper work, not routine reconstruction of the answer.
+6. **Improve measurement deliberately.** Review missing-feature suggestions, select
+   small shadow studies, and check later sessions. Keep the local layer mainly faithful
+   summarization and explanation; deeper interpretation belongs to the frontier review.
+
+Before each build, follow AGENTS/AGENT_TEAM's tests → builder → independent reproduction
+in isolated worktrees. Governing specs: LOCAL_AI_AUTOMATION_PLAN (mission, digest,
+stages and N3), REVIEW_LEARNING_LOOP, JOURNAL_RELIABILITY_AND_UX_PLAN, warehouse plan/
+decisions, AUTO_MODES_AND_QUIET_HOURS, chart-unification, relevant DESK_INTERNALS entries,
+and plan.md §§5–7/P6. Existing owner candidates are the source registry/digest/index,
+market journal service/capture/context, outcome readers/evidence_stats, journal services
+and the recap/research UI. Names are starting points; verify actual ownership before
+assigning files. No new runtime module/store is authorized merely by this list.
+
+Acceptance must cover: correct long/short and option exposure; missing risk/fees/FX;
+partial closes and duplicate decision links; unhit targets and missing bars; entry-close
+EOD and early closes; two-session selection versus two-session follow-through; stale/
+unavailable warehouse/import; multiple simultaneous theses and mid-session changes;
+late forecast imports and corrected notes; lookahead-free pivots/earnings; UI/export
+cell parity; no fabricated citations/numbers; timeout, model-offline and empty output;
+and supersession without history loss. Audit a winning AND losing example from original
+note/forecast → known context → opportunity/trade → measured result → displayed sentence.
+Confirm the compressed version preserves uncertainty and contradictory notes. Compare
+time/tokens with the current multi-hour review and test whether an unfamiliar reader
+can find the five requested answers without opening raw stores. Tests alone do not
+close live gates; inspect a real night's report and a later matured session together.
+
+This edit changes planning only. Checkpoint/glance is refreshed; CHANGELOG, plan.md,
+governing runtime specs and app baseline stay unchanged because no implementation,
+contract in force or promotion changed. No new Markdown/status file is introduced.
+
+### Fable's selection order and optional additions
+
+Read 10K first for the shared review/AI work. Its dependency sequence replaces the
+separate recap → tagging → narrative ordering below where they overlap; preserve the
+independent discovery/watchlist/chart work and do not duplicate the readers or screens.
+Remaining broad sequence (proposal, not a roadmap promotion):
+1. A/B delivery diagnosis and 10K's verified-output repairs; recheck the dated 5C findings.
+2. Follow 10K's shared facts/intent/context/UI/export sequence for D/E/F/I/J and items 5/7.
+   Define their identities early; raw note capture can proceed alongside independent
+   numerical work. Coordinate shared Journal/UI edits serially.
+3. G's one Watchlist and H's history/loading foundation remain separate, reusable work.
+4. After H, C's H1/H4 watches advance one trigger at a time with their own rule fixtures
+   and recorded selection. A recap or narrative build does not authorize a new detector.
+
+Optional suggestions based on the existing wishlist, not extra authorized work:
+- Put “data as of / last success / why absent” in the existing relevant status strips.
+  This connects A/B/E/F without another health dashboard.
+- Link F's examples to one small, dated habit/thesis to test next, as item 5F proposes;
+  retain counterexamples and review it on fresh sessions rather than declaring success now.
+- Connect item 6's theta study and item 7's D1 environments to D/F only when built and
+  measured. Keep qualitative market stance, hypothetical pick outcomes and traded money
+  distinct. Neither study should delay fixing stale scans or missing watchlist names.
+- Keep item 8's like/reject badges source- and horizon-aware when integrating G; a pass
+  can be shown without becoming a veto or “Reviewed today”. Item 9's AVWAPE-side filtering
+  stays a separate detector/display decision and must not sneak in as a discovery repair.
+
+Before each selected build, Fable records scope, actual source owners, golden/failing
+tests, any remaining trader decision and live acceptance gate in the existing plan/docs.
+Afterward reconcile checkpoint/CHANGELOG/specs, advance only completed work and keep live
+gates open. No new roadmap, packet-status file or committed assessment is needed. This
+planning pass changes no runtime contract, so plan.md and the app baseline remain unchanged.
+
+
+11. Bring JumpStarter's workspace memory changes here (trader, 2026-09-11)
+
+STATUS: BUILT 2026-09-12 on `main` (trader: "integrate the memory changes"; plan.md Phase
+0.25, gate #93 owed). Written 2026-09-11 as CANDIDATE: trader explicitly asked to add the memory changes from their
+JumpStarter GitHub repo to this wishlist. Plan the adaptation; do not run a blanket
+retrofit, overwrite this repo's instructions or install a memory system in this task.
+This is development-agent recall, separate from Trade Mentor and the bot's market memory.
+
+Verified source: [Isidore94/JumpStarter](https://github.com/Isidore94/JumpStarter),
+GitHub `main` at `664e08348f0cd1e234518f610185c983036d850a` on 2026-09-11,
+matching the clean local checkout at `C:\Users\Aaron\JumpStarter`.
+Read the integrated M1 change and its follow-ups, not just the initial patch:
+`48d86e9` (hierarchical memory), `3234bd2` (index authority), `556cffd`
+(maintenance/guidance), `664e083` (integration and verification).
+Primary references at that revision: `CLAUDE.md` “Workspace memory”, `MEMORY.md`,
+`memory/`, `docs/INTERNALS.md` “Workspace memory is request-grounded”,
+`docs/CODEX_NOTES.md`, root `.codex/agents/*.toml` and CHANGELOG's M1 entry.
+M1 changed JumpStarter's own workspace guidance; its templates were not changed.
+Do not assume `jumpstart init` or copying templates installs these memory changes.
+
+What to carry over, adapted to TradingBotV3:
+- A small `MEMORY.md` routing index: name → detail file → trigger keywords, not stored
+  facts. Detail areas for people, project knowledge and decisions, plus dated daily
+  notes and prunable temporary context. Read the index, then only matching details.
+- Before recalling earlier decisions/preferences/work, use the narrow relevant memory
+  sources; JumpStarter limits recall to five sources and cites file, provenance and date.
+  This does not cap the source investigation needed for a real implementation or audit.
+- Keep only non-re-derivable knowledge. Each durable detail line has a source, date and
+  `[stated]`, `[observed]`, `[inferred]` or `[suggested]` provenance. Do not turn a model
+  guess into a trader statement. Do not duplicate git history, live counts, generated
+  plans, broker data, keys or machine status that should be checked at its real source.
+- Supersede obsolete detail beside its dated replacement while retaining the old line
+  struck through. Fix stale routing; an index or future search database is only a locator.
+  Update the index alongside detail changes and consolidate before its source-defined
+  size caps, rather than letting daily logs grow into another giant startup brief.
+- Preserve the source's distinction between direct trader corrections and inferred
+  lessons. JumpStarter's evidence threshold for inferred standing lessons is at least
+  three weighted independent signals across two sessions (signals older than 30 days
+  count half). In this repo that threshold alone must NEVER authorize a detector change,
+  overwrite an accepted decision, promote a wishlist idea or bypass the ask-first rule.
+  Failure memories describe what broke and what fixed it; they are not executable orders.
+- Adapt role guidance: read-only recon/review reports sourced proposed memory corrections
+  to the lead; memory writes stay inside each worker's authorized scope and integration
+  stays with the lead. Preserve TradingBotV3's existing model routing and isolated workers.
+
+Reconcile authority before copying anything:
+`CURRENT_CHECKPOINT.md` remains the current-work brief; `plan.md` remains build order and
+promotion authority; CHANGELOG remains implemented history; accepted decisions/specs
+remain the contracts. Memory points to those sources instead of competing with them.
+JumpStarter's “detail is authoritative” applies to memory detail versus its routing
+index, not memory versus verified code or this repo's control set. Its idle-boot rule
+must not weaken this repo's mandatory narrow reads once a task exists. Explicit user
+directions and verified current evidence still win. Inventory any existing Claude-local
+memory before migrating; do not bulk-copy stale auto-memory or another project's notes.
+
+Expected selected implementation: add the local index and narrowly seeded detail files;
+edit CLAUDE then regenerate byte-identical AGENTS; adapt relevant existing agent guidance;
+classify new Markdown in docs/README and reconcile checkpoint/CHANGELOG. Update an
+existing internals entry or decision record if the authority contract needs explanation.
+No new roadmap, handoff or status ledger. Do not import JumpStarter's sample operator
+facts or approval record as though they were TradingBotV3 decisions.
+
+Verification: inspect the final integrated source revision again; static checks for
+resolvable routes, provenance/date/source, caps, stale/conflicting entries and identical
+CLAUDE/AGENTS. In fresh Claude and Codex sessions, ask a bounded prior-preference question
+and verify that only the relevant memory files are read and the answer cites its source;
+ask a live-status question and verify it reads the checkpoint/code instead of stale memory.
+Check that read-only helpers write nothing and neither recall nor a suggested lesson
+authorizes app work. Use docs/config checks; no trading-engine test run or desk restart
+is needed for a memory-only adaptation. JumpStarter's own passing tests do not verify
+the adaptation here. Coordinate with the already-listed root instruction-file trim.
