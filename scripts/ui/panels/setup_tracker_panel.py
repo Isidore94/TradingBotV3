@@ -10,6 +10,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -76,6 +77,15 @@ STUDY_DISCOVERY_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
 EXIT_FRAMEWORK_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
     "master_avwap_exit_framework_stats.csv"
 )
+# Packet EF1 (trader, 2026-09-08): the same comparison split by SETUP FAMILY, in
+# its own file. The pooled table above answers "does band 3 beat band 2" for the
+# whole population; this one answers it for the 1st-dev breakout. It is a second
+# FILE and a second READ, never a second grain inside the shipped table.
+EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
+    "master_avwap_exit_framework_by_family.csv"
+)
+#: The picker's first entry: today's table, unchanged.
+EXIT_FRAMEWORK_POOLED_LABEL = "All setups (pooled)"
 
 #: The ten-row floor Weekend Prep's tables use (R4 A18), applied to the three
 #: tabs this packet adds. 260 px is ten rows plus a header. A separate constant
@@ -425,6 +435,14 @@ class SetupTrackerPanel(QFrame):
         self.catch_rate_rows: list[dict[str, Any]] = []
         self.human_pick_rows: list[dict[str, Any]] = []
         self.band_variant_rows: list[dict[str, Any]] = []
+        # EF1. `exit_framework_rows` is what the table currently SHOWS - the
+        # pooled export, or one family's slice of the by-family one.
+        self.exit_framework_rows: list[dict[str, Any]] = []
+        self.exit_framework_by_family_rows: list[dict[str, Any]] = []
+        self._ranked_exports: dict[str, Any] = {}
+        self._export_signatures: dict[str, Any] = {}
+        self._pooled_exit_framework_sentence = EXIT_FRAMEWORK_NO_EXPORT_SENTENCE
+        self._exit_framework_rendered_from: tuple | None = None
         # ST6.4. The SHARED Working-lately snapshot, handed over by the desk's
         # service. Empty means this page renders its own read and LABELS it
         # `panel read`, which is the difference between "the desk's answer" and
@@ -496,6 +514,16 @@ class SetupTrackerPanel(QFrame):
         self.exit_framework_status_label = QLabel(EXIT_FRAMEWORK_NO_EXPORT_SENTENCE)
         self.exit_framework_status_label.setObjectName("MutedLabel")
         self.exit_framework_status_label.setWordWrap(True)
+        # EF1: the ONE control the Exit frameworks tab gains. The first entry is
+        # today's table and nothing else on the tab changes; a family view is a
+        # PRESENTATION filter over a second export, never a second reading and
+        # never a re-ranking - `_rank_exit_frameworks` orders both files.
+        self.exit_framework_family_combo = QComboBox()
+        self.exit_framework_family_combo.setObjectName("ExitFrameworkFamilyPicker")
+        self.exit_framework_family_combo.addItem(EXIT_FRAMEWORK_POOLED_LABEL)
+        self.exit_framework_family_combo.currentIndexChanged.connect(
+            self._on_exit_framework_family_changed
+        )
 
         self.tabs = QTabWidget()
         # G2b.2: every tab NAMES the column that takes the slack and the
@@ -668,10 +696,15 @@ class SetupTrackerPanel(QFrame):
                 "scenarios by definition has a smaller n, and Filtered carries the difference so "
                 "n + Filtered equals the baseline's n - a smaller denominator here is the "
                 "experiment working, not a worse result. Rows are grouped by side and bucket with "
-                "the baseline above its twin. Nothing here scores, ranks, gates or alerts, and "
+                "the baseline above its twin. EF1: the picker above this table splits the "
+                "SAME comparison by SETUP FAMILY - `All setups (pooled)` is this whole "
+                "population, a family is that setup's own answer to 'does band 3 beat band "
+                "2', and a family's rows are shown even when they are under the reportable "
+                "floor. Nothing here scores, ranks, gates or alerts, and "
                 "nothing here retires evidence.",
                 self.exit_framework_table,
                 status=self.exit_framework_status_label,
+                control=("Setup family:", self.exit_framework_family_combo),
             ),
             "Exit frameworks",
         )
@@ -867,7 +900,7 @@ class SetupTrackerPanel(QFrame):
         return table, model
 
     def _make_explained_tab(
-        self, description: str, table: DataTable, *, footer=None, status=None
+        self, description: str, table: DataTable, *, footer=None, status=None, control=None
     ) -> QWidget:
         tab = QWidget()
         label = QLabel(description)
@@ -877,6 +910,20 @@ class SetupTrackerPanel(QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         layout.addWidget(label)
+        # EF1: `control` is the ONE picker a tab may carry, and it sits ABOVE the
+        # status sentence, because the sentence describes whatever the control
+        # currently selects. `(caption, widget)`; at most one per tab.
+        if control is not None:
+            caption, widget = control
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            prompt = QLabel(caption)
+            prompt.setObjectName("MutedLabel")
+            row.addWidget(prompt)
+            row.addWidget(widget, 1)
+            row.addStretch(2)
+            layout.addLayout(row)
         # `status` is what the table currently says about itself and belongs
         # ABOVE it; `footer` is how the read went and belongs below.
         if status is not None:
@@ -1045,6 +1092,87 @@ class SetupTrackerPanel(QFrame):
                     return payload
                 self._refresh_pending = False
 
+    # ------------------------------------------------------------------
+    # EF1: the Exit frameworks family picker
+    # ------------------------------------------------------------------
+
+    def selected_exit_framework_family(self) -> str:
+        """The picker's current selection, or the pooled label when there is none."""
+        combo = getattr(self, "exit_framework_family_combo", None)
+        if combo is None:
+            return EXIT_FRAMEWORK_POOLED_LABEL
+        return str(combo.currentText() or EXIT_FRAMEWORK_POOLED_LABEL)
+
+    def _refill_exit_framework_families(self) -> None:
+        """Rebuild the picker from the by-family export, KEEPING the selection.
+
+        A refresh that reset the picker to the pooled view would undo the
+        trader's choice every time a scan rewrote the file, which on a scan day
+        is several times an hour. The selection survives while the family is
+        still in the export; a family that has gone falls back to pooled.
+
+        Signals are blocked while the list is rebuilt: `clear()` and `addItems`
+        each emit `currentIndexChanged`, and re-rendering the table twice for a
+        list that has not changed is the sort of thing that ends up on the Qt
+        thread's bill.
+        """
+        combo = self.exit_framework_family_combo
+        families = exit_framework_families(self.exit_framework_by_family_rows)
+        wanted = [EXIT_FRAMEWORK_POOLED_LABEL, *families]
+        current = [combo.itemText(index) for index in range(combo.count())]
+        if current == wanted:
+            return
+        selected = self.selected_exit_framework_family()
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItems(wanted)
+            combo.setCurrentIndex(wanted.index(selected) if selected in wanted else 0)
+        finally:
+            combo.blockSignals(blocked)
+
+    def _apply_exit_framework_view(self) -> None:
+        """Render the Exit frameworks table for the current selection. Qt thread.
+
+        Same memo rule as every other table on this page: the rows are re-set
+        and the columns re-fitted only when what they were BUILT from changed -
+        here the two export signatures and the selected family.
+        """
+        family = self.selected_exit_framework_family()
+        rows = exit_framework_view(self._ranked_exports, family)[:300]
+        self.exit_framework_rows = rows
+        if family == EXIT_FRAMEWORK_POOLED_LABEL:
+            self.exit_framework_status_label.setText(
+                self._pooled_exit_framework_sentence
+            )
+        else:
+            self.exit_framework_status_label.setText(
+                exit_framework_family_sentence(family, rows)
+            )
+        memo = (
+            self._export_signatures.get("exit_framework"),
+            self._export_signatures.get("exit_framework_by_family"),
+            family,
+        )
+        # Its OWN memo, not an entry in `_rendered_from`: that dict is REPLACED
+        # wholesale at the end of every render pass, so a key written into it
+        # here would be dropped on the next refresh and this table would re-fit
+        # on every pass - which is the defect G7.2 measured and fixed.
+        if self._exit_framework_rendered_from == memo:
+            return
+        self._exit_framework_rendered_from = memo
+        self.exit_framework_model.set_rows(rows)
+        self.exit_framework_table.fit_columns()
+
+    def _on_exit_framework_family_changed(self, _index: int) -> None:
+        """A picker click re-renders ONE table from rows already in memory.
+
+        It never reads a file and never refreshes the page: the export behind
+        both views was parsed on the worker, and a presentation filter that went
+        back to disk would put a CSV parse on the Qt thread.
+        """
+        self._apply_exit_framework_view()
+
     def _on_exports_failed(self, message: str) -> None:
         """A read that could not run leaves the page showing what it had.
 
@@ -1091,6 +1219,11 @@ class SetupTrackerPanel(QFrame):
         self.control_discovery_rows = ranked.get("control_discovery") or []
         self.study_discovery_rows = ranked.get("study_discovery") or []
         self.exit_framework_rows = ranked.get("exit_framework") or []
+        self.exit_framework_by_family_rows = ranked.get("exit_framework_by_family") or []
+        # EF1: what the picker's re-render needs, so a selection change costs no
+        # file read and never touches the Qt thread with a parse.
+        self._ranked_exports = ranked
+        self._export_signatures = signatures
 
         self.band_variant_status_label.setText(
             band_variant_coverage_sentence(band_variant_export_rows)
@@ -1101,8 +1234,8 @@ class SetupTrackerPanel(QFrame):
         self.study_discovery_status_label.setText(
             discovery_population_sentence(study_discovery_export_rows, kind="study")
         )
-        self.exit_framework_status_label.setText(
-            exit_framework_population_sentence(exit_framework_export_rows)
+        self._pooled_exit_framework_sentence = exit_framework_population_sentence(
+            exit_framework_export_rows
         )
 
         rendered: dict[str, tuple] = {}
@@ -1115,6 +1248,10 @@ class SetupTrackerPanel(QFrame):
             getattr(self, model_name).set_rows(rows)
             getattr(self, table_name).fit_columns()
         self._rendered_from = rendered
+        # EF1: after `_rendered_from` is replaced; this table keeps its own memo
+        # because its rows depend on the picker as well as on two files.
+        self._refill_exit_framework_families()
+        self._apply_exit_framework_view()
 
         # The attribute leaderboard is read on its own worker (19.7 MB live);
         # the table fills when it arrives. Left exactly as it was.
@@ -1292,16 +1429,16 @@ def _detail_row_identity(row: dict[str, Any], kind: str) -> tuple:
     )
 
 
-#: The twelve exports `refresh()` reads, by the short name the payload, the
-#: signatures and the per-table memo all use (G7.2). The attribute leaderboard
-#: is deliberately absent: it is 19.7 MB and has had its own worker since
-#: Phase 0.9, and the packet leaves it exactly where it is.
+#: The thirteen exports `refresh()` reads, by the short name the payload, the
+#: signatures and the per-table memo all use (G7.2; EF1 added the thirteenth).
+#: The attribute leaderboard is deliberately absent: it is 19.7 MB and has had
+#: its own worker since Phase 0.9, and the packet leaves it exactly where it is.
 def tracker_export_files() -> tuple[tuple[str, Any], ...]:
     """Resolved at CALL time, never bound into a module constant.
 
-    These twelve names are patched on this module by the tests that point a
-    panel at a temporary home folder, so a tuple built at import would read the
-    paths the live desk uses no matter what a test said.
+    These names are patched on this module by the tests that point a panel at a
+    temporary home folder, so a tuple built at import would read the paths the
+    live desk uses no matter what a test said.
     """
     return (
         ("setup_type", SETUP_TYPE_STATS_FILE),
@@ -1316,13 +1453,15 @@ def tracker_export_files() -> tuple[tuple[str, Any], ...]:
         ("control_discovery", CONTROL_DISCOVERY_STATS_FILE),
         ("study_discovery", STUDY_DISCOVERY_STATS_FILE),
         ("exit_framework", EXIT_FRAMEWORK_STATS_FILE),
+        # EF1: the thirteenth. Same shape, one grain finer, read the same way.
+        ("exit_framework_by_family", EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE),
     )
 
 
 def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     """The whole of the Setup Tracker's read, on a worker thread. G7.2.
 
-    Twelve cached CSV reads, the human-focus read and the pure ranking of what
+    Thirteen cached CSV reads, the human-focus read and the pure ranking of what
     they returned - none of it touches a widget, and it is the same code in the
     same order the Qt thread used to run inline. Each file's `(mtime_ns, size)`
     is taken BEFORE its read: a file rewritten mid-pass then has a signature the
@@ -1360,6 +1499,9 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "control_discovery": _rank_discovery_rows(raw["control_discovery"]),
         "study_discovery": _rank_discovery_rows(raw["study_discovery"]),
         "exit_framework": _rank_exit_frameworks(raw["exit_framework"]),
+        # EF1: ONE ranking function for both files, so a family view can never
+        # be ordered by a different rule than the pooled table it came from.
+        "exit_framework_by_family": _rank_exit_frameworks(raw["exit_framework_by_family"]),
     }
     return {
         "min_closed": int(min_closed),
@@ -1414,9 +1556,11 @@ def _table_render_plan(
         ("study_discovery_table", "study_discovery_model",
          (ranked.get("study_discovery") or [])[:300],
          (signatures.get("study_discovery"),)),
-        ("exit_framework_table", "exit_framework_model",
-         (ranked.get("exit_framework") or [])[:300],
-         (signatures.get("exit_framework"),)),
+        # EF1: `exit_framework_table` is deliberately ABSENT. Its rows depend on
+        # the family picker as well as on two files, so it is rendered by
+        # `_apply_exit_framework_view` - which owns the same memo rule, so a
+        # refresh over unchanged files and an unchanged selection still re-fits
+        # nothing.
     )
 
 
@@ -1722,6 +1866,71 @@ def _rank_exit_frameworks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
 
     return sorted(rows, key=_key)
+
+
+def exit_framework_view(
+    ranked: dict[str, Any], family: str
+) -> list[dict[str, Any]]:
+    """The Exit frameworks rows for one picker selection. EF1, presentation only.
+
+    The pooled selection is the pooled export, untouched. A family selection is
+    the by-family export FILTERED - and filtered BEFORE the table's 300-row cap,
+    which is the whole reason this is a function and not a slice at the render
+    site: sixty families of six rows is 360, and a view capped before it filtered
+    would show a late family nothing at all.
+
+    Neither branch re-ranks: `_rank_exit_frameworks` has already ordered both
+    files by the same Wilson lower bound, and filtering a sorted list keeps its
+    order. Nothing here sorts by mean R.
+    """
+    if not family or family == EXIT_FRAMEWORK_POOLED_LABEL:
+        return list(ranked.get("exit_framework") or [])
+    return [
+        row
+        for row in (ranked.get("exit_framework_by_family") or [])
+        if str(row.get("setup_family") or "") == family
+    ]
+
+
+def exit_framework_families(rows: list[dict[str, Any]]) -> list[str]:
+    """Every family in the by-family export, sorted by NAME - never by a result.
+
+    A picker ordered by the best bound would make the choice for the reader and
+    would move under them between scans; a name sort is where they left it.
+    """
+    return sorted({str(row.get("setup_family") or "").strip() for row in rows} - {""})
+
+
+def exit_framework_family_sentence(family: str, rows: list[dict[str, Any]]) -> str:
+    """What ONE family's view is, in one line. EF1.
+
+    The `n_closed` it prints is the LARGEST among the family's rows, never the
+    sum: the four templates are simulated on the SAME setups, so adding their
+    closes is a claim about four times as many setups as exist.
+
+    Below the floor the rows are still SHOWN and the sentence says they are not
+    yet reportable. Hiding a study's rows is how a study never gets looked at,
+    and a study is exactly what this split was built to read.
+    """
+    if not rows:
+        return (
+            f"No exit-framework rows for {family} yet. A family appears here once its "
+            "records carry exit scenarios; nothing here is a pick."
+        )
+    populations = sorted({str(row.get("population") or "").strip() for row in rows} - {""})
+    closes = [int(_float(row.get("n_closed"), 0.0)) for row in rows]
+    largest = max(closes) if closes else 0
+    floor = _attribute_floor()
+    below = " Every row is BELOW FLOOR (under %d closed): shown, not yet reportable." % floor
+    return (
+        f"{family} ({'/'.join(populations) or 'champion'} population): "
+        f"{len(rows)} exit-template group(s), largest n closed {largest}. "
+        "The templates are simulated on the SAME setups, so their closes are never "
+        "summed."
+        f"{below if largest < floor else ''}"
+        " Win rate leads, sorted by its Wilson lower bound; Avg R is beside it, never "
+        "the sort. Nothing here scores, ranks or alerts."
+    )
 
 
 def _graded_episodes(rows: list[dict[str, Any]]) -> int:
