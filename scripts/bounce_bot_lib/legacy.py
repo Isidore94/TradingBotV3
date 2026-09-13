@@ -350,6 +350,10 @@ RRS_TIMEFRAMES = {
     "30m": {"label": "30 min", "bar_size": "30 mins", "duration": "5 D", "minutes": 30},
     "1h": {"label": "1 hour", "bar_size": "1 hour", "duration": "5 D", "minutes": 60},
 }
+# SN3 (WISHLIST item 4, 2026-09-12): the timeframes one scan cycle always
+# measures. The GUI's selected timeframe is added to the walk when it is not
+# one of these, so a cycle is still ONE walk of the universe.
+RRS_CYCLE_TIMEFRAME_KEYS = ("5m", "15m", "1h")
 SCAN_EXTREME_COUNT = 5
 GROUP_STRENGTH_TIMEFRAMES = {
     "D1": {"bar_size": "1 day", "duration": "6 M"},
@@ -2965,6 +2969,10 @@ class BounceBot(EWrapper, EClient):
         self._confluence_state = None
         self._orb_first_candle_state = None
         self.latest_rrs_payload = None
+        # SN3: this cycle's payload per timeframe key; ``latest_rrs_payload``
+        # is the entry the GUI's selected timeframe produced, not a copy.
+        self._rrs_payloads = {}
+        self._intraday_rrs_profile_cache = {}
         self.earnings_reaction_filter_cache = {}
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
@@ -10813,19 +10821,86 @@ class BounceBot(EWrapper, EClient):
     def get_cached_5m_bars(self, symbol):
         return self._get_cached_bars(symbol, "5 D", "5 mins")
 
+    def rrs_payload_for(self, timeframe_key):
+        """The payload THIS cycle produced for ``timeframe_key`` (SN3).
+
+        ``latest_rrs_payload`` is the SAME object as the entry for the GUI's
+        selected timeframe: the GUI no longer gets its own walk of the
+        universe, it gets the one the cycle already measured.
+        """
+        payloads = getattr(self, "_rrs_payloads", None)
+        if not isinstance(payloads, dict):
+            return None
+        return payloads.get(timeframe_key)
+
+    def _intraday_rrs_profile_for_cycle(self, symbol, symbol_bars, spy_bars, length, current_date):
+        """Today's intraday RRS profile for one symbol, built once per new bar.
+
+        ``_build_intraday_rrs_profile`` is the expensive thing in the cycle: it
+        re-runs ``real_relative_strength`` over a growing slice for every bar
+        of the session, and the four RRS passes each rebuilt it for every
+        symbol from the same 5-minute bars.  The result depends only on the
+        symbol's own bars intersected with SPY's (``_align_bars_with_map``
+        drops any SPY bar the symbol did not print), so the cache key is the
+        symbol's last bar dt - plus its bar count, and the session date the
+        rows are filtered to, so a trimmed history or a day roll rebuilds even
+        when the last dt has not moved.
+        """
+        cache = getattr(self, "_intraday_rrs_profile_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._intraday_rrs_profile_cache = cache
+        cache_key = (symbol_bars[-1].dt, len(symbol_bars), length, current_date)
+        cached = cache.get(symbol)
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+        intraday_profile = self._build_intraday_rrs_profile(symbol_bars, spy_bars, length=length)
+        today_profile = []
+        if intraday_profile:
+            today_profile = [
+                item for item in intraday_profile
+                if item.get("dt") and item["dt"].date() == current_date
+            ]
+        cache[symbol] = (cache_key, today_profile)
+        return today_profile
+
     def run_rrs_scan(self, timeframe_key_override=None, emit_gui=True):
+        """ONE walk of the universe per cycle, every intraday RRS timeframe.
+
+        Until 2026-09-12 the scan cycle entered this four times - 5m, 15m, 1h
+        and then again for whichever of them the GUI had selected - and every
+        entry re-walked the universe, re-bucketed the same 5-minute bars and
+        rebuilt each symbol's intraday RRS profile from scratch: 275 s of pure
+        CPU per cycle measured on 2026-09-08, on the interpreter lock the GUI
+        needs.  Everything that does not depend on the timeframe (the bars,
+        the profile, the SPY context windows, the environment summary, the
+        group-strength and internals snapshots) is now measured ONCE, and the
+        timeframe-dependent work (aggregation, alignment, RRS) runs inside the
+        same walk.  The GUI pass reuses its timeframe's result.
+
+        No formula, threshold, universe or ETF alignment changed: every
+        payload is byte-identical to what the four passes produced from the
+        same bars, pinned in ``tests/test_ws_sn3_one_rrs_pass.py`` against a
+        recording made on the pre-SN3 code.  ``timeframe_key_override`` still
+        names the timeframe the GUI pass publishes; the walk measures them all
+        either way.
+        """
         self.load_master_avwap_focus()
         self.load_master_avwap_d1_watchlist()
         self.load_master_avwap_d1_upgrade_alerts()
         self.load_master_avwap_d1_zone_arms()
-        threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
+        threshold, _bar_size, _duration, length, gui_timeframe_key = self.get_rrs_settings()
         if timeframe_key_override in RRS_TIMEFRAMES:
-            timeframe_key = timeframe_key_override
-            bar_size = RRS_TIMEFRAMES[timeframe_key]["bar_size"]
-            duration = RRS_TIMEFRAMES[timeframe_key]["duration"]
-        timeframe_minutes = RRS_TIMEFRAMES[timeframe_key]["minutes"]
+            gui_timeframe_key = timeframe_key_override
+        timeframe_keys = list(RRS_CYCLE_TIMEFRAME_KEYS)
+        if gui_timeframe_key not in timeframe_keys:
+            timeframe_keys.append(gui_timeframe_key)
+        timeframe_minutes = {key: RRS_TIMEFRAMES[key]["minutes"] for key in timeframe_keys}
         if emit_gui and self.gui_callback:
-            self.gui_callback(f"RRS scan running ({RRS_TIMEFRAMES[timeframe_key]['label']})...", "rrs_status")
+            self.gui_callback(
+                f"RRS scan running ({RRS_TIMEFRAMES[gui_timeframe_key]['label']})...",
+                "rrs_status",
+            )
 
         spy_5m = self.get_cached_5m_bars("SPY")
         if not spy_5m:
@@ -10833,21 +10908,25 @@ class BounceBot(EWrapper, EClient):
                 self.gui_callback("RRS scan: SPY data unavailable.", "rrs_status")
             return
 
-        spy_bars = spy_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(spy_5m, timeframe_minutes)
-        spy_by_dt = {bar.dt: bar for bar in spy_bars}
-        spy_move_ratio = self._calc_move_ratio(spy_bars, length)
+        spy_by_dt = {}
+        spy_move_ratio = {}
+        for timeframe_key in timeframe_keys:
+            minutes = timeframe_minutes[timeframe_key]
+            spy_bars = spy_5m if minutes == 5 else _aggregate_bars_timeframe(spy_5m, minutes)
+            spy_by_dt[timeframe_key] = {bar.dt: bar for bar in spy_bars}
+            spy_move_ratio[timeframe_key] = self._calc_move_ratio(spy_bars, length)
 
-        results = []
-        sector_results = []
-        industry_results = []
-        symbol_context = []
-        all_scores = []
+        results = {key: [] for key in timeframe_keys}
+        sector_results = {key: [] for key in timeframe_keys}
+        industry_results = {key: [] for key in timeframe_keys}
+        symbol_context = {key: [] for key in timeframe_keys}
+        all_scores = {key: [] for key in timeframe_keys}
         # Full-universe sector/industry RRS, keyed by symbol. ``*_results``
         # above only collect threshold-crossers, which biased every recorded
         # rrs_sector / rrs_industry toward extremes (median +2.6 vs -0.07 for
         # the SPY scope) and left them blank on ~75% of alerts.
-        sector_all = {}
-        industry_all = {}
+        sector_all = {key: {} for key in timeframe_keys}
+        industry_all = {key: {} for key in timeframe_keys}
         intraday_profiles = {}
         current_market_date = spy_5m[-1].dt.date()
         previous_market_date = self._previous_market_date_from_bars(spy_5m, current_market_date)
@@ -10868,57 +10947,87 @@ class BounceBot(EWrapper, EClient):
             spy_5m[-1].dt if spy_5m else None
         )
         spy_context_windows = self._build_spy_context_windows(spy_5m, length) if environment_scan_active else []
+
+        # One aggregation per reference ETF per timeframe per CYCLE. The four
+        # passes re-bucketed the same sector/industry ETF bars once for every
+        # scanned symbol, for an identical answer every time.
+        reference_bars_by_dt = {}
+
+        def _reference_by_dt(reference_symbol, timeframe_key, reference_5m):
+            cache_key = (reference_symbol, timeframe_key)
+            cached = reference_bars_by_dt.get(cache_key)
+            if cached is None:
+                minutes = timeframe_minutes[timeframe_key]
+                reference_bars = (
+                    reference_5m if minutes == 5
+                    else _aggregate_bars_timeframe(reference_5m, minutes)
+                )
+                cached = {bar.dt: bar for bar in reference_bars}
+                reference_bars_by_dt[cache_key] = cached
+            return cached
+
         for symbol in all_symbols:
             sym_5m = self.get_cached_5m_bars(symbol)
             if not sym_5m:
                 continue
-            intraday_profile = self._build_intraday_rrs_profile(sym_5m, spy_5m, length=length)
-            if intraday_profile:
-                current_date = spy_5m[-1].dt.date()
-                today_profile = [item for item in intraday_profile if item.get("dt") and item["dt"].date() == current_date]
-                if today_profile:
-                    intraday_profiles[symbol] = today_profile
-            sym_bars = sym_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sym_5m, timeframe_minutes)
-            aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt)
-            rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
-            if rrs_value is None:
+            today_profile = self._intraday_rrs_profile_for_cycle(
+                symbol, sym_5m, spy_5m, length, current_market_date
+            )
+            if today_profile:
+                intraday_profiles[symbol] = today_profile
+
+            sym_bars_by_timeframe = {}
+            measured_timeframes = []
+            symbol_direction = None
+            for timeframe_key in timeframe_keys:
+                minutes = timeframe_minutes[timeframe_key]
+                sym_bars = sym_5m if minutes == 5 else _aggregate_bars_timeframe(sym_5m, minutes)
+                aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt[timeframe_key])
+                rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
+                if rrs_value is None:
+                    continue
+                sym_bars_by_timeframe[timeframe_key] = sym_bars
+                measured_timeframes.append(timeframe_key)
+                symbol_move_ratio = self._calc_move_ratio(sym_bars, length)
+                excess_move_ratio = None
+                if symbol_move_ratio is not None and spy_move_ratio[timeframe_key] is not None:
+                    excess_move_ratio = symbol_move_ratio - spy_move_ratio[timeframe_key]
+                all_scores[timeframe_key].append((symbol, rrs_value, power_index))
+                environment_signal = None
+                if rrs_value >= threshold:
+                    environment_signal = "RS"
+                elif rrs_value <= -threshold:
+                    environment_signal = "RW"
+
+                symbol_direction = self.get_symbol_direction(symbol)
+                if environment_signal:
+                    symbol_context[timeframe_key].append(
+                        {
+                            "symbol": symbol,
+                            "signal": environment_signal,
+                            "rrs": rrs_value,
+                            "move_ratio": symbol_move_ratio,
+                            "excess_move_ratio": excess_move_ratio,
+                            "power_index": power_index,
+                            "watchlist_bias": symbol_direction,
+                        }
+                    )
+
+                if symbol_direction == "long" and rrs_value >= threshold:
+                    results[timeframe_key].append(("RS", symbol, rrs_value, power_index))
+                elif symbol_direction == "short" and rrs_value <= -threshold:
+                    results[timeframe_key].append(("RW", symbol, rrs_value, power_index))
+
+            if not measured_timeframes:
                 continue
-            symbol_move_ratio = self._calc_move_ratio(sym_bars, length)
-            excess_move_ratio = None
-            if symbol_move_ratio is not None and spy_move_ratio is not None:
-                excess_move_ratio = symbol_move_ratio - spy_move_ratio
-            all_scores.append((symbol, rrs_value, power_index))
-            environment_signal = None
-            if rrs_value >= threshold:
-                environment_signal = "RS"
-            elif rrs_value <= -threshold:
-                environment_signal = "RW"
-
-            symbol_direction = self.get_symbol_direction(symbol)
-            if environment_signal:
-                symbol_context.append(
-                    {
-                        "symbol": symbol,
-                        "signal": environment_signal,
-                        "rrs": rrs_value,
-                        "move_ratio": symbol_move_ratio,
-                        "excess_move_ratio": excess_move_ratio,
-                        "power_index": power_index,
-                        "watchlist_bias": symbol_direction,
-                    }
-                )
-
-            if symbol_direction == "long" and rrs_value >= threshold:
-                results.append(("RS", symbol, rrs_value, power_index))
-            elif symbol_direction == "short" and rrs_value <= -threshold:
-                results.append(("RW", symbol, rrs_value, power_index))
-
             classification = self.get_symbol_classification(symbol)
             if not classification:
                 continue
             sector_key = classification.get("sectorKey", "")
             industry_key = classification.get("industryKey", "")
             if industry_key:
+                # One map update per symbol per CYCLE: every call rewrites the
+                # JSON file, and the four passes each rewrote it per symbol.
                 self.industry_map_data = load_and_update_industry_etf_map(
                     industry_key,
                     sector_key,
@@ -10929,95 +11038,137 @@ class BounceBot(EWrapper, EClient):
             sector_etf = resolve_sector_etf(sector_key, self.sector_etf_map)
             sec_5m = self.get_cached_5m_bars(sector_etf)
             if sec_5m:
-                sec_bars = sec_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sec_5m, timeframe_minutes)
-                aligned_sym_sec, aligned_sec = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in sec_bars})
-                sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
-                if sec_rrs is not None:
-                    # Every scanned symbol, not just threshold-crossers (see
-                    # rrs_sector_all below): the alert-time snapshot must be
-                    # able to record a symbol's real sector RRS whatever its
-                    # value, or the learning rows only ever see extremes.
-                    sector_all[symbol] = (sec_rrs, sec_power, sector_etf)
-                    if symbol_direction == "long" and sec_rrs >= threshold:
-                        sector_results.append(("RS", symbol, sec_rrs, sec_power))
-                    elif symbol_direction == "short" and sec_rrs <= -threshold:
-                        sector_results.append(("RW", symbol, sec_rrs, sec_power))
+                for timeframe_key in measured_timeframes:
+                    sec_by_dt = _reference_by_dt(sector_etf, timeframe_key, sec_5m)
+                    aligned_sym_sec, aligned_sec = _align_bars_with_map(
+                        sym_bars_by_timeframe[timeframe_key], sec_by_dt
+                    )
+                    sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
+                    if sec_rrs is not None:
+                        # Every scanned symbol, not just threshold-crossers (see
+                        # rrs_sector_all below): the alert-time snapshot must be
+                        # able to record a symbol's real sector RRS whatever its
+                        # value, or the learning rows only ever see extremes.
+                        sector_all[timeframe_key][symbol] = (sec_rrs, sec_power, sector_etf)
+                        if symbol_direction == "long" and sec_rrs >= threshold:
+                            sector_results[timeframe_key].append(("RS", symbol, sec_rrs, sec_power))
+                        elif symbol_direction == "short" and sec_rrs <= -threshold:
+                            sector_results[timeframe_key].append(("RW", symbol, sec_rrs, sec_power))
 
-            industry_ref = resolve_industry_ref_etf(industry_key, sector_key)
+            # ``self.industry_map_data`` was just refreshed from the same file
+            # this call would re-read, once per symbol per pass.
+            industry_ref = resolve_industry_ref_etf(
+                industry_key, sector_key, industry_map_data=self.industry_map_data
+            )
             ind_5m = self.get_cached_5m_bars(industry_ref)
             if ind_5m:
-                ind_bars = ind_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(ind_5m, timeframe_minutes)
-                aligned_sym_ind, aligned_ind = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in ind_bars})
-                ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
-                if ind_rrs is not None:
-                    industry_all[symbol] = (ind_rrs, ind_power, industry_ref)
-                    if symbol_direction == "long" and ind_rrs >= threshold:
-                        industry_results.append(("RS", symbol, ind_rrs, ind_power))
-                    elif symbol_direction == "short" and ind_rrs <= -threshold:
-                        industry_results.append(("RW", symbol, ind_rrs, ind_power))
+                for timeframe_key in measured_timeframes:
+                    ind_by_dt = _reference_by_dt(industry_ref, timeframe_key, ind_5m)
+                    aligned_sym_ind, aligned_ind = _align_bars_with_map(
+                        sym_bars_by_timeframe[timeframe_key], ind_by_dt
+                    )
+                    ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
+                    if ind_rrs is not None:
+                        industry_all[timeframe_key][symbol] = (ind_rrs, ind_power, industry_ref)
+                        if symbol_direction == "long" and ind_rrs >= threshold:
+                            industry_results[timeframe_key].append(("RS", symbol, ind_rrs, ind_power))
+                        elif symbol_direction == "short" and ind_rrs <= -threshold:
+                            industry_results[timeframe_key].append(("RW", symbol, ind_rrs, ind_power))
 
-        strongest = sorted(all_scores, key=lambda row: row[1], reverse=True)[:SCAN_EXTREME_COUNT]
-        weakest = sorted(all_scores, key=lambda row: row[1])[:SCAN_EXTREME_COUNT]
-        self.latest_scan_extremes[timeframe_key] = strongest + weakest
-        if strongest or weakest:
-            self._log_scan_extremes(timeframe_key, strongest, weakest)
-
-        rs_results = sorted([r for r in results if r[0] == "RS"], key=lambda r: -r[2])
-        rw_results = sorted([r for r in results if r[0] == "RW"], key=lambda r: r[2])
-        ordered_results = rs_results + rw_results
+        profile_cache = getattr(self, "_intraday_rrs_profile_cache", None)
+        if isinstance(profile_cache, dict):
+            scanned = set(all_symbols)
+            for cached_symbol in [key for key in profile_cache if key not in scanned]:
+                profile_cache.pop(cached_symbol, None)
 
         def _ordered(rows):
             rs = sorted([r for r in rows if r[0] == "RS"], key=lambda r: -r[2])
             rw = sorted([r for r in rows if r[0] == "RW"], key=lambda r: r[2])
             return rs + rw
 
-        sector_payload = _ordered(sector_results)
-        industry_payload = _ordered(industry_results)
+        # Timeframe-independent, so measured once for the whole cycle instead
+        # of once per pass: the profiles, the SPY windows and the threshold are
+        # the same three inputs every pass handed it.
         environment_scan = (
             self._summarize_environment_scan(intraday_profiles, spy_context_windows, threshold)
             if environment_scan_active else None
         )
-        if environment_scan:
-            self._record_environment_focus_history(environment_scan, timeframe_key)
-        snapshot_payload = {
-            "timestamp": datetime.now(),
-            "threshold": threshold,
-            "timeframe_key": timeframe_key,
-            "results": ordered_results,
-            "results_sector": sector_payload,
-            "results_industry": industry_payload,
-            "group_strength": self.compute_group_strengths(),
-            "market_internals": self.compute_market_internals(),
-            "symbol_context": symbol_context,
-            "spy_move_ratio": spy_move_ratio,
-            "environment_scan": environment_scan,
-            "excluded_earnings_reaction_symbols": earnings_reaction_symbols,
-            # Every scanned symbol's SPY RRS, not just threshold-crossers.
-            # ``results`` only holds alert candidates, which left the learning
-            # rows' rrs fields blank for ~85% of bounces ("unknown" alignment).
-            "rrs_all": {
-                str(symbol).strip().upper(): (rrs_value, power_index)
-                for symbol, rrs_value, power_index in all_scores
-            },
-            # Same full-universe treatment for the group scopes, so alert rows
-            # record what a symbol's sector/industry RRS actually was instead
-            # of only the extremes that cleared the alert threshold.
-            "rrs_sector_all": {
-                str(symbol).strip().upper(): value for symbol, value in sector_all.items()
-            },
-            "rrs_industry_all": {
-                str(symbol).strip().upper(): value for symbol, value in industry_all.items()
-            },
-        }
+        group_strength = self.compute_group_strengths()
+        market_internals = self.compute_market_internals()
+        snapshot_timestamp = datetime.now()
+
+        payloads = {}
+        for timeframe_key in timeframe_keys:
+            scores = all_scores[timeframe_key]
+            strongest = sorted(scores, key=lambda row: row[1], reverse=True)[:SCAN_EXTREME_COUNT]
+            weakest = sorted(scores, key=lambda row: row[1])[:SCAN_EXTREME_COUNT]
+            self.latest_scan_extremes[timeframe_key] = strongest + weakest
+            if strongest or weakest:
+                self._log_scan_extremes(timeframe_key, strongest, weakest)
+
+            rs_results = sorted([r for r in results[timeframe_key] if r[0] == "RS"], key=lambda r: -r[2])
+            rw_results = sorted([r for r in results[timeframe_key] if r[0] == "RW"], key=lambda r: r[2])
+            ordered_results = rs_results + rw_results
+            sector_payload = _ordered(sector_results[timeframe_key])
+            industry_payload = _ordered(industry_results[timeframe_key])
+            if environment_scan:
+                self._record_environment_focus_history(environment_scan, timeframe_key)
+            payloads[timeframe_key] = {
+                "timestamp": snapshot_timestamp,
+                "threshold": threshold,
+                "timeframe_key": timeframe_key,
+                "results": ordered_results,
+                "results_sector": sector_payload,
+                "results_industry": industry_payload,
+                "group_strength": group_strength,
+                "market_internals": market_internals,
+                "symbol_context": symbol_context[timeframe_key],
+                "spy_move_ratio": spy_move_ratio[timeframe_key],
+                "environment_scan": environment_scan,
+                "excluded_earnings_reaction_symbols": earnings_reaction_symbols,
+                # Every scanned symbol's SPY RRS, not just threshold-crossers.
+                # ``results`` only holds alert candidates, which left the learning
+                # rows' rrs fields blank for ~85% of bounces ("unknown" alignment).
+                "rrs_all": {
+                    str(symbol).strip().upper(): (rrs_value, power_index)
+                    for symbol, rrs_value, power_index in scores
+                },
+                # Same full-universe treatment for the group scopes, so alert rows
+                # record what a symbol's sector/industry RRS actually was instead
+                # of only the extremes that cleared the alert threshold.
+                "rrs_sector_all": {
+                    str(symbol).strip().upper(): value
+                    for symbol, value in sector_all[timeframe_key].items()
+                },
+                "rrs_industry_all": {
+                    str(symbol).strip().upper(): value
+                    for symbol, value in industry_all[timeframe_key].items()
+                },
+            }
+
+        # The fourth pass recorded the environment focus history a second time
+        # under the GUI's own timeframe key.  It no longer walks the universe,
+        # but that recording's ``hit_count`` reaches the D1 attribute rows as
+        # ``bouncebot.*_hit_count``, so the recording itself is kept exactly as
+        # it was - a scoring input is not something a pass-structure change may
+        # move (plan.md sec 5).
+        if environment_scan and gui_timeframe_key in RRS_CYCLE_TIMEFRAME_KEYS:
+            self._record_environment_focus_history(environment_scan, gui_timeframe_key)
+
+        self._rrs_payloads = payloads
+        snapshot_payload = payloads.get(gui_timeframe_key)
         if emit_gui:
-            self._emit_master_avwap_focus_rrs_alerts(symbol_context, threshold, timeframe_key)
+            self._emit_master_avwap_focus_rrs_alerts(
+                symbol_context[gui_timeframe_key], threshold, gui_timeframe_key
+            )
         self.latest_rrs_payload = snapshot_payload
-        if emit_gui and self.gui_callback:
+        if emit_gui and self.gui_callback and snapshot_payload:
             decorated_snapshot = self._decorate_snapshot(snapshot_payload)
             self.gui_callback(decorated_snapshot, "rrs_snapshot")
             status_msg = (
-                f"RRS scan complete ({len(ordered_results)} SPY, {len(sector_payload)} sector, "
-                f"{len(industry_payload)} industry refs)"
+                f"RRS scan complete ({len(snapshot_payload['results'])} SPY, "
+                f"{len(snapshot_payload['results_sector'])} sector, "
+                f"{len(snapshot_payload['results_industry'])} industry refs)"
             )
             internals_line = format_internals_line(snapshot_payload.get("market_internals"))
             if internals_line and "unavailable" not in internals_line:
@@ -13743,12 +13894,13 @@ class BounceBot(EWrapper, EClient):
                 # Each run is timed on its own (S2 instrumentation, 2026-09-03):
                 # the preamble line used to say "rrs_scan 272s" for four runs and
                 # could not say which of them, or whether the GUI one, was slow.
-                for timeframe_key in ("5m", "15m", "1h"):
-                    self.run_rrs_scan(timeframe_key_override=timeframe_key, emit_gui=False)
-                    cycle_clock.mark(f"rrs_scan_{timeframe_key}")
-                # Keep the GUI view synced with user-selected RRS timeframe.
+                # ONE entry per cycle (SN3, 2026-09-12): run_rrs_scan measures
+                # 5m, 15m and 1h in a single walk of the universe and hands the
+                # GUI's selected timeframe the payload that walk already built.
+                # Four entries cost 275 s of CPU per cycle on 2026-09-08, on the
+                # interpreter lock the GUI needs.
                 self.run_rrs_scan()
-                cycle_clock.mark("rrs_scan_gui")
+                cycle_clock.mark("rrs_scan")
 
                 # Regime-pause bangers: SPY paused against the tape -> flag the
                 # longs/shorts.txt names that refuse to participate.
