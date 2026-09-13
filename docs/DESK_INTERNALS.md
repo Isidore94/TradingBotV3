@@ -3492,3 +3492,69 @@ PIXELS for the exact token, because "bright red" is a claim about what the trade
 
 **Reopen trigger.** A new capture verb joins the decision family; the trader asks for a
 third mark or for one of the two to mean something else.
+
+## WS - wrong side is shown, never hidden (2026-09-12, WISHLIST item 9)
+
+**The trader, verbatim (WISHLIST item 9):** *"stop putting up longs below avwape and
+shorts above it."* The lead's ruling for the sweep, which the trader may overrule
+(`plan.md` Phase 0.26): **display only**. A `wrong side` chip on the Desk's setups row
+and a ` [wrong side]` tag on the AWAY digest's swing line, on the CURRENT anchor only.
+Hiding such a row is a DETECTOR decision - it changes which setups exist - and it is not
+built. Nothing here reaches a score, a gate, an alert, a watchlist, Focus, the review
+queue or `review_policy.json`, and nothing is re-ordered or filtered.
+
+**What the row actually carries, measured.** The packet's premise was that the desk row
+carries `current_close` and `current_avwape`. It does not. Those two are
+`feature_snapshot` fields on the TRACKER's daily marks (`legacy.py:5132-5133`); the rows
+the setups table and the AWAY digest read are SCAN rows, and on the live focus feed of
+2026-09-12 **zero of 435** carried either field. Every one of the 435 carried
+`current_band_zone` - top level or under `setup_candidate.trigger` - written by
+`runner.py` from `legacy.get_band_context`, whose vocabulary is the ordered band levels
+(`LOWER_3 .. LOWER_1`, `VWAP`, `UPPER_1 .. UPPER_3`). A zone names the two levels the
+close sits between, so it answers the same question the two prices would, and reading it
+needs no `legacy.py` edit (the packet forbade one).
+
+**So the rule has two bases and says which it used** (`scripts/avwape_side.py`, pure - no
+I/O, no clock, no Qt, because `paint` calls it). `wrong_side(side, close, avwape)` is the
+packet's function: a LONG under the anchor or a SHORT over it, **tolerance 0** (a close
+exactly on the line is the RIGHT side), `None` whenever the side or a number is missing.
+`wrong_side_from_zone` is the same verdict from the zone. `read_row` prefers the numbers
+and falls back to the zone, and `tooltip_text` **never prints a price it did not read** -
+priced rows get `LONG below AVWAPE 412.50 (close 409.10)`, zone rows get `LONG below
+AVWAPE (band zone LOWER_1 to VWAP)`.
+
+**`favorite_zone` is deliberately not a fallback.** It names the zone the SETUP wants
+(`"LOWER_1 to AVWAPE"`), not where price is; reading it as the close's position would
+badge rows by their setup shape. `legacy._priority_current_band_zone` does fall back to
+it - for a different question.
+
+**The chip is a second pill, never a repaint of the first.** `SetupTableDelegate._chip`
+now returns its rect and takes `after=`, so the `wrong side` pill starts a gap past the
+bucket chip; `sizeHint` asks for that extra width, because `fit_columns` sizes a column by
+measuring the delegate. Below `_MIN_CHIP_WIDTH` the second pill is **not drawn at all** -
+the compact profile pins `bucket` at 96 px and a 12 px sliver of colour is not a badge -
+and the tooltip still carries the whole sentence. The tooltip ADDS a line to the bucket
+label the cell already showed; it never replaces it.
+
+**On the digest the tag costs nothing.** It is computed after the ranking and after the
+near cap, from `pick["raw"]` - the row WS-PT4 already put on the projection, so the digest
+and the table are one reading of one row - and a reader that raises costs the tag and
+never the digest (`is_wrong_side_row` swallows). On the 2026-09-12 feed the badge would
+have flagged **87 LONGs under the anchor and 6 SHORTs over it, of 435**.
+
+**Still the trader's to decide** (open, recorded here rather than guessed): whether the
+wrong side should eventually be HIDDEN or demoted rather than badged; whether the PREVIOUS
+anchor counts as well as the current one; whether the M5 alert list, the chart review pane
+and the Focus surfaces should carry the same badge; and whether a wrong-side pick should
+be excluded from the AWAY push.
+
+**Tests:** `tests/test_ws_ws_wrong_side.py` - 53 of 57 red on the pre-build tip (the four
+that passed are the "no chip" / "no tag" negatives, vacuously true before the feature),
+58 green after. Two goldens were taken from the pre-change code and re-taken after: the
+right-side bucket cell renders to the same image (sha1
+`c6cecd5e2481dd4aa0589fce62466045a549095b`) and a digest with no wrong-side picks renders
+byte-identical (sha1 `d6b287457a939368d311af6f7f74380ace523ab0`).
+
+**Reopen trigger.** The trader asks for hiding or demotion; a scan row starts carrying
+`current_close`/`current_avwape` (then the numbers basis becomes the live one and the
+tooltip changes shape); a new band level joins the zone vocabulary.
