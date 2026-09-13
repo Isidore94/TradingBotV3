@@ -311,6 +311,10 @@ EXPECTED_SLOT_ORDER = (
     "preference_trade_outcomes",
     "evidence_report",
     "daily_digest",
+    # WS-TH (2026-09-12): appended at the END of the deterministic stage. It
+    # reads `theta_picks.jsonl` and the daily bars and feeds nothing above it,
+    # so it sits after the digest and stays ahead of `ai_summary`.
+    "theta_pick_grading",
     # stage 2 - narration, moved here as a unit by decision 0018
     "ai_summary",
     "ticker_briefs",

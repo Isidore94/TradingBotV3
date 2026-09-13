@@ -393,6 +393,15 @@ TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
 # never in front of it, and nothing in the running system reads this file to
 # detect, score, rank, gate or alert (plan.md sec 5).
 SWING_FAVORITES_FILE = PERSISTENT_DATA_DIR / "swing_favorites.jsonl"
+# Packet WS-TH (2026-09-12, WISHLIST item 6). Append-only JSONL of the theta
+# picks the D1 scan already printed to `master_avwap_theta_puts.txt`: one row per
+# (symbol, scan_date, play_type), written from the RUNNER right after the report,
+# carrying the support set the scan built, the score and rank it showed, and the
+# strike/expiry/premium it recommended. Same storage class as the logs above -
+# small, trader-relevant, shared home. SHADOW EVIDENCE ONLY: nothing in the
+# running system reads this file to detect, score, rank, gate or alert, and a
+# failed append loses the row, never the scan (plan.md sec 5).
+THETA_PICKS_FILE = PERSISTENT_DATA_DIR / "theta_picks.jsonl"
 # Append-only JSONL of every add and remove on the four plain watchlists
 # (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`), written by
 # `scripts/watchlist_intent_events.py`. Membership on those lists means
@@ -559,6 +568,15 @@ MASTER_AVWAP_TIER_OUTCOMES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_ti
 # with no production reader until a decision moves one.
 MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
     PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_session_horizon_outcomes.csv"
+)
+# Packet WS-TH (2026-09-12). The theta picks graded forward: held above the sold
+# strike at the exact 5/10/20-session endpoints and at the option's own expiry,
+# maximum adverse excursion in ATR, and which support broke first. Written
+# BESIDE the tier outcomes by the overnight `theta_pick_grading` slot from
+# `theta_picks.jsonl`; shadow only, with no production reader outside the Setup
+# Tracker's Theta tab.
+MASTER_AVWAP_THETA_OUTCOMES_FILE = (
+    PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_theta_outcomes.csv"
 )
 MASTER_AVWAP_TIER_PERFORMANCE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tier_performance.csv"
 MASTER_AVWAP_TIER_CATCH_RATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tier_catch_rate.csv"

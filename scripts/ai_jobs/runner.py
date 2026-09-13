@@ -498,6 +498,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         note_vocabulary_audit,
         policy_draft,
         setup_research,
+        theta_grading,
     )
     from journal_runner import run_nightly_journal_import
     from preference_trade_outcomes import run_preference_trade_outcomes
@@ -660,6 +661,24 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=digest.run_daily_digest,
             reserve_minutes=10.0,
             description="Deterministic daily fact pack, plus medium-tier narration",
+            max_attempts=3,
+        ),
+        # Packet WS-TH (2026-09-12), APPENDED at the END of the deterministic
+        # stage. A later phase appends INSIDE its stage and never reorders
+        # across stages, so it goes after `daily_digest` - which closes the
+        # block - and stays ahead of `ai_summary`.
+        #
+        # Last inside the stage rather than beside the cohort grades because
+        # nothing here feeds them: it reads `theta_picks.jsonl` and the durable
+        # daily bars, and writes one CSV nothing else in the night opens. It
+        # deliberately sits AFTER the digest, so a theta grade can never delay
+        # the fact pack. Deterministic, no model, seconds of work - hence
+        # `journal_import`'s attempt budget rather than the briefs'.
+        JobSlot(
+            name="theta_pick_grading",
+            run=theta_grading.run_theta_pick_grading,
+            reserve_minutes=5.0,
+            description="Grade the recorded theta picks at 5/10/20 sessions and at expiry (deterministic, no model)",
             max_attempts=3,
         ),
         # ------------------------------------------------------------------

@@ -10,6 +10,10 @@ from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
+# Packet WS-TH (2026-09-12). The theta picks the scan just printed, recorded as
+# shadow evidence in the scan's own output pass - never from `legacy.py`'s
+# tracker save (lead ruling (c)). A failed append loses the row, never the scan.
+from theta_pick_tracker import record_theta_picks
 
 # Scanner orchestration is extracted while helper functions continue to migrate.
 globals().update(
@@ -2566,6 +2570,10 @@ def _run_master_impl(
         reviewed_symbols=reviewed_symbols,
     )
     write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
+    # WS-TH item 1: the same rows the report just printed, recorded once per
+    # (symbol, scan date, play type). Shadow evidence - it reads the rows and
+    # changes none of them - and it never raises into the scan.
+    record_theta_picks(theta_put_rows, theta_pcs_rows, today_run, datetime.now())
     favorite_watchlist_reference = datetime.now()
     favorite_watchlist_result = write_favorite_zone_watchlist_outputs(
         focus_path=MASTER_AVWAP_FOCUS_FILE,
