@@ -443,3 +443,11 @@ mode**, through the SAME sender, as
 
 This does not add a routine push: nothing automatic arms one of these watches. The
 count of always-on push exceptions stays at two, and this is a caller inside the first.
+
+**One outbound fetch rides with it, and it is not a scan.** When an armed H1 retester's
+cached M5 window is short of the rule's warm-up, `scripts/h1_history.py` reads THAT
+SYMBOL's hourly bars through `yfinance`, at most once per completed H1 bar, on its own
+daemon thread. It is not gated on quiet hours or on the Auto mode for the same reason
+the push is not: the trader armed the condition by hand and is waiting on it. It scans
+nothing, discovers nothing, adopts nothing and writes nothing - one symbol, one
+interval, in memory - and it is the same shape as the group RS/RW tape's own clock.

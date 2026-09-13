@@ -73,6 +73,28 @@ class _Recorder:
         return {"ok": True}
 
 
+def _h1_cache(bars):
+    """An `H1HistoryCache` whose "download" is this list. Never touches yfinance."""
+    from h1_history import H1HistoryCache
+
+    rows = list(bars or ())
+
+    class _Frame:
+        empty = not rows
+        columns = None
+
+        def iterrows(self):
+            for bar in rows:
+                yield bar["dt"], {
+                    "Open": bar["open"],
+                    "High": bar["high"],
+                    "Low": bar["low"],
+                    "Close": bar["close"],
+                }
+
+    return H1HistoryCache(downloader=lambda *a, **kw: _Frame())
+
+
 def test_the_arm_bar_button_emits_the_kind_once_a_symbol_is_charted():
     _qt_app()
     from ui.widgets.arm_bar import ArmBar
@@ -306,21 +328,28 @@ def test_the_armed_inventory_says_not_measured_with_the_bar_count(
 
     panel = _panel(monkeypatch, tmp_path)
     monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol, **kw: list(thin))
+    # Nothing reachable to fetch: the count is still the truth, and the row
+    # says the fetch is the reason rather than pretending the bars are absent.
+    cache = _h1_cache(None)
+    cache.fetch_now("AAPL", now=datetime(2026, 8, 18, 12, 0))
+    panel._h1_history = cache
     panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
     watch = next(w for w in panel._chart_watches if w.kind == WATCH_KIND)
 
-    assert panel._armed_watch_note(watch) == f"not measured (14 of {WARMUP_BARS} H1 bars)"
+    assert panel._armed_watch_note(watch) == (
+        f"not measured (14 of {WARMUP_BARS} H1 bars, yfinance unavailable)"
+    )
 
     # It reaches the table the trader reads, in the health column.
     panel._refresh_armed_list()
     row = next(row for row in panel.armed_list._rows if row[0] == "AAPL")
-    assert row[5] == f"not measured (14 of {WARMUP_BARS} H1 bars)"
+    assert row[5] == f"not measured (14 of {WARMUP_BARS} H1 bars, yfinance unavailable)"
 
-    # With enough history the note is silent and the ordinary health shows.
+    # With enough history of its own, the note names the source it used.
     monkeypatch.setattr(
         panel, "_m5_bars_for", lambda symbol, **kw: golden_m5_series(bars)
     )
-    assert panel._armed_watch_note(watch) == ""
+    assert panel._armed_watch_note(watch) == "H1 from cache"
 
 
 def test_a_session_watch_never_gets_the_h1_note(monkeypatch, tmp_path):
@@ -328,6 +357,7 @@ def test_a_session_watch_never_gets_the_h1_note(monkeypatch, tmp_path):
 
     panel = _panel(monkeypatch, tmp_path)
     monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol, **kw: [])
+    panel._h1_history = _h1_cache(None)
     session_watch = ChartWatch(
         symbol="AAPL",
         kind="new_hod",
@@ -335,3 +365,145 @@ def test_a_session_watch_never_gets_the_h1_note(monkeypatch, tmp_path):
         side="LONG",
     )
     assert panel._armed_watch_note(session_watch) == ""
+
+
+# ---------------------------------------------------------------------------
+# The H1 history fallback (lead decision 2026-09-13; the trader may overrule)
+# ---------------------------------------------------------------------------
+def _warmup_bars() -> int:
+    from indicators.h1_ema_bounce import WARMUP_BARS
+
+    return WARMUP_BARS
+
+
+def test_a_short_cache_reaches_the_rule_through_the_fetched_h1_history(
+    monkeypatch, tmp_path
+):
+    """The whole point of the fallback: 14 cached H1 bars is below the warm-up,
+    so the watch is judged on the fetched series instead - and it can fire."""
+    bars, _ = golden_long_h1_bars()
+    thin = golden_m5_series(bars[:14])
+
+    panel = _panel(monkeypatch, tmp_path)
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol, **kw: list(thin))
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol, **kw: [])
+    cache = _h1_cache(bars)
+    panel._h1_history = cache
+    recorder = _Recorder()
+    panel.price_alert_service = recorder
+    panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    watch = next(w for w in panel._chart_watches if w.kind == WATCH_KIND)
+
+    fetched = cache.fetch_now("AAPL", now=GOLDEN_CONFIRM_DT + timedelta(hours=1))
+    assert len(fetched) >= _warmup_bars()
+
+    series, source = panel._h1_bars_for_watch(watch)
+    assert len(series) == len(bars)
+    assert source == "yfinance"
+    assert panel._armed_watch_note(watch) == "H1 from yfinance"
+
+    panel._poll_d1_event_watches(now=GOLDEN_CONFIRM_DT + timedelta(hours=1))
+
+    assert not [w for w in panel._chart_watches if w.kind == WATCH_KIND]
+    assert len(recorder.calls) == 1
+    payload = dict(panel._alerts[0].payload or {})
+    assert payload["confirm_bar_dt"] == GOLDEN_CONFIRM_DT.isoformat()
+
+
+def test_a_full_cache_never_uses_the_fallback(monkeypatch, tmp_path):
+    """The desk's own bars are PRIMARY. A symbol whose cached window already
+    answers must not reach the network, even with a fallback sitting there."""
+    bars, _ = golden_long_h1_bars()
+
+    panel = _panel(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        panel, "_m5_bars_for", lambda symbol, **kw: golden_m5_series(bars)
+    )
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol, **kw: [])
+
+    asked: list[str] = []
+
+    class _Refusing:
+        def bars_for(self, symbol):
+            # A different, WRONG series: if it is ever consulted, the numbers
+            # below move and the test says so.
+            return [dict(bar) for bar in _mirror(bars)]
+
+        def request(self, symbol, *, now=None):
+            asked.append(symbol)
+            return False
+
+        def unavailable(self, symbol):
+            return False
+
+    panel._h1_history = _Refusing()
+    panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    watch = next(w for w in panel._chart_watches if w.kind == WATCH_KIND)
+
+    series, source = panel._h1_bars_for_watch(watch)
+    assert source == "cache"
+    assert series[-1]["close"] == bars[-1]["close"]
+    assert panel._armed_watch_note(watch) == "H1 from cache"
+    assert asked == []  # nothing was even asked for
+
+
+def test_the_fallback_fetches_at_most_once_per_completed_hour():
+    cache = _h1_cache([])
+    moment = datetime(2026, 8, 26, 11, 45)
+
+    assert cache.request("AAPL", now=moment) is True
+    assert cache.request("AAPL", now=moment + timedelta(minutes=1)) is False
+    assert cache.request("AAPL", now=moment + timedelta(minutes=14)) is False
+    # The next hour is a new question.
+    assert cache.request("AAPL", now=moment + timedelta(minutes=30)) is True
+
+
+def test_the_fetched_series_drops_the_forming_hour_and_converts_the_zone():
+    """Completed bars only, and `astimezone` - never a stripped offset (N1)."""
+    import zoneinfo
+
+    from h1_history import frame_to_h1_bars
+    from market_session import get_market_local_timezone
+
+    local_tz, _ = get_market_local_timezone()
+    eastern = zoneinfo.ZoneInfo("America/New_York")
+    stamps = [
+        datetime(2026, 8, 26, 13, 30, tzinfo=eastern),
+        datetime(2026, 8, 26, 14, 30, tzinfo=eastern),  # still forming at 15:00
+    ]
+
+    class _Frame:
+        empty = False
+        columns = None
+
+        def iterrows(self):
+            for index, stamp in enumerate(stamps):
+                yield stamp, {
+                    "Open": 100.0 + index,
+                    "High": 101.0 + index,
+                    "Low": 99.0 + index,
+                    "Close": 100.5 + index,
+                }
+
+    now = (
+        datetime(2026, 8, 26, 15, 0, tzinfo=eastern)
+        .astimezone(local_tz)
+        .replace(tzinfo=None)
+    )
+    built = frame_to_h1_bars(_Frame(), now=now)
+
+    assert len(built) == 1  # the 14:30 ET hour had not closed
+    assert built[0]["dt"] == stamps[0].astimezone(local_tz).replace(tzinfo=None)
+    assert built[0]["dt"].tzinfo is None
+
+
+def test_a_failed_fetch_is_unavailable_and_never_an_empty_tape():
+    from h1_history import H1HistoryCache
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("no network")
+
+    cache = H1HistoryCache(downloader=_boom)
+    assert cache.fetch_now("AAPL", now=datetime(2026, 8, 26, 12, 0)) == []
+    assert cache.unavailable("AAPL") is True
+    assert cache.bars_for("AAPL") == []

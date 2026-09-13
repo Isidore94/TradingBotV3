@@ -54,7 +54,8 @@ from chart_watch import (
     evaluate_chart_watch,
     evaluate_d1_event_watch,
     evaluate_d1_level_watch,
-    evaluate_h1_bounce_watch,
+    evaluate_h1_bars,
+    h1_bars_for_watch,
     h1_bounce_message,
     completed_session_bars,
     load_any_bounce_watches,
@@ -67,6 +68,7 @@ from chart_watch import (
     save_d1_level_watches,
     watch_is_stale,
     H1_EMA_BOUNCE_KIND,
+    H1_SOURCE_YFINANCE,
     PERSISTENT_WATCH_KINDS,
 )
 import focus_adoption_gate
@@ -4578,7 +4580,7 @@ class AlertCenterPanel(QFrame):
         if kind == H1_EMA_BOUNCE_KIND:
             self.statusChanged.emit(
                 f"{symbol}: {label} armed - {watch.reason}. "
-                f"{self._h1_warmup_note(symbol)}"
+                f"{self._h1_warmup_note(watch)}"
             )
             return True
         level = f" against {watch.baseline:.2f}" if watch.baseline is not None else ""
@@ -4587,6 +4589,53 @@ class AlertCenterPanel(QFrame):
             "M5 bar that meets it flags red in the Alert Center."
         )
         return True
+
+    def _h1_history_cache(self):
+        """The H1 fallback cache, built on first use. None if unavailable.
+
+        Lead decision 2026-09-13 (the trader may overrule): the desk's cached
+        M5 window aggregates to ~35 completed H1 bars against a 45-bar warm-up,
+        so an armed watch would never fire. The missing history is fetched for
+        ARMED SYMBOLS ONLY, through yfinance, on the cache's own worker thread -
+        the group RS/RW tape precedent: zero IB traffic, no engine change. The
+        desk's own cache stays primary and a full one never touches the network.
+        """
+        cache = getattr(self, "_h1_history", None)
+        if cache is None:
+            try:
+                from h1_history import H1HistoryCache
+
+                cache = H1HistoryCache()
+            except Exception:  # pragma: no cover - yfinance/env unavailable
+                logging.debug("H1 history fallback unavailable", exc_info=True)
+                cache = False
+            self._h1_history = cache
+        return cache or None
+
+    def _h1_bars_for_watch(self, watch, *, now: datetime | None = None):
+        """(the H1 series this watch is judged on, which source it came from).
+
+        Reads only what is already in memory. When the cached window is short
+        of the warm-up it ASKS the fallback for a refresh and returns whatever
+        it has right now - the first cycle after arming simply reports "not
+        measured", and the answer lands before the next completed hour.
+        """
+        m5_bars = self._m5_bars_for(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS)
+        cache = self._h1_history_cache()
+        fallback = cache.bars_for(watch.symbol) if cache is not None else None
+        bars, source = h1_bars_for_watch(m5_bars, fallback_h1_bars=fallback)
+        if cache is not None and len(bars) < self._h1_warmup_bars():
+            cache.request(watch.symbol, now=now or datetime.now())
+        return bars, source
+
+    @staticmethod
+    def _h1_warmup_bars() -> int:
+        try:
+            from indicators.h1_ema_bounce import WARMUP_BARS
+
+            return int(WARMUP_BARS)
+        except Exception:  # pragma: no cover - the module is first-party
+            return 45
 
     def _armed_watch_note(self, watch) -> str:
         """Why an armed watch is not answering yet, in the inventory's health cell.
@@ -4600,29 +4649,31 @@ class AlertCenterPanel(QFrame):
         """
         if str(getattr(watch, "kind", "") or "") not in PERSISTENT_WATCH_KINDS:
             return ""
-        have, needed = self._h1_warmup_counts(watch.symbol)
+        have, needed, source = self._h1_warmup_counts(watch)
         if have is None:
             return ""
         if have >= needed:
-            return ""
+            # It can answer - and the trader can see WHICH history answered it.
+            return (
+                "H1 from yfinance"
+                if source == H1_SOURCE_YFINANCE
+                else "H1 from cache"
+            )
+        cache = self._h1_history_cache()
+        if cache is not None and cache.unavailable(watch.symbol):
+            return f"not measured ({have} of {needed} H1 bars, yfinance unavailable)"
         return f"not measured ({have} of {needed} H1 bars)"
 
-    def _h1_warmup_counts(self, symbol: str) -> tuple[int | None, int]:
-        """(completed H1 bars available, bars the rule needs). One O(bars) pass."""
+    def _h1_warmup_counts(self, watch) -> tuple[int | None, int, str]:
+        """(H1 bars available, bars the rule needs, source). One O(bars) pass."""
         try:
-            from indicators.h1_ema_bounce import WARMUP_BARS, closed_h1_bars
-
-            have = len(
-                closed_h1_bars(
-                    self._m5_bars_for(symbol, sessions=self.H1_WATCH_M5_SESSIONS)
-                )
-            )
+            bars, source = self._h1_bars_for_watch(watch)
         except Exception:  # pragma: no cover - a note never costs the caller
-            return (None, 0)
-        return (have, WARMUP_BARS)
+            return (None, 0, "")
+        return (len(bars), self._h1_warmup_bars(), source)
 
-    def _h1_warmup_note(self, symbol: str) -> str:
-        """What the H1 rule can see for this symbol RIGHT NOW, measured.
+    def _h1_warmup_note(self, watch) -> str:
+        """What the H1 rule can see for this watch RIGHT NOW, measured.
 
         The rule needs `WARMUP_BARS` completed H1 bars before it will answer at
         all, and the desk's cached M5 window is five sessions (SN2), which
@@ -4630,14 +4681,16 @@ class AlertCenterPanel(QFrame):
         in hand, never from a remembered number - is the difference between a
         watch that is waiting and a watch the trader thinks is watching.
         """
-        have, needed = self._h1_warmup_counts(symbol)
+        have, needed, source = self._h1_warmup_counts(watch)
         if have is None:
             return "It evaluates on every completed H1 bar."
         if have >= needed:
-            return f"{have} completed H1 bars cached - it evaluates on every new one."
+            where = "from yfinance" if source == H1_SOURCE_YFINANCE else "cached"
+            return f"{have} completed H1 bars {where} - it evaluates on every new one."
         return (
-            f"Only {have} completed H1 bars are cached and the rule needs "
-            f"{needed}, so it reports NOT MEASURED until more arrive."
+            f"Only {have} completed H1 bars are available and the rule needs "
+            f"{needed}; the missing history is being fetched, so it reports "
+            "NOT MEASURED until it lands."
         )
 
     def disarm_chart_watch_for(self, symbol: str, kind: str) -> bool:
@@ -5519,11 +5572,8 @@ class AlertCenterPanel(QFrame):
         triggered: list[ChartWatchTrigger] = []
         for watch in armed:
             try:
-                result = evaluate_h1_bounce_watch(
-                    watch,
-                    self._m5_bars_for(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS),
-                    now=moment,
-                )
+                h1_bars, _source = self._h1_bars_for_watch(watch, now=moment)
+                result = evaluate_h1_bars(watch, h1_bars, now=moment)
             except Exception:
                 logging.debug(
                     "H1 retester evaluation failed for %s", watch.symbol, exc_info=True

@@ -4341,12 +4341,22 @@ grace, or for a prompt to survive being away.
   with a ceiling of ten sessions on the ASK, and one `"5 D"` window behind it; and the
   durable H1 store `project_paths.MASTER_AVWAP_INTRADAY_BARS_DIR` **does not exist on
   the live desk** - nothing has ever written it. So the watch waits and SAYS SO: `not
-  measured (N of 45 H1 bars)` in the Armed inventory's health column and the same count
-  in the arming message, both counted from the bars in hand rather than from a
+  measured (N of 45 H1 bars)`, counted from the bars in hand rather than from a
   remembered number. An armed surface reporting `ok` beside a watch that cannot
-  evaluate is the one thing that table must never say. Closing the gap is a data-supply
-  decision for the trader - a wider M5 window for armed symbols in `bounce_bot_lib`, or
-  a `v2` rule sheet - never a lowered constant wearing the `v1` name.
+  evaluate is the one thing that table must never say.
+- **So the history is fetched, for armed symbols only** (lead decision 2026-09-13; the
+  trader may overrule, and a watch that cannot fire for a whole test week gives them
+  nothing to judge). `scripts/h1_history.py` reads ONE armed symbol's hourly bars
+  through `yfinance` on its own daemon thread - the group RS/RW tape precedent: its own
+  clock, zero IB traffic, no `bounce_bot_lib` change. The cache stays PRIMARY (a full
+  window never touches the network, and a test holds that), at most one fetch per
+  completed H1 bar per symbol, never on the Qt thread, completed bars only through
+  `completed_bars.is_completed_bar`, and the exchange zone CONVERTED with `astimezone`
+  before it is dropped - N1's fault, not repeated. A failed download is a REFUSAL:
+  `not measured (N of 45 H1 bars, yfinance unavailable)`, never an empty tape. The
+  health cell names the source, `H1 from cache` / `H1 from yfinance`, so no verdict is
+  read without knowing which history produced it. The alternative - a wider M5 window
+  for armed symbols in `bounce_bot_lib` - stays the trader's ask; `v1` keeps its 45.
 - **Tests:** `tests/test_ws_10c_h1_retester.py` (the packet's, written red - 25 of 26
   green; the 26th clicks an `ArmBar` with no symbol charted, where every watch toggle is
   disabled by design, and is left red rather than weakened) and

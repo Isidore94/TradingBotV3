@@ -309,12 +309,43 @@ def evaluate_chart_watch(
 #: The ATR the H1 rule measures its distances in (Wilder, on H1 bars).
 H1_ATR_LENGTH = 14
 
+#: Which history a verdict was measured on, for the armed inventory to print.
+H1_SOURCE_CACHE = "cache"
+H1_SOURCE_YFINANCE = "yfinance"
+
+
+def h1_bars_for_watch(
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    fallback_h1_bars: Iterable[Mapping[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """(completed H1 bars, which source they came from).
+
+    **The desk's own cache is PRIMARY.** The fallback - `h1_history`'s yfinance
+    read for an armed symbol - is consulted only when the cached M5 window
+    cannot reach the rule's warm-up, and then only if it actually carries more
+    bars. A symbol whose cache is long enough never touches the network, which
+    is the property the second test in `tests/test_ws_10c_h1_retester_builder.py`
+    exists to hold.
+    """
+    from indicators.h1_ema_bounce import WARMUP_BARS, closed_h1_bars
+
+    cached = closed_h1_bars(m5_bars)
+    if len(cached) >= WARMUP_BARS or not fallback_h1_bars:
+        return cached, H1_SOURCE_CACHE
+    fallback = [dict(bar) for bar in fallback_h1_bars]
+    fallback.sort(key=lambda bar: _naive(bar["dt"]))
+    if len(fallback) <= len(cached):
+        return cached, H1_SOURCE_CACHE
+    return fallback, H1_SOURCE_YFINANCE
+
 
 def evaluate_h1_bounce_watch(
     watch: ChartWatch,
     m5_bars: Iterable[Mapping[str, Any]] | None,
     *,
     now: datetime | None = None,
+    fallback_h1_bars: Iterable[Mapping[str, Any]] | None = None,
 ):
     """Run `h1_ema_bounce_v1` against the desk's cached M5 bars.
 
@@ -334,10 +365,15 @@ def evaluate_h1_bounce_watch(
     already extend. It is never invalidated, because a close a full ATR
     through the line is the other side's setup, not this one's failure.
     """
-    from indicators.atr import wilder_atr
-    from indicators.h1_ema_bounce import REASON_INVALIDATED, closed_h1_bars, evaluate
+    h1_bars, _source = h1_bars_for_watch(m5_bars, fallback_h1_bars=fallback_h1_bars)
+    return evaluate_h1_bars(watch, h1_bars, now=now)
 
-    h1_bars = closed_h1_bars(m5_bars)
+
+def evaluate_h1_bars(watch: ChartWatch, h1_bars, *, now: datetime | None = None):
+    """The rule against a series the caller has already chosen (see above)."""
+    from indicators.atr import wilder_atr
+    from indicators.h1_ema_bounce import REASON_INVALIDATED, evaluate
+
     if not h1_bars:
         return None
     atr = wilder_atr(h1_bars, H1_ATR_LENGTH)
