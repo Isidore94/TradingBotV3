@@ -406,6 +406,15 @@ SWING_FAVORITES_FILE = PERSISTENT_DATA_DIR / "swing_favorites.jsonl"
 # only - nothing in the running system reads this file to detect, score, rank,
 # gate or alert (plan.md sec 5).
 WATCHLIST_INTENT_EVENTS_FILE = PERSISTENT_DATA_DIR / "watchlist_intent_events.jsonl"
+# Append-only daily record of what KIND of day the market had, one row per
+# (session, benchmark, rule_version), written by scripts/d1_environment_store.py
+# from the pure rule in scripts/indicators/d1_environment.py (WISHLIST 7). The
+# label is joined to swing outcomes by SCAN DATE so a readout can be cut by the
+# tape the decision was made in. Shared home because it is small, dated and
+# trader-relevant - and deliberately NOT the research warehouse, which is a
+# different store with a different contract. Shadow evidence: nothing detects,
+# scores, ranks, gates or alerts on it (plan.md sec 5).
+D1_ENVIRONMENT_FILE = PERSISTENT_DATA_DIR / "d1_environment.jsonl"
 # Aggregated revealed-preference state derived from the review-events log by
 # scripts/review_learning.py: per-segment take rates, taken-vs-passed
 # outcomes, blind spots / leaks, watch conversion. Rebuilt when stale.
