@@ -1093,7 +1093,7 @@ def test_the_story_pane_shows_you_said_then_the_market_did_then_the_sources(pane
     assert trader < measured < sources, body[:400]
 
     assert trader < body.index(PANEL_NOTE) < measured, "the words go under 'You said'"
-    assert measured < body.index("SPY") < sources
+    assert measured < body.index("SPY", measured)  # lead fix 2026-09-13: the note itself names SPY above the measured heading < sources
     assert measured < body.index("USO") < sources, "an unmeasured benchmark is still named"
 
     entry_id = panel.service.entries_for()[0]["entry_id"]

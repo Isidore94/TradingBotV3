@@ -1369,6 +1369,38 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **The Market Journal tells the session's story and challenges the thesis in it (WS-10D,
+  WISHLIST 10D / 10K, 2026-09-13, sweep branch).** `scripts/market_story.py` builds a
+  `DailyStory` in three kinds that never blur: `trader_said` (the day's entries verbatim in
+  `created_at` order, each carrying `written_after_the_session` and `predicts_this_session`, so
+  the same sentence typed at 11:00 and at 21:00 Pacific is a prediction and a description),
+  `measured` (completed daily bars for SPY / QQQ / IWM / VXX / TLT / USO, each cell carrying
+  `bars_through`, `bars_used` and a named rule version, an absent series reading `unmeasured`
+  with a reason), and `ai_said`, ALWAYS EMPTY here - code computes, the model explains in a
+  later packet. No note means an empty `trader_said` and a sentence saying so. Which session an
+  entry belongs to is ONE function, `market_journal.session_of_entry`, recomputed from
+  `created_at`, because `EvidenceLedger.append` overwrites the entry's own `session_date` with
+  the market-local date of the WRITE (a 21:00 Pacific note is stored under the next session -
+  the ledger defect stays outside this packet, written down in DESK_INTERNALS).
+  `scripts/market_thesis.py` reads a note with a versioned vocabulary into claim / horizon (in
+  exchange SESSIONS) / stance / condition / invalidation / benchmarks, every field carrying a
+  span that reproduces it exactly, `unstated` carrying none; a later note links only inside the
+  horizon and only on the same benchmark (same stance SUPPORTS, a reversal CONTRADICTS, a
+  stance-less mention MENTIONS). Rows live in `market_theses.jsonl`
+  (`project_paths.MARKET_THESES_FILE`), append-only, keyed on `entry_id` + `extractor_version`;
+  a trader edit is a NEW superseding row and the journal entry is never touched. An imported
+  weekly forecast is `origin=external_forecast` plus a `kind=forecast` sidecar whose unsupplied
+  creation time stays `unknown`; `active_theses` never returns one. The Market Journal page
+  gains the Story pane ("You said" / "External forecast" / "The market did" / "Sources", the
+  sources clickable), the Active theses list with one or two grounded questions and an
+  interpretation box, and "Paste weekly forecast..." - all on the panel's existing worker.
+  `scripts/market_story_rollups.py` is the LAST deterministic nightly slot: each week belongs
+  to the month of its Thursday, a month adds its uncovered days, every pack names covered /
+  expected / missing sessions, carries open theses forward, and is rebuilt only when its
+  `inputs_hash` changed; both slot-order pins gained the name in that position. Shadow only.
+  Advisory: a panel refresh reads the journal ledger three times on the worker (cheap today).
+  Tests: `tests/test_ws_10d_market_story.py` (one contradictory ordering assertion corrected by
+  the lead), `tests/test_ws_10d_story_links.py`.
 - **The said-vs-did report has both halves (WS-5B, WISHLIST 5B, 2026-09-13, sweep branch).**
   `scripts/preference_trade_outcomes.py` now collects every explicit REFUSAL beside the
   endorsements: `annotation:veto` (detail `<code> (v<vocab_version>)`, an uncoded veto reads
@@ -2582,6 +2614,14 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   forming last bar), one fetch line per cycle; 342 bars then 7 per cycle. The lead corrected one
   tester assertion to the shipped invariant. Suite 7718 green but for that one, ruff clean,
   smoke 7/7, selftest 80/80. Gate #113.
+- **WS-10D (WISHLIST 10D) - the Market Journal tells the story and challenges the thesis**,
+  branch `claude/ws-10d-market-story-build` `f38823b7`: `market_story` (three kinds, measured
+  benchmarks), `market_thesis` (versioned extraction with spans, append-only theses, superseding
+  interpretations, forecast import), the Story pane and Active theses on the page,
+  `market_story_rollups` as the last deterministic slot (Thursday-owned weeks), and
+  `market_journal.session_of_entry` routing around the ledger's session stamp. Suite 7733 green
+  but for one contradictory ordering assertion the lead corrected, ruff clean, smoke 7/7,
+  selftest 80/80. Gate #114.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
