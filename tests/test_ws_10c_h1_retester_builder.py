@@ -291,3 +291,47 @@ def test_the_expiry_row_names_the_store_and_the_ten_trading_days():
     assert rows[0]["store"] == "chart_watches"
     assert rows[0]["kind"] == WATCH_KIND
     assert rows[0]["trading_days"] == armed_alert_expiry.DEFAULT_EXPIRY_TRADING_DAYS
+
+
+def test_the_armed_inventory_says_not_measured_with_the_bar_count(
+    monkeypatch, tmp_path
+):
+    """Lead ruling 2026-09-13: if the desk's cached M5 window cannot reach the
+    45-bar warm-up, the watch stays armed and the REASON is visible - never a
+    row reporting `ok` beside a watch that cannot evaluate at all."""
+    from indicators.h1_ema_bounce import WARMUP_BARS
+
+    bars, _ = golden_long_h1_bars()
+    thin = golden_m5_series(bars[:14])  # two sessions -> 14 completed H1 bars
+
+    panel = _panel(monkeypatch, tmp_path)
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol, **kw: list(thin))
+    panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    watch = next(w for w in panel._chart_watches if w.kind == WATCH_KIND)
+
+    assert panel._armed_watch_note(watch) == f"not measured (14 of {WARMUP_BARS} H1 bars)"
+
+    # It reaches the table the trader reads, in the health column.
+    panel._refresh_armed_list()
+    row = next(row for row in panel.armed_list._rows if row[0] == "AAPL")
+    assert row[5] == f"not measured (14 of {WARMUP_BARS} H1 bars)"
+
+    # With enough history the note is silent and the ordinary health shows.
+    monkeypatch.setattr(
+        panel, "_m5_bars_for", lambda symbol, **kw: golden_m5_series(bars)
+    )
+    assert panel._armed_watch_note(watch) == ""
+
+
+def test_a_session_watch_never_gets_the_h1_note(monkeypatch, tmp_path):
+    from chart_watch import ChartWatch
+
+    panel = _panel(monkeypatch, tmp_path)
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol, **kw: [])
+    session_watch = ChartWatch(
+        symbol="AAPL",
+        kind="new_hod",
+        armed_at=datetime(2026, 8, 26, 7, 15),
+        side="LONG",
+    )
+    assert panel._armed_watch_note(session_watch) == ""

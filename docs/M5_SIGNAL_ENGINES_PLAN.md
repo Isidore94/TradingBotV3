@@ -573,12 +573,28 @@ bar-for-bar against the shipped original and a subprocess probe proves neither
 edited** and the retired H1/M5 LRSI emitters stay retired —
 `H1_ALERTS_RETIRED` keeps exactly its four mentions, all in that file.
 
-**Known limit, unresolved at build time.** The desk's cached M5 window is five
-sessions (`useRTH=1`, `"5 D"`; SN2), which aggregates to ~35 completed H1 bars
-— BELOW the 45-bar warm-up. Until a wider window exists for an armed symbol,
-the rule answers **not measured** live and the watch waits. Arming says so, from
-the bars actually in hand. This is a data-supply question, not a rule question:
-lowering the warm-up would be a different rule sheet.
+**Known limit, and the two sources that were checked (lead ruling 2026-09-13).**
+The desk's cached M5 window is five sessions (`useRTH=1`, `"5 D"`; SN2), which
+aggregates to ~35 completed H1 bars — BELOW the 45-bar warm-up.
+
+- **WS-CH's "Load older" path cannot supply the rest.** It is the SAME call this
+  poll already makes — `BounceBot.m5_chart_bars(symbol, max_sessions=N)` — with a
+  per-chart ceiling of `M5_MAX_SESSIONS = 10` (`symbol_snapshot_dialog.py`). The
+  ceiling is on the ASK, not on the data: the cache behind it holds one `"5 D"`
+  window, so asking for ten sessions returns the five that exist. The poll already
+  asks for ten (`H1_WATCH_M5_SESSIONS`), so it is right the day the window widens.
+- **The durable H1 store is empty.** `project_paths.MASTER_AVWAP_INTRADAY_BARS_DIR`
+  (`C:\TradingBotData\intraday_bars`, written by `master_avwap_lib`) would be the
+  natural source, and on the live desk on 2026-09-13 **the directory does not
+  exist** — nothing has ever written it, and neither has the `%LOCALAPPDATA%` L1
+  beside it.
+
+So the watch stays armed and says so: `not measured (N of 45 H1 bars)` in the
+Armed inventory's health column, and the same count in the arming message, both
+counted from the bars actually in hand. **`v1` keeps its 45.** Closing the gap is
+a data-supply decision for the trader — a wider M5 window for armed symbols in
+`bounce_bot_lib`, or a `v2` rule sheet measured on less history — not something
+this packet may decide by lowering a constant.
 
 **Tests:** `tests/test_ws_10c_h1_retester.py` (the packet's, written red) and
 `tests/test_ws_10c_h1_retester_builder.py`.

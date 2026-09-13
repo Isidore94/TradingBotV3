@@ -113,9 +113,23 @@ class ArmedWatchList(QFrame):
         self.set_watches([], [], has_m5_bars=lambda _symbol: True)
 
     def set_watches(
-        self, watches, levels, *, has_m5_bars, d1_events=(), now: datetime | None = None
+        self,
+        watches,
+        levels,
+        *,
+        has_m5_bars,
+        d1_events=(),
+        now: datetime | None = None,
+        watch_note=None,
     ) -> None:
-        """Render armed session watches and persistent level/event alerts together."""
+        """Render armed session watches and persistent level/event alerts together.
+
+        ``watch_note(watch) -> str`` is the host's chance to say something the
+        widget cannot work out for itself about why a watch is not answering
+        yet - the H1 retester's warm-up shortfall, for instance. A non-empty
+        note REPLACES the health cell, because "ok" next to a watch that
+        cannot evaluate is the one thing this table must never say.
+        """
         moment = now or datetime.now()
         self._rows = []
         #: Row index -> the trader's own words for what they are waiting on.
@@ -124,6 +138,16 @@ class ArmedWatchList(QFrame):
         self._row_reasons: list[str] = []
         for watch in watches or []:
             self._row_reasons.append(str(getattr(watch, "reason", "") or ""))
+            health = watch_health(
+                watch.kind, bool(has_m5_bars(watch.symbol)), watch.armed_at, moment
+            )
+            if watch_note is not None:
+                try:
+                    note = str(watch_note(watch) or "")
+                except Exception:  # pragma: no cover - a note never costs a row
+                    note = ""
+                if note:
+                    health = note
             self._rows.append(
                 (
                     watch.symbol,
@@ -135,7 +159,7 @@ class ArmedWatchList(QFrame):
                         "%m/%d" if watch.kind in PERSISTENT_WATCH_KINDS else "%H:%M"
                     ),
                     format_age(watch.armed_at, moment),
-                    watch_health(watch.kind, bool(has_m5_bars(watch.symbol)), watch.armed_at, moment),
+                    health,
                     ("watch", watch.symbol, watch.kind, 0.0),
                 )
             )

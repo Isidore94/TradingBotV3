@@ -4336,11 +4336,17 @@ grace, or for a prompt to survive being away.
   over the ~35 resulting H1 bars. No fetch, no file read, no second copy of the series.
 - **The open limit, stated rather than hidden.** The desk's cached M5 window is five
   sessions at `useRTH=1` (SN2's `"5 D"`), which aggregates to about **35** completed H1
-  bars against a **45**-bar warm-up - so on today's data the rule answers *not measured*
-  and the watch waits. Arming says exactly that, counted from the bars in hand rather
-  than from a remembered number. Widening it is a data-supply decision (a wider M5 fetch
-  for armed symbols, or an H1 fetch of its own), not a reason to lower the warm-up: that
-  would be a different rule sheet, measured on less evidence, wearing the same name.
+  bars against a **45**-bar warm-up. Two sources were checked before settling for it
+  (lead ruling 2026-09-13): WS-CH's *Load older* path is the SAME `m5_chart_bars` call
+  with a ceiling of ten sessions on the ASK, and one `"5 D"` window behind it; and the
+  durable H1 store `project_paths.MASTER_AVWAP_INTRADAY_BARS_DIR` **does not exist on
+  the live desk** - nothing has ever written it. So the watch waits and SAYS SO: `not
+  measured (N of 45 H1 bars)` in the Armed inventory's health column and the same count
+  in the arming message, both counted from the bars in hand rather than from a
+  remembered number. An armed surface reporting `ok` beside a watch that cannot
+  evaluate is the one thing that table must never say. Closing the gap is a data-supply
+  decision for the trader - a wider M5 window for armed symbols in `bounce_bot_lib`, or
+  a `v2` rule sheet - never a lowered constant wearing the `v1` name.
 - **Tests:** `tests/test_ws_10c_h1_retester.py` (the packet's, written red - 25 of 26
   green; the 26th clicks an `ArmBar` with no symbol charted, where every watch toggle is
   disabled by design, and is left red rather than weakened) and

@@ -4588,6 +4588,39 @@ class AlertCenterPanel(QFrame):
         )
         return True
 
+    def _armed_watch_note(self, watch) -> str:
+        """Why an armed watch is not answering yet, in the inventory's health cell.
+
+        Today this is the H1 retester's warm-up: the rule needs
+        `WARMUP_BARS` completed H1 bars and the desk's cached M5 window
+        supplies fewer, so the honest state is `not measured (N of 45 H1
+        bars)` rather than `ok`. An armed surface whose job is to say "these
+        are the exact conditions I am waiting on" must not report a watch as
+        healthy when it cannot evaluate at all.
+        """
+        if str(getattr(watch, "kind", "") or "") not in PERSISTENT_WATCH_KINDS:
+            return ""
+        have, needed = self._h1_warmup_counts(watch.symbol)
+        if have is None:
+            return ""
+        if have >= needed:
+            return ""
+        return f"not measured ({have} of {needed} H1 bars)"
+
+    def _h1_warmup_counts(self, symbol: str) -> tuple[int | None, int]:
+        """(completed H1 bars available, bars the rule needs). One O(bars) pass."""
+        try:
+            from indicators.h1_ema_bounce import WARMUP_BARS, closed_h1_bars
+
+            have = len(
+                closed_h1_bars(
+                    self._m5_bars_for(symbol, sessions=self.H1_WATCH_M5_SESSIONS)
+                )
+            )
+        except Exception:  # pragma: no cover - a note never costs the caller
+            return (None, 0)
+        return (have, WARMUP_BARS)
+
     def _h1_warmup_note(self, symbol: str) -> str:
         """What the H1 rule can see for this symbol RIGHT NOW, measured.
 
@@ -4597,23 +4630,14 @@ class AlertCenterPanel(QFrame):
         in hand, never from a remembered number - is the difference between a
         watch that is waiting and a watch the trader thinks is watching.
         """
-        try:
-            from indicators.h1_ema_bounce import WARMUP_BARS, closed_h1_bars
-
-            have = len(
-                closed_h1_bars(
-                    self._m5_bars_for(symbol, sessions=self.H1_WATCH_M5_SESSIONS)
-                )
-            )
-        except Exception:  # pragma: no cover - a note must never cost the arm
+        have, needed = self._h1_warmup_counts(symbol)
+        if have is None:
             return "It evaluates on every completed H1 bar."
-        if have >= WARMUP_BARS:
-            return (
-                f"{have} completed H1 bars cached - it evaluates on every new one."
-            )
+        if have >= needed:
+            return f"{have} completed H1 bars cached - it evaluates on every new one."
         return (
             f"Only {have} completed H1 bars are cached and the rule needs "
-            f"{WARMUP_BARS}, so it reports NOT MEASURED until more arrive."
+            f"{needed}, so it reports NOT MEASURED until more arrive."
         )
 
     def disarm_chart_watch_for(self, symbol: str, kind: str) -> bool:
@@ -5161,6 +5185,7 @@ class AlertCenterPanel(QFrame):
             self._d1_level_watches,
             d1_events=self._d1_event_watches,
             has_m5_bars=lambda symbol: bool(self._m5_bars_for(symbol)),
+            watch_note=self._armed_watch_note,
         )
         current = self._current_review_alert
         if current is not None:
