@@ -59,7 +59,7 @@ import threading
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -413,6 +413,62 @@ def _ai_store_dir() -> Path | None:
         return Path(raw).expanduser()
     except (OSError, ValueError):
         return None
+
+
+def _master_scan_freshness_check(local_tz: tzinfo) -> dict[str, Any]:
+    """The D1 scan's three clocks, in ONE sentence - WS-10A item 2.
+
+    The same string the Setups strip shows, built by the same function: two
+    surfaces disagreeing about how fresh the scan is would be a second opinion
+    where the trader needs a fact. The manifest lives in the shared home rather
+    than the diagnostics folder, so it is read there even when the audit is
+    pointed at a sandbox - it describes the scan, not this machine's telemetry.
+
+    A scan that failed is UNHEALTHY because the report on screen is stale; a
+    partial one is DEGRADED because an absent name may mean nothing; no
+    manifest at all is UNKNOWN, never green.
+    """
+    import project_paths as _paths
+
+    try:
+        from master_avwap_lib import scan_manifest
+    except Exception as exc:  # noqa: BLE001 - the audit never depends on the scanner
+        return _check(
+            "master_scan_freshness",
+            "Master scan freshness",
+            STATUS_UNKNOWN,
+            f"The scan manifest could not be evaluated, so freshness is unmeasured: {exc}",
+            source=Path(__file__),
+        )
+
+    manifest = scan_manifest.read_manifest()
+    report_path = Path(_paths.MASTER_AVWAP_PRIORITY_SETUPS_FILE)
+    try:
+        report_mtime = datetime.fromtimestamp(report_path.stat().st_mtime, tz=local_tz)
+    except OSError:
+        report_mtime = None
+    summary = scan_manifest.freshness_line(manifest, report_mtime=report_mtime)
+    status = {
+        scan_manifest.STATUS_OK: STATUS_HEALTHY,
+        scan_manifest.STATUS_PARTIAL: STATUS_DEGRADED,
+        scan_manifest.STATUS_FAILED: STATUS_UNHEALTHY,
+    }.get(str((manifest or {}).get("status") or ""), STATUS_UNKNOWN)
+    return _check(
+        "master_scan_freshness",
+        "Master scan freshness",
+        status,
+        summary,
+        source=Path(scan_manifest.manifest_path()),
+        updated_at=str((manifest or {}).get("finished_at") or ""),
+        details={
+            "status": (manifest or {}).get("status"),
+            "universe_size": (manifest or {}).get("universe_size"),
+            "symbols_fetched": (manifest or {}).get("symbols_fetched"),
+            "latest_input_bar_session": (manifest or {}).get("latest_input_bar_session"),
+            "preview_bar_used": bool((manifest or {}).get("preview_bar_used")),
+            "outputs": (manifest or {}).get("outputs") or [],
+        },
+    )
 
 
 def _market_calendar_check(today: datetime) -> dict[str, Any]:
@@ -2759,6 +2815,7 @@ def build_operations_audit(
         _questrade_chain_check(moment, journal_path),
         _outcome_claim_coverage_check(outcomes_path),
         _market_calendar_check(moment),
+        _master_scan_freshness_check(local_tz),
         manifest,
         _away_report_check(report_path, auto_state_path, moment, local_tz, market_phase),
         _industry_board_check(industry_path, moment, local_tz, market_phase),
