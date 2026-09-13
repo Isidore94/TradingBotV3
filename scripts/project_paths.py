@@ -413,6 +413,22 @@ THETA_PICKS_FILE = PERSISTENT_DATA_DIR / "theta_picks.jsonl"
 # submitted; it is NEVER read as an observation (an unanswered prompt is no
 # observation) and nothing in the running system detects, scores, ranks, gates
 # or alerts off either file (plan.md sec 5).
+# WISHLIST 10D / packet WS-10D. The Market Journal's thesis sidecar: one
+# append-only row per (`entry_id`, `extractor_version`) holding what the
+# deterministic vocabulary read out of a note, plus the trader's own
+# superseding interpretation and any imported weekly forecast
+# (`kind=forecast`). It sits BESIDE the journal and never inside it - the
+# journal entry is the trader's words and is never rewritten, and a machine
+# reading of those words is a second statement, not an edit of the first.
+# SHADOW EVIDENCE ONLY: nothing in the running system detects, scores, ranks,
+# gates or alerts off this file (plan.md sec 5).
+MARKET_THESES_FILE = PERSISTENT_DATA_DIR / "market_theses.jsonl"
+# The weekly / monthly / quarterly story rollups, one JSON per period under
+# `weekly/`, `monthly/` and `quarterly/`. Derived and rebuildable: every pack
+# is recomputed from the daily stories whenever its inputs' hash changes, so
+# losing the directory costs one overnight slot and nothing else.
+MARKET_STORY_ROLLUPS_DIR = RUNTIME_DATA_DIR / "market_story_rollups"
+
 TRADE_MENTOR_SLOTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_slots.json"
 TRADE_MENTOR_DRAFTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_drafts.json"
 # Append-only JSONL of every add and remove on the four plain watchlists

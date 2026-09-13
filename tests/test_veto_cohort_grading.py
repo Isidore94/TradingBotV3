@@ -585,6 +585,13 @@ def test_the_scope_can_be_selected_on_demand():
         # delay the fact pack. Appended inside the stage, never reordered across
         # stages - the same rule every line above it follows.
         "theta_pick_grading",
+        # WS-10D (2026-09-12) appended the Market Journal's story rollups after
+        # it, closing the deterministic stage: they read the journal's own
+        # entries and the exchange calendar, feed nothing above them, and are
+        # deterministic - the narration of those packs is a later packet and
+        # belongs to stage 2. Appended inside the stage, never reordered across
+        # stages.
+        "market_story_rollups",
         # Stage 2: the narration pair, moved here as a unit by decision 0018.
         "ai_summary",
         "ticker_briefs",
