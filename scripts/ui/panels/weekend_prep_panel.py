@@ -1434,7 +1434,15 @@ class WalkawayPage(_StepPage):
         self._reload_review_data()
 
 
-TAG_WEEK_COLUMNS = ("Date", "Symbol", "Status", "Tag", "Net", "Week")
+#: WS-10E item 3 added `From`: which lane proposed the tag waiting in this row.
+#: Only one lane is named, and deliberately - "your journal note" is the one
+#: proposal the trader can check against something they themselves wrote, and a
+#: column that named every lane would be a machine-provenance column on a screen
+#: whose whole job is the trader's yes or no.
+TAG_WEEK_COLUMNS = ("Date", "Symbol", "Status", "Tag", "Net", "Week", "From")
+
+#: What that column says when the note lane is where the proposal came from.
+TAG_WEEK_NOTE_ORIGIN = "your journal note"
 
 #: The missing-planned-risk worklist (ST5.5). Newest first, ten-row floor, and a
 #: row that is clicked opens the trade where the trader can type the plan.
@@ -1622,6 +1630,10 @@ class TagWeekPage(_StepPage):
                 # is no longer one week, and a reader has to be able to see that
                 # without counting dates.
                 "this week" if row.get("in_review_week") else "backlog",
+                # WS-10E: marked when the waiting tag is the one the trader's
+                # OWN Market Journal note named. Blank otherwise - a row this
+                # cannot vouch for says nothing rather than naming a lane.
+                TAG_WEEK_NOTE_ORIGIN if _tag_came_from_a_note(row) else "",
             )
             for column, text in enumerate(values):
                 self.table.setItem(index, column, QTableWidgetItem(text))
@@ -1841,6 +1853,28 @@ def _open_journal_store(store=None, path=None):
     from journal_store import JournalStore
 
     return JournalStore(path) if path is not None else JournalStore()
+
+
+def _tag_came_from_a_note(row) -> bool:
+    """Is the provisional tag on this row the one the trader's note named?
+
+    Compared rather than flagged: the stored verdict says which setup the note
+    lane claimed for that trade, and the row says which tag is actually waiting.
+    A flag written at apply time would go on claiming a provenance the tag no
+    longer has once the trader edits it.
+
+    Only a PROVISIONAL row can be marked. A confirmed tag is the trader's own
+    answer and where the machine's guess came from stopped mattering.
+    """
+    from journal_analytics import note_lane_tag
+    from journal_store import TAG_STATUS_PROVISIONAL
+
+    if str(row.get("tag_status") or "") != TAG_STATUS_PROVISIONAL:
+        return False
+    claimed = note_lane_tag(row.get("note_lane_json"))
+    if not claimed:
+        return False
+    return str(row.get("setup_tags") or "").strip() == claimed
 
 
 def _read_week_tag_rows(bounds, *, store=None, path=None) -> list[dict]:

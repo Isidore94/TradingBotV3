@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from journal_analytics import format_note_lane_line
 from journal_store import (
     TAG_STATUS_NEEDS_REVIEW,
     TAG_STATUS_PROVISIONAL,
@@ -498,6 +499,22 @@ class TradesTab(QFrame):
         self.ai_enrichment_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.ai_enrichment_note.setVisible(False)
 
+        # WS-10E item 3. What the trader's OWN journal notes made of this trade,
+        # beside the model's advisory row and above it on purpose: one is
+        # deterministic and cites a sentence the trader wrote, the other is a
+        # model's opinion. Read from the stored verdict, never re-derived here -
+        # the Market Journal ledger is not opened on the Qt thread.
+        self.note_lane_note = QLabel("")
+        self.note_lane_note.setObjectName("NoteLaneNote")
+        self.note_lane_note.setWordWrap(True)
+        self.note_lane_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.note_lane_note.setToolTip(
+            "The deterministic note lane: a setup you NAMED in the Market "
+            "Journal inside this trade's own window. A suggestion, never a tag "
+            "- only you confirm a tag."
+        )
+        self.note_lane_note.setVisible(False)
+
         self.review_outcome = QComboBox()
         self.review_outcome.addItems(
             [
@@ -537,6 +554,7 @@ class TradesTab(QFrame):
         layout.addWidget(self.notes_input)
         layout.addWidget(self.save_notes_button)
         layout.addWidget(self.confirm_tags_button)
+        layout.addWidget(self.note_lane_note)
         layout.addWidget(QLabel("Overnight AI note (advisory)"))
         layout.addWidget(self.ai_enrichment_note)
         review_form = QFormLayout()
@@ -740,6 +758,7 @@ class TradesTab(QFrame):
         self.tags_input.setText(str(raw.get("setup_tags") or ""))
         self.notes_input.setPlainText(str(raw.get("notes") or ""))
         self._show_tag_status(raw)
+        self._show_note_lane(raw)
         self._show_ai_enrichment(trade.trade_id)
         self.review_outcome.setCurrentIndex(0)
         latest_review = journal_feed.latest_trade_review(trade.trade_id) or {}
@@ -771,6 +790,21 @@ class TradesTab(QFrame):
             self.adjustments_list.addItem(
                 f"{record.get('created_at')} {record.get('action')}{superseded} - {record.get('reason')}"
             )
+
+    def _show_note_lane(self, raw: dict) -> None:
+        """Print the note lane's verdict for this trade (WS-10E item 3).
+
+        Three sentences and no fourth, formatted by `journal_analytics` so this
+        pane and every other reader say the same words. The value is the one the
+        last `refresh_auto_tags` stored on the trade, so showing it costs a
+        dictionary lookup - the ledger read happened on the tagger's own pass.
+
+        A trade whose verdict was never computed (an old row, or one added since
+        the last refresh) says nothing rather than guessing a blank window.
+        """
+        line = format_note_lane_line(raw.get("note_lane_json"))
+        self.note_lane_note.setText(line)
+        self.note_lane_note.setVisible(bool(line))
 
     def _show_ai_enrichment(self, trade_id: str) -> None:
         """Show the latest non-superseded advisory row for this trade (WS-AI1).

@@ -261,6 +261,10 @@ def run_journal_enrichment(
 
     vocabulary = setup_vocabulary()
     evidence_rows = list(review_rows) if review_rows is not None else _review_rows(day)
+    # WS-10E item 2. ONE tagger for the whole night, so the Market Journal
+    # ledger is read once rather than once per trade, and so the deterministic
+    # answer in the package is the same object the Journal's own pane shows.
+    tagger = _note_tagger()
     model = ""
     # WS-AI1 item 2. Three counts, never two: a model that DECLINED and a
     # provider that FAILED are different nights, and the old `enriched N of M`
@@ -282,7 +286,7 @@ def run_journal_enrichment(
         try:
             result = _enrich_one(
                 trade=trade, vocabulary=vocabulary, review_rows=evidence_rows,
-                session_date=day,
+                session_date=day, tagger=tagger,
             )
         except Exception as exc:  # noqa: BLE001 - one trade's failure is its own
             # The failure is RECORDED against the trade it happened to, not
@@ -479,12 +483,51 @@ def _evidence_links(trade: Mapping[str, Any], review_rows: Sequence[Mapping[str,
     return links[:5]
 
 
+def _note_tagger():
+    """The deterministic tagger, or ``None`` when it cannot be built.
+
+    WS-10E item 2. A package without the trader's own notes is the package this
+    pass has always sent, so a tagger that will not construct costs the notes
+    and never the night.
+    """
+    try:
+        from journal_analytics import AutoTagger
+
+        return AutoTagger()
+    except Exception:  # noqa: BLE001 - enrichment never fails over its context
+        _log.debug("The note lane is unavailable to the enrichment package.", exc_info=True)
+        return None
+
+
+def _note_lane_section(trade: Mapping[str, Any], tagger: Any) -> dict[str, Any]:
+    """The candidate notes and what the deterministic lane already concluded.
+
+    Both halves matter and they are different things. The NOTES let the model
+    cite an entry by id in `sources`; the DETERMINISTIC verdict beside them
+    means the model is correcting an answer that already exists rather than
+    inventing one from prose.
+    """
+    if tagger is None:
+        return {}
+    try:
+        report = dict(tagger.note_lane_report(dict(trade)))
+    except Exception:  # noqa: BLE001
+        _log.debug("The note lane could not answer for this trade.", exc_info=True)
+        return {}
+    notes = list(report.pop("notes", ()))
+    return {
+        "trader_notes": notes,
+        "deterministic_note_lane": report,
+    }
+
+
 def _enrich_one(
     *,
     trade: Mapping[str, Any],
     vocabulary: Sequence[str],
     review_rows: Sequence[Mapping[str, Any]],
     session_date: str,
+    tagger: Any = None,
 ) -> dict[str, Any] | None:
     """One trade's advisory summary and tags. Medium tier; raises on failure."""
     import ai_summary
@@ -495,6 +538,7 @@ def _enrich_one(
     evidence = _evidence_package(
         trade=trade, vocabulary=vocabulary,
         links=_evidence_links(trade, review_rows), session_date=session_date,
+        note_lane=_note_lane_section(trade, tagger),
     )
     result = ai_summary.request_ai_summary(
         provider="local",
@@ -569,7 +613,7 @@ def _confidence_text(summary: Mapping[str, Any]) -> str:
     return value if value in {"high", "medium", "low"} else ""
 
 
-def _evidence_package(*, trade, vocabulary, links, session_date) -> dict[str, Any]:
+def _evidence_package(*, trade, vocabulary, links, session_date, note_lane=None) -> dict[str, Any]:
     """One trade, its review evidence, and the closed vocabulary. Nothing else."""
     import hashlib
 
@@ -593,9 +637,18 @@ def _evidence_package(*, trade, vocabulary, links, session_date) -> dict[str, An
             "`unknowns`. If the evidence does not support a summary, return an "
             "empty summary and empty tags and say why in `unknowns` - that is a "
             "correct answer and it is recorded as one. Do not give advice, and "
-            "do not restate numbers you were not given."
+            "do not restate numbers you were not given. When a trader note "
+            "supports a tag, cite it in `sources` as `note:<note_id>` and say "
+            "which words you read it from; `deterministic_note_lane` is what "
+            "code already concluded from the same notes, so disagreeing with it "
+            "is an answer you must justify in `unknowns`."
         ),
     }
+    # WS-10E item 2. The candidate notes and the deterministic verdict, ABSENT
+    # rather than empty when the lane could not be consulted: a key holding an
+    # empty list would read as "the trader wrote nothing", which is a different
+    # statement from "the lane was unavailable".
+    content.update(dict(note_lane or {}))
     encoded = json.dumps(content, sort_keys=True, default=str).encode("utf-8")
     package = {
         "schema_version": "ai_evidence_package_v2",
