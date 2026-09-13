@@ -225,6 +225,9 @@ class WatchlistTabService(QObject):
         self._journal = JournalSnapshot()
         self._running = False
         self._last_error = ""
+        #: The journal is re-read only when its file moved. True at start
+        #: because nothing has been read yet.
+        self._journal_dirty = True
         self._stamps: dict[str, float] = {}
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_INTERVAL_MS)
@@ -325,6 +328,8 @@ class WatchlistTabService(QObject):
             if self._stamps.get(name) != stamp:
                 self._stamps[name] = stamp
                 changed = True
+                if name == "journal":
+                    self._journal_dirty = True
         return changed
 
     # ------------------------------------------------------------------- work
@@ -332,25 +337,43 @@ class WatchlistTabService(QObject):
         if self._running:
             return False
         self._running = True
-        # Frozen HERE, on the Qt thread, before the worker exists.
-        inputs = {
-            "focus": self.focus_snapshot(),
-            "armed_alerts": self.armed_alerts(),
-            "board_rows": self.board_rows(),
-        }
+        # Frozen HERE, on the Qt thread, before the worker exists: the Focus
+        # store is a writer the Qt thread owns, and the cheap stores are the
+        # same ones the tab itself re-reads on a click (four short text files,
+        # two small JSONL, one JSON and the mtime-cached day ledgers - measured
+        # under 3 ms on this desk). What the worker gets is a finished payload,
+        # so the first thing it does is the BUILD, and the sqlite journal read
+        # that supersedes it happens entirely off this thread.
+        payload = gather(
+            focus=self.focus_snapshot(),
+            armed_alerts=self.armed_alerts(),
+            board_rows=self.board_rows(),
+            journal=self._journal,
+        )
         threading.Thread(
-            target=self._worker, args=(inputs,), name="watchlist-tab", daemon=True
+            target=self._worker, args=(payload,), name="watchlist-tab", daemon=True
         ).start()
         return True
 
-    def _worker(self, inputs: dict[str, Any]) -> None:
+    def _worker(self, payload: dict[str, Any]) -> None:
+        """Publish the cheap answer first, then the journal's.
+
+        The Journal is sqlite over a year of fills and, the first time, a
+        schema check - measured at ~30 ms here against under 3 ms for
+        everything else. Waiting for it before publishing anything would leave
+        the tab blank for all of it, so the fast rows go out at once and the
+        positions SUPERSEDE them when they land.
+        """
         try:
-            self._journal = read_journal()
-            payload = gather(journal=self._journal, **inputs)
-            rows = watchlist_views.build_watchlist_rows(**payload)
-            self._rows = rows
-            self._last_error = self._journal.error
-            self.rowsChanged.emit(rows)
+            self._publish(payload)
+            if self._journal_dirty:
+                self._journal_dirty = False
+                self._journal = read_journal()
+                self._last_error = self._journal.error
+                payload = dict(payload)
+                payload["journal_exposures"] = self._journal.trades
+                payload["last_sync"] = self._journal.last_sync
+                self._publish(payload)
         except Exception as exc:  # noqa: BLE001
             # The last good rows survive a failed read (plan.md sec 5: a failed
             # publish never destroys the last verified report).
@@ -359,6 +382,11 @@ class WatchlistTabService(QObject):
         finally:
             self._running = False
             self.statusChanged.emit(self.status_text())
+
+    def _publish(self, payload: dict[str, Any]) -> None:
+        rows = watchlist_views.build_watchlist_rows(**payload)
+        self._rows = rows
+        self.rowsChanged.emit(rows)
 
 
 def _parse_stamp(value: object) -> datetime | None:

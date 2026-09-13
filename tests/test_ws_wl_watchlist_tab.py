@@ -821,6 +821,14 @@ def _lay_out(widget, width: int, height: int) -> None:
 #: pointed `TRADINGBOTV3_DATA_DIR` at a temp folder, so none of these can reach
 #: `C:\TradingBotData` - but they ARE shared with the rest of the suite, so the
 #: fixture SAVES and RESTORES rather than blanking and walking away.
+#:
+#: Builder note (2026-09-13): the two SWING Focus files were missing from this
+#: tuple and a swing pick leaked ACROSS tests - `test_restore_puts_a_faded_
+#: pick_back_through_restore_faded` restores ROKU into `focus_swing_longs.txt`
+#: (which is where a `category="swing"` add lands), and the next desk then
+#: counted 25 rows where its own fixture had written 24. Added here rather than
+#: worked around: no assertion is changed, and the blanked slice below still
+#: means "the lists that are READ by name".
 _DESK_HOME_FILES = (
     "LONGS_FILE",
     "SHORTS_FILE",
@@ -828,6 +836,8 @@ _DESK_HOME_FILES = (
     "SWING_SHORTS_FILE",
     "FOCUS_LONGS_FILE",
     "FOCUS_SHORTS_FILE",
+    "FOCUS_SWING_LONGS_FILE",
+    "FOCUS_SWING_SHORTS_FILE",
     "SWING_FAVORITES_FILE",
     "WATCHLIST_INTENT_EVENTS_FILE",
     "PRICE_ALERTS_FILE",
@@ -837,7 +847,7 @@ _DESK_HOME_FILES = (
 
 #: Blanked to "" rather than deleted: the four plain watchlists and the two
 #: Focus files are READ by name and a missing one logs a warning on every load.
-_DESK_HOME_BLANKED = _DESK_HOME_FILES[:6]
+_DESK_HOME_BLANKED = _DESK_HOME_FILES[:8]
 
 
 @pytest.fixture

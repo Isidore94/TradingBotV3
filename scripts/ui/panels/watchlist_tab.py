@@ -200,6 +200,11 @@ class WatchlistTabPanel(QFrame):
 
     # ------------------------------------------------------------------ build
     def _build_layout(self) -> None:
+        # The table is built FIRST and parented here on purpose: a `QComboBox`
+        # owns an internal `QListView`, so a `findChildren(QAbstractItemView)`
+        # would answer with the view selector's popup if the combos were the
+        # older children. The desk's own tooling looks the table up that way.
+        self.table = QTableWidget(0, len(COLUMNS), self)
         self.view_selector = QComboBox()
         for name in watchlist_views.VIEWS:
             self.view_selector.addItem(watchlist_views.VIEW_LABELS[name], name)
@@ -250,7 +255,6 @@ class WatchlistTabPanel(QFrame):
         self.status_label.setObjectName("MutedLabel")
         self.status_label.setWordWrap(True)
 
-        self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels([label for _key, label in COLUMNS])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -890,7 +894,14 @@ class WatchlistTabPanel(QFrame):
             self._set_status(result.message)
             return result
 
-        incoming = extract_watchlist_symbols(str(text or ""))
+        # Token by token, so a name typed TWICE is two occurrences:
+        # `extract_watchlist_symbols` de-duplicates, and the trader's "it told
+        # me it was already there" counts what they pasted, not what survived.
+        incoming = [
+            symbol
+            for token in str(text or "").replace(",", "\n").split()
+            for symbol in extract_watchlist_symbols(token)
+        ]
         if not incoming:
             result = AddResult(message="Nothing to add.")
             self._set_status(result.message)
