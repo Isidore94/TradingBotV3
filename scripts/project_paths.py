@@ -393,6 +393,18 @@ TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
 # never in front of it, and nothing in the running system reads this file to
 # detect, score, rank, gate or alert (plan.md sec 5).
 SWING_FAVORITES_FILE = PERSISTENT_DATA_DIR / "swing_favorites.jsonl"
+# WISHLIST 10J / packet WS-TM. The Trade Mentor's two small state files, in
+# the SHARED home rather than the machine cache: a prompt the trader already
+# answered on the desk must not be asked again by a desk started from anywhere
+# else, and a half-typed read is the trader's own words. `trade_mentor_slots`
+# keys one record per `slot_id` (delivered / answered / skipped and why), so a
+# restart, a drifted timer or a clock correction can never turn one hour into
+# two records. `trade_mentor_drafts` keeps text that was typed and never
+# submitted; it is NEVER read as an observation (an unanswered prompt is no
+# observation) and nothing in the running system detects, scores, ranks, gates
+# or alerts off either file (plan.md sec 5).
+TRADE_MENTOR_SLOTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_slots.json"
+TRADE_MENTOR_DRAFTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_drafts.json"
 # Append-only JSONL of every add and remove on the four plain watchlists
 # (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`), written by
 # `scripts/watchlist_intent_events.py`. Membership on those lists means
