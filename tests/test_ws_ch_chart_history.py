@@ -771,3 +771,124 @@ def test_one_chart_click_never_asks_the_provider_for_four_years_of_daily_bars(
     assert max(requested) <= 800, (
         f"one chart click asked the provider for {max(requested)} calendar days"
     )
+
+
+# ==========================================================================
+# Builder-added (WS-CH build): the lead's ruling (a) on levels, and the two
+# constants the widget derives. ADDITIONS only - nothing above is weakened.
+# ==========================================================================
+@pytest.mark.qt
+def test_a_four_year_old_store_level_is_not_admitted_by_the_longer_payload(qapp):
+    """Lead ruling (a): the price filter follows the VISIBLE window.
+
+    The fixture carries a deliberate far level at 19.83 - inside the 1,000-bar
+    payload's range and nowhere near the chart the trader opens on.
+    ``horizontal_levels`` has a clutter budget per bucket, so admitting lines
+    nobody can see is not free; today's behaviour is kept by handing the filter
+    the initial visible window instead of the payload. Panning left does NOT
+    recompute levels - the payload is fixed at build time.
+    """
+    pytest.importorskip("PySide6.QtWidgets", reason="PySide6 not installed")
+    from PySide6.QtCore import QThreadPool
+
+    import chart_levels
+    import chart_snapshot
+    from ui.services.chart_data_service import ChartDataService
+
+    golden = _golden()
+    payload = _build(golden, sessions=chart_snapshot.D1_HISTORY_SESSIONS)
+
+    def prices(bars=None, **kwargs) -> set[str]:
+        levels = chart_levels.build_d1_levels(
+            golden["symbol"],
+            payload["bars"] if bars is None else bars,
+            store_records=golden["store_levels"],
+            trendline_feed={},
+            price_alerts_path=ROOT_DIR / "tests" / "fixtures" / "no_such_price_alerts.json",
+            d1_level_watches_path=ROOT_DIR / "tests" / "fixtures" / "no_such_watches.json",
+            avwap_anchor=payload.get("avwape_anchor") or None,
+            **kwargs,
+        )
+        return {f"{float(level['price']):.2f}" for level in levels}
+
+    windowed = prices(price_range_bars=payload["bars"][-VISIBLE_SESSIONS:])
+    assert "180.32" in windowed, "the level the trader can see is still drawn"
+    assert "19.83" not in windowed, "a 2021 store level reached the opening chart"
+    # The filter is driven by the range it is HANDED, not by the fixture: the
+    # 2021 level sits below even the 1,000-session payload's low, and only the
+    # whole 1,300-session store reaches down to it.
+    assert "19.83" not in prices()
+    assert "19.83" in prices(price_range_bars=_stored_bars(golden))
+
+    # ...and the worker is what hands the filter the visible window.
+    seen: list[list] = []
+    real = chart_levels.build_d1_levels
+
+    def spy(symbol, bars, **kwargs):
+        seen.append(list(kwargs.get("price_range_bars") or []))
+        return real(symbol, bars, **kwargs)
+
+    service = ChartDataService(
+        store=_FakeD1Store({golden["symbol"]: _stored_bars(golden)}),
+        pool=QThreadPool(),
+    )
+    try:
+        chart_levels.build_d1_levels = spy
+        d1, _m5, _meta = service.build_snapshots(
+            golden["symbol"],
+            [],
+            chart_snapshot.D1_HISTORY_SESSIONS,
+            view_sessions=VISIBLE_SESSIONS,
+        )
+    finally:
+        chart_levels.build_d1_levels = real
+        service.shutdown()
+
+    assert len(d1["bars"]) == chart_snapshot.D1_HISTORY_SESSIONS
+    assert seen and len(seen[0]) == VISIBLE_SESSIONS
+    assert _dates(seen[0]) == _dates(d1["bars"])[-VISIBLE_SESSIONS:]
+
+
+@pytest.mark.qt
+def test_chart_review_keeps_its_own_opening_window_and_gains_the_history(
+    qapp, monkeypatch
+):
+    """The second host: 520 sessions visible as today, 1,000 held behind."""
+    import chart_snapshot
+    from ui.panels.chart_review_panel import CHART_REVIEW_D1_SESSIONS
+    from ui.services import chart_bar_refresh
+    from ui.services import chart_data_service as service_mod
+    from ui.widgets import symbol_snapshot_dialog as mod
+
+    golden = _golden()
+    store = _FakeD1Store({golden["symbol"]: _stored_bars(golden)})
+    monkeypatch.setattr(service_mod, "shared_store", lambda: store)
+
+    class _NoRefresh:
+        def best_bars(self, _symbol, bars):
+            return bars
+
+    monkeypatch.setattr(
+        chart_bar_refresh, "shared_refresh_service", lambda: _NoRefresh()
+    )
+    monkeypatch.setattr(
+        mod.SymbolSnapshotWidget, "_start_d1_backfill", lambda self, s: None
+    )
+    monkeypatch.setattr(
+        mod.SymbolSnapshotWidget, "_start_forming_fetch", lambda self, s: None
+    )
+
+    widget = mod.SymbolSnapshotWidget(d1_sessions=CHART_REVIEW_D1_SESSIONS)
+    widget.resize(900, 700)
+    try:
+        assert widget._d1_view_sessions == CHART_REVIEW_D1_SESSIONS
+        assert widget._d1_payload_sessions == chart_snapshot.D1_HISTORY_SESSIONS
+        widget.set_symbol(golden["symbol"])
+        _drain(widget, qapp)
+        assert widget.d1_chart.bar_count() == chart_snapshot.D1_HISTORY_SESSIONS
+        low, high = _x_range(widget.d1_chart)
+        assert round(high - low) == pytest.approx(CHART_REVIEW_D1_SESSIONS, abs=20)
+    finally:
+        widget._data.shutdown()
+        widget.deleteLater()
+        qapp.processEvents()

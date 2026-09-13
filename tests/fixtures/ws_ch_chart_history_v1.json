@@ -1,4 +1,21 @@
 {
+ "schema": "ws_ch_chart_history/v1",
+ "feature_version": "chart_snapshot.build_d1_snapshot + chart_levels.build_d1_levels + earnings_projection.earnings_marks, pre-WS-CH",
+ "raw_input_keys": [
+  "bars",
+  "earnings_dates",
+  "store_levels"
+ ],
+ "raw_input_sha256": "285ff9b05b66909b153088fd294cf11343b1f2976b4adba3241f99620789d3a4",
+ "acquired_at": "2026-09-12T19:41:42-07:00",
+ "universe_version": "synthetic single symbol (WSCH); no universe file is read",
+ "provider_assumptions": "No provider. The 1,300 daily bars are generated data frozen into this file; loader/anchor_resolver/now are all injected, so no store, no network and no clock is reached.",
+ "as_of": "2026-09-11T17:30:00-07:00",
+ "expected_keys": [
+  "expected_90"
+ ],
+ "numeric_tolerance": 1e-09,
+ "intentional_difference": "",
  "generated_from_commit": "204f464071e5a0892fffdd23e9d4c1ef5d64c3ad",
  "generated_at": "2026-09-12T19:41:42",
  "note": "Pinned from the PRE-FIX code (packet WS-CH). The bars are data, not a generator: the test reads them from here so the fix cannot move the inputs. expected_90 is what build_d1_snapshot / build_d1_levels / earnings_marks produced for a 90-session payload before the history window existed.",
