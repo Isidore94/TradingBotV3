@@ -19,19 +19,6 @@ from typing import Any, Iterable
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-#: How many completed daily bars a story's measured part needs. Sixty is three
-#: months: enough for a 20-day average and a 14-day ATR with room to spare, and
-#: small enough that six symbols cost one cheap read on the worker.
-_INDEX_BAR_LIMIT = 60
-
-
-def _parse_moment(value) -> datetime | None:
-    try:
-        return datetime.fromisoformat(str(value or "").strip())
-    except ValueError:
-        return None
-
-
 def _forecast_origin() -> str:
     import market_journal
 
@@ -205,19 +192,11 @@ class MarketJournalService(QObject):
         wanted = str(session_date or "").strip()
         if not wanted:
             return []
-        rows = []
-        for row in self.entries_for():
-            stamp = _parse_moment(row.get("created_at"))
-            if stamp is None:
-                # No usable creation time: the stored stamp is all there is.
-                about = str(row.get("session_date") or "")
-            else:
-                try:
-                    about = market_journal.session_date_for(stamp)
-                except Exception:  # noqa: BLE001 - never lose an entry to a calendar
-                    about = str(row.get("session_date") or "")
-            if about == wanted:
-                rows.append(row)
+        rows = [
+            row
+            for row in self.entries_for()
+            if market_journal.session_of_entry(row) == wanted
+        ]
         rows.sort(key=lambda row: str(row.get("created_at") or ""))
         return rows
 
@@ -247,56 +226,20 @@ class MarketJournalService(QObject):
         )
 
     def _index_bars(self, symbols) -> dict[str, list[dict[str, Any]]]:
-        """Completed daily OHLC for the benchmarks, from the durable store.
+        """Completed daily OHLC for the benchmarks. ONE reader, shared.
 
-        READS, never fetches (the same parquet-per-symbol store the cohort
-        grades use). Any failure is an absent symbol, which the story reports
-        as unmeasured with a reason - never as a zero.
+        `market_story_rollups.load_index_bars` is the same reader the overnight
+        rollup uses, so the desk's Story pane and the weekly pack measure the
+        same bars. It lives there because `market_story` is pure by contract
+        and the nightly slot must not import Qt.
         """
-        out: dict[str, list[dict[str, Any]]] = {}
         try:
-            from pathlib import Path
+            from market_story_rollups import load_index_bars
 
-            import pandas as pd
-
-            from human_focus_tracking import (
-                MASTER_AVWAP_DAILY_BARS_DIR,
-                _load_durable_daily_frame,
-            )
-        except Exception:  # noqa: BLE001
-            return out
-        for raw in symbols or ():
-            symbol = str(raw).strip().upper()
-            if not symbol:
-                continue
-            try:
-                frame = _load_durable_daily_frame(symbol, Path(MASTER_AVWAP_DAILY_BARS_DIR))
-                if frame is None or getattr(frame, "empty", True):
-                    continue
-                work = frame.rename(columns={c: str(c).strip().lower() for c in frame.columns})
-                if "datetime" not in work.columns:
-                    for candidate in ("date", "time", "timestamp"):
-                        if candidate in work.columns:
-                            work["datetime"] = work[candidate]
-                            break
-                if "datetime" not in work.columns or "close" not in work.columns:
-                    continue
-                work = work.tail(_INDEX_BAR_LIMIT)
-                bars: list[dict[str, Any]] = []
-                for _index, record in work.iterrows():
-                    stamp = pd.to_datetime(record["datetime"], errors="coerce")
-                    if stamp is None or pd.isna(stamp):
-                        continue
-                    bar = {"dt": stamp.date().isoformat()}
-                    for name in ("open", "high", "low", "close"):
-                        if name in work.columns:
-                            bar[name] = record[name]
-                    bars.append(bar)
-                if bars:
-                    out[symbol] = bars
-            except Exception:  # noqa: BLE001 - one unreadable symbol is one unmeasured cell
-                logging.debug("Daily bars unreadable for %s.", symbol, exc_info=True)
-        return out
+            return load_index_bars(symbols)
+        except Exception:  # noqa: BLE001 - no bars is an unmeasured cell, never a broken story
+            logging.debug("Benchmark daily bars unreadable.", exc_info=True)
+            return {}
 
     # -- theses -----------------------------------------------------------
     def theses_for(self, session_date: str = "") -> list[dict[str, Any]]:
