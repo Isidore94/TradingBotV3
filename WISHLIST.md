@@ -715,7 +715,7 @@ Trader's words: "stop putting up longs below avwape and shorts above it."
 
 10. Better daily discovery, entry watches, journals and review — Fable 5.1 queue (2026-09-11)
 
-SWEEP: 10A, 10B, 10D, 10E, 10H, 10J and 10K step 1 BUILT (each sub-item carries its own SWEEP line); 10C, 10F, 10G and 10I in build 2026-09-13; 10K steps 2 and 5 (WS-RP) land last.
+SWEEP: 10A, 10B, 10C step 1, 10D, 10E, 10F, 10G, 10H, 10I, 10J steps 1-2 and 10K step 1 BUILT (each sub-item carries its own SWEEP line); 10K steps 2 and 5 (WS-RP) land last.
 
 STATUS: PLANNED CANDIDATES. The trader asked for plans in this file, not implementation.
 No new product phase is authorized by this entry. Fable can investigate and prepare a
@@ -806,6 +806,8 @@ and proof that accepted names actually enter a scan. AWAY must still stage, not 
 Read M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN and AUTO_MODES_AND_QUIET_HOURS_PLAN.
 
 ### 10C. One opt-in H1/H4 retester with named triggers (requests 3, 4, 5)
+
+SWEEP: step 1 BUILT - packet WS-10C on `claude/ws-10c-h1-retester`, merged at adcaeb19, gate #116 (`h1_ema_bounce_v1`, the H1 retester button, one fire then disarm, every-mode push through the armed sender; a yfinance H1 fallback for armed names by lead ruling because the desk caches ~35 of the 45 warm-up bars - the trader may overrule); steps 2-3 (H4 / LRSI options, trendline break-then-retest) not in this sweep.
 
 Trader intent: on selected “TOP weekly pattern” names, wait for a better entry instead
 of jumping in. Add a quick **H1/H4 retester** arm button below the chart, using the shared
@@ -944,6 +946,8 @@ remains the trader's. Read JOURNAL_RELIABILITY_AND_UX_PLAN §2/auto-tagging and 
 
 ### 10F. Replace AWAY Recap with a visual Daily Recap (request 8)
 
+SWEEP: BUILT - packet WS-DR on `claude/ws-dr-daily-recap`, merged at f9b07df4, gate #115 (a session reader over twelve durable stores, four tabs, credit from the decision's own timestamp, the phone digest untouched); 5F's four questions are views 3 and 4.
+
 Verified gap: `ui/app.py:711` hands the recap a capped process-scoped alert list, so a
 restart or midnight crossing is not a complete session record. `_RecapWorker` in
 `ui/panels/away_recap_panel.py:72` reads the current report, pending picks and Focus;
@@ -996,6 +1000,8 @@ Read AUTO_MODES_AND_QUIET_HOURS, CHART_REVIEW_WORKSPACE, REVIEW_LEARNING_LOOP an
 the current outcome-semantics contracts. This is descriptive learning, not a new ranking model.
 
 ### 10G. One Trading Desk Watchlist for Focus and positions (requests 9, 10)
+
+SWEEP: BUILT - packet WS-WL on `claude/ws-wl-watchlist-tab`, merged at 21e8038f, gate #117 (five views over one pure row set, positions read-only, every verb to its owner, Chart Review and Focus Picks pages retired with their actions inventoried). OPEN for the trader: rename the old Watchlists tab; open the desk with the setups column shown.
 
 Resolve the placement overlap in favor of the trader's final instruction: the main
 **Watchlist tab belongs on Trading Desk**. Journal can link to the Positions view of that
@@ -1070,6 +1076,8 @@ check oldest dates and freshness and compare GUI responsiveness to the existing 
 Read BROKER_ADAPTERS, DESK_CHART_UNIFICATION and GUI_FLUIDITY_MEASUREMENT_RUNBOOK.
 
 ### 10I. Connect thesis, actual trades and setup evidence by market environment (2026-09-11 follow-up)
+
+SWEEP: BUILT - packet WS-10I on `claude/ws-10i-context-join`, merged at 054d501f, gate #118 (`context_join`, `setup_environment_evidence`, the Results By environment control, the backfill CLI dry-run by default; the Daily Recap row keeps both the session label and the observation context by lead decision).
 
 Trader asks: can the Market Journal, Journal and Setup Tracker together answer “what
 works in what market environment?”, and are we using the local AI well? This is the

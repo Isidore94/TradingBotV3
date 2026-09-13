@@ -384,9 +384,9 @@ at #94. Live validation (section 6) is the trader's test week on the sweep branc
 **Built so far (2026-09-12/13, every packet on `claude/wishlist-sweep-2026-09-12`, gates in
 `CURRENT_CHECKPOINT.md`):** WS-5D #94, WS-PT4 #95, WS-5A #96, WS-EF1 #97, WS-FC1 #98, WS-SX #99,
 WS-AI1 #100, WS-10B #101, WS-ENV #102, WS-SN4 #103, WS-SN3 #104, WS-J1 #105, WS-TH #106, WS-CH #107,
-WS-WS #108, WS-10A #109, WS-TM #110, WS-10E #111, WS-5B #112, WS-SN2 #113, WS-10D #114. In build
-2026-09-13: WS-DR (10F + 5F), WS-WL (10G), WS-10I, WS-10C step 1; WS-RP (10K steps 2 and 5) lands
-last, then the docs pass (CLAUDE.md trimmed to 44.7 KB at f63167b0). **Owed asks, all ask-first
+WS-WS #108, WS-10A #109, WS-TM #110, WS-10E #111, WS-5B #112, WS-SN2 #113, WS-10D #114, WS-DR #115,
+WS-10C #116, WS-WL #117, WS-10I #118. Remaining: WS-RP (10K steps 2 and 5) lands last, then its docs
+lines (the docs pass itself is done: CLAUDE.md trimmed to 44.7 KB at f63167b0, plan/WISHLIST/memory lines). **Owed asks, all ask-first
 (the trader's word):** FC1's two seams (the Parquet mirror filter; `fetch_daily_bars`' forming-bar
 return) and the live `repair --apply`; ENV's legacy.py stamp on the tracker outcome row; SN3's
 duplicate fourth `_record_environment_focus_history` call; WS's hide-vs-mark, previous anchor and

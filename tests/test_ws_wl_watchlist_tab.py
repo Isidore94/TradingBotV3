@@ -1146,7 +1146,12 @@ def test_remove_asks_the_owning_store_and_a_position_row_has_no_remove(desk):
     assert tab.select_symbol("AAL", side="long")
     assert tab.remove_selected() is True
     _spin()
-    assert read_watchlist_symbols(project_paths.LONGS_FILE) == []
+    # Lead fix 2026-09-13: this test's own _seed_rows adds MU to m5 Focus, and
+    # FocusPickStore._inject_into_shared puts a Focus pick on longs.txt; removing
+    # the trader's AAL through its owner must leave that injection to ITS owner
+    # (measured: longs.txt == ['AAL', 'MU'] before the click). The builder's test
+    # directly below removes MU through the Focus verb and reaches [].
+    assert read_watchlist_symbols(project_paths.LONGS_FILE) == ["MU"]
 
     assert tab.select_symbol("MU", side="long")
     assert tab.remove_selected() is True
