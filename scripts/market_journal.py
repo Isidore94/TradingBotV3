@@ -59,6 +59,14 @@ MACHINE_ORIGINS = (ORIGIN_AUTO_MODE_FLIP,)
 #: desk chose the moment, which is exactly what a later reader needs to tell a
 #: prompted read from a volunteered one.
 ORIGIN_TRADE_MENTOR = "trade_mentor"
+#: WISHLIST 10K / packet WS-10D. Someone ELSE's words, pasted in whole - the
+#: weekly forecast the trader asks a chat model for. It is stored in this
+#: journal because it is part of the week's record, and it carries its own
+#: origin because it is the one kind of entry the trader did not write: outside
+#: commentary, never their adopted view. A story shows it under its own
+#: heading, `market_thesis` files it as `kind=forecast`, and nothing turns it
+#: into a thesis unless the trader writes an entry of their own adopting it.
+ORIGIN_EXTERNAL_FORECAST = "external_forecast"
 
 #: The journal-only RVOL floor. It is an OVERLAY on this page's charts and
 #: never touches the canonical D1 level store (trader decision, plan.md L1118).
