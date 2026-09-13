@@ -1571,6 +1571,44 @@ They are evidence and must not be loaded as context.
 
 ### AI and automation
 
+- **Trustworthy overnight output (WS-AI1, WISHLIST 10K step 1 + 5C, 2026-09-12, sweep
+  branch).** The per-trade journal enrichment has its OWN validated contract,
+  `ai_jobs.enrichment.ENRICHMENT_JSON_SCHEMA` (`summary`, `tags`, `confidence`, `sources`,
+  `unknowns`, closed), sent down the SAME provider path: `ai_summary.request_ai_summary` takes
+  `schema` / `schema_name` / `prompt_version` with the session summary's schema as the default
+  (every existing caller's payload byte-identical), and `ai_summary.validate_structured_output`
+  validates a caller-supplied contract. `_proposed_tags` / `_summary_text` are the ONE
+  extraction seam and read exactly that schema's keys - the previous reuse of
+  `AI_SUMMARY_JSON_SCHEMA` forbade every key they read, so six trades over 2026-09-09..11
+  carried a blank `ai_trade_enrichment` row while the ledger said `ok`. A row now says what it
+  is: `ai_trade_enrichment` gains `status` (`enriched` / `abstained` / `failed`), `reason` (the
+  model's own `unknowns`, or the error class), `confidence` and `supersedes_row_id`
+  (`NEW_COLUMNS_V3`, additive, idempotent), and the slot reports `enriched A, abstained B,
+  failed C of N` with `STATUS_OK` only for `A + B == N, C == 0`. `enrichment.is_legacy_blank`
+  (blank summary AND blank tags AND no status) is what `_trades_for_session` refuses to read as
+  done, so the blank rows are repairable; the repair APPENDS a row naming the one it replaces
+  and never rewrites. Every published nightly summary names its completion in one top-level
+  word - `map_reduce.completion_word`: `synthesized` / `partial` / `unsynthesized_fallback` /
+  `failed` - and `briefs.run_daily_summary` publishes `STATUS_OK` only for `synthesized`, still
+  publishing the document and naming the synthesis error verbatim; the word reaches the ledger
+  row through the runner's `extra` and the System Health AI row prints it. Two defects in that
+  reader were fixed with it: `operations_audit._ai_jobs_check` counted `degraded` where the
+  ledger constant is `degraded_no_narrative` (no AI job could ever show as degraded), and read
+  `ts` / `timestamp` where `ledger.record` writes `started_at` / `finished_at` (every AI row read
+  as undated). The advice has a reader: `ui/services/journal_feed.latest_ai_enrichment` (newest
+  row nothing supersedes) rendered by `TradesTab._show_trade`, marked advisory, an abstained or
+  failed row shown rather than hidden. A new package scope `preference_to_trade` carries a
+  derived, bounded section over ST5's `preference_trade_outcomes.csv`
+  (`ai_summary.preference_to_trade_section`): three grains kept apart, coverage derived from the
+  report's own `match_basis` plus the 10-SESSION window (`journal_unavailable` / `window_open` /
+  `no_match_after_window`, summing to the unmatched count), at most 20 examples selected by
+  `(session_date, report row order)` descending - no result column enters that key;
+  `REPORT_FILE` resolved at call time. **Lead decision 2026-09-12 (trader may overrule):** the
+  scope joins `briefs.DEFAULT_SCOPES` (the nightly slate is six), because 5C says the summary
+  is fed "into the existing AI package". No timeout was raised and no model changed; the
+  runner's stage order is unchanged and `weekly_synthesis` stays optional. Tests:
+  `tests/test_ws_ai1_enrichment_status.py`. Rule: DESK_INTERNALS "AI1 - an enrichment row is
+  never blank on success"; contract: `docs/LOCAL_AI_AUTOMATION_PLAN.md` Phase 3.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
@@ -2125,6 +2163,13 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   `set_decision_lookup` on the delegate, the `reject_today` token, tooltips with the time, a
   worker-built snapshot repainted through the coalescer; a symbol-font fixture for pixel tests.
   Suite 7326 green, ruff clean, smoke 7/7, selftest 74/74. Gate #99.
+- **WS-AI1 (WISHLIST 10K step 1 + 5C) - trustworthy overnight output**, branch
+  `claude/ws-ai1-enrichment-status-build` `e0683a31`: the enrichment's own schema down the same
+  provider path, `abstained` / `failed` statuses with an append-only supersession of the six
+  blank rows, `map_reduce.completion_word` reaching the ledger and System Health (two audit
+  reader defects fixed), a Trades-detail reader, the `preference_to_trade` scope (7,668 chars on
+  the live report copy, 48% of its source cap) joining the nightly slate by lead decision. Suite
+  7328 green, ruff clean, smoke 7/7, selftest 74/74. Gate #100.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
