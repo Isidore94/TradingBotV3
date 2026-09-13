@@ -1478,7 +1478,14 @@ def test_the_desk_charts_a_recap_row_through_the_board_door_and_requeues_nothing
         charted: list[tuple] = []
         queued: list[tuple] = []
         center.show_board_symbol = lambda *args, **kwargs: charted.append((args, kwargs))
-        center._enqueue_review_alert = lambda *args, **kwargs: queued.append(args)
+        # Lead fix (2026-09-13): the scanner's own symbol-less status row (`Scanning
+        # paused.`, side WATCH) reaches this door from the bot thread on the first
+        # processEvents() and the real door discards it on its first line; the
+        # recorder therefore keeps only symbol-bearing alerts, which is what a
+        # re-queue would be. The waiting-list length is measured by the next test.
+        center._enqueue_review_alert = lambda alert, *args, **kwargs: (
+            queued.append((alert, args)) if getattr(alert, "symbol", "") else None
+        )
 
         window.daily_recap_panel.chartRequested.emit("TSLA", "SHORT")
         application.processEvents()
