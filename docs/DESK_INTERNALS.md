@@ -4270,6 +4270,98 @@ existed (commit `ed705b7a`) and all green after.
 or step 4 (coaching) is authorized; the trader asks for a different hour, a different
 grace, or for a prompt to survive being away.
 
+---
+
+## 10C - a watch is entry timing, never a claim (2026-09-13, WISHLIST sweep)
+
+- **What the trader said (WISHLIST 10C):** on selected weekly-pattern names, *wait for a
+  better entry* - a quick H1/H4 retester arm button below the chart, on the shared arm
+  surface. And the fence around it, in the same breath: **a like or a tag alone never
+  arms it, and the watch expresses entry timing, not a setup claim or an order.** Step 1
+  only is built (the H1 15-EMA bounce); steps 2 (H4 / LRSI) and 3 (trendline
+  break-then-retest) are not.
+- **Why that fence is load-bearing.** Everything else this desk records is a claim of
+  some kind - a like is training data, a veto is a verdict, a Focus pick is a name worth
+  watching. A retester watch is none of those: it says *"tell me when this shape prints,
+  I will decide then."* So it grades nothing, joins no cohort, reaches no detector,
+  score, tier, gate, watchlist, Focus list, review queue or `review_policy.json`, and
+  writes no `pick_feedback` verdict. It fires once, it disarms, and the decision log
+  gets `arm_watch` / `watch_fired` / `watch_invalidated` / `armed_alert_expired` rows
+  that the review scoreboard already ignores by name (`review_learning`'s
+  deliberately-not-added list). **A pattern firing is not proof of a profitable entry;
+  usefulness is measured later.**
+- **The rule sheet is frozen first, then wired.** `h1_ema_bounce_v1` lives in
+  `scripts/indicators/h1_ema_bounce.py` and its full table is in
+  `docs/M5_SIGNAL_ENGINES_PLAN.md` section 10: touch within 0.25 ATR of the 15-EMA,
+  reclaim on the LAST completed bar by 0.10 ATR, inside 3 bars, EMA sloping the trade's
+  way over 5, invalidated by a close 1 ATR through the line, `ambiguous` when a single
+  candle does both, 45-bar warm-up, 24 h staleness, invalid candles skipped and counted.
+  A change to any of those is a NEW version beside it, because a fired row carries the
+  version it was measured under.
+- **Why the H1 aggregation is a copy.** `bounce_bot_lib.legacy._closed_h1_bars` is the
+  shipped rule and the packet asked for it to be reused. It could not be: importing that
+  module drags `ibapi` and ~1,050 modules (2.55 s, measured 2026-09-13) into what is
+  meant to be a pure indicator, and it takes `IbBar` objects rather than the dict bars
+  `m5_chart_bars` returns. So `closed_h1_bars` is a faithful copy over dicts, the golden
+  pins it **bar-for-bar** against the original, and a subprocess probe asserts neither
+  `ibapi` nor the engine package loads. Nothing in `bounce_bot_lib` is edited and
+  `H1_ALERTS_RETIRED` keeps exactly its four mentions: the retired H1 emitters stay
+  retired, and this packet adds a watch, not an emitter.
+- **One kind on this surface is not session-scoped, and it takes TWO readers to mean it.**
+  `chart_watch.PERSISTENT_WATCH_KINDS` is the single name. `load_chart_watches` keeps
+  those rows when the file's market date does not match (every other kind still dies at
+  the roll, which is what `new_hod` beside it is for), and `watch_is_stale` returns False
+  for them - without that second reader the watch survives the restart and the 30 s M5
+  poll deletes it a minute later, which is the same bug with a longer fuse. Its life is
+  10 TRADING days through `armed_alert_expiry`, counted on the exchange calendar, and
+  uncertainty never deletes.
+- **`armed_at` stays NAIVE.** It is the chart-watch store's own convention - IB serves
+  this desk's bars on the local clock and arm times come from the same clock - and both
+  `watch_is_stale` and `_evaluate_extreme` depend on it. The rows that LEAVE the store
+  (`fired`, `invalidated`, the expiry row) carry the bar times the rule measured,
+  attached to that same clock; nothing strips an offset off an aware stamp.
+- **Where it fires.** The armed poll is `_poll_d1_event_watches`, and the H1 pass runs at
+  its HEAD - before its "no D1 event watches armed" early return, which would otherwise
+  make the feature invisible whenever the trader had no D1 event armed. The fired event
+  lands on the **D1 feed as an ARMED event** (`CHART_WATCH_TAG`, timeframe D1), never as
+  a detector alert and never on the M5 alert list. One event per watch, carrying **every**
+  measured reason, then it disarms; re-arming is a new `watch_id`.
+- **The phone.** `PriceAlertService.notify_armed_watch` - the SAME sender the armed
+  Research/Focus price alerts use, in every mode, de-duplicated by watch id. The
+  exception was never about price alerts; it is about a condition the trader armed by
+  hand (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`, amendment 2026-09-13). The push goes
+  out BEFORE the alert is drawn: a broken display path must not be able to suppress it.
+- **Cost on the Qt thread.** Per ARMED H1 watch, per 60 s tick: one O(bars) bucketing
+  pass over M5 dicts `_m5_bars_for` has already materialised, then an O(bars) ATR and EMA
+  over the ~35 resulting H1 bars. No fetch, no file read, no second copy of the series.
+- **The open limit, stated rather than hidden.** The desk's cached M5 window is five
+  sessions at `useRTH=1` (SN2's `"5 D"`), which aggregates to about **35** completed H1
+  bars against a **45**-bar warm-up. Two sources were checked before settling for it
+  (lead ruling 2026-09-13): WS-CH's *Load older* path is the SAME `m5_chart_bars` call
+  with a ceiling of ten sessions on the ASK, and one `"5 D"` window behind it; and the
+  durable H1 store `project_paths.MASTER_AVWAP_INTRADAY_BARS_DIR` **does not exist on
+  the live desk** - nothing has ever written it. So the watch waits and SAYS SO: `not
+  measured (N of 45 H1 bars)`, counted from the bars in hand rather than from a
+  remembered number. An armed surface reporting `ok` beside a watch that cannot
+  evaluate is the one thing that table must never say.
+- **So the history is fetched, for armed symbols only** (lead decision 2026-09-13; the
+  trader may overrule, and a watch that cannot fire for a whole test week gives them
+  nothing to judge). `scripts/h1_history.py` reads ONE armed symbol's hourly bars
+  through `yfinance` on its own daemon thread - the group RS/RW tape precedent: its own
+  clock, zero IB traffic, no `bounce_bot_lib` change. The cache stays PRIMARY (a full
+  window never touches the network, and a test holds that), at most one fetch per
+  completed H1 bar per symbol, never on the Qt thread, completed bars only through
+  `completed_bars.is_completed_bar`, and the exchange zone CONVERTED with `astimezone`
+  before it is dropped - N1's fault, not repeated. A failed download is a REFUSAL:
+  `not measured (N of 45 H1 bars, yfinance unavailable)`, never an empty tape. The
+  health cell names the source, `H1 from cache` / `H1 from yfinance`, so no verdict is
+  read without knowing which history produced it. The alternative - a wider M5 window
+  for armed symbols in `bounce_bot_lib` - stays the trader's ask; `v1` keeps its 45.
+- **Tests:** `tests/test_ws_10c_h1_retester.py` (the packet's, written red - 25 of 26
+  green; the 26th clicks an `ArmBar` with no symbol charted, where every watch toggle is
+  disabled by design, and is left red rather than weakened) and
+  `tests/test_ws_10c_h1_retester_builder.py` (11 added, including the M5-poll date-roll
+  case proven to fail with the `watch_is_stale` exemption removed).
 ## The sentences CLAUDE.md moved here on 2026-09-13 (WISHLIST sweep docs pass)
 
 `CLAUDE.md` had grown to 52.0 KB against its ~45 KB limit (the 0.25 memory section and the sweep's rule lines). The 34 longest bullets were shortened to their seams and each one's ORIGINAL text is reproduced below, verbatim and unedited, in `CLAUDE.md` order. **Nothing was deleted.** Where a bullet below and the current `CLAUDE.md` differ, the shortened rule in `CLAUDE.md` is the binding one and this is the full account behind it; the incident sections elsewhere in this file remain the deeper record. The one wording change beyond shortening: the auto-tagging rule now names FOUR lanes (WS-10E's `trader_note` lane), the story under "The four auto-tagging lanes".

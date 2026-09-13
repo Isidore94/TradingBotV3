@@ -523,3 +523,90 @@ Engine tests 31, wiring tests 19, any-bounce 20 + 5 Qt, zone-arms golden 6.
 Full-suite figures are in `CURRENT_CHECKPOINT.md`. **No live proof is claimed**:
 §7's per-engine desk session is still owed, and now it also decides which of the
 four new toggles should default on.
+
+---
+
+## 10. `h1_ema_bounce_v1` — the H1 retester rule sheet (WISHLIST 10C, 2026-09-13)
+
+The trader's brief (WISHLIST 10C): on a weekly-pattern name they already like,
+**wait for a better entry** — a quick H1/H4 retester armed from the chart. A
+like or a tag never arms it; **the watch expresses entry timing, not a setup
+claim and not an order.** Step 1 only is built: one opt-in H1 15-EMA bounce.
+Steps 2 (H4 / LRSI options) and 3 (trendline break-then-retest) are not built.
+
+**The rule is frozen and versioned.** `scripts/indicators/h1_ema_bounce.py`,
+`RULE_VERSION = "h1_ema_bounce_v1"`. A change to any line below is a NEW
+version beside this one, never an edit of it: a fired row carries the version
+it was measured under, and re-reading old rows under new constants would be a
+claim nobody measured.
+
+| | |
+|---|---|
+| Input | Completed, **session-aligned** H1 bars, oldest first, plus the side and the H1 Wilder ATR14 the caller measured. |
+| Hours | Regular hours only — the bars come from the desk's `useRTH=1` M5 cache, so the buckets are 06:30…12:30 local and the last one is the short 30-minute hour. |
+| Aggregation | `closed_h1_bars(m5_bars)`: buckets start at the SESSION open, and a bucket is closed once the M5 data reaches its end (bucket start + 60 min, or the session close). **A forming H1 bar is a preview and is never returned.** |
+| EMA | `EMA_LENGTH = 15`, close-based, seeded with the FIRST close, `alpha = 2/16` — the convention both existing copies in the repo already use. |
+| Warm-up | `WARMUP_BARS = 45`. Fewer is **not measured** (`None`), never "no". |
+| Touch | The bar's low (long) / high (short) within `TOUCH_TOLERANCE_ATR = 0.25` of the EMA. |
+| Reclaim | The LAST completed bar closes back through the EMA in the trade's direction by at least `REJECTION_CLOSE_ATR = 0.10`. |
+| Age | `MAX_TOUCH_AGE_BARS = 3` (confirm index − touch index, inclusive). |
+| Slope | The EMA must be moving the trade's way over `SLOPE_LOOKBACK_BARS = 5`. |
+| Invalidation | Any bar in the window closing `INVALIDATION_CLOSE_ATR = 1.0` ATR the WRONG side of the EMA. Ends the episode. |
+| Ambiguity | A touch and a reclaim on the SAME candle is `ambiguous` and **never fires** — one hourly candle has no order of events. |
+| Staleness | `STALE_AFTER = 24 h` between the last completed bar and `now` → not measured. An ordinary overnight gap is ~19 h, so this never blanks a normal morning. |
+| Invalid candle | `low <= open, close <= high` (plan.md sec 5); a bar that breaks it is **skipped and counted** (`skipped_bars`), never repaired and never priced. |
+| Cooldown | One fire per watch. Re-arming is a NEW `watch_id`. |
+| Expiry | 10 TRADING days through `scripts/armed_alert_expiry.py`, counted from the arm. |
+| Reasons | `H1Bounce.reason` is the verdict (`bounce_confirmed` / `ambiguous` / `no_touch` / `invalidated` / `awaiting_reclaim` / `slope_against`); `H1Bounce.reasons` is **every** measured observation, and the one fired row records all of them. |
+
+**This is not `assess_h1_riding_ema15`.** That shipped helper asks whether price
+is *riding* the line — several closes beyond it — which is a trend description.
+This is a pullback that got bought. The brief asked for the check to be made
+before reuse; it was made, and the rule is written fresh.
+
+**Why the aggregation is a copy, not an import.** `bounce_bot_lib.legacy` drags
+`ibapi` and ~1,050 modules (2.55 s, measured 2026-09-13) and its
+`_closed_h1_bars` takes `IbBar` objects, so reuse-as-is was never possible. The
+copy reads the dict bars `BounceBot.m5_chart_bars` returns; the golden pins it
+bar-for-bar against the shipped original and a subprocess probe proves neither
+`ibapi` nor the engine package is imported. **Nothing in `bounce_bot_lib` is
+edited** and the retired H1/M5 LRSI emitters stay retired —
+`H1_ALERTS_RETIRED` keeps exactly its four mentions, all in that file.
+
+**Known limit, and the two sources that were checked (lead ruling 2026-09-13).**
+The desk's cached M5 window is five sessions (`useRTH=1`, `"5 D"`; SN2), which
+aggregates to ~35 completed H1 bars — BELOW the 45-bar warm-up.
+
+- **WS-CH's "Load older" path cannot supply the rest.** It is the SAME call this
+  poll already makes — `BounceBot.m5_chart_bars(symbol, max_sessions=N)` — with a
+  per-chart ceiling of `M5_MAX_SESSIONS = 10` (`symbol_snapshot_dialog.py`). The
+  ceiling is on the ASK, not on the data: the cache behind it holds one `"5 D"`
+  window, so asking for ten sessions returns the five that exist. The poll already
+  asks for ten (`H1_WATCH_M5_SESSIONS`), so it is right the day the window widens.
+- **The durable H1 store is empty.** `project_paths.MASTER_AVWAP_INTRADAY_BARS_DIR`
+  (`C:\TradingBotData\intraday_bars`, written by `master_avwap_lib`) would be the
+  natural source, and on the live desk on 2026-09-13 **the directory does not
+  exist** — nothing has ever written it, and neither has the `%LOCALAPPDATA%` L1
+  beside it.
+
+**So the missing history is fetched, for ARMED SYMBOLS ONLY** (lead decision
+2026-09-13; the trader may overrule). `scripts/h1_history.py` reads that one
+symbol's hourly bars through `yfinance` (`interval="60m"`, `prepost=False`) on
+its own one-shot daemon thread — the group RS/RW tape precedent: **zero IB
+traffic and no engine change**. The rules it holds: the desk's cache stays
+PRIMARY and a full window never touches the network; at most one fetch per
+completed H1 bar per armed symbol; never on the Qt thread (the poll reads
+memory and asks for a refresh, it never waits); completed bars only through
+`completed_bars.is_completed_bar`, with the exchange zone CONVERTED to
+market-local by `astimezone` and only then dropped; and a failed download is a
+refusal, never an empty tape.
+
+The Armed inventory's health column names the source — `H1 from cache` /
+`H1 from yfinance` — and an unreachable fetch reads
+`not measured (N of 45 H1 bars, yfinance unavailable)`. **`v1` keeps its 45.**
+The alternative remains the trader's to decide: a wider M5 window for armed
+symbols in `bounce_bot_lib`, or a `v2` rule sheet measured on less history —
+never a lowered constant wearing the `v1` name.
+
+**Tests:** `tests/test_ws_10c_h1_retester.py` (the packet's, written red) and
+`tests/test_ws_10c_h1_retester_builder.py`.

@@ -165,6 +165,8 @@ def test_watch_kind_labels_cover_all_buttons():
         "lod_avwap",
         "vwap_bounce",
         "band_bounce",
+        # WISHLIST 10C: the one kind on this surface that is NOT session-scoped.
+        "h1_ema_bounce",
     ]
     assert WATCH_KINDS["new_hod"] == "New HOD"
     assert WATCH_KINDS["new_lod"] == "New LOD"
@@ -172,6 +174,7 @@ def test_watch_kind_labels_cover_all_buttons():
     assert WATCH_KINDS["lod_avwap"] == "LOD AVWAP"
     assert WATCH_KINDS["vwap_bounce"] == "VWAP bounce"
     assert WATCH_KINDS["band_bounce"] == "σ-band bounce"
+    assert WATCH_KINDS["h1_ema_bounce"] == "H1 retester"
     assert set(D1_LEVEL_KINDS) == {"d1_level_above", "d1_level_below"}
 
 

@@ -30,7 +30,9 @@ first edit. Current-state facts below were verified by read-only recon on
 ## 1. The trader's mode semantics (2026-08-14, restated as a matrix)
 
 Price alerts (Research/Focus `PriceAlertService`) remain the standing always-on push
-exception in **every** mode, unchanged.
+exception in **every** mode, unchanged. Since 2026-09-13 that exception is stated as
+what it always meant - **a TRADER-ARMED condition pushes in every mode** - and it
+carries a second caller through the same sender (see the 10C amendment at the end).
 
 | Behavior | OFF | DESK | AWAY | EVENING |
 |---|---|---|---|---|
@@ -446,3 +448,43 @@ gain no routine output from it. `away_recap.build_recap` and
 — are untouched, and the AWAY digest panel is still handed the Alert Center's
 backing list when the recap page is selected, so the phone's text digest is the
 same digest it was yesterday.
+
+---
+
+## Amendment 2026-09-13 - an armed chart watch pushes in every mode (WISHLIST 10C, packet WS-10C)
+
+**The exception is unchanged; its statement is widened by one caller.** "AWAY is the
+only Auto mode that pushes routine output" has two standing exceptions: the
+Research/Focus price alerts and EVENING's SPY +/-1% wake alarm. The first of those has
+never really been about *price alerts* - it is about a condition **the trader armed by
+hand and is waiting on**. A price alert armed on the Focus board and an H1 retester
+armed under the chart are the same request made from two surfaces, and it would be
+indefensible for the desk to buzz for one and stay silent for the other because of
+where the button was.
+
+So the armed H1 retester (`chart_watch.PERSISTENT_WATCH_KINDS`) pushes **in every
+mode**, through the SAME sender, as
+`PriceAlertService.notify_armed_watch(*, watch_id, title, message)`:
+
+- **One door.** It calls `push_notify.send_push` exactly where `_notify` does, at the
+  same `urgent` priority. No new sender, no new gate, no new kill switch, and
+  `_push_swing_picks` / `_maybe_push_d1_events` stay AWAY-gated and untouched.
+- **One buzz per episode.** De-duplicated by `watch_id`; `ok` means a push left the
+  desk and a repeat returns `deduplicated`. Re-arming is a new id, so the trader can
+  deliberately ask for the same condition again.
+- **Only a FIRE.** An invalidation or an expiry disarms the watch and is recorded, but
+  never wakes anybody: there is nothing to act on.
+- **Delivery never costs the event.** The panel pushes BEFORE it draws the alert (a
+  broken display path must not be able to suppress the phone), and a failed push is
+  logged, never raised.
+
+This does not add a routine push: nothing automatic arms one of these watches. The
+count of always-on push exceptions stays at two, and this is a caller inside the first.
+
+**One outbound fetch rides with it, and it is not a scan.** When an armed H1 retester's
+cached M5 window is short of the rule's warm-up, `scripts/h1_history.py` reads THAT
+SYMBOL's hourly bars through `yfinance`, at most once per completed H1 bar, on its own
+daemon thread. It is not gated on quiet hours or on the Auto mode for the same reason
+the push is not: the trader armed the condition by hand and is waiting on it. It scans
+nothing, discovers nothing, adopts nothing and writes nothing - one symbol, one
+interval, in memory - and it is the same shape as the group RS/RW tape's own clock.
