@@ -3084,6 +3084,12 @@ def run_master(
     from diagnostics import provider_counters
 
     provider_counters.begin_run()
+    # WS-FC1: the daily-bar write guard's refusals are per-run too, and they are
+    # published on both the success and the failure path - a scan that died
+    # halfway still says how many forming bars it refused.
+    from . import daily_bar_cache
+
+    daily_bar_cache.begin_run()
     try:
         result = _run_master_impl(
             longs_path=longs_path,
@@ -3115,10 +3121,12 @@ def run_master(
                 result.get("tracker_catchup_sessions") or []
             )
         provider_counters.flush_to_manifest(recorder)
+        daily_bar_cache.flush_to_manifest(recorder)
         recorder.finalize(status="ok")
         return result
     except BaseException as exc:
         provider_counters.flush_to_manifest(recorder)
+        daily_bar_cache.flush_to_manifest(recorder)
         recorder.finalize(status="failed", error=repr(exc))
         raise
     finally:
