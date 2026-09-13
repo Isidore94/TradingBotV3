@@ -843,6 +843,7 @@ def desk_home():
             project_paths.WATCHLIST_INTENT_EVENTS_FILE,
             project_paths.PRICE_ALERTS_FILE,
             project_paths.FOCUS_PICK_MEMBERSHIP_FILE,
+            project_paths.TRADER_ANNOTATIONS_FILE,
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
@@ -1211,6 +1212,69 @@ def test_arming_from_the_tab_writes_one_entry_through_save_entries(desk):
     after = price_alerts.load_price_alerts()
     assert len(after) == 1
     assert after[0]["armed_above"] is False
+
+
+def _annotation_rows():
+    path = project_paths.TRADER_ANNOTATIONS_FILE
+    if not path.exists():
+        return []
+    import json
+
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            rows.append(json.loads(line))
+    return rows
+
+
+@pytest.mark.qt
+def test_a_like_from_the_tab_records_a_like_and_moves_nothing(desk):
+    """A like carries zero privileges (P9). The row stays exactly where it was."""
+    from ui.annotations import verdicts
+
+    tab = _seed_rows(desk, _tab(desk))
+    before = [row.symbol for row in tab.visible_rows()]
+
+    assert tab.select_symbol("MU", side="long")
+    assert tab.like_selected() is True
+    _spin()
+
+    rows = [row for row in _annotation_rows() if row.get("symbol") == "MU"]
+    assert len(rows) == 1
+    assert rows[0]["surface"] == verdicts.SURFACE_FOCUS_PANEL
+    tab.refresh_now()
+    _spin()
+    assert [row.symbol for row in tab.visible_rows()] == before
+    assert desk.focus_service.is_focus("MU") is True
+
+
+@pytest.mark.qt
+def test_not_today_drops_an_auto_pick_and_never_a_name_the_trader_typed(desk):
+    """The hard invariant: a user-entered name is never auto-removed.
+
+    Same verb, same click, two picks - and only the one the MACHINE placed may
+    leave. `remove_if_auto_adopted` is the seam that decides, and the marker's
+    absence means the trader owns it.
+    """
+    store = desk.focus_service.store
+    desk.focus_service.add_many(["MINE", "AUTO"], "long", "m5")
+    store.mark_auto_adopted("AUTO", "long", "m5", reason="strength board parity")
+    tab = _tab(desk)
+    tab.refresh_now()
+    _spin()
+
+    assert tab.select_symbol("AUTO", side="long")
+    assert tab.not_today_selected() is True
+    _spin()
+    assert tab.select_symbol("MINE", side="long")
+    assert tab.not_today_selected() is True
+    _spin()
+
+    assert desk.focus_service.is_focus("AUTO") is False
+    assert desk.focus_service.is_focus("MINE") is True
+    symbols = [row.get("symbol") for row in _annotation_rows()]
+    assert sorted(symbols) == ["AUTO", "MINE"], "both decisions are recorded"
 
 
 @pytest.mark.qt
