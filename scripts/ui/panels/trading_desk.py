@@ -23,11 +23,14 @@ from ui.widgets.m5_alert_bar import M5AlertBar
 from ui.widgets.swing_favorites_bar import SwingFavoritesBar
 from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
+from ui.panels.watchlist_tab import WatchlistTabPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
 from ui.services.group_tape_service import GroupTapeService
 from ui.services.swing_favorites_service import SwingFavoritesService
+from ui.services.watchlist_tab_service import WatchlistTabService
+from ui.timer_utils import SignalCoalescer
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
 from ui.widgets.working_lately_strip import WorkingLatelyStrip
@@ -78,13 +81,43 @@ class TradingDeskPanel(QWidget):
         )
         self.bounce_panel = BouncePanel(self.focus_service)
         self.rs_window_panel = RsWindowPanel(self.bounce_panel.service)
+        # WS-WL (WISHLIST 10G). ONE Watchlist tab, and ONE service behind it -
+        # the StrengthBoardService precedent: the desk owns the service because
+        # the desk owns the two stores it reads through (Focus and the price
+        # alerts), and the desk is what shuts it down. `MainWindow` aliases it
+        # so the window's own shutdown path can find it too.
+        self.watchlist_tab_service = WatchlistTabService(
+            self,
+            focus_service=self.focus_service,
+            price_alert_service=self.price_alert_service,
+        )
+        self.watchlist_tab = WatchlistTabPanel(
+            service=self.watchlist_tab_service,
+            focus_service=self.focus_service,
+            price_alert_service=self.price_alert_service,
+            watchlists_panel=self.watchlists_panel,
+        )
+        self.watchlist_tab.statusChanged.connect(self.statusChanged)
+        # A burst of Focus edits is ONE re-read (`SignalCoalescer`, 200 ms
+        # leading edge): the DESK drain adopts up to ten staged picks per
+        # cycle and each one notifies.
+        self._watchlist_focus_coalescer = SignalCoalescer(
+            self.watchlist_tab_service.refresh_now, parent=self
+        )
+        self.focus_service.focusChanged.connect(self._watchlist_focus_coalescer.request)
         self.master_workspace = MasterAvwapWorkspace(
             self.master_panel,
             self.theta_panel,
             self.watchlists_panel,
             self.industry_panel,
             rs_window_panel=self.rs_window_panel,
+            watchlist_tab=self.watchlist_tab,
         )
+        # Raising the tab reveals the column it lives in and moves the keyboard
+        # inside the panel: a `QShortcut` in a hidden tab never fires, and the
+        # widget that holds focus after a tab switch is the tab BAR, which is
+        # not a child of the panel the shortcut is bound to.
+        self.master_workspace.watchlistRaised.connect(self._reveal_watchlist_tab)
         self.alert_center = AlertCenterPanel(self.focus_service)
         self.alert_center.attach_service(self.bounce_panel.service)
         # A5: the Alert Center arms phone price alerts off painted D1 levels.
@@ -350,8 +383,34 @@ class TradingDeskPanel(QWidget):
             self.rs_window_panel,
             self.industry_panel,
             self.watchlists_panel,
+            self.watchlist_tab,
         ):
             panel.set_chart_sink(sink)
+
+    # ------------------------------------------------------- the Watchlist tab
+    def _reveal_watchlist_tab(self) -> None:
+        """Make the column visible and put the keyboard inside the panel."""
+        if self.workspace_mode == "workspace" and not self._setups_visible:
+            self.set_setups_visible(True)
+        self.watchlist_tab.take_focus()
+
+    def show_watchlist(self, view: str = "") -> bool:
+        """Raise the Watchlist tab, optionally on one view (WS-WL item 4).
+
+        The Journal's "Positions on the Watchlist" button is a NAV call: it
+        asks for this list on its Positions view, never a second list of its
+        own.
+        """
+        raised = self.master_workspace.show_watchlist()
+        if not raised:
+            return False
+        if self.workspace_mode == "tabs" and isinstance(self._mode_widget, QTabWidget):
+            self._mode_widget.setCurrentWidget(self.master_workspace)
+        self._reveal_watchlist_tab()
+        if view:
+            self.watchlist_tab.set_view(view)
+        self.watchlist_tab.refresh_now()
+        return True
 
     # ------------------------------------------------------- swing picks
     def _add_swing_favorites(self, text: str, side: str) -> None:
@@ -431,6 +490,9 @@ class TradingDeskPanel(QWidget):
         group_tape_service = getattr(self, "group_tape_service", None)
         if group_tape_service is not None:
             components.append(("group tape", group_tape_service.shutdown))
+        watchlist_tab_service = getattr(self, "watchlist_tab_service", None)
+        if watchlist_tab_service is not None:
+            components.append(("watchlist tab", watchlist_tab_service.shutdown))
         for label, close in components:
             try:
                 close()
@@ -581,6 +643,11 @@ class TradingDeskPanel(QWidget):
 
 
 class MasterAvwapWorkspace(QFrame):
+    #: The Watchlist tab became the current one. The desk listens: the column
+    #: this workspace lives in opens hidden, and a tab nobody can see cannot
+    #: take the keyboard (WS-WL item 5).
+    watchlistRaised = Signal()
+
     def __init__(
         self,
         master_panel: MasterAvwapPanel,
@@ -589,6 +656,8 @@ class MasterAvwapWorkspace(QFrame):
         industry_panel: IndustryPanel | None = None,
         rs_window_panel: RsWindowPanel | None = None,
         parent=None,
+        *,
+        watchlist_tab: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -597,8 +666,13 @@ class MasterAvwapWorkspace(QFrame):
         self.watchlists_panel = watchlists_panel
         self.industry_panel = industry_panel
         self.rs_window_panel = rs_window_panel
+        self.watchlist_tab = watchlist_tab
         self.tabs = QTabWidget()
         self.tabs.addTab(self.master_panel, "Setups")
+        # WS-WL: second, directly after the setups - it is the list the trader
+        # works from, and the pages it replaced were nav entries 1 and 2.
+        if self.watchlist_tab is not None:
+            self.tabs.addTab(self.watchlist_tab, "Watchlist")
         self.tabs.addTab(self.theta_panel, "Theta Plays")
         self.tabs.addTab(self.watchlists_panel, "Watchlists")
         if self.industry_panel is not None:
@@ -606,13 +680,25 @@ class MasterAvwapWorkspace(QFrame):
         if self.rs_window_panel is not None:
             self.tabs.addTab(self.rs_window_panel, "RS Window")
         self.master_panel.scan_service.finished.connect(lambda *_args: self.theta_panel.refresh())
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.tabs)
 
+    def _on_tab_changed(self, index: int) -> None:
+        if self.watchlist_tab is not None and self.tabs.widget(index) is self.watchlist_tab:
+            self.watchlistRaised.emit()
+
     def show_setups(self) -> None:
         self.tabs.setCurrentWidget(self.master_panel)
+
+    def show_watchlist(self) -> bool:
+        """Raise the Watchlist tab. False when this workspace has none."""
+        if self.watchlist_tab is None:
+            return False
+        self.tabs.setCurrentWidget(self.watchlist_tab)
+        return True
 
     def show_theta(self) -> None:
         self.theta_panel.refresh()

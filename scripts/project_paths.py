@@ -342,6 +342,13 @@ UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
 # See plan.md, Milestone 8 (Human focus lists).
 FOCUS_LONGS_FILE = PERSISTENT_DATA_DIR / "focus_longs.txt"
 FOCUS_SHORTS_FILE = PERSISTENT_DATA_DIR / "focus_shorts.txt"
+# The SWING half of the same store. `FocusPickStore` still DERIVES its swing
+# paths from whatever `focus_longs_path` it was handed - a sandbox store must
+# keep its swing files inside its own sandbox - so these are the names of the
+# production pair, for callers that need to address them (WS-WL, 2026-09-13:
+# a desk test blanked the two m5 files and left a swing Focus pick behind).
+FOCUS_SWING_LONGS_FILE = FOCUS_LONGS_FILE.with_name("focus_swing_longs.txt")
+FOCUS_SWING_SHORTS_FILE = FOCUS_SHORTS_FILE.with_name("focus_swing_shorts.txt")
 FOCUS_PICK_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "focus_pick_membership.json"
 # Which longs.txt/shorts.txt entries the universe auto-populator owns (so
 # rotation/cuts never delete a name the trader typed), plus the day's

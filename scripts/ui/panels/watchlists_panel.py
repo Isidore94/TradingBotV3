@@ -105,6 +105,21 @@ class WatchlistsPanel(QFrame):
             for leaf in area.symbol_panels():
                 leaf.text.symbolActivated.connect(self._open_symbol_snapshot)
 
+    def editor_for_list(self, list_name: str):
+        """The editor that OWNS one of the four plain files, by its stream name.
+
+        Keyed on `watchlist_intent_events.LIST_SPECS`' names so the Watchlist
+        tab (WS-WL) and the intent stream cannot disagree about which file a
+        side and horizon mean. An unknown name answers `None` rather than
+        guessing a file to write.
+        """
+        return {
+            "longs": self.shared.long_editor,
+            "shorts": self.shared.short_editor,
+            "swinglongs": self.master.long_editor,
+            "shortswings": self.master.short_editor,
+        }.get(str(list_name or "").strip().lower())
+
     def set_bounce_service(self, service) -> None:
         """Optional: cached M5 bars for the popup's lower chart."""
         self._bounce_service = service
@@ -423,17 +438,42 @@ class WatchlistEditorPanel(QFrame):
     def sort_symbols(self) -> None:
         self._write_symbols(sorted(self.current_symbols()), notify=True)
 
-    def remove_symbols(self, symbols_to_remove: set[str]) -> None:
+    def add_symbols(self, symbols, *, pasted: bool = False) -> list[str]:
+        """Merge names in from another surface, through THIS panel's writer.
+
+        WS-WL: the Watchlist tab does not open `longs.txt` - it asks the panel
+        that already owns the file, so the save, the one-name-one-side rule and
+        the WS-5D intent row all keep happening in exactly one place. Returns
+        the names that were actually new.
+        """
+        incoming = [str(symbol or "").strip().upper() for symbol in symbols or ()]
+        incoming = [symbol for symbol in incoming if symbol]
+        if not incoming:
+            return []
+        current = self.current_symbols()
+        merged = _merge_symbols(current, incoming)
+        added = [symbol for symbol in merged if symbol not in current]
+        if not added:
+            return []
+        self._write_symbols(
+            merged,
+            notify=True,
+            source=_INTENT_TRADER_PASTE if pasted else _INTENT_TRADER_EDIT,
+        )
+        return added
+
+    def remove_symbols(
+        self,
+        symbols_to_remove: set[str],
+        *,
+        reason: str = "taken off this side when the trader put it on the other",
+    ) -> None:
         current = self.current_symbols()
         filtered = [symbol for symbol in current if symbol not in symbols_to_remove]
         if filtered != current:
             # The trader put this name on the other side; the desk is keeping
             # one name off both. Still the trader's edit, with its cause named.
-            self._write_symbols(
-                filtered,
-                notify=False,
-                reason="taken off this side when the trader put it on the other",
-            )
+            self._write_symbols(filtered, notify=False, reason=reason)
 
     def current_symbols(self) -> list[str]:
         return extract_watchlist_symbols(self.text.toPlainText())

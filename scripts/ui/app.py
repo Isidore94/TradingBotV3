@@ -81,8 +81,15 @@ class PageSpec:
 
 PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Trading Desk", "mdi.chart-timeline-variant", "trading_panel"),
-    PageSpec("Chart Review", "mdi.chart-line", "chart_review_panel"),
-    PageSpec("Focus Picks", "mdi.star-outline", "trading_panel.focus_picks_panel"),
+    # WS-WL (WISHLIST 10G), 2026-09-13: **Chart Review and Focus Picks are no
+    # longer nav pages.** Every action they had lives on the Trading Desk's
+    # Watchlist tab (`ui/panels/watchlist_tab.py`) - add, paste, copy, clear,
+    # remove, like, "Not today", refresh, Snapshot Today, the price-alert
+    # save/remove/re-arm, the chart, `Ctrl+L` and a faded pick's Restore. Both
+    # PANEL CLASSES stay: `ChartReviewPanel` is still constructed below (other
+    # code imports it and its capture rail is the annotation surface's
+    # reference implementation) and `FocusPicksPanel` is still built by the
+    # desk, where BounceBot alerts and the RRS snapshot still reach it.
     PageSpec("Journal", "mdi.notebook-outline", "journal_panel"),
     # R10.H. The label difference from "Journal" above is deliberate and
     # recorded: that one is the trade and tax record, this one is what the
@@ -151,6 +158,14 @@ class MainWindow(QMainWindow):
         # tab, on that trade. Weekend Prep never writes `planned_risk`; it
         # refers, and the trader types the plan where `save_risk_fields` lives.
         self.weekend_prep_panel.openTradeRequested.connect(self._open_journal_trade)
+        # WS-WL item 4: the Journal LINKS to the one Watchlist's Positions view.
+        self.journal_panel.positionsOnWatchlistRequested.connect(
+            self.show_watchlist_positions
+        )
+        # WS-WL item 2: the desk owns the Watchlist service (it owns the Focus
+        # and price-alert stores it reads through); the window aliases it so
+        # every shutdown path can find it by the name the packet gave it.
+        self.watchlist_tab_service = self.trading_panel.watchlist_tab_service
         self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel(self.trading_panel.price_alert_service)
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
@@ -686,6 +701,27 @@ class MainWindow(QMainWindow):
             # would attribute every later idle stall to the last page visited.
             interaction_trace.end()
 
+    def _select_page_by_title(self, title: str) -> bool:
+        """Select a page by its TITLE, never by an index a reorder can move."""
+        for index, spec in enumerate(PAGE_SPECS):
+            if spec.title == title:
+                self._select_page(index)
+                return True
+        return False
+
+    def show_watchlist_positions(self) -> bool:
+        """The Journal's "Positions on the Watchlist" (WS-WL item 4).
+
+        A nav call: the Trading Desk page, then its Watchlist tab on the
+        Positions view. No second list is built and nothing is read here.
+        """
+        if not self._select_page_by_title("Trading Desk"):
+            return False
+        import watchlist_views
+
+        return bool(
+            self.trading_panel.show_watchlist(watchlist_views.VIEW_POSITIONS)
+        )
     def _chart_recap_row(self, symbol: str, side: str = "") -> None:
         """A Daily Recap row -> the board chart door, resolved at click time.
 

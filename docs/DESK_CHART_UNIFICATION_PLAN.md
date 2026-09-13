@@ -386,3 +386,46 @@ ranking or invent a queue the trader never asked for. §2.1's CaptureRail alread
 delivered what §2 was for — capture on every chart-opening surface. Reopening
 this needs a trader statement that they want a queue over the boards, which is a
 workflow decision, not a wiring one.
+
+
+## Chart Review retires as a PAGE, not as a surface (packet WS-WL, 2026-09-13)
+
+WISHLIST 10G puts one Watchlist on the Trading Desk and retires the standalone **Chart
+Review** and **Focus Picks** nav entries. This plan's subject — the capture rail, the
+provenance line, the movers-only filter, the D1 gap honesty, the armed-alert painting —
+is untouched. `ChartReviewPanel` is still constructed by `MainWindow`, still imported by
+`tests/test_chart_review_workspace.py` and `tests/test_r4_capture_surfaces.py`, and is
+still the reference implementation the Alert Center's own rail was built against. What
+went is the left-nav row.
+
+The two things the page could do that nothing else could, and where they live now:
+
+* **Open a symbol that is on a list** → `WatchlistTabPanel.chart_selected()`, which
+  routes through the Alert Center's `chart_symbol` — the desk's ONE door (trader,
+  2026-09-03: every ticker click on the Trading Desk lands on the centre chart). It is a
+  MANUAL look: `MANUAL_CHART_TAG`, no place in the waiting list, never a re-queue and
+  never a skip count.
+* **Open a symbol that is on NO list** (`ChartReviewPanel.open_symbol`, the lookup box —
+  the one thing the page could do that selecting a row cannot) →
+  `WatchlistTabPanel.chart_lookup()`, behind the tab's **Chart only** button and the same
+  `Ctrl+L` box. Read-only exactly as it was: the name goes in the machine-local recents
+  (`ui/services/symbol_lookup.RecentLookups`, the SAME store and file the page used) and
+  onto the chart, and into no watchlist, no Focus list and no CandidateRegistry. The
+  page's recents CHIP STRIP became a completer on the add box — same memory, no second
+  widget row in a height-conscious column.
+* **`Ctrl+L`** (focus the lookup box) → the same sequence, bound ONCE at the Watchlist
+  tab's own scope with `WidgetWithChildrenShortcut`, focusing the tab's add box. It is
+  not bound at window scope, deliberately: two bindings for one sequence fire neither,
+  and a `QShortcut` in a hidden tab never fires at all.
+
+`Alt+E` (the page's setups toggle) is not carried over — the desk has its own always-on
+setups toggle and F9, which is what the trader uses.
+
+**The thing that bit us here, recorded because it will bite the next tab too.** Raising a
+tab does not put the keyboard inside it: after `setCurrentWidget` the focus widget is the
+tab BAR, which is a child of the `QTabWidget` and NOT of the page. `correctWidgetContext`
+then refuses a `WidgetWithChildrenShortcut` bound on the page, and the shortcut silently
+does nothing. Measured in this worktree with offscreen Qt: with focus on the tab bar the
+binding never fires; with focus on any widget INSIDE the page it fires every time. So
+raising the Watchlist tab both reveals its column (a tab in a hidden column cannot be
+read, and a hidden widget's shortcut never matches) and moves focus into the panel.
