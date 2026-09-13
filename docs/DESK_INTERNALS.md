@@ -4269,3 +4269,94 @@ existed (commit `ed705b7a`) and all green after.
 **Reopen trigger.** WISHLIST 10J step 3 (a local model filling a form from the raw text)
 or step 4 (coaching) is authorized; the trader asks for a different hour, a different
 grace, or for a prompt to survive being away.
+
+
+## WL - one watchlist, many owners (2026-09-13, WISHLIST 10G)
+
+The trader's brief: *"the main Watchlist tab belongs on Trading Desk"* - one list with
+views, source badges, side and horizon, *"without turning source into priority"*, and the
+Journal linking to its Positions view. The desk already knew every one of those names; it
+just knew them in five places, and none of the five could see the other four.
+
+**The rows are ONE pure function and every view is a filter over it.**
+`scripts/watchlist_views.build_watchlist_rows` takes the four plain lists, the Focus
+store, today's swing favorites, the journal's open trades, the WS-5D intent stream, the
+M5 board, today's decisions, the armed price alerts and the per-broker last sync, and
+returns `WatchRow`s. It opens no store, writes nothing, reaches no network and reads no
+clock it was not handed - so the Qt service can run it on a worker and a test can run it
+without a desk. Row identity is `(symbol, side)`: "one symbol may appear once per side".
+
+**Presence on a shared list is not authorship.** `FocusPickStore.add` INJECTS its pick
+into `longs.txt` / `shorts.txt`, so "the name is on the list" cannot mean "the trader
+typed it" - measured on this branch, `focus_service.add_many(["MU"], "long", "m5")` turns
+`longs.txt` from `['AAL']` into `['AAL', 'MU']`. Authorship is the WS-5D stream's answer:
+the newest `add` for that `(list, symbol)` names its writer, and `machine_inject` is not
+the trader. Where the stream never saw the pair - every pick older than WS-5D - the
+fallback is whether a LIVE Focus pick explains the injection; a name nothing explains is
+the trader's, because the four files predate every writer that labels itself.
+`first_seen` is the earliest add the stream can VOUCH for (`trader_edit`,
+`trader_paste`, `machine_inject`); an `observed_external` add is when the desk noticed a
+file had changed and leaves it blank rather than back-dating a moment nobody measured.
+
+**Three departures from the packet's wording, all forced by the data.** `positions` is a
+TUPLE - the trader has four accounts and one name is legitimately held in two, so folding
+them would hide an account or invent a sum nobody holds. `horizons` is a frozenset -
+`MSFT` can sit on `longs.txt` AND `swinglongs.txt`, and the horizon cannot be part of a
+key that is `(symbol, side)`. And there is a SEVENTH source, `alert`: the price-alert
+board retired with the Focus Picks page, so an armed alert on a name that is on no list
+would otherwise still be polling and have no row anywhere. An option position's
+`exposure` is `None` - "not measured" - because an option's average price is per contract
+and this module will not invent a multiplier.
+
+**A position is a read-only projection and it arms nothing.** `stale` is "the last
+VERIFIED import run for that broker (`import_runs.status = 'OK'`; `RECONCILE` is a repair
+pass, not a look at the broker) is older than the previous session's close", and an
+unknown sync is stale too: the row is SHOWN, greyed, never removed, because uncertainty
+never deletes. A CLOSED position leaves the automatic view only when the sync that says
+so is verified-fresh - a stale close is still shown. A hand-added name survives its
+position going away; it loses the badge, not the row. Nothing on this tab writes a price
+alert because a position exists.
+
+**The split across the thread boundary.** The Qt thread owns the Focus store (its
+`reload()` expires the m5 lists and repairs the fade clocks - it is a WRITER), so it
+freezes three in-memory list copies into a `FocusSnapshot`, gathers the cheap stores
+(four short text files, two small JSONL, one JSON, the mtime-cached day ledgers - under
+3 ms measured) and hands the worker a finished payload. `watchlist-tab` publishes those
+rows immediately and only then reads the Journal - sqlite over a year of fills, ~30 ms
+here on a warm store and a schema check when cold - and publishes again. Waiting for the
+second before showing the first would leave the tab blank for all of it. The service's
+15-second tick `stat()`s five paths and starts nothing when none of them moved.
+
+**Every verb still asks the owner it already had.** `WatchlistEditorPanel` for a manual
+add, paste or removal (new public `add_symbols` / `remove_symbols(reason=)`, so the save,
+the one-name-one-side rule and the WS-5D intent row all keep happening in one place);
+`FocusService.remove_everywhere` for a Focus pick; a `swing_favorites` RETRACTION row for
+a favorite; `FocusPickStore.restore_faded` - never `discard_faded`, which clears the
+entry WITHOUT putting the pick back - for a faded one; `PriceAlertService.save_entries`
+for arming. A position row has no Remove at all (`can_remove()` answers before the button
+is drawn). The one deliberate behaviour change: the retired board's **Remove** DELETED an
+entry, and the tab's **Disarm** does not - A2 says a price alert is disarmed, never
+deleted, so the levels and the history stay and "Re-arm" is one click.
+
+**The two retired pages, and why the shortcut had to move.** Chart Review and Focus Picks
+are no longer `PAGE_SPECS` rows. Both panel CLASSES stay and both objects are still
+built: `ChartReviewPanel` is the annotation rail's reference implementation and other
+code imports it, and `FocusPicksPanel` still receives BounceBot alerts, the RRS snapshot
+and the mover flags on the desk. `Ctrl+L` - Chart Review's lookup key - is rebound at the
+new tab's scope, exactly once, and the tab does two things when it is raised: it makes
+the setups column visible (a tab in a hidden column cannot be read, and a `QShortcut` in
+a hidden widget never fires) and it moves focus INSIDE the panel, because the widget that
+holds focus after a tab switch is the tab BAR, which is not a child of the panel the
+shortcut is bound to, and `WidgetWithChildrenShortcut` would not match.
+
+**Tests:** `tests/test_ws_wl_watchlist_tab.py` - 55 written red by the tester before any
+of this existed, plus one added by the builder. One of the tester's is left RED on
+purpose: it asserts `longs.txt` is empty after the tab removes `AAL`, and the same
+fixture's Focus add has injected `MU` into that file. Writing `[]` would delete the
+injection behind the Focus store's back and BounceBot would stop watching a live Focus
+pick; the added test pins the measured behaviour instead.
+
+**Reopen trigger.** The trader asks for the old `Watchlists` file-editor tab to be
+renamed or folded in (two tabs a letter apart is a real cost), for a Positions view that
+shows money rather than quantity, or for the Watchlist to be a nav page of its own rather
+than a tab in the setups column.

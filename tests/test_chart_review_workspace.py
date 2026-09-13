@@ -672,9 +672,19 @@ class NavigationRegistrationTests(unittest.TestCase):
 
         return PAGE_SPECS
 
-    def test_chart_review_sits_directly_after_the_trading_desk(self) -> None:
+    def test_chart_review_and_focus_picks_are_no_longer_nav_pages(self) -> None:
+        """WS-WL (WISHLIST 10G, 2026-09-13) retired both nav entries.
+
+        Every action they had is reachable from the Trading Desk's Watchlist
+        tab - `tests/test_ws_wl_watchlist_tab.py` holds the inventory, one
+        parametrized case per old button. The PANELS are untouched and this
+        file's other 40-odd tests still drive `ChartReviewPanel` directly; what
+        went is the left-nav row, and the Trading Desk is still page 0.
+        """
         titles = [spec.title for spec in self._specs()]
-        self.assertEqual(titles[:3], ["Trading Desk", "Chart Review", "Focus Picks"])
+        self.assertEqual(titles[:3], ["Trading Desk", "Journal", "Market Journal"])
+        self.assertNotIn("Chart Review", titles)
+        self.assertNotIn("Focus Picks", titles)
 
     def test_every_page_is_declared_exactly_once(self) -> None:
         """The alignment these tests were always about, checked end to end."""

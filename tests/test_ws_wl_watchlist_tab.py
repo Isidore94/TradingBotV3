@@ -1450,3 +1450,49 @@ def test_the_watchlist_tab_fits_without_a_horizontal_scrollbar(desk_home, width,
         assert len(tab.visible_rows()) == 24
     finally:
         _shutdown(panel)
+
+
+# ---------------------------------------------------------------------------
+# ADDED BY THE BUILDER (2026-09-13), not a rewrite of anything above.
+#
+# `test_remove_asks_the_owning_store_and_a_position_row_has_no_remove` asserts
+# that `longs.txt` is EMPTY after the tab removes AAL. It is not, and cannot
+# be: `_seed_rows` also calls `focus_service.add_many(["MU"], "long", "m5")`,
+# and `FocusPickStore._inject_into_shared` puts every m5 Focus pick straight
+# into `longs.txt` (CLAUDE.md, "every Focus add is injected into longs.txt /
+# shorts.txt"). Measured on this branch against a scratch home:
+#
+#     longs.txt   = ['AAL', 'MU']
+#     focus longs = ['MU']
+#
+# So removing AAL leaves `['MU']`. Writing `[]` instead would delete the
+# injection behind the Focus store's back, and BounceBot would stop watching a
+# name that is still a Focus pick - a desync. Taking the injection out is the
+# Focus store's own job (`remove_everywhere`), which the same test exercises
+# one line later. That assertion is left RED rather than weakened; this test
+# pins what the stores actually do, so the lead can decide the line with the
+# numbers in front of them.
+# ---------------------------------------------------------------------------
+@pytest.mark.qt
+def test_removing_a_manual_name_leaves_a_focus_injection_for_its_own_owner(desk):
+    """Remove AAL: `longs.txt` keeps MU, because MU is Focus's line, not a list entry."""
+    from watchlist_utils import read_watchlist_symbols
+
+    tab = _seed_rows(desk, _tab(desk))
+    assert read_watchlist_symbols(project_paths.LONGS_FILE) == ["AAL", "MU"], (
+        "premise: the Focus add injected MU into the shared long list"
+    )
+
+    assert tab.select_symbol("AAL", side="long")
+    assert tab.remove_selected() is True
+    _spin()
+
+    assert read_watchlist_symbols(project_paths.LONGS_FILE) == ["MU"]
+    assert desk.focus_service.is_focus("MU") is True
+
+    # ...and the Focus verb is what takes the injection back out.
+    assert tab.select_symbol("MU", side="long")
+    assert tab.remove_selected() is True
+    _spin()
+    assert desk.focus_service.is_focus("MU") is False
+    assert read_watchlist_symbols(project_paths.LONGS_FILE) == []
