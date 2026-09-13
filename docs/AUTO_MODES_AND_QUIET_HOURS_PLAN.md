@@ -408,3 +408,41 @@ session is exactly when the next one arrives.
 `market_early_close.session_close`, not `market_calendar.session_close`, so a half day
 ends the hourly window when the tape actually stops);
 `scripts/ui/services/trade_mentor_service.py` owns the one timer and the one state file.
+
+## Amendment 2026-09-13 — the return surface is the **Daily Recap**, in every mode (WISHLIST 10F, packet WS-DR)
+
+The 2026-08-24 amendment above made an AWAY day end in a recap rather than a
+queue. It is still true, and the page it named has been replaced.
+
+**What changed.** The nav entry `AWAY Recap` is now **Daily Recap**
+(`scripts/ui/panels/daily_recap_panel.py`, `PAGE_SPECS` slot unchanged — still
+directly after Market Journal), it is offered in **every** Auto mode rather than
+being an AWAY artefact, and it is selectable by exchange session: the last
+COMPLETED session by default, Today offered and marked provisional in the entry
+itself, and a 1/2/3 prior-session lookback that selects the swing window and the
+horizon reported together. Four tabs — what worked today, swings that followed
+through, my decisions, rejected and it worked — each with its cohort, window, n
+and pending count said out loud, and a sort control limited to the measures the
+reader declared.
+
+**Why it had to change.** The old page was handed `center._alerts` +
+`center._d1_alerts` by `_feed_away_recap`: a process-scoped list capped at 250 /
+100 items. A desk restarted mid-session, or left running across midnight,
+reported what the PROCESS saw rather than what the SESSION produced — which is
+precisely the record an AWAY day exists to leave behind.
+`scripts/daily_recap_reader.py` takes a session, a lookback, a clock and a set of
+PATHS, so the same session reads the same after a restart, a week later, or in
+another interpreter.
+
+**What deliberately did not change.** Discovery is identical in every mode.
+AWAY still STAGES and never adopts, and the staged-pick block moved onto the new
+page with its behaviour intact — the R2 gate is shown at click time, never
+enforced, and the page only ASKS the Focus store's own owner. AWAY still
+accumulates no return queue. The two push exceptions (Focus/Research price
+alerts in every mode, EVENING's SPY ±1% alarm) are untouched, and **the Daily
+Recap adds no push at all**: it is a page on the desk, so DESK, EVENING and OFF
+gain no routine output from it. `away_recap.build_recap` and
+`autopilot_today.txt` — including the `== WORKING LATELY ==` section ST6.6 added
+— are untouched, and the AWAY digest panel is still handed the Alert Center's
+backing list when the recap page is selected, so the phone's text digest is the
+same digest it was yesterday.
