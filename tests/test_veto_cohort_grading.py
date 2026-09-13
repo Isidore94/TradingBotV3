@@ -579,6 +579,12 @@ def test_the_scope_can_be_selected_on_demand():
         "preference_trade_outcomes",
         "evidence_report",
         "daily_digest",
+        # WS-TH (2026-09-12) appended the theta grade at the END of the
+        # deterministic stage: it reads `theta_picks.jsonl` and the daily bars,
+        # feeds nothing above it, and sits after the digest so it can never
+        # delay the fact pack. Appended inside the stage, never reordered across
+        # stages - the same rule every line above it follows.
+        "theta_pick_grading",
         # Stage 2: the narration pair, moved here as a unit by decision 0018.
         "ai_summary",
         "ticker_briefs",

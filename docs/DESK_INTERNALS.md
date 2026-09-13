@@ -3698,3 +3698,99 @@ edited for it.
 **Reopen trigger.** The trader wants the label stamped on the tracker outcome row itself
 (an ask-first `legacy.py` change), wants a weight per environment in the point system, or
 wants a per-family cut inside the section - none of which this packet does.
+
+## TH - the theta picks are graded, never changed (2026-09-12, WISHLIST sweep)
+
+WISHLIST item 6, in the trader's words: *"Track, per pick and per day it appears: symbol,
+scan date, support set, the score and rank, the chosen strike/expiry/premium. Grade at the
+sold put's expiry and at 5/10/20 sessions: did price hold above the strike, max adverse
+excursion in ATR, which supports broke first."*
+
+The D1 scan has printed `master_avwap_theta_puts.txt` since Phase 0.11 and **nothing has
+ever read a theta pick back**. There is no theta row in the setup tracker, no theta cohort
+in the outcome store and no surface that answers "does a three-SMA stack actually hold a
+sold strike". This packet adds the record and the grade. It adds no term to the theta score,
+no support to a stack, no line to the report and no gate anywhere:
+`scripts/master_avwap_lib/legacy.py` is READ by it and was not edited.
+
+### Four things the real scan rows settled
+
+A hand-written fixture would have got every one of these wrong, which is why the tests build
+their rows through `evaluate_theta_put_candidate` / `evaluate_theta_pcs_candidate` and
+`_apply_best_option_to_theta_row` rather than by hand.
+
+- **`SMA_20` is BUILT as a theta support and then DROPPED.** `evaluate_theta_put_candidate`
+  asks `_theta_support_entry` for SMA_20/50/100/200 and `_is_valid_theta_support_entry`
+  (`legacy.py:21082`) then refuses SMA_20. So a recorded support set names SMA_50/100/200,
+  and a "three-support" pick built from SMA_20/50/100 is not a pick at all - it fails the
+  `THETA_MIN_SUPPORT_LEVELS` floor. **The store records what the ROW carries, never what the
+  builder attempted.**
+- **`held` is `level <= close` and is NEVER derived from `distance_atr`.**
+  `_theta_support_entry` keeps a level up to `THETA_SUPPORT_ABOVE_TOL_ATR` (0.05 ATR) ABOVE
+  the close and CLAMPS that negative distance to `distance_atr: 0.0`. A level 0.05 ATR
+  overhead and a level sitting exactly on price therefore record the identical distance, and
+  only the level separates them. A recorder that read the distance would mark an overhead
+  band as a support that was holding.
+- **A sold put carries `strike`; a put credit spread carries `short_strike` and
+  `long_strike`.** Both shapes are recorded in full and `strike` is the SOLD leg either way,
+  so a credit spread is never a NULL strike.
+- **`_apply_best_option_to_theta_row` REPLACES `score` with the option's `rank_score`** and
+  keeps the support score as `base_score` (87 and 35 on the tester's AAA row). The report
+  ranks on the former, so the store records both and the grade line grades the former.
+
+### The rules this produced
+
+- **One row per `(symbol, scan_date, play_type)` in `theta_picks.jsonl`** (shared home,
+  `project_paths.THETA_PICKS_FILE`), written from the RUNNER right after
+  `write_theta_put_report` - the scan's own output pass, never `legacy.py`'s tracker save.
+  A key already present is not rewritten, so a rerun or a deferred option pass cannot double
+  the n. **A failed append loses the row, never the scan**, and one malformed entry in the
+  list does not cost the good ones.
+- **Every appearance is an observation; the cohort grain is the FIRST appearance.** A repeat
+  day is its own row and keeps `first_seen_scan_date`. In the readout, `n` counts first
+  appearances and **`repeat_days` sits beside it and is never summed into it** - a name the
+  scan finds eight days running is ONE observation of the outcome and eight days of interest.
+- **`closes_for` hands back `{date: {"close","low","high"}}`, not a bare close.** It keeps the
+  name `session_horizon_outcomes` established, and the value shape is wider because the MAE
+  and `first_support_broken` are questions a close-only series CANNOT answer: a session that
+  cut through a support and closed back above it is a break the closes never see. The
+  docstring says so.
+- **The marks land on exchange SESSIONS.** A 2026-06-01 scan's 20th session is 2026-06-30,
+  because Juneteenth (2026-06-19) is not one; twenty business days lands on 06-29. The
+  fixture puts a BROKEN close on 06-29 and a HELD close on 06-30, so a weekday walk fails on
+  the number rather than passing quietly.
+- **Completed bars only, and a session the calendar has not reached is `pending`**, with
+  `target_session_not_complete`, never a break. The expiry grade waits for the expiry session
+  to complete: before it there is no verdict, not a loss.
+- **Only a support that was HOLDING on the scan date can break**, and `first_support_broken`
+  is `none` when nothing did - a word, because a blank reads as "we did not look" and the
+  nearest support would read as a break that never happened. A tie inside one session goes
+  to the highest level, the one price crossed first on the way down.
+- **A pick with no option quote is `unmeasured`, never broken.** `option_status:
+  no_weekly_options` leaves `best_option` empty, so there is no strike and "did price hold
+  above the strike" has no answer; grading it False would score a play the trader was never
+  offered.
+- **RS is `not_measured` and never invented.** Recon found NO relative-strength term in
+  today's theta scoring - `_theta_support_quality` takes source and `distance_atr` and
+  nothing else - so the RS cut is a column that says so with a note naming the function.
+- **Hold rate leads, the sort is the BOUND, and the grade line is the point system's.**
+  The cells carry the ONE Wilson bound (`swing_headline`) and the floor is
+  `evidence_stats.MIN_REPORTABLE_N`; the tercile line reuses `setup_points_evidence.Cell`, so
+  the desk's two grade lines never say the same thing two ways, and it refuses under 30 per
+  third with that module's own `not enough per third yet`.
+- **The slot is APPENDED at the END of the deterministic stage.** `theta_pick_grading` sits
+  directly after `daily_digest` and ahead of `ai_summary`; decision 0018 holds - a later
+  phase appends inside its stage and never reorders across stages - so `EXPECTED_SLOT_ORDER`
+  gained one name in that position and nothing above it moved. It is deterministic, calls no
+  model, is idempotent, and it deliberately runs after the digest so a theta grade can never
+  delay the fact pack.
+- **The readout is built ONCE, on the Setup Tracker's read worker.** Its cells and both its
+  sentences come off the same `theta_readout` call; the Qt thread renders them and computes
+  neither. Building it twice would be two answers to one question.
+
+### What is NOT here
+
+No promotion, no score, no gate. The Theta tab is shadow evidence with a population sentence
+above it, and 20 sessions after the first scan is the earliest any cell can carry an `n` and
+a bound. The RS cut stays `not_measured` until someone adds an RS term to the theta score on
+purpose; the readout will not invent one to fill a column.

@@ -31,10 +31,12 @@ from project_paths import (
     MASTER_AVWAP_SETUP_STATS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
     MASTER_AVWAP_TIER_CATCH_RATE_FILE,
+    MASTER_AVWAP_THETA_OUTCOMES_FILE,
     MASTER_AVWAP_TIER_LIST_FILE,
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
 )
 from research_explanations import build_plain_english_whats_working
+from theta_pick_tracker import THETA_NO_EXPORT_SENTENCE, theta_readout
 from ui import theme
 from ui.read_worker import ReadWorker, join_worker
 from ui.timer_utils import SignalCoalescer
@@ -287,6 +289,23 @@ DISCOVERY_COLUMNS = (
     ("flag", "Flag"),
 )
 
+#: Packet WS-TH (2026-09-12). The theta plays' own cells. HOLD RATE LEADS with
+#: its `n` and the ONE Wilson lower bound, and the sort is the BOUND - the same
+#: rule the Controls and Studies tabs follow. `Repeat days` sits beside `n` and
+#: is never added to it: a name the scan finds eight days running is ONE
+#: observation of the outcome and eight days of interest.
+THETA_COLUMNS = (
+    ("support_combo", "Support combo"),
+    ("play_type", "Play"),
+    ("hold_rate", "Held 20s"),
+    ("hold_rate_lb", "Held 20s (low)"),
+    ("n", "n"),
+    ("repeat_days", "Repeat days"),
+    ("n_unmeasured", "Unmeasured"),
+    ("expiry_hold_rate", "Held at expiry"),
+    ("n_expiry_graded", "Expiry n"),
+)
+
 #: Packet M5.3. `framework_family` and `experimental` lead, because the first
 #: question about a row here is which framework it belongs to and whether it
 #: ever happened.
@@ -368,6 +387,11 @@ PERCENT_KEYS = {
     # here and covers all three.
     "win_rate_lb",
     "stop_out_rate",
+    # WS-TH: the Theta tab's three rates. Fractions in the cell, percents on
+    # the screen, through the one formatter every other rate here uses.
+    "hold_rate",
+    "hold_rate_lb",
+    "expiry_hold_rate",
 }
 SIGNED_KEYS = {
     "avg_total_r_champion",
@@ -439,6 +463,8 @@ class SetupTrackerPanel(QFrame):
         # pooled export, or one family's slice of the by-family one.
         self.exit_framework_rows: list[dict[str, Any]] = []
         self.exit_framework_by_family_rows: list[dict[str, Any]] = []
+        # WS-TH: the Theta tab's cells, as `theta_readout` ranked them.
+        self.theta_rows: list[dict[str, Any]] = []
         self._ranked_exports: dict[str, Any] = {}
         self._export_signatures: dict[str, Any] = {}
         self._pooled_exit_framework_sentence = EXIT_FRAMEWORK_NO_EXPORT_SENTENCE
@@ -514,6 +540,17 @@ class SetupTrackerPanel(QFrame):
         self.exit_framework_status_label = QLabel(EXIT_FRAMEWORK_NO_EXPORT_SENTENCE)
         self.exit_framework_status_label.setObjectName("MutedLabel")
         self.exit_framework_status_label.setWordWrap(True)
+        # WS-TH: the Theta tab's two lines. The population sentence sits ABOVE
+        # the table for the same reason every other population sentence on this
+        # page does - a theta cell and a pick look identical in a table - and
+        # the grade line sits BELOW it, because it is a verdict on the numbers
+        # the table just showed, not a description of them.
+        self.theta_status_label = QLabel(THETA_NO_EXPORT_SENTENCE)
+        self.theta_status_label.setObjectName("MutedLabel")
+        self.theta_status_label.setWordWrap(True)
+        self.theta_grade_label = QLabel("")
+        self.theta_grade_label.setObjectName("MutedLabel")
+        self.theta_grade_label.setWordWrap(True)
         # EF1: the ONE control the Exit frameworks tab gains. The first entry is
         # today's table and nothing else on the tab changes; a family view is a
         # PRESENTATION filter over a second export, never a second reading and
@@ -579,10 +616,16 @@ class SetupTrackerPanel(QFrame):
             text_key="framework_family",
             elide_keys=("exit_template_id",),
         )
+        # WS-TH: `Support combo` takes the slack - it is the only free-text
+        # identifier here and the rates must never take it.
+        self.theta_table, self.theta_model = self._make_table(
+            THETA_COLUMNS, text_key="support_combo", elide_keys=("play_type",)
+        )
         for table in (
             self.control_discovery_table,
             self.study_discovery_table,
             self.exit_framework_table,
+            self.theta_table,
         ):
             table.setMinimumHeight(TABLE_TEN_ROWS_PX)
         self.attribute_table, self.attribute_model = self._make_table(
@@ -707,6 +750,25 @@ class SetupTrackerPanel(QFrame):
                 control=("Setup family:", self.exit_framework_family_combo),
             ),
             "Exit frameworks",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "SHADOW EVIDENCE, packet WS-TH. The theta plays the D1 scan already "
+                "prints to master_avwap_theta_puts.txt, recorded once per symbol per "
+                "scan date and graded forward: did the close hold above the SOLD "
+                "strike at the exact 5th, 10th and 20th exchange session, and at the "
+                "option's own expiry. Cells are cut by SUPPORT COMBO and play type. "
+                "Hold rate leads with its n and its Wilson lower bound, and the sort "
+                "is the BOUND - a 100% on two picks is not better than a 60% on "
+                "forty. n counts FIRST APPEARANCES; Repeat days counts the later ones "
+                "and is never added to n. A blank cell is not measured, never zero. "
+                "Nothing on this tab scores, ranks, gates or alerts, and nothing here "
+                "changes a theta score, a support or the report.",
+                self.theta_table,
+                status=self.theta_status_label,
+                footer=self.theta_grade_label,
+            ),
+            "Theta",
         )
         self.tabs.addTab(
             self._make_explained_tab(
@@ -1220,6 +1282,7 @@ class SetupTrackerPanel(QFrame):
         self.study_discovery_rows = ranked.get("study_discovery") or []
         self.exit_framework_rows = ranked.get("exit_framework") or []
         self.exit_framework_by_family_rows = ranked.get("exit_framework_by_family") or []
+        self.theta_rows = ranked.get("theta") or []
         # EF1: what the picker's re-render needs, so a selection change costs no
         # file read and never touches the Qt thread with a parse.
         self._ranked_exports = ranked
@@ -1237,6 +1300,12 @@ class SetupTrackerPanel(QFrame):
         self._pooled_exit_framework_sentence = exit_framework_population_sentence(
             exit_framework_export_rows
         )
+        # WS-TH: both lines come off the worker's own readout - the Qt thread
+        # renders them and computes neither.
+        self.theta_status_label.setText(
+            str(data.get("theta_population_sentence") or THETA_NO_EXPORT_SENTENCE)
+        )
+        self.theta_grade_label.setText(str(data.get("theta_grade_sentence") or ""))
 
         rendered: dict[str, tuple] = {}
         for table_name, model_name, rows, memo in _table_render_plan(
@@ -1455,6 +1524,9 @@ def tracker_export_files() -> tuple[tuple[str, Any], ...]:
         ("exit_framework", EXIT_FRAMEWORK_STATS_FILE),
         # EF1: the thirteenth. Same shape, one grain finer, read the same way.
         ("exit_framework_by_family", EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE),
+        # WS-TH: the fourteenth. One row per graded theta pick; the cells the
+        # tab shows are built from it on the worker, never on the Qt thread.
+        ("theta", MASTER_AVWAP_THETA_OUTCOMES_FILE),
     )
 
 
@@ -1503,12 +1575,19 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         # be ordered by a different rule than the pooled table it came from.
         "exit_framework_by_family": _rank_exit_frameworks(raw["exit_framework_by_family"]),
     }
+    # WS-TH: the readout ranks the cells AND writes the tab's two sentences, so
+    # it is built once here on the worker. Building it twice - once for the rows
+    # and once for the text - is two answers to one question.
+    theta = theta_readout(raw["theta"])
+    ranked["theta"] = theta.cells
     return {
         "min_closed": int(min_closed),
         "signatures": signatures,
         "human_focus_digest": digest,
         "raw": raw,
         "ranked": ranked,
+        "theta_population_sentence": theta.population_sentence(),
+        "theta_grade_sentence": theta.grade_sentence(),
         "scan_factor_mtime_text": _latest_mtime_text(
             [MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE]
         ),
@@ -1556,6 +1635,8 @@ def _table_render_plan(
         ("study_discovery_table", "study_discovery_model",
          (ranked.get("study_discovery") or [])[:300],
          (signatures.get("study_discovery"),)),
+        ("theta_table", "theta_model", (ranked.get("theta") or [])[:300],
+         (signatures.get("theta"),)),
         # EF1: `exit_framework_table` is deliberately ABSENT. Its rows depend on
         # the family picker as well as on two files, so it is rendered by
         # `_apply_exit_framework_view` - which owns the same memo rule, so a
