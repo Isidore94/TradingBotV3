@@ -32,7 +32,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from chart_watch import ANY_BOUNCE_KINDS, D1_EVENT_KINDS, WATCH_KINDS
+from chart_watch import (
+    ANY_BOUNCE_KINDS,
+    D1_EVENT_KINDS,
+    PERSISTENT_WATCH_KINDS,
+    WATCH_KINDS,
+)
 from ui import theme
 from ui.widgets.flow_layout import FlowLayout
 
@@ -334,6 +339,15 @@ class ArmBar(QFrame):
             button.setToolTip(self._tooltip_for(kind))
 
     _WATCH_KIND_DETAILS = {
+        "h1_ema_bounce": (
+            "The hourly chart comes back to its 15-EMA and holds it: a "
+            "completed H1 bar tags the line (within 0.25 ATR) and a later one "
+            "- inside three bars - closes back through it, with the EMA "
+            "moving your way. A touch and a reclaim on the SAME candle is "
+            "ambiguous and does not fire. A close a full ATR the wrong side "
+            "of the line ends the watch. It needs 45 completed H1 bars before "
+            "it will answer at all."
+        ),
         "hod_avwap": (
             "AVWAP anchored on whichever candle made today's HOD (re-anchors if "
             "a new HOD prints); fires when a completed bar tags the line from "
@@ -348,11 +362,20 @@ class ArmBar(QFrame):
 
     def _tooltip_for(self, kind: str) -> str:
         label = WATCH_KINDS[kind]
-        base = (
-            f"Toggle a one-shot {label} watch for this symbol. The first "
-            "completed M5 bar that meets it fires a red alert in the Alert "
-            "Center (bypasses the tier gate and sounds). Click again to disarm."
-        )
+        if kind in PERSISTENT_WATCH_KINDS:
+            base = (
+                f"Toggle a one-shot {label} watch for this symbol. It is NOT a "
+                "session watch: it stays armed for ten trading days, across "
+                "restarts, and is evaluated on every completed H1 bar. One "
+                "fire, then it disarms - re-arming is a new watch. Click "
+                "again to disarm."
+            )
+        else:
+            base = (
+                f"Toggle a one-shot {label} watch for this symbol. The first "
+                "completed M5 bar that meets it fires a red alert in the Alert "
+                "Center (bypasses the tier gate and sounds). Click again to disarm."
+            )
         detail = self._WATCH_KIND_DETAILS.get(kind)
         if detail:
             base = f"{base}\n\n{detail}"
