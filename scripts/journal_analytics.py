@@ -738,13 +738,20 @@ class AutoTagger:
                 # exactly what the packet forbids.
                 continue
             seen.append(row)
+        # ONE pick, not two. The claim this verdict names is the same candidate
+        # `journal_bulk_tag` would write - `max` on confidence, first wins on a
+        # tie, exactly as the writer does it. A second rule here would let the
+        # Journal print one setup while the Tags column carried another, and Tag
+        # Week's mark compares the two.
         best: dict[str, Any] = {}
-        for row in seen:
-            for slug, span in row["claims"]:
-                best = {"tag": slug, "entry_id": row["entry_id"], "span": span}
-                break
-            if best:
-                break
+        claims = self.note_lane_candidates(trade)
+        if claims:
+            top = max(claims, key=lambda item: float(item.get("confidence") or 0.0))
+            best = {
+                "tag": str(top.get("tag") or ""),
+                "entry_id": str(top.get("match_basis") or "")[len(NOTE_MATCH_BASIS_PREFIX):],
+                "span": str(top.get("span") or ""),
+            }
         payload = {
             "verdict": "claim" if best else "no_claim",
             "reason": "",
