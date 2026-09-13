@@ -68,24 +68,64 @@ os.environ["TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE"] = "1"
 os.environ.setdefault("TRADINGBOT_DESIGNATED_WRITER", socket.gethostname())
 os.environ.setdefault("TRADINGBOT_WRITER_ROLE", "designated_writer")
 
-# A real font database for the offscreen renders (WS-SX, 2026-09-12).
+# One symbol font, so an offscreen render can draw ★ (WS-SX, 2026-09-12).
 #
-# Measured: under `QT_QPA_PLATFORM=offscreen` this process starts with an EMPTY
-# font database - `QFontDatabase.families()` is `[]` and every glyph paints as
-# the .notdef box. The first test that builds a `MainWindow` imports
+# Measured today: under `QT_QPA_PLATFORM=offscreen` this process starts with an
+# EMPTY font database - `QFontDatabase.families()` is `[]` and every glyph paints
+# as the .notdef box. The first test that builds a `MainWindow` imports
 # `qtawesome`, which registers its twelve ICON fonts, and from that moment they
 # are the only families Qt knows: "Sans Serif", "MS Shell Dlg 2" and the system
-# font all resolve into Font Awesome / Material Icons. `✕` happens to exist
-# there; `★` and `☆` do not, so a star painted after that test renders NOTHING
-# and a pixel assertion about it passes alone and fails in the full suite.
+# font all resolve into codicon / Font Awesome. `✕` (U+2715) exists there; `★`
+# and `☆` (U+2605/U+2606) do not, so a star painted after that test renders
+# NOTHING - which is why a pixel assertion about one passes alone and fails in
+# the full suite.
 #
-# Pointing the offscreen plugin at the machine's real font directory makes the
-# database real from the start (66 families here), which is both deterministic
-# and closer to what the desk actually paints. Set only if the directory exists,
-# and never over a value the caller chose.
-_FONT_DIR = os.environ.get("WINDIR", r"C:\Windows") + os.sep + "Fonts"
-if os.path.isdir(_FONT_DIR):
-    os.environ.setdefault("QT_QPA_FONTDIR", _FONT_DIR)
+# The fix is the smallest one that works: register the machine's symbol font as
+# an application font for the tests that SAMPLE PIXELS, and remove it again
+# afterwards.
+#
+# The wider fix was measured and rejected: `QT_QPA_FONTDIR` pointed at
+# `C:\Windows\Fonts` gives the whole suite a real font database (66 families
+# instead of 0) and with it
+# `test_qt_desk_layout.py::test_compact_profile_never_hides_columns_behind_a_scrollbar`
+# fails - 596px of columns in a 519px viewport at 1400px wide. That is a real
+# question about the compact profile at the narrowest width (the same test
+# already fails today whenever it happens to run after a test that built a
+# MainWindow), and a font default in conftest is not the place to answer it.
+# So the registration is SCOPED to the modules that need the glyph and is undone
+# at teardown, leaving every other test measuring exactly what it measured
+# before.
+_SYMBOL_FONT_CANDIDATES = (
+    Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "seguisym.ttf",
+    Path("/System/Library/Fonts/Apple Symbols.ttf"),
+)
+#: Test modules that render a glyph offscreen and assert on its PIXELS.
+_PIXEL_GLYPH_MODULES = frozenset({"test_ws_sx_star_x"})
+
+
+@pytest.fixture(autouse=True)
+def _offscreen_symbol_font(request):
+    """Lend a star-capable family to the tests that paint one, then take it back."""
+    module = getattr(getattr(request.node, "module", None), "__name__", "")
+    if module.rsplit(".", 1)[-1] not in _PIXEL_GLYPH_MODULES:
+        yield
+        return
+    gui = sys.modules.get("PySide6.QtGui")
+    widgets = sys.modules.get("PySide6.QtWidgets")
+    handle = -1
+    if gui is not None and widgets is not None and widgets.QApplication.instance():
+        for candidate in _SYMBOL_FONT_CANDIDATES:
+            try:
+                if candidate.exists():
+                    handle = gui.QFontDatabase.addApplicationFont(str(candidate))
+                    break
+            except OSError:  # a font path this machine does not have
+                continue
+    try:
+        yield
+    finally:
+        if handle >= 0:
+            gui.QFontDatabase.removeApplicationFont(handle)
 
 
 
