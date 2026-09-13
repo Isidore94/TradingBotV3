@@ -391,6 +391,14 @@ def test_three_statements_about_one_trade_count_as_one_trade(tmp_path, monkeypat
     monkeypatch.setattr(
         project_paths, "TRADER_ANNOTATIONS_FILE", tmp_path / "absent_annotations.jsonl"
     )
+    # WS-5B added a FOURTH store to the slot's read (the M5 click-away lives in
+    # the review-event log). Every other store this test does not want is
+    # already pointed at an absent file or stubbed; an unnamed one falls back to
+    # the shared test home folder and a click-away another test wrote there
+    # arrives as a fourth statement. No assertion changed.
+    monkeypatch.setattr(
+        project_paths, "ALERT_REVIEW_EVENTS_FILE", tmp_path / "absent_review_events.jsonl"
+    )
     result = pto.run_preference_trade_outcomes(
         now=datetime(2026, 9, 25, 20, 0, 0),
         window_days=45,

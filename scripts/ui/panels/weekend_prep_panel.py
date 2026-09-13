@@ -1170,6 +1170,12 @@ class FocusReviewPage(_StepPage):
         and a like they skipped are two lessons and nothing here pools them -
         not the rows, not the notes, not the counts.
         """
+        # The family NAME comes from the module that writes it; a literal here
+        # would be a second copy of a vocabulary that has one owner. The module
+        # is already imported by the reader that produced these rows, so this
+        # costs a dict lookup on the Qt thread and no file.
+        from preference_trade_outcomes import FAMILY_REJECT
+
         likes: list = []
         rejects: list = []
         for row in list(rows or []):
@@ -1177,7 +1183,7 @@ class FocusReviewPage(_StepPage):
             # equal are still two statements, so nothing here compares rows.
             target = (
                 rejects
-                if str(row.get("verdict_family") or "") == "reject"
+                if str(row.get("verdict_family") or "") == FAMILY_REJECT
                 else likes
             )
             target.append(row)
