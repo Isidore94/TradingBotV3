@@ -190,12 +190,21 @@ def _statements(tmp_path, feedback_rows, *, since, until):
     empty_annotations.write_text("", encoding="utf-8")
     empty_favorites = tmp_path / "swing_favorites.jsonl"
     empty_favorites.write_text("", encoding="utf-8")
+    # WS-5B added a FOURTH store (the M5 click-away lives in the review-event
+    # log). This helper names every store it wants empty for the same reason it
+    # already named the other three: an unnamed one falls back to the shared
+    # test home folder, and a click-away another test wrote there is a
+    # statement this fixture never made. No assertion moved; the fixture is
+    # hermetic again.
+    empty_events = tmp_path / "alert_review_events.jsonl"
+    empty_events.write_text("", encoding="utf-8")
     return pto.collect_statements(
         since=since,
         until=until,
         annotations_path=empty_annotations,
         feedback_path=_feedback_file(tmp_path, feedback_rows),
         favorites_path=empty_favorites,
+        events_path=empty_events,
     )
 
 
