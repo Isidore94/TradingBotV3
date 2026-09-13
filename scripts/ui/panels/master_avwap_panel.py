@@ -316,6 +316,27 @@ class _PointsEvidenceWorker(QThread):
         self.done.emit(sentence)
 
 
+class _DayDecisionsWorker(QThread):
+    """Today's likes and rejects for the ★/✕ columns (WS-SX), off the Qt thread.
+
+    One parse of three JSONL ledgers - the same cached, mtime-keyed read the
+    "Reviewed today" badge uses - so an unchanged day costs a dict lookup and a
+    changed one costs it here rather than in `paint`. It never raises into Qt:
+    an unreadable ledger means the table wears the marks it already had.
+    """
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            from pick_feedback import decisions_today
+
+            payload = decisions_today()
+        except Exception:  # noqa: BLE001 - two glyphs, never the table
+            payload = None
+        self.done.emit(payload)
+
+
 class MasterAvwapPanel(QWidget):
     setupSelected = Signal(object)
     rowsChanged = Signal(int, int, int)
@@ -378,6 +399,16 @@ class MasterAvwapPanel(QWidget):
         self._next_snapshot_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._next_snapshot_shortcut.activated.connect(self._open_next_symbol_snapshot)
         self.table.add_row_action("D1+M5 Snapshot Chart", self._open_symbol_snapshot)
+        # WS-SX. Today's decisions behind the ★ and the ✕, refreshed off the Qt
+        # thread and repainted through the SAME coalescer a Focus change uses:
+        # both answers are "repaint those two columns", and one burst is one
+        # repaint whichever of them arrived.
+        self._day_decisions = None
+        self._day_decisions_date = ""
+        self._decisions_worker = None
+        self._focus_repaint_coalescer = SignalCoalescer(
+            lambda: self._refresh_decision_marks(), parent=self
+        )
         if self.focus_service is not None:
             self.delegate.set_focus_lookup(self.focus_service.is_focus)
             # The ★ column: click to favorite into Swing Focus / click again to remove.
@@ -396,12 +427,10 @@ class MasterAvwapPanel(QWidget):
             # that morning adopted 45 picks one at a time. `setup_delegate.py`
             # paint lines were the single hottest stack in the stall log.
             # One repaint per burst says exactly as much as 45 did.
-            self._focus_repaint_coalescer = SignalCoalescer(
-                lambda: self._repaint_focus_stars(), parent=self
-            )
             self.focus_service.focusChanged.connect(
                 self._focus_repaint_coalescer.request
             )
+        self._request_decision_refresh()
 
         self.empty_state = EmptyState(
             "Run a scan to see setups",
@@ -494,6 +523,12 @@ class MasterAvwapPanel(QWidget):
         self.report_poll_timer = QTimer(self)
         self.report_poll_timer.setInterval(30_000)
         self.report_poll_timer.timeout.connect(self._poll_report_changes)
+        # WS-SX rides the same 30 s tick rather than owning a timer: the ★/✕ are
+        # about TODAY, so the only thing left to notice is the day rolling under
+        # a desk that was left running. Its own slot, because
+        # `_poll_report_changes` is called unbound by a test with a stand-in
+        # self and must keep answering exactly one question.
+        self.report_poll_timer.timeout.connect(self._check_decision_day_roll)
         start_staggered(self.report_poll_timer, 43_000)
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.setInterval(15_000)
@@ -506,6 +541,9 @@ class MasterAvwapPanel(QWidget):
         # Caught up once on the way back in, so a page that was hidden across a
         # scheduler slot shows the right status immediately.
         self._scheduler_tick()
+        # ...and so does a page that was hidden while the trader vetoed a name
+        # from the chart, or across a day roll (WS-SX).
+        self._request_decision_refresh()
 
     def _build_layout(self) -> None:
         """One control strip over the table.
@@ -763,6 +801,61 @@ class MasterAvwapPanel(QWidget):
     def _repaint_focus_stars(self) -> None:
         """Repaint the table because Focus membership moved. Presentation only."""
         self.table.viewport().update()
+
+    def _request_decision_refresh(self) -> None:
+        """Ask for ONE repaint of the ★/✕ columns, at most one per 200 ms.
+
+        Safe to call from any capture verb in a tight loop - that is the whole
+        point of the coalescer (2026-08-31).
+        """
+        coalescer = getattr(self, "_focus_repaint_coalescer", None)
+        if coalescer is not None:
+            coalescer.request()
+
+    def _refresh_decision_marks(self) -> None:
+        """The coalesced reaction: re-ask the ledgers, then repaint.
+
+        The repaint happens immediately because a Focus change needs nothing
+        read; the decision snapshot lands a moment later and repaints again only
+        if it actually changed.
+        """
+        self._start_day_decisions()
+        self._repaint_focus_stars()
+
+    def _start_day_decisions(self) -> None:
+        worker = getattr(self, "_decisions_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _DayDecisionsWorker(self)
+        worker.done.connect(self._on_day_decisions_ready)
+        self._decisions_worker = worker
+        worker.start()
+
+    def _on_day_decisions_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        if payload is None:
+            return
+        if payload == self._day_decisions:
+            return  # nothing the trader can see changed; do not repaint 60 rows
+        self._day_decisions = payload
+        self._day_decisions_date = str(getattr(payload, "trade_date", "") or "")
+        self.delegate.set_decision_lookup(payload.for_symbol)
+        self._repaint_focus_stars()
+
+    def _check_decision_day_roll(self) -> None:
+        """The marks reset on the day roll, with the desk left running.
+
+        Rides the report poll rather than owning a timer: the question is
+        "is the snapshot still about today?", and asking it every 30 s costs two
+        timezone conversions.
+        """
+        try:
+            from pick_feedback import _trade_date_text
+
+            today = _trade_date_text()
+        except Exception:  # noqa: BLE001 - a clock never costs the table
+            return
+        if self._day_decisions_date and today != self._day_decisions_date:
+            self._request_decision_refresh()
 
     def flush_pending_refresh(self) -> None:
         """Run an owed coalesced repaint now. The seam the tests drive."""
@@ -1284,6 +1377,7 @@ class MasterAvwapPanel(QWidget):
     def set_rows(self, rows: list[SetupRow]) -> None:
         if self._uses_default_feedback_paths:
             _apply_reviewed_today_badges(rows)
+        self._request_decision_refresh()
         self._working_lately_source_rows = list(rows)
         rows = self._by_points(self._prioritised(self._working_lately_source_rows))
         self.model.set_rows(rows)
@@ -1576,6 +1670,10 @@ class MasterAvwapPanel(QWidget):
 
     def _record_review_event(self, action: str, row: SetupRow, detail: dict) -> None:
         """Swing decision -> alert_review_events.jsonl. Best-effort, never UI-visible."""
+        # WS-SX: the trader just decided something about this name, so the ★/✕
+        # columns are stale. Asked FIRST and unconditionally - the decision
+        # happened whether or not this panel is the one that logs it.
+        self._request_decision_refresh()
         if self._review_events_path is None:
             return
         try:
