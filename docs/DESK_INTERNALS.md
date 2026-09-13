@@ -4349,8 +4349,18 @@ a hidden widget never fires) and it moves focus INSIDE the panel, because the wi
 holds focus after a tab switch is the tab BAR, which is not a child of the panel the
 shortcut is bound to, and `WidgetWithChildrenShortcut` would not match.
 
+**The journal read never CREATES the journal.** `JournalStore()` builds its schema on
+construction, and the trader's own "Prepare Journal database" is a backup, a migration
+and a rebuild they are ASKED about. A watchlist read that quietly brought the database
+into existence would skip all three - and it did, until `read_journal` was made to refuse
+while `store_needs_preparation()` is true; the symptom was
+`test_qt_journal_panel.py::test_migration_failure_stays_visible...` failing in the full
+suite and passing alone, because the panel found a prepared store where the test had
+arranged for none. A journal that is not ready answers with an empty snapshot that says
+so, and the Positions view is empty rather than wrong.
+
 **Tests:** `tests/test_ws_wl_watchlist_tab.py` - 55 written red by the tester before any
-of this existed, plus one added by the builder. One of the tester's is left RED on
+of this existed, plus two added by the builder. One of the tester's is left RED on
 purpose: it asserts `longs.txt` is empty after the tab removes `AAL`, and the same
 fixture's Focus add has injected `MU` into that file. Writing `[]` would delete the
 injection behind the Focus store's back and BounceBot would stop watching a live Focus

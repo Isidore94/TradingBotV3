@@ -90,6 +90,21 @@ def read_journal(*, today: date | None = None) -> JournalSnapshot:
     except Exception as exc:  # noqa: BLE001 - the tab outlives a missing journal
         return JournalSnapshot(error=str(exc))
 
+    # NEVER the thing that creates or migrates the journal. `JournalStore()`
+    # creates the schema on construction, and the trader's own "Prepare Journal
+    # database" flow is a backup, a migration and a rebuild they are asked
+    # about. A watchlist read that quietly brought the database into existence
+    # would skip all three - and it did: it made
+    # `test_qt_journal_panel.py::test_migration_failure_stays_visible...` fail
+    # in the full suite, because the panel then found a prepared store where
+    # the test had arranged for none. A journal that is not ready answers with
+    # an EMPTY snapshot that says so.
+    try:
+        if journal_feed.store_needs_preparation():
+            return JournalSnapshot(error="journal not prepared")
+    except Exception as exc:  # noqa: BLE001
+        return JournalSnapshot(error=str(exc))
+
     reference = today or date.today()
     rows: dict[str, dict[str, Any]] = {}
     error = ""

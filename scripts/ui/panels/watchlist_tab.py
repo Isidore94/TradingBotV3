@@ -214,14 +214,32 @@ class WatchlistTabPanel(QFrame):
         )
 
         self.add_input = QLineEdit()
-        self.add_input.setPlaceholderText("Add ticker (Ctrl+L)")
+        self.add_input.setPlaceholderText("Ticker (Ctrl+L) - Add, or Chart only")
         self.add_input.returnPressed.connect(self._add_from_input)
+        # Chart Review's recents, kept: same store, same machine-local file,
+        # and still not a watchlist - nothing reads it to decide what to scan.
+        from PySide6.QtCore import QStringListModel
+        from PySide6.QtWidgets import QCompleter
+
+        from ui.services.symbol_lookup import RecentLookups
+
+        self._recents = RecentLookups()
+        self._recents_model = QStringListModel(self._recents.symbols(), self)
+        completer = QCompleter(self._recents_model, self)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.add_input.setCompleter(completer)
         self.side_selector = QComboBox()
         self.side_selector.addItems(["long", "short"])
         self.horizon_selector = QComboBox()
         self.horizon_selector.addItems([watchlist_views.HORIZON_DAY, watchlist_views.HORIZON_SWING])
 
         self.add_button = QPushButton("Add")
+        self.chart_only_button = QPushButton("Chart only")
+        self.chart_only_button.setToolTip(
+            "Chart the typed name without putting it on any list - the Chart "
+            "Review page's Open button."
+        )
+        self.chart_only_button.clicked.connect(lambda: self.chart_lookup())
         self.paste_button = QPushButton("Paste many")
         self.copy_button = QPushButton("Copy")
         self.refresh_button = QPushButton("Refresh")
@@ -287,6 +305,7 @@ class WatchlistTabPanel(QFrame):
         add_row.addWidget(self.side_selector)
         add_row.addWidget(self.horizon_selector)
         add_row.addWidget(self.add_button)
+        add_row.addWidget(self.chart_only_button)
         add_row.addWidget(self.paste_button)
         add_row.addWidget(self.copy_button)
 
@@ -598,6 +617,42 @@ class WatchlistTabPanel(QFrame):
         """`Ctrl+L`: the add box takes the caret and selects what is in it."""
         self.add_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.add_input.selectAll()
+
+    def chart_lookup(self, text: object = None) -> str:
+        """Chart a TYPED name without putting it on any list.
+
+        The Chart Review page's "Open" button, which is the one thing it could
+        do that selecting a row cannot: look at a name that is on no watchlist,
+        in no Focus list and in no position. Read-only, exactly as it was -
+        the name goes in the machine-local recents (never a watchlist, never
+        the CandidateRegistry) and onto the shared chart as a MANUAL look.
+        """
+        from ui.services.symbol_lookup import normalize_symbol
+
+        raw = self.add_input.text() if text is None else text
+        symbol = normalize_symbol(raw)
+        if not symbol:
+            self._set_status(f"{str(raw or '').strip() or 'That'} is not a ticker.")
+            return ""
+        try:
+            self._recents.remember(symbol)
+            self._refresh_lookup_completer()
+        except Exception:  # noqa: BLE001 - a recents file never costs a chart
+            logger.debug("watchlist tab: recents not written", exc_info=True)
+        self.symbolActivated.emit(symbol)
+        if self._chart_sink is not None:
+            self._chart_sink(symbol, side="", origin="the Watchlist")
+        self._set_status(f"Charted {symbol}. It was not added to any list.")
+        return symbol
+
+    def _refresh_lookup_completer(self) -> None:
+        """The recents, as a completer on the add box - no second widget row.
+
+        Chart Review showed them as a chip strip. A completer costs the
+        height-conscious setups column nothing and answers the same question:
+        "what was that name I looked at ten minutes ago?"
+        """
+        self._recents_model.setStringList(self._recents.symbols())
 
     def can_remove(self) -> bool:
         """False for a position-only row: the broker's answer is not a list."""

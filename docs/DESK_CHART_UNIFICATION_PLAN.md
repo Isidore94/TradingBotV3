@@ -400,11 +400,19 @@ went is the left-nav row.
 
 The two things the page could do that nothing else could, and where they live now:
 
-* **Open any symbol** (`ChartReviewPanel.open_symbol`, the lookup box) →
-  `WatchlistTabPanel.chart_selected()`, which routes through the Alert Center's
-  `chart_symbol` — the desk's ONE door (trader, 2026-09-03: every ticker click on the
-  Trading Desk lands on the centre chart). It is a MANUAL look: `MANUAL_CHART_TAG`, no
-  place in the waiting list, never a re-queue and never a skip count.
+* **Open a symbol that is on a list** → `WatchlistTabPanel.chart_selected()`, which
+  routes through the Alert Center's `chart_symbol` — the desk's ONE door (trader,
+  2026-09-03: every ticker click on the Trading Desk lands on the centre chart). It is a
+  MANUAL look: `MANUAL_CHART_TAG`, no place in the waiting list, never a re-queue and
+  never a skip count.
+* **Open a symbol that is on NO list** (`ChartReviewPanel.open_symbol`, the lookup box —
+  the one thing the page could do that selecting a row cannot) →
+  `WatchlistTabPanel.chart_lookup()`, behind the tab's **Chart only** button and the same
+  `Ctrl+L` box. Read-only exactly as it was: the name goes in the machine-local recents
+  (`ui/services/symbol_lookup.RecentLookups`, the SAME store and file the page used) and
+  onto the chart, and into no watchlist, no Focus list and no CandidateRegistry. The
+  page's recents CHIP STRIP became a completer on the add box — same memory, no second
+  widget row in a height-conscious column.
 * **`Ctrl+L`** (focus the lookup box) → the same sequence, bound ONCE at the Watchlist
   tab's own scope with `WidgetWithChildrenShortcut`, focusing the tab's add box. It is
   not bound at window scope, deliberately: two bindings for one sequence fire neither,

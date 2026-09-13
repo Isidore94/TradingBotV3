@@ -1496,3 +1496,47 @@ def test_removing_a_manual_name_leaves_a_focus_injection_for_its_own_owner(desk)
     _spin()
     assert desk.focus_service.is_focus("MU") is False
     assert read_watchlist_symbols(project_paths.LONGS_FILE) == []
+
+
+@pytest.mark.qt
+def test_charting_a_typed_name_adds_it_to_nothing(desk):
+    """Chart Review's "Open": look at a name that is on NO list, and keep it off.
+
+    Added by the builder. The tester's inventory maps `ChartReviewPanel.
+    open_symbol` onto `chart_selected`, which charts the SELECTED ROW - so on
+    its own it cannot reach a name the desk has never heard of, which is the
+    one thing the retired page could do that nothing else on the tab could.
+    `chart_lookup` is that door, and like the page it was taken from it is
+    read-only: the name goes in the machine-local recents and onto the chart,
+    and into no watchlist, no Focus list and no CandidateRegistry.
+    """
+    from ui.models.bounce import MANUAL_CHART_TAG
+    from watchlist_utils import read_watchlist_symbols
+
+    tab = _tab(desk)
+    centre = desk.alert_center
+    waiting_before = len(getattr(centre, "_review_queue", []) or [])
+
+    assert tab.chart_lookup("wmt") == "WMT"
+    _spin()
+
+    current = centre._current_review_alert
+    assert current is not None
+    assert current.symbol == "WMT"
+    assert current.tag == MANUAL_CHART_TAG
+    assert len(getattr(centre, "_review_queue", []) or []) == waiting_before
+
+    for path in (
+        project_paths.LONGS_FILE,
+        project_paths.SHORTS_FILE,
+        project_paths.SWING_LONGS_FILE,
+        project_paths.SWING_SHORTS_FILE,
+    ):
+        assert "WMT" not in read_watchlist_symbols(path)
+    assert desk.focus_service.is_focus("WMT") is False
+    tab.refresh_now()
+    _spin()
+    assert "WMT" not in [row.symbol for row in tab.rows()]
+
+    # Not a ticker: the status says so and nothing is charted.
+    assert tab.chart_lookup("not a ticker at all") == ""
