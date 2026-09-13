@@ -427,6 +427,26 @@ def as_rows(headlines: Iterable[Headline]) -> list[dict[str, Any]]:
     return [item.as_row() for item in rank(headlines)]
 
 
+def percent_text(value: Any, *, digits: int = 0) -> str:
+    """A 0..1 rate as a percent string, or `"unmeasured"`. One spelling.
+
+    A surface that needs the rate and the bound in SEPARATE columns cannot use
+    `format_win_rate`, which spells them as one phrase - and writing
+    `f"{rate * 100:.0f}"` on the surface is how a view starts re-deriving its
+    own numbers. The multiplication lives here, in the module that owns what a
+    rate IS, and the caller asks for a string.
+    """
+    if value is None:
+        return "unmeasured"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "unmeasured"
+    if number != number:
+        return "unmeasured"
+    return f"{number * 100:.{max(0, int(digits))}f}"
+
+
 def format_win_rate(row: Mapping[str, Any]) -> str:
     """`62% (>=52%, n=90)`, or a dash. The one spelling every surface uses.
 

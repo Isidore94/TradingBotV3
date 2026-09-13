@@ -6,6 +6,9 @@ import threading
 import time
 from copy import deepcopy
 
+import d1_environment_store
+from indicators.d1_environment import classify_environment as classify_d1_environment
+
 from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
@@ -301,6 +304,101 @@ def bridge_earnings_anchor_caches_to_csv(
     except Exception:
         logging.exception("Earnings-anchor bridge failed (scan result unaffected).")
         return 0
+
+
+#: How many calendar days of daily bars the environment hook asks for. The rule
+#: warms up at 34 COMPLETED sessions and 260 calendar days is about 180 of them,
+#: so a holiday week, a stale cache and a fresh machine all still measure.
+D1_ENVIRONMENT_FETCH_DAYS = 260
+
+
+def _d1_environment_bars(frame) -> list[dict]:
+    """A daily-bar frame as plain dict bars, oldest first.
+
+    The indicator is pure and takes bars, not a DataFrame, so the conversion
+    lives here - on the runner side of the seam - rather than teaching an
+    indicator about pandas.
+    """
+    if frame is None:
+        return []
+    rows = frame
+    if hasattr(frame, "to_dict"):
+        if getattr(frame, "empty", False):
+            return []
+        rows = frame.to_dict("records")
+    bars: list[dict] = []
+    for row in rows or ():
+        try:
+            stamp = row.get("datetime", row.get("date"))
+            bars.append(
+                {
+                    "dt": stamp,
+                    "open": float(row.get("open")),
+                    "high": float(row.get("high")),
+                    "low": float(row.get("low")),
+                    "close": float(row.get("close")),
+                }
+            )
+        except (AttributeError, TypeError, ValueError):
+            continue
+    bars.sort(key=lambda bar: str(d1_environment_store.session_of(bar)))
+    return bars
+
+
+def record_d1_environment(ib=None, *, now, path=None, benchmarks=None) -> dict:
+    """Label today's finished session for each benchmark and append the rows.
+
+    WISHLIST 7, packet WS-ENV. Called as a sibling of
+    `bridge_earnings_anchor_caches_to_csv` at the end of a scan: the bars are
+    fetched through the SAME pinned daily fetch the scan itself uses
+    (`fetch_daily_bars`, which honours `daily_bars_source` - never a second
+    provider path), the FORMING bar is dropped through
+    `completed_bars.is_completed_bar` at daily length, and the pure rule in
+    `indicators.d1_environment` decides the label. The runner fetches; the
+    indicator stays pure.
+
+    Returns `{benchmark: label}` FOR THE LOG LINE ONLY. Nothing in the scan
+    branches on it: this is shadow evidence and reaches no detector, score,
+    alert, watchlist or Focus list (plan.md sec 5).
+
+    Every failure is logged and swallowed - an evidence store never costs the
+    thing it records, and the scan's own outputs are already on disk when this
+    runs.
+    """
+    names = tuple(benchmarks or d1_environment_store.BENCHMARKS)
+    labels: dict[str, str] = {}
+    through = ""
+    for symbol in names:
+        try:
+            frame = fetch_daily_bars(ib, symbol, D1_ENVIRONMENT_FETCH_DAYS)
+            bars = d1_environment_store.completed_daily_bars(
+                _d1_environment_bars(frame), now=now
+            )
+            if not bars:
+                logging.info("D1 environment: no completed daily bars for %s.", symbol)
+                continue
+            env = classify_d1_environment(bars)
+            d1_environment_store.append_environment(
+                env,
+                benchmark=symbol,
+                bars_through=env.as_of_session,
+                source=d1_environment_store.SOURCE_SCAN,
+                path=path,
+            )
+            labels[str(symbol)] = env.label
+            through = env.as_of_session or through
+        except Exception:
+            logging.exception(
+                "D1 environment reading failed for %s (scan result unaffected).", symbol
+            )
+    if labels:
+        logging.info(
+            "D1 environment: %s (%s, bars through %s)",
+            " ".join(f"{symbol}={label}" for symbol, label in labels.items()),
+            d1_environment_store.RULE_VERSION,
+            through or "unknown",
+        )
+    return labels
 
 
 def _log_phase_duration(label: str, since: float) -> float:
@@ -2982,6 +3080,10 @@ def _run_master_impl(
     save_json(PREV_CACHE_FILE, prev_cache)
     # Warehouse evidence only (see bridge_earnings_anchor_caches_to_csv).
     bridge_earnings_anchor_caches_to_csv(curr_cache, prev_cache, longs, shorts)
+    # Shadow evidence only (WISHLIST 7 / packet WS-ENV): one D1 environment row
+    # per benchmark for the session that just finished. Failure is logged, never
+    # raised, and the returned labels reach the log line and nothing else.
+    run_result["d1_environment"] = record_d1_environment(ib, now=datetime.now())
     save_history(history)
     save_json(AI_STATE_FILE, ai_state)
 

@@ -41,6 +41,8 @@ from PySide6.QtWidgets import (
 import evidence_stats
 import project_paths
 import research_results
+import swing_evidence
+from d1_environment_join import attach_environment
 from ui import theme
 from ui.models.tracker_table_model import ROW_ROLE, TrackerTableModel
 from ui.read_worker import ReadWorker, join_worker
@@ -524,12 +526,22 @@ class ResearchResultsPanel(QFrame):
         # reason. The leader, the policy line and the population sentence go in
         # the tooltip: all of it printed on the page came to 1,922 characters
         # of running text, which at 3,456 px is one line nobody reads.
-        self.section_label.setText(
-            "\n".join(section.verdict_short or section.verdict_line for section in sections)
-        )
+        # A section with NO verdict contributes no line: the environment cut
+        # (WS-ENV) names no leader - it is an observational cut - and a blank
+        # row above the cards would read as a verdict that failed to print. Its
+        # title and sentence still reach the tooltip, where the provenance lives.
+        verdicts = [
+            (section.verdict_short or section.verdict_line).strip()
+            for section in sections
+        ]
+        self.section_label.setText("\n".join(line for line in verdicts if line))
         self.section_label.setToolTip(
             "\n\n".join(
-                f"{section.title}\n{section.sentence}\n{section.verdict_line}"
+                "\n".join(
+                    part
+                    for part in (section.title, section.sentence, section.verdict_line)
+                    if str(part or "").strip()
+                )
                 for section in sections
             )
         )
@@ -624,6 +636,31 @@ class ResearchResultsPanel(QFrame):
         self._worker = None
 
 
+def _read_environment_rows(as_of) -> list[dict[str, Any]]:
+    """Eligible swing observations, joined to the D1 environment of their SCAN date.
+
+    On the WORKER, never the Qt thread (WS-ENV / WISHLIST 7): a 10 MB outcome
+    CSV and a JSONL store, read once per Results redraw for the one selection
+    that shows them.
+
+    The eligibility is `swing_evidence`'s own (`POLICY_SCANROW_V1`: one horizon,
+    deduplicated on `observation_id`, an explicit `stale_horizon` dropped) and
+    the window is `evidence_stats.lately_window` at this readout's own declared
+    length - see `research_results.ENVIRONMENT_WINDOW_SESSIONS` for why a cut
+    by environment cannot live inside a 20-session window. The join is by
+    `scan_date`, so a row is labelled with the tape it was DECIDED in.
+    """
+    window = evidence_stats.lately_window(
+        as_of, sessions=research_results.ENVIRONMENT_WINDOW_SESSIONS
+    )
+    read = swing_evidence.read_eligible_rows(
+        project_paths.MASTER_AVWAP_TIER_OUTCOMES_FILE,
+        swing_evidence.POLICY_SCANROW_V1,
+        window=window,
+    )
+    return attach_environment(read.rows, date_field=swing_evidence.POLICY_SCANROW_V1.clock_field)
+
+
 def _read(selection, window, payload) -> dict[str, Any]:
     """The whole read, on the worker: the snapshot, the journal, and the view.
 
@@ -640,6 +677,19 @@ def _read(selection, window, payload) -> dict[str, Any]:
     if population == "mine":
         trades = list(load_trades())
     as_of = _as_of(snapshot)
+    # The environment cut is opened ONLY where it is shown. A My-trades page
+    # has no scan date to join on and a day-trade page is a different
+    # population; neither pays for a 10 MB read it will not render.
+    environment_rows: list[dict[str, Any]] | None = None
+    if population == "bot" and horizon == "swing":
+        try:
+            environment_rows = _read_environment_rows(as_of)
+        except Exception:
+            # A readout never costs the page it sits on: the section renders
+            # empty and says so, and the champion sections above it are already
+            # built from the snapshot.
+            logging.exception("Results: the D1 environment cut could not be read.")
+            environment_rows = []
     view = research_results.build_results_view(
         population=population,
         horizon=horizon,
@@ -647,6 +697,7 @@ def _read(selection, window, payload) -> dict[str, Any]:
         snapshot=snapshot,
         journal_trades=trades,
         as_of=as_of,
+        environment_rows=environment_rows,
         # No currency control on this page, so no mode is claimed:
         # `resolve_pnl_key` then sums a single-currency selection, sums the
         # converted column when everything converted, and REFUSES a total over

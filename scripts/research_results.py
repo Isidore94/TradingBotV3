@@ -36,7 +36,10 @@ from typing import Any, Iterable, Mapping, Sequence
 import evidence_stats
 import journal_analytics
 import journal_trade_shape
+import swing_headline
 import working_lately
+from d1_environment_join import ENVIRONMENT_FIELD
+from indicators.d1_environment import RULE_VERSION as D1_ENVIRONMENT_RULE_VERSION
 from working_lately import EvidenceCell
 
 
@@ -484,6 +487,211 @@ def _bot_sections(snapshot: Mapping[str, Any] | None, horizon: str) -> tuple[Res
 
 
 # ---------------------------------------------------------------------------
+# the environment cut (WS-ENV)
+# ---------------------------------------------------------------------------
+
+
+#: The section's key, named once. A page asks for it by this and never by index.
+ENVIRONMENT_SECTION_KEY = "by_environment"
+
+#: How far back the environment cut reads, IN EXCHANGE SESSIONS, and why it is
+#: not `LATELY_SESSIONS`. "Lately" is 20 sessions - about a month - and a month
+#: of SPY is usually ONE environment, so a cut of it would print one populated
+#: row and four empty ones and answer nothing. Six of those windows is about
+#: six months, which on the recorded 2026 series holds all five labels. It is a
+#: declared parameter of THIS readout, not a second definition of "lately": no
+#: other surface reads it, and the section's rows say the number out loud.
+ENVIRONMENT_WINDOW_SESSIONS = 6 * evidence_stats.LATELY_SESSIONS
+
+
+def _environment_key(row: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get(ENVIRONMENT_FIELD) or "unknown").strip() or "unknown",
+        str(row.get("side") or "").strip().upper(),
+    )
+
+
+def _environment_row(
+    environment: str,
+    side: str,
+    headline: swing_headline.Headline,
+    group: Sequence[Mapping[str, Any]] = (),
+    *,
+    date_field: str = "scan_date",
+) -> ResultsRow:
+    """One (environment, side) cell. The numbers are the headline's own."""
+    symbols = {str(row.get("symbol") or "").strip().upper() for row in group}
+    symbols.discard("")
+    sessions_seen = {str(row.get(date_field) or "")[:10] for row in group}
+    sessions_seen.discard("")
+    values: dict[str, Any] = {
+        "environment": environment,
+        "side": side,
+        # The shortlist table reads a bot row by these names; an environment
+        # cell fills them so it renders in the SAME table rather than needing a
+        # second one. `family` is the environment because that is what this
+        # row is about.
+        "family": environment,
+        "kind": ENVIRONMENT_SECTION_KEY,
+        "namespace": "live",
+        "n_symbols": len(symbols),
+        "n_sessions": len(sessions_seen),
+    }
+    values.update(headline.as_row())
+    reason = (
+        ""
+        if headline.meets_floor
+        else (
+            f"below the evidence floor - n={headline.n} against a floor of "
+            f"{evidence_stats.MIN_REPORTABLE_N}, so read it as discovery"
+        )
+    )
+    rate = swing_headline.percent_text(headline.win_rate)
+    bound = swing_headline.percent_text(headline.win_rate_lb)
+    display = {
+        "environment": environment,
+        "side": side,
+        "win_rate": swing_headline.format_win_rate(values),
+        "win_rate_lb": bound if bound == "unmeasured" else f"{bound}%",
+        "n": str(headline.n),
+        "avg_r": "unmeasured" if headline.avg_r is None else f"{headline.avg_r:+.2f}",
+        "avg_unit": str(headline.avg_unit),
+        "meets_floor": "" if headline.meets_floor else f"under n={evidence_stats.MIN_REPORTABLE_N}",
+        "eligibility": reason or "eligible",
+        # The shortlist's own column names, so this section renders in the ONE
+        # bot table. The statistic is a PERCENT here, the way the favorable
+        # section already prints one, and the Measure column says which cut it is.
+        "family": environment,
+        "kind": ENVIRONMENT_SECTION_KEY,
+        "namespace": "live",
+        "sample": f"{headline.n} graded",
+        "statistic": rate,
+        "lower_bound": bound,
+        "n_symbols": str(len(symbols)),
+        "n_sessions": str(len(sessions_seen)),
+        "coverage": f"{len(symbols)} symbol(s) / {len(sessions_seen)} session(s)",
+    }
+    return ResultsRow(
+        cell=None,
+        line=headline.sentence(),
+        reason=reason,
+        eligible=bool(headline.meets_floor),
+        values=values,
+        display=display,
+    )
+
+
+def environment_section(
+    rows: Sequence[Mapping[str, Any]] | None,
+    *,
+    benchmark: str = "SPY",
+    rule_version: str = D1_ENVIRONMENT_RULE_VERSION,
+    date_field: str = "scan_date",
+    sessions: int = ENVIRONMENT_WINDOW_SESSIONS,
+) -> ResultsSection:
+    """Eligible swing observations, cut by the D1 environment of their SCAN date.
+
+    WISHLIST 7 / packet WS-ENV. The rows arrive already filtered by
+    `swing_evidence.read_eligible_rows` and already joined by
+    `d1_environment_join.attach_environment` - this module computes a VIEW and
+    never a new statistic, so the rate, the bound and the floor are all
+    `swing_headline`'s and `evidence_stats`' own.
+
+    **`unknown` is a row, never a bucket folded into the others.** A session the
+    store never labelled is not a quiet session; it is an unread one, and
+    pooling it into a measured cell would make up a reading.
+
+    **Win rate leads, and the SORT is the bound** - a 67%-on-thirty cell sits
+    below a 62%-on-a-hundred, which is the whole reason the bound is on the
+    table. These rows are `favorable_direction` (ST1): the tier file's `win` is
+    the sign of a close-to-close percent move, so the column is headed
+    "Favorable %" and the unit is `%`.
+    """
+    table = [dict(row) for row in (rows or ()) if isinstance(row, Mapping)]
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in table:
+        groups.setdefault(_environment_key(row), []).append(row)
+
+    headlines: dict[tuple[str, str], swing_headline.Headline] = {
+        key: swing_headline.headline_from_tracker_rows(
+            f"{key[1]} {key[0]}".strip(), group, sessions=sessions
+        )
+        for key, group in groups.items()
+    }
+    ordered_keys = sorted(
+        headlines,
+        key=lambda key: (
+            not headlines[key].meets_floor,
+            headlines[key].win_rate_lb is None,
+            -(headlines[key].win_rate_lb or 0.0),
+            -headlines[key].n,
+            key[0],
+            key[1],
+        ),
+    )
+    section_rows = tuple(
+        _environment_row(
+            key[0], key[1], headlines[key], groups[key], date_field=date_field
+        )
+        for key in ordered_keys
+    )
+
+    covered: set[str] = set()
+    uncovered: set[str] = set()
+    for row in table:
+        session = str(row.get(date_field) or "")[:10]
+        if not session:
+            continue
+        label = str(row.get(ENVIRONMENT_FIELD) or "unknown").strip() or "unknown"
+        (uncovered if label == "unknown" else covered).add(session)
+    uncovered -= covered
+
+    n_unknown = sum(
+        headline.n for key, headline in headlines.items() if key[0] == "unknown"
+    )
+    sentence = (
+        f"Swing observations cut by the D1 environment {benchmark} was in ON THE "
+        f"SCAN DATE ({rule_version}) - the tape the decision was made in, never "
+        f"the one it exited in. {len(covered)} session(s) here carry a stored "
+        f"label and {len(uncovered)} do not; an unlabelled session reads "
+        f"`unknown`, which is its own row and is pooled into nothing. Win rate "
+        f"leads with n and one Wilson lower bound, and the sort is the bound."
+    )
+    return ResultsSection(
+        key=ENVIRONMENT_SECTION_KEY,
+        title=f"By environment ({benchmark}, {rule_version})",
+        kind=ENVIRONMENT_SECTION_KEY,
+        sentence=sentence,
+        # **No verdict, deliberately.** `verdict_short` is a KIND's own verdict
+        # state, decided by `working_lately.select_leader` over snapshot cells.
+        # This section has no snapshot and names no leader - it is an
+        # observational cut - so it prints no verdict line rather than inventing
+        # a fourth one. The sentence below carries what it does claim.
+        verdict_line="",
+        verdict_short="",
+        bands=ResultsBands(),
+        rows=section_rows,
+        studies=(),
+        stats={
+            "columns": ("environment", "side") + swing_headline.HEADLINE_COLUMNS,
+            "labels": ("Environment", "Side")
+            + swing_headline.headline_labels(
+                swing_headline.OUTCOME_KIND_FAVORABLE_DIRECTION
+            ),
+            "benchmark": str(benchmark),
+            "rule_version": str(rule_version),
+            "cells": len(section_rows),
+            "eligible_cells": len([row for row in section_rows if row.eligible]),
+            "rows_read": len(table),
+            "n_unknown": n_unknown,
+            "sessions_covered": len(covered),
+            "sessions_uncovered": len(uncovered),
+            "sessions": int(sessions),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # My trades
 # ---------------------------------------------------------------------------
 
@@ -896,6 +1104,7 @@ def build_results_view(
     journal_trades: Sequence[Any] | None = None,
     as_of: Any = None,
     currency_mode: Any = None,
+    environment_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> ResultsView:
     """One selection's whole readout. Pure: nothing here opens a file.
 
@@ -918,6 +1127,12 @@ def build_results_view(
         applies, sentence = True, label
     else:
         sections = _bot_sections(snapshot, horizon)
+        # The environment cut is a BOT x SWING readout and belongs nowhere else:
+        # the join is by a swing observation's scan date, and a My-trades page
+        # has no such column. The champion sections above are untouched - this
+        # only ever appends.
+        if horizon == "swing" and environment_rows is not None:
+            sections = sections + (environment_section(environment_rows),)
         freshness = _bot_freshness(snapshot)
         # The window control does NOT reach the snapshot, so the page says
         # whose window these numbers were measured over instead of repeating a

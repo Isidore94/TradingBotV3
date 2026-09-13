@@ -553,12 +553,15 @@ def test_the_scope_behaviour_is_unchanged():
     trader's decision, and this packet changed no behaviour."""
     from ai_jobs.briefs import DEFAULT_SCOPES
 
+    # WS-AI1 (lead decision 2026-09-12, WISHLIST 5C): `preference_to_trade` joins the
+    # nightly slate - the bounded summary is fed "into the existing AI package".
     assert DEFAULT_SCOPES == (
         "daily_report",
         "market_conditions",
         "setup_trackers",
         "journal_review",
         "market_journal",
+        "preference_to_trade",
     )
 
 
