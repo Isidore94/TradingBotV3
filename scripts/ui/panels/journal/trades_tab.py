@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -397,6 +398,14 @@ class TradesTab(QFrame):
             self.tag_filter.addItem(label, value)
         self.tag_filter.currentIndexChanged.connect(self._on_tag_filter_changed)
         self.tag_filter_note = QLabel("")
+        # WS-J1: an empty QLabel keeps Qt's default (Preferred, Preferred) size
+        # policy, which CAN GROW - and because nothing else in this row could,
+        # the row itself became the tab's one "expanding" item and ate almost
+        # half the window (958 px of a 2160 px tab, measured offscreen) above
+        # an otherwise-empty table. Pinning it Fixed makes the row report its
+        # own text height as its height, same as the label and combobox beside
+        # it, so the splitter below is the only widget left that grows.
+        self.tag_filter_note.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Tag review"))
         filter_row.addWidget(self.tag_filter)
@@ -404,16 +413,50 @@ class TradesTab(QFrame):
         filter_row.addStretch(1)
 
         self.detail = self._build_detail()
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.table)
-        splitter.addWidget(self.detail)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.table)
+        self.splitter.addWidget(self.detail)
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 2)
+        # WS-J1: `setStretchFactor` only governs how EXTRA space is divided on
+        # a later resize - it says nothing about the sizes the splitter opens
+        # with, which Qt derives from the children's size hints instead (the
+        # trader saw 39/61, measured offscreen as [1347, 2105] on a 3,456 px
+        # tab). `_apply_splitter_ratio` sets the declared 3:2 explicitly, once
+        # per show/resize, until the trader's own drag takes over for the rest
+        # of the desk session (`_splitter_user_sized`, never persisted to disk).
+        self._splitter_user_sized = False
+        self.splitter.splitterMoved.connect(self._on_splitter_moved)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(filter_row)
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
+
+    # -- splitter ratio ------------------------------------------------------
+
+    def _on_splitter_moved(self, _pos: int, _index: int) -> None:
+        """The trader dragged the handle - stop re-asserting 3:2 for this tab
+        instance. `setSizes()` does not emit this signal, only an interactive
+        drag does, so a programmatic reset never trips this itself."""
+        self._splitter_user_sized = True
+
+    def _apply_splitter_ratio(self) -> None:
+        if self._splitter_user_sized:
+            return
+        width = self.splitter.width()
+        if width <= 0:
+            return
+        table_width = width * 3 // 5
+        self.splitter.setSizes([table_width, width - table_width])
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        self._apply_splitter_ratio()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._apply_splitter_ratio()
 
     # -- detail pane -------------------------------------------------------
 
