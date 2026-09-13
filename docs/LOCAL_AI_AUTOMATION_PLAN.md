@@ -2201,3 +2201,43 @@ theses forward, and is rebuilt only when its `inputs_hash` changed. Narrating th
 joins the existing narration stage in a later packet; nothing here calls a model, and
 nothing here reaches a detector, score, gate, alert, watchlist, Focus, the review queue or
 `review_policy.json`.
+
+**Thesis, context, opportunity and trade share ONE identity and time contract** (WISHLIST
+10I, plus 10K's "measure environment, then connect it"; `scripts/context_join.py`,
+`scripts/setup_environment_evidence.py`). The measured state and the trader's expectation
+are attached SEPARATELY and never merged. `attach_context` writes an `observation_context`
+and an `entry_context` side by side, each a frozen `ContextRef` carrying the context id
+(benchmark + rule version + the session the label is ABOUT), `observed_at`, `available_at`
+and a named CERTAINTY. The time rule is one sentence: a D1 label is published at its
+session's CLOSE, so a clock before that close reads the PREVIOUS EXCHANGE session
+(`prior_session`), a clock at or after it reads its own session (`session`), an
+observation dated by session alone reads that session, a clock with no time of day - a
+bare date on an entry, or the midnight market-local stamp a broker file writes - reads the
+previous completed session as `date_only` and is FLAGGED, and a session nobody labelled is
+`unknown` and is pooled into nothing. The walk back is `market_calendar.previous_session`,
+never a calendar day, and both naive and aware stamps land in market-local through
+`journal_trade_shape`'s own coercion. **A date-only fill may never select a midday
+regime.**
+
+`link_theses` links a thesis by SCOPE (the benchmark the row's own ContextRef was measured
+against - `attach_context` runs first because the outcome rows carry no benchmark column)
+and by VALIDITY WINDOW (`created_at` to the horizon's last session close, counted in
+sessions, or `invalidated_at`, whichever is first). Several live theses all link, newest
+first, and none is chosen. `setup_environment_evidence` then answers the one question in
+three populations that are never added up: `opportunity_cells` (every recorded eligible
+example, swing by the favorable-direction rate and day trades by `held_run_score`, cut by
+the D1 label of the session and never by the alert's own `market_environment`),
+`personal_cells` (confirmed-tag trades by the ENTRY context, money once per trade, theta
+and day trades and unconfirmed tags excluded by name) and `thesis_review` (three separate
+verdicts - `market_call`, `setup_held`, `trade_profitable` - never merged into one grade).
+Every cell carries n, distinct sessions, distinct symbols, coverage, the ONE Wilson bound,
+the floor and the family's own baseline, and refuses to LEAD when it is under the floor or
+over `working_lately.CONCENTRATION_LIMIT`.
+
+The backfill (`python -m context_join backfill --since`) is DRY BY DEFAULT and labels only
+what the contemporaneous store establishes; a reconstructed ref is
+`certainty=reconstructed`, flagged, and excluded from every forward claim. Shadow only:
+nothing in this chain reaches a detector, score, alert, watchlist, Focus, the review queue
+or `review_policy.json`. The long form - the three joins that would have been wrong, the
+table of certainties and the day-trade vocabulary trap - is `docs/DESK_INTERNALS.md`
+"10I - two contexts per row, three verdicts per thesis".

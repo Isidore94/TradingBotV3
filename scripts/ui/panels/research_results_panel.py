@@ -28,6 +28,7 @@ from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QDateEdit,
     QFrame,
     QHBoxLayout,
@@ -54,6 +55,12 @@ from ui.widgets.section_header import SectionHeader
 
 #: Where the last choice is remembered. Decision 3 of 2026-09-06.
 RESULTS_SELECTION_KEY = "research_results_selection"
+
+#: Where the By environment choice is remembered (packet WS-10I). A SECOND key,
+#: deliberately: the three-part selection is what every other surface and test
+#: calls `selection()`, and widening that tuple would rewrite a remembered
+#: preference every reader already agrees on.
+RESULTS_ENVIRONMENT_KEY = "research_results_environment"
 
 #: Bot setups x Swing x Recent 20 sessions - the trader's own default.
 DEFAULT_SELECTION = ("bot", "swing", "recent")
@@ -164,6 +171,30 @@ def _mine_columns(sections) -> tuple[tuple[str, str], ...]:
     )
 
 
+#: How each environment reads in the control. The KEYS are the rule's own
+#: labels and are never re-spelled; only the words beside them are for reading.
+ENVIRONMENT_LABELS = {
+    research_results.ENVIRONMENT_ALL: "All environments",
+    "compressed": "Compressed",
+    "trending_up": "Trending up",
+    "trending_down": "Trending down",
+    "mixed": "Mixed",
+    "unknown": "Unknown (unlabelled)",
+}
+
+
+def _valid_environment(value: Any) -> str:
+    """A remembered environment choice, or no cut at all.
+
+    Unrecognised reads as `ENVIRONMENT_ALL`: a label the rule no longer
+    produces must not leave the page permanently filtered to nothing.
+    """
+    text = str(value or "").strip()
+    if text in research_results.ENVIRONMENT_CHOICES:
+        return text
+    return research_results.ENVIRONMENT_ALL
+
+
 def _valid_selection(value: Any) -> tuple[str, str, str] | None:
     """A remembered selection, or None if it is not one this page can show."""
     if not isinstance(value, (list, tuple)) or len(value) != 3:
@@ -248,6 +279,9 @@ class ResearchResultsPanel(QFrame):
         self._selection = _valid_selection(
             project_paths.get_local_setting(RESULTS_SELECTION_KEY)
         ) or DEFAULT_SELECTION
+        self._environment = _valid_environment(
+            project_paths.get_local_setting(RESULTS_ENVIRONMENT_KEY)
+        )
         self._shortlist_rows: list[dict[str, Any]] = []
 
         self.population_buttons: dict[str, QToolButton] = {}
@@ -272,6 +306,20 @@ class ResearchResultsPanel(QFrame):
         for edit in (self.custom_start, self.custom_end):
             edit.dateChanged.connect(self._on_custom_dates_changed)
 
+        # The By environment control (packet WS-10I). ONE page-level control, a
+        # combo rather than a fifth row of buttons: five labels plus "all" is
+        # more than a button strip can carry beside the other three groups, and
+        # the control is a filter, not a population.
+        self.environment_combo = QComboBox()
+        self.environment_combo.setObjectName("ResultsEnvironmentCombo")
+        for key in research_results.ENVIRONMENT_CHOICES:
+            self.environment_combo.addItem(ENVIRONMENT_LABELS.get(key, key), key)
+        index = self.environment_combo.findData(self._environment)
+        self.environment_combo.setCurrentIndex(max(index, 0))
+        self.environment_combo.currentIndexChanged.connect(self._on_environment_changed)
+        self.environment_label = QLabel("")
+        self.environment_label.setObjectName("MutedLabel")
+
         self.freshness_label = QLabel("")
         self.freshness_label.setObjectName("MutedLabel")
         self.status_label = QLabel("")
@@ -281,7 +329,12 @@ class ResearchResultsPanel(QFrame):
         # Every running-text label on this page reads at one measure, left,
         # with the slack on the right (`_reader_measure`). Wrapped, because a
         # capped line that could not wrap would just elide.
-        self._reading_labels = (self.freshness_label, self.section_label, self.status_label)
+        self._reading_labels = (
+            self.freshness_label,
+            self.environment_label,
+            self.section_label,
+            self.status_label,
+        )
         for label in self._reading_labels:
             label.setWordWrap(True)
             label.setAlignment(
@@ -365,11 +418,15 @@ class ResearchResultsPanel(QFrame):
         controls.addWidget(self.custom_start, 0)
         controls.addWidget(self._custom_labels[1], 0)
         controls.addWidget(self.custom_end, 0)
+        controls.addSpacing(12)
+        controls.addWidget(QLabel("By environment"), 0)
+        controls.addWidget(self.environment_combo, 0)
         controls.addStretch(1)
         row = QWidget()
         row.setLayout(controls)
         layout.addWidget(row)
 
+        layout.addWidget(self.environment_label)
         layout.addWidget(self.freshness_label)
         layout.addWidget(self.section_label)
 
@@ -461,6 +518,25 @@ class ResearchResultsPanel(QFrame):
         self.explanation_view.clear()
         self.refresh()
 
+    def _on_environment_changed(self, _index: int) -> None:
+        """A new cut is a new read - on the worker, like every other read here."""
+        chosen = _valid_environment(self.environment_combo.currentData())
+        if chosen == self._environment:
+            return
+        self._environment = chosen
+        try:
+            project_paths.save_local_setting(RESULTS_ENVIRONMENT_KEY, chosen)
+        except Exception:  # noqa: BLE001 - a preference is never worth the page
+            logging.debug("Saving the Results environment failed.", exc_info=True)
+        # A cut change is a CONTEXT change: the open explanation describes a row
+        # that may not be on the page any more (packet G4's rule).
+        self.explanation_view.clear()
+        self.refresh()
+
+    def environment(self) -> str:
+        """Which environment the page is cut to. `all` is no cut."""
+        return self._environment
+
     def _on_custom_dates_changed(self, _value) -> None:
         if self._selection[2] != "custom":
             return
@@ -485,7 +561,10 @@ class ResearchResultsPanel(QFrame):
         if self._worker is not None and self._worker.isRunning():
             self._pending = True
             return
-        selection = self._selection
+        # The chosen environment travels as the FOURTH part of the read's key,
+        # so a payload that comes back for a cut the trader has already changed
+        # is dropped the same way a stale population is (WS-10I).
+        selection = (*self._selection, self._environment)
         window: Any = selection[2]
         if window == "custom":
             window = (
@@ -505,7 +584,8 @@ class ResearchResultsPanel(QFrame):
 
     def _on_loaded(self, payload: object) -> None:
         try:
-            if isinstance(payload, dict) and payload.get("selection") == self._selection:
+            current = (*self._selection, self._environment)
+            if isinstance(payload, dict) and payload.get("selection") == current:
                 self._render(payload["view"])
         finally:
             self._drain()
@@ -521,6 +601,12 @@ class ResearchResultsPanel(QFrame):
     def _render(self, view: research_results.ResultsView) -> None:
         self.freshness_label.setText(view.freshness_line)
         self.freshness_label.setToolTip(view.freshness_line)
+        # The control says what it is claiming: the benchmark, the rule version
+        # and WHICH MOMENT the cut is about (WS-10I). A page cut to `compressed`
+        # that did not say "by the tape the opportunity was observed in" would
+        # leave the reader to assume the wrong one of the two.
+        self.environment_label.setText(view.environment_line)
+        self.environment_label.setToolTip(view.environment_line)
         sections = list(view.sections)
         # ONE short verdict line per kind - the machine's own state and its own
         # reason. The leader, the policy line and the population sentence go in
@@ -661,6 +747,35 @@ def _read_environment_rows(as_of) -> list[dict[str, Any]]:
     return attach_environment(read.rows, date_field=swing_evidence.POLICY_SCANROW_V1.clock_field)
 
 
+def _read_environment_labels() -> dict[str, str]:
+    """`{session: label}` for the chosen benchmark, on the WORKER.
+
+    One small JSONL, mtime-cached by the store itself. The entry-context cut
+    needs the table and nothing else: no trade file, no outcome file.
+    """
+    import d1_environment_store
+
+    return dict(d1_environment_store.labels_by_session())
+
+
+def _read_day_environment_rows(as_of) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """The intraday outcome rows of the lately window, and the label table.
+
+    On the WORKER (packet WS-10I). `held_run_score.read_outcome_rows` STREAMS
+    the ~300 MB outcome CSV and keeps only the window's rows, which is why this
+    is its reader rather than a second pass here. The rows are handed over RAW:
+    `setup_environment_evidence` folds them into episodes and cuts them by the
+    D1 label of their session - never by the `market_environment` the alert
+    stamped at registration, which is a different vocabulary.
+    """
+    import held_run_score
+
+    rows = held_run_score.read_outcome_rows(
+        project_paths.INTRADAY_BOUNCE_OUTCOMES_FILE, as_of=as_of
+    )
+    return list(rows), _read_environment_labels()
+
+
 def _read(selection, window, payload) -> dict[str, Any]:
     """The whole read, on the worker: the snapshot, the journal, and the view.
 
@@ -671,7 +786,10 @@ def _read(selection, window, payload) -> dict[str, Any]:
     a SQLite query over the whole trade history, and a Bot page has no business
     paying for it. Neither population ever renders the other's numbers.
     """
-    population, horizon, _window_key = selection
+    # Three parts or four: the fourth is the By environment cut (WS-10I) and an
+    # older remembered three-part selection means "no cut", never a crash.
+    population, horizon = str(selection[0]), str(selection[1])
+    environment = _valid_environment(selection[3] if len(selection) > 3 else "")
     trades: list[Any] = []
     snapshot = dict(payload) if isinstance(payload, Mapping) else (read_persisted_snapshot() or {})
     if population == "mine":
@@ -681,6 +799,7 @@ def _read(selection, window, payload) -> dict[str, Any]:
     # has no scan date to join on and a day-trade page is a different
     # population; neither pays for a 10 MB read it will not render.
     environment_rows: list[dict[str, Any]] | None = None
+    environment_labels: dict[str, str] | None = None
     if population == "bot" and horizon == "swing":
         try:
             environment_rows = _read_environment_rows(as_of)
@@ -690,6 +809,23 @@ def _read(selection, window, payload) -> dict[str, Any]:
             # built from the snapshot.
             logging.exception("Results: the D1 environment cut could not be read.")
             environment_rows = []
+    elif population == "bot" and horizon == "day":
+        # The day-trade cut is a DIFFERENT read - the intraday outcome log, not
+        # the swing tier file - so it has its own reader and the swing one is
+        # never opened for it.
+        try:
+            environment_rows, environment_labels = _read_day_environment_rows(as_of)
+        except Exception:
+            logging.exception("Results: the day-trade environment cut could not be read.")
+            environment_rows, environment_labels = [], {}
+    elif population == "mine" and environment != research_results.ENVIRONMENT_ALL:
+        # My trades is cut by the environment known AT THE ENTRY, so it needs
+        # the label table and nothing else - no outcome file is opened here.
+        try:
+            environment_labels = _read_environment_labels()
+        except Exception:
+            logging.exception("Results: the environment labels could not be read.")
+            environment_labels = {}
     view = research_results.build_results_view(
         population=population,
         horizon=horizon,
@@ -698,6 +834,8 @@ def _read(selection, window, payload) -> dict[str, Any]:
         journal_trades=trades,
         as_of=as_of,
         environment_rows=environment_rows,
+        environment_filter=environment,
+        environment_labels=environment_labels,
         # No currency control on this page, so no mode is claimed:
         # `resolve_pnl_key` then sums a single-currency selection, sums the
         # converted column when everything converted, and REFUSES a total over

@@ -4362,6 +4362,156 @@ grace, or for a prompt to survive being away.
   disabled by design, and is left red rather than weakened) and
   `tests/test_ws_10c_h1_retester_builder.py` (11 added, including the M5-poll date-roll
   case proven to fail with the `watch_is_stale` exemption removed).
+## 10I - two contexts per row, three verdicts per thesis (2026-09-13, WISHLIST 10I/10K)
+
+### The question, and why it needed a contract rather than a column
+
+The trader keeps two accounts of every decision: what they EXPECTED (the thesis) and what
+the tape was MEASURED to be doing (the environment). WISHLIST 10I asked for those two to
+be connected to the opportunities and the trades without either one contaminating the
+other - "one drillable answer with three populations" - and 10K asked for the environment
+to be measured first and connected afterwards.
+
+The connection is where the errors live, not the measurement. Three of them are the reason
+this is a module and not a join:
+
+* **A label is not available when the session it is about starts.** `d1_environment_v1`
+  reads a session's completed daily bars, so the label for 2026-09-08 exists at 2026-09-08
+  16:00 ET. A 10:35 decision on that session cannot have known it. Handing it that label
+  reads as evidence and is a leak: every cut built on it would be scored with information
+  from after the decision.
+* **One calendar day back is not the previous session.** The fixtures are built around
+  Monday 2026-09-07, Labor Day, precisely because a `- timedelta(days=1)` walk from
+  2026-09-08 lands on a day nobody labelled and turns a measured cell into `unknown`. The
+  walk is `market_calendar.previous_session`.
+* **15:35 ET is 19:35 UTC.** A read that strips the offset decides the close has passed
+  and hands out the session's own label. Both stamps go through
+  `journal_trade_shape._coerce_datetime` - naive ATTACHED, aware CONVERTED - which is the
+  journal's own rule and not a second opinion about the trader's clock.
+
+### The time rule, stated once
+
+`scripts/context_join.py` owns it and nothing else restates it:
+
+| the row's clock | session read | certainty | flagged |
+|---|---|---|---|
+| before that session's 16:00 close | the PREVIOUS exchange session | `prior_session` | no |
+| at or after the close | its own session | `session` | no |
+| an OBSERVATION dated by session alone (`scan_date`) | that session | `session` | no |
+| no time of day - a bare date on an ENTRY, or midnight market-local | the previous completed session | `date_only` | YES |
+| a session nobody labelled | none | `unknown` | YES |
+
+The fourth row is the broker-file case: `journal_statement_import` stamps every fill
+midnight market-local precisely so `journal_trade_shape.is_date_only` can recognise it.
+**A date-only fill may never be given a midday regime** - that would be the desk claiming
+it knows the fill happened after the close.
+
+The text form is what separates row 3 from row 4: `2026-09-08` and `2026-09-08 00:00:00`
+both coerce to midnight, and they are different statements. A scan row's date NAMES the
+session it read completed bars for; a fill's timestamp is a MOMENT, and midnight is the
+one time of day a fill cannot happen at.
+
+### Two refs, never one
+
+`observation_context` and `entry_context` are separate columns and neither overwrites the
+other. An opportunity nobody took has the first and not the second. A trade has both and
+they routinely disagree - that disagreement is the readable part, and blending them would
+destroy the only thing the pair is for. `ContextRef` carries `context_id` (benchmark, rule
+version and the session the label is ABOUT), `observed_at`, `available_at` and the
+certainty. **The certainty belongs to the JOIN, not to the context**, so it is not part of
+the id: a live read and a reconstructed read of the same reading are the same context,
+told apart by the certainty and never by the label.
+
+### A thesis links by scope and window, and none is chosen
+
+`link_theses` links when the row's benchmark scope and the thesis's validity window cover
+the row's observation time. The scope comes from the row's own `ContextRef` - which is why
+`attach_context` runs FIRST - because the tier-outcome rows carry no benchmark column and
+inferring one from the symbol would link a QQQ call to an SPY decision. The window is
+`created_at` to the horizon's last session close (counted in SESSIONS) or `invalidated_at`,
+whichever comes first: a thesis written on Thursday is not evidence about a Tuesday
+decision, and an invalidated thesis stops covering what comes after it while keeping what
+came before - it WAS the stance at the time.
+
+Overlapping theses ALL link, newest first, and the payload carries no `chosen`, `primary`,
+`selected`, `best` or `winner` key. Ambiguous stays ambiguous; the review grades each.
+
+### Three verdicts, three keys
+
+`setup_environment_evidence.thesis_review` answers three different questions and never
+merges them: `market_call` (the benchmark's own later path against the stated stance),
+`setup_held` (the linked opportunities' record) and `trade_profitable` (money, once per
+trade). The case that makes the rule is the common one - **the call was RIGHT and the
+trade LOST**. A single grade over those two facts is worth less than either.
+
+`market_call` is `open` whenever the recorded path has no close at the horizon's last
+session. Not reached, not recorded and not directional are all `open`: a thesis is never
+called wrong because the data stopped.
+
+### What the cells refuse
+
+`opportunity_cells` reports every cell and lets some of them lead. A cell under
+`evidence_stats.MIN_REPORTABLE_N`, or with more than `working_lately.CONCENTRATION_LIMIT`
+of its sample from one name or one session, prints with its refusal in `lead_refusal`. On
+the packet's fixture the best-looking rate on the page - 85% - is thirty rows of one
+ticker, and it is refused; a cell split evenly over two sessions sits at exactly 0.50 and
+stays eligible, because the limit is EXCEEDED and never reached. A `win` column that is
+present and EMPTY is unmeasured, not a loss.
+
+`personal_cells` keeps the grains apart: one trade with two confirmed tags shows in two
+cells and contributes its money ONCE (`duplicate_tag_rows` is the difference, the rule
+`preference_trade_outcomes.trade_level_summary` already owns). Theta, day trades and
+unconfirmed tags are excluded BY NAME with three different reasons and counted in their own
+populations - a sold put is premium, not a swing. An open position's mark is never money.
+A commission keeps the sign the importer gave it.
+
+### The day-trade cut reads a different word
+
+The M5 outcome rows already carry `context_json.market_environment`, stamped at alert
+registration and read by `held_run_score` and the digest's `env_key_of`. **That is not the
+D1 label.** It is a different vocabulary on a different clock answering a different
+question, and the 10I day-trade cut is the D1 label of the row's `trade_date`. Printing
+the two under one heading would be two unrelated words in one column.
+
+### The surface
+
+Research > Results gains a page-level **By environment** control (`ENVIRONMENT_ALL` is the
+default and cuts nothing, so every champion golden is byte-identical). Bot is cut by the
+environment known at OBSERVATION and My trades by the one known at ENTRY, and the control's
+line names the benchmark and the rule version, because `compressed` is a reading under a
+versioned rule and not a word about the weather. Bot x Day gets its own section key and its
+own statistic; a day cell is never a row inside the swing cut. Two populations, two readers,
+both on the Results worker: the day page streams the intraday outcome log and never opens
+the swing tier file.
+
+### Backfill
+
+`python -m context_join backfill --since YYYY-MM-DD` is DRY BY DEFAULT, names the data dir
+and `--apply`, and labels only what the contemporaneous store establishes. Every
+reconstructed ref is `certainty=reconstructed` and flagged, and is kept out of every
+forward claim: the label is the same label, and what makes it different is that nobody
+read it at the time.
+
+**Tests:** `tests/test_ws_10i_context_join.py` (the tester's 23 plus a fixture-calendar
+guard, red before any of this existed at `6e3854aa`) and
+`tests/test_ws_10i_context_join_build.py` (the builder's 9 for the surface seams the
+tester's file does not pin, proven red by restoring the pre-change files).
+
+### The Daily Recap's two labels
+
+WS-DR landed on the sweep branch the same day, so the wiring is here rather than owed.
+`RecapRow` keeps its own `d1_environment` - the label OF the session, which is what WS-ENV
+joined and what WS-DR's tests pin - and gains `observation_context` beside it, which is
+what the decision COULD KNOW. For an intraday row those two differ by one session and the
+difference is the point: a 10:35 alert is labelled with the previous session's tape, and
+the Environment cell's tooltip still names the session's own label so nothing is hidden. A
+matched decision carries `entry_context` from the preference report's `trade_opened_at`,
+and the cell prints `observed → entered`; an unmatched opportunity prints one label,
+because there is no fill and there is nothing to invent.
+
+**Reopen trigger.** A second benchmark is cut on; the trader asks for the thesis review on
+a screen of its own; a recap row's own `d1_environment` is reconciled with the observation
+context (a lead decision, not a builder's).
 ## The sentences CLAUDE.md moved here on 2026-09-13 (WISHLIST sweep docs pass)
 
 `CLAUDE.md` had grown to 52.0 KB against its ~45 KB limit (the 0.25 memory section and the sweep's rule lines). The 34 longest bullets were shortened to their seams and each one's ORIGINAL text is reproduced below, verbatim and unedited, in `CLAUDE.md` order. **Nothing was deleted.** Where a bullet below and the current `CLAUDE.md` differ, the shortened rule in `CLAUDE.md` is the binding one and this is the full account behind it; the incident sections elsewhere in this file remain the deeper record. The one wording change beyond shortening: the auto-tagging rule now names FOUR lanes (WS-10E's `trader_note` lane), the story under "The four auto-tagging lanes".

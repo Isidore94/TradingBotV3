@@ -737,7 +737,12 @@ EVENT_CAUSES = ("lost_coverage", "corrected_data", "window_rollover", "new_outco
 #: What the day-trade statistic IS, spelled once. NAME-SELECTION evidence -
 #: which name to look at - and never captured P&L; the snapshot carries no P&L
 #: field for it and a test asserts the dataclass has none.
-HELD_RUN_STATISTIC_NAME = "held_run_score (P(held 30m) x trimmed MFE_R)"
+#:
+#: **The definition lives in `held_run_score`**, the module that computes the
+#: statistic (packet WS-10I), and is imported here rather than restated: the
+#: string is printed on four surfaces and two copies of it would agree only
+#: until somebody edited one.
+from held_run_score import HELD_RUN_STATISTIC_NAME  # noqa: E402 - the constant block's own seam
 
 #: The one sentence that says the leader is observational. Printed, never
 #: corrected away: K cells were looked at and the best of K was named.
