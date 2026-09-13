@@ -3441,3 +3441,107 @@ session's real close); the daily source stops being Yahoo; or a second writer of
 per-symbol CSV appears. The durable Parquet mirror (`_persist_durable_daily_bars`) still
 receives the unfiltered merged frame - it is outside the FC1 yes and is an open question for
 the trader, not a silent edit.
+
+## CH - the bars exist, the view is a window (2026-09-13, WISHLIST sweep)
+
+### The complaint, and what it actually was
+
+The trader's sentence is *"200 candles is not enough"* (WISHLIST 10H). The reflex reading is
+"fetch more history", and it is wrong. `chart_snapshot.load_d1_bars` has always read the
+**full** daily history out of the durable parquet store, and `build_d1_snapshot` has always
+computed SMA50/100/200, EMA8/15/21 and the AVWAPE bands over that whole history **before**
+slicing a display tail. The bars were already there. `D1_DEFAULT_SESSIONS = 90` was the
+slice, and the slice was the complaint.
+
+So this packet bought about four years of D1 history for one longer list slice of bars that
+are already in memory, and **not one additional provider request**. The warm-up the trader
+worried about ("enough warm-up before the visible span for EMA/LRSI/AVWAP") was never at
+risk - it is what the module already did - and the golden fixture proves it: every overlay's
+last 90 values are byte-identical to what the 90-session chart produced before the change.
+
+### The two numbers, and why they are two
+
+- `D1_HISTORY_SESSIONS = 1000` - how far back the payload REACHES.
+- `D1_DEFAULT_SESSIONS = 90` - how many bars the chart OPENS on.
+
+`CandleChart.set_data(..., initial_view_sessions=N)` holds every bar and frames the tail, so
+**panning left reveals the older bars with no request of any kind**. `setClipToView(True)` +
+`setDownsampling(auto=True, mode="peak")` were already set on every chart, with a comment
+saying they resolve to a no-op at 90-500 bars and "earn their keep when a longer history is
+zoomed into"; this is that. Measured offscreen at 1,000 candles with 14 overlays: `set_data`
+24-31 ms, `grab()` 15-22 ms - a frame, not a freeze.
+
+The history target is a TARGET, capped by what the store holds. The payload carries
+`oldest_available` (the oldest bar DRAWN) and `history_truncated` (the store has more behind
+it). 300 stored sessions report 300 and `False`: there is nothing further left to pan to, and
+a strip that claimed otherwise would invite the trader to drag at a wall.
+
+### Three things that would have been wrong
+
+**A y-range from the payload.** The fixture walks from about 20 to about 197 on purpose. The
+last 90 sessions live between 163.89 and 196.74; the 1,000-bar payload starts at 39.30. A
+scale taken from the payload flattens today's candles into a line - the same chart the
+trader already had, only wider and now useless. The y-range comes from the VISIBLE window.
+The log/linear decision still asks EVERY bar, though: a non-positive bar off the left edge is
+one pan away, and flipping the scale under the trader mid-drag is worse than opening linear.
+
+**Levels from the payload.** `chart_levels.horizontal_levels` filters store levels to the
+chart's price range and then applies a clutter budget per bucket. Handed a four-year range it
+admits four-year-old levels, and they compete for that budget with the lines the trader can
+see. So `build_d1_levels` gained `price_range_bars` and `ChartDataService` passes the INITIAL
+VISIBLE window: today's behaviour, exactly (lead ruling, 2026-09-13). **Panning left does not
+recompute levels** - the payload is fixed at build time and the paint path reads no caches.
+
+**A provider request sized off the history target.**
+`SymbolSnapshotWidget._start_d1_backfill` asks for `max(260, ceil(sessions * 365 / 252))`
+calendar days when the store looks stale. Wiring 1,000 sessions into that field would make
+every click on a stale symbol a 1,449-day Yahoo request. It is a repair for one symbol, not a
+history import - the store is filled by the scan pipeline - so it still sizes off the host's
+`d1_sessions` (260 compact, 754 for Chart Review) and a test caps it at 800.
+
+### M5: the button, the merge, and the view
+
+Two sessions on open, as always; **Load older** adds two, up to ten per symbol per desk
+session. It reads the same in-memory `bot.m5_chart_bars(max_sessions=n)` the chart already
+used - documented as a cache read that never fetches - so there is no new provider door. The
+pan-left trigger the packet allowed was deliberately NOT wired: a pan that fetches is a fetch
+on the paint path, and a test arms the fake bot to raise on any call during a `grab()`.
+
+The chunks overlap by construction (a 4-session read contains the 2-session one), so the
+merge is a CUT at the fresh chunk's first bar, not a set union: no bar can appear twice, the
+order is the order it was already in, and a bot whose cache has since shrunk cannot take
+history off a chart that has it.
+
+**"Viewport preserved" means the same CANDLES, not the same index range.** Older bars arrive
+on the LEFT, so restoring `(100, 140)` verbatim after 156 bars are prepended slides the
+trader a session and a half back through their own chart. `CandleChart.visible_bar_span`
+records the first and last candle's `dt` plus the y-range; `restore_bar_span` puts those
+candles back and returns False rather than guess if either is gone.
+
+A raising provider costs the older bars and never the chart: the extra sessions roll back to
+what the chart actually reached, the drawn bars stay drawn, and the button reads `older bars
+unavailable`. A result for a symbol the trader has left is dropped twice over - the service
+already keeps only the newest request per symbol, and the render path checks the symbol - and
+a symbol switch resets the count to two.
+
+### What was not built, and why
+
+**H1/H4 (packet item 3).** The desk draws neither. `bounce_bot_lib/legacy.py` builds
+completed H1 bars and `master_avwap_lib/legacy.py:28422` aggregates H4 by session; both are
+detector inputs, and neither reaches a chart, a widget or a payload. (The packet pointed at
+`:28105`, which is not the resampler - the code is the fact.) The packet's own instruction
+was "if the desk does not draw H1/H4 today, say so and stop at D1/M5". A 500-bar target is
+only meaningful once such a chart exists.
+
+**The centre pane's own provenance line.** Item 4 asks for the oldest date in "the chart's
+existing provenance strip". Exactly one exists - Chart Review's `provenance_state`, which now
+appends `D1 back to <date>` and `(more behind)` when truncated. The centre Visual Alert
+Review pane has no strip to add to; giving it one is a layout decision for the trader, not a
+wiring one, and the arm bar's position rule says not to move that furniture uninvited.
+
+### Reopen trigger
+
+An H1 or H4 CHART appears on the desk (then item 3's 500-bar target becomes real work); the
+daily store stops being the source of D1 bars; or the trader asks for the oldest-date readout
+on the centre pane as well.
+
