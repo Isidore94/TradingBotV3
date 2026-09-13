@@ -702,6 +702,42 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **Last scan, latest input bar and shown report are three clocks (WS-10A, WISHLIST 10A,
+  2026-09-13, sweep branch).** Every Master AVWAP scan writes `master_avwap_scan_manifest.json`
+  and one append-only line to `master_avwap_scan_manifest_history.jsonl`
+  (`scripts/master_avwap_lib/scan_manifest.py`, `project_paths` constants, temp + rename, shared
+  home), called by `runner.run_master` on BOTH the success and the failure branch (the
+  `legacy.py` diff is ZERO). It records when the scan ran (`started_at` / `finished_at`, aware
+  market-local), how fresh its INPUTS were (`latest_input_bar_session` + `preview_bar_used`,
+  asked ONCE of WS-FC1's `daily_bar_cache.last_completed_session`, so a forming bar is a
+  labelled preview and never moves the session), and what it published (`outputs`:
+  `priority_setups` rows, `theta_puts` = put + PCS rows, `d1_watchlist` symbols), plus
+  `universe_size` / `symbols_fetched`, per-source counts and WS-FC1's two drop counters.
+  `status` is `ok` only when the scan reached its whole universe, `partial` when it RETURNED
+  having fetched fewer, `failed` when it raised - and a failed scan touches no output file, so
+  the last good report keeps its bytes and its mtime. `scan_manifest.freshness_line` builds one
+  sentence (`Scan ok 12:31 - inputs through Thu 09-10 (D1 complete) - shown: 12:31 report`,
+  `Scan FAILED 13:02 - showing 12:31 report (stale)`, `Scan partial 12:31 (940 of 1097
+  symbols) - ...`, `... inputs: today preview ...`, `Scan: not recorded yet - no report`,
+  `inputs: no completed session recorded`), rendering each stamp in the offset it CARRIES; the
+  Setups status row shows it via `_ScanFreshnessWorker` off the Qt thread on the existing
+  `refresh_from_reports` path (two `stat` calls decide whether either file moved; nothing parsed
+  on paint), and System Health prints the same string as check `master_scan_freshness` (failed
+  = unhealthy, partial = degraded, no manifest = unknown, never green; its two paths are named
+  parameters of `build_operations_audit` so a sandbox audit resolves nothing to the shared
+  home). One dated copy per publishing scan lands in
+  `%LOCALAPPDATA%\TradingBotV3\diagnostics\scan_reports\<YYYY-MM-DD>_<HHMM>.json` with
+  `{symbol, side, bucket}` rows, capped at `REPORT_COPY_RETENTION_SESSIONS` (30) counted as the
+  30 most recent DISTINCT dates; a failed scan gets no copy. `cd scripts && python -m
+  master_avwap_lib.scan_replay --symbol X --session YYYY-MM-DD` replays one session read-only,
+  prints `DATA_DIR` first, one line per checkpoint (open `<11:00`, midday `[11:00, 15:00)`,
+  final hour `[15:00, 16:00)`, close `>= 16:00`, in EXCHANGE time - the Pacific desk's stamps
+  are converted so a 09:58 PT snapshot files under midday, the builder's reading), and names
+  first eligibility, first publication and the delay in minutes - `no recorded snapshot` /
+  `delay unmeasured` where nothing was kept, never a reconstruction. Tests:
+  `tests/test_ws_10a_scan_freshness.py` (20), `tests/test_ws_10a_scan_freshness_builder.py`
+  (7). Rules: DESK_INTERNALS "10A - last scan, latest bar and shown report are three clocks";
+  fields: `docs/BROKER_ADAPTERS.md`.
 - **The theta picks are recorded and graded (WS-TH, WISHLIST item 6, 2026-09-13, sweep
   branch).** `scripts/theta_pick_tracker.py` records one row per `(symbol, scan_date,
   play_type)` in `theta_picks.jsonl` (`project_paths.THETA_PICKS_FILE`) from the RUNNER right
@@ -919,6 +955,27 @@ They are evidence and must not be loaded as context.
 
 ### Charts, review, alerts, and phone surfaces
 
+- **The wrong side of the AVWAPE is shown and never hidden (WS-WS, WISHLIST item 9,
+  2026-09-13, sweep branch).** `scripts/avwape_side.py` is the one rule, pure and shared:
+  `wrong_side(side, close, avwape)` is True for a LONG under the current anchor or a SHORT over
+  it, with a tolerance of 0 (a close exactly on the line is the right side) and `None` whenever
+  the side or a number is missing, because an unknown is never "wrong". The scan rows the desk
+  reads carry neither price (`current_close` / `current_avwape` are tracker `feature_snapshot`
+  fields, `legacy.py:5132-5133`; 0 of 435 live feed rows carry them), so `read_row` prefers the
+  two numbers when a caller has them and otherwise reads `current_band_zone` (top level or
+  `setup_candidate.trigger`, never `favorite_zone`), and `tooltip_text` never prints a price it
+  did not read (`LONG below AVWAPE 412.50 (close 409.10)` when priced, `LONG below AVWAPE (band
+  zone LOWER_1 to VWAP)` from a zone). `ui/widgets/setup_delegate.py` paints a `wrong side` chip
+  in the `caution` token after the bucket chip (`_chip` returns its rect and takes `after=`;
+  `sizeHint` asks for the width because `fit_columns` measures the delegate; below
+  `_MIN_CHIP_WIDTH` - the compact profile's 96 px bucket cell - the chip is not drawn and the
+  tooltip still carries it), and `autopilot_core.render_away_report` appends ` [wrong side]`
+  after the symbol and counts them under the list (`N wrong side of the anchor (shown, never
+  hidden ...)`); a raising reader costs the tag, never the digest. On a copy of the 2026-09-11
+  feed: 342 right, 93 wrong, 0 unreadable. Display only: no detector, score, gate, alert,
+  watchlist, Focus or `review_policy.json` change, nothing re-ordered or filtered - hiding a
+  wrong-side row, the previous anchor, and the other surfaces (M5 list, chart review, Focus)
+  stay the trader's open questions. Tests: `tests/test_ws_ws_wrong_side.py` (58).
 - **The chart's bars and the chart's view are two different numbers (WS-CH, WISHLIST 10H,
   2026-09-13, sweep branch).** `chart_snapshot.D1_HISTORY_SESSIONS` (1,000, about four NYSE
   years) is how far back a daily payload REACHES and `D1_DEFAULT_SESSIONS` (90) is how many bars
@@ -2377,6 +2434,17 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   the chart, levels computed for the opening window, **Load older** on M5 (+2 sessions, cap 10,
   view kept by candle identity), the provenance strip's `D1 back to`. H1/H4 not drawn by the
   desk, so not built. Suite 7410 green, ruff clean, smoke 7/7, selftest 75/75. Gate #107.
+- **WS-WS (WISHLIST item 9) - the wrong side of the AVWAPE is shown, never hidden**, branch
+  `claude/ws-ws-wrong-side` `7b8628d5`: `scripts/avwape_side.py` (one rule, price or band-zone
+  basis - the scan rows carry no `current_avwape`), the amber chip after the bucket chip, the
+  ` [wrong side]` digest tag and count; 93 of 435 live rows on 2026-09-11. Suite 7461 green, ruff
+  clean, smoke 7/7, selftest 75/75. Gate #108.
+- **WS-10A (WISHLIST 10A) - three clocks on the scan**, branch
+  `claude/ws-10a-scan-freshness-build` `c258f7a8`: `master_avwap_lib/scan_manifest.py` (the
+  manifest, its history line, dated report copies capped at 30 dates, `freshness_line`), the
+  Setups status row and System Health check `master_scan_freshness`, and the read-only
+  `scan_replay` CLI with four exchange-time checkpoints; `legacy.py` diff zero. Suite 7430
+  green, ruff clean, smoke 7/7, selftest 75/75. Gate #109.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
