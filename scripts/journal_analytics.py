@@ -6,7 +6,7 @@ import logging
 import math
 import re
 from collections import defaultdict
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 

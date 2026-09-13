@@ -3079,9 +3079,47 @@ incident sections elsewhere in this file remain the deeper record.
 
 - **A VETO retires the chart, a CLAIMED like ADVANCES it, a QUICK like and a NOTE move nothing** (trader, 2026-09-04). A rail veto uses its own verb (`vetoRetireRequested` → `_retire_after_veto`) and writes ONE row; the "✕ Not today" button writes an uncoded row and opens the note box. A quick like is `likeRecorded` → `_after_like`; a claimed like is `likeAdvanceRequested` → `_advance_after_like` → `_advance_review_queue`; an advance parks nothing and drops nothing. Both write `like_advance` through `_record_like_advance` because `review_learning.TAKE_ACTIONS` keys on it. "Veto D1 — but M5 today" writes a veto row and emits a REQUEST; the panel places (first), then retires (second) through the box-free verb.
 
-### The three auto-tagging lanes, long form
+### The four auto-tagging lanes, long form
 
-- Auto-tagging has three lanes that never compete and are ordered by LANE, never confidence: `journal_analytics.AutoTagger` (which setup, from the scanner's own files), `journal_trade_shape` (facts from the trade's own timestamps and legs), and `trader_capture` (what the trader already SAID inside the trade's own window, outranking every fuzzy source, a rejection prefixed `vetoed:` / `passed:`). No tag is ever derived from the outcome; unmeasurable emits NO tag; `context_row_id` is a pointer, and plan.md P5.3/P5.4 own the canonical opportunity id. `preference_trade_outcomes` shows its match confidence on every row or says "no match".
+- Auto-tagging has four lanes that never compete and are ordered by LANE, never confidence: `trader_capture` (what the trader already SAID inside the trade's own window, outranking every other source, a rejection prefixed `vetoed:` / `passed:`), then `trader_note` (WS-10E's Market Journal lane), then `journal_analytics.AutoTagger`'s scanner-file lane (which setup, from the scanner's own files), then `journal_trade_shape` (facts from the trade's own timestamps and legs). No tag is ever derived from the outcome; unmeasurable emits NO tag; `context_row_id` is a pointer, and plan.md P5.3/P5.4 own the canonical opportunity id. `preference_trade_outcomes` shows its match confidence on every row or says "no match".
+
+**WS-10E - the note lane** (WISHLIST 10E, built 2026-09-13). The Market Journal has held
+the trader's own written setup claims since R10.H and no lane read one: `grep
+market_journal scripts/journal_analytics.py` returned nothing. A sentence typed about a
+name while the trade was open reached the Journal's Tags column by no path at all.
+
+- **The window is the trade's OWN, with one trading session of margin before the open.**
+  `AutoTagger.note_window_for` walks `market_calendar.previous_session`; the write time
+  compared against it is the entry's `created_at`, because the `EvidenceLedger` overwrites
+  `session_date` with the session of the APPEND and that answers a different question. A
+  **date-only broker fill has no intraday window** (`journal_trade_shape.is_date_only`) and
+  the verdict is `unmeasured`, never a tag.
+- **The lane matches a CLAIM, never a mood.** The vocabulary is `setup_docs.SETUP_DOCS` -
+  the encyclopedia the desk already keeps - compiled into whole-token phrase patterns from
+  each family's key and its label. A single-token phrase is DROPPED, so `general` can never
+  tag a trade because the trader wrote "general weakness". The candidate carries
+  `match_basis = note:<entry_id>` and the `span` quoted verbatim out of the entry.
+- **Side comes from the note's OWN words.** A note whose words state the opposite side
+  never matches (matching on the ticker alone is exactly what the rule forbids); a
+  side-silent note matches either, because silence is not a contradiction.
+- **Confidence 0.88 / 0.84** - below the capture lane's 0.90/0.95 and above the scanner
+  lane's observed ceiling (P6a's histogram: tracker + same day + same side is 0.72) - so
+  `journal_bulk_tag` picks it up under the same 0.70 threshold with no change to its pick
+  rule. `JournalStore.apply_provisional_tags`' refusal to overwrite a confirmed tag is
+  untouched and pinned by a test.
+- **THREE verdicts and no fourth**, stored on the trade as `note_lane_json` by every
+  `refresh_auto_tags` and printed by `journal_analytics.format_note_lane_line`: `note lane:
+  <setup> from note <id> "<span>"`, `note lane: no explicit claim in N candidate note(s)`,
+  `note lane: unmeasured (date-only fill)`. Stored rather than re-derived because the
+  Journal's Trades detail must not open the Market Journal ledger on the Qt thread.
+- **Tag Week's `From` column is COMPARED, never flagged.** `note_lane_tag` against the
+  row's own `setup_tags`, so the mark stops claiming a provenance the tag no longer has the
+  moment the trader edits it, and a confirmed row is never marked.
+- The advisory package gains `trader_notes` (id, market-local write time, text, side words)
+  and `deterministic_note_lane`, so the model cites `note:<id>` in AI1's `sources` and is
+  correcting an answer rather than inventing one. Nothing in that path writes a tag.
+- Tests: `tests/test_ws_10e_note_tags.py` (13), including a grep-guard over every callable
+  named `*note*` in `journal_analytics` proving the lane's inputs reach no outcome field.
 
 ### A broker file is authoritative for money, long form
 
