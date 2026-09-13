@@ -737,6 +737,117 @@ def test_the_chart_host_docks_the_card_and_keeps_a_give_a_read_button(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# ADDED BY THE BUILDER. Two seams the tester's file names but does not drive:
+# the host BUTTON (not just its presence) and the 10:00 card's second section as
+# a widget (not just `build_task`'s answer). Both existed only as code paths
+# nothing clicked, which is the state a green suite is worst at noticing.
+# ---------------------------------------------------------------------------
+
+
+def test_the_give_a_read_button_actually_opens_the_card(tmp_path):
+    """Presence is not reachability. The button was asserted to EXIST; this
+    clicks it and checks a card the trader can type into comes up - and that it
+    is a manual slot, not a scheduled one waiting to be answered."""
+    from ui.widgets.alert_chart_review import AlertChartReview
+
+    review = AlertChartReview(dock_arm_bar=True)
+    review.show()
+    _app.processEvents()
+
+    button = [
+        widget
+        for widget in review.findChildren(QPushButton)
+        if "give a read" in widget.text().strip().lower()
+    ][0]
+    button.click()
+    _app.processEvents()
+
+    card = review.mentor_card
+    assert card.isVisible(), "the manual door opens the card"
+    assert card._slot is not None
+    assert card._slot.kind == "manual", "nobody asked for this one"
+    review.close()
+
+
+def test_the_ten_oclock_card_asks_only_the_missing_fields_and_files_what_was_answered(tmp_path):
+    """The second section as the trader meets it.
+
+    `build_task` is tested above as a function; this drives the WIDGET, because
+    the combo that files an answer and the combo that files nothing are the same
+    widget and only one of them may write. A field the trader never touched must
+    stay unasked - which is why the combo opens on "-" and not on whatever state
+    happens to sit at index 0."""
+    import trade_mentor_schedule as schedule
+    import trade_mentor_trade_check as check
+    from PySide6.QtWidgets import QComboBox
+
+    store = _store(tmp_path)
+    _cover(store)
+    _seed_trade(store, "T1", "AAPL")
+    store.save_trade_annotation("T1", setup_tags="ORB", notes="broke the opening range")
+    store.save_risk_fields("T1", planned_stop=181.40)
+
+    journal = _journal(tmp_path)
+    clock = _Clock(_pacific(NORMAL_SESSION, 10, 6, 12))
+    card = _card(tmp_path, journal, clock)
+    ten = [s for s in schedule.slots_for_session(NORMAL_SESSION) if s.scheduled_at.hour == 10][0]
+    card.show_slot(ten)
+    card.set_trade_check(check.build_task(store, NORMAL_SESSION), store=store)
+
+    # Thesis, stop and setup are all recorded, so exactly one question is asked.
+    assert list(card._answer_inputs) == ["T1"]
+    assert list(card._answer_inputs["T1"]) == ["target"]
+    assert card.trade_check_box.isVisible()
+    assert card.save_answers_button.isVisible()
+
+    combo, text_input = card._answer_inputs["T1"]["target"]
+    assert isinstance(combo, QComboBox)
+    assert combo.currentData() == "", "an untouched field files nothing"
+    assert card.save_trade_check()["ok"] is False
+
+    combo.setCurrentIndex(combo.findData(check.ANSWER_NO_FIXED_TARGET))
+    text_input.setText("ran it to the close")
+    result = card.save_trade_check()
+
+    assert result["ok"] is True and result["fields"] == 1
+    rows = {row["field"]: row for row in check.recalled_fields(store, "T1")}
+    assert rows["target"]["state"] == check.ANSWER_NO_FIXED_TARGET
+    assert rows["target"]["text"] == "ran it to the close"
+    assert rows["target"]["value"] is None
+    assert rows["target"]["recalled_after_session"] is True
+    assert rows["target"]["recorded_at"] == _pacific(NORMAL_SESSION, 10, 6, 12).isoformat()
+    # Asked and answered: the next morning does not ask again.
+    assert check.build_task(store, NORMAL_SESSION).trades == ()
+
+
+def test_an_ordinary_hour_carries_no_leftover_trade_questions(tmp_path):
+    """A stale question saved against the wrong morning is the one way this
+    section could write a falsehood, so the 11:00 card CLEARS it rather than
+    merely hiding it."""
+    import trade_mentor_schedule as schedule
+    import trade_mentor_trade_check as check
+
+    store = _store(tmp_path)
+    _cover(store)
+    _seed_trade(store, "T1", "AAPL")
+
+    journal = _journal(tmp_path)
+    card = _card(tmp_path, journal, _Clock(_pacific(NORMAL_SESSION, 10, 6, 12)))
+    ten = [s for s in schedule.slots_for_session(NORMAL_SESSION) if s.scheduled_at.hour == 10][0]
+    card.show_slot(ten)
+    card.set_trade_check(check.build_task(store, NORMAL_SESSION), store=store)
+    assert card._answer_inputs
+
+    eleven = [s for s in schedule.slots_for_session(NORMAL_SESSION) if s.scheduled_at.hour == 11][0]
+    card.show_slot(eleven)
+
+    assert card._answer_inputs == {}
+    assert not card.trade_check_box.isVisible()
+    assert not card.save_answers_button.isVisible()
+    assert card.save_trade_check()["ok"] is False
+
+
+# ---------------------------------------------------------------------------
 # Item 4 - the 10:00 card's second section
 # ---------------------------------------------------------------------------
 
