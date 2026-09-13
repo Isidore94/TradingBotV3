@@ -410,13 +410,20 @@ def test_the_bucket_chip_itself_survives(app):
     near = QColor(theme.color("near"))
     assert _has_exact(wrong, near) > 0
     assert _has_exact(right, near) > 0
-    # The bucket chip is drawn FIRST, at the same left edge: the head of the
-    # cell is identical and only the tail differs.
-    head = BUCKET_CELL.width() // 3
+    # The bucket chip is drawn FIRST and the second pill starts a gap past it,
+    # so the WHOLE bucket-chip region is pixel-identical on both rows. The
+    # region is measured from the delegate's own metrics, never guessed: with
+    # the font database an offscreen suite actually gets (see DESK_INTERNALS
+    # "SX"), a third of the cell can be well past the end of the first chip.
+    from ui.widgets import setup_delegate as delegate_module
+
+    view, _model, _delegate = _table(app, [])
+    chip_end = delegate_module._PAD + delegate_module._chip_width(view.font(), "Near")
+    assert chip_end < BUCKET_CELL.width(), "the fixture cell fits the bucket chip"
     assert all(
         wrong.pixel(x, y) == right.pixel(x, y)
         for y in range(BUCKET_CELL.height())
-        for x in range(head)
+        for x in range(chip_end)
     ), "the wrong-side chip is drawn AFTER the bucket chip, never over it"
     assert wrong != right, "and it IS drawn"
 
