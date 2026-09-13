@@ -1268,6 +1268,20 @@ class FocusPickStore:
             # which is the safe direction to fail.
             pass
 
+    def shared_watchlist_path(self, side: object, category: object = "m5") -> Path:
+        """The plain watchlist file this store injects into for one side.
+
+        Public because a caller that needs to reason about the shared lists -
+        packet WS-10B's AWAY staging asks the auto-populate queue to skip names
+        already on them - must ask the store that owns the injection rather
+        than re-deriving the path from `project_paths`. A test store and the
+        live store then answer differently, which is the point: a derived
+        constant would have sent a hermetic test at the real `longs.txt`.
+        """
+        return self._shared_paths[normalize_focus_category(category)][
+            normalize_focus_side(side)
+        ]
+
     def auto_pick_markers(self) -> dict[str, dict]:
         return dict(self._auto_picks)
 

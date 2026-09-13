@@ -167,6 +167,12 @@ def desk(tmp_path, monkeypatch):
         ignored_symbols_path=tmp_path / "ignored.json",
         parked_symbols_path=tmp_path / "parked.json",
         review_events_path=tmp_path / "alert_review_events.jsonl",
+        # WS-10B (2026-09-12): AWAY now STAGES the board's eligible rows into
+        # the auto-populate queue instead of doing nothing, so this fixture's
+        # AWAY leg touches that file. Pointed at tmp for the reason every other
+        # path here is - the docstring above already promised it was hermetic.
+        # No assertion in this file changed.
+        auto_pick_pending_path=tmp_path / "auto_pick_pending.json",
     )
     monkeypatch.setattr(made, "_alerts_may_sound", lambda: False)
     monkeypatch.setattr(made, "_review_movers_only", False, raising=False)
