@@ -419,7 +419,16 @@ SCOPE_BUDGET_WEIGHTS = {
     "walkaway": 1,
     "setup_performance": 1,
     "market_journal": 1,
-    "preference_to_trade": 1,
+    # WS-AI1. Weight 2 and it costs the other scopes NOTHING: the allocator caps
+    # a scope's allocation at what it NEEDS and hands the surplus straight back
+    # (`_allocate_scope_budgets`), and this section is bounded at
+    # `PREFERENCE_SECTION_MAX_CHARS` with at most `PREFERENCE_EXAMPLE_LIMIT`
+    # examples, so it cannot grow into its share. Weight 1 would have given it a
+    # base share of 80,000 x 1/12 = 6,666 chars against a MEASURED 7,668 on the
+    # live report (838 statement rows, 136,720 bytes on disk, 2026-09-11) - so
+    # it would have depended on surplus every night, and surplus is handed out
+    # to the heaviest scopes first.
+    "preference_to_trade": 2,
 }
 
 #: Below this a grant cannot carry anything a reader could use, so the source
@@ -1028,6 +1037,25 @@ def _preference_report_file() -> Path:
 #: nothing about which ones are interesting.
 PREFERENCE_EXAMPLE_LIMIT = 20
 
+#: Character ceiling on the whole encoded section - the package's OWN per-source
+#: cap, so this section is bound by the same rule every other source is.
+#: MEASURED on a read-only copy of the live report (838 statement rows, 136,720
+#: bytes on disk, 2026-09-11): the section encodes to **7,668 chars**, 48% of
+#: this cap and 9.6% of `MAX_TOTAL_EVIDENCE_CHARS`. A 17.8x reduction on the
+#: file it reads, and the reduction does not grow with the file: the counts are
+#: fixed-size and the examples are capped. The loop below is the backstop for a
+#: pathological report, and it gives way by dropping the OLDEST examples -
+#: never a count, never the coverage.
+PREFERENCE_SECTION_MAX_CHARS = MAX_SOURCE_CHARS
+
+#: Ceiling on ONE example's free text. The bound belongs on the ROW as well as
+#: on the section: `statement` is the only unbounded field in the report (the
+#: trader's own words, or a note copied out of the market journal), so a single
+#: long one could push the section over a cap that 20 ordinary rows sit well
+#: inside. It binds nothing on the live report today - every statement there is
+#: shorter than this - which is exactly when a guard is worth adding.
+PREFERENCE_STATEMENT_CHARS = 120
+
 #: The columns an example carries out of the ST5 report. `journal_r` and
 #: `journal_net_pnl` are here because the section's whole subject is what
 #: happened; they are NOT in the selection key, and gate the packet's rule: a
@@ -1120,40 +1148,100 @@ def preference_to_trade_section(
     examples = [
         {
             "row_id": row["_row_id"],
-            **{column: row.get(column, "") for column in PREFERENCE_EXAMPLE_COLUMNS},
+            **{
+                column: _preference_cell(column, row.get(column, ""))
+                for column in PREFERENCE_EXAMPLE_COLUMNS
+            },
         }
         for row in ordered[:PREFERENCE_EXAMPLE_LIMIT]
     ]
 
     from preference_trade_outcomes import TRADE_WINDOW_NOTE
 
+    def _build(rows_shown: list[dict[str, Any]]) -> dict[str, Any]:
+        return _preference_payload(
+            path=path,
+            reference=reference,
+            window_note=TRADE_WINDOW_NOTE,
+            n_statements=len(rows),
+            matched=len(matched_trade_ids),
+            unmatched=len(unmatched),
+            journal_unavailable=journal_unavailable,
+            window_open=window_open,
+            no_match_after_window=no_match_after_window,
+            examples=rows_shown,
+        )
+
+    # The cap is a SIZE rule and it drops from the END, which is the oldest
+    # example - the same direction the selection already ran in. The counts and
+    # the coverage never shrink: they are the answer, and the examples are the
+    # illustration. `examples_note` states K of N either way, so a reader is
+    # never left to assume the file held only what it was shown.
+    section = _build(examples)
+    while len(examples) > 1 and _encoded_size(section) > PREFERENCE_SECTION_MAX_CHARS:
+        examples = examples[:-1]
+        section = _build(examples)
+    return section
+
+
+def _preference_payload(
+    *,
+    path: Path,
+    reference: str,
+    window_note: str,
+    n_statements: int,
+    matched: int,
+    unmatched: int,
+    journal_unavailable: int,
+    window_open: int,
+    no_match_after_window: int,
+    examples: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """One encoding of the section. Called repeatedly as the cap shrinks it.
+
+    The counts and the coverage are IDENTICAL at every example count - only
+    `examples` and the K in `examples_note` move - so the size rule can never
+    change what the section claims about the trader's record.
+    """
     return {
         "schema_version": "ai_preference_to_trade_v1",
         "source_file": str(path),
         "as_of": reference,
-        "window": TRADE_WINDOW_NOTE,
-        "n_statements": len(rows),
-        "n_trades_matched": len(matched_trade_ids),
-        "n_trades_unmatched": len(unmatched),
+        "window": window_note,
+        "n_statements": n_statements,
+        "n_trades_matched": matched,
+        "n_trades_unmatched": unmatched,
         "coverage": {
             "journal_unavailable": journal_unavailable,
             "window_open": window_open,
             "no_match_after_window": no_match_after_window,
         },
         "coverage_note": (
-            f"{len(rows)} statement(s); {len(matched_trade_ids)} distinct trade(s) "
-            f"matched inside {TRADE_WINDOW_NOTE}; of the {len(unmatched)} statement(s) "
-            f"with no trade, {window_open} are still inside their window, "
-            f"{no_match_after_window} closed without one, and {journal_unavailable} "
-            "carry no match basis at all. A statement counts once; a trade named by "
-            "two statements counts once."
+            f"{n_statements} statement(s); {matched} distinct trade(s) matched inside "
+            f"{window_note}; of the {unmatched} statement(s) with no trade, "
+            f"{window_open} are still inside their window, {no_match_after_window} "
+            f"closed without one, and {journal_unavailable} carry no match basis at "
+            "all. A statement counts once; a trade named by two statements counts once."
         ),
         "examples": examples,
         "examples_note": (
-            f"{len(examples)} of {len(rows)} row(s), the NEWEST by session date and "
+            f"{len(examples)} of {n_statements} row(s), the NEWEST by session date and "
             "report order. Selection is a size rule: no result column is in the key."
         ),
     }
+
+
+def _preference_cell(column: str, value: str) -> str:
+    """One example cell, with the free-text field bounded and SAID to be.
+
+    The ellipsis is not decoration: a statement silently cut at 120 characters
+    reads as a complete sentence the trader never finished, and the row id
+    beside it is what a reader follows to the whole thing.
+    """
+    text = str(value or "")
+    if column != "statement" or len(text) <= PREFERENCE_STATEMENT_CHARS:
+        return text
+    return text[:PREFERENCE_STATEMENT_CHARS].rstrip() + "... [cut; see row_id]"
 
 
 def _preference_window_open(said_on: str, reference: str) -> bool:

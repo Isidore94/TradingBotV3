@@ -41,6 +41,14 @@ DEFAULT_SCOPES = (
     "setup_trackers",
     "journal_review",
     "market_journal",
+    # WS-AI1, lead decision 2026-09-12 (trader may overrule), on WISHLIST 5C:
+    # the bounded statement-to-trade summary is fed "into the existing AI
+    # package", and the package that reaches the trader is the unattended
+    # nightly one - a scope nobody selects is not fed into anything. It is a
+    # DERIVED section (`ai_summary.preference_to_trade_section`), not the raw
+    # ST5 CSV, so it costs the budget a bounded amount rather than a file that
+    # grows with every statement the trader makes.
+    "preference_to_trade",
 )
 #: Per-symbol packets stay the ORIGINAL four. `market_journal` joined the daily
 #: summary, not this: a journal entry is about a session, and TB-0/TB-5 measured

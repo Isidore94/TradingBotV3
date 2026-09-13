@@ -3264,6 +3264,15 @@ move: put the fact in the payload as a WORD, and make the reader read it.
    descending. `journal_r` may be READ in an example and may never RANK one - the live
    report's single best row is also its oldest, and a section that surfaced it would be
    teaching the model that the trader's stated preferences work better than they do.
+   It is ON the nightly slate (lead decision 2026-09-12, the trader able to overrule:
+   "into the existing AI package" means the package that actually reaches the trader),
+   and it earns its place by being small - **7,668 chars measured on a read-only copy of
+   the live report (838 statement rows, 136,720 bytes on disk, 2026-09-11)**: 48% of the
+   16,000-char per-source cap, 9.6% of the 80,000-char package budget, a 17.8x reduction
+   that does not decay as the report grows because the counts are fixed-size and the
+   examples are capped. Budget weight 2 costs the other five scopes nothing, because the
+   allocator caps a scope at what it needs and returns the surplus; weight 1's base share
+   of 6,666 would simply have left it depending on a surplus paid to heavier scopes first.
 
 **Two defects found beside it, both in the completion-word path.**
 `operations_audit._ai_jobs_check` counted `statuses.get("degraded")` while the ledger's

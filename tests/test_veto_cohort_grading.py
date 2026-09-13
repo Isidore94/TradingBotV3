@@ -380,8 +380,11 @@ def test_the_nightly_slate_never_grows_by_accident():
 
     Pinned as the exact tuple so a scope can only join the slate deliberately.
     `market_journal` joined on 2026-08-27 - the trader reversed R10.I's opt-in
-    in as many words - and `trader_judgement` did not, which is what this
-    guards."""
+    in as many words - `preference_to_trade` joined on 2026-09-12 (WS-AI1, lead
+    decision on WISHLIST 5C, the trader able to overrule: the bounded summary is
+    fed "into the existing AI package", and the package that reaches the trader
+    is the unattended nightly one), and `trader_judgement` has not, which is
+    what this guards."""
     from ai_jobs import briefs
 
     assert briefs.DEFAULT_SCOPES == (
@@ -390,6 +393,7 @@ def test_the_nightly_slate_never_grows_by_accident():
         "setup_trackers",
         "journal_review",
         "market_journal",
+        "preference_to_trade",
     )
     assert "trader_judgement" not in briefs.DEFAULT_SCOPES
 

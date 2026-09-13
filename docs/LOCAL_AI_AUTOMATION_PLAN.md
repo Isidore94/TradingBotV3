@@ -720,6 +720,29 @@ P&L, match confidence or any other result column may enter that key**, the same
 refusal N3 made for the research narration. `REPORT_FILE` is resolved at CALL
 time inside `_source_specs`, never bound at import.
 
+**It is on the nightly slate** (`briefs.DEFAULT_SCOPES`, lead decision
+2026-09-12 on WISHLIST 5C, the trader able to overrule): the summary is fed
+"into the existing AI package", and the package that reaches the trader is the
+unattended nightly one — a scope nobody selects is fed into nothing. Both
+existing slate pins (`tests/test_opt_in_evidence_scopes.py`,
+`tests/test_veto_cohort_grading.py`) now pin SIX and name the decision, so a
+seventh still cannot join by accident.
+
+**The budget, measured rather than assumed.** On a read-only copy of the live
+report (838 statement rows, 136,720 bytes on disk, 2026-09-11) the section
+encodes to **7,668 characters** — 48% of the package's per-source cap
+(`MAX_SOURCE_CHARS`, 16,000) and 9.6% of `MAX_TOTAL_EVIDENCE_CHARS` (80,000). A
+17.8x reduction on the file it reads, and one that does not decay as the report
+grows: the counts are fixed-size and the examples are capped at 20 with each
+`statement` bounded at `PREFERENCE_STATEMENT_CHARS`. The scope carries budget
+weight **2**, which costs the other five nothing — `_allocate_scope_budgets`
+caps a scope's allocation at what it NEEDS and returns the surplus — and exists
+because weight 1 would have given it a base share of 6,666 against a measured
+7,668, leaving it dependent on a surplus that is handed to the heaviest scopes
+first. `PREFERENCE_SECTION_MAX_CHARS` is the backstop for a pathological report
+and gives way by dropping the OLDEST examples, never a count and never the
+coverage.
+
 The runner's stage order is unchanged and `weekly_synthesis` stays optional and
 unscheduled.
 
