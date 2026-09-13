@@ -102,6 +102,23 @@ READER_MEASURE_MIN_PX = 240
 #: the whole excerpt; the handle still drags it either way.
 LOWER_SPLIT_SHARES = (1000, 2000)
 
+#: The Story pane's three headings (WS-10D item 3, WISHLIST 10D step 1). They
+#: are CONSTANTS because the three kinds must be visibly distinct wherever the
+#: story is rendered and because a test asserts the reading order: the trader's
+#: own words, then what the desk measured, then the sources each came from.
+STORY_TRADER_HEADING = "You said"
+STORY_MEASURED_HEADING = "The market did"
+STORY_SOURCES_HEADING = "Sources"
+#: Someone else's words, under their own heading and never under "You said"
+#: (WISHLIST 10K). An imported forecast is outside commentary; it becomes the
+#: trader's view only if they write an entry of their own adopting it.
+STORY_FORECAST_HEADING = "External forecast"
+
+#: The link scheme the Story pane's sources use. A source is a LINK - clicking
+#: it selects the entry (and therefore its capture) in the list on the left,
+#: which is the whole point of naming sources rather than counting them.
+STORY_ENTRY_SCHEME = "entry"
+
 
 def _reader_measure(metrics: QFontMetrics) -> int:
     """The pixel width of `READER_MEASURE_CHARS` characters, capped and floored.
@@ -167,6 +184,75 @@ def _written_line(created_at: Any) -> str:
     return f"written {local.strftime('%H:%M')} {_utc_offset_label(local)}"
 
 
+def _html(text: Any) -> str:
+    """The trader's own characters, safe inside the one HTML view on this page."""
+    from html import escape
+
+    return escape(str(text or ""), quote=True)
+
+
+def _story_entry_prefix(row: Any) -> str:
+    """`13:36 · [written after the session]` - how to read the sentence below it."""
+    parts = [str(row.get("created_at") or "")[11:16]]
+    if row.get("written_after_the_session"):
+        parts.append("[written after the session]")
+    elif row.get("predicts_this_session"):
+        parts.append("[written during the session]")
+    symbols = ", ".join(str(item) for item in (row.get("symbols") or ()))
+    if symbols:
+        parts.append(symbols)
+    return "  ·  ".join(part for part in parts if part)
+
+
+def _measured_line(cell: Any) -> str:
+    """One benchmark's row, or the reason there is none.
+
+    An unmeasured benchmark is NAMED. A cell dropped for having no bars reads
+    as "nothing happened there", which is a claim nobody measured.
+    """
+    symbol = str(cell.get("symbol") or "")
+    if str(cell.get("status") or "") != "measured":
+        return f"{symbol}: unmeasured — {cell.get('reason') or 'no completed bars'}"
+    position = dict(cell.get("position_vs_sma20") or {})
+    distance = position.get("distance_atr")
+    sma_part = (
+        f"{position.get('side', 'unknown')} SMA20 by {distance:.2f} ATR"
+        if isinstance(distance, (int, float))
+        else f"{position.get('side', 'unknown')} SMA20"
+    )
+    change = cell.get("change_pct")
+    close = cell.get("close")
+    span = cell.get("range_atr")
+    head = f"{symbol}: close {close:.2f}" if isinstance(close, (int, float)) else f"{symbol}:"
+    return (
+        head
+        + (f", {change:+.2f}%" if isinstance(change, (int, float)) else "")
+        + (f", range {span:.2f} ATR" if isinstance(span, (int, float)) else "")
+        + f", {sma_part}"
+        + f" (bars through {cell.get('bars_through') or 'unknown'})"
+    )
+
+
+def _thesis_label(row: Any) -> str:
+    """Claim, horizon, stance, condition, invalidation - `unstated` when unsaid.
+
+    `unstated` is printed, never hidden: a thesis with no stated invalidation
+    and a thesis whose invalidation nobody bothered to show look identical if
+    the field is simply left out, and only one of those is honest.
+    """
+    claim = str(row.get("claim") or "").strip() or "(no claim found)"
+    horizon = str(row.get("horizon") or "")
+    stance = str(row.get("stance") or "")
+    condition = str(row.get("condition") or "")
+    invalidation = str(row.get("invalidation") or "")
+    parts = [f"{stance}: {claim}"]
+    if horizon:
+        parts.append(f"horizon {horizon}")
+    parts.append(f"condition: {condition}")
+    parts.append(f"invalidation: {invalidation}")
+    return "  ·  ".join(parts)
+
+
 class _EntriesWorker(QThread):
     """Loads entries, digests, the regime timeline and the day context."""
 
@@ -195,6 +281,17 @@ class _EntriesWorker(QThread):
             # A missing capture store is a quieter page, never a failed one:
             # the entries are the record and they loaded.
             payload["digests"] = {}
+        # WS-10D: the story and the theses load HERE, on the worker, with
+        # everything else the page reads (G7). Each in its own guard: a story
+        # that cannot be built must not blank the entries, which are the record.
+        try:
+            payload["story"] = self._service.daily_story(self._session)
+        except Exception:  # noqa: BLE001
+            payload["story"] = None
+        try:
+            payload["theses"] = self._service.theses_for(self._session)
+        except Exception:  # noqa: BLE001
+            payload["theses"] = []
         self.loaded.emit(payload)
 
 
@@ -233,6 +330,7 @@ class MarketJournalPanel(QFrame):
         self._capture_worker: _CaptureWorker | None = None
         self._entries: list[dict] = []
         self._digests: dict[str, dict] = {}
+        self._theses: list[dict] = []
         self._loaded_once = False
 
         self.heading = QLabel("Market Journal")
@@ -294,6 +392,29 @@ class MarketJournalPanel(QFrame):
         self.thought_view.setTextInteractionFlags(
             Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
         )
+        # WS-10D: the story of the selected session, and the theses read out of
+        # it. Read-only; the ONE editable thing here is the interpretation box,
+        # and what it writes is a NEW row that supersedes the machine's draft.
+        self.story_view = QTextBrowser()
+        self.story_view.setObjectName("StoryReader")
+        self.story_view.setReadOnly(True)
+        self.story_view.setOpenExternalLinks(False)
+        self.story_view.setOpenLinks(False)
+        self.story_view.anchorClicked.connect(self._on_story_anchor)
+        self.theses_list = QListWidget()
+        self.theses_list.currentRowChanged.connect(self._on_thesis_selected)
+        self.thesis_questions = QLabel("")
+        self.thesis_questions.setObjectName("ThesisQuestions")
+        self.thesis_questions.setWordWrap(True)
+        self.thesis_questions.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.interpretation_box = QPlainTextEdit()
+        self.interpretation_box.setPlaceholderText(
+            "What you actually meant. Saving writes a NEW row; the machine's "
+            "reading and your original note both stay exactly as they are."
+        )
+        self.save_interpretation_button = QPushButton("Save interpretation")
+        self.save_interpretation_button.clicked.connect(self._save_interpretation)
+
         self.charts_note = QLabel("")
         self.charts_note.setWordWrap(True)
         self.digest_label = QLabel("")
@@ -365,21 +486,49 @@ class MarketJournalPanel(QFrame):
         reader_body.addLayout(meta_row)
         reader_body.addLayout(view_row, 1)
 
+        # WS-10D: the story beside the theses. The story is the session's
+        # sequence - what you said, what the market did, where each came from -
+        # and the theses are what a note CLAIMED, with the questions that claim
+        # raises. Side by side because one is read and the other is answered.
+        story_side = QVBoxLayout()
+        story_side.setContentsMargins(0, 0, 0, 0)
+        story_side.addWidget(QLabel("The story of this session"))
+        story_side.addWidget(self.story_view, 1)
+        story_holder = QWidget()
+        story_holder.setLayout(story_side)
+
+        thesis_side = QVBoxLayout()
+        thesis_side.setContentsMargins(0, 0, 0, 0)
+        thesis_side.addWidget(QLabel("Active theses"))
+        thesis_side.addWidget(self.theses_list, 1)
+        thesis_side.addWidget(self.thesis_questions)
+        thesis_side.addWidget(self.interpretation_box, 1)
+        thesis_side.addWidget(self.save_interpretation_button)
+        thesis_holder = QWidget()
+        thesis_holder.setLayout(thesis_side)
+
+        story_widget = QSplitter(Qt.Horizontal)
+        story_widget.addWidget(story_holder)
+        story_widget.addWidget(thesis_holder)
+        story_widget.setSizes([1400, 1000])
+
         # G3.2: the right half is now READER over CHARTS. The charts are the
         # follow-on evidence; the trader opens this page to read what they
         # wrote, so the words get the top of the column and the 2 x 2 grid
         # keeps the larger share below it. Draggable either way.
         right = QSplitter(Qt.Vertical)
         right.addWidget(reader_widget)
+        right.addWidget(story_widget)
         right.addWidget(charts_widget)
         right.setStretchFactor(0, 2)
         right.setStretchFactor(1, 3)
+        right.setStretchFactor(2, 3)
         # Stretch alone only governs RESIZES; the opening split comes from the
         # size hints, and an empty chart grid hints far larger than a paragraph
         # of text - which opened the reader at a couple of lines. These are
         # proportions, not pixels: QSplitter scales them to the real height and
         # honours each child's minimum. Measured 796 / 1194 at 3456 x 2160.
-        right.setSizes([800, 1200])
+        right.setSizes([700, 700, 900])
 
         # NOTE: this pair is LEFT vs RIGHT and is not the pair above.
         lower = QSplitter(Qt.Horizontal)
@@ -519,6 +668,8 @@ class MarketJournalPanel(QFrame):
         self._render_timeline(payload.get("timeline") or {})
         self._render_context(payload.get("context") or {})
         self._render_calendar()
+        self._render_story(payload.get("story"))
+        self._render_theses(payload.get("theses") or [])
 
     def _render_sessions(self, sessions: list[str]) -> None:
         current = self.session_picker.currentText()
@@ -728,6 +879,160 @@ class MarketJournalPanel(QFrame):
             parts.append(symbols)
         self.thought_meta.setText("  ·  ".join(parts))
         self.thought_view.setPlainText(str(entry.get("text") or ""))
+
+    # -- the story and the theses (WS-10D) --------------------------------
+    def _render_story(self, story: Any) -> None:
+        """The three kinds, visibly distinct, in reading order.
+
+        `setHtml` rather than `setPlainText` here, and ONLY here: the sources
+        are links the trader clicks to reach the entry they name, which a plain
+        block of text cannot be. Everything the trader wrote is escaped before
+        it goes in, so a thought containing `<` is still a thought.
+        """
+        if story is None:
+            self.story_view.setHtml(
+                f"<p>{_html('No story could be built for this session.')}</p>"
+            )
+            return
+        get = story.get if isinstance(story, dict) else lambda name, default=None: getattr(
+            story, name, default
+        )
+        session = str(get("session_date", "") or "")
+        parts: list[str] = [f"<h3>{_html(STORY_TRADER_HEADING)}</h3>"]
+        said = list(get("trader_said", ()) or ())
+        if said:
+            for row in said:
+                parts.append(
+                    "<p>"
+                    + _html(_story_entry_prefix(row))
+                    + "<br/>"
+                    + _html(str(row.get("text") or "")).replace("\n", "<br/>")
+                    + "</p>"
+                )
+        else:
+            parts.append(
+                "<p><i>"
+                + _html(
+                    f"No note was written for {session}. Nothing below is a view "
+                    "you held - it is only what the desk measured."
+                )
+                + "</i></p>"
+            )
+
+        forecasts = list(get("external_forecasts", ()) or ())
+        if forecasts:
+            parts.append(f"<h3>{_html(STORY_FORECAST_HEADING)}</h3>")
+            for row in forecasts:
+                parts.append(
+                    "<p>"
+                    + _html("Imported, not yours: ")
+                    + _html(str(row.get("text") or "")).replace("\n", "<br/>")
+                    + "</p>"
+                )
+
+        parts.append(f"<h3>{_html(STORY_MEASURED_HEADING)}</h3>")
+        for cell in list(get("measured", ()) or ()):
+            parts.append("<p>" + _html(_measured_line(cell)) + "</p>")
+
+        parts.append(f"<h3>{_html(STORY_SOURCES_HEADING)}</h3>")
+        sources = dict(get("sources", {}) or {})
+        entry_ids = list(sources.get("entry_ids") or ())
+        captured = set(sources.get("capture_entry_ids") or ())
+        if entry_ids:
+            links = [
+                f'<a href="{STORY_ENTRY_SCHEME}:{_html(str(entry_id))}">{_html(str(entry_id))}</a>'
+                + (_html(" (with charts)") if entry_id in captured else "")
+                for entry_id in entry_ids
+            ]
+            parts.append("<p>" + "<br/>".join(links) + "</p>")
+        else:
+            parts.append("<p>" + _html("No journal entry was written for this session.") + "</p>")
+        context_id = str(sources.get("context_row_id") or "")
+        if context_id:
+            parts.append("<p>" + _html(f"Desk context row: {context_id}") + "</p>")
+        for note in list(get("notes", ()) or ()):
+            parts.append("<p><i>" + _html(str(note)) + "</i></p>")
+        self.story_view.setHtml("".join(parts))
+
+    def _on_story_anchor(self, url) -> None:
+        """A source link selects the entry it names (WS-10D item 3).
+
+        The whole reason the story lists its sources by id is so the trader can
+        get from a sentence back to the thing it was built from. Selecting the
+        entry is also what draws its capture, so one click answers both "which
+        note was that?" and "what did it look like?".
+        """
+        try:
+            raw = url.toString()
+        except AttributeError:
+            raw = str(url or "")
+        _scheme, _, entry_id = raw.partition(":")
+        entry_id = entry_id.strip()
+        if not entry_id:
+            return
+        row = self._row_for_entry(entry_id)
+        if row is None:
+            self.status.setText(f"{entry_id} is not in the list on the left.")
+            return
+        self.entries.setCurrentRow(row)
+        self._on_entry_selected(row)
+
+    def _render_theses(self, theses: list[dict]) -> None:
+        self._theses = [dict(row) for row in theses or ()]
+        blocked = self.theses_list.blockSignals(True)
+        try:
+            self.theses_list.clear()
+            for row in self._theses:
+                item = QListWidgetItem(_thesis_label(row))
+                item.setData(Qt.UserRole, str(row.get("thesis_id") or ""))
+                self.theses_list.addItem(item)
+        finally:
+            self.theses_list.blockSignals(blocked)
+        if not self._theses:
+            self.thesis_questions.setText(
+                "No note on this session, so there is no claim to question."
+            )
+            self.interpretation_box.setPlainText("")
+            return
+        self.theses_list.setCurrentRow(0)
+        self._on_thesis_selected(self.theses_list.currentRow())
+
+    def _current_thesis(self) -> dict | None:
+        row = self.theses_list.currentRow()
+        if row is None or row < 0 or row >= len(self._theses):
+            return None
+        return self._theses[row]
+
+    def _on_thesis_selected(self, _row: int) -> None:
+        thesis = self._current_thesis()
+        if thesis is None:
+            self.thesis_questions.setText("")
+            self.interpretation_box.setPlainText("")
+            return
+        questions = [str(item) for item in (thesis.get("questions") or ()) if str(item).strip()]
+        self.thesis_questions.setText("  ".join(questions))
+        # The trader's own reading when there is one, an empty box when the
+        # machine's draft is all there is. Never pre-filled with the draft:
+        # editing a machine sentence would make it look like the trader's.
+        self.interpretation_box.setPlainText(str(thesis.get("text") or ""))
+
+    def _save_interpretation(self) -> None:
+        thesis = self._current_thesis()
+        if thesis is None:
+            self.status.setText("Select a thesis before saving an interpretation.")
+            return
+        result = self.service.save_interpretation(
+            entry_id=str(thesis.get("entry_id") or ""),
+            supersedes=str(thesis.get("thesis_id") or ""),
+            text=self.interpretation_box.toPlainText(),
+        )
+        if result.get("ok"):
+            self.status.setText(
+                "Interpretation saved. The machine's draft and your note are untouched."
+            )
+            self._refresh_if_loaded()
+        else:
+            self.status.setText(f"Interpretation NOT saved: {result.get('reason', '')}")
 
     # -- the captured charts ----------------------------------------------
     def _on_entry_selected(self, _row: int) -> None:
