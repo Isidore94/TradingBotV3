@@ -25,6 +25,14 @@ THEMES: dict[str, dict[str, str]] = {
         "favorite": "#E9B949",
         "near": "#6EA8FF",
         "study": "#9B7CFF",
+        # WS-SX. The ✕ of a name the trader rejected TODAY - vetoed, disliked,
+        # passed on, or clicked away from an M5 alert. Brighter and more
+        # saturated than `short`, which is a SIDE and has to sit calmly beside
+        # `long` in every chip and score bar; this one is meant to be found at a
+        # glance in a table of 60 rows. `theme.color()` answers an unknown name
+        # with `neutral`, so a token missing from EITHER dict paints the mark
+        # grey and nothing raises - keep both.
+        "reject_today": "#FF2D2D",
         "input_bg": "#12161C",
         "selection": "#244B86",
         # Chart-line palette (user-specified 2026-07-29): the D1 overlays are
@@ -60,6 +68,9 @@ THEMES: dict[str, dict[str, str]] = {
         "favorite": "#B7791F",
         "near": "#2563EB",
         "study": "#7C3AED",
+        # Darker than the dark theme's, for the same reason `short` is: a
+        # #FF2D2D on white reads as pink rather than as a warning.
+        "reject_today": "#C21010",
         "input_bg": "#F8FAFC",
         "selection": "#BFD7FF",
         # Same assignments, darkened where the dark-theme value would wash
