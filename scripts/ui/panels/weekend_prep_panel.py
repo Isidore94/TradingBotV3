@@ -458,9 +458,21 @@ FOCUS_REVIEW_VIEWS: tuple[tuple[str, str, str, str], ...] = (
         "Said vs did",
         "preference_table",
         "preference_note",
-        "One row per STATEMENT you made in the reviewed week, beside whether "
-        "you traded it and what it then did. The match is a JUDGEMENT, not a "
-        "link - 'no match' is a real answer.",
+        "One row per ENDORSEMENT you made in the reviewed week - a like, a "
+        "claim, a swing pick - beside whether you traded it and what it then "
+        "did. The match is a JUDGEMENT, not a link - 'no match' is a real "
+        "answer. The refusals are their own view, 'Said no'.",
+    ),
+    (
+        "Said no",
+        "preference_rejection_table",
+        "preference_rejection_note",
+        "One row per REFUSAL you recorded in the reviewed week - a veto, a "
+        "day-trade pass, a dislike, a not-today, a click away from an M5 alert "
+        "- beside whether you traded the name anyway. Never pooled with the "
+        "endorsements in 'Said vs did': a veto you took is a different lesson "
+        "from a like you skipped. 'Match state' says which kind of miss a blank "
+        "trade is - the window is still open, or it closed with nothing.",
     ),
     (
         "Said at the time",
@@ -587,6 +599,19 @@ class FocusReviewPage(_StepPage):
         self.preference_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.preference_note = QLabel("")
         self.preference_note.setWordWrap(True)
+
+        # WS-5B: the OTHER half of the same report. A veto the trader took
+        # anyway and a like they skipped are two different lessons, and one
+        # table sorted by date would read as one population.
+        self.preference_rejection_table = QTableWidget(
+            0, len(PREFERENCE_REJECTION_COLUMNS)
+        )
+        self.preference_rejection_table.setHorizontalHeaderLabels(
+            list(PREFERENCE_REJECTION_HEADERS)
+        )
+        self.preference_rejection_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.preference_rejection_note = QLabel("")
+        self.preference_rejection_note.setWordWrap(True)
 
         # Packet W2: R8 sec 6's last two DEFERRED joins. The cohorts above are
         # the two judgement mirrors - what was thrown away, what was endorsed.
@@ -1133,13 +1158,37 @@ class FocusReviewPage(_StepPage):
         )
 
     def _render_preference_trades(self, rows) -> None:
-        """What was said, whether it was taken, and what it did (P6).
+        """What was said, whether it was taken, and what it did (P6 + WS-5B).
 
         Every row shows its MATCH CONFIDENCE or says "no match": the join is a
         judgement - the trader could have taken the name that week for an
         unrelated reason - and a bare trade id would read as a fact. Nothing
         here mints an identifier; plan.md P5.3/P5.4 own the canonical one.
+
+        WS-5B: ONE read, TWO tables. The endorsements stay where they were and
+        the refusals get their own view, because a veto the trader took anyway
+        and a like they skipped are two lessons and nothing here pools them -
+        not the rows, not the notes, not the counts.
         """
+        # The family NAME comes from the module that writes it; a literal here
+        # would be a second copy of a vocabulary that has one owner. The module
+        # is already imported by the reader that produced these rows, so this
+        # costs a dict lookup on the Qt thread and no file.
+        from preference_trade_outcomes import FAMILY_REJECT
+
+        likes: list = []
+        rejects: list = []
+        for row in list(rows or []):
+            # ONE pass, and the family decides. Two rows that happen to be
+            # equal are still two statements, so nothing here compares rows.
+            target = (
+                rejects
+                if str(row.get("verdict_family") or "") == FAMILY_REJECT
+                else likes
+            )
+            target.append(row)
+        self._render_preference_rejections(rejects)
+        rows = likes
         self.preference_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             for column, key in enumerate(PREFERENCE_COLUMNS):
@@ -1151,9 +1200,10 @@ class FocusReviewPage(_StepPage):
         )
         if not rows:
             self.preference_note.setText(
-                "No preference/trade report for this week yet. It is written by the "
-                "overnight preference_trade_outcomes slot - an absent report, not a "
-                "week without opinions."
+                "No endorsements in the preference/trade report for this week. It is "
+                "written by the overnight preference_trade_outcomes slot - an absent "
+                "report, not a week without opinions. The refusals are in the "
+                "'Said no' view."
             )
             return
         taken = sum(1 for row in rows if str(row.get("traded") or "") == "yes")
@@ -1174,6 +1224,45 @@ class FocusReviewPage(_StepPage):
             "setup you named and skipped. Match confidence is a JUDGEMENT, not "
             "a link: a trade on the same name that week may have been taken for "
             "another reason entirely, and 'no match' is a real answer."
+        )
+
+    def _render_preference_rejections(self, rows) -> None:
+        """"Rejections that were traded anyway / not traded" (WS-5B).
+
+        The half of the record that costs money: a name you vetoed, passed on,
+        disliked, threw back for the day or clicked away from - beside whether
+        you took it anyway. Counted on its own, printed on its own, and never
+        added to the endorsements above it.
+        """
+        rows = list(rows or [])
+        self.preference_rejection_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            for column, key in enumerate(PREFERENCE_REJECTION_COLUMNS):
+                self.preference_rejection_table.setItem(
+                    index, column, QTableWidgetItem(str(row.get(key) or ""))
+                )
+        apply_width_rule_to_table_widget(
+            self.preference_rejection_table, text_columns=(0, 3), elide_columns=(3,)
+        )
+        if not rows:
+            self.preference_rejection_note.setText(
+                "No refusals recorded in this week's preference/trade report. An "
+                "absent record, not a week you agreed with everything - and a report "
+                "written before 2026-09-13 has no reject half at all."
+            )
+            return
+        taken = sum(1 for row in rows if str(row.get("traded") or "") == "yes")
+        pending = sum(
+            1 for row in rows if str(row.get("match_state") or "") == "window_open"
+        )
+        self.preference_rejection_note.setText(
+            f"{len(rows)} refusal(s) this week; {taken} were traded anyway and "
+            f"{len(rows) - taken} were not. {pending} still have an open "
+            "10-session window, which is not yet a miss. A refusal you traded "
+            "anyway is the expensive row - and the match is a JUDGEMENT, so a "
+            "trade on the same name may have been taken for another reason "
+            "entirely. Never added to the endorsements in 'Said vs did': two "
+            "verdicts are never combined."
         )
 
     def _render_cohort(self, rows) -> None:
@@ -3285,6 +3374,31 @@ PREFERENCE_HEADERS = (
     "Paper 5d",
 )
 
+#: WS-5B: the reject half, with the MATCH STATE on screen. "No trade yet" and
+#: "no trade, window closed" are the difference between a pending row and a
+#: broken promise, and the likes table never needed to tell them apart because
+#: the file could not say.
+PREFERENCE_REJECTION_COLUMNS = (
+    "session_date",
+    "symbol",
+    "side",
+    "statement",
+    "traded",
+    "match_state",
+    "match_confidence",
+    "journal_r",
+)
+PREFERENCE_REJECTION_HEADERS = (
+    "Date",
+    "Symbol",
+    "Side",
+    "What you refused",
+    "Traded",
+    "Match state",
+    "Match conf.",
+    "Journal R",
+)
+
 
 def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
     """This week's rows of the preference/trade report (P6).
@@ -3299,7 +3413,7 @@ def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
     # BY NAMED CONSTANT (R1, CLAUDE.md). Resolving a home-folder store by
     # rebuilding its name under a directory is what shipped a blank page for six
     # days; the module that writes this file already exports where it is.
-    from preference_trade_outcomes import REPORT_FILE
+    from preference_trade_outcomes import REPORT_FILE, verdict_family_for
 
     path = Path(REPORT_FILE)
     if not path.is_file():
@@ -3338,6 +3452,16 @@ def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
                 or str(raw.get("match_basis") or ""),
                 "journal_r": str(raw.get("journal_r") or ""),
                 "paper_forward_return_h5": str(raw.get("paper_forward_return_h5") or ""),
+                # WS-5B. The page cannot separate what the reader threw away.
+                # A pre-5B file has neither column: an absent family is an
+                # ENDORSEMENT (every channel that could write one back then
+                # was), read through the module's own map rather than a second
+                # copy of it here, and an absent state stays blank because the
+                # old file never measured which kind of miss a blank trade was.
+                "verdict_family": str(raw.get("verdict_family") or "").strip()
+                or verdict_family_for(raw.get("channel")),
+                "match_state": str(raw.get("match_state") or "").strip(),
+                "channel": str(raw.get("channel") or ""),
             }
         )
     rows.sort(key=lambda row: (row["session_date"], row["symbol"]))
