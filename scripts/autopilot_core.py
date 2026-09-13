@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
+import avwape_side
 import focus_adoption_gate
 import prev_day_gate
 from evidence_stats import SWING_HORIZON_SESSIONS
@@ -4022,6 +4023,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     picks_symbols: list[str] = []
     near_rows_shown = 0
     near_rows_suppressed = 0
+    wrong_side_rows = 0
     for _index, pick in indexed_picks:
         symbol = str(pick.get("symbol") or "").strip().upper()
         if not symbol:
@@ -4041,9 +4043,23 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         family_text = f" | {family}" if family else ""
         key_level = str(pick.get("key_level") or "").strip()
         level_text = f" @ {key_level}" if key_level else ""
+        # WS-WS (WISHLIST 9): a LONG under its current AVWAPE, or a SHORT over
+        # it, says so right after its name. The tag is the ONLY thing it
+        # changes - the pick is in the same place in the same list with the same
+        # numbers, because hiding one is a detector decision nobody has taken.
+        wrong_text = ""
+        if avwape_side.is_wrong_side_row(pick.get("raw")):
+            wrong_side_rows += 1
+            wrong_text = f" {avwape_side.WRONG_SIDE_TAG}"
         picks_symbols.append(symbol)
         picks_lines.append(
-            f"{len(picks_symbols)}. {symbol} ({side}){bucket_text}{expected_text}{family_text}{level_text}"
+            f"{len(picks_symbols)}. {symbol}{wrong_text} ({side})"
+            f"{bucket_text}{expected_text}{family_text}{level_text}"
+        )
+    if wrong_side_rows:
+        picks_lines.append(
+            f"{wrong_side_rows} wrong side of the anchor "
+            "(shown, never hidden - a LONG under its AVWAPE or a SHORT over it)"
         )
     if near_rows_suppressed:
         picks_lines.append(

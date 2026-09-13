@@ -6,6 +6,7 @@ from PySide6.QtCore import QEvent, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QToolTip
 
+import avwape_side
 from ui import theme
 from ui.models.setup import SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupTableModel
@@ -15,6 +16,11 @@ _COLUMN_KEYS = [key for key, _label in SetupTableModel.COLUMNS]
 _ROW_HEIGHT = 40
 _CHIP_HEIGHT = 22
 _PAD = 10
+#: Gap between two chips sharing one cell (WS-WS).
+_CHIP_GAP = 6
+#: Narrower than this and the second chip is not drawn at all: a 12px sliver of
+#: colour is not a badge, and the tooltip still says the whole thing.
+_MIN_CHIP_WIDTH = 22
 
 #: WS-SX tooltip wording. The MARK says that a decision exists; the tooltip says
 #: WHICH and WHEN. The kinds are `pick_feedback.LIKE_KINDS` / `REJECT_KINDS`; a
@@ -146,11 +152,41 @@ class SetupTableDelegate(QStyledItemDelegate):
         the model re-emitting `dataChanged` for a hover.
         """
         if event is not None and event.type() == QEvent.Type.ToolTip:
-            text = self._decision_tooltip(index)
+            text = self._decision_tooltip(index) or self._wrong_side_tooltip(index)
             if text:
                 QToolTip.showText(event.globalPos(), text, view)
                 return True
         return super().helpEvent(event, view, option, index)
+
+    @staticmethod
+    def _wrong_side_read(row):
+        """This row's side-of-the-anchor reading, or None. Never raises.
+
+        `paint` and `sizeHint` both ask, so it stays what `avwape_side` is: a
+        dict lookup and one short string split, no I/O and no clock.
+        """
+        if not isinstance(row, SetupRow):
+            return None
+        try:
+            return avwape_side.read_row(row.raw)
+        except Exception:
+            return None
+
+    def _wrong_side_tooltip(self, index) -> str:
+        """The bucket cell's extra line when the row is on the wrong side.
+
+        ADDED to the tooltip the cell already has (its bucket label), never
+        instead of it - WS-WS hides nothing, and that includes text.
+        """
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key != "bucket":
+            return ""
+        read = self._wrong_side_read(index.data(ROW_ROLE))
+        text = avwape_side.tooltip_text(read)
+        if not text:
+            return ""
+        existing = str(index.data(Qt.ItemDataRole.ToolTipRole) or "").strip()
+        return f"{existing}\n{text}" if existing else text
 
     def _decision_tooltip(self, index) -> str:
         key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
@@ -178,7 +214,17 @@ class SetupTableDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):  # noqa: N802 (Qt override)
         size = super().sizeHint(option, index)
-        return QSize(size.width(), max(size.height(), _ROW_HEIGHT))
+        width = size.width()
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key == "bucket":
+            read = self._wrong_side_read(index.data(ROW_ROLE))
+            if read is not None and read.wrong:
+                # `fit_columns` sizes a column by asking this, so a column that
+                # never asks for the second chip never gets the room to paint
+                # it. Width only: the row height is the setups height either way
+                # (G2b pins that).
+                width += _chip_width(option.font, avwape_side.WRONG_SIDE_LABEL) + _CHIP_GAP
+        return QSize(width, max(size.height(), _ROW_HEIGHT))
 
     def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
         row = index.data(ROW_ROLE)
@@ -221,7 +267,24 @@ class SetupTableDelegate(QStyledItemDelegate):
         elif key == "side" and is_setup and row.side in {"LONG", "SHORT"}:
             self._chip(painter, option, rect, row.side, "long" if row.side == "LONG" else "short")
         elif key == "bucket" and is_setup and row.bucket:
-            self._chip(painter, option, rect, row.bucket_label, _bucket_token(bucket), study=is_study)
+            bucket_chip = self._chip(
+                painter, option, rect, row.bucket_label, _bucket_token(bucket), study=is_study
+            )
+            # WS-WS (WISHLIST 9): a LONG whose close sits under its AVWAPE, or a
+            # SHORT whose close sits over it, is BADGED - after the bucket chip,
+            # never over it. Display only: the row is still here, still in the
+            # same place, still with the same score.
+            read = self._wrong_side_read(row)
+            if read is not None and read.wrong:
+                self._chip(
+                    painter,
+                    option,
+                    rect,
+                    avwape_side.WRONG_SIDE_LABEL,
+                    "caution",
+                    study=is_study,
+                    after=bucket_chip,
+                )
         elif key == "score" and is_setup and row.score is not None:
             self._score(painter, option, rect, row.score, selected)
         else:
@@ -270,14 +333,29 @@ class SetupTableDelegate(QStyledItemDelegate):
         painter.setPen(color)
         painter.drawText(text_rect, align, elided)
 
-    def _chip(self, painter, option, rect, text, token, study=False) -> None:
+    def _chip(self, painter, option, rect, text, token, study=False, after=None):
+        """One pill. Returns the rect it took, or None when it did not fit.
+
+        `after` is another chip's rect in the same cell: the pill starts a gap
+        past its right edge instead of at the cell's padding (WS-WS). A second
+        chip with no room left is not drawn - a coloured sliver says nothing,
+        and the tooltip still carries the whole sentence.
+        """
         color = QColor(theme.color(token))
         font = _resized(option.font, -1.0, minimum=7.5)
         font.setBold(True)
         metrics = QFontMetrics(font)
         chip_h = min(_CHIP_HEIGHT, rect.height() - 8)
-        chip_w = min(metrics.horizontalAdvance(text) + 20, rect.width() - _PAD - 4)
-        chip_rect = QRect(rect.left() + _PAD, rect.top() + (rect.height() - chip_h) // 2, chip_w, chip_h)
+        left = rect.left() + _PAD
+        if after is not None:
+            left = after.right() + _CHIP_GAP
+        # Unchanged for the first chip: with `left == rect.left() + _PAD` this is
+        # exactly the `rect.width() - _PAD - 4` it has always been.
+        available = rect.width() - 4 - (left - rect.left())
+        chip_w = min(metrics.horizontalAdvance(text) + 20, available)
+        if after is not None and chip_w < _MIN_CHIP_WIDTH:
+            return None
+        chip_rect = QRect(left, rect.top() + (rect.height() - chip_h) // 2, chip_w, chip_h)
 
         painter.setBrush(_alpha(token, 36))
         painter.setPen(QPen(_alpha(token, 130), 1))
@@ -289,6 +367,7 @@ class SetupTableDelegate(QStyledItemDelegate):
         painter.setOpacity(0.85 if study else 1.0)
         painter.drawText(chip_rect, int(Qt.AlignmentFlag.AlignCenter), elided)
         painter.setOpacity(1.0)
+        return chip_rect
 
     def _score(self, painter, option, rect, score, selected) -> None:
         token = _score_token(score)
@@ -310,6 +389,13 @@ class SetupTableDelegate(QStyledItemDelegate):
         if fill_w > 0:
             painter.setBrush(_alpha(token, 210))
             painter.drawRoundedRect(QRect(track.left(), track.top(), fill_w, track.height()), 2, 2)
+
+
+def _chip_width(font: QFont, text: str) -> int:
+    """What one pill of this text costs, in the chip's own font (WS-WS)."""
+    chip_font = _resized(font, -1.0, minimum=7.5)
+    chip_font.setBold(True)
+    return QFontMetrics(chip_font).horizontalAdvance(text) + 20
 
 
 def _bucket_token(bucket: str) -> str:
