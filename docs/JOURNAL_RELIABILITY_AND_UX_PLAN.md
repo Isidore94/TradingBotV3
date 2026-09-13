@@ -648,6 +648,45 @@ second tag is unchanged, but a confirmed trade no longer re-proposes the tag it
 was confirmed with, which is why the backlog could not fall below the number of
 trades in it.
 
+**The note lane — BUILT 2026-09-13 (WISHLIST 10E, packet WS-10E).** A fourth
+lane, and the first that matches on WORDS. The trader's brief: *"the Journal
+should use my setup notes to tag the trades I took."* The gap was total —
+`grep market_journal scripts/journal_analytics.py` returned nothing, so a setup
+the trader NAMED in the Market Journal while the trade was open reached the Tags
+column by no path at all.
+
+`AutoTagger.note_lane_candidates` takes the Market Journal entries whose
+`symbols` carry the trade's symbol and whose **actual write time** (`created_at`;
+the ledger overwrites `session_date` with the session of the append, which
+answers a different question) falls inside the trade's own window — open to
+close, widened by ONE trading session before the open. A **date-only broker fill
+has no intraday window** and gets `unmeasured`, never a tag, which is rule 2
+above applied to a window instead of a bucket.
+
+It emits a tag only for an **explicit claim**: `setup_docs.SETUP_DOCS` compiled
+into whole-token phrase patterns from each family's key and label, never fuzzy,
+with single-token phrases dropped so `general` cannot tag a trade. The candidate
+carries `match_basis = note:<entry_id>` and the `span` quoted verbatim (two
+additive columns on `auto_tag_candidates`). A note whose own words state the
+opposite side never matches; a side-silent note matches either.
+
+Rule 1 holds unchanged and is now guarded at SOURCE level: a grep-guard over
+every callable named `*note*` in `journal_analytics` proves the lane's inputs
+reach no outcome field. Lane order is still by LANE — capture, note, scanner,
+shape — with confidence 0.88/0.84 placing the note between the two, so
+`journal_bulk_tag` writes it under the same 0.70 threshold and
+`apply_provisional_tags`' refusal to overwrite a confirmed tag is untouched.
+
+The verdict is stored on the trade (`note_lane_json`) by every
+`refresh_auto_tags` and printed by `journal_analytics.format_note_lane_line` in
+three shapes and no fourth — the claim, `no explicit claim in N candidate
+note(s)`, and `unmeasured (date-only fill)`. The Trades detail shows it above the
+overnight AI row; Tag Week's `From` column marks the waiting rows whose tag came
+from a note, COMPARED against the row's own `setup_tags` rather than flagged at
+apply time. The advisory package carries the candidate notes and the
+deterministic verdict so the model can cite `note:<id>` and correct an answer
+rather than invent one. Tests: `tests/test_ws_10e_note_tags.py` (13).
+
 **Owed:** one desk session in which the trader tags real trades, renames one,
 and filters on it. And, still unbuilt and still the trader's call, the §8
 statement-file import that makes the imported-history case real — see the
