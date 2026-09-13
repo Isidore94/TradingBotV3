@@ -41,6 +41,7 @@ from ui.panels.bounce_panel import format_auto_regime_reading
 from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
 from ui.panels.away_recap_panel import AwayRecapPanel
+from ui.panels.daily_recap_panel import DailyRecapPanel
 from ui.panels.market_journal_panel import MarketJournalPanel
 from ui.panels.weekend_prep_panel import WeekendPrepPanel
 from ui.panels.research_panel import ResearchPanel
@@ -87,9 +88,13 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     # recorded: that one is the trade and tax record, this one is what the
     # trader thought. Merging them would turn the tax journal into a diary.
     PageSpec("Market Journal", "mdi.book-open-variant", "market_journal_panel"),
-    # R1 amendment 2026-08-24: an AWAY day ends in a recap, not a queue. This
-    # is the return surface that replaced 317 pending review items.
-    PageSpec("AWAY Recap", "mdi.calendar-check-outline", "away_recap_panel"),
+    # R1 amendment 2026-08-24: an AWAY day ends in a recap, not a queue - the
+    # return surface that replaced 317 pending review items. WS-DR (WISHLIST
+    # 10F, 2026-09-13) takes that slot for EVERY Auto mode and reads the day
+    # from the durable stores instead of this process's alert list; the AWAY
+    # page's class stays on disk because the phone digest and the staged-pick
+    # feed still run through it.
+    PageSpec("Daily Recap", "mdi.calendar-check-outline", "daily_recap_panel"),
     PageSpec("Weekend Prep", "mdi.calendar-weekend", "weekend_prep_panel"),
     PageSpec("Universe", "mdi.earth", "universe_panel"),
     PageSpec("Research", "mdi.flask-outline", "research_panel"),
@@ -99,10 +104,15 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Settings", "mdi.cog-outline", "settings_panel"),
 )
 
-#: The one page that must be HANDED its input before it can say anything.
-#: Matched by title rather than index so a reorder cannot silently unwire it -
-#: which is the class of bug `test_qt_page_specs` exists for.
-AWAY_RECAP_PAGE_TITLE = "AWAY Recap"
+#: The recap page, matched by TITLE rather than index so a reorder cannot
+#: silently unwire it - the class of bug `test_qt_page_specs` exists for.
+#: Selecting it refreshes two things: the Daily Recap's own store read, and the
+#: AWAY digest panel that is still handed the Alert Center's backing list.
+DAILY_RECAP_PAGE_TITLE = "Daily Recap"
+
+#: The old name, kept as an alias for one release: it was the title AND the
+#: page, and a caller that still asks for it is asking for this page.
+AWAY_RECAP_PAGE_TITLE = DAILY_RECAP_PAGE_TITLE
 
 
 class MainWindow(QMainWindow):
@@ -128,6 +138,11 @@ class MainWindow(QMainWindow):
         self.away_recap_panel = AwayRecapPanel(
             focus_service=self.trading_panel.focus_service,
             journal_service=self.market_journal_panel.service,
+        )
+        # WS-DR. The Daily Recap reads the durable stores on its own worker; it
+        # is handed no feed, which is the whole point of it.
+        self.daily_recap_panel = DailyRecapPanel(
+            focus_service=self.trading_panel.focus_service
         )
         self.weekend_prep_panel = WeekendPrepPanel(
             focus_service=self.trading_panel.focus_service
@@ -189,6 +204,13 @@ class MainWindow(QMainWindow):
         self.away_recap_panel.symbolActivated.connect(
             self.trading_panel.alert_center.show_board_symbol
         )
+        # WS-DR. The Daily Recap uses the SAME named door, and it is routed
+        # through a method rather than the bound slot so the call is resolved
+        # when the row is clicked: `show_board_symbol` is a board's door, and a
+        # board chart holds no place in the waiting list - nothing here reaches
+        # `_enqueue_review_alert`.
+        self.daily_recap_panel.chartRequested.connect(self._chart_recap_row)
+        self.daily_recap_panel.focusAddRequested.connect(self._add_staged_pick_to_focus)
         # ST6.3. ONE Working-lately snapshot for the whole desk, owned by the
         # window because four surfaces read it and no one panel is their parent.
         # Everything expensive is on its worker; the slots below only format.
@@ -656,12 +678,39 @@ class MainWindow(QMainWindow):
             self.workspace_button.setVisible(mode_visible)
             self.tabs_button.setVisible(mode_visible)
             interaction_trace.mark("layout")
-            if PAGE_SPECS[index].title == AWAY_RECAP_PAGE_TITLE:
+            if PAGE_SPECS[index].title == DAILY_RECAP_PAGE_TITLE:
                 self._feed_away_recap()
+                self._reload_daily_recap()
         finally:
             # Closed here rather than left open: a span that outlived its click
             # would attribute every later idle stall to the last page visited.
             interaction_trace.end()
+
+    def _chart_recap_row(self, symbol: str, side: str = "") -> None:
+        """A Daily Recap row -> the board chart door, resolved at click time.
+
+        Never `_enqueue_review_alert`: a board chart takes no place in the
+        waiting list and is never skip-counted (CLAUDE.md, "Charts and boards").
+        """
+        try:
+            self.trading_panel.alert_center.show_board_symbol(symbol, side)
+        except Exception:  # noqa: BLE001 - a chart request never costs the page
+            logging.exception("The Daily Recap could not chart %s.", symbol)
+
+    def _add_staged_pick_to_focus(self, symbol: str, side: str) -> None:
+        """The staged-pick add, performed by the store's own owner."""
+        try:
+            self.trading_panel.focus_service.add(symbol, side, "swing")
+        except Exception:  # noqa: BLE001
+            logging.exception("The staged pick %s could not be added to Focus.", symbol)
+
+    def _reload_daily_recap(self) -> None:
+        """Kick the Daily Recap's worker. Quiet on failure: a recap that cannot
+        be read must never cost the page switch that asked for it."""
+        try:
+            self.daily_recap_panel.reload()
+        except Exception:
+            logging.exception("The Daily Recap could not be reloaded.")
 
     def _open_journal_trade(self, trade_id: str) -> None:
         """Show the Journal page on one trade (ST5.5). Never a writer.
@@ -1027,6 +1076,9 @@ class MainWindow(QMainWindow):
             # while it owned one, which cost nothing then and would cost a
             # half-written capture now.
             self.market_journal_panel,
+            # WS-DR: it owns a read worker of its own, so it joins the list the
+            # day it gains one rather than the day someone notices.
+            self.daily_recap_panel,
             self.weekend_prep_panel,
             self.universe_panel,
             self.research_panel,

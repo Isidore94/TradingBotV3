@@ -1520,3 +1520,54 @@ def test_the_phone_text_digest_still_builds_the_way_it_did():
     assert recap["session_date"] == SESSION
     assert len(recap["classified_alerts"]) == 1
     assert [row["symbol"] for row in recap["staged_picks"]] == ["AAA", "BBB"]
+
+
+# ---------------------------------------------------------------------------
+# 9 - ADDED BY THE BUILDER (2026-09-13). Nothing above is weakened, skipped or
+# rewritten; this section only adds.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.qt
+def test_the_recap_chart_request_adds_nothing_to_the_waiting_list():
+    """The same property as the test above, measured on the QUEUE itself.
+
+    `test_the_desk_charts_a_recap_row_through_the_board_door_and_requeues_nothing`
+    replaces `_enqueue_review_alert` with a recorder and asserts it is never
+    CALLED. On a real `MainWindow` that recorder also catches something the
+    recap had nothing to do with: the scanner's own `Scanning paused.` status
+    row (`symbol=''`, `side='WATCH'`), delivered from the bot thread on the
+    first `processEvents()`. The product is right about it - the real
+    `_enqueue_review_alert` drops a symbol-less alert on its FIRST line, so
+    nothing is queued - but the recorder cannot tell a call from a queue entry.
+
+    Measured here the other way round: the door is left alone and the WAITING
+    LIST is counted before and after. A board chart holds no place in it.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    application = QApplication.instance() or QApplication([])
+
+    from ui.app import MainWindow
+    from ui.state import UiState
+
+    window = MainWindow(UiState(workspace_mode="workspace"))
+    try:
+        center = window.trading_panel.alert_center
+        application.processEvents()
+        charted: list[tuple] = []
+        center.show_board_symbol = lambda *args, **kwargs: charted.append((args, kwargs))
+        before = len(center._review_queue)
+
+        window.daily_recap_panel.chartRequested.emit("TSLA", "SHORT")
+        application.processEvents()
+
+        assert charted and charted[0][0][0] == "TSLA"
+        assert len(center._review_queue) == before, (
+            "charting a recap row put something in the waiting list"
+        )
+    finally:
+        try:
+            window.close()
+        except Exception:
+            pass
