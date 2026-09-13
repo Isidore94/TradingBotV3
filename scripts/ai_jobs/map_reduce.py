@@ -425,6 +425,37 @@ def coverage_statement(*, planned: int, read: int, failed: Sequence[str], source
     return text
 
 
+#: The completion vocabulary (WS-AI1 item 4). Four words, and every published
+#: summary carries exactly one of them.
+#:
+#: * ``synthesized``            - every slice read and the reduce pass answered.
+#: * ``partial``                - the reduce pass answered, over less evidence.
+#: * ``unsynthesized_fallback`` - the reduce pass did not answer; the document
+#:                                is the code's assembly of the surviving
+#:                                findings, not the model's synthesis.
+#: * ``failed``                 - no document was produced by this path at all.
+COMPLETION_SYNTHESIZED = "synthesized"
+COMPLETION_PARTIAL = "partial"
+COMPLETION_UNSYNTHESIZED = "unsynthesized_fallback"
+COMPLETION_FAILED = "failed"
+
+COMPLETION_WORDS = (
+    COMPLETION_SYNTHESIZED,
+    COMPLETION_PARTIAL,
+    COMPLETION_UNSYNTHESIZED,
+    COMPLETION_FAILED,
+)
+
+
+def completion_word(*, synthesis_error: str, slices_failed: Sequence[str]) -> str:
+    """One word for how complete a map-reduce document is."""
+    if str(synthesis_error or "").strip():
+        return COMPLETION_UNSYNTHESIZED
+    if list(slices_failed or ()):
+        return COMPLETION_PARTIAL
+    return COMPLETION_SYNTHESIZED
+
+
 def run_map_reduce(
     *,
     evidence: Mapping[str, Any],
@@ -511,6 +542,21 @@ def run_map_reduce(
     return {
         "schema_version": "ai_summary_result_v1",
         "status": "validated",
+        # WS-AI1 item 4. The completion WORD, at the top level, always present.
+        #
+        # `status: "validated"` describes the document's shape and says nothing
+        # about how complete it is, and the only thing that did was
+        # `map_reduce.synthesized` - a boolean two levels down that `briefs.py`
+        # did not read. So the 900 s synthesis timeouts on 2026-09-10 and -11
+        # published an unsynthesized fallback and were ledgered `ok`, and the
+        # trader had no way to tell those nights from clean ones.
+        #
+        # The order is deliberate: a lost synthesis outranks a lost slice,
+        # because a fallback document is assembled by code from what survived
+        # and a partial one is still the model's own synthesis of less.
+        "completion": completion_word(
+            synthesis_error=synthesis_error, slices_failed=failed
+        ),
         "provider": "local",
         "model": model,
         "response_id": "",
@@ -560,11 +606,17 @@ def run_map_reduce(
 
 
 __all__ = [
+    "COMPLETION_FAILED",
+    "COMPLETION_PARTIAL",
+    "COMPLETION_SYNTHESIZED",
+    "COMPLETION_UNSYNTHESIZED",
+    "COMPLETION_WORDS",
     "Chunk",
     "DEFAULT_CHUNK_CHARS",
     "FINDINGS_SOURCE_ID",
     "MAP_REDUCE_SETTING_KEY",
     "chunk_chars",
+    "completion_word",
     "chunk_package",
     "coverage_statement",
     "findings_package",

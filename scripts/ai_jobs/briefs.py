@@ -41,6 +41,14 @@ DEFAULT_SCOPES = (
     "setup_trackers",
     "journal_review",
     "market_journal",
+    # WS-AI1, lead decision 2026-09-12 (trader may overrule), on WISHLIST 5C:
+    # the bounded statement-to-trade summary is fed "into the existing AI
+    # package", and the package that reaches the trader is the unattended
+    # nightly one - a scope nobody selects is not fed into anything. It is a
+    # DERIVED section (`ai_summary.preference_to_trade_section`), not the raw
+    # ST5 CSV, so it costs the budget a bounded amount rather than a file that
+    # grows with every statement the trader makes.
+    "preference_to_trade",
 )
 #: Per-symbol packets stay the ORIGINAL four. `market_journal` joined the daily
 #: summary, not this: a journal entry is about a session, and TB-0/TB-5 measured
@@ -197,7 +205,9 @@ def run_daily_summary(
         model,
     )
 
-    def _publish(result: dict[str, Any], status: str, reason: str) -> dict[str, Any]:
+    def _publish(
+        result: dict[str, Any], status: str, reason: str, completion: str = ""
+    ) -> dict[str, Any]:
         exported = ai_summary.export_ai_summary(
             result, evidence, output_dir=_summary_dir(session_date)
         )
@@ -218,6 +228,11 @@ def run_daily_summary(
                 **(result.get("usage") or {}),
             },
             "coverage": counts,
+            # WS-AI1 item 4. The completion word travels out of the slot and
+            # into the ledger row through the runner's `extra`, so the System
+            # Health strip can show it without parsing a sentence.
+            "completion": str(completion or ""),
+            "extra": {"completion": str(completion or "")},
         }
 
     if not ai_summary.has_usable_sources(evidence):
@@ -232,6 +247,7 @@ def run_daily_summary(
             ai_summary.degraded_result(evidence, reason=reason + ".", model=""),
             ledger.STATUS_DEGRADED,
             reason,
+            completion=map_reduce.COMPLETION_FAILED,
         )
 
     if chunked:
@@ -261,6 +277,7 @@ def run_daily_summary(
                 ai_summary.degraded_result(evidence, reason=reason + ".", model=model),
                 ledger.STATUS_DEGRADED,
                 reason,
+                completion=map_reduce.COMPLETION_FAILED,
             )
         stats = result.get("map_reduce") or {}
         result = dict(result)
@@ -270,13 +287,44 @@ def run_daily_summary(
             citation_drops=result.get("citation_drops"),
             extra_statements=[stats.get("coverage_statement", "")],
         )
+        # WS-AI1 item 4. `STATUS_OK` is for a night that was actually clean.
+        #
+        # This branch used to publish OK unconditionally, with "; NOT
+        # synthesized" appended to the end of a sentence nobody reads to the
+        # end. Two nights (2026-09-10 and -11) whose synthesis pass timed out at
+        # 900 s therefore sat in the ledger as successful. The document is still
+        # published - losing the findings would be worse than publishing them
+        # unsynthesized - but the ledger now names what it is, and only
+        # `synthesized` earns OK.
+        completion = str(
+            result.get("completion")
+            or map_reduce.completion_word(
+                synthesis_error=str(stats.get("synthesis_error") or ""),
+                slices_failed=list(stats.get("slices_failed") or ()),
+            )
+        )
+        synthesis_error = str(stats.get("synthesis_error") or "")
         reason = (
             f"summary for {session_date} from {counts.get('usable', 0)} usable source(s) "
-            f"read as {stats.get('slices_read')} of {stats.get('slices_planned')} slice(s)"
-            + ("" if stats.get("synthesized") else "; NOT synthesized")
+            f"read as {stats.get('slices_read')} of {stats.get('slices_planned')} slice(s); "
+            f"completion={completion}"
+            # The CAUSE, verbatim from the exception, so "why was this not
+            # synthesized" is answered in the ledger row rather than in a log.
+            + (f" after {synthesis_error}" if synthesis_error else "")
+            + (
+                f"; {len(stats.get('slices_failed') or ())} slice(s) failed: "
+                + ", ".join(list(stats.get("slices_failed") or ())[:3])
+                if stats.get("slices_failed")
+                else ""
+            )
         )
         logging.info("AI summary: %s", reason)
-        return _publish(result, ledger.STATUS_OK, reason)
+        status = (
+            ledger.STATUS_OK
+            if completion == map_reduce.COMPLETION_SYNTHESIZED
+            else ledger.STATUS_DEGRADED
+        )
+        return _publish(result, status, reason, completion=completion)
 
     previous_error = ""
     for attempt in (1, 2):
@@ -307,6 +355,7 @@ def run_daily_summary(
                 ai_summary.degraded_result(evidence, reason=reason + ".", model=model),
                 ledger.STATUS_DEGRADED,
                 reason,
+                completion=map_reduce.COMPLETION_FAILED,
             )
 
         # Provenance is the code's to state, never the model's to estimate.
@@ -318,7 +367,11 @@ def run_daily_summary(
             result,
             ledger.STATUS_OK,
             f"summary for {session_date} from {counts.get('usable', 0)} usable source(s)"
-            + (f", {counts.get('stale', 0)} stale" if counts.get("stale") else ""),
+            + (f", {counts.get('stale', 0)} stale" if counts.get("stale") else "")
+            + f"; completion={map_reduce.COMPLETION_SYNTHESIZED}",
+            # One validated document from one call: nothing was reduced and
+            # nothing was lost, so this path is synthesized by construction.
+            completion=map_reduce.COMPLETION_SYNTHESIZED,
         )
     raise RuntimeError("unreachable")  # pragma: no cover
 

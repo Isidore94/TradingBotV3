@@ -47,6 +47,10 @@ ENRICHMENT_SCHEMA = "ai_trade_enrichment_v1"
 
 GATE_NOT_MET_PREFIX = "ENRICHMENT GATE NOT MET."
 
+#: Ceiling on one trade's advisory summary. Bounded in the CONTRACT as well as
+#: in the extractor, so the model is told the limit rather than silently cut.
+MAX_SUMMARY_CHARS = 2000
+
 #: The exact words the ledger row carries when the collection window is met and
 #: the trader has not yet recorded the spot-audit (Q4.2). A constant because it
 #: is the sentence the lead reads out of the ledger on the morning after.
@@ -56,6 +60,49 @@ AUDIT_REFUSAL = "refused: audit not recorded"
 #: this is a nightly pass over what is NEW and a backfill is a separate,
 #: deliberate act.
 MAX_TRADES_PER_NIGHT = 25
+
+#: What a row SAYS about itself (WS-AI1). An absent status is the LEGACY blank
+#: written before this packet, and the supersession rule below looks for it.
+STATUS_ENRICHED = "enriched"
+STATUS_ABSTAINED = "abstained"
+STATUS_FAILED = "failed"
+
+#: Statuses that mean "this trade's attempt for this session has been made".
+#: A `failed` row is deliberately NOT one of them: a provider that was down for
+#: one firing is exactly the case a second firing inside the same window is for,
+#: and the slot's own attempt cap in `ai_jobs.ledger` is what bounds that.
+SETTLED_STATUSES = frozenset({STATUS_ENRICHED, STATUS_ABSTAINED})
+
+#: The contract version this pass speaks, sent with the provider call so a
+#: stored row can be traced back to the prompt that produced it.
+ENRICHMENT_PROMPT_VERSION = "ai_trade_enrichment_v1"
+
+#: The per-trade contract, and the whole of packet WS-AI1's item 1.
+#:
+#: Until 2026-09-12 this pass reused ``ai_summary.AI_SUMMARY_JSON_SCHEMA``,
+#: which is ``additionalProperties: False`` over ``executive_summary`` plus the
+#: five ``MODEL_SUMMARY_SECTIONS``. **None** of the keys the extraction seam
+#: below reads can exist in a response that schema validates, so every row this
+#: job wrote was blank while the ledger said ``ok`` - six trades over
+#: 2026-09-09..11. The defect was not a bad model or a bad extractor; it was two
+#: documents that had never been read against each other.
+#:
+#: Five fields, closed. ``summary`` and ``tags`` are what the seam reads;
+#: ``confidence`` is the model's own; ``sources`` are ids from the package it
+#: was given; and ``unknowns`` is how an honest empty answer says WHY it is
+#: empty - which is what turns a blank row into an ``abstained`` one.
+ENRICHMENT_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": MAX_SUMMARY_CHARS},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "sources": {"type": "array", "items": {"type": "string"}},
+        "unknowns": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "tags", "confidence", "sources", "unknowns"],
+    "additionalProperties": False,
+}
 
 #: Bullet shape in the setup documents: ``- **Name** — description``.
 _FAMILY_BULLET = re.compile(r"^\s*-\s+\*\*(?P<name>[^*]+)\*\*")
@@ -215,47 +262,129 @@ def run_journal_enrichment(
     vocabulary = setup_vocabulary()
     evidence_rows = list(review_rows) if review_rows is not None else _review_rows(day)
     model = ""
+    # WS-AI1 item 2. Three counts, never two: a model that DECLINED and a
+    # provider that FAILED are different nights, and the old `enriched N of M`
+    # made them the same missing number. `A + B == N` with `C == 0` is the only
+    # shape that earns STATUS_OK.
     enriched = 0
+    abstained = 0
+    failed = 0
     failures: list[str] = []
     dropped_total = 0
+    superseded = 0
 
-    for trade in trades[:MAX_TRADES_PER_NIGHT]:
+    batch = trades[:MAX_TRADES_PER_NIGHT]
+    deferred = len(trades) - len(batch)
+
+    for trade in batch:
+        trade_id = str(trade.get("trade_id"))
+        supersedes = str(trade.get("_supersedes_row_id") or "")
         try:
             result = _enrich_one(
                 trade=trade, vocabulary=vocabulary, review_rows=evidence_rows,
                 session_date=day,
             )
         except Exception as exc:  # noqa: BLE001 - one trade's failure is its own
-            failures.append(f"{trade.get('trade_id')}: {type(exc).__name__}: {exc}")
+            # The failure is RECORDED against the trade it happened to, not
+            # only in the ledger's prose. Before WS-AI1 nothing was written, so
+            # the next night re-read the trade as fresh and the record of the
+            # outage lived in one sentence of a log nobody opens.
+            detail = f"{type(exc).__name__}: {exc}"
+            failures.append(f"{trade_id}: {detail}")
+            failed += 1
+            _save_row(
+                journal, trade_id=trade_id, day=day, moment=moment,
+                status=STATUS_FAILED, reason=detail, supersedes=supersedes,
+                failures=failures,
+            )
             continue
         if result is None:
             continue
         model = model or str(result.get("model") or "")
         dropped_total += len(result.get("dropped_tags") or ())
-        try:
-            journal.save_ai_enrichment(
-                trade_id=str(trade.get("trade_id")),
-                session_date=day,
-                summary=str(result.get("summary") or ""),
-                tags=list(result.get("tags") or ()),
-                evidence=list(result.get("evidence") or ()),
-                model=str(result.get("model") or ""),
-                now=moment.isoformat(timespec="seconds"),
-            )
+        summary_text = str(result.get("summary") or "").strip()
+        tags = list(result.get("tags") or ())
+        # An empty answer is an ANSWER. It is saved, labelled, and carries the
+        # model's own `unknowns` as its reason - never a blank row that a later
+        # reader cannot tell apart from a crash.
+        abstaining = not summary_text and not tags
+        status = STATUS_ABSTAINED if abstaining else STATUS_ENRICHED
+        saved = _save_row(
+            journal, trade_id=trade_id, day=day, moment=moment, status=status,
+            reason=_unknowns_or_default(result) if abstaining else "",
+            supersedes=supersedes, failures=failures,
+            summary=summary_text, tags=tags,
+            evidence=list(result.get("evidence") or ()),
+            model=str(result.get("model") or ""),
+            confidence=str(result.get("confidence") or ""),
+        )
+        if not saved:
+            failed += 1
+            continue
+        if supersedes:
+            superseded += 1
+        if abstaining:
+            abstained += 1
+        else:
             enriched += 1
-        except Exception as exc:  # noqa: BLE001
-            failures.append(f"{trade.get('trade_id')}: save failed: {exc}")
 
     reason = (
-        f"enriched {enriched} of {len(trades)} trade(s) for {day}"
+        f"enriched {enriched}, abstained {abstained}, failed {failed} of {len(batch)} "
+        f"trade(s) for {day}"
+        + (f"; {superseded} blank row(s) superseded" if superseded else "")
         + (f"; {dropped_total} proposed tag(s) outside the vocabulary were dropped"
            if dropped_total else "")
+        + (f"; {deferred} trade(s) deferred to the next run by the nightly cap"
+           if deferred else "")
         + (f"; {len(failures)} failure(s): " + "; ".join(failures[:3]) if failures else "")
     )
-    if failures and not enriched:
-        return {"status": job_ledger.STATUS_DEGRADED, "model": model,
-                "reason": reason, "outputs": []}
-    return {"status": job_ledger.STATUS_OK, "model": model, "reason": reason, "outputs": []}
+    complete = failed == 0 and (enriched + abstained) == len(batch)
+    status = job_ledger.STATUS_OK if complete else job_ledger.STATUS_DEGRADED
+    return {"status": status, "model": model, "reason": reason, "outputs": []}
+
+
+def _unknowns_or_default(result: Mapping[str, Any]) -> str:
+    """The model's own `unknowns`, or a statement that it gave none."""
+    return str(result.get("unknowns") or "").strip() or (
+        "the model returned an empty summary and no tags and named no unknowns"
+    )
+
+
+def _save_row(
+    journal: Any,
+    *,
+    trade_id: str,
+    day: str,
+    moment: datetime,
+    status: str,
+    reason: str,
+    supersedes: str,
+    failures: list[str],
+    summary: str = "",
+    tags: Sequence[str] = (),
+    evidence: Sequence[Any] = (),
+    model: str = "",
+    confidence: str = "",
+) -> bool:
+    """Append one row. A save that fails is a failure of THIS trade, not the pass."""
+    try:
+        journal.save_ai_enrichment(
+            trade_id=trade_id,
+            session_date=day,
+            summary=summary,
+            tags=list(tags),
+            evidence=list(evidence),
+            model=model,
+            now=moment.isoformat(timespec="seconds"),
+            status=status,
+            reason=reason,
+            confidence=confidence,
+            supersedes_row_id=supersedes,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"{trade_id}: save failed: {exc}")
+        return False
 
 
 def _journal_store():
@@ -265,15 +394,51 @@ def _journal_store():
     return JournalStore(Path(JOURNAL_DB_FILE))
 
 
+def is_legacy_blank(row: Mapping[str, Any]) -> bool:
+    """A row written before WS-AI1 that says nothing and does not say why.
+
+    Blank ``summary`` AND blank ``tags`` AND no ``status``. All three, because
+    an ``abstained`` row is ALSO blank in the first two and it is a real answer
+    - the trader's journal has an entry saying the model looked and declined.
+    Only the unlabelled blank is the defect's residue.
+    """
+    if str(row.get("status") or "").strip():
+        return False
+    return not str(row.get("summary") or "").strip() and not str(row.get("tags") or "").strip()
+
+
 def _trades_for_session(store: Any, day: str) -> list[dict[str, Any]]:
-    """Closed trades on this session that carry no enrichment for it yet."""
+    """Closed trades on this session whose attempt for it has not been made.
+
+    **A blank row is not a finished trade** (WS-AI1 item 3). This used to skip a
+    trade when ANY enrichment row existed for the session, so the six blank rows
+    the schema defect wrote satisfied "already done" forever - the repair could
+    never reach them, and no amount of fixing the schema would have produced a
+    single non-blank row.
+
+    A trade comes back when it carries no row for the session, or only legacy
+    blanks. The newest legacy blank travels on the trade as
+    ``_supersedes_row_id`` so the repair's new row can name the row it replaces
+    without a second query.
+    """
     rows = store.list_trades(trade_date=day)
     fresh = []
     for row in rows:
-        existing = store.list_ai_enrichment(str(row.get("trade_id")))
-        if any(str(item.get("session_date")) == day for item in existing):
+        existing = [
+            item
+            for item in store.list_ai_enrichment(str(row.get("trade_id")))
+            if str(item.get("session_date")) == day
+        ]
+        if any(str(item.get("status") or "").strip() in SETTLED_STATUSES for item in existing):
             continue
-        fresh.append(dict(row))
+        # A `failed` row leaves the trade here, so a second firing inside the
+        # same window retries it rather than reporting "nothing to enrich" -
+        # which is what a night the provider was down would otherwise look like.
+        candidate = dict(row)
+        blanks = [item for item in existing if is_legacy_blank(item)]
+        if blanks:
+            candidate["_supersedes_row_id"] = str(blanks[-1].get("enrichment_id") or "")
+        fresh.append(candidate)
     return fresh
 
 
@@ -337,6 +502,11 @@ def _enrich_one(
         api_key="",
         evidence=evidence,
         timeout_seconds=900,
+        # WS-AI1: the SAME provider path, this pass's OWN contract. The session
+        # summary's schema forbids every key the seam above reads.
+        schema=ENRICHMENT_JSON_SCHEMA,
+        schema_name="tradingbot_trade_enrichment",
+        prompt_version=ENRICHMENT_PROMPT_VERSION,
     )
     summary = result.get("summary") or {}
     proposed = _proposed_tags(summary)
@@ -345,29 +515,58 @@ def _enrich_one(
         "summary": _summary_text(summary),
         "tags": kept,
         "dropped_tags": dropped,
+        "confidence": _confidence_text(summary),
+        "unknowns": _unknowns_text(summary),
         "evidence": _evidence_links(trade, review_rows),
         "model": result.get("model", ""),
+        "prompt_version": str(result.get("prompt_version") or ENRICHMENT_PROMPT_VERSION),
     }
 
 
 def _proposed_tags(summary: Mapping[str, Any]) -> list[str]:
-    for key in ("tags", "setups", "families"):
-        value = summary.get(key)
-        if isinstance(value, (list, tuple)):
-            return [str(item) for item in value]
-        if isinstance(value, str) and value.strip():
-            return [part.strip() for part in re.split(r"[;,]", value) if part.strip()]
+    """The ONE tag seam, and it reads :data:`ENRICHMENT_JSON_SCHEMA`'s key.
+
+    It used to try ``tags`` / ``setups`` / ``families`` in turn - a fallback
+    chain that looks tolerant and was in fact the bug hiding in plain sight:
+    when the contract forbids all three, three chances at nothing is still
+    nothing. One contract, one key.
+    """
+    value = summary.get("tags")
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    if isinstance(value, str) and value.strip():
+        return [part.strip() for part in re.split(r"[;,]", value) if part.strip()]
     return []
 
 
 def _summary_text(summary: Mapping[str, Any]) -> str:
-    for key in ("headline", "summary", "what_worked", "lessons"):
-        value = summary.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()[:2000]
-        if isinstance(value, (list, tuple)) and value:
-            return "; ".join(str(item) for item in value)[:2000]
+    """The ONE summary seam, reading :data:`ENRICHMENT_JSON_SCHEMA`'s key."""
+    value = summary.get("summary")
+    if isinstance(value, str) and value.strip():
+        return value.strip()[:MAX_SUMMARY_CHARS]
+    if isinstance(value, (list, tuple)) and value:
+        return "; ".join(str(item) for item in value)[:MAX_SUMMARY_CHARS]
     return ""
+
+
+def _unknowns_text(summary: Mapping[str, Any]) -> str:
+    """The model's own account of what it could not determine.
+
+    Used verbatim as an abstention's reason: a sentence written here would be
+    the code inventing a reason for a decision the model made.
+    """
+    value = summary.get("unknowns")
+    if isinstance(value, (list, tuple)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return "; ".join(parts)[:MAX_SUMMARY_CHARS]
+    if isinstance(value, str):
+        return value.strip()[:MAX_SUMMARY_CHARS]
+    return ""
+
+
+def _confidence_text(summary: Mapping[str, Any]) -> str:
+    value = str(summary.get("confidence") or "").strip().lower()
+    return value if value in {"high", "medium", "low"} else ""
 
 
 def _evidence_package(*, trade, vocabulary, links, session_date) -> dict[str, Any]:
@@ -386,10 +585,15 @@ def _evidence_package(*, trade, vocabulary, links, session_date) -> dict[str, An
         "review_evidence": list(links),
         "allowed_setup_families": list(vocabulary),
         "instructions": (
-            "Summarize this trade in one or two plain sentences and choose zero "
-            "or more setup families from allowed_setup_families. Never invent a "
-            "family name; an empty list is a valid answer. Do not give advice, "
-            "and do not restate numbers you were not given."
+            "Write `summary` as one or two plain sentences about this trade, and "
+            "put zero or more names from allowed_setup_families in `tags`. Never "
+            "invent a family name; an empty list is a valid answer. State your "
+            "own `confidence` (high, medium or low), cite the source ids you "
+            "used in `sources`, and list anything you could not determine in "
+            "`unknowns`. If the evidence does not support a summary, return an "
+            "empty summary and empty tags and say why in `unknowns` - that is a "
+            "correct answer and it is recorded as one. Do not give advice, and "
+            "do not restate numbers you were not given."
         ),
     }
     encoded = json.dumps(content, sort_keys=True, default=str).encode("utf-8")

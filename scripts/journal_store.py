@@ -2429,6 +2429,10 @@ class JournalStore:
         evidence: Any = (),
         model: str = "",
         now: str = "",
+        status: str = "",
+        reason: str = "",
+        confidence: str = "",
+        supersedes_row_id: Any = "",
     ) -> None:
         """Append one ADVISORY enrichment row (LOCAL-AI Phase 3).
 
@@ -2440,14 +2444,28 @@ class JournalStore:
         Append-only: a second pass over the same trade adds a row rather than
         rewriting what an earlier night believed, which is what makes the
         history of the advice auditable.
+
+        WS-AI1 (2026-09-12) gave the row four more fields, and they are what
+        make a blank row readable:
+
+        * ``status`` -- ``enriched`` / ``abstained`` / ``failed``. An absent
+          status is the LEGACY blank written before this packet, and the
+          enrichment pass treats that absence as "never really done".
+        * ``reason`` -- why it abstained (the model's own ``unknowns``) or how
+          it failed (the error class and message). Never prose invented here.
+        * ``confidence`` -- the model's own ``low|medium|high``, or "".
+        * ``supersedes_row_id`` -- the ``enrichment_id`` this row replaces. A
+          POINTER: the superseded row is never touched, so the history of a
+          repaired night stays readable.
         """
         with self.connection() as conn:
             conn.execute(
                 """
                 INSERT INTO ai_trade_enrichment(
                     trade_id, session_date, schema, summary, tags, evidence_json,
-                    model, generated_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    model, generated_at, status, reason, confidence,
+                    supersedes_row_id
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(trade_id),
@@ -2458,6 +2476,10 @@ class JournalStore:
                     _json_dumps(list(evidence or ())),
                     str(model or ""),
                     str(now or _now_iso()),
+                    str(status or ""),
+                    str(reason or ""),
+                    str(confidence or ""),
+                    "" if supersedes_row_id in (None, "") else str(supersedes_row_id),
                 ),
             )
 

@@ -225,6 +225,11 @@ SCOPE_LABELS = {
     # code is the fact and the comment was the defect. Whether it SHOULD be
     # nightly is the trader's decision and this changes no behaviour.
     "market_journal": "Market journal entries and the day's machine context",
+    # WS-AI1 item 6 (WISHLIST 5C). A DERIVED, bounded section rather than the
+    # ST5 CSV: the report is one row per statement and its interesting number
+    # is the coverage, which a model reading 25 raw rows would have to count
+    # for itself - and counting is exactly what a model must not be asked to do.
+    "preference_to_trade": "What you said against what you traded (ST5 coverage)",
 }
 
 #: Machine-written facts a scope's evidence cannot be read correctly without.
@@ -414,6 +419,16 @@ SCOPE_BUDGET_WEIGHTS = {
     "walkaway": 1,
     "setup_performance": 1,
     "market_journal": 1,
+    # WS-AI1. Weight 2 and it costs the other scopes NOTHING: the allocator caps
+    # a scope's allocation at what it NEEDS and hands the surplus straight back
+    # (`_allocate_scope_budgets`), and this section is bounded at
+    # `PREFERENCE_SECTION_MAX_CHARS` with at most `PREFERENCE_EXAMPLE_LIMIT`
+    # examples, so it cannot grow into its share. Weight 1 would have given it a
+    # base share of 80,000 x 1/12 = 6,666 chars against a MEASURED 7,668 on the
+    # live report (838 statement rows, 136,720 bytes on disk, 2026-09-11) - so
+    # it would have depended on surplus every night, and surplus is handed out
+    # to the heaviest scopes first.
+    "preference_to_trade": 2,
 }
 
 #: Below this a grant cannot carry anything a reader could use, so the source
@@ -493,6 +508,59 @@ AI_SUMMARY_JSON_SCHEMA = {
     "required": ["executive_summary", *MODEL_SUMMARY_SECTIONS],
     "additionalProperties": False,
 }
+
+#: The prompt/contract version the session-summary path speaks. Named so a
+#: caller that asks for a DIFFERENT contract (packet WS-AI1's per-trade
+#: enrichment) can say which one it used in its own record, instead of every
+#: document claiming the same unversioned provenance.
+AI_SUMMARY_PROMPT_VERSION = "ai_summary_v1"
+
+
+def validate_structured_output(
+    payload: Any, schema: Mapping[str, Any], *, name: str = "response"
+) -> dict[str, Any]:
+    """Structural validation for a schema that is NOT the session summary.
+
+    WS-AI1. `validate_ai_summary` is the session summary's validator and hard-
+    codes its sections, its citation rule and its position-claim rule; none of
+    those belong to a per-trade enrichment. Rather than a second provider path,
+    `request_ai_summary` takes a ``schema`` and validates it here.
+
+    Deliberately small, and deliberately RAISING rather than repairing: required
+    keys, `additionalProperties: False`, declared types, string `enum`s and the
+    item type of an array. A model answer that breaks any of those is a provider
+    failing to answer, which is the caller's `failed` - not something to patch
+    into a document that then looks fine.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{name} must be a JSON object")
+    properties = dict(schema.get("properties") or {})
+    missing = [key for key in (schema.get("required") or ()) if key not in payload]
+    if missing:
+        raise ValueError(f"{name} is missing required field(s): {', '.join(sorted(missing))}")
+    if schema.get("additionalProperties") is False:
+        extra = sorted(set(payload) - set(properties))
+        if extra:
+            raise ValueError(f"{name} carries field(s) the schema forbids: {', '.join(extra)}")
+    cleaned: dict[str, Any] = {}
+    for key, value in payload.items():
+        spec = properties.get(key) or {}
+        expected = str(spec.get("type") or "")
+        if expected == "string":
+            if not isinstance(value, str):
+                raise ValueError(f"{name}.{key} must be a string")
+            allowed = spec.get("enum")
+            if allowed is not None and value not in allowed:
+                raise ValueError(f"{name}.{key}={value!r} is outside {sorted(allowed)}")
+        elif expected == "array":
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(f"{name}.{key} must be an array")
+            item_type = str(((spec.get("items") or {}).get("type")) or "")
+            if item_type == "string" and any(not isinstance(item, str) for item in value):
+                raise ValueError(f"{name}.{key} must be an array of strings")
+            value = list(value)
+        cleaned[key] = value
+    return cleaned
 
 
 def normalize_provider(provider: str) -> str:
@@ -934,7 +1002,265 @@ def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
                 TRADER_ANNOTATIONS_FILE,
             ),
         ],
+        # WS-AI1 item 6. The path is resolved HERE, on every call, because
+        # `_source_specs` is a function: `preference_trade_outcomes.REPORT_FILE`
+        # is module state a caller (and a test) can point elsewhere, and an
+        # import-time binding would have frozen the live path into this table.
+        "preference_to_trade": [
+            (
+                "preference.to_trade",
+                (
+                    "Statement-to-trade coverage: what the trader said, whether a "
+                    "trade followed inside the 10-SESSION window, and why each "
+                    "miss is a miss"
+                ),
+                _preference_report_file(),
+            ),
+        ],
     }
+
+
+def _preference_report_file() -> Path:
+    """ST5's report path, read at CALL time (WS-AI1)."""
+    try:
+        import preference_trade_outcomes
+
+        return Path(preference_trade_outcomes.REPORT_FILE)
+    except Exception:  # noqa: BLE001 - a missing module is a missing source
+        from project_paths import OUTPUT_DIR
+
+        return Path(OUTPUT_DIR) / "preference_trade_outcomes.csv"
+
+
+#: How many example rows the `preference_to_trade` section carries. A SIZE
+#: rule, exactly like N3's bounded narration: it decides how many rows fit, and
+#: nothing about which ones are interesting.
+PREFERENCE_EXAMPLE_LIMIT = 20
+
+#: Character ceiling on the whole encoded section - the package's OWN per-source
+#: cap, so this section is bound by the same rule every other source is.
+#: MEASURED on a read-only copy of the live report (838 statement rows, 136,720
+#: bytes on disk, 2026-09-11): the section encodes to **7,668 chars**, 48% of
+#: this cap and 9.6% of `MAX_TOTAL_EVIDENCE_CHARS`. A 17.8x reduction on the
+#: file it reads, and the reduction does not grow with the file: the counts are
+#: fixed-size and the examples are capped. The loop below is the backstop for a
+#: pathological report, and it gives way by dropping the OLDEST examples -
+#: never a count, never the coverage.
+PREFERENCE_SECTION_MAX_CHARS = MAX_SOURCE_CHARS
+
+#: Ceiling on ONE example's free text. The bound belongs on the ROW as well as
+#: on the section: `statement` is the only unbounded field in the report (the
+#: trader's own words, or a note copied out of the market journal), so a single
+#: long one could push the section over a cap that 20 ordinary rows sit well
+#: inside. It binds nothing on the live report today - every statement there is
+#: shorter than this - which is exactly when a guard is worth adding.
+PREFERENCE_STATEMENT_CHARS = 120
+
+#: The columns an example carries out of the ST5 report. `journal_r` and
+#: `journal_net_pnl` are here because the section's whole subject is what
+#: happened; they are NOT in the selection key, and gate the packet's rule: a
+#: result column may be READ and may never RANK.
+PREFERENCE_EXAMPLE_COLUMNS = (
+    "session_date", "symbol", "side", "channel", "statement", "statement_id",
+    "traded", "trade_id", "trade_opened_at", "match_confidence", "match_basis",
+    "journal_r", "journal_net_pnl",
+)
+
+
+def preference_to_trade_section(
+    path: Path, *, session_date: str = "", now: datetime | None = None
+) -> dict[str, Any]:
+    """A bounded, deterministic read of ST5's statement-to-trade report.
+
+    WISHLIST 5C through packet WS-AI1. The model is handed COUNTS it does not
+    have to derive and at most :data:`PREFERENCE_EXAMPLE_LIMIT` rows, because
+    handing it 500 statement rows and asking "how often did you act on what you
+    said" is asking it to do arithmetic - the one thing the data-quality rule
+    already says it must not be asked to do.
+
+    The three grains are kept apart, because they answer different questions:
+
+    * ``n_statements``      -- rows in the report. One per thing the trader said.
+    * ``n_trades_matched``  -- DISTINCT ``trade_id``. ST5.2's rule: two
+      statements about one trade are two statements and ONE trade.
+    * ``n_trades_unmatched``-- statements no trade was matched to.
+
+    **Coverage is derived, never invented.** The report's own vocabulary is
+    ``match_basis`` (`preference_trade_outcomes.match_trade`), and every miss
+    falls into exactly one of three honest buckets:
+
+    * ``journal_unavailable``   -- the row carries no ``match_basis`` at all,
+      which is what a row written without a readable journal looks like. It is
+      routinely 0, and a 0 that is MEASURED is worth more than a bucket that
+      was left out because it is usually empty.
+    * ``window_open``           -- the statement's 10-SESSION window has not
+      closed yet (`statement_window_end`). Not a miss; not yet an answer.
+    * ``no_match_after_window`` -- the window closed and no trade was matched.
+      This is the real "said it, did not do it".
+
+    The three sum to ``n_trades_unmatched`` by construction.
+
+    **Examples are selected by RECENCY and by nothing else.** The key is
+    (session_date, the report's own row order), both descending; no R, win rate,
+    P&L or confidence column may enter it. The oldest row in the live report is
+    also frequently the best one, and a section that surfaced it would be
+    teaching the model that the trader's preferences work better than they do.
+    """
+    import csv as _csv
+
+    moment = now or datetime.now().astimezone()
+    reference = str(session_date or "").strip() or moment.date().isoformat()
+    rows: list[dict[str, str]] = []
+    with Path(path).open("r", encoding="utf-8", newline="") as handle:
+        for index, row in enumerate(_csv.DictReader(handle), start=1):
+            row = {str(key): str(value or "") for key, value in row.items() if key}
+            row["_row_id"] = f"{Path(path).name}#{index}"
+            row["_ordinal"] = str(index)
+            rows.append(row)
+
+    matched_trade_ids: list[str] = []
+    unmatched: list[dict[str, str]] = []
+    for row in rows:
+        trade_id = row.get("trade_id", "").strip()
+        if trade_id:
+            if trade_id not in matched_trade_ids:
+                matched_trade_ids.append(trade_id)
+        else:
+            unmatched.append(row)
+
+    journal_unavailable = 0
+    window_open = 0
+    no_match_after_window = 0
+    for row in unmatched:
+        if not row.get("match_basis", "").strip():
+            journal_unavailable += 1
+            continue
+        if _preference_window_open(row.get("session_date", ""), reference):
+            window_open += 1
+        else:
+            no_match_after_window += 1
+
+    ordered = sorted(
+        rows,
+        key=lambda row: (row.get("session_date", ""), int(row.get("_ordinal") or 0)),
+        reverse=True,
+    )
+    examples = [
+        {
+            "row_id": row["_row_id"],
+            **{
+                column: _preference_cell(column, row.get(column, ""))
+                for column in PREFERENCE_EXAMPLE_COLUMNS
+            },
+        }
+        for row in ordered[:PREFERENCE_EXAMPLE_LIMIT]
+    ]
+
+    from preference_trade_outcomes import TRADE_WINDOW_NOTE
+
+    def _build(rows_shown: list[dict[str, Any]]) -> dict[str, Any]:
+        return _preference_payload(
+            path=path,
+            reference=reference,
+            window_note=TRADE_WINDOW_NOTE,
+            n_statements=len(rows),
+            matched=len(matched_trade_ids),
+            unmatched=len(unmatched),
+            journal_unavailable=journal_unavailable,
+            window_open=window_open,
+            no_match_after_window=no_match_after_window,
+            examples=rows_shown,
+        )
+
+    # The cap is a SIZE rule and it drops from the END, which is the oldest
+    # example - the same direction the selection already ran in. The counts and
+    # the coverage never shrink: they are the answer, and the examples are the
+    # illustration. `examples_note` states K of N either way, so a reader is
+    # never left to assume the file held only what it was shown.
+    section = _build(examples)
+    while len(examples) > 1 and _encoded_size(section) > PREFERENCE_SECTION_MAX_CHARS:
+        examples = examples[:-1]
+        section = _build(examples)
+    return section
+
+
+def _preference_payload(
+    *,
+    path: Path,
+    reference: str,
+    window_note: str,
+    n_statements: int,
+    matched: int,
+    unmatched: int,
+    journal_unavailable: int,
+    window_open: int,
+    no_match_after_window: int,
+    examples: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """One encoding of the section. Called repeatedly as the cap shrinks it.
+
+    The counts and the coverage are IDENTICAL at every example count - only
+    `examples` and the K in `examples_note` move - so the size rule can never
+    change what the section claims about the trader's record.
+    """
+    return {
+        "schema_version": "ai_preference_to_trade_v1",
+        "source_file": str(path),
+        "as_of": reference,
+        "window": window_note,
+        "n_statements": n_statements,
+        "n_trades_matched": matched,
+        "n_trades_unmatched": unmatched,
+        "coverage": {
+            "journal_unavailable": journal_unavailable,
+            "window_open": window_open,
+            "no_match_after_window": no_match_after_window,
+        },
+        "coverage_note": (
+            f"{n_statements} statement(s); {matched} distinct trade(s) matched inside "
+            f"{window_note}; of the {unmatched} statement(s) with no trade, "
+            f"{window_open} are still inside their window, {no_match_after_window} "
+            f"closed without one, and {journal_unavailable} carry no match basis at "
+            "all. A statement counts once; a trade named by two statements counts once."
+        ),
+        "examples": examples,
+        "examples_note": (
+            f"{len(examples)} of {n_statements} row(s), the NEWEST by session date and "
+            "report order. Selection is a size rule: no result column is in the key."
+        ),
+    }
+
+
+def _preference_cell(column: str, value: str) -> str:
+    """One example cell, with the free-text field bounded and SAID to be.
+
+    The ellipsis is not decoration: a statement silently cut at 120 characters
+    reads as a complete sentence the trader never finished, and the row id
+    beside it is what a reader follows to the whole thing.
+    """
+    text = str(value or "")
+    if column != "statement" or len(text) <= PREFERENCE_STATEMENT_CHARS:
+        return text
+    return text[:PREFERENCE_STATEMENT_CHARS].rstrip() + "... [cut; see row_id]"
+
+
+def _preference_window_open(said_on: str, reference: str) -> bool:
+    """Is this statement's 10-session window still open as of ``reference``?
+
+    Uncertainty reads CLOSED: a date this code cannot parse must not be counted
+    as "still waiting", which would quietly shrink the number of real misses.
+    """
+    try:
+        start = date.fromisoformat(str(said_on)[:10])
+        asof = date.fromisoformat(str(reference)[:10])
+    except (TypeError, ValueError):
+        return False
+    try:
+        from preference_trade_outcomes import statement_window_end
+
+        return statement_window_end(start) > asof
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _sha256_file(path: Path) -> str:
@@ -1279,6 +1605,70 @@ def _artifact_digest(path: Path, content: Any, size_bytes: int, mtime_iso: str) 
         default=str,
     )
     return "capped:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _preference_source(
+    source_id: str,
+    label: str,
+    path: Path,
+    *,
+    session_date: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """The statement-to-trade section as a package source (WS-AI1 item 6).
+
+    An absent or unreadable report is declared MISSING or INVALID and the
+    package carries on - the whole point of the coverage block. A section that
+    reported zero statements because it could not open the file would be a
+    measured-looking claim about the trader's discipline, drawn from nothing.
+    """
+    target = Path(path)
+    if not target.exists():
+        return _source_record(
+            source_id, label,
+            status=SOURCE_STATUS_MISSING,
+            reason=f"{target.name} does not exist; ST5's nightly slot has not written it",
+            session_date=session_date,
+        )
+    observed_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        content = preference_to_trade_section(target, session_date=session_date, now=now)
+    except Exception as exc:  # noqa: BLE001
+        return _source_record(
+            source_id, label,
+            status=SOURCE_STATUS_INVALID,
+            reason=f"{target.name} could not be read as an ST5 report: {exc}",
+            observed_at=observed_at,
+            session_date=session_date,
+        )
+    if not content.get("n_statements"):
+        return _source_record(
+            source_id, label,
+            status=SOURCE_STATUS_EMPTY,
+            reason=f"{target.name} holds no statement rows",
+            observed_at=observed_at,
+            session_date=session_date,
+        )
+    # The newest statement the report carries IS its content_through - measured
+    # from the rows rather than from the file's mtime, which is rewritten nightly
+    # whether or not anything new was said.
+    newest = max(
+        (str(row.get("session_date") or "") for row in content.get("examples") or ()),
+        default="",
+    )
+    encoded = json.dumps(content, sort_keys=True, default=str).encode("utf-8")
+    return _source_record(
+        source_id, label,
+        status=SOURCE_STATUS_AVAILABLE,
+        as_of=observed_at,
+        observed_at=observed_at,
+        content_through=newest,
+        content_through_basis="the newest statement session in the report",
+        source_session=newest,
+        session_date=session_date,
+        sha256=hashlib.sha256(encoded).hexdigest(),
+        content=content,
+    )
 
 
 def _path_source(
@@ -1837,6 +2227,20 @@ def build_evidence_package(
         collected: list[dict[str, Any]] = []
         if scope == "journal_review":
             collected.append(_journal_source(journal_store, session_date=session_text))
+        elif scope == "preference_to_trade":
+            # WS-AI1: a DERIVED section, not the raw CSV. The same source id and
+            # the same override key as every path-backed source, so a caller
+            # points it at a fixture exactly the way it points any other.
+            for source_id, label, path in specs.get(scope, []):
+                collected.append(
+                    _preference_source(
+                        source_id,
+                        label,
+                        overrides.get(source_id, path),
+                        session_date=session_text,
+                        now=generated,
+                    )
+                )
         else:
             for source_id, label, path in specs.get(scope, []):
                 collected.append(
@@ -2079,6 +2483,11 @@ SOURCE_KINDS_BY_FAMILY = {
     "feedback": SOURCE_KIND_FEEDBACK,
     "judgement": SOURCE_KIND_FEEDBACK,
     "review": SOURCE_KIND_FEEDBACK,
+    # WS-AI1. The statement-to-trade report is the trader's own words joined to
+    # their own fills: feedback, not a position statement. It names trade ids,
+    # and a trade id is not a claim that anything is HELD - only the trade
+    # journal's own source ids may support that (POSITION_SOURCE_IDS).
+    "preference": SOURCE_KIND_FEEDBACK,
     "walkaway": SOURCE_KIND_WALKAWAY,
     "ops": SOURCE_KIND_OPS,
 }
@@ -2414,6 +2823,35 @@ def _local_user_prompt(evidence: Mapping[str, Any], previous_error: str = "") ->
         "evidence package above. Any statement carrying a percentage, an "
         "'N of M', an 'n=N' or a decimal R value must carry metric_ref "
         "{source_id, key, horizon, denominator} or it will be discarded."
+        + _correction_note(previous_error)
+    )
+
+
+def _local_schema_prompt(
+    evidence: Mapping[str, Any], schema: Mapping[str, Any], previous_error: str = ""
+) -> str:
+    """The local prompt for a caller-supplied schema (WS-AI1).
+
+    Kept apart from `_local_user_prompt` so the session summary's payload stays
+    byte-identical: that prompt names five sections, a data_quality prohibition
+    and a metric_ref rule, none of which exist in another contract. This one
+    states the package, the schema, and the one rule every structured answer
+    here obeys - an empty answer is allowed, an invented field is not.
+    """
+    properties = list((schema.get("properties") or {}).keys())
+    return (
+        "Answer about the evidence package below, and return ONLY the required "
+        "JSON object (no prose, no markdown fence).\n"
+        + COVERAGE_PROMPT_LINE
+        + "\n\nEVIDENCE PACKAGE:\n"
+        + json.dumps(_model_visible_package(evidence), sort_keys=True, default=str)
+        + "\n\nREQUIRED OUTPUT SHAPE - return exactly this JSON object:\n"
+        + json.dumps(schema, sort_keys=True)
+        + "\n\nEvery one of these keys must be present: "
+        + ", ".join(properties)
+        + ". Do not add any other key. An EMPTY answer is valid and is better "
+        "than a guess: return empty strings and empty lists and say what you "
+        "could not determine in the list the schema provides for it."
         + _correction_note(previous_error)
     )
 
@@ -3165,6 +3603,8 @@ def _request_local_summary(
     timeout_seconds: int,
     post,
     previous_error: str = "",
+    schema: Mapping[str, Any] | None = None,
+    schema_name: str = "tradingbot_ai_summary",
 ) -> tuple[Mapping[str, Any], dict[str, Any], list[dict[str, Any]], str]:
     """One local chat-completions call, validated the same way as the cloud.
 
@@ -3179,6 +3619,17 @@ def _request_local_summary(
     a whole document, and ``""`` otherwise -- so a caller can say in its
     manifest that the document it published is the smaller one.
     """
+    #: The caller's contract, or the session summary's. WS-AI1: ONE provider
+    #: path, two contracts - a second path would be a second place for a
+    #: timeout, a retry rule and a truncation check to drift.
+    contract = dict(schema) if schema is not None else AI_SUMMARY_JSON_SCHEMA
+    own_contract = contract is not AI_SUMMARY_JSON_SCHEMA
+
+    def _prompt(error_text: str) -> str:
+        if own_contract:
+            return _local_schema_prompt(evidence, contract, error_text)
+        return _local_user_prompt(evidence, error_text)
+
     base_url = local_endpoint_url()
     if not base_url:
         raise RuntimeError(
@@ -3190,7 +3641,7 @@ def _request_local_summary(
         "model": model,
         "messages": [
             {"role": "system", "content": _system_instruction()},
-            {"role": "user", "content": _local_user_prompt(evidence, previous_error)},
+            {"role": "user", "content": _prompt(previous_error)},
         ],
         # Two caps (packet N2): the reduce package asks for the synthesis one,
         # everything else keeps the map cap the evidence budget is sized against.
@@ -3206,9 +3657,9 @@ def _request_local_summary(
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "name": "tradingbot_ai_summary",
+                "name": schema_name,
                 "strict": True,
-                "schema": AI_SUMMARY_JSON_SCHEMA,
+                "schema": contract,
             },
         },
     }
@@ -3276,7 +3727,7 @@ def _request_local_summary(
                 )
             retried_shorter = True
             payload["messages"][1]["content"] = (
-                _local_user_prompt(evidence, previous_error) + _shorter_output_note()
+                _prompt(previous_error) + _shorter_output_note()
             )
             continue
         text = _extract_chat_completion_text(body)
@@ -3284,7 +3735,11 @@ def _request_local_summary(
             raise RuntimeError("local provider returned no text content")
         try:
             drops: list[dict[str, Any]] = []
-            summary = validate_ai_summary(_parse_json_text(text), evidence, dropped=drops)
+            parsed = _parse_json_text(text)
+            if own_contract:
+                summary = validate_structured_output(parsed, contract, name=schema_name)
+            else:
+                summary = validate_ai_summary(parsed, evidence, dropped=drops)
             return body, summary, drops, "shorter" if retried_shorter else ""
         except (ValueError, json.JSONDecodeError) as exc:
             # Only malformed output is worth retrying, and only once -- and the
@@ -3293,7 +3748,7 @@ def _request_local_summary(
             last_error = exc
             if attempt >= LOCAL_JSON_RETRIES:
                 break
-            payload["messages"][1]["content"] = _local_user_prompt(evidence, str(exc))
+            payload["messages"][1]["content"] = _prompt(str(exc))
     raise RuntimeError(
         f"local provider returned invalid summary JSON after "
         f"{LOCAL_JSON_RETRIES + 1} attempt(s): {last_error}"
@@ -3309,11 +3764,24 @@ def request_ai_summary(
     timeout_seconds: int = 90,
     post=requests.post,
     previous_error: str = "",
+    schema: Mapping[str, Any] | None = None,
+    schema_name: str = "tradingbot_ai_summary",
+    prompt_version: str = AI_SUMMARY_PROMPT_VERSION,
 ) -> dict[str, Any]:
     """Call one provider and return validated output plus non-secret metadata.
 
     ``previous_error`` is the rejection from an earlier attempt, fed back to
     the model verbatim so the retry is told what to fix.
+
+    ``schema`` is the JSON contract the answer must satisfy. It defaults to
+    ``AI_SUMMARY_JSON_SCHEMA`` and every existing caller leaves it alone, so
+    their request payloads are byte-identical. A caller that passes its OWN
+    schema (packet WS-AI1's per-trade enrichment) gets the SAME provider path -
+    the same timeout, retry, truncation and length-stop rules - validated
+    through :func:`validate_structured_output` instead of the session summary's
+    validator, and it names its own ``prompt_version`` so a stored row can say
+    which contract produced it. A second provider function would have been a
+    second place for all of that to drift.
     """
 
     normalized_provider = normalize_provider(provider)
@@ -3323,6 +3791,16 @@ def request_ai_summary(
         key = LOCAL_PLACEHOLDER_API_KEY
     if not key:
         raise ValueError("provider API key is missing")
+    contract = dict(schema) if schema is not None else AI_SUMMARY_JSON_SCHEMA
+    own_contract = schema is not None
+    # The cloud branches below build their prompt inline; a caller-supplied
+    # contract needs a prompt that describes IT rather than the five summary
+    # sections. Computed once so the default stays byte-identical.
+    cloud_prompt = (
+        _local_schema_prompt(evidence, contract, previous_error)
+        if own_contract
+        else _user_prompt(evidence) + _correction_note(previous_error)
+    )
     started = datetime.now().astimezone()
     if normalized_provider == "local":
         body, summary, drops, length_retry = _request_local_summary(
@@ -3332,6 +3810,8 @@ def request_ai_summary(
             timeout_seconds=timeout_seconds,
             post=post,
             previous_error=previous_error,
+            schema=schema,
+            schema_name=schema_name,
         )
         finished = datetime.now().astimezone()
         return {
@@ -3353,6 +3833,7 @@ def request_ai_summary(
             # Empty on a clean answer; never absent, so a reader can tell "no
             # drops" from "this build did not measure drops".
             "citation_drops": drops,
+            "prompt_version": str(prompt_version or ""),
             # "shorter" when this document is the second, smaller answer after a
             # length stop; "" otherwise. LOCAL ONLY -- the cloud providers do
             # not go through this retry, and adding a key to their envelopes
@@ -3366,15 +3847,15 @@ def request_ai_summary(
             json={
                 "model": selected_model,
                 "instructions": _system_instruction(),
-                "input": _user_prompt(evidence) + _correction_note(previous_error),
+                "input": cloud_prompt,
                 "max_output_tokens": 3500,
                 "store": False,
                 "text": {
                     "format": {
                         "type": "json_schema",
-                        "name": "tradingbot_ai_summary",
+                        "name": schema_name,
                         "strict": True,
-                        "schema": AI_SUMMARY_JSON_SCHEMA,
+                        "schema": contract,
                     }
                 },
             },
@@ -3397,11 +3878,11 @@ def request_ai_summary(
                 "messages": [
                     {
                         "role": "user",
-                        "content": _user_prompt(evidence) + _correction_note(previous_error),
+                        "content": cloud_prompt,
                     }
                 ],
                 "output_config": {
-                    "format": {"type": "json_schema", "schema": AI_SUMMARY_JSON_SCHEMA}
+                    "format": {"type": "json_schema", "schema": contract}
                 },
             },
             timeout=max(10, min(300, int(timeout_seconds))),
@@ -3416,7 +3897,10 @@ def request_ai_summary(
         raise RuntimeError(f"{normalized_provider} returned no text content")
     parsed = _parse_json_text(text)
     drops: list[dict[str, Any]] = []
-    summary = validate_ai_summary(parsed, evidence, dropped=drops)
+    if own_contract:
+        summary = validate_structured_output(parsed, contract, name=schema_name)
+    else:
+        summary = validate_ai_summary(parsed, evidence, dropped=drops)
     finished = datetime.now().astimezone()
     return {
         "schema_version": "ai_summary_result_v1",
@@ -3431,6 +3915,7 @@ def request_ai_summary(
         "usage": usage_from_body(body),
         "summary": summary,
         "citation_drops": drops,
+        "prompt_version": str(prompt_version or ""),
     }
 
 

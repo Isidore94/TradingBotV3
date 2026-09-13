@@ -620,6 +620,131 @@ That redesign has **not been done**. Concretely, for the next agent:
 > `docs/SETUPS_MAJOR.md` / `SETUPS_TEST.md`; anything outside that vocabulary is
 > DROPPED and counted, because an invented family name is a bucket nobody can
 > compare against anything. The weekly retro named below is NOT built.
+>
+> **WS-AI1, 2026-09-12 — the enrichment has its OWN schema, and an empty row is
+> never a silent one.** Until this packet the pass reused
+> `ai_summary.AI_SUMMARY_JSON_SCHEMA`, which is `additionalProperties: False`
+> over `executive_summary` plus the five `MODEL_SUMMARY_SECTIONS`. None of the
+> keys the extraction seam read could exist in a response that schema validated,
+> so **every row the job wrote was blank while the ledger said `ok`** — six
+> trades over 2026-09-09..11 — and `_trades_for_session` then read each blank
+> row as "already done" forever. Four rules now hold:
+>
+> 1. **One contract.** `enrichment.ENRICHMENT_JSON_SCHEMA` is `summary`, `tags`,
+>    `confidence` (`low|medium|high`), `sources`, `unknowns`, closed. It travels
+>    down the SAME provider path: `ai_summary.request_ai_summary` takes `schema`,
+>    `schema_name` and `prompt_version` and validates a caller-supplied contract
+>    through `ai_summary.validate_structured_output`. The default is unchanged,
+>    so every existing caller's request payload is byte-identical. There is no
+>    second provider function, because a second one is a second place for the
+>    timeout, retry, truncation and length-stop rules to drift.
+>    `_proposed_tags` / `_summary_text` stay the one extraction seam and read
+>    exactly this schema's keys.
+> 2. **A row says what it is.** `status` is `enriched`, `abstained` or `failed`;
+>    `reason` carries the model's own `unknowns` on an abstention and the error
+>    class on a failure; `confidence` is the model's own. The slot's ledger line
+>    is `enriched A, abstained B, failed C of N`, and `STATUS_OK` needs
+>    `A + B == N` with `C == 0`. **An absent status is the LEGACY blank** written
+>    before this packet.
+> 3. **A blank row is not a finished trade.** `enrichment.is_legacy_blank` is
+>    blank `summary` AND blank `tags` AND no `status` — all three, because an
+>    `abstained` row is also blank in the first two and is a real answer. The
+>    repair APPENDS a row naming the one it replaces in `supersedes_row_id`;
+>    nothing is ever rewritten. A settled row (`enriched` / `abstained`) ends the
+>    trade's attempt for that session; a `failed` row does not, so a second
+>    firing inside the same window retries it and the slot's own attempt cap in
+>    `ai_jobs.ledger` is what bounds that.
+> 4. **A tag suggestion still carries zero privilege.** The vocabulary decides,
+>    the pass writes only `ai_trade_enrichment`, and
+>    `scripts/journal_bulk_tag.py` remains the one machine writer of a real tag.
+>
+> The reader is `ui/services/journal_feed.latest_ai_enrichment` (newest row that
+> nothing supersedes) rendered by `TradesTab._show_trade` on the existing detail
+> read path, marked advisory. An `abstained` or `failed` row is SHOWN, not
+> hidden: a pane that showed only the successes would make the layer look more
+> complete than it is, which is the defect this packet ended.
+
+#### The completion vocabulary (WS-AI1 item 4)
+
+**Every published nightly summary names how complete it is, in one word at the
+top level of the result.** `map_reduce.completion_word` decides it and
+`map_reduce.COMPLETION_WORDS` is the closed set:
+
+| word | what happened |
+|---|---|
+| `synthesized` | every slice read and the reduce pass answered |
+| `partial` | the reduce pass answered, over fewer slices than planned |
+| `unsynthesized_fallback` | the reduce pass did not answer; the document is the code's assembly of the surviving findings |
+| `failed` | this path produced no model document at all |
+
+A lost synthesis outranks a lost slice, because a fallback document is assembled
+by code and a partial one is still the model's own synthesis of less.
+
+`briefs.run_daily_summary` publishes `ledger.STATUS_OK` **only** for
+`synthesized`; anything else is `STATUS_DEGRADED`, the document is still
+published (losing the findings would be worse), and the reason names the
+completion and the synthesis error verbatim. Before this, the chunked branch
+returned `STATUS_OK` unconditionally with `; NOT synthesized` appended to the end
+of a sentence nobody reads to the end — which is how the 900 s synthesis timeouts
+of 2026-09-10 and -11 were ledgered as clean nights. **The timeout was not raised
+and the model was not changed.**
+
+The word reaches the ledger row through the runner's `extra` (`ledger.record`
+only ever `setdefault`s, so a slot cannot overwrite a ledger field) and the
+System Health strip's AI row prints it. Two defects in that same reader were
+fixed with it: `operations_audit._ai_jobs_check` counted
+`statuses.get("degraded")` while the ledger constant is `degraded_no_narrative`,
+so a degraded night read as healthy; and it read `ts`/`timestamp` while
+`ledger.record` writes `started_at`/`finished_at`, so every AI row read as
+undated.
+
+#### `preference_to_trade` in the nightly package (WS-AI1 item 6 / WISHLIST 5C)
+
+A DERIVED, bounded section over ST5's `preference_trade_outcomes.csv`, built by
+`ai_summary.preference_to_trade_section` and registered as the scope
+`preference_to_trade`. It is not the raw CSV: the report is one row per
+statement and its interesting number is the coverage, and asking a model to
+count 500 rows is asking it to do the one thing the data-quality rule already
+forbids.
+
+Three grains, never merged: `n_statements` (rows), `n_trades_matched` (DISTINCT
+`trade_id` — ST5.2's rule that two statements about one trade are two statements
+and ONE trade), `n_trades_unmatched`. Coverage is derived from the report's own
+`match_basis` vocabulary plus `preference_trade_outcomes.statement_window_end`:
+`journal_unavailable` (no `match_basis` at all — routinely 0, and a MEASURED 0 is
+worth more than an omitted bucket), `window_open` (the 10-SESSION window has not
+closed), `no_match_after_window`. The three sum to `n_trades_unmatched` by
+construction. Examples are capped at `PREFERENCE_EXAMPLE_LIMIT` (20) and selected
+by `(session_date, the report's own row order)` **descending — no `journal_r`,
+P&L, match confidence or any other result column may enter that key**, the same
+refusal N3 made for the research narration. `REPORT_FILE` is resolved at CALL
+time inside `_source_specs`, never bound at import.
+
+**It is on the nightly slate** (`briefs.DEFAULT_SCOPES`, lead decision
+2026-09-12 on WISHLIST 5C, the trader able to overrule): the summary is fed
+"into the existing AI package", and the package that reaches the trader is the
+unattended nightly one — a scope nobody selects is fed into nothing. Both
+existing slate pins (`tests/test_opt_in_evidence_scopes.py`,
+`tests/test_veto_cohort_grading.py`) now pin SIX and name the decision, so a
+seventh still cannot join by accident.
+
+**The budget, measured rather than assumed.** On a read-only copy of the live
+report (838 statement rows, 136,720 bytes on disk, 2026-09-11) the section
+encodes to **7,668 characters** — 48% of the package's per-source cap
+(`MAX_SOURCE_CHARS`, 16,000) and 9.6% of `MAX_TOTAL_EVIDENCE_CHARS` (80,000). A
+17.8x reduction on the file it reads, and one that does not decay as the report
+grows: the counts are fixed-size and the examples are capped at 20 with each
+`statement` bounded at `PREFERENCE_STATEMENT_CHARS`. The scope carries budget
+weight **2**, which costs the other five nothing — `_allocate_scope_budgets`
+caps a scope's allocation at what it NEEDS and returns the surplus — and exists
+because weight 1 would have given it a base share of 6,666 against a measured
+7,668, leaving it dependent on a surplus that is handed to the heaviest scopes
+first. `PREFERENCE_SECTION_MAX_CHARS` is the backstop for a pathological report
+and gives way by dropping the OLDEST examples, never a count and never the
+coverage.
+
+The runner's stage order is unchanged and `weekly_synthesis` stays optional and
+unscheduled.
 
 
 - Nightly pass over new journal rows: summarize, tag with setup names from

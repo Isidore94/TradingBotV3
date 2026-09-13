@@ -160,6 +160,37 @@ def latest_trade_review(trade_id: str) -> dict[str, Any] | None:
         return None
 
 
+def latest_ai_enrichment(trade_id: str) -> dict[str, Any] | None:
+    """The newest advisory enrichment row for one trade that nothing replaces.
+
+    WS-AI1 item 5. The table has had no reader anywhere in `scripts/` or `ui/`
+    since it was created - the model wrote advice into a store the trader could
+    not open, which is indistinguishable from not writing it.
+
+    "Latest non-superseded" is literal: a row another row NAMES in
+    `supersedes_row_id` is history and is never shown, and the newest of what
+    remains is the answer. The store is append-only, so the repaired night's row
+    and the blank it replaced both exist and only one of them is the advice.
+
+    Read-only, and a broken read is None rather than an exception: the detail
+    pane must still render a trade when the AI layer is off or its table is
+    empty.
+    """
+    try:
+        rows = _store().list_ai_enrichment(str(trade_id))
+    except Exception:
+        return None
+    if not rows:
+        return None
+    replaced = {
+        str(row.get("supersedes_row_id") or "").strip()
+        for row in rows
+        if str(row.get("supersedes_row_id") or "").strip()
+    }
+    live = [row for row in rows if str(row.get("enrichment_id") or "") not in replaced]
+    return dict(live[-1]) if live else None
+
+
 def export_trades_csv() -> Path:
     return _store().export_trades_csv()
 

@@ -380,6 +380,10 @@ def _run_slots_locked(
                 reason=_failure_reason(slot.name, status, outcome),
                 outputs=outcome.get("outputs") or (),
                 tokens=outcome.get("tokens") or {},
+                # WS-AI1: a slot may add fields of its own to its ledger row -
+                # the daily summary adds `completion`. `ledger.record` only ever
+                # ADDS (setdefault), so a slot cannot overwrite a ledger field.
+                extra=outcome.get("extra") or None,
                 path=ledger_path,
             )
             logging.info(
