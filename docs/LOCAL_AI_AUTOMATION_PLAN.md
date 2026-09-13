@@ -1992,3 +1992,27 @@ process is killed) and carry `INCOMPLETE_RUN_NOTE` exactly as before.
 carries position language, and the dropped-row log names any position or numeric
 drop with its detail.
 
+## 10 The Trade Mentor writes the corpus; the model reads it LATER (WISHLIST 10J, packet WS-TM)
+
+WISHLIST 10J has four steps. Steps 1 and 2 are built (packet WS-TM, 2026-09-12): a
+scheduler that asks a present trader for a market read on Pacific wall-clock hours, and
+a card that files the **raw text** in the Market Journal through that store's one
+writer, stamped with the slot that asked and the moment the trader actually replied.
+Step 3 — a local model reading those rows and proposing a structured form (symbols,
+bias, levels, the setup named) — and step 4 (coaching from the accumulated reads) are
+**deferred and unbuilt**.
+
+The order is the point, and it is the same order §1 argues for everywhere else here. A
+model that summarises as it captures destroys the thing it is summarising: what the
+trader actually wrote at 09:00, in their own words, unsmoothed. So the text is stored
+verbatim first and interpreted never-or-later. When step 3 is built it reads
+`market_journal` rows with `origin = trade_mentor` — which already carry the prompt kind,
+the scheduled hour and the response time — proposes into a separate field, and is
+overridable; it does not rewrite the row, and nothing it produces may reach a detector, a
+score, a gate, an alert, Focus or the review queue.
+
+One bound worth stating now, because it is the constraint step 3 will push against: a
+read filed against the 09:00 slot at 09:12 describes 09:12. `mentor.scheduled_at` and
+`mentor.responded_at` are stored separately so no later reader has to guess which, and a
+model that averages them would be inventing a minute nobody observed.
+

@@ -3492,3 +3492,116 @@ PIXELS for the exact token, because "bright red" is a claim about what the trade
 
 **Reopen trigger.** A new capture verb joins the decision family; the trader asks for a
 third mark or for one of the two to mean something else.
+
+## TM - a prompt is a slot, an answer is a dated row (2026-09-12, WISHLIST 10J)
+
+The Trade Mentor is the first thing on this desk that INTERRUPTS. Everything else waits
+to be looked at. That single fact decides almost every rule below, because an
+interruption that is wrong is worse than no interruption at all, and because the thing it
+collects — what the trader thought at 09:00, in their own words — cannot be reconstructed
+afterwards from anything.
+
+**A prompt is a SLOT, and a slot is a record.** `trade_mentor_schedule.slots_for_session`
+is pure: no Qt, no I/O, no clock read. A session is a tuple of `MentorSlot(slot_id,
+session, scheduled_at, kind, expires_at, post_close)` and `slot_id` is
+`<session>-<HHMM>-<kind>`. `trade_mentor_slots.json` keys one record per `slot_id` with
+`delivered_at`, `answered_at` and `skipped_reason`. Everything the trader asked for falls
+out of that pair: a desk restart mid-hour re-shows the card (the hour is open and nobody
+answered) without moving `delivered_at` or writing a second record; a timer that fired
+late or a clock the OS corrected cannot duplicate an hour, because the identity is the
+wall-clock slot and not the tick; a missed hour is recorded with its reason and never
+asked again.
+
+**The close that ends the hourly window is the REAL close.** `market_calendar.
+session_close` models every session as 16:00 ET by design and every existing caller is
+right to use it. Asking it here puts an 11:00 M5 read on the day after Thanksgiving, an
+hour after the tape stopped. `market_early_close.session_close` is the one this reads, and
+2026-11-27 therefore carries five slots (07, 08, 09, 10, 12) and no 11:00. The two D1
+hours and the 10:00 trade check SURVIVE the close and are LABELLED `post_close`: the
+trader asked for the noon D1 read on a short day in as many words, and the 10:00 check
+asks about yesterday's trades, not today's tape.
+
+**Pacific is a wall clock, not an offset.** `ZoneInfo("America/Los_Angeles")`. The 09:00
+read is -08:00 on 6 March 2026 and -07:00 on 9 March; a `timezone(timedelta(hours=-8))`
+implementation passes every test written in winter and files half the year's reads an
+hour away from the tape they describe.
+
+**An unanswered prompt is no observation, and a draft is not an answer.** Expiry is
+`scheduled_at + 1 hour`, which on a normal session IS the next slot, so a backlog can
+never form. Half-typed text goes to `trade_mentor_drafts.json` exactly as typed and is
+never a journal row, never shown as a read, never counted. The alternative — treating
+silence as "no view" — would put a hole in the record indistinguishable from a trader who
+looked and had nothing to say.
+
+**Four absences, four reasons.** `away` (Auto mode AWAY), `paused` (the trader's "Pause
+today", a DAY and not a switch), `locked`, `idle` (more than `IDLE_GRACE_MINUTES` = 20
+since the last input). One boolean "present" would make the coverage gap unreadable
+months later, and these are the only four states anyone will have to explain. A trader
+quietly watching charts is PRESENT: the comparison is strictly greater than the grace, and
+an off-by-one there turns a chart-watching hour into a skipped one. Presence is measured
+by `user_presence.idle_seconds` — `GetLastInputInfo` behind a function that returns `None`
+off Windows or on failure — and `None` is treated as PRESENT, because missing data is
+uncertainty and reading it as absence would silently switch the feature off. A locked
+workstation is carried by the same number (input stops at the lock); no session-lock hook
+was built, and `session_locked` is an injected callable so one can be added later without
+touching a caller.
+
+**"Read unchanged" is a new row, never a correction.** It restates the previous read at
+the current time with `reaffirms` naming it, and `supersedes` asserted EMPTY. Superseding
+would HIDE the 09:00 read behind the 11:00 one, and "my view has not changed for two
+hours" would become indistinguishable from "I only ever said it once". The two fields
+`mentor` and `reaffirms` are new on `market_journal.build_entry`, present and empty on
+every other entry rather than absent; the packet expected an existing extra/metadata
+field and there is none.
+
+**A read carries THREE times and never blends them.** `mentor.scheduled_at` is the hour
+that asked, `mentor.responded_at` is when the trader actually replied, and `created_at` is
+the ledger's UTC stamp of the same instant. A reply typed at 09:12 cannot claim to
+describe the market at 09:00.
+
+**A defect this found:** `market_journal_service.write_entry` built the entry from the
+caller's `now` and then appended without it, so `EvidenceLedger.append` stamped `event_at`
+AND its own `session_date` from `datetime.now()`. An entry written with an explicit `now`
+was filed under one date and stamped with another, and a reader narrowing the ledger by
+session missed it entirely. No production caller passed `now` before this packet, which is
+why it never showed; the Mentor's injected clock is what found it.
+
+**The 10:00 check asks only what is missing, and "no stop" is never a zero.**
+`trade_mentor_trade_check` walks the calendar to the PREVIOUS EXCHANGE SESSION (Monday
+asks about Friday), reads `journal_store.JournalStore` and `journal_coverage` — not
+`shared_journal_service()`, which is the market journal and was the packet's one wrong
+premise — and asks per trade only the material fields it lacks: thesis (`notes`), stop
+(`planned_stop`), target (no column exists anywhere, which is WHY the four states exist)
+and setup (`setup_tags`). The four answer states `not_supplied` / `no_fixed_target` /
+`not_remembered` / `not_applicable` stay distinct because "I had no plan" and "I had a
+plan I cannot recall" are different facts about a trader. Answers are ANNOTATION rows
+(`opportunity_events` under a new `RECALLED` type — a kind, not a schema migration) and
+`planned_stop` is NEVER written from here: `0.0` reads downstream as a stop at zero and an
+infinite R, and a number remembered the next morning is not the documented pre-entry plan
+that column means. Every row carries `recalled_after_session = True` and the actual write
+time. The task is capped at three trades and the remainder is a COUNT the Journal's
+completeness view shows, never a fourth question and never silence. No broker coverage for
+the session answers `journal not ready` and asks nothing — an empty questionnaire drawn
+from an incomplete import is a lie about the session.
+
+**The card never takes focus and the arm bar never moves.** `WA_ShowWithoutActivating`,
+no `setFocus`, no `raise_`, no `activateWindow`, not modal; `Ctrl+Enter` is an event
+filter ON THE TEXT BOXES, not a `QShortcut`, because a shortcut lives at window scope and
+a hidden card competing with a live binding is the rail-shortcut fault (two bindings for
+one sequence fire neither). The card is added to `AlertChartReview`'s layout AFTER the arm
+bar, hidden, so the arm bar keeps the position the trader welded it to on 2026-08-20 and
+the card costs the height-starved column nothing until a prompt is due.
+
+**Ownership.** `MainWindow` owns the service (one timer, one state file, and the card's
+host is built more than once), started in `showEvent` and stopped in `closeEvent` beside
+`WorkingLatelyService`; `AlertChartReview` owns exactly one card and the always-available
+"Give a read" button, in the EXISTING verb row. Settings owns the checkbox (default OFF,
+persisted, independent of Auto in both directions), the DST-aware sentence and a "Pause
+today" button that emits a REQUEST rather than writing the service's state.
+
+**Tests:** `tests/test_ws_tm_trade_mentor.py` — 36, written red before any of this
+existed (commit `ed705b7a`) and all green after.
+
+**Reopen trigger.** WISHLIST 10J step 3 (a local model filling a form from the raw text)
+or step 4 (coaching) is authorized; the trader asks for a different hour, a different
+grace, or for a prompt to survive being away.
