@@ -366,11 +366,22 @@ class JournalStore:
                     pnl_usd REAL,
                     auto_tag_summary TEXT NOT NULL DEFAULT '',
                     tag_confidence REAL,
-                    -- WS-10E: what the Market Journal lane saw for this trade,
-                    -- as a small JSON verdict. Derived, re-written on every
-                    -- `refresh_auto_tags` exactly like `auto_tag_summary`, and
-                    -- read by the Trades detail and Weekend Prep's Tag Week so
-                    -- neither pays for a ledger read on the Qt thread.
+                    updated_at TEXT NOT NULL
+                );
+
+                -- WS-10E: what the Market Journal lane saw for one trade, as a
+                -- small JSON verdict. Derived state, re-written by every
+                -- `refresh_auto_tags` exactly like `auto_tag_summary`, and read
+                -- by the Journal's Trades detail and Weekend Prep's Tag Week so
+                -- neither pays for a ledger read on the Qt thread.
+                --
+                -- Its OWN table rather than a column on `trades`: `trades` is
+                -- assembly output and is pinned bit-for-bit by
+                -- `tests/test_journal_characterization.py`. A derived column
+                -- there would put the tagger inside the assembler's golden,
+                -- where a later lane change would read as an assembly change.
+                CREATE TABLE IF NOT EXISTS note_lane_verdicts (
+                    trade_id TEXT PRIMARY KEY,
                     note_lane_json TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
@@ -1882,9 +1893,15 @@ class JournalStore:
                        a.planned_risk AS planned_risk, COALESCE(a.risk_source, '') AS risk_source,
                        -- A trade with no annotation row at all has nothing a
                        -- machine wrote, so it reads as the trader's (P6a).
-                       COALESCE(a.tag_status, 'confirmed') AS tag_status
+                       COALESCE(a.tag_status, 'confirmed') AS tag_status,
+                       -- WS-10E: the note lane's verdict, joined rather than
+                       -- stored on `trades`. A trade the tagger has not visited
+                       -- since this packet landed reads '', which every reader
+                       -- renders as silence rather than as an empty window.
+                       COALESCE(n.note_lane_json, '') AS note_lane_json
                 FROM trades t
                 LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id
+                LEFT JOIN note_lane_verdicts n ON n.trade_id = t.trade_id
                 {where_sql}
                 ORDER BY t.trade_date DESC, t.opened_at DESC, t.symbol
                 """,
@@ -2444,18 +2461,33 @@ class JournalStore:
                 # note's full text into the journal database a second time.
                 report = tagger.note_lane_report(trade)
                 conn.execute(
-                    "UPDATE trades SET auto_tag_summary = ?, tag_confidence = ?,"
-                    " note_lane_json = ?, updated_at = ? WHERE trade_id = ?",
+                    """
+                    INSERT INTO note_lane_verdicts(trade_id, note_lane_json, updated_at)
+                    VALUES(?, ?, ?)
+                    ON CONFLICT(trade_id) DO UPDATE SET
+                        note_lane_json = excluded.note_lane_json,
+                        updated_at = excluded.updated_at
+                    """,
                     (
-                        top_summary,
-                        top_confidence,
+                        trade["trade_id"],
                         _json_dumps(
                             {key: value for key, value in report.items() if key != "notes"}
                         ),
                         _now_iso(),
-                        trade["trade_id"],
                     ),
                 )
+                conn.execute(
+                    "UPDATE trades SET auto_tag_summary = ?, tag_confidence = ?,"
+                    " updated_at = ? WHERE trade_id = ?",
+                    (top_summary, top_confidence, _now_iso(), trade["trade_id"]),
+                )
+            # A rebuild re-keys trades, so a verdict can outlive the trade it was
+            # about. Dropped here rather than left to accumulate: this table is
+            # derived and nothing downstream may read a row whose trade is gone.
+            conn.execute(
+                "DELETE FROM note_lane_verdicts WHERE trade_id NOT IN"
+                " (SELECT trade_id FROM trades)"
+            )
 
     def save_ai_enrichment(
         self,
