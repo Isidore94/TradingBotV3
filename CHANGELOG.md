@@ -864,6 +864,25 @@ They are evidence and must not be loaded as context.
 
 ### Charts, review, alerts, and phone surfaces
 
+- **The setups table's two mark columns state the day's decisions (WS-SX, WISHLIST item 8,
+  2026-09-12, sweep branch).** `scripts/pick_feedback.py` `decisions_today` / `DayDecisions`,
+  `scripts/ui/widgets/setup_delegate.py` `set_decision_lookup`,
+  `scripts/ui/panels/master_avwap_panel.py`, `scripts/ui/theme.py` token `reject_today` (both
+  themes). The star is filled for a name in Focus OR liked today (quick or claimed; an absent
+  `like_mode` reads claimed), and the X is painted bright red for a name vetoed, disliked,
+  passed on, removed-for-today or clicked away from its M5 alert today, each with a tooltip
+  (`helpEvent`) naming the decision and its time; a name both liked and vetoed shows both
+  marks. The decision snapshot is a WIDER read than `reviewed_symbols_today` - the day-trade
+  pass annotation and the M5 click-away `skip` row (`clicked_away_from_m5_alert`) are in it and
+  are not in that badge, whose answer is unchanged - and both come from one cached, mtime-keyed
+  parse; `unfavorite` is in neither. It is rebuilt on a worker thread on every capture verb,
+  `set_rows`, `showEvent` and the day roll, repainted through the panel's existing 200 ms
+  `SignalCoalescer` (now created unconditionally), never read inside `paint`, and it hides,
+  re-orders, mutes and writes nothing. Test environment: `tests/conftest.py` registers one
+  symbol font (seguisym.ttf) ONLY for `_PIXEL_GLYPH_MODULES`, because an offscreen process's
+  font database is empty until qtawesome's icon fonts load and then U+2605/U+2606 draw nothing.
+  Known, out of scope: `test_qt_desk_layout.py`'s compact-profile test overflows at 1400 px
+  when run after a MainWindow with real fonts. Tests: `tests/test_ws_sx_star_x.py` (14).
 - **The AWAY digest ranks swing picks by points when the trader's Points switch is on
   (WS-PT4, 2026-09-12, sweep branch).** `autopilot_core.swing_pick_projection` is the ONE
   projection of a digest pick (`AutopilotService._write_report_locked` calls it) and now
@@ -2101,6 +2120,11 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   always present, one log line per scan; dry run on a copy: 66 of 1,988 files; 443 tracker
   records touched, zero fills. `--apply` and two ask-first seams are the trader's. Suite 7332
   green, ruff clean, smoke 7/7, selftest 74/74. Gate #98.
+- **WS-SX (WISHLIST item 8) - the setups star and X reflect the day's decisions**, branch
+  `claude/ws-sx-star-x-build` `d81bc929`: `pick_feedback.decisions_today` off one shared read,
+  `set_decision_lookup` on the delegate, the `reject_today` token, tooltips with the time, a
+  worker-built snapshot repainted through the coalescer; a symbol-font fixture for pixel tests.
+  Suite 7326 green, ruff clean, smoke 7/7, selftest 74/74. Gate #99.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
