@@ -39,7 +39,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
 

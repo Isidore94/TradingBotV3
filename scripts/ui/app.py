@@ -195,6 +195,27 @@ class MainWindow(QMainWindow):
         # Four triggers, one coalesced reaction: the first show, the day roll,
         # a finished scan (which is what rewrites the tracker exports) and its
         # own thirty-minute timer.
+        # WISHLIST 10J. The Trade Mentor's scheduler is owned by the WINDOW for
+        # the same reason the Working-lately service is: it holds one timer and
+        # one state file, and the surface it drives (the card under the chart)
+        # is built more than once in this process's lifetime. The card is the
+        # Alert Center's; the decision about when to show it is this one's.
+        from ui.services.trade_mentor_service import TradeMentorService
+
+        self.trade_mentor_service = TradeMentorService(self)
+        self.trade_mentor_service.promptDue.connect(self._show_trade_mentor_prompt)
+        self.trade_mentor_service.promptExpired.connect(
+            lambda _slot_id: self.trading_panel.alert_center.chart_review.hide_mentor_card()
+        )
+        mentor_card = self.trading_panel.alert_center.chart_review.mentor_card
+        mentor_card.answered.connect(self.trade_mentor_service.mark_answered)
+        mentor_card.skipped.connect(
+            lambda record: self.trade_mentor_service.mark_skipped(
+                str(record.get("slot_id") or ""), str(record.get("skipped_reason") or "")
+            )
+        )
+        self.settings_panel.mentorPauseRequested.connect(self._pause_trade_mentor)
+
         self.working_lately_service = WorkingLatelyService(self)
         self.working_lately_service.snapshotChanged.connect(
             self.trading_panel.set_working_lately_snapshot
@@ -910,6 +931,65 @@ class MainWindow(QMainWindow):
         # worker, and a thread started during construction runs while a test is
         # still monkeypatching the module globals it reads.
         self.working_lately_service.start()
+        # WISHLIST 10J, for the same reason: the first poll reads the Settings
+        # flag and a state file, and a timer started during construction runs
+        # while a test is still monkeypatching what it reads.
+        self.trade_mentor_service.start()
+        self._sync_trade_mentor_label()
+
+    # -- Trade Mentor (WISHLIST 10J) --------------------------------------
+    def _previous_mentor_read(self, session: str):
+        """The last read the Trade Mentor filed for this session, if any.
+
+        Shown beside the new prompt so "Read unchanged" has something to name.
+        One bounded read of a small JSONL, at most once an hour - not a paint
+        path, and never in the 60-second poll (the service emits, this runs).
+        """
+        try:
+            from ui.services.market_journal_service import shared_journal_service
+
+            rows = [
+                row
+                for row in shared_journal_service().entries_for(session)
+                if str(row.get("origin") or "") == "trade_mentor"
+            ]
+        except Exception:  # noqa: BLE001 - a missing previous read is not an error
+            logging.debug("Previous mentor read unreadable.", exc_info=True)
+            return None
+        return rows[-1] if rows else None
+
+    def _show_trade_mentor_prompt(self, slot) -> None:
+        """Put a due prompt under the chart, with whatever it needs to ask."""
+        review = self.trading_panel.alert_center.chart_review
+        try:
+            review.show_mentor_slot(slot, previous=self._previous_mentor_read(str(slot.session)))
+        except Exception:  # noqa: BLE001 - a prompt never costs the desk
+            logging.debug("Trade Mentor prompt could not be shown.", exc_info=True)
+            return
+        if str(getattr(slot, "kind", "")) != "m5_trades":
+            return
+        # The 10:00 second section. Two small queries against the journal DB,
+        # once a day, on the slot the trader is already being interrupted for.
+        try:
+            import trade_mentor_trade_check as check
+            from journal_store import JournalStore
+
+            store = JournalStore()
+            task = check.build_task(store, slot.scheduled_at.date())
+            review.mentor_card.set_trade_check(task, store=store)
+        except Exception:  # noqa: BLE001 - the read still stands without it
+            logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
+
+    def _pause_trade_mentor(self) -> None:
+        self.trade_mentor_service.pause_today()
+        self.trading_panel.alert_center.chart_review.hide_mentor_card()
+        self._sync_trade_mentor_label()
+
+    def _sync_trade_mentor_label(self) -> None:
+        try:
+            self.settings_panel.set_next_prompt_at(self.trade_mentor_service.next_prompt_at())
+        except Exception:  # noqa: BLE001 - a label never breaks the window
+            logging.debug("Trade Mentor label could not be refreshed.", exc_info=True)
 
     def _show_setup_tracker_page(self) -> None:
         """The Working-lately strip's click-through (ST6.4).
@@ -965,6 +1045,11 @@ class MainWindow(QMainWindow):
         # reader. ST6.3.
         try:
             self.working_lately_service.shutdown()
+        except Exception:
+            pass
+        # Same list, same reason (WISHLIST 10J): one timer, owned here.
+        try:
+            self.trade_mentor_service.shutdown()
         except Exception:
             pass
         # Backstop for the shared writer lease: AutopilotService.shutdown

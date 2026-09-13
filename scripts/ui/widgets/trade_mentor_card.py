@@ -46,8 +46,10 @@ from typing import Any, Callable, Mapping
 
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -140,10 +142,30 @@ class TradeMentorCard(QWidget):
         self.d1_label.setVisible(False)
         self.d1_box.setVisible(False)
 
+        # The 10:00 card's SECOND section, kept visually separate from the read
+        # above it. Two different questions on one card is the trader's own
+        # design; merging them into one box would produce a paragraph that is
+        # neither a market read nor a record of a trade.
         self.trade_check_label = QLabel("")
         self.trade_check_label.setObjectName("MutedLabel")
         self.trade_check_label.setWordWrap(True)
         self.trade_check_label.setVisible(False)
+        self.trade_check_box = QWidget(self)
+        self._trade_check_layout = QVBoxLayout(self.trade_check_box)
+        self._trade_check_layout.setContentsMargins(0, 0, 0, 0)
+        self._trade_check_layout.setSpacing(3)
+        self.trade_check_box.setVisible(False)
+        #: trade_id -> field -> (state combo, free-text box)
+        self._answer_inputs: dict[str, dict[str, tuple[QComboBox, QLineEdit]]] = {}
+        self._trade_store = None
+        self.save_answers_button = QPushButton("Save answers")
+        self.save_answers_button.setToolTip(
+            "Files what you remember as a labelled next-morning note. It never "
+            "becomes the plan you typed before the trade, and 'no stop' is "
+            "never written as a stop at zero."
+        )
+        self.save_answers_button.clicked.connect(self.save_trade_check)
+        self.save_answers_button.setVisible(False)
 
         self.submit_button = QPushButton("Submit")
         self.submit_button.setToolTip("File this read now (Ctrl+Enter).")
@@ -182,6 +204,8 @@ class TradeMentorCard(QWidget):
         layout.addWidget(self.d1_label)
         layout.addWidget(self.d1_box)
         layout.addWidget(self.trade_check_label)
+        layout.addWidget(self.trade_check_box)
+        layout.addWidget(self.save_answers_button)
         layout.addLayout(buttons)
         layout.addWidget(self.status_label)
 
@@ -267,7 +291,14 @@ class TradeMentorCard(QWidget):
         show_d1 = kind == KIND_M5_D1
         self.d1_label.setVisible(show_d1)
         self.d1_box.setVisible(show_d1)
-        self.trade_check_label.setVisible(False)
+        if kind != KIND_M5_TRADES:
+            # Only the 10:00 card carries the second section. It is cleared
+            # rather than hidden, so a stale question from an earlier hour can
+            # never be saved against the wrong morning.
+            self._clear_trade_check()
+            self.trade_check_label.setVisible(False)
+            self.trade_check_box.setVisible(False)
+            self.save_answers_button.setVisible(False)
         if self._previous:
             self.previous_label.setText(
                 "Your last read: " + str(self._previous.get("text") or "")
@@ -282,10 +313,130 @@ class TradeMentorCard(QWidget):
         )
         self.setVisible(True)
 
-    def set_trade_check_summary(self, text: str) -> None:
-        """The 10:00 card's second section, in one line. Item 4 owns the detail."""
-        self.trade_check_label.setText(str(text or ""))
-        self.trade_check_label.setVisible(bool(text))
+    def _clear_trade_check(self) -> None:
+        self._answer_inputs = {}
+        while self._trade_check_layout.count():
+            item = self._trade_check_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def set_trade_check(self, task, store=None) -> None:
+        """Build the 10:00 card's second section from `build_task`'s answer.
+
+        Three states, all of them said out loud:
+
+        * the statement has not landed - one line saying so, and NO questions.
+          An empty questionnaire drawn from an incomplete list is a lie about
+          the session;
+        * nothing is missing - one line saying so;
+        * something is missing - up to `TRADE_CAP_DEFAULT` trades, each with a
+          state combo and a free-text box per missing field, and the remainder
+          stated as a COUNT rather than dropped.
+        """
+        import trade_mentor_trade_check as check
+
+        self._clear_trade_check()
+        self._trade_store = store
+        if task is None:
+            self.trade_check_label.setVisible(False)
+            self.trade_check_box.setVisible(False)
+            self.save_answers_button.setVisible(False)
+            return
+        if not getattr(task, "journal_ready", False):
+            self.trade_check_label.setText(
+                f"Yesterday's trades ({task.reviewed_session}): {task.reason or check.REASON_NOT_READY} "
+                "- the broker statement has not landed, so nothing is asked."
+            )
+            self.trade_check_label.setVisible(True)
+            self.trade_check_box.setVisible(False)
+            self.save_answers_button.setVisible(False)
+            return
+        if not task.trades:
+            self.trade_check_label.setText(
+                f"Yesterday's trades ({task.reviewed_session}): nothing is missing."
+            )
+            self.trade_check_label.setVisible(True)
+            self.trade_check_box.setVisible(False)
+            self.save_answers_button.setVisible(False)
+            return
+
+        remainder = (
+            f" {task.remaining} more still missing fields - they stay in the "
+            "Journal's completeness view."
+            if task.remaining
+            else ""
+        )
+        self.trade_check_label.setText(
+            f"Yesterday's trades ({task.reviewed_session}), missing fields only."
+            + remainder
+        )
+        self.trade_check_label.setVisible(True)
+
+        for question in task.trades:
+            heading = QLabel(
+                f"{question.symbol} {question.direction}".strip() or question.trade_id
+            )
+            heading.setObjectName("MutedLabel")
+            self._trade_check_layout.addWidget(heading)
+            fields: dict[str, tuple[QComboBox, QLineEdit]] = {}
+            for name in question.missing:
+                row = QWidget(self.trade_check_box)
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(4)
+                row_layout.addWidget(QLabel(name))
+                combo = QComboBox(row)
+                # "-" first, so a field the trader did not touch stays unasked
+                # rather than being filed as whatever happened to be at index 0.
+                combo.addItem("-", "")
+                for state in check.ANSWER_STATES:
+                    combo.addItem(state.replace("_", " "), state)
+                text_input = QLineEdit(row)
+                text_input.setPlaceholderText("in your own words (optional)")
+                row_layout.addWidget(combo)
+                row_layout.addWidget(text_input, 1)
+                self._trade_check_layout.addWidget(row)
+                fields[name] = (combo, text_input)
+            self._answer_inputs[question.trade_id] = fields
+
+        self.trade_check_box.setVisible(True)
+        self.save_answers_button.setVisible(True)
+
+    def save_trade_check(self) -> dict[str, Any]:
+        """File every field the trader actually answered, and nothing else."""
+        import trade_mentor_trade_check as check
+
+        store = self._trade_store
+        if store is None:
+            return {"ok": False, "reason": "the trade journal is not available here"}
+        moment = self._now()
+        saved = 0
+        for trade_id, fields in self._answer_inputs.items():
+            answers: dict[str, dict[str, Any]] = {}
+            for name, (combo, text_input) in fields.items():
+                state = str(combo.currentData() or "")
+                if not state:
+                    continue
+                answers[name] = {"state": state, "text": text_input.text().strip()}
+            if not answers:
+                continue
+            try:
+                check.save_answers(store, trade_id, answers, now=moment)
+                saved += len(answers)
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("Recalled fields not saved for %s: %s", trade_id, exc)
+                self._set_status(f"answers NOT saved: {exc}")
+                return {"ok": False, "reason": str(exc)}
+        if not saved:
+            self._set_status("Nothing was answered, so nothing was filed.")
+            return {"ok": False, "reason": "no field was answered"}
+        self._clear_trade_check()
+        self.trade_check_box.setVisible(False)
+        self.save_answers_button.setVisible(False)
+        self._set_status(f"{saved} remembered field(s) filed, labelled as recalled.")
+        return {"ok": True, "fields": saved}
 
     def give_a_read(self, now: datetime | None = None) -> MentorSlot:
         """The manual door, open at all times - no slot has to be due.
