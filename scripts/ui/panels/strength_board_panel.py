@@ -57,14 +57,35 @@ import focus_adoption_gate
 #: compare, not a verdict on them.
 _COLUMNS = (
     "Symbol", "Strength", "RVOL", "Day %", "vs VWAP", "Last", "200 SMA", "100 SMA",
+    "Scan",
 )
 #: Which row field each column shows, so a header click sorts on the NUMBER
 #: rather than on the formatted text. "+1.20%" and "-11.00%" sort correctly as
 #: floats and backwards as strings, and "—" is not a small number at all.
 _COLUMN_KEYS = (
     "symbol", "strength", "rvol", "day_pct", "vwap_distance_pct", "last",
-    "sma200_d1", "sma100_d1",
+    "sma200_d1", "sma100_d1", "adoption",
 )
+
+#: `Scan` (packet WS-10B, WISHLIST 10B). The LAST column, text only.
+#:
+#: It answers the one question the board could not: this name is on the TC2000
+#: list, so why is it not being scanned? The verdict is written by
+#: `AlertCenterPanel._auto_adopt_strength_board` at the moment it decides -
+#: `adopted`, `already_in_focus`, `staged (AWAY)`, `not today`, `declined
+#: today`, `mode EVENING`/`mode OFF`, or `not adopted: <reason>` in the
+#: adoption gate's own words - and pushed here through `set_adoption`. This
+#: file computes none of it: a second opinion about a name's eligibility,
+#: rendered beside the first, is exactly the disagreement the ONE gate exists
+#: to prevent.
+#:
+#: NOT SORTABLE, and that is the packet's "no reorder". Every other column is a
+#: measurement and ranking by one is the board's whole job; this one is a
+#: verdict, and a board re-ordered by how the machine answered would put the
+#: names the trader can no longer act on at one end of their own scan list.
+#: `_sort_value` would also read every verdict as "missing" - it coerces to
+#: float - so the sort would be a no-op that looked like one.
+SCAN_COLUMN = len(_COLUMNS) - 1
 
 
 def _sort_value(row: dict, key: str):
@@ -202,6 +223,8 @@ class _SideTable(QWidget):
     def _on_header_clicked(self, column: int) -> None:
         if not (0 <= column < len(_COLUMNS)):
             return  # the button column sorts nothing
+        if column == SCAN_COLUMN:
+            return  # `Scan` is a verdict, not a measurement - see SCAN_COLUMN
         if column == self._sort_column:
             self._sort_descending = not self._sort_descending
         else:
@@ -246,6 +269,33 @@ class _SideTable(QWidget):
 
     def set_rows(self, rows: list[dict]) -> None:
         self._rows = [dict(row) for row in rows]
+        self._render()
+
+    def rows(self) -> list[dict]:
+        """This side's rows as the table holds them, `adoption` included."""
+        return [dict(row) for row in self._rows]
+
+    def set_adoption(self, verdicts: dict) -> None:
+        """Write the `Scan` verdict onto the rows already in hand (WS-10B).
+
+        {symbol: verdict}. Merged into the ROW rather than kept in a side map
+        so the field travels with the row through the sort and through
+        `rows()`, and so a reader cannot get a verdict for a name the table is
+        no longer showing.
+
+        A symbol with no verdict is left blank rather than guessed at: the
+        auto-join returns early when it cannot reach the Focus store, and a
+        blank cell says "nothing decided this refresh" where `not adopted`
+        would be a claim nobody made.
+        """
+        wanted = {
+            str(symbol or "").strip().upper(): str(text or "")
+            for symbol, text in (verdicts or {}).items()
+        }
+        for row in self._rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol in wanted:
+                row["adoption"] = wanted[symbol]
         self._render()
 
     def set_parity_only(self, on: bool) -> None:
@@ -316,6 +366,7 @@ class _SideTable(QWidget):
                 _fmt(row.get("last"), 2),
                 _fmt(row.get("sma200_d1"), 2),
                 _fmt(row.get("sma100_d1"), 2),
+                str(row.get("adoption") or ""),
             )
             # A row that misses a floor is GREYED and NAMES what it missed - it
             # is never removed from the list (decision 0010: a display filter is
@@ -323,7 +374,9 @@ class _SideTable(QWidget):
             missed = list(row.get("failed_floors") or ())
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
-                if column:
+                if column and column != SCAN_COLUMN:
+                    # `Scan` is a sentence, not a number: right-aligning it
+                    # would ragged-edge the one column the trader reads as text.
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if missed:
                     # The desk's existing greying idiom (`away_recap_panel`):
@@ -512,6 +565,18 @@ class StrengthBoardPanel(QWidget):
         """Both tables sized to their rows - the Strength page's hosting mode."""
         for table in (self.longs, self.shorts):
             table.set_fit_rows(bool(on))
+
+    def set_adoption(self, verdicts: dict) -> None:
+        """The `Scan` column's verdicts, per side (packet WS-10B).
+
+        `{"long": {symbol: verdict}, "short": {...}}`. Per SIDE because the
+        same symbol can sit on both tables with two different answers - the
+        long leg above yesterday's high, the short leg not below yesterday's
+        low - and one merged map would show whichever was written last.
+        """
+        verdicts = verdicts or {}
+        for side, table in (("long", self.longs), ("short", self.shorts)):
+            table.set_adoption(verdicts.get(side) or {})
 
     def _on_status(self, text: str) -> None:
         self.status.setText(text)

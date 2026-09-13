@@ -764,3 +764,37 @@ scan input.
 The **click-to-add path is unchanged**: a click on a row IS the trader liking the
 name, so `_add_symbols` still goes through the service and still writes the
 pick-feedback row. Live gate #58.
+
+## Addendum — 2026-09-12: the `Scan` column, and AWAY stages (packet WS-10B)
+
+WISHLIST 10B asked for a verification before a feature: trace a board row from
+publication to the universe BounceBot actually scans. The DESK link was intact
+and is now pinned end to end (`tests/test_ws_10b_board_to_scan.py`) — board →
+empty `failed_floors` → the ONE adoption gate → `store.add_many` → the auto-pick
+marker → `_inject_into_shared` → `longs.txt` / `shorts.txt` →
+`get_scan_symbol_set`, which the scan cycle rebuilds from those files every
+pass, so an adopted name is scanned on the next cycle with no restart, each name
+is appended exactly once, and a trader-typed line survives every refresh. What
+was missing was AWAY: the mode check returned and the discovery was discarded.
+AWAY now STAGES the eligible rows through
+`autopilot_core.stage_auto_populate_candidates` — the existing owner of the
+approval queue, with its lock, its per-side cap and its refusal of names already
+listed or already decided today — so the desk's own drain, which re-measures
+every queued pick on the flip back to DESK, remains the only door an unattended
+pick comes through. EVENING and OFF still do nothing.
+
+**The `Scan` column.** Each board row carries an `adoption` verdict written at
+the moment the auto-join decides, from that row's own numbers: `adopted`,
+`already_in_focus`, `staged (AWAY)`, `not today`, `declined today`,
+`mode EVENING` / `mode OFF`, `not adopted: floor <what it missed>`, or
+`not adopted: <the adoption gate's reason verbatim>` (so an unmeasurable row
+reads `not adopted: cannot verify session VWAP`). It is the LAST column of both
+side tables — text only, no colour vote, and deliberately not sortable, because
+a scan list re-ordered by how the machine answered is not the trader's ranking.
+The view computes none of it and a row with no verdict stays blank. One INFO
+line per refresh carries the same counts to `trading_bot.log`:
+`Strength board: N rows, A adopted, S staged, R not adopted (reasons: ...)`.
+
+Scanner inclusion and Focus adoption remain DISTINCT contracts: nothing here
+scans a row the gate refused, and "scan every board row regardless" would be a
+separate selection the trader has not asked for.
