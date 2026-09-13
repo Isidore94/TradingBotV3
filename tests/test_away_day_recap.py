@@ -302,7 +302,12 @@ def test_selecting_the_away_recap_page_hands_it_the_alert_center_backing_list(mo
         )
         assert center._alerts, "the backing list must fill in AWAY - that half already worked"
 
-        index = [spec.title for spec in PAGE_SPECS].index("AWAY Recap")
+        # WS-DR (2026-09-13) renamed this nav entry to "Daily Recap" and gave
+        # the slot to the store-backed page. The AWAY digest panel is still
+        # built, still handed the Alert Center's backing list when that page is
+        # selected, and still what `away_recap.build_recap` draws - which is
+        # exactly what this test is about.
+        index = [spec.title for spec in PAGE_SPECS].index("Daily Recap")
         window._select_page(index)
 
         rows = window.away_recap_panel._alerts
@@ -346,7 +351,7 @@ def test_the_recap_feed_is_oldest_first_and_carries_the_d1_rows(monkeypatch):
         d1.is_d1 = True
         center.add_alert(d1)
 
-        window._select_page([spec.title for spec in PAGE_SPECS].index("AWAY Recap"))
+        window._select_page([spec.title for spec in PAGE_SPECS].index("Daily Recap"))
         rows = window.away_recap_panel._alerts
 
         assert [row["symbol"] for row in rows] == ["AAA", "CCC", "BBB"]

@@ -4427,3 +4427,123 @@ Shortened in the same pass; originals verbatim.
 - Ground rule 10's statistics contract lives once in `scripts/evidence_stats.py`; `outcome_semantics.claim_kind` decides what may be averaged as a trade (59% of the outcome store is annotations).
 
 - The Market Journal is what the trader thought; the Journal is what they traded — two stores, never merged, both through `shared_journal_service()`. An entry is never backdated: `written_after_the_session` is COMPUTED. A capture joins by `entry_id` from outside.
+## DR - the recap reads the day from the stores, not the process (2026-09-13, WISHLIST 10F + 5F)
+
+### The defect that decided the shape
+
+`ui/app.py`'s `_feed_away_recap` handed the AWAY Recap `center._alerts` +
+`center._d1_alerts`: the Alert Center's own backing lists, capped at
+`MAX_FEED_ITEMS` (250) and `MAX_D1_FEED_ITEMS` (100), and scoped to the PROCESS.
+The page's own docstring named the limitation rather than papering over it - a
+desk restarted mid-session, or left running across midnight, reported what that
+process had seen. On a day the desk restarted at 11:00 the recap's honest answer
+was "the afternoon", and on a busy day the morning fell off the end of a 250-item
+cap. That is the wrong shape for a record of a day: the evidence was on disk the
+whole time.
+
+So `scripts/daily_recap_reader.read_session` takes its whole input as PATHS
+(`RecapSources`, twelve durable stores), a session, a lookback and a clock. The
+durability property is provable the only way it can be: the test re-reads the
+same fixture in a SEPARATE INTERPRETER and compares the `repr` of the whole
+session. That is why every emitted moment is pinned to its own fixed offset - a
+platform-local `tzinfo` object would still be correct, and its repr would still
+have matched here, but the fixed offset makes the equality structural rather than
+lucky.
+
+### The four numbers, and the four ways to get them wrong
+
+1. **The store already did the side arithmetic.** `intraday_bounce_outcomes.csv`
+   names its side column `direction`, not `side`, and its `mfe_pct` /
+   `eod_move_pct` are ALREADY side-adjusted. TSLA (short) and NVDA (long) both
+   closed 95.00 from a 100.00 entry; that is `+5.00` for the short and `-5.00`
+   for the long. A reader that recomputed `(close - entry) / entry` files them in
+   the same place, and a reader that adjusted the stored value AGAIN inverts one
+   of them.
+2. **Credit starts at the decision's own timestamp.** SHW ran 5.00% the trader's
+   way across the session, all of it from the 06:35 bar's 323.00 low. The pass
+   was taken at 12:30. The number the trader may be shown as "what you gave up"
+   is measured from the LAST COMPLETED bar at the decision (12:25, close 340.00)
+   forward to the post-decision low of 333.20 - 2.00%. The day's 5.00% is still
+   reported, in its own column, as the day's path. They are two questions and
+   they never share a cell.
+3. **Unmeasurable is `unavailable`, never the day's number and never 0.0.** The
+   MU like at 12:30 has no bar series behind it - the stores record WHAT moved on
+   the session, not WHEN - so its credited cell is empty with a reason. Handing
+   it MU's 8.00% day MFE would be a claim about timing nothing recorded; handing
+   it 0.0 would be a claim that nothing happened.
+4. **Present-and-empty is not zero.** An `open` outcome row, an immature horizon
+   and an unlabelled session each write their columns present and EMPTY. AMD is
+   counted, shown and named unmeasured; MSFT's 3-session end is `pending` and
+   out of the rows rather than a pick that went nowhere.
+
+### The window is counted on the exchange calendar
+
+Labor Day 2026-09-07 is not a session, so the third prior session of 2026-09-10
+is 09-04. A window counted in calendar days says 09-07 and sweeps in whatever was
+scanned on the 2nd. The 1/2/3 control is ONE control: it picks the lookback
+window AND the horizon reported, because "how far back" and "how far forward" are
+one question for a swing pick.
+
+### Every verdict is its own fact
+
+The grain is `human_focus_tracking._pick_key`'s
+`(trade_date, symbol, side, category slot)` PLUS the verdict. KBR was vetoed and
+thrown back for the day; STT was vetoed and disliked. Those are two statements
+about one name and pooling them counts one decision twice. Two clicks on ONE
+statement - the MU claimed like at 12:30 and again at 13:05 - link into one row
+with `occurrences = 2` and credit from the first. One pass carrying two reason
+codes is ONE decision whose cohorts overlap and are never summed. A retraction
+removes a swing favorite. `unfavorite` is never graded at all, and a note is
+neither an endorsement nor a rejection. WS-5B's report supplies the journal R and
+P&L, joined on the CHANNEL (`pick_feedback:not_today`, `annotation:veto`, ...) as
+well as the name, so a vetoed-and-thrown-back symbol cannot inherit the other
+statement's match; MFE, EOD return and journal P&L stay three columns.
+
+View 4 shows a refusal only where the later path was favorable, with the ADVERSE
+movement beside it and the trader's own reason with it: STT's veto is out because
+STT's MFE was 0.00, and KBR's is in with `+4.00` and `-1.50` side by side,
+because a later rise alone does not prove a timing or risk refusal wrong.
+
+### Tabs, and why not one flat page
+
+The Strength window's one flat page is the precedent for a set of SMALL boards.
+Four recap tables each want a screen of rows, and stacked they put the fourth
+below the fold at the desk's windowed 1640x980 - measured, not guessed: the
+render test asserts no table runs past the bottom of the page at 3456x2160 AND at
+1640x980. One tab per view, each with its population sentence and a sort control
+offering only the measures the reader declared (no `mean_r`, `win_rate`,
+`expectancy`, `score` or `rank` - the same refusal gate #43 puts on the narration
+view). The AWAY staged-pick block sits under the tabs, unchanged: AWAY stages and
+never adopts, the page only ASKS, and the R2 gate is shown at click time rather
+than enforced.
+
+### What is NOT here
+
+No push. The Daily Recap is a page on the desk, so DESK, EVENING and OFF gain no
+routine output from it and the two push exceptions are untouched.
+`away_recap.build_recap` and `autopilot_today.txt` are untouched and the AWAY
+digest panel is still handed the Alert Center's backing list when the recap page
+is selected - the phone's text digest is the same digest it was. The reader
+opens no tracker JSON (1.1 GB; a recap that opened it would freeze the desk) and
+`alert_center_panel.py` was not edited at all: the chart widget has no marker
+seam, so the decision time travels in the row's own Time column and its tooltip
+rather than one being invented. A row click goes through `show_board_symbol` -
+the door for a board on another page - so a recap row is a board look and takes
+no place in the waiting list.
+
+**Tests:** `tests/test_ws_dr_daily_recap.py`. One assertion in it is knowingly
+red and is NOT weakened:
+`test_the_desk_charts_a_recap_row_through_the_board_door_and_requeues_nothing`
+replaces `center._enqueue_review_alert` with a recorder and asserts it is never
+CALLED, and on a real `MainWindow` that recorder also catches the scanner's own
+`Scanning paused.` status row (`symbol=''`, `side='WATCH'`) arriving from the bot
+thread on the first `processEvents()` - with no recap involved at all. The real
+method drops a symbol-less alert on its first line, so nothing is queued; the
+builder-added `test_the_recap_chart_request_adds_nothing_to_the_waiting_list`
+measures the waiting list itself and is green.
+
+**Reopen trigger.** The chart gains a marker seam (then the decision time is
+passed to it instead of sitting in a tooltip); WS-10A's dated priority-report
+copies land (then the recap reads them instead of `unknown`); the trader asks for
+a fifth view, a different default sort, or for the recap to say anything about
+money it did not read from the journal.
