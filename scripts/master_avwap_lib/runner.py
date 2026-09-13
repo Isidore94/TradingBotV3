@@ -718,6 +718,8 @@ def _run_master_impl(
         write_theta_put_report(THETA_PUTS_FILE, [])
         return {
             "watchlist_label": watchlist_label,
+            "universe_size": 0,
+            "priority_rows": [],
             "tracked_rows": [],
             "theta_put_rows": [],
             "theta_pcs_rows": [],
@@ -2313,6 +2315,14 @@ def _run_master_impl(
     ]
     run_result: dict[str, object] = {
         "watchlist_label": watchlist_label,
+        # WS-10A: the two keys the scan manifest needs and the payload did not
+        # carry. `universe_size` is what the scan SET OUT to evaluate (the
+        # symbol set assembled from the watchlists above), so a scan that
+        # returned having reached fewer names can be called `partial` instead of
+        # `ok`; `priority_rows` is what it PUBLISHED, which is the row count of
+        # the priority report rather than the tracked subset.
+        "universe_size": len(symbols),
+        "priority_rows": priority_rows,
         "tracked_rows": tracked_rows,
         "bucket_upgrades": bucket_upgrades,
         "theta_put_rows": theta_put_rows,
@@ -3090,6 +3100,13 @@ def run_master(
     from . import daily_bar_cache
 
     daily_bar_cache.begin_run()
+    # WS-10A: the scan's own three clocks. `started_at` is taken HERE, from the
+    # one hook a test can freeze, so it can never be the same number as
+    # `finished_at` by accident - "it updated at 12:31" and "its newest input
+    # bar was Thursday's" are different facts and the trader needs both.
+    from . import scan_manifest
+
+    scan_started_at = scan_manifest.market_now()
     try:
         result = _run_master_impl(
             longs_path=longs_path,
@@ -3121,13 +3138,33 @@ def run_master(
                 result.get("tracker_catchup_sessions") or []
             )
         provider_counters.flush_to_manifest(recorder)
-        daily_bar_cache.flush_to_manifest(recorder)
+        forming_dropped, invalid_dropped = daily_bar_cache.flush_to_manifest(recorder)
         recorder.finalize(status="ok")
+        scan_manifest.record_scan(
+            run_id=recorder.run_id,
+            started_at=scan_started_at,
+            finished_at=scan_manifest.market_now(),
+            run_result=result if isinstance(result, dict) else None,
+            forming_dropped=forming_dropped,
+            invalid_dropped=invalid_dropped,
+        )
         return result
     except BaseException as exc:
         provider_counters.flush_to_manifest(recorder)
-        daily_bar_cache.flush_to_manifest(recorder)
+        forming_dropped, invalid_dropped = daily_bar_cache.flush_to_manifest(recorder)
         recorder.finalize(status="failed", error=repr(exc))
+        # The failed scan writes its manifest and touches NO output file: the
+        # last good report keeps its bytes and its mtime, and the strip labels
+        # it stale rather than a republished identical file claiming to be new.
+        scan_manifest.record_scan(
+            run_id=recorder.run_id,
+            started_at=scan_started_at,
+            finished_at=scan_manifest.market_now(),
+            run_result=None,
+            error=repr(exc),
+            forming_dropped=forming_dropped,
+            invalid_dropped=invalid_dropped,
+        )
         raise
     finally:
         clear_active_recorder()

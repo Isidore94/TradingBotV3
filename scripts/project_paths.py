@@ -531,6 +531,18 @@ ANCHOR_AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "master_anchor_avwap_signals.csv"
 MASTER_AVWAP_FOCUS_FILE = RUNTIME_DATA_DIR / "master_avwap_focus.json"
 MASTER_AVWAP_D1_WATCHLIST_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_watchlist.json"
 MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_upgrade_alerts.json"
+# WS-10A (2026-09-12): the scan's own record of its three clocks - when it ran,
+# how fresh its INPUT bars were, and what it published. Written by
+# `master_avwap_lib.scan_manifest.record_scan` at the end of EVERY scan (ok,
+# partial or failed) and read by the Setups strip, System Health and the replay
+# CLI. Shared home rather than a machine-local diagnostic: the desk and the
+# away scanner both publish the same reports, so both must be able to say how
+# fresh they are.
+MASTER_AVWAP_SCAN_MANIFEST_FILE = RUNTIME_DATA_DIR / "master_avwap_scan_manifest.json"
+#: One append-only line per scan, the same payload. The replay walks this.
+MASTER_AVWAP_SCAN_MANIFEST_HISTORY_FILE = (
+    RUNTIME_DATA_DIR / "master_avwap_scan_manifest_history.jsonl"
+)
 # Per-symbol D1 band-zone "arms" for every scanned symbol: the M5 bounce/break
 # rubric levels the bounce bot watches to fire D1 Focus alerts (decision-support).
 MASTER_AVWAP_D1_ZONE_ARMS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_zone_arms.json"
