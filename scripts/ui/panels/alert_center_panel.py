@@ -734,18 +734,21 @@ class AlertCenterPanel(QFrame):
             # so every alert for that name immediately shows the gold flag.
             #
             # COALESCED (2026-08-31, trader-approved under the file-scoped
-            # ask-first rule). `_rebuild_feed` destroys and reconstructs every
-            # row widget in both feeds - up to MAX_FEED_ITEMS + MAX_D1_FEED_ITEMS
+            # ask-first rule), and since SN4 (2026-09-12) a DIFF rather than a
+            # rebuild. `_rebuild_feed` destroys and reconstructs every row
+            # widget in both feeds - up to MAX_FEED_ITEMS + MAX_D1_FEED_ITEMS
             # = 350 widget trees, each with its own stylesheet - and the DESK
-            # drain that morning fired it 45 times in 13 seconds. Only the
-            # TRIGGER is coalesced: which alerts pass the feed gate, their
-            # order, the repetition fold and the digest are all decided inside
-            # `_rebuild_feed` and are untouched. Nothing is withheld - the
-            # rebuild still happens, once, within 200 ms of the last change.
-            # Late-bound so the coalescer calls whatever `_rebuild_feed` is at
-            # fire time - the seam a test spies on is the one that runs.
+            # drain that morning fired it 45 times in 13 seconds; one coalesced
+            # change still cost 24.2 s on 2026-09-08. `_sync_feed` restyles the
+            # star on the rows the change touches and leaves the rest alone.
+            # Only the TRIGGER is coalesced: which alerts pass the feed gate,
+            # their order, the repetition fold and the digest are all decided
+            # by `_feed_target_rows` and are untouched. Nothing is withheld -
+            # the refresh still happens, once, within 200 ms of the last
+            # change. Late-bound so the coalescer calls whatever `_sync_feed`
+            # is at fire time - the seam a test spies on is the one that runs.
             self._focus_feed_coalescer = SignalCoalescer(
-                lambda: self._rebuild_feed(), parent=self
+                lambda: self._sync_feed(), parent=self
             )
             self.focus_service.focusChanged.connect(
                 self._focus_feed_coalescer.request
@@ -1279,6 +1282,12 @@ class AlertCenterPanel(QFrame):
         ledger.set_market_date(market_date, session_open=session_open)
         if ledger.session_open is None and session_open is not None:
             ledger.session_open = session_open
+        if getattr(self, "_digest_market_date", None) != ledger.market_date:
+            # The ledger just rolled to a new market day and cleared its own
+            # digest; the feed's registry of digested rows rolls with it, or
+            # yesterday's burst would keep those names off today's feed.
+            self._digest_market_date = ledger.market_date
+            self._digested_keys().clear()
         return ledger
 
     @staticmethod
@@ -1329,10 +1338,46 @@ class AlertCenterPanel(QFrame):
 
         Nothing is discarded: every digested alert is in the backing list, in
         History, in the chart review queue, and named on the digest row itself.
+
+        The key is registered BEFORE the row is drawn and taken back off if
+        the row could not be drawn, so a failure here falls through to an
+        ordinary row (fail-open) rather than leaving a name with no row and
+        nothing standing in for it.
         """
+        key = self._feed_row_key(alert)
+        self._digested_keys().add(key)
+        if self._refresh_open_digest_row():
+            return True
+        self._digested_keys().discard(key)
+        return False
+
+    def _refresh_open_digest_row(self) -> bool:
+        """Create, update or retire the ONE open-burst row. True if on screen.
+
+        SN4 made this a function of the digested-key registry rather than a
+        side effect of one alert arriving, so a veto or a Focus change redraws
+        the row in place instead of exploding the burst into forty rows.
+        """
+        keys = self._digested_keys()
         row = getattr(self, "_digest_row", None)
         try:
-            if row is None or row.parent() is None:
+            if row is not None and row.parent() is None:
+                row = None
+                self._digest_row = None
+            if not keys:
+                if row is not None:
+                    self.feed_layout.removeWidget(row)
+                    row.setParent(None)
+                    row.deleteLater()
+                    self._digest_row = None
+                return False
+            live = {symbol for symbol, _side in keys}
+            symbols = [
+                symbol
+                for symbol in self._repetition_ledger().digest_symbols()
+                if symbol in live
+            ] or sorted(live)
+            if row is None:
                 row = QLabel()
                 row.setObjectName("Panel")
                 row.setWordWrap(True)
@@ -1342,7 +1387,6 @@ class AlertCenterPanel(QFrame):
                 )
                 self.feed_layout.insertWidget(0, row)
                 self._digest_row = row
-            symbols = self._repetition_ledger().digest_symbols()
             row.setText(
                 f"Open burst · {len(symbols)} name(s) grouped: "
                 + ", ".join(symbols)
@@ -1910,9 +1954,124 @@ class AlertCenterPanel(QFrame):
         self._ignore_alert_symbol(alert.symbol)
         self.statusChanged.emit(message)
 
-    def _insert_item_into(
-        self, layout, alert: BounceAlert, max_items: int, *, repeat=None
-    ) -> None:
+    # ------------------------------------------------ the feed's own rows
+    #
+    # SN4 (WISHLIST item 4, trader 2026-09-08). Measured live at 13:16 that
+    # day: a veto cost 4.0-4.1 s and one coalesced `focusChanged` cost 24.2 s,
+    # because both called `_rebuild_feed`, which destroys and reconstructs up
+    # to MAX_FEED_ITEMS + MAX_D1_FEED_ITEMS = 350 row widget trees on the Qt
+    # thread. Removing one row and restyling one star are both O(1) jobs.
+    #
+    # The shape of the fix: `_feed_target_rows` says what the feed SHOULD look
+    # like, and both paths read it - `_rebuild_feed` builds every row from it,
+    # `_sync_feed` reconciles the rows already on screen against it. One
+    # definition, so a diffed feed and a rebuilt feed cannot disagree; that
+    # equality is what `tests/test_ws_sn4_feed_diff.py` asserts.
+    #
+    # Nothing here gates, scores, folds or records anything. The backing
+    # lists, the repetition ledger, the review queue, History and every
+    # evidence stream are written before any of this and are untouched by it.
+
+    @staticmethod
+    def _feed_row_key(alert: BounceAlert) -> tuple[str, str]:
+        """One live row per symbol + side - the feed's own row identity."""
+        return (str(alert.symbol or "").upper(), str(alert.side or "").upper())
+
+    def _feed_row_registry(self) -> dict:
+        rows = getattr(self, "_feed_rows", None)
+        if rows is None:
+            rows = {}
+            self._feed_rows = rows
+        return rows
+
+    def _digested_keys(self) -> set:
+        """The (symbol, side) keys the open-burst digest row stands in for.
+
+        A digested alert deliberately has NO row of its own, so the target
+        below has to know which keys those are - otherwise a veto would
+        redraw the burst as forty rows, which is what the digest exists to
+        prevent. Day-scoped with the ledger (see `_repetition_ledger`).
+        """
+        keys = getattr(self, "_digest_keys", None)
+        if keys is None:
+            keys = set()
+            self._digest_keys = keys
+        return keys
+
+    def _feed_repeat_counts(self) -> dict:
+        """Today's ×N counts, read from the ledger and never re-decided.
+
+        `RepetitionLedger.consider` is a DECISION and counts the alert it is
+        handed; a row being redrawn is not a new alert, so it re-stamps its
+        badge from this snapshot instead of asking again.
+        """
+        try:
+            return self._repetition_ledger().repeat_counts()
+        except Exception:
+            logging.debug("Repeat counts unavailable.", exc_info=True)
+            return {}
+
+    def _feed_target_rows(self) -> list:
+        """`(key, alert, repeat_count)` per M5 row, top row first.
+
+        Three rules, in order:
+
+        * the ignore list and the minimum-tier gate decide what QUALIFIES -
+          the same two filters the feed has always applied;
+        * one row per (symbol, side): a name that has alerted three times has
+          three entries in `self._alerts` and ONE row, and that row sits where
+          the OLDEST of them put it, because a fold keeps the row's
+          first-seen time and its place - which is what the trader is looking
+          at when they veto the row above it;
+        * the ×N badge comes from the ledger, so a redrawn row carries the
+          count it had.
+        """
+        mode = self._min_tier_mode()
+        qualifying = [
+            alert
+            for alert in self._alerts
+            if alert.symbol not in self._ignored_symbols
+            and alert_passes_feed_gate(
+                alert, mode, is_focus=self._alert_has_focus_privilege(alert)
+            )
+        ]
+        digested = self._digested_keys()
+        if digested:
+            # A digested name that has since been vetoed, gated out or aged
+            # off the backing list is no longer being stood in for.
+            digested &= {self._feed_row_key(alert) for alert in qualifying}
+        rows: list = []
+        seen: set = set()
+        for alert in reversed(qualifying):  # oldest first
+            key = self._feed_row_key(alert)
+            if key in seen:
+                continue
+            seen.add(key)
+            if key in digested:
+                continue
+            rows.append((key, alert))
+        rows.reverse()  # newest row first - the order the layout draws
+        del rows[MAX_FEED_ITEMS:]
+        counts = self._feed_repeat_counts()
+        return [(key, alert, int(counts.get(key, 1) or 1)) for key, alert in rows]
+
+    def _d1_target_rows(self) -> list:
+        """The D1 Focus feed's rows, top first, keyed on the alert itself.
+
+        No fold and no tier gate here: the D1 feed shows one row per ready
+        transition or pin, and two of them on one symbol are two events.
+        """
+        return [
+            (id(alert), alert, 1)
+            for alert in [
+                alert
+                for alert in self._d1_alerts
+                if alert.symbol not in self._ignored_symbols
+            ][:MAX_D1_FEED_ITEMS]
+        ]
+
+    def _build_feed_row(self, alert: BounceAlert, *, repeat_count: int = 1):
+        """One row widget, wired. The only place a feed row is constructed."""
         focus_category = ""
         if self.focus_service and alert.symbol:
             focus_category = self.focus_service.focus_category(alert.symbol) or ""
@@ -1930,18 +2089,59 @@ class AlertCenterPanel(QFrame):
         # R4 section 6.3: an escalation re-floats the row and carries the count
         # with it, so "third time, now S-tier" reads as one story rather than
         # as an unrelated new alert.
-        if repeat is not None and getattr(repeat, "repeat_count", 1) > 1:
-            try:
-                item.set_repeat_count(repeat.repeat_count)
-            except Exception:
-                logging.debug("Repeat badge failed.", exc_info=True)
-        layout.insertWidget(0, item)
+        if repeat_count > 1:
+            self._stamp_repeat_count(item, repeat_count)
+        return item
+
+    @staticmethod
+    def _place_feed_row(layout, index: int, item) -> None:
+        """Put one row into a feed layout at `index`, shown.
+
+        Qt shows a widget added to a visible layout when that layout next
+        activates, which is one trip through the event loop away; saying it
+        here costs nothing, makes the row visible the moment it is placed,
+        and means a row's own state answers "is this on screen" without
+        waiting for a paint.
+        """
+        layout.insertWidget(index, item)
+        item.show()
+
+    @staticmethod
+    def _stamp_repeat_count(item, count: int) -> None:
+        try:
+            item.set_repeat_count(int(count))
+        except Exception:
+            logging.debug("Repeat badge failed.", exc_info=True)
+
+    def _restyle_feed_row(self, item) -> None:
+        """Re-dress one surviving row for the current Focus lists.
+
+        SN4's Focus half: the star's `focusOn` property, the gold frame and
+        the ★ badge are set on the rows that changed and nowhere else. A row
+        whose category is unchanged does nothing at all, so this is cheap to
+        call for every visible row.
+        """
+        if self.focus_service is None:
+            return
+        symbol = str(getattr(item.alert, "symbol", "") or "")
+        try:
+            category = (self.focus_service.focus_category(symbol) or "") if symbol else ""
+            item.feed_item.apply_focus_state(category)
+        except Exception:
+            logging.debug("Feed row restyle failed.", exc_info=True)
+
+    def _insert_item_into(
+        self, layout, alert: BounceAlert, max_items: int, *, repeat=None
+    ) -> None:
+        count = int(getattr(repeat, "repeat_count", 1) or 1) if repeat is not None else 1
+        item = self._build_feed_row(alert, repeat_count=count)
+        self._place_feed_row(layout, 0, item)
         if layout is self.feed_layout and alert.symbol:
-            rows = getattr(self, "_feed_rows", None)
-            if rows is None:
-                rows = {}
-                self._feed_rows = rows
-            rows[(str(alert.symbol).upper(), str(alert.side or "").upper())] = item
+            key = self._feed_row_key(alert)
+            self._feed_row_registry()[key] = item
+            # This name has a row of its own again, so the open-burst digest
+            # is no longer standing in for it.
+            self._digested_keys().discard(key)
         while layout.count() > max_items + 1:
             taken = layout.takeAt(layout.count() - 2)
             widget = taken.widget()
@@ -1972,38 +2172,97 @@ class AlertCenterPanel(QFrame):
                 widget.deleteLater()
 
     def flush_pending_focus_refresh(self) -> None:
-        """Run an owed coalesced feed rebuild now. The seam the tests drive."""
+        """Run an owed coalesced feed refresh now. The seam the tests drive."""
         coalescer = getattr(self, "_focus_feed_coalescer", None)
         if coalescer is not None:
             coalescer.flush()
 
+    def _sync_layout_rows(self, layout, targets: list, *, key_of, track_rows: bool) -> None:
+        """Reconcile one layout's row widgets against its target list.
+
+        Take every row out of the layout (cheap: no widget is constructed and
+        none is reparented), destroy the ones the target no longer wants, then
+        put the survivors back in target order and build only what is missing.
+        The layout OBJECT is never replaced, so the scroll area, the trailing
+        stretch and the open-burst digest row all stay where they are.
+
+        A duplicate key keeps the BOTTOM row - the oldest, which is the one
+        already sitting at the target's position.
+        """
+        wanted = {key: (alert, count) for key, alert, count in targets}
+        kept: dict = {}
+        taken_items: list = []
+        for index in range(layout.count() - 1, -1, -1):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if not isinstance(widget, _ClickableItem):
+                continue
+            taken_items.append(layout.takeAt(index))
+            key = key_of(widget)
+            if key in wanted and key not in kept:
+                kept[key] = widget
+            else:
+                widget.setParent(None)
+                widget.deleteLater()
+        if track_rows:
+            self._feed_rows = {}
+        offset = 0
+        digest_row = getattr(self, "_digest_row", None)
+        if digest_row is not None and layout.indexOf(digest_row) == 0:
+            offset = 1
+        for position, (key, alert, count) in enumerate(targets):
+            item = kept.get(key)
+            if item is None:
+                item = self._build_feed_row(alert, repeat_count=count)
+            else:
+                self._stamp_repeat_count(item, count)
+                self._restyle_feed_row(item)
+            self._place_feed_row(layout, offset + position, item)
+            if track_rows:
+                self._feed_rows[key] = item
+        taken_items.clear()
+
+    def _sync_feed(self) -> None:
+        """Bring both feeds to the target state by DIFF, not by rebuild.
+
+        What a veto and a Focus change call. The rows the trader did not
+        touch are the same widgets afterwards, at the same positions, with
+        their ×N badges intact.
+        """
+        targets = self._feed_target_rows()
+        self._refresh_open_digest_row()
+        self._sync_layout_rows(
+            self.feed_layout,
+            targets,
+            key_of=lambda item: self._feed_row_key(item.alert),
+            track_rows=True,
+        )
+        self._sync_layout_rows(
+            self.d1_feed_layout,
+            self._d1_target_rows(),
+            key_of=lambda item: id(item.alert),
+            track_rows=False,
+        )
+
     def _rebuild_feed(self) -> None:
-        # Every row widget is about to be destroyed, so the fold registry and
-        # the digest row must go with them - a registry pointing at deleted
-        # widgets would make the next repeat of each name silently fail over
-        # to a new row instead of folding.
+        """Destroy every row and draw both feeds again - the whole-feed repaint.
+
+        Kept for the decisions that are about EVERY row at once: the
+        minimum-tier switch, the day's Clear, and unpinning a D1 Focus name.
+        Everything else goes through `_sync_feed`.
+
+        Every row widget is about to be destroyed, so the fold registry and
+        the digest row go with them - a registry pointing at deleted widgets
+        would make the next repeat of each name silently fail over to a new
+        row instead of folding. It then draws from the SAME target the diff
+        reads, so "the feed after a veto" and "the feed after a rebuild" are
+        the same feed.
+        """
         self._feed_rows = {}
         self._digest_row = None
         self._clear_feed_layout(self.feed_layout)
-        mode = self._min_tier_mode()
-        for alert in reversed(
-            [
-                a
-                for a in self._alerts
-                if a.symbol not in self._ignored_symbols
-                and alert_passes_feed_gate(a, mode, is_focus=self._alert_has_focus_privilege(a))
-            ][:MAX_FEED_ITEMS]
-        ):
-            self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
         self._clear_feed_layout(self.d1_feed_layout)
-        for alert in reversed(
-            [
-                alert
-                for alert in self._d1_alerts
-                if alert.symbol not in self._ignored_symbols
-            ][:MAX_D1_FEED_ITEMS]
-        ):
-            self._insert_item_into(self.d1_feed_layout, alert, MAX_D1_FEED_ITEMS)
+        self._sync_feed()
 
     def _note_away_recap_alert(self, alert: BounceAlert) -> None:
         """Count an alert diverted from the queue into the AWAY recap.
@@ -5637,7 +5896,10 @@ class AlertCenterPanel(QFrame):
             and self._current_review_alert.symbol == symbol
         ):
             self._current_review_alert = None
-        self._rebuild_feed()
+        # SN4: a veto removes THAT row. Every other row keeps its widget, its
+        # position and its ×N badge - measured 4.0-4.1 s per veto on
+        # 2026-09-08 when this was a 350-widget rebuild.
+        self._sync_feed()
         self._refresh_ignored_button()
         if self._current_review_alert is None:
             self._advance_review_queue()

@@ -15,6 +15,20 @@ _FOCUS_BADGE_TEXT = {
 }
 
 
+def _repolish(widget) -> None:
+    """Re-read `theme.qss` for ONE widget after a dynamic property changed.
+
+    Qt evaluates a property selector (`[focusOn="true"]`) when the widget is
+    polished, so a property set afterwards changes nothing until the style is
+    unpolished and polished again. This is the cheap half of SN4: one widget,
+    not a stylesheet re-set on the panel.
+    """
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+    widget.update()
+
+
 class _SymbolLabel(QLabel):
     """The ticker name as a click target for the D1+M5 snapshot popup.
 
@@ -68,6 +82,15 @@ class AlertFeedItem(QWidget):
         tone = "long" if alert.side == "LONG" else "short" if alert.side == "SHORT" else "neutral"
         is_focus = bool(focus_category)
         is_watch_hit = is_chart_watch_alert(alert)
+        # SN4: liking a name restyles the rows it touches in place, so the row
+        # has to remember the three things that decide its Focus dress.
+        self._focus_category = str(focus_category or "")
+        self._favorite_hint = str(favorite_hint or "")
+        self._is_watch_hit = bool(is_watch_hit)
+        self._symbol = str(alert.symbol or "")
+        self._focus_badge = None
+        self._side_badge = None
+        self._top_layout = None
         if is_watch_hit:
             # A user-armed chart watch fired: full red frame - it outranks
             # even the gold focus treatment because the trader set this exact
@@ -78,6 +101,7 @@ class AlertFeedItem(QWidget):
             self.setProperty("alertKind", "focus")
 
         top = QHBoxLayout()
+        self._top_layout = top
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(8)
         time_label = QLabel(alert.time_text)
@@ -108,8 +132,12 @@ class AlertFeedItem(QWidget):
             )
             top.addWidget(Badge(label.upper(), "short"))
         if is_focus:
-            top.addWidget(Badge(_FOCUS_BADGE_TEXT.get(focus_category, "★ FOCUS"), "favorite"))
-        top.addWidget(Badge(alert.side, tone))
+            self._focus_badge = Badge(
+                _FOCUS_BADGE_TEXT.get(focus_category, "★ FOCUS"), "favorite"
+            )
+            top.addWidget(self._focus_badge)
+        self._side_badge = Badge(alert.side, tone)
+        top.addWidget(self._side_badge)
         if alert.timeframe:
             top.addWidget(Badge(alert.timeframe, "info"))
         top.addStretch(1)
@@ -121,25 +149,12 @@ class AlertFeedItem(QWidget):
         # analysis-only and never writes Focus; this one is placement.
         self.favorite_button = None
         if show_favorite_button and alert.symbol:
-            bucket = favorite_hint or "Focus"
             star = QToolButton()
-            if is_focus:
-                star.setText(f"★ In {bucket}")
-                star.setToolTip(
-                    f"{alert.symbol} is in {bucket}. Click to remove it from "
-                    "Focus Picks."
-                )
-            else:
-                star.setText(f"☆ Like → {bucket}")
-                star.setToolTip(
-                    f"Like {alert.symbol} into {bucket}: its alerts flag gold, "
-                    "skip the tier filter, and sound."
-                )
             star.setCursor(Qt.CursorShape.PointingHandCursor)
             star.setObjectName("AlertFavoriteButton")
-            star.setProperty("focusOn", "true" if is_focus else "false")
-            star.clicked.connect(self.favoriteToggled.emit)
             self.favorite_button = star
+            self._dress_favorite_button(is_focus)
+            star.clicked.connect(self.favoriteToggled.emit)
             top.addWidget(star)
 
             dislike = QToolButton()
@@ -172,6 +187,79 @@ class AlertFeedItem(QWidget):
             context.setObjectName("MutedLabel")
             context.setWordWrap(True)
             layout.addWidget(context)
+
+    def _dress_favorite_button(self, is_focus: bool) -> None:
+        """The star's words and its `focusOn` property, in one place.
+
+        Called from `__init__` and again from `apply_focus_state`, so a row
+        that is restyled in place reads exactly like a freshly built one.
+        """
+        star = self.favorite_button
+        if star is None:
+            return
+        bucket = self._favorite_hint or "Focus"
+        if is_focus:
+            star.setText(f"★ In {bucket}")
+            star.setToolTip(
+                f"{self._symbol} is in {bucket}. Click to remove it from "
+                "Focus Picks."
+            )
+        else:
+            star.setText(f"☆ Like → {bucket}")
+            star.setToolTip(
+                f"Like {self._symbol} into {bucket}: its alerts flag gold, "
+                "skip the tier filter, and sound."
+            )
+        star.setProperty("focusOn", "true" if is_focus else "false")
+
+    def apply_focus_state(self, focus_category: str = "") -> bool:
+        """Re-dress this row for a Focus change WITHOUT rebuilding it (SN4).
+
+        Returns True when something actually changed. The three things a
+        rebuild would have produced are all produced here - the gold frame
+        (`alertKind`), the ★ SWING / ★ M5 badge, and the star's words and
+        `focusOn` property - so a diffed row and a rebuilt row are the same
+        row. A row whose armed chart watch fired keeps its red frame: that
+        outranks the gold treatment, exactly as it does on construction.
+
+        No-ops when the category is unchanged, which is the common case: the
+        panel calls this for every visible row after a Focus change and only
+        the one or two rows the trader touched do any work.
+        """
+        category = str(focus_category or "")
+        if category == self._focus_category:
+            return False
+        self._focus_category = category
+        is_focus = bool(category)
+        if not self._is_watch_hit:
+            self.setProperty("alertKind", "focus" if is_focus else None)
+            _repolish(self)
+        if is_focus:
+            text = _FOCUS_BADGE_TEXT.get(category, "★ FOCUS")
+            if self._focus_badge is None:
+                badge = Badge(text, "favorite")
+                position = (
+                    self._top_layout.indexOf(self._side_badge)
+                    if self._top_layout is not None and self._side_badge is not None
+                    else -1
+                )
+                if position < 0:
+                    badge.deleteLater()
+                else:
+                    self._top_layout.insertWidget(position, badge)
+                    self._focus_badge = badge
+            else:
+                self._focus_badge.setText(text)
+        elif self._focus_badge is not None:
+            badge, self._focus_badge = self._focus_badge, None
+            if self._top_layout is not None:
+                self._top_layout.removeWidget(badge)
+            badge.setParent(None)
+            badge.deleteLater()
+        self._dress_favorite_button(is_focus)
+        if self.favorite_button is not None:
+            _repolish(self.favorite_button)
+        return True
 
     def set_repeat_count(self, count: int, *, latest_trigger: str = "") -> None:
         """Fold a repeat into this row (R4 section 6.3).
