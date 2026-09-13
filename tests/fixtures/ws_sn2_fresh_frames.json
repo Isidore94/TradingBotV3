@@ -1,4 +1,10 @@
 {
+  "acquired_at": "2026-09-13T10:57:37-07:00",
+  "as_of": "2026-06-08T07:25:00-07:00",
+  "expected_keys": [
+    "frames"
+  ],
+  "feature_version": "request_and_detect_bounce_full_window_v1",
   "frames": {
     "intraday_cycle_2": {
       "columns": [
@@ -18539,6 +18545,14 @@
     }
   },
   "generated_from_commit": "b8bdec24e7a3b1b673d821d788a849b11bddc540",
+  "intentional_difference": "",
+  "numeric_tolerance": 0.0,
   "provider_assumptions": "Synthetic RTH 5-minute bars, no provider call; six sessions 2026-06-01..2026-06-08, market-local session open 06:30, completed bars only (bar_start + 5 min <= now).",
-  "series_version": "ws_sn2_synthetic_v1"
+  "raw_input_keys": [
+    "frames"
+  ],
+  "raw_input_sha256": "244575520bed66a09e0d158d99b696138d0b602d6470199c278f6026998ab403",
+  "schema": "ws_sn2_fresh_frames_v1",
+  "series_version": "ws_sn2_synthetic_v1",
+  "universe_version": "ws_sn2_synthetic_v1"
 }
