@@ -189,6 +189,63 @@ def test_a_source_link_selects_the_entry_it_names(panel):
 
 
 @pytest.mark.qt
+def test_the_paste_action_imports_a_forecast_and_invents_no_provenance(qapp):
+    """WISHLIST 10K's button: the text goes through, the blanks stay blank.
+
+    The dialog is not driven here (a modal `exec` in a test is a hang); its
+    write half is, because that is where a field could be quietly filled in.
+    An empty "written at" must reach the service EMPTY - it is
+    `market_thesis.record_forecast` that turns it into `unknown`, in one place.
+    """
+    from PySide6.QtCore import QObject, Signal
+
+    from ui.panels.market_journal_panel import MarketJournalPanel
+
+    class _Stub(QObject):
+        statusChanged = Signal(str)
+        entryWritten = Signal(dict)
+        chartCaptured = Signal(dict)
+
+        def __init__(self):
+            super().__init__()
+            self.imported: list[dict] = []
+
+        def entries_for(self, session_date: str = ""):
+            return []
+
+        def import_weekly_forecast(self, **kwargs):
+            self.imported.append(kwargs)
+            return {"ok": True, "entry": {"entry_id": "mj-x"}, "forecast": {}}
+
+    widget = MarketJournalPanel(service=_Stub())
+    try:
+        result = widget._import_forecast(
+            {
+                "text": "Week of Sept 14: base case SPY grinds to 5,500.",
+                "source_model": "",
+                "created_at_claimed": "",
+                "target_week": "2026-W38",
+                "scenarios": ["base: 5,500"],
+            }
+        )
+        assert result["ok"] is True
+        assert len(widget.service.imported) == 1
+        sent = widget.service.imported[0]
+        assert sent["text"].startswith("Week of Sept 14")
+        assert sent["source_model"] == ""
+        assert sent["created_at_claimed"] == ""
+        assert sent["target_week"] == "2026-W38"
+        assert tuple(sent["scenarios"]) == ("base: 5,500",)
+
+        # Nothing pasted, nothing written.
+        assert widget._import_forecast({"text": "   "})["ok"] is False
+        assert len(widget.service.imported) == 1
+    finally:
+        widget.shutdown()
+        widget.deleteLater()
+
+
+@pytest.mark.qt
 def test_an_unknown_source_link_says_so_and_moves_nothing(panel):
     """A link to an entry the list does not hold never silently changes the row."""
     from PySide6.QtCore import QUrl

@@ -253,6 +253,54 @@ def _thesis_label(row: Any) -> str:
     return "  ·  ".join(parts)
 
 
+def _ask_for_forecast(parent) -> dict | None:
+    """The paste dialog. Returns what was typed, or None when cancelled.
+
+    Built here rather than as a class because it holds no state: it asks four
+    questions, hands back the answers, and every empty answer STAYS empty -
+    `market_thesis.record_forecast` is what turns a blank into `unknown`, in
+    one place, so the dialog cannot invent a provenance the trader did not give.
+    """
+    from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLineEdit
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Paste a weekly forecast")
+    text_box = QPlainTextEdit()
+    text_box.setPlaceholderText("Paste the forecast exactly as it was written.")
+    model_box = QLineEdit()
+    model_box.setPlaceholderText("Which model or person wrote it (optional)")
+    created_box = QLineEdit()
+    created_box.setPlaceholderText("When it was written, if you know (optional)")
+    week_box = QLineEdit()
+    week_box.setPlaceholderText("Target week, e.g. 2026-W38 (optional)")
+    scenarios_box = QPlainTextEdit()
+    scenarios_box.setPlaceholderText("Scenarios, one per line (optional)")
+
+    form = QFormLayout(dialog)
+    form.addRow(QLabel("The forecast, verbatim"))
+    form.addRow(text_box)
+    form.addRow("Source", model_box)
+    form.addRow("Written at", created_box)
+    form.addRow("Target week", week_box)
+    form.addRow("Scenarios", scenarios_box)
+    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    form.addRow(buttons)
+
+    if dialog.exec() != QDialog.Accepted:
+        return None
+    return {
+        "text": text_box.toPlainText(),
+        "source_model": model_box.text().strip(),
+        "created_at_claimed": created_box.text().strip(),
+        "target_week": week_box.text().strip(),
+        "scenarios": [
+            line.strip() for line in scenarios_box.toPlainText().splitlines() if line.strip()
+        ],
+    }
+
+
 class _EntriesWorker(QThread):
     """Loads entries, digests, the regime timeline and the day context."""
 
@@ -414,6 +462,11 @@ class MarketJournalPanel(QFrame):
         )
         self.save_interpretation_button = QPushButton("Save interpretation")
         self.save_interpretation_button.clicked.connect(self._save_interpretation)
+        # WISHLIST 10K: someone else's weekly forecast, pasted in whole. Its own
+        # button and its own origin, because it is the one thing on this page
+        # the trader did not write.
+        self.paste_forecast_button = QPushButton("Paste weekly forecast…")
+        self.paste_forecast_button.clicked.connect(self._paste_weekly_forecast)
 
         self.charts_note = QLabel("")
         self.charts_note.setWordWrap(True)
@@ -431,6 +484,7 @@ class MarketJournalPanel(QFrame):
         compose = QVBoxLayout()
         compose.addWidget(QLabel("New entry"))
         compose.addWidget(self.entry_text, 1)
+        compose.addWidget(self.paste_forecast_button, 0, Qt.AlignLeft)
         compose_widget = QWidget()
         compose_widget.setLayout(compose)
 
@@ -1153,6 +1207,44 @@ class MarketJournalPanel(QFrame):
         waiter = getattr(self.service, "wait_for_captures", None)
         if callable(waiter):
             waiter(2000)
+
+    # -- the imported weekly forecast (WISHLIST 10K) -----------------------
+    def _paste_weekly_forecast(self) -> None:
+        """Ask for the pasted text and what is KNOWN about where it came from.
+
+        Every field but the text is optional and an empty one stays `unknown`.
+        The dialog does not guess: a forecast whose creation time nobody typed
+        was not written at the moment it was pasted, and recording it that way
+        would claim the trader knew it earlier than they did.
+        """
+        payload = _ask_for_forecast(self)
+        if payload is None:
+            return
+        self._import_forecast(payload)
+
+    def _import_forecast(self, payload: dict) -> dict:
+        """The write half, separate from the dialog so it can be tested."""
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            self.status.setText("Nothing was pasted, so nothing was imported.")
+            return {"ok": False, "reason": "empty forecast"}
+        result = self.service.import_weekly_forecast(
+            text=text,
+            source_model=str(payload.get("source_model") or ""),
+            created_at_claimed=str(payload.get("created_at_claimed") or ""),
+            target_week=str(payload.get("target_week") or ""),
+            scenarios=tuple(payload.get("scenarios") or ()),
+            session_date=self.session_date(),
+        )
+        if result.get("ok"):
+            self.status.setText(
+                "Weekly forecast imported as outside commentary. It is not your "
+                "view until you write an entry adopting it."
+            )
+            self._refresh_if_loaded()
+        else:
+            self.status.setText(f"Forecast NOT imported: {result.get('reason', '')}")
+        return result
 
     # -- writing ----------------------------------------------------------
     def _save(self) -> None:
