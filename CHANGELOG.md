@@ -1343,6 +1343,55 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **The said-vs-did report has both halves (WS-5B, WISHLIST 5B, 2026-09-13, sweep branch).**
+  `scripts/preference_trade_outcomes.py` now collects every explicit REFUSAL beside the
+  endorsements: `annotation:veto` (detail `<code> (v<vocab_version>)`, an uncoded veto reads
+  `uncoded`), `annotation:pass` (unchanged detail), `pick_feedback:dislike`,
+  `pick_feedback:not_today` and `review_event:m5_click_away` (a new `events_path` kwarg);
+  `unfavorite` is absent by decision. Three columns at the END of `COLUMNS` - `like_mode`
+  (`quick` / `claimed` for `annotation:like_claim` rows, an absent field reading `claimed`;
+  empty for the pick-feedback and favorite likes, which were neither the key nor the dialog),
+  `verdict_family` (`endorse` / `reject`), `match_state` (`matched` / `window_open` /
+  `no_match_after_window` / `journal_unavailable`; `matching_unavailable` reserved, no path
+  emits it) - and `schema` bumps to `preference_trade_outcomes_v2`; the first 19 columns stay
+  byte-identical (golden). `trade_level_summary` gains `n_statements_by_family` and still keys
+  money by `trade_id`; `match_trade`'s side logic is untouched (P6's opposite-side match at
+  0.35 stands, the verdicts stay separate rows, the money counts once); a sideless coincidence
+  is `symbol+window_side_unknown` 0.50; `match_state` agrees with
+  `ai_summary.preference_to_trade_section` by construction (same empty-`match_basis` rule, same
+  `statement_window_end`); an unreadable journal publishes the statements with empty
+  `match_basis`, `journal_unavailable` and a `degraded` slot status instead of `skipped` with no
+  file. Weekend Prep's Focus Review gains a TENTH view, "Said no" (`preference_rejection_table`
+  / `preference_rejection_note`), filled by the same read pass, `Match state` visible, counts
+  never pooled across families. Two ST5 tests widened their fixture to name the fourth store
+  (a test naming three leaks the fourth from the shared pytest home). No free text reaches a
+  model (`statement_detail` is not a `PREFERENCE_EXAMPLE_COLUMNS`). Tests:
+  `tests/test_ws_5b_preference_symmetric.py` (17).
+- **A fourth auto-tagging lane: the trader's own Market Journal notes (WS-10E, WISHLIST 10E,
+  2026-09-13, sweep branch).** `AutoTagger` now reads the Market Journal. For a CLOSED trade,
+  entries whose `symbols` carry the trade's symbol and whose ACTUAL write time (`created_at` -
+  the ledger overwrites `session_date` with the session of the append) fall inside the trade's
+  own window - open to close, widened by one trading session before the open - are candidates;
+  a date-only broker fill has no intraday window and is `unmeasured`. A tag is emitted only for
+  an explicit claim: `setup_docs.SETUP_DOCS` compiled to whole-token phrase patterns from each
+  family's key and label, single-token phrases dropped so `general` cannot tag a trade. The
+  candidate carries `match_basis = note:<entry_id>` and the span quoted verbatim
+  (`auto_tag_candidates.match_basis` / `match_span`, additive in `NEW_COLUMNS_V3`). A note whose
+  own words state the opposite side never matches; a side-silent note matches either. Order
+  stays by LANE - capture, note, scanner, shape (`journal_analytics._lane_rank` and the mirrored
+  SQL in `JournalStore.list_auto_tag_candidates`) - with confidence 0.88 / 0.84 placing the note
+  between the two, so `journal_bulk_tag` writes it under the same 0.70 threshold and
+  `apply_provisional_tags`' refusal to overwrite a confirmed tag is untouched. The lane's
+  verdict is stored per trade in the new `note_lane_verdicts` table (its own table, LEFT JOINed
+  into `list_trades`; never a column on the golden-pinned `trades`) and printed by
+  `journal_analytics.format_note_lane_line` in three shapes: the claim, `no explicit claim in N
+  candidate note(s)`, `unmeasured (date-only fill)`. The Journal's Trades detail shows it above
+  the overnight AI row; Weekend Prep's Tag Week gains a `From` column marking rows whose waiting
+  tag came from a note. The advisory enrichment package carries `trader_notes` and
+  `deterministic_note_lane` so the model cites `note:<id>`. Nothing in this chain reads an
+  outcome field (grep-guard). Tests: `tests/test_ws_10e_note_tags.py` (13). Docs: DESK_INTERNALS
+  "The four auto-tagging lanes"; `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`. The CLAUDE.md /
+  AGENTS.md "three lanes" rule line is rewritten in the sweep's docs pass.
 - **Trade Mentor: a prompt is a slot, an answer is a dated row (WS-TM, WISHLIST 10J steps 1-2,
   2026-09-13, sweep branch).** `scripts/trade_mentor_schedule.py` (pure) builds the day's
   `MentorSlot`s - whole hours from `FIRST_HOUR` 7 Pacific (`America/Los_Angeles`, DST-aware)
@@ -2489,6 +2538,17 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   the 10:00 missing-fields check off the journal store, Settings checkbox + Pause today; a
   market-journal clock defect fixed alongside. Suite 7443 green, ruff clean, smoke 7/7, selftest
   80/80. Gate #110.
+- **WS-10E (WISHLIST 10E) - the Journal tags a trade from the trader's own notes**, branch
+  `claude/ws-10e-note-tags-build` `f5fabaa3`: the `trader_note` lane (whole-token setup
+  vocabulary, the trade's own window on `created_at`, `match_basis = note:<id>` + span,
+  opposite-side refused), the `note_lane_verdicts` table joined into `list_trades`, the Trades
+  detail line, Tag Week's `From` column, the notes in the enrichment package. Suite 7483 green,
+  ruff clean, smoke 7/7, selftest 75/75. Gate #111.
+- **WS-5B (WISHLIST 5B) - the said-vs-did report has both halves**, branch
+  `claude/ws-5b-preference-symmetric-build` `a0a29f04`: five refusal channels as statements,
+  `like_mode` / `verdict_family` / `match_state` at the end of the columns (schema v2, first 19
+  byte-identical), `n_statements_by_family`, a degraded-not-skipped unreadable journal, Weekend
+  Prep's tenth view "Said no". Suite 7487 green, ruff clean, smoke 7/7, selftest 75/75. Gate #112.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
