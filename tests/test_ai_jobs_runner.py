@@ -315,6 +315,10 @@ EXPECTED_SLOT_ORDER = (
     # reads `theta_picks.jsonl` and the daily bars and feeds nothing above it,
     # so it sits after the digest and stays ahead of `ai_summary`.
     "theta_pick_grading",
+    # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
+    # Deterministic, no model; it reads the daily stories and the exchange calendar
+    # and feeds nothing above it, so it CLOSES the deterministic stage.
+    "market_story_rollups",
     # stage 2 - narration, moved here as a unit by decision 0018
     "ai_summary",
     "ticker_briefs",
