@@ -1343,6 +1343,43 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **Trade Mentor: a prompt is a slot, an answer is a dated row (WS-TM, WISHLIST 10J steps 1-2,
+  2026-09-13, sweep branch).** `scripts/trade_mentor_schedule.py` (pure) builds the day's
+  `MentorSlot`s - whole hours from `FIRST_HOUR` 7 Pacific (`America/Los_Angeles`, DST-aware)
+  to before the close, `D1_HOURS` (8, 12) and `TRADES_HOUR` 10 combined into one slot each,
+  `post_close` when the slot sits past an early close read from `market_early_close.session_close`
+  (`market_calendar.session_close` is 16:00 ET even on a half day), `expires_at = scheduled_at
+  + 1 h`, nothing on a weekend or holiday; `slot_id` = session + wall time + kind.
+  `ui/services/trade_mentor_service.py` is the ONE scheduler (one 60 s `QTimer`, owned by
+  `MainWindow`, started in `showEvent`): slot records in `trade_mentor_slots.json` (delivered /
+  answered / skipped with `away` / `paused` / `locked` / `idle` / `expired` / `not_present`),
+  expiry at the head of the poll, `promptDue` once per service instance per slot, a restart
+  re-shows an unanswered unexpired card without moving `delivered_at`, a missed hour is
+  recorded and never re-asked, AWAY / paused / idle beyond `IDLE_GRACE_MINUTES` (20) skip
+  (`scripts/user_presence.py`: `GetLastInputInfo`, None off Windows reads PRESENT;
+  `session_locked` is an injected callable, no lock hook yet). `ui/widgets/trade_mentor_card.py`
+  docks UNDER the chart after the arm bar (which did not move), hidden until due,
+  `WA_ShowWithoutActivating`, Ctrl+Enter scoped to its boxes; Submit writes the RAW text first
+  through `market_journal_service.write_entry(origin="trade_mentor", mentor=..., reaffirms=...)`
+  - `build_entry` / `write_entry` grew those two kwargs (present and empty on every other entry)
+  because no metadata field existed; "Read unchanged" writes a NEW row referencing the previous
+  read; drafts live in `trade_mentor_drafts.json`, never a read. The 10:00 check
+  (`scripts/trade_mentor_trade_check.py`) reads the previous exchange session's trades from
+  `journal_store.JournalStore` + `journal_coverage` (NOT the market journal), asks only the
+  missing material fields with the four answer states distinct (`not supplied` / `no fixed
+  target` / `not remembered` / `not applicable`; no stop is never 0), stores the answers as
+  RECALLED `opportunity_events` annotation rows stamped with the actual write time (no schema
+  migration, `planned_stop` never written), capped at three trades / five minutes with the rest
+  counted; missing broker coverage says `journal not ready`. Settings: the checkbox (default
+  OFF, `qt_trade_mentor_enabled`), the DST sentence, `next prompt hh:mm`, `Pause today`; "Give a
+  read" on the chart host at all times. Independent of the scanner's Auto setting; no phone
+  push; nothing in AWAY. Defect fixed alongside: `market_journal_service.write_entry` built the
+  entry from the caller's `now` but appended without it, so an entry written with an explicit
+  clock was filed under one date and stamped with another (no production caller passed `now`
+  before). Steps 3 (AI form filling) and 4 (coaching) are NOT built. Tests:
+  `tests/test_ws_tm_trade_mentor.py` (36 + 3), one added in `tests/test_market_journal.py`;
+  `test_qt_alert_capture`'s "nothing under the charts" pin now names the hidden card after the
+  arm bar. Selftest 75 -> 80 (five reach checks).
 - **The Journal's Trades splitter opens at its declared 3:2 and the tag-review row no longer
   eats the tab (WS-J1, WISHLIST item 1 leftover, 2026-09-13, sweep branch).** Two layout defects
   in `scripts/ui/panels/journal/trades_tab.py`: the `QSplitter` declared `setStretchFactor` 3:2
@@ -2445,6 +2482,13 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   Setups status row and System Health check `master_scan_freshness`, and the read-only
   `scan_replay` CLI with four exchange-time checkpoints; `legacy.py` diff zero. Suite 7430
   green, ruff clean, smoke 7/7, selftest 75/75. Gate #109.
+- **WS-TM (WISHLIST 10J steps 1-2) - Trade Mentor**, branch `claude/ws-tm-trade-mentor-build`
+  `6e17add1`: the pure slot schedule (Pacific, DST, early closes from `market_early_close`),
+  one scheduler service with persisted slot state and presence skips, the non-modal card under
+  the chart writing raw reads through the Market Journal service (`mentor=` / `reaffirms=`),
+  the 10:00 missing-fields check off the journal store, Settings checkbox + Pause today; a
+  market-journal clock defect fixed alongside. Suite 7443 green, ruff clean, smoke 7/7, selftest
+  80/80. Gate #110.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 

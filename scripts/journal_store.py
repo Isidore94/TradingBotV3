@@ -110,6 +110,14 @@ OPPORTUNITY_EVENT_TYPES = {
     "CLOSED",
     "REVIEWED",
     "NOTE",
+    # WISHLIST 10J. A material field the trader could not answer at the time and
+    # supplied the next morning, through the Trade Mentor's 10:00 check. An
+    # annotation KIND rather than a schema migration: it never touches
+    # `trade_annotations`, which the trader owns (I7), and it is labelled
+    # `recalled_after_session` in its payload so remembered risk can never be
+    # read as a documented pre-entry plan. `scripts/trade_mentor_trade_check.py`
+    # is its only writer.
+    "RECALLED",
 }
 
 

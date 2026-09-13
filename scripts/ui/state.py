@@ -21,6 +21,12 @@ class UiState:
     compact_density: bool = False
     nav_collapsed: bool = False
     ui_scale: str = "auto"
+    # WISHLIST 10J. The Trade Mentor's opt-in, OFF by default and persisted
+    # per machine like every other `qt_*` setting. It is INDEPENDENT of the
+    # scanner's Auto setting: prompting a present trader and scanning an empty
+    # desk are different questions, and one switch answering both would mean
+    # turning off the scanner to stop the prompts.
+    trade_mentor_enabled: bool = False
 
     @classmethod
     def load(cls) -> "UiState":
@@ -33,6 +39,7 @@ class UiState:
             compact_density=bool(get_local_setting("qt_compact_density", False)),
             nav_collapsed=bool(get_local_setting("qt_nav_collapsed", False)),
             ui_scale=_choice("qt_ui_scale", "auto", VALID_UI_SCALES),
+            trade_mentor_enabled=bool(get_local_setting("qt_trade_mentor_enabled", False)),
         )
 
     def save(self) -> None:
@@ -42,6 +49,7 @@ class UiState:
         save_local_setting("qt_compact_density", bool(self.compact_density))
         save_local_setting("qt_nav_collapsed", bool(self.nav_collapsed))
         save_local_setting("qt_ui_scale", self.ui_scale)
+        save_local_setting("qt_trade_mentor_enabled", bool(self.trade_mentor_enabled))
 
 
 def _choice(key: str, default: str, valid: set[str]) -> str:

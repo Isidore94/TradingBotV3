@@ -84,12 +84,25 @@ class MarketJournalService(QObject):
         origin: str = "",
         now: datetime | None = None,
         supersedes: str = "",
+        mentor: Any = None,
+        reaffirms: str = "",
     ) -> dict[str, Any]:
         """Write one entry. Returns the row, or a refusal that says why.
 
         A refusal is returned rather than raised: both hosts show it in a
         status line, and an exception here would turn "you typed nothing" into
         a traceback.
+
+        `mentor` / `reaffirms` are WISHLIST 10J's Trade Mentor fields, passed
+        straight through to `build_entry`. The card writes its RAW text through
+        HERE and nowhere else: there is one owner of this store (ground rule 8),
+        and a prompt-answering surface with its own writer would be a second one.
+
+        A caveat the caller must know: `EvidenceLedger.append` stamps its own
+        `session_date` from the WRITE moment's market-local date, last, so a
+        caller cannot overwrite it. That is right for the ledger and wrong for
+        the question "which hour was this read about?", which is why the slot's
+        `scheduled_at` and the trader's `responded_at` both live in `mentor`.
         """
         import market_journal
 
@@ -101,13 +114,23 @@ class MarketJournalService(QObject):
             origin=origin or market_journal.ORIGIN_DESK_TAB,
             now=now,
             supersedes=supersedes,
+            mentor=mentor,
+            reaffirms=reaffirms,
         )
         ok, reason = market_journal.is_publishable(entry)
         if not ok:
             self.statusChanged.emit(reason)
             return {"ok": False, "reason": reason}
         try:
-            row = self._stream().append(entry)
+            # The SAME moment the entry was built from. Without this the ledger
+            # stamped `event_at` and its own `session_date` from `datetime.now()`
+            # while `created_at` said something else, so an entry written with an
+            # explicit `now` was filed under one date and stamped with another -
+            # and a reader narrowing the ledger by session would miss it
+            # entirely. No production caller passed `now` before WISHLIST 10J,
+            # which is why it never showed; the Trade Mentor's injected clock is
+            # what found it.
+            row = self._stream().append(entry, now=now)
         except Exception as exc:  # noqa: BLE001
             logging.warning("Market journal entry not written: %s", exc)
             self.statusChanged.emit(f"entry NOT saved: {exc}")

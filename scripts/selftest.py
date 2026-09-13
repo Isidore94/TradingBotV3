@@ -94,6 +94,19 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # R1 amendment: the AWAY day's return surface.
     "away_recap",
     "ui.panels.away_recap_panel",
+    # WISHLIST 10J: the Trade Mentor. Every one of these is reached through a
+    # FUNCTION-LEVEL import - `ui.app` imports the service inside `__init__`,
+    # the service imports `user_presence` inside its own, and both the window
+    # and the card import `trade_mentor_trade_check` at 10:00. PyInstaller can
+    # follow that chain and a refactor can quietly break it, which is the exact
+    # shape of the journal-chain problem two entries down. A bundle missing one
+    # would not fail at launch: it would fail at the top of the hour the trader
+    # turned the feature on for.
+    "trade_mentor_schedule",
+    "trade_mentor_trade_check",
+    "user_presence",
+    "ui.services.trade_mentor_service",
+    "ui.widgets.trade_mentor_card",
     # NOT ai_jobs: the local AI batch layer is deliberately out of the bundle
     # (PACKAGES_NOT_IN_THE_BUNDLE in tests/test_packaging_spec_drift.py). Its
     # only entry point is scripts/run_ai_jobs.py, a scheduled CLI run from the

@@ -54,6 +54,11 @@ ORIGIN_AWAY_RECAP = "away_recap"
 #: count a row nobody thought.
 ORIGIN_AUTO_MODE_FLIP = "auto_mode_flip"
 MACHINE_ORIGINS = (ORIGIN_AUTO_MODE_FLIP,)
+#: WISHLIST 10J. A read the Trade Mentor ASKED for. The trader wrote every word
+#: of it, so it is not a machine origin - what the origin records is that the
+#: desk chose the moment, which is exactly what a later reader needs to tell a
+#: prompted read from a volunteered one.
+ORIGIN_TRADE_MENTOR = "trade_mentor"
 
 #: The journal-only RVOL floor. It is an OVERLAY on this page's charts and
 #: never touches the canonical D1 level store (trader decision, plan.md L1118).
@@ -84,6 +89,8 @@ def build_entry(
     origin: str = ORIGIN_DESK_TAB,
     now: datetime | None = None,
     supersedes: str = "",
+    mentor: Mapping[str, Any] | None = None,
+    reaffirms: str = "",
 ) -> dict[str, Any]:
     """One journal entry.
 
@@ -91,6 +98,17 @@ def build_entry(
     written. They are separate fields precisely so an evening write-up of an
     AWAY day can be honest about both - and `written_after_the_session` is
     computed rather than asserted, so it cannot be set wrongly by a caller.
+
+    `mentor` and `reaffirms` are WISHLIST 10J's two additions, and they are
+    fields on THIS row rather than a second store, because a read and the
+    prompt it answers are one fact (packet WS-TM). `mentor` carries the slot
+    that asked (`slot_id`, `prompt_kind`, `scheduled_at`) and, separately, the
+    moment the trader actually replied (`responded_at`) - a reply typed at 09:12
+    cannot claim to describe the market at 09:00, and `created_at` alone cannot
+    say which hour was being asked about. `reaffirms` names the earlier entry a
+    "Read unchanged" restates. It is deliberately NOT `supersedes`: superseding
+    would hide the read it reaffirms, and "I still think what I thought at 09:00"
+    is a new observation at 11:00, not a correction of the old one.
     """
     moment = _now(now)
     created_at = moment.astimezone(timezone.utc).isoformat(timespec="seconds")
@@ -119,6 +137,11 @@ def build_entry(
         "origin": str(origin or ""),
         "text": body,
         "supersedes": str(supersedes or ""),
+        # Present and empty on every other entry, never absent: a reader that
+        # has to tell "no prompt asked for this" from "this key did not exist
+        # yet" is reading two different absences as one.
+        "mentor": dict(mentor or {}),
+        "reaffirms": str(reaffirms or ""),
     }
 
 

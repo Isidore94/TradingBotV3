@@ -370,3 +370,41 @@ invent a sentence about evidence nobody read.
 The 2026-08-15 §1 matrix rows for AWAY remain accurate for what is BUILT
 today; this amendment governed the recap packet's build and the queue-routing
 change that landed with it.
+
+## Amendment 2026-09-12 — the Trade Mentor is a narrow fixed-time exception (WISHLIST 10J, packet WS-TM)
+
+Every **automatic starter** on this desk is gated on `autopilot_core.auto_scanning_due`,
+fail-open, and manual buttons are never gated. The Trade Mentor is neither: it starts
+nothing, scans nothing, fetches nothing and pushes nothing. It asks a **present human**
+for a sentence at fixed Pacific wall-clock hours — hourly M5 reads from 07:00 until
+before the session's actual close, D1 reads at 08:00 and 12:00, and the previous
+session's missing trade fields at 10:00 — and files what they type in the Market
+Journal. So it is recorded here as an exception to the quiet-hours rule rather than a
+new starter under it, and the exception is bounded four ways.
+
+**It is opt-in.** A Settings checkbox, default OFF and persisted per machine, and
+independent of the scanner's Auto setting in both directions: Auto OFF still prompts,
+and the Mentor checkbox OFF prompts nothing whatever Auto says. Turning the scanner off
+must not be how the trader stops the prompts.
+
+**It runs in DESK, EVENING and OFF, and never in AWAY.** AWAY means nobody is at the
+desk, which is precisely the state in which an interruption becomes an unanswered
+prompt — and an unanswered prompt is no observation, so it would leave a hole in the
+record that reads exactly like "the trader had no view". AWAY is recorded as the skip
+reason `away` and the hour is never asked again.
+
+**There is no phone push, and it does not become one.** The two standing exceptions to
+"AWAY is the only Auto mode that pushes routine output" (Research/Focus price alerts and
+EVENING's SPY ±1% wake alarm) are unchanged, and this is not a third: the surface is a
+card under the chart on the machine the trader is sitting at.
+
+**Absence skips; it never queues.** Away, paused for the day, a locked workstation, or
+more than `IDLE_GRACE_MINUTES` (20) since the last keystroke or mouse move, each recorded
+as its own reason. A missed hour stays missed — no backlog, no catch-up burst on return —
+and an unanswered prompt expires one hour after it was scheduled, which on a normal
+session is exactly when the next one arrives.
+
+`scripts/trade_mentor_schedule.py` owns the instants (and reads
+`market_early_close.session_close`, not `market_calendar.session_close`, so a half day
+ends the hourly window when the tape actually stops);
+`scripts/ui/services/trade_mentor_service.py` owns the one timer and the one state file.
