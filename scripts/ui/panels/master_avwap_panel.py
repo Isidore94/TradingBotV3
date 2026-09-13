@@ -280,6 +280,45 @@ class _FamilyRecordWorker(QThread):
         self.done.emit((records, coverage))
 
 
+class _ScanFreshnessWorker(QThread):
+    """The scan's three clocks, off the Qt thread - WS-10A item 2.
+
+    It opens two files (the scan manifest and one `stat` of the priority
+    report), which is why it is a worker and not a call inside
+    `refresh_from_reports`: that path runs on the trader's own click and on the
+    report watcher's signal, and a shared-home read there is a stall charged to
+    them. Never raises into Qt - a strip that cannot be built says nothing
+    rather than taking down the swing screen.
+
+    Emits the finished sentence, or "" when nothing could be read.
+    """
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            import project_paths
+            from datetime import datetime as _datetime
+
+            from market_session import get_market_local_timezone
+            from master_avwap_lib import scan_manifest
+
+            manifest = scan_manifest.read_manifest()
+            report_mtime = None
+            try:
+                stamp = Path(project_paths.MASTER_AVWAP_PRIORITY_SETUPS_FILE).stat().st_mtime
+                local_tz, _name = get_market_local_timezone()
+                report_mtime = _datetime.fromtimestamp(stamp, tz=local_tz)
+            except OSError:
+                # No report on disk yet. Missing data is uncertainty: the line
+                # says "no report" rather than inventing a clock.
+                report_mtime = None
+            line = scan_manifest.freshness_line(manifest, report_mtime=report_mtime)
+        except Exception:  # noqa: BLE001 - one strip, never the table
+            line = ""
+        self.done.emit(line)
+
+
 class _PointsEvidenceWorker(QThread):
     """Log today's ranked rows, grade the log against the tracker's outcomes,
     write the weight proposal (trader, 2026-09-08). Never raises into Qt.
@@ -464,6 +503,12 @@ class MasterAvwapPanel(QWidget):
         self.data_as_of_label.setObjectName("MutedLabel")
         self.last_run_label = QLabel("Last run: never")
         self.last_run_label.setObjectName("MutedLabel")
+        # WS-10A item 2: the scan's OWN record, which `Last run:` is not - that
+        # label is written only by `_on_scan_finished`, so after a failed scan
+        # (or a restart) it says nothing at all about what is on screen.
+        self._scan_freshness_key: object = object()
+        self.scan_freshness_label = QLabel("")
+        self.scan_freshness_label.setObjectName("MutedLabel")
         # ST1 item 3: what the Family favorable % column IS - outcome kind,
         # horizon in its own unit, window, coverage. Filled from the same worker
         # read that fills the column, blank until it lands.
@@ -570,6 +615,7 @@ class MasterAvwapPanel(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.addWidget(self.status_label)
         status_row.addStretch(1)
+        status_row.addWidget(self.scan_freshness_label)
         status_row.addWidget(self.points_grade_label)
         status_row.addWidget(self.family_record_label)
         status_row.addWidget(self.last_run_label)
@@ -1290,8 +1336,54 @@ class MasterAvwapPanel(QWidget):
             label.setText(self._family_record_coverage)
             label.setToolTip(self._family_record_coverage)
 
+    def _scan_freshness_signature(self) -> tuple:
+        """`(manifest stamp, report stamp)` - two `stat` calls, nothing parsed.
+
+        The read itself is the worker's job; this is only the question "has
+        either file moved since the last time we asked?". Deliberately computed
+        on the Qt thread and BEFORE the worker starts: the report watcher fires
+        `refresh_from_reports` several times around a scan, and a second worker
+        racing the first is how a "never on paint" guarantee quietly becomes a
+        "usually not on paint" one.
+        """
+        import project_paths as _paths
+
+        stamps = []
+        for path in (
+            _paths.MASTER_AVWAP_SCAN_MANIFEST_FILE,
+            _paths.MASTER_AVWAP_PRIORITY_SETUPS_FILE,
+        ):
+            try:
+                stat = Path(path).stat()
+                stamps.append((stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                stamps.append(None)
+        return tuple(stamps)
+
+    def _start_scan_freshness_read(self) -> None:
+        signature = self._scan_freshness_signature()
+        if signature == self._scan_freshness_key:
+            return
+        self._scan_freshness_key = signature
+        worker = _ScanFreshnessWorker(self)
+        worker.done.connect(self._on_scan_freshness_ready)
+        self._scan_freshness_worker = worker
+        worker.start()
+
+    def _on_scan_freshness_ready(self, line: object) -> None:  # pragma: no cover - signal seam
+        text = str(line or "")
+        if not text:
+            # Nothing could be read, so nothing is claimed - and the signature
+            # is released so the next refresh tries again.
+            self._scan_freshness_key = object()
+        label = getattr(self, "scan_freshness_label", None)
+        if label is not None:
+            label.setText(text)
+            label.setToolTip(text)
+
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
         self._start_family_record_read()
+        self._start_scan_freshness_read()
         meta = load_latest_setup_rows_with_meta()
         rows = meta["rows"]
         _apply_swing_quality_shadow_badges(rows)
