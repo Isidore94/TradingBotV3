@@ -480,23 +480,31 @@ def test_a_burst_refills_the_price_alert_symbols_once(tmp_path, monkeypatch):
     assert refills == [1]
 
 
-def test_a_burst_rebuilds_the_alert_feed_once(tmp_path, monkeypatch):
+def test_a_burst_refreshes_the_alert_feed_once(tmp_path, monkeypatch):
     """Approved by the trader 2026-08-31 (ask-first rule, alert_center_panel.py).
 
     The trigger is coalesced and nothing else: which alerts pass the feed gate,
-    their order, the fold and the digest are all decided inside `_rebuild_feed`
-    and are untouched.
+    their order, the fold and the digest are all decided by
+    `_feed_target_rows` and are untouched.
+
+    SN4 (2026-09-12) changed WHAT the one reaction is, not how many there are:
+    the burst now runs `_sync_feed`, which restyles the star on the rows the
+    change touches instead of destroying and rebuilding 350 widget trees. The
+    guarantee this test exists for - one reaction per burst - is unchanged.
     """
     _app()
     from ui.panels.alert_center_panel import AlertCenterPanel
 
     service = _service(tmp_path)
     panel = AlertCenterPanel(focus_service=service)
+    refreshes: list[int] = []
     rebuilds: list[int] = []
+    monkeypatch.setattr(panel, "_sync_feed", lambda: refreshes.append(1))
     monkeypatch.setattr(panel, "_rebuild_feed", lambda: rebuilds.append(1))
 
     for symbol in BURST:
         service.store.add(symbol, "long", "m5")
-    assert rebuilds == [], "45 focus adds must not rebuild 350 feed rows 45 times"
+    assert refreshes == [], "45 focus adds must not refresh the feed 45 times"
     panel.flush_pending_focus_refresh()
-    assert rebuilds == [1]
+    assert refreshes == [1]
+    assert rebuilds == [], "and the one reaction is a diff, never a rebuild"

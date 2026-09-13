@@ -129,6 +129,12 @@ def _panel(tmp_path, monkeypatch):
     )
     panel.sound_input.setChecked(False)
     panel.min_tier_input.setCurrentIndex(max(0, panel.min_tier_input.findData("all")))
+    # SHOWN, offscreen. `_badge_text` below asks `isVisible()`, and a child of
+    # a window that was never shown is never visible however its own flag is
+    # set - so without this every badge reads "" and the comparisons below
+    # would agree about nothing. (Builder, 2026-09-12: fixture only, no
+    # assertion changed.)
+    panel.show()
     return panel
 
 
