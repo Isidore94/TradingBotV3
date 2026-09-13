@@ -359,6 +359,30 @@ class AlertChartReview(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
+        # WISHLIST 10J. The Trade Mentor's card lives UNDER the chart, beside
+        # the arm bar, and the arm bar does not move: it is welded there by a
+        # trader decision (2026-08-20) and this feature is not the one that gets
+        # to renegotiate it. The card is hidden until a prompt is due, so it
+        # costs the height-starved desk column nothing on an ordinary minute.
+        #
+        # The host owns the card; the SERVICE that decides when to show it is
+        # owned by the window (`MainWindow`), because it holds a timer and a
+        # state file and this widget is built more than once.
+        from ui.widgets.trade_mentor_card import TradeMentorCard
+
+        self.mentor_card = TradeMentorCard(self)
+        self.mentor_card.setVisible(False)
+        # Always reachable, whether or not anything is due: "I want to write a
+        # read now" must never require waiting for the top of an hour. It sits
+        # in the existing verb row rather than adding a second one - CLAUDE.md
+        # allows exactly one row between the charts and the tab strip.
+        self.give_a_read_button = QPushButton("Give a read")
+        self.give_a_read_button.setToolTip(
+            "Write a market read right now and file it in the Market Journal. "
+            "Always available - it does not need a scheduled prompt."
+        )
+        self.give_a_read_button.clicked.connect(self._on_give_a_read)
+
         buttons = QHBoxLayout()
         buttons.addWidget(self.reviewed_badge)
         buttons.addWidget(self.mover_badge)
@@ -367,6 +391,7 @@ class AlertChartReview(QWidget):
         buttons.addWidget(self.remove_today_button)
         buttons.addWidget(self.cross_focus_button)
         buttons.addWidget(self.quick_like_button)
+        buttons.addWidget(self.give_a_read_button)
         buttons.addStretch(1)
         buttons.addWidget(self.hidden_button)
         buttons.addWidget(self.armed_summary)
@@ -397,6 +422,10 @@ class AlertChartReview(QWidget):
             layout.addWidget(self.arm_bar)
         else:
             self.arm_bar.setParent(None)
+        # Beside the arm bar, under the chart - and after it, so the arm bar
+        # keeps the exact position it has had since 2026-08-20 whether a prompt
+        # is up or not. Hidden, so it takes no height until one is.
+        layout.addWidget(self.mentor_card)
         if self._dock_capture_rail:
             layout.addWidget(self.capture_rail)
         else:
@@ -528,6 +557,38 @@ class AlertChartReview(QWidget):
     def _emit_level_disarm(self, direction: str, level: float) -> None:
         if self.alert is not None and self.alert.symbol:
             self.levelDisarmRequested.emit(self.alert.symbol, direction, float(level))
+
+    # -- Trade Mentor (WISHLIST 10J) --------------------------------------
+    def show_mentor_slot(self, slot, previous=None) -> None:
+        """Put a due prompt up under the chart. Never steals focus.
+
+        A new hour REPLACES whatever card was there; the card itself stashes any
+        half-typed draft on the way out. Failure here is swallowed: a prompt is
+        an interruption, and an interruption that throws would take the chart
+        with it.
+        """
+        try:
+            self.mentor_card.show_slot(slot, previous=previous)
+        except Exception:  # noqa: BLE001 - a prompt never costs the chart
+            import logging
+
+            logging.debug("Trade Mentor card could not be shown.", exc_info=True)
+
+    def hide_mentor_card(self) -> None:
+        try:
+            self.mentor_card.hide_card()
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.debug("Trade Mentor card could not be hidden.", exc_info=True)
+
+    def _on_give_a_read(self) -> None:
+        try:
+            self.mentor_card.give_a_read()
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.debug("Manual read could not be opened.", exc_info=True)
 
     def _on_level_selected(
         self, symbol: str, level_id: str, family: str, price: float
