@@ -350,6 +350,17 @@ def _rows():
     ]
 
 
+def _one_row_cell(app, row: SetupRow, key: str) -> QImage:
+    """That row's cell, ALONE in its table.
+
+    The delegate alternates the row background on `index.row() % 2`, so two rows
+    of one table are never comparable pixel for pixel. One row per table at
+    index 0 compares the painting and nothing else.
+    """
+    view, model, delegate = _table(app, [row])
+    return _render(delegate, view, model, 0, key)
+
+
 def test_a_wrong_side_row_paints_the_chip_beside_its_bucket_chip(app):
     view, model, delegate = _table(app, _rows())
     wrong = _render(delegate, view, model, 0, "bucket")
@@ -372,35 +383,58 @@ def test_a_right_side_bucket_cell_renders_exactly_as_a_row_with_nothing_to_say(a
     """The golden: a row that is NOT wrong side paints the pre-WS cell, pixel
     for pixel. An unknown row cannot reach the new code at all, so the two
     images being identical is the proof that a right-side row does not either.
+
+    (The builder also compared this image against the pre-change delegate
+    directly: sha1 `c6cecd5e2481dd4aa0589fce62466045a549095b`, unchanged.)
     """
-    view, model, delegate = _table(app, _rows())
-    assert _render(delegate, view, model, 1, "bucket") == _render(delegate, view, model, 2, "bucket")
+    right = _one_row_cell(app, _setup_row("SAME", "LONG", "VWAP to UPPER_1"), "bucket")
+    unknown = _one_row_cell(app, _setup_row("SAME", "LONG", None), "bucket")
+    assert right == unknown
 
 
 def test_the_row_is_untouched_outside_the_bucket_cell(app):
-    view, model, delegate = _table(app, _rows())
-    for key in ("symbol", "side", "score", "key_level"):
-        assert _render(delegate, view, model, 0, key) == _render(delegate, view, model, 1, key), (
-            f"the {key} cell of a wrong-side row must paint exactly as any other row's"
+    """Same row, same symbol, only the band zone differs."""
+    wrong = _setup_row("SAME", "LONG", "LOWER_1 to VWAP")
+    quiet = _setup_row("SAME", "LONG", None)
+    for key in ("symbol", "side", "score", "key_level", "favorite", "dislike"):
+        assert _one_row_cell(app, wrong, key) == _one_row_cell(app, quiet, key), (
+            f"the {key} cell of a wrong-side row must paint exactly as it does today"
         )
 
 
 def test_the_bucket_chip_itself_survives(app):
     """G2b styling: the bucket chip keeps its own token and its own position."""
-    view, model, delegate = _table(app, _rows())
-    wrong = _render(delegate, view, model, 0, "bucket")
-    right = _render(delegate, view, model, 1, "bucket")
+    wrong = _one_row_cell(app, _setup_row("SAME", "LONG", "LOWER_1 to VWAP"), "bucket")
+    right = _one_row_cell(app, _setup_row("SAME", "LONG", "VWAP to UPPER_1"), "bucket")
     near = QColor(theme.color("near"))
     assert _has_exact(wrong, near) > 0
     assert _has_exact(right, near) > 0
-    # The bucket chip is drawn FIRST, at the same left edge on both rows: the
-    # left half of the cell is identical and only the tail differs.
-    half = BUCKET_CELL.width() // 3
+    # The bucket chip is drawn FIRST, at the same left edge: the head of the
+    # cell is identical and only the tail differs.
+    head = BUCKET_CELL.width() // 3
     assert all(
         wrong.pixel(x, y) == right.pixel(x, y)
         for y in range(BUCKET_CELL.height())
-        for x in range(half)
+        for x in range(head)
     ), "the wrong-side chip is drawn AFTER the bucket chip, never over it"
+    assert wrong != right, "and it IS drawn"
+
+
+def test_a_cell_with_no_room_for_the_second_chip_draws_no_sliver(app):
+    """The compact profile pins `bucket` at 96px. A 12px stub is not a badge."""
+    row = _setup_row("SAME", "LONG", "LOWER_1 to VWAP")
+    view, model, delegate = _table(app, [row])
+    narrow = QRect(0, 0, 96, 40)
+    image = QImage(narrow.width(), narrow.height(), QImage.Format.Format_ARGB32)
+    image.fill(QColor("#000000"))
+    option = _option(view)
+    option.rect = narrow
+    painter = QPainter(image)
+    try:
+        delegate.paint(painter, option, model.index(0, _column("bucket")))
+    finally:
+        painter.end()
+    assert _has_exact(image, QColor(theme.color("near"))) > 0, "the bucket chip still paints"
 
 
 def test_the_bucket_cell_asks_for_the_width_the_second_chip_needs(app):
@@ -432,24 +466,28 @@ def _tooltip_text(delegate, view, model, row: int, key: str) -> str:
         QToolTip.showText = original
     if seen:
         return seen[-1]
-    if handled:
-        return ""
+    # The delegate declined, so Qt's own `helpEvent` showed the model's tooltip
+    # through C++ (which never sees a Python patch of `QToolTip.showText`).
+    # What the trader reads in that case is the model's text.
+    assert handled or not str(model.data(index, Qt.ItemDataRole.ToolTipRole) or "")
     return str(model.data(index, Qt.ItemDataRole.ToolTipRole) or "")
 
 
 def test_the_chip_s_tooltip_says_which_side_and_what_it_read(app):
+    """The bucket cell already had a tooltip (its label). The chip ADDS a line."""
     view, model, delegate = _table(app, _rows())
-    assert _tooltip_text(delegate, view, model, 0, "bucket") == (
-        "LONG below AVWAPE (band zone LOWER_1 to VWAP)"
-    )
+    assert _tooltip_text(delegate, view, model, 0, "bucket").splitlines() == [
+        "Near",
+        "LONG below AVWAPE (band zone LOWER_1 to VWAP)",
+    ]
 
 
 def test_a_priced_row_s_tooltip_names_both_numbers_on_the_table_too(app):
     rows = [_setup_row("PRICED", "LONG", None, current_close=409.10, current_avwape=412.50)]
     view, model, delegate = _table(app, rows)
-    assert _tooltip_text(delegate, view, model, 0, "bucket") == (
-        "LONG below AVWAPE 412.50 (close 409.10)"
-    )
+    lines = _tooltip_text(delegate, view, model, 0, "bucket").splitlines()
+    assert lines[-1] == "LONG below AVWAPE 412.50 (close 409.10)"
+    assert lines[0] == "Near", "today's bucket tooltip is kept, never replaced"
 
 
 def test_a_right_side_bucket_cell_keeps_the_tooltip_it_has_today(app):
