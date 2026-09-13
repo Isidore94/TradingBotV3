@@ -406,13 +406,15 @@ def test_the_feed_after_veto_focus_new_alert_and_repeat_equals_a_full_rebuild(
     panel.add_alert(_m5_alert(repeated_index))
 
     live = _visible(panel)
+    # ...and the sequence reached that state without one rebuild (read BEFORE the
+    # explicit rebuild below, which the spy would otherwise count - lead fix 2026-09-13).
+    sequence_rebuilds = list(rebuilds)
 
     panel._rebuild_feed()
     rebuilt = _visible(panel)
 
     assert live == rebuilt
-    # ...and the sequence reached that state without one rebuild.
-    assert rebuilds == []
+    assert sequence_rebuilds == []
 
 
 def test_a_burst_of_three_focus_changes_is_one_reaction_and_not_a_rebuild(
