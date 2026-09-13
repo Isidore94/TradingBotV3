@@ -3364,3 +3364,100 @@ that seam is the obvious follow-on. The packet named only the Focus store's two 
 **Reopen trigger.** A second reader appears (10G, WS-DR), the auto-populate seam is
 labelled, or the trader asks to be prompted for a reason on an edit - which this packet
 deliberately does not do.
+
+## ENV - one D1 environment label per session, joined by scan date (2026-09-12, WISHLIST 7)
+
+**What the trader asked for.** WISHLIST item 7: read the readouts cut by the kind of day
+the market was having. The only honest way to do that is to decide the kind of day ONCE,
+from completed daily bars, under a named and versioned rule - not per surface, per reader,
+or per memory of what February felt like. Lead rulings for the sweep (the trader may
+overrule): the `legacy.py` stamp on the tracker outcome row is NOT built here (ask-first;
+the dated store joined on `scan_date` gives the same point-in-time answer); the rule is
+`d1_environment_v1` below; and the label only LABELS a readout - no weight is set per
+environment for the point system.
+
+**The rule, in one pure module.** `scripts/indicators/d1_environment.py`
+(`classify_environment`), bars in and a frozen `D1Environment` out, `None` for anything
+unmeasurable, no clock, no I/O, no engine import. In this ORDER:
+
+    len(bars) < WARMUP_SESSIONS (34)                -> unknown, reason "warmup"
+    atr14 unmeasurable                              -> unknown, reason "unmeasurable"
+    range_atr <= COMPRESSION_RANGE_ATR (3.0)        -> compressed
+    slope_atr > +TREND_SLOPE_ATR (0.5), close>sma20 -> trending_up
+    slope_atr < -TREND_SLOPE_ATR,       close<sma20 -> trending_down
+    otherwise                                       -> mixed
+
+`range_atr` is (max high - min low over the last 10 sessions) / ATR14 and `slope_atr` is
+(SMA20 today - SMA20 ten sessions ago) / ATR14. **ATR14 is Wilder at the LAST bar over the
+WHOLE supplied series**, the 10-session window included - the packet left that open and
+this is the answer; `indicators.atr.wilder_atr` owns the recurrence, so there is no fourth
+copy of Wilder's smoothing on the desk. The warm-up is 34 because SMA20 ten sessions back
+needs 30 bars and ATR14 needs 15.
+
+**Compression is decided FIRST, deliberately.** A quiet market grinding higher inside a
+three-ATR box is a compressed market; calling it a trend is how a reader talks themself
+into size on a day that never went anywhere. On the recorded SPY series 2026-04-29 is
+exactly that: `slope_atr` 3.84 with the close above its SMA20, `range_atr` 2.19, labelled
+`compressed`. 2026-09-11 lands at `range_atr` 3.0030 - three thousandths the wrong side of
+the threshold - which is why the golden pins six sessions to the last bit.
+
+**The store.** `scripts/d1_environment_store.py` appends one JSONL row per `(session,
+benchmark, rule_version)` to `project_paths.D1_ENVIRONMENT_FILE` in the shared home. A key
+already on disk is NEVER rewritten (`append_environment` returns False and touches
+nothing): a re-run or a repaired bar file is a second opinion about a day that already has
+one. A new rule is a new VERSION beside the old one, and that is what lets both live in one
+file - `label_for_session` is asked for a version and answers only from its rows. Each
+benchmark keeps its own row (SPY / QQQ / IWM), never pooled and never averaged. `unknown`
+is an ANSWER and is written with its reason; a missing row and a measured `unknown` both
+read `unknown`, and only the row's `reason` tells them apart. `labels_by_session` is ONE
+read cached by the file's MTIME (cheap enough for the Results worker); `read_rows` is
+deliberately uncached because the writer asks it for the keys it must not duplicate.
+
+**The hook.** `runner.record_d1_environment` runs as a SIBLING of
+`bridge_earnings_anchor_caches_to_csv` at the end of a scan - after the caches are saved,
+before `save_history`, one call site. It fetches SPY/QQQ/IWM through the SAME pinned
+`fetch_daily_bars` the scan itself uses (never a second provider path), drops the FORMING
+bar through `completed_bars.is_completed_bar` at daily length, calls the pure rule and
+appends. It returns `{benchmark: label}` for the log line only; every failure is logged and
+swallowed, because an evidence store never costs the thing it records. The log line is
+`D1 environment: SPY=<label> QQQ=.. IWM=.. (d1_environment_v1, bars through <session>)`.
+
+**The join is by SCAN DATE and never the exit date.**
+`d1_environment_join.attach_environment` adds `d1_environment` to each row IN PLACE (the
+caller's own list and dicts - the Results worker joins tens of thousands of rows on a
+redraw). Both dates are usually in the store, so joining on the wrong column is not a
+blank; it is a plausible label pointing the wrong way. A present-and-empty date, a missing
+column and an unlabelled session all read `unknown`.
+
+**The readout.** Research > Results gains "By environment (SPY, d1_environment_v1)" under
+Bot x Swing only - a My-trades page has no scan date to join on. One row per (environment,
+side): win rate FIRST with `n` and the ONE Wilson bound from `swing_headline`, SORTED BY
+THE BOUND (62% on a hundred above 67% on thirty), the `MIN_REPORTABLE_N` floor LABELLING a
+row and never hiding it, and `unknown` as its own row pooled into nothing. The rows are
+`favorable_direction` (ST1), so the columns are headed "Favorable %" and the unit is `%`.
+The section carries NO verdict line - it names no leader - and the panel now skips a
+section with no verdict rather than printing a blank one above the cards. The champion
+sections are byte-identical with and without the cut.
+
+**Why the cut reads 120 sessions and not "lately".** `ENVIRONMENT_WINDOW_SESSIONS` is
+`6 * LATELY_SESSIONS`. Twenty sessions of SPY is usually ONE environment, so a cut of
+"lately" would print one populated row and four empty ones and answer nothing. It is a
+declared parameter of THIS readout, read by nothing else, and every row's sentence says the
+number out loud. It is not a second definition of "lately".
+
+**The backfill.** `python -m d1_environment_store backfill --benchmark SPY --since
+2026-01-01` (from `scripts/`) is DRY BY DEFAULT, prints `DATA_DIR`, the store and the bar
+cache BEFORE anything (the 2026-09-05 rule), labels each past session POINT-IN-TIME under
+the current version with `source = backfill`, and never relabels a session already written.
+Run DRY on 2026-09-12 against a COPY of the machine cache, 184 sessions 2025-12-17 ..
+2026-09-11: **SPY** 69 compressed / 43 mixed / 33 unknown (the warm-up) / 27 trending_up /
+12 trending_down; **QQQ** 64 / 40 / 33 / 32 / 15; **IWM** 84 / 27 / 33 / 32 / 8. `--apply`
+on the live store is the trader's call.
+
+**Shadow only.** Nothing in this chain reaches a detector, score, alert, watchlist, Focus
+list, review queue or `review_policy.json` (plan.md sec 5), and no `legacy.py` line was
+edited for it.
+
+**Reopen trigger.** The trader wants the label stamped on the tracker outcome row itself
+(an ask-first `legacy.py` change), wants a weight per environment in the point system, or
+wants a per-family cut inside the section - none of which this packet does.
