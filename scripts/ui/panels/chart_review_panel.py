@@ -116,6 +116,16 @@ def provenance_state(
         text += f" · {timeframe} age {age}"
     else:
         text += " · bar age unknown"
+
+    # How far back the D1 chart the trader is holding actually goes, and
+    # whether the store has more behind it (WS-CH item 4). It belongs in the
+    # strip the chart already has, never a popup: the question "can I keep
+    # dragging left?" is asked while dragging.
+    oldest = str((meta or {}).get("oldest_available") or "").strip()
+    if oldest:
+        text += f" · D1 back to {oldest}"
+        if (meta or {}).get("history_truncated"):
+            text += " (more behind)"
     return text, degraded
 
 

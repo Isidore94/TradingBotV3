@@ -863,7 +863,23 @@ class CandleChart(pg.PlotWidget):
         self._volume.set_bars(self._bars if self._show_volume else [])
         self._volume.setVisible(self.volume_is_drawn())
 
-    def set_data(self, bars: list[dict], overlays: list[dict] = (), *, timeframe: str = "m5") -> None:
+    def set_data(
+        self,
+        bars: list[dict],
+        overlays: list[dict] = (),
+        *,
+        timeframe: str = "m5",
+        initial_view_sessions: int | None = None,
+    ) -> None:
+        """Draw ``bars`` and open on the last ``initial_view_sessions`` of them.
+
+        The chart HOLDS every bar it is given; ``initial_view_sessions`` says
+        only how many are in front of the trader when it first paints (packet
+        WS-CH). Panning left reveals the rest with no request of any kind - the
+        bars are already in this widget, which is the whole point of separating
+        how many exist from how many are visible. ``None`` keeps the historical
+        behaviour of framing the whole payload.
+        """
         self._bars = [dict(bar) for bar in bars or []]
         self._set_crosshair_visible(False)
         # Retained so a log/linear toggle can re-render without the caller
@@ -880,20 +896,41 @@ class CandleChart(pg.PlotWidget):
             self._sync_bad_bar_note()
             self._push_levels()  # nothing to hang a level on; hide them all
             return
+        # The window the chart OPENS on. Every bar stays in the widget; this
+        # decides only what the first frame shows, and - critically - what the
+        # price scale is taken from. A y-range spanning four years flattens
+        # today's candles into a line, which is the same chart the trader
+        # already had, just wider.
+        window = self._bars
+        if initial_view_sessions is not None:
+            wanted = max(1, int(initial_view_sessions))
+            if wanted < len(self._bars):
+                window = self._bars[-wanted:]
         # The range comes from the bars a chart may honestly take a scale
         # from: well-formed ones if there are any, otherwise the malformed
         # ones whose low/high still hold. None means nothing was usable.
-        span_range = bar_integrity.price_range(self._bars)
+        full_range = bar_integrity.price_range(self._bars)
+        span_range = bar_integrity.price_range(window) if window is not self._bars else full_range
+        if span_range is None:  # nothing usable in the window; fall back wider
+            span_range = full_range
         # Log scaling needs strictly positive prices. A non-positive bar means
         # a bad cache row, and a silently clamped candle would misdraw the
-        # whole chart - fall back to linear and stay honest instead.
+        # whole chart - fall back to linear and stay honest instead. This asks
+        # of EVERY bar, not just the visible ones: a bar off the left edge is
+        # one pan away, and flipping the scale under the trader mid-drag is
+        # worse than opening linear.
         self._apply_log_active(
-            self._log_y and span_range is not None and span_range[0] > 0
+            self._log_y and full_range is not None and full_range[0] > 0
         )
         self._candles.set_bars(self._bars, log_y=self._log_active)
         self._sync_overlays(self._push_overlays())
         self._set_ticks(timeframe)
-        plot.setXRange(-1, len(self._bars), padding=0.01)
+        if window is self._bars:
+            plot.setXRange(-1, len(self._bars), padding=0.01)
+        else:
+            plot.setXRange(
+                len(self._bars) - len(window) - 1, len(self._bars), padding=0.01
+            )
         # The y-range comes from the candles and nothing else. Every level and
         # overlay is drawn inside whatever range this produces; none of them
         # gets a vote in what it is.
@@ -1350,6 +1387,62 @@ class CandleChart(pg.PlotWidget):
         if 0 <= index < len(self._bars):
             return dict(self._bars[index])
         return None
+
+    # ------------------------------------------------------------------
+    # viewport preservation (WS-CH item 2)
+    # ------------------------------------------------------------------
+    def visible_bar_span(self) -> tuple | None:
+        """Which CANDLES are on screen right now, plus the price range.
+
+        Older bars arrive on the LEFT, so the index range is not what has to
+        be preserved across a merge - restoring it verbatim would slide the
+        trader a whole session back through their own chart. The candles are
+        the thing they were looking at, so the candles are what is recorded.
+
+        Returns ``(first_dt, last_dt, y_low, y_high)`` in the view's own
+        y-space (log when log scaling is active), or None when there is
+        nothing on screen. Pure read; touches no cache and no provider.
+        """
+        if not self._bars:
+            return None
+        try:
+            (x_low, x_high), (y_low, y_high) = self.getPlotItem().vb.viewRange()
+        except Exception:
+            return None
+        first = max(0, int(math.ceil(x_low)))
+        last = min(len(self._bars) - 1, int(math.floor(x_high)))
+        if first > last:
+            return None
+        return (
+            self._bars[first].get("dt"),
+            self._bars[last].get("dt"),
+            float(y_low),
+            float(y_high),
+        )
+
+    def restore_bar_span(self, span: tuple | None) -> bool:
+        """Put the candles ``visible_bar_span`` recorded back on screen.
+
+        False when either edge is no longer in the payload - the caller keeps
+        whatever ``set_data`` framed rather than guessing at a window.
+        """
+        if not span or not self._bars:
+            return False
+        try:
+            first_dt, last_dt, y_low, y_high = span
+        except (TypeError, ValueError):
+            return False
+        positions = {}
+        for index, bar in enumerate(self._bars):
+            positions.setdefault(bar.get("dt"), index)
+        first = positions.get(first_dt)
+        last = positions.get(last_dt)
+        if first is None or last is None or last < first:
+            return False
+        plot = self.getPlotItem()
+        plot.setXRange(float(first), float(last), padding=0)
+        plot.setYRange(float(y_low), float(y_high), padding=0)
+        return True
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton and self._bars:

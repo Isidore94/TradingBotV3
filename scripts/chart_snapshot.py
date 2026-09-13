@@ -24,6 +24,17 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 D1_DEFAULT_SESSIONS = 90
+#: How many daily sessions a chart payload REACHES BACK, as distinct from how
+#: many it opens on (packet WS-CH, WISHLIST 10H - the trader's "200 candles is
+#: not enough"). The durable store already holds years; the only thing that was
+#: ever short was the tail this module sliced, so this costs one longer slice
+#: of bars that are already in memory and no provider request whatsoever.
+#:
+#: It is a TARGET, capped by what the store holds: a symbol with 300 stored
+#: sessions gets 300 bars and ``history_truncated=False``, because there is
+#: nothing further left to pan to and saying otherwise invites the trader to
+#: drag at a wall. Roughly four NYSE years.
+D1_HISTORY_SESSIONS = 1000
 _daily_bars_cache: dict[str, tuple[tuple[str, int], list[dict[str, Any]]]] = {}
 # (mtime, {symbol: [iso dates...]}) for the earnings-dates cache file.
 _earnings_dates_cache: list = [None, {}]
@@ -515,7 +526,15 @@ def build_d1_snapshot(
     """
     stored = (loader or load_d1_bars)(symbol)
     if not stored:
-        return {"symbol": symbol, "timeframe": "D1", "bars": [], "overlays": [], "note": "no daily store"}
+        return {
+            "symbol": symbol,
+            "timeframe": "D1",
+            "bars": [],
+            "overlays": [],
+            "note": "no daily store",
+            "oldest_available": "",
+            "history_truncated": False,
+        }
     # A scan running mid-session writes today's PARTIAL daily bar to the
     # durable store. It is a preview candle wearing a stored bar's clothes:
     # never let it into the indicator math, and prefer a live aggregate over
@@ -604,6 +623,15 @@ def build_d1_snapshot(
                 "AVWAPE prev", tail_values(prev_bands["avwap"]), "chart_yellow", 1.2, False
             )
         )
+    # How far back this payload actually reaches, and whether the store holds
+    # more behind it. The chart is a WINDOW onto these bars: without the flag a
+    # provenance strip would read the oldest bar DRAWN as the oldest bar that
+    # EXISTS, which is a claim the payload cannot make.
+    oldest_available = ""
+    if shown:
+        stamp = shown[0].get("dt")
+        if hasattr(stamp, "date"):
+            oldest_available = stamp.date().isoformat()
     return {
         "symbol": symbol,
         "timeframe": "D1",
@@ -612,6 +640,8 @@ def build_d1_snapshot(
         "note": "",
         "avwape_anchor": anchor.isoformat() if anchor_index is not None else "",
         "avwape_prev_anchor": prev_anchor.isoformat() if prev_index is not None else "",
+        "oldest_available": oldest_available,
+        "history_truncated": len(bars) > max(0, int(sessions)),
     }
 
 

@@ -66,6 +66,7 @@ class _SnapshotTask(QRunnable):
         d1_preview_bars: Sequence[Mapping[str, Any]],
         sessions: int | None,
         source: str | None,
+        view_sessions: int | None = None,
     ) -> None:
         super().__init__()
         self._service = service
@@ -75,6 +76,7 @@ class _SnapshotTask(QRunnable):
         self._d1_preview_bars = list(d1_preview_bars or [])
         self._sessions = sessions
         self._source = source
+        self._view_sessions = view_sessions
 
     def run(self) -> None:  # noqa: D401 (Qt override)
         service = self._service
@@ -87,6 +89,7 @@ class _SnapshotTask(QRunnable):
                 self._sessions,
                 d1_preview_bars=self._d1_preview_bars,
                 source=self._source,
+                view_sessions=self._view_sessions,
             )
         except Exception:
             _log.warning(
@@ -186,6 +189,7 @@ class ChartDataService(QObject):
         sessions: int | None = None,
         d1_preview_bars: Sequence[Mapping[str, Any]] = (),
         source: str | None = None,
+        view_sessions: int | None = None,
     ) -> int:
         """Queue a snapshot build. Returns immediately; never blocks.
 
@@ -194,6 +198,11 @@ class ChartDataService(QObject):
         never reaches into the bot from a worker. ``d1_preview_bars`` is the
         same shape but feeds only D1 aggregation; a Yahoo daily preview must
         never masquerade as a five-minute candle.
+
+        ``sessions`` is how far back the D1 payload REACHES; ``view_sessions``
+        is how many of its bars the chart OPENS on (packet WS-CH). The second
+        one exists because the store-level price filter has to stay on the
+        window the trader can actually see - see ``_build_levels``.
         """
         symbol = str(symbol or "").strip().upper()
         if not symbol:
@@ -220,6 +229,7 @@ class ChartDataService(QObject):
                 d1_preview_bars,
                 sessions,
                 source,
+                view_sessions,
             )
         )
         return request_id
@@ -252,13 +262,16 @@ class ChartDataService(QObject):
         *,
         d1_preview_bars: Sequence[Mapping[str, Any]] = (),
         source: str | None = None,
+        view_sessions: int | None = None,
     ) -> tuple[dict, dict, dict]:
         """The blocking build. Public so tests can exercise it directly.
 
         Returns (d1, m5, meta). ``meta`` carries the freshness probes, which
         belong here rather than on the GUI thread: they resolve the market
         session, and that reads local_settings.json for the configured
-        timezone on every call.
+        timezone on every call. Since WS-CH it also carries how far back the
+        payload reaches (``oldest_available``) and whether the store holds more
+        behind it (``history_truncated``), so the provenance strip can say so.
         """
         from ui.services import safe_import
 
@@ -287,8 +300,17 @@ class ChartDataService(QObject):
         m5 = chart_snapshot.build_m5_snapshot(symbol, list(m5_bars or []))
         # The anchor comes from the snapshot that just resolved it, so the
         # challenger's centre is anchored on exactly the bar the champion's is.
+        # The level price filter follows the INITIAL VISIBLE window, not the
+        # whole payload: the payload now reaches back about four years and a
+        # 2021 store level would spend the clutter budget on a line that is
+        # nowhere near the screen (WS-CH, lead ruling (a)).
+        window = int(view_sessions or chart_snapshot.D1_DEFAULT_SESSIONS)
+        payload_bars = d1.get("bars") or []
         d1["levels"] = self._build_levels(
-            symbol, d1.get("bars") or [], avwap_anchor=d1.get("avwape_anchor")
+            symbol,
+            payload_bars,
+            avwap_anchor=d1.get("avwape_anchor"),
+            price_range_bars=payload_bars[-max(1, window):],
         )
         d1["earnings"] = self._build_earnings(symbol, d1.get("bars") or [])
         self._cache_earnings_anchor_from_source(symbol)
@@ -317,6 +339,8 @@ class ChartDataService(QObject):
             "storage_tier": tier,
             "stale_store": False,
             "want_forming": False,
+            "oldest_available": str(d1.get("oldest_available") or ""),
+            "history_truncated": bool(d1.get("history_truncated")),
         }
         d1_bars = d1.get("bars") or []
         m5_snapshot_bars = m5.get("bars") or []
@@ -360,6 +384,7 @@ class ChartDataService(QObject):
         symbol: str,
         bars: Sequence[Mapping[str, Any]],
         avwap_anchor: str | None = None,
+        price_range_bars: Sequence[Mapping[str, Any]] | None = None,
     ) -> list[dict]:
         """The D1 paint-lines, built HERE because this is the worker (A4).
 
@@ -376,7 +401,10 @@ class ChartDataService(QObject):
             import chart_levels
 
             return chart_levels.build_d1_levels(
-                symbol, bars, avwap_anchor=avwap_anchor
+                symbol,
+                bars,
+                avwap_anchor=avwap_anchor,
+                price_range_bars=price_range_bars,
             )
         except Exception:
             _log.debug("D1 level build failed for %s.", symbol, exc_info=True)
