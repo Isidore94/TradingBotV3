@@ -818,6 +818,10 @@ class MainWindow(QMainWindow):
         self._apply_scaled_metrics()
         self.trading_panel.set_mode(self.state.workspace_mode)
         self._sync_mode_buttons()
+        # The Trade Mentor checkbox lives on this panel, so the "next prompt"
+        # line beside it has to answer the switch the trader just flipped
+        # rather than whatever it said when the window opened.
+        self._sync_trade_mentor_label()
 
     def _apply_scaled_metrics(self) -> None:
         """Re-apply the pixel budgets that live in Python, not the stylesheet.
@@ -966,6 +970,9 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - a prompt never costs the desk
             logging.debug("Trade Mentor prompt could not be shown.", exc_info=True)
             return
+        # The Settings line says when the NEXT one is, so it moves every time a
+        # prompt lands rather than telling the trader what was true at startup.
+        self._sync_trade_mentor_label()
         if str(getattr(slot, "kind", "")) != "m5_trades":
             return
         # The 10:00 second section. Two small queries against the journal DB,
