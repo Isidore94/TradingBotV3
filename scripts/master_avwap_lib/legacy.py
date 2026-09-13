@@ -425,6 +425,17 @@ SETUP_BAND_VARIANT_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_band_va
 CONTROL_DISCOVERY_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.csv")
 STUDY_DISCOVERY_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_study_discovery.csv")
 EXIT_FRAMEWORK_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_exit_framework_stats.csv")
+# Packet EF1 (trader, 2026-09-08). The SAME comparison at one finer grain, in a
+# SECOND file beside the pooled one - never inside it. "Full at band 3 loses" is
+# a whole-population answer; a 1st-dev breakout starts one band from its target
+# and an AVWAPE bounce starts two, so the right exit is probably per setup.
+# A second file rather than a `setup_family` column in the first because the
+# pooled file's 24 rows are a shipped table with a 300-row cap, and splitting it
+# by family would both blow the cap and change the grain of what the Exit
+# frameworks tab has always rendered.
+EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE = SETUP_STATS_FILE.with_name(
+    "master_avwap_exit_framework_by_family.csv"
+)
 CONTROL_DISCOVERY_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
 # Study namespace (B4): new setup ideas (1h/4h trend, HV-level break, compression
 # break, ...) are measured here for hit-rate / realized R BEFORE they touch scoring.
@@ -13279,8 +13290,46 @@ EXIT_FRAMEWORK_STATS_COLUMNS = (
     "n_filtered_by_experiment",
 )
 
+#: Packet EF1. The same columns one grain finer: `setup_family` FIRST, because
+#: it is the question the row answers, and `population` beside it so a study or
+#: control family can never be read as the champion's own record. Derived from
+#: the pooled tuple rather than restated, so the two files can never disagree on
+#: a column - the test pins `columns - {setup_family, population}` == the pooled
+#: tuple, in order.
+EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS = (
+    "setup_family",
+    "population",
+    *EXIT_FRAMEWORK_STATS_COLUMNS,
+)
 
-def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
+#: What a tracker record with no `setup_family` is grouped as. It is COUNTED,
+#: never dropped: a dropped row would make the pooled row bigger than the sum of
+#: its families and nothing on the page would say so.
+EXIT_FRAMEWORK_UNLABELLED_FAMILY = "unlabelled"
+
+
+def _tracker_setup_population(setup: dict) -> str:
+    """`champion` / `study` / `control`, from the RECORD's own flag.
+
+    Never from the family NAME. `record_setup_tracker_snapshot` stamps
+    `is_study` / `is_control` when it files a record into its isolated
+    namespace, and that stamp is the only thing that says which population a row
+    belongs to: a champion setup whose family is literally called
+    `study_1stdev_breakout_probe` is still a champion, and a study record whose
+    family carries no such word is still a study.
+    """
+    if not isinstance(setup, dict):
+        return "champion"
+    if setup.get("is_study"):
+        return "study"
+    if setup.get("is_control"):
+        return "control"
+    return "champion"
+
+
+def build_exit_framework_stats_rows(
+    setups: dict[str, dict], by_family: bool = False
+) -> list[dict]:
     """The reader `comparison_apr2026` has lacked since April.
 
     Two experimental exit templates (`exp_full_band2_hard_stop_125r` and
@@ -13309,9 +13358,31 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
     `n + n_filtered_by_experiment` reconciles to the baseline's `n`. Without
     that column a smaller denominator reads as a worse result, which is the
     opposite of what it means.
+
+    **Packet EF1: `by_family` is the GROUPING KEY, not a second builder.** With
+    it the key gains `setup_family` (blank or missing is `unlabelled`, counted
+    never dropped) and `population`, and the rows carry those two columns in
+    front. One builder means the pooled file and the by-family file can never
+    disagree on a rate, and one scenario walker means the band-variant fence in
+    `_flatten_tracker_scenarios` still applies - a second walk of
+    `setup["scenarios"]` written here would be exactly the eighth unfenced
+    reader `test_band_variant_fence_guard.py` exists to prevent.
+
+    `population` is JOINED on `setup_id` against the setups mapping rather than
+    added to the flattened row: the flattener feeds every champion export and a
+    new column there would move files this packet must leave byte-identical.
     """
 
-    groups: dict[tuple[str, str, str, str], dict] = {}
+    population_by_setup_id: dict[str, str] = {}
+    if by_family:
+        for setup_id, setup in (setups or {}).items():
+            if not isinstance(setup, dict):
+                continue
+            population_by_setup_id[str(setup.get("setup_id") or setup_id)] = (
+                _tracker_setup_population(setup)
+            )
+
+    groups: dict[tuple[str, ...], dict] = {}
     for row in _flatten_tracker_scenarios(setups or {}):
         key = (
             str(row.get("framework_family") or ""),
@@ -13319,6 +13390,12 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
             str(row.get("side") or ""),
             str(row.get("priority_bucket") or ""),
         )
+        if by_family:
+            key = (
+                str(row.get("setup_family") or "").strip() or EXIT_FRAMEWORK_UNLABELLED_FAMILY,
+                population_by_setup_id.get(str(row.get("setup_id")), "champion"),
+                *key,
+            )
         group = groups.setdefault(
             key,
             {
@@ -13360,7 +13437,15 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
         group["rows"].append(row)
 
     stats_rows: list[dict] = []
-    for (family, template, side, bucket), group in sorted(groups.items()):
+    columns = (
+        EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS if by_family else EXIT_FRAMEWORK_STATS_COLUMNS
+    )
+    for key, group in sorted(groups.items()):
+        if by_family:
+            setup_family, population, family, template, side, bucket = key
+        else:
+            setup_family = population = ""
+            family, template, side, bucket = key
         tradeable = group["rows"]
         closed = [row for row in tradeable if _scenario_is_closed(row.get("status"))]
         closed_rs = [
@@ -13405,7 +13490,10 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
         # Wilson, but its `n` is the denominator of the RATE - here that is the
         # closed count, while this row's `n` is the tracked count.
         row["n"] = len(tradeable)
-        stats_rows.append({column: row[column] for column in EXIT_FRAMEWORK_STATS_COLUMNS})
+        if by_family:
+            row["setup_family"] = setup_family
+            row["population"] = population
+        stats_rows.append({column: row[column] for column in columns})
     return stats_rows
 
 
@@ -13518,13 +13606,26 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
     #
     # `saved_at` / `saved_by` are stamped on all three so the page can answer
     # "as of when?" from the export rather than from a file mtime (M3.2).
-    for label, builder, argument, columns, path in (
+    #
+    # Packet EF1 adds the FOURTH: the same exit-framework comparison one grain
+    # finer. It reads all three namespaces, because the study and control
+    # records carry the same exit scenarios and the by-family file is the first
+    # surface that reads them back - labelled by `population`, so nothing here
+    # lets a study row into a champion aggregate. The pooled export above is
+    # untouched and stays the champion's population alone.
+    exit_framework_by_family_setups = dict(setups) if isinstance(setups, dict) else {}
+    for namespace in ("control_setups", "study_setups"):
+        extra = payload.get(namespace) if isinstance(payload, dict) else None
+        if isinstance(extra, dict):
+            exit_framework_by_family_setups.update(extra)
+    for label, builder, argument, columns, path, builder_kwargs in (
         (
             "control discovery",
             build_control_discovery_stats_rows,
             payload,
             DISCOVERY_STATS_COLUMNS,
             CONTROL_DISCOVERY_STATS_FILE,
+            {},
         ),
         (
             "study discovery",
@@ -13532,6 +13633,7 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
             payload,
             DISCOVERY_STATS_COLUMNS,
             STUDY_DISCOVERY_STATS_FILE,
+            {},
         ),
         (
             "exit framework",
@@ -13539,11 +13641,22 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
             setups,
             EXIT_FRAMEWORK_STATS_COLUMNS,
             EXIT_FRAMEWORK_STATS_FILE,
+            {},
+        ),
+        # EF1. Its own guard, after the pooled one: a bug in the new grouping
+        # must cost neither the tracker save nor the pooled file.
+        (
+            "exit framework by family",
+            build_exit_framework_stats_rows,
+            exit_framework_by_family_setups,
+            EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS,
+            EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE,
+            {"by_family": True},
         ),
     ):
         try:
             pd.DataFrame(
-                _stamp_tracker_clock(builder(argument), saved_at, saved_by),
+                _stamp_tracker_clock(builder(argument, **builder_kwargs), saved_at, saved_by),
                 columns=[*columns, TRACKER_SAVED_AT_COLUMN, TRACKER_SAVED_BY_COLUMN],
             ).to_csv(path, index=False)
         except Exception as exc:

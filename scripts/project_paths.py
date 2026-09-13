@@ -393,6 +393,19 @@ TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
 # never in front of it, and nothing in the running system reads this file to
 # detect, score, rank, gate or alert (plan.md sec 5).
 SWING_FAVORITES_FILE = PERSISTENT_DATA_DIR / "swing_favorites.jsonl"
+# Append-only JSONL of every add and remove on the four plain watchlists
+# (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`), written by
+# `scripts/watchlist_intent_events.py`. Membership on those lists means
+# INTEREST - never a setup claim, a position or a verdict - so a removal is not
+# a dislike. Each row carries the observation time (aware, market-local), the
+# list, side and horizon, and a source that keeps the trader's own typing
+# (`trader_edit` / `trader_paste`) distinct from the desk's Focus injection
+# (`machine_inject` / `machine_uninject`) and from a difference merely SEEN at
+# load time after an edit outside the app (`observed_external`). Same storage
+# class as the two logs above: small, trader-relevant, shared home. Evidence
+# only - nothing in the running system reads this file to detect, score, rank,
+# gate or alert (plan.md sec 5).
+WATCHLIST_INTENT_EVENTS_FILE = PERSISTENT_DATA_DIR / "watchlist_intent_events.jsonl"
 # Aggregated revealed-preference state derived from the review-events log by
 # scripts/review_learning.py: per-segment take rates, taken-vs-passed
 # outcomes, blind spots / leaks, watch conversion. Rebuilt when stale.

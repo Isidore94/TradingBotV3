@@ -3057,6 +3057,8 @@ incident sections elsewhere in this file remain the deeper record.
 
 - **`preference_trade_outcomes` matches inside 10 SESSIONS** (`statement_window_end`; a calendar refusal falls back NARROWER) **and `trade_level_summary` sums P&L once per `trade_id`** over a file that stays one row per statement. **`journal_exposure` reads bias from the legs — a LONG option is never a bullish setup**, a `trade_legs` row is a FILL so `multi_leg` means more than one option CONTRACT, and a spread look-alike is `partial_of_spread_candidate` (no sibling seam exists). **`personal_evidence_summary` partitions by STATUS** — complete / partly_closed / open_exposure, whose net and winners are `None` — **with `uncertain` a CROSS-CUTTING label that pools no money**, counts both tag lanes over ONE denominator (closed or partly closed) and names no best setup below `MIN_REPORTABLE_N`; Weekend Prep lists the WHOLE provisional backlog and REFERS a missing `planned_risk` to the Trades tab, never computing one from an outcome.
 
+- **5A - the verdict card reads NUMBERS, not strings** (WS-5A, 2026-09-12; WISHLIST item 5 block A, reproduced by Codex 2026-09-09). `weekend_verdict.best_cohort_line` composed its column name out of its horizon (`avg_r_h3`, `n_h3`) and the two panel readers that feed it published `horizon` / `n` / `avg_return`, where `avg_return` was already the table's formatted `+1.23%`. No row on either side of that seam has ever carried an `avg_r_*` key, so every cell was skipped and BOTH cohort lines printed "nothing with enough behind it yet" on a desk holding 115 graded veto rows and 129 graded like rows (30 and 33 of them at the three-session horizon) - and the first row that had matched would have printed a PERCENT return with an `R` after it. The contract is now typed at the reader: `_cohort_numeric_fields` gives `_read_veto_cohort` / `_read_like_cohort` a row carrying `horizon_sessions: int`, `n: int` and `avg_side_return_pct: float | None` (the CSV's fraction times 100; the unit is in the NAME because the bug was a unit bug), a blank stays `None` and never a substituted zero, and the `+1.90%` / `21` cells are built at the display edge by `_cohort_cell_text` inside `_fill_cohort_table`. `_cohort_view` compares the horizon as an int in one place, because `"3" == 3` is False and that is the class of mistake this repaired. In the card, `CARD_HORIZON` is the integer **3 sessions**, the pooled side (`ALL` is what the rollup writes; `BOTH` is carried too) is EXCLUDED from a ranking of reasons because it is both sides added together, and both lines rank by the HIGHEST side-adjusted return: "Likes that work: `<cohort> <side>` +x.xx% over 3 sessions (n=..)" and "Rejections worth another look: `<reason> <side>` +x.xx% side-adjusted (n=..)". The old veto line took `min()`, which named the rejection that was RIGHT - the one reading a trader never has to act on - so "Rejections that were right" is not printed at all: these are lines five and six of the eight the trader capped the card at. THREE absences, three sentences, because printing one for another is the class of false statement this repaired: under the floor is "nothing with enough behind it yet (best n was N against a floor of F)", graded only at other horizons is "nothing has matured to 3 sessions yet (K row(s) at other horizons)", and no rows at all is "no like|veto cohorts measured yet". The floor stays the card's own `MIN_COHORT_N` (5) rather than `evidence_stats.MIN_REPORTABLE_N` (30) by decision, because the card is a pointer at a table row and 30 would silence the like line entirely - 2 of the 21 three-session side rows clear 30, against 8 that clear 5; moving it is a trader decision about what the card may say, not a repair. Tests: `tests/test_ws_5a_weekend_verdict.py` (real live header, both sides plus the pooled one, a mature and a thin cell, an empty `avg_side_return`, and a characterization guard on the table cell text).
+
 ### ST4 / ST7 - the named selection policy, long form
 
 - **Which observation of a thesis gets graded is a NAMED policy** (ST4/ST7): family rows carry `selection_policy`; `first_actionable_v2` (`master_avwap_lib/selection_policy.py` - earliest row per attempt, declared re-entry rule, declared `full_band2` representative, pending stays pending) is the default since 2026-09-06 (decision 0019), `closed_first_v1` remains by name, and the persisted write logs `policies: selection=.. execution=.. levels=..`. A scenario's exit date is its last `events` entry, read only when CLOSED; a COMPACTED record is `undatable_exit`, never silently pending. **A compact projection's `_scoring_outcome_summary` IS the record**: a default read takes it unconditionally and an ABSENT `representative_status` grades off `closed_setups` - recomputing dropped every setup and zeroed both deltas.
@@ -3093,6 +3095,66 @@ incident sections elsewhere in this file remain the deeper record.
 
 - **The control, study and experimental-exit populations are SURFACED, LABELLED, and never mixed with picks** (M5, 2026-09-05): three Setup Tracker tabs - Controls (`N graded episodes from the M setups`, never one number under the other noun), Studies, Exit frameworks (`comparison_apr2026` beside `baseline`, `n_filtered_by_experiment` reconciling the two n's) - read three CSVs written in the tracker's own guarded save pass. Win rate leads with `n` and the ONE Wilson bound, the sort is the bound, each tab carries a population sentence and `experimental` is a COLUMN. Shadow only; the champion aggregates are pinned byte-identical.
 
+**EF1 - the same comparison, split by setup family** (trader, 2026-09-08; built in the
+2026-09-12 WISHLIST sweep). The trader asked whether taking profit at the 3rd band beats
+the 2nd for the 1st-dev breakout study, and the M5 export could not answer it: it pools
+every scan row by `(framework_family, exit_template_id, side, priority_bucket)` and never
+by SETUP, so "full at band 3 loses" (LONG favorite: 47% win, -0.15 R, n_closed 8,018) is a
+whole-population answer. A 1st-dev breakout starts one band from its target; an AVWAPE
+bounce starts two.
+
+- **The grouping key is a PARAMETER of the one builder, never a second builder.**
+  `legacy.build_exit_framework_stats_rows(setups, by_family=False)`; with `by_family=True`
+  the key gains `setup_family` and `population` in front and the rows carry those two
+  columns first (`EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS`, derived from the pooled tuple so
+  the two files can never disagree on a column, and pinned that way by a test). One builder
+  is what makes the two files agree on a rate; one scenario walker
+  (`_flatten_tracker_scenarios`) is what keeps the band-variant fence - a second walk of
+  `setup["scenarios"]` here would be the eighth unfenced reader
+  `test_band_variant_fence_guard.py` exists to prevent.
+- **A SECOND file, never a finer grain inside the shipped one.**
+  `master_avwap_exit_framework_by_family.csv` beside `master_avwap_exit_framework_stats.csv`,
+  written in the same guarded save pass under its OWN `try`, after the pooled one. The
+  pooled file stays byte-identical (golden) and a raising by-family export costs neither
+  the tracker save nor the pooled file. The pooled file's 24 live rows sit under the
+  table's 300-row cap; splitting it by family would blow the cap and change the grain of a
+  shipped table.
+- **`population` is the RECORD's flag, joined on `setup_id`, never the family name.**
+  `champion` / `study` / `control` from `is_study` / `is_control`, so a champion family
+  called `study_1stdev_breakout_probe` is still `champion` and a study family with no such
+  word is still `study`; population is part of the key, so a study and a champion sharing a
+  family name keep separate rows. The by-family export reads all three namespaces (the
+  study and control records carry the same exit scenarios, built by the same
+  `build_tracker_setup_record`); the pooled export still reads `setups` alone. So the
+  reconciliation - family sums of `n`, `n_closed`, `wins`, `losses`,
+  `n_expired_unmeasured`, `n_filtered_by_experiment` equal to the pooled row - holds over
+  the CHAMPION rows. A setup with no `setup_family` is `unlabelled`, counted, never dropped:
+  a dropped row would make the pooled row bigger than the sum of its families with nothing
+  on the page saying so.
+- **The tab gains ONE control and nothing else.** `exit_framework_family_combo` above the
+  population sentence, first entry `All setups (pooled)` rendering today's table unchanged
+  (golden order), then every family in the by-family export sorted by NAME - never by a
+  result, which would make the choice for the reader and move under them between scans. A
+  family view FILTERS BEFORE the 300-row cap (sixty families of six rows is 360; a view
+  capped before it filtered would show a late family nothing) and re-ranks nothing:
+  `_rank_exit_frameworks` has already ordered both files by the same Wilson lower bound.
+  The family sentence prints the LARGEST `n_closed` among the family's rows, never the sum -
+  the four templates are simulated on the SAME setups, so 30+33+31+32 is a claim about 126
+  setups that do not exist - and says `BELOW FLOOR` when every row is under
+  `evidence_stats.MIN_REPORTABLE_N`, with the rows still SHOWN. Hiding a study's rows is
+  how a study never gets looked at, and a study is what the split was built to read.
+- **The table keeps its OWN render memo** (`_exit_framework_rendered_from`) rather than an
+  entry in `_rendered_from`: that dict is replaced wholesale at the end of every render
+  pass, so a key written into it there would be dropped and the table would re-fit on every
+  refresh - the defect G7.2 measured and fixed. A picker click re-renders one table from
+  rows already in memory and reads no file.
+- **Shadow only.** No detector, score, alert, template, stop rule or default exit changes;
+  nothing here promotes a template - T4's criteria decide. File-scoped ask-first: the
+  trader's EF1 prompt is the yes for the exit-framework export seam only.
+- **Tests:** `tests/test_ws_ef1_exit_by_family.py` (19; 18 failed with the fix reverted,
+  proved 2026-09-12).
+
+
 ### The M5 Strength Board's auto-adoption, long form
 
 - **M5 Strength Board:** batched yfinance over `universe_all.txt` PLUS the four trader watchlists, zero IB traffic; relative volume is SESSION-RELATIVE and is not one of the seven fenced formula functions (byte-identical to the R8 baseline); D1 SMA floors read `2y` with today's forming bar dropped. Its parity rows auto-join M5 Focus (`_auto_adopt_strength_board`: DESK only, empty `failed_floors` only, the ONE adoption gate re-run per row, skipping `_ignored_symbols` and `FocusPickStore.declined_today`, one `add_many` per side plus `mark_auto_adopted`, never `FocusService.add`, never removing). Every Focus add is injected into `longs.txt` / `shorts.txt` by `FocusPickStore._inject_into_shared` and a removal un-injects it.
@@ -3121,6 +3183,52 @@ incident sections elsewhere in this file remain the deeper record.
 - **What did not change:** `request_and_detect_bounce`, the RRS passes, `_rebuild_feed`, every detector, threshold, tier, fold and evidence row. SN1-SN4 remain in WISHLIST as ideas until the trader moves them into `plan.md`.
 - **File-scoped ask-first:** `bounce_bot_lib/legacy.py` is a detector file; the "Go" of 2026-09-08 is the yes for these two seams only.
 - **Tests:** `tests/test_sn5_sn6_scanner_breath_and_fast_lane_order.py` - 12 of 13 fail with the fix reverted (proved on the lead's checkout, 2026-09-08).
+
+---
+
+## WS-PT4 - the AWAY digest ranks by points when the trader's switch is on (2026-09-12)
+
+**What the trader said** (WISHLIST item 4, points, block 4): *"rank the AWAY digest's
+swing picks by points too (today it ranks by the family's Wilson bound)"* - marked "open,
+your call". The lead's ruling, which the trader may overrule: the digest uses the EXISTING
+Points switch and nothing new. `setup_points.rank_enabled()` (local setting
+`rank_setups_by_points`, default OFF) is read AT SORT TIME inside
+`autopilot_core.order_swing_picks`; OFF is the identity function and the digest keeps the
+Wilson order exactly, which is what the golden `tests/fixtures/ws_pt4_away_digest_switch_off.txt`
+pins. ON, `setup_points.rank_order` puts the `RANKED_BUCKETS` rows (favourite,
+near-favourite, high-conviction) first by total and every other pick after them; the list
+handed to it is already in the Wilson order, so that order is the tiebreak and the order
+the unranked rows keep - the same shape as the setups table, where the point ranking is
+applied after the Working-lately order. The near cap is still applied AFTER the ranking by
+the renderer, so what a cap hides is the weakest near row by whichever order is in force
+and never the best one; the bucket is still printed and never ranked on.
+
+**One scorer, two callers.** The digest scores with `setup_points.score_row` itself -
+there is no second formula - so `autopilot_core.swing_pick_projection` widens the digest's
+pick row to carry the SCAN ROW (`raw`) and the two group-context readings
+(`d1_vs_sector`, `d1_vs_industry`) the display enrichment already attached, plus
+`bucket_key`: the phone prints the bucket LABEL ("Favorite") and `RANKED_BUCKETS` matches
+the KEY (`favorite_setup`), so a ranking that matched the label would quietly rank nothing.
+The family record is `swing_family_points_record`, which turns the digest's own
+`swing_family_read()` counts into the `win_rate_lb` shape the desk panel injects - the
+same `swing_evidence.read_eligible_rows` under `POLICY_SCANROW_V1` in the same lately
+window, the same `swing_headline.wilson_lower_bound`, so the bound the digest scores on is
+the bound it used to order on and the one the setups table shows. Nothing is re-derived
+from a different source. A pick missing an input scores that part 0 with the note and is
+never dropped (an ungraded family scores 0 on `setup` and says so), and any failure in the
+whole path falls back to the Wilson order rather than costing the swing block.
+
+**The digest says which order it used.** The `Ranked on:` line now ends in
+`| order: Wilson bound` or `| order: points (switch on)`, and is written whenever picks
+were ranked even if the record line is missing - a points ranking that never says so is
+the defect ST1 item 3 fixed for the Wilson one. Presentation only: nothing here reaches a
+detector, a score, an alert, a watchlist, Focus or `review_policy.json`, no weight is
+tuned (`setup_points.active_weights()` is read, never written), and the phone PUSH
+(`build_swing_push`) is deliberately untouched - it is a different, shorter list.
+
+**Tests:** `tests/test_ws_pt4_digest_points.py` - 10 of 11 fail with
+`scripts/autopilot_core.py` and `scripts/ui/services/autopilot_service.py` restored
+(proved 2026-09-12); the eleventh asserts the switch-OFF near cap, which must pass both ways.
 
 ---
 
@@ -3195,3 +3303,64 @@ for app work.
 
 **Reopen trigger.** The trader changes the recall policy, the tags, the caps or the scope
 of what memory may hold; or the root instruction-file trim moves this section.
+
+## 5D - a watchlist edit is a dated event, never a verdict (2026-09-12, WISHLIST sweep)
+
+**The gap.** The four plain watchlists - `longs.txt`, `shorts.txt`, `swinglongs.txt`,
+`shortswings.txt` - are the oldest surface on the desk and the only trader act that kept
+no history at all. `WatchlistEditorPanel._write_symbols` wrote the joined symbols to the
+file and that was the entire record: a name appeared, a name vanished, and nothing said
+who did it or when. Every other verdict already has a forward record (P5: veto, like,
+pass, rejection), so the act the trader performs most often was the one the evidence loop
+could not see. `focus_membership_events` covers Focus-pick episodes, which is a different
+membership - hence a new stream, in the same shape, not a new schema style.
+
+**The rule.** `scripts/watchlist_intent_events.py` (schema `watchlist_intent_event_v1`,
+stream `WATCHLIST_INTENT_EVENTS_FILE` in the shared home) appends one JSONL row per symbol
+that joined or left one of the four lists: `ts` (aware, market-local, the OBSERVATION
+time), `market_date`, `list`, `side`, `horizon`, `symbol`, `action`, `source`, `reason`
+and `writer`. Five clauses bind it:
+
+- **Membership is interest, never a claim.** Not a setup, not a position, not a
+  prediction. A `remove` is not a dislike - the dislike has its own store
+  (`pick_feedback.jsonl`) and the trader's own words.
+- **Nothing is invented.** `ts` is when the desk SAW the change. An edit made in Notepad
+  or on the DAS while the app was closed is stamped at the moment the panel next loaded
+  the file and labelled `observed_external`; it is never back-dated to a time nobody
+  measured, and it is never asserted to be a trader decision.
+- **A machine write is distinguishable.** `FocusPickStore._inject_into_shared` /
+  `_uninject_from_shared` write `machine_inject` / `machine_uninject` through the same
+  writer; the panel writes `trader_edit`, and a clipboard drop `trader_paste`. The
+  cross-side removal (`WatchlistEditorArea._handle_symbols_saved`) is the trader's edit
+  with its cause in `reason`, because the trader caused it.
+- **The evidence never costs the save.** `_write_symbols` writes the FILE first, then
+  appends; every writer returns a count and swallows its own failure; a failed append
+  shows `(intent not recorded)` as a status suffix and nothing more. Hand-entered names
+  are untouched by every path (plan.md sec 5).
+- **Re-ordering is not a change.** The diff is against what the panel last read or wrote,
+  so `sort_symbols` and an autosave that moved nothing append nothing, and a re-add after
+  a removal is a new `add`.
+
+**The baseline row, and why it stays small.** Reconstructing membership needs a starting
+point, and the file's current contents are not one - they are today's state, not the state
+when the stream began. So the first time a list is seen with no reconstructable history,
+ONE `baseline_recorded` row names the symbols then present and NO `add` rows are written,
+because nobody observed those additions. It is written at most once per list (never per
+load), encodes the symbols as one comma-joined string rather than a list of objects, and
+carries `symbol_count` and a 12-character `symbols_digest`. After that the stream grows
+with CHANGES, never with loads: three reopenings of the page write nothing.
+
+**What reads it.** Nothing, yet. No detector, score, alert, Focus list, scanner or
+`review_policy.json` touches it. 10G's Watchlist tab will render source badges from it and
+the WS-DR work may join on it; until then `python -m watchlist_intent_events tail --list
+longs` (run from `scripts/`) is the whole consumer.
+
+**Known gap.** `autopilot_core`'s auto-populate (`write_bouncebot_watchlists` and the
+append helper near `autopilot_core.py:3225`) is a THIRD machine writer of `longs.txt` /
+`shorts.txt` and is not labelled: its adds surface as `observed_external` at the next
+panel load. That is honest - the desk did observe them late - but coarse, and labelling
+that seam is the obvious follow-on. The packet named only the Focus store's two seams.
+
+**Reopen trigger.** A second reader appears (10G, WS-DR), the auto-populate seam is
+labelled, or the trader asks to be prompted for a reason on an edit - which this packet
+deliberately does not do.

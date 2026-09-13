@@ -100,12 +100,12 @@ def test_a_row_under_the_n_floor_sorts_after_every_row_above_it():
             _raw(trimmed_mean_return="0.5000", meets_n_floor="", sample_count="3")
         ),
         "cohort": "thin",
-        "horizon": "3",
+        "horizon_sessions": 3,
     }
     weak_but_real = {
         **panel_module._cohort_robust_fields(_raw(trimmed_mean_return="-0.0098")),
         "cohort": "real",
-        "horizon": "3",
+        "horizon_sessions": 3,
     }
     ordered = panel_module._cohort_view([strong_but_thin, weak_but_real], "3")
 
@@ -119,7 +119,7 @@ def test_rows_above_the_floor_order_by_the_TRIMMED_mean():
                 _raw(trimmed_mean_return=trimmed, avg_side_return=avg)
             ),
             "cohort": name,
-            "horizon": "3",
+            "horizon_sessions": 3,
         }
 
     # `flatterer` wins on the bare average and loses on the trimmed one.
@@ -130,10 +130,13 @@ def test_rows_above_the_floor_order_by_the_TRIMMED_mean():
 
 
 def test_the_view_shows_one_horizon_and_defaults_to_h3():
+    # WS-5A: the rows carry `horizon_sessions` as an INT and the selector's
+    # text is converted once, inside `_cohort_view`. Only the fixture shape
+    # moved here; the selection rule asserted below is unchanged.
     rows = [
-        {**panel_module._cohort_robust_fields(_raw()), "cohort": "a", "horizon": "1"},
-        {**panel_module._cohort_robust_fields(_raw()), "cohort": "b", "horizon": "3"},
-        {**panel_module._cohort_robust_fields(_raw()), "cohort": "c", "horizon": "5"},
+        {**panel_module._cohort_robust_fields(_raw()), "cohort": "a", "horizon_sessions": 1},
+        {**panel_module._cohort_robust_fields(_raw()), "cohort": "b", "horizon_sessions": 3},
+        {**panel_module._cohort_robust_fields(_raw()), "cohort": "c", "horizon_sessions": 5},
     ]
     assert panel_module.DEFAULT_COHORT_HORIZON == "3"
     assert [r["cohort"] for r in panel_module._cohort_view(rows, "3")] == ["b"]
@@ -147,7 +150,7 @@ def test_a_row_with_no_trimmed_mean_sorts_last_inside_its_own_group():
         return {
             **panel_module._cohort_robust_fields(_raw(trimmed_mean_return=trimmed)),
             "cohort": name,
-            "horizon": "3",
+            "horizon_sessions": 3,
         }
 
     ordered = panel_module._cohort_view(
@@ -157,8 +160,8 @@ def test_a_row_with_no_trimmed_mean_sorts_last_inside_its_own_group():
 
 
 def test_the_floor_sentence_says_what_being_under_the_floor_means():
-    under = {**panel_module._cohort_robust_fields(_raw(meets_n_floor="")), "horizon": "3"}
-    over = {**panel_module._cohort_robust_fields(_raw()), "horizon": "3"}
+    under = {**panel_module._cohort_robust_fields(_raw(meets_n_floor="")), "horizon_sessions": 3}
+    over = {**panel_module._cohort_robust_fields(_raw()), "horizon_sessions": 3}
 
     said = panel_module._floor_sentence([under, over])
     assert "1 of 2" in said
