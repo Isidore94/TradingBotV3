@@ -582,7 +582,7 @@ def test_the_day_roll_refetches_the_window_and_the_next_cycle_is_a_delta_again(m
     assert_frame_equal(harness.frame_for(SYMBOL, 2), golden("monday_second"))
 
 
-def test_a_forming_last_bar_forces_a_whole_window_refetch_and_the_cache_recovers(monkeypatch):
+def test_a_forming_last_bar_never_enters_the_kept_window_and_the_next_delta_rereads_it(monkeypatch):
     """The fault the packet names.  A forming bar carries a preview price; a
     delta merged onto it writes that preview into the frame for good.  It must
     force a whole-window refetch, and the cycle after that is a delta again."""
@@ -600,9 +600,22 @@ def test_a_forming_last_bar_forces_a_whole_window_refetch_and_the_cache_recovers
     harness.cycle(CYCLE_3_NOW)  # cycle 1: must NOT merge onto the forming bar
     harness.cycle(CYCLE_4_NOW)  # cycle 2: clean cache, back to a delta
 
-    assert any(is_whole_window_request(req) for req in harness.ib.requests_in_cycle(1)), (
-        "a partial last bar in the cache must trigger a whole-window refetch, "
-        "never a merge; cycle 1 asked for %s"
+    # Lead ruling 2026-09-13 (WS-SN2): IB's endDateTime="" ALWAYS serves a forming last
+    # bar, so "refetch the whole window on a forming tail" would refetch every cycle and
+    # SN2 would save nothing.  The invariant the packet protects - a preview price is never
+    # merged into a later frame as final - is kept by NEVER keeping a forming bar in the
+    # window: the kept window ends on the last COMPLETED bar, cycle 1 asks for a delta that
+    # re-reads the 09:20 bar, and the merged frame equals a fresh fetch (the golden).
+    kept = harness.bot.cached_bounce_frame(SYMBOL)
+    assert kept, "cycle 0 must have kept a window"
+    assert all("09:20" not in str(row.get("time", "")) for row in kept), (
+        "a forming bar must never enter the kept window; kept tail is %s"
+        % (kept[-1].get("time"),)
+    )
+    assert harness.ib.requests_in_cycle(1) and not any(
+        is_whole_window_request(req) for req in harness.ib.requests_in_cycle(1)
+    ), (
+        "cycle 1 must ask for a delta that re-reads the bar that was forming; it asked for %s"
         % ([req.duration for req in harness.ib.requests_in_cycle(1)],)
     )
     assert_frame_equal(harness.frame_for(SYMBOL, 1), golden("intraday_cycle_3"))
