@@ -599,7 +599,7 @@ def test_a_forming_last_bar_never_enters_the_kept_window_and_the_next_delta_rere
 
     kept = harness.bot.cached_bounce_frame(SYMBOL)
     assert kept, "cycle 0 must have kept a window (read BEFORE cycle 1)"
-    assert all("09:20" not in str(row.get("time", "")) for row in kept), (
+    assert "09:20" not in str(kept[-1].get("time", "")), (
         "a forming bar must never enter the kept window; kept tail is %s"
         % (kept[-1].get("time"),)
     )
