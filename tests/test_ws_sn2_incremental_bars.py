@@ -597,6 +597,12 @@ def test_a_forming_last_bar_never_enters_the_kept_window_and_the_next_delta_rere
         "proves nothing; last cached bar is %s" % (cached[-1].dt,)
     )
 
+    kept = harness.bot.cached_bounce_frame(SYMBOL)
+    assert kept, "cycle 0 must have kept a window (read BEFORE cycle 1)"
+    assert all("09:20" not in str(row.get("time", "")) for row in kept), (
+        "a forming bar must never enter the kept window; kept tail is %s"
+        % (kept[-1].get("time"),)
+    )
     harness.cycle(CYCLE_3_NOW)  # cycle 1: must NOT merge onto the forming bar
     harness.cycle(CYCLE_4_NOW)  # cycle 2: clean cache, back to a delta
 
@@ -606,12 +612,6 @@ def test_a_forming_last_bar_never_enters_the_kept_window_and_the_next_delta_rere
     # merged into a later frame as final - is kept by NEVER keeping a forming bar in the
     # window: the kept window ends on the last COMPLETED bar, cycle 1 asks for a delta that
     # re-reads the 09:20 bar, and the merged frame equals a fresh fetch (the golden).
-    kept = harness.bot.cached_bounce_frame(SYMBOL)
-    assert kept, "cycle 0 must have kept a window"
-    assert all("09:20" not in str(row.get("time", "")) for row in kept), (
-        "a forming bar must never enter the kept window; kept tail is %s"
-        % (kept[-1].get("time"),)
-    )
     assert harness.ib.requests_in_cycle(1) and not any(
         is_whole_window_request(req) for req in harness.ib.requests_in_cycle(1)
     ), (
