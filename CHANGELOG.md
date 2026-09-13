@@ -864,6 +864,29 @@ They are evidence and must not be loaded as context.
 
 ### Charts, review, alerts, and phone surfaces
 
+- **The alert feed diffs itself instead of rebuilding (WS-SN4, WISHLIST item 4, 2026-09-13,
+  sweep branch).** `ui/panels/alert_center_panel.py` states what the feed should look like ONCE,
+  in `_feed_target_rows`, and both paths read it: `_sync_feed` reconciles the rows on screen
+  against that target - destroying what is gone, inserting what is missing, restyling what
+  changed and leaving every other row the SAME widget at the same position - and
+  `_rebuild_feed` builds every row from it. A veto (`_ignore_alert_symbol`) and the coalesced
+  `focusChanged` refresh call the diff; the rebuild is kept for the whole-feed decisions (the
+  minimum-tier switch, the day's Clear, `_unpin_d1_focus` - the obvious fourth diff case for a
+  follow-up). Measured offscreen on 250 M5 + 100 D1 rows: a veto 220.1 ms -> 8.5 ms, a
+  coalesced focus flush 223.7 ms -> 6.2 ms, neither constructing a row widget (live 2026-09-08:
+  4.0-4.1 s and 24.2 s). The parity exposed two rebuild defects, both fixed: it was not
+  fold-aware (a repeated name drew one row per entry at the newest position; the target keeps
+  ONE row per (symbol, side) at the OLDEST qualifying entry's position) and it dropped every ×N
+  badge (re-stamped from the read-only `RepetitionLedger.repeat_counts()` - `consider` is a
+  DECISION and is never re-called for a redraw). The open-burst digest is a day-scoped registry
+  (`_digested_keys` + `_refresh_open_digest_row`) so a veto inside the burst redraws that one
+  row. `AlertFeedItem.apply_focus_state` re-dresses a single row for a Focus change (star
+  `focusOn`, gold frame, ★ badge; unpolish/polish on that widget alone; no-op when unchanged).
+  Nothing is gated, scored, folded or withheld; the backing lists, the ledger, the review queue
+  and every evidence stream are written before it. The tester's parity assertion counted the
+  test's own explicit rebuild; the lead moved the read before it (intent kept). Tests:
+  `tests/test_ws_sn4_feed_diff.py`, `tests/test_ws_sn4_feed_diff_builder.py`;
+  `test_focus_refresh_coalescing` now pins "one reaction, not a rebuild".
 - **The board's picks reach the scan, and every row says why not (WS-10B, WISHLIST 10B,
   2026-09-12, sweep branch).** The DESK chain was traced and is PINNED end to end by
   `tests/test_ws_10b_board_to_scan.py`: board publication -> rows with an empty `failed_floors`
@@ -2231,6 +2254,11 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   the append-only store, the runner hook beside the anchor bridge, the backfill CLI (dry run: SPY
   33/69/43/27/12), the scan-date join and the "By environment" section on Research > Results.
   Suite 7404 green, ruff clean, smoke 7/7, selftest 75/75. Gate #102.
+- **WS-SN4 (WISHLIST item 4) - the alert feed diffs itself**, branch `claude/ws-sn4-feed-diff-build`
+  `a26f877a` (+ a lead test fix): `_feed_target_rows` / `_sync_feed`, the fold-aware rebuild,
+  ×N badges re-stamped from `repeat_counts()`, `AlertFeedItem.apply_focus_state`; a veto 220 ms
+  -> 8.5 ms, a focus flush 224 ms -> 6.2 ms offscreen. Suite 7401 green (one tester assertion
+  corrected by the lead), ruff clean, smoke 7/7, selftest 75/75. Gate #103.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
