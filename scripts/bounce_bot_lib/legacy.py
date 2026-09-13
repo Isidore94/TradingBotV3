@@ -95,6 +95,7 @@ from focus_picks import load_auto_pick_symbols, load_focus_map
 # the writer here and every reader of the outcome CSV cannot drift apart.
 import outcome_semantics
 from market_internals import format_internals_line, internals_context_fields
+from completed_bars import is_completed_bar as _is_completed_bar
 from durability_retry import fetch_with_bounded_retry
 from vold_recorder import (
     CONTRACT_CANDIDATES as VOLD_CONTRACT_CANDIDATES,
@@ -2151,6 +2152,21 @@ def _bars_to_ib(bars):
             )
         )
     return ib_bars
+
+
+def _sn2_same_bar(cached_row, served_row):
+    """Whether a served bar is the SAME print the kept window already holds.
+
+    SN2's identity check (WISHLIST item 4): the overlap bar's dt AND close must
+    match, or the delta and the kept window are not one series - a revision, a
+    corporate action, a halt - and the window is refetched whole rather than
+    spliced. An unreadable close is a mismatch: missing data is uncertainty,
+    never confirmation.
+    """
+    try:
+        return float(cached_row.get("close")) == float(served_row.get("close"))
+    except (TypeError, ValueError, AttributeError):
+        return False
 
 
 def _dedupe_bars(bars):
@@ -6112,10 +6128,31 @@ class BounceBot(EWrapper, EClient):
         every = max(1, int(BACKGROUND_SYMBOL_REFRESH_EVERY_CYCLES))
         return int(getattr(self, "_scan_cycle_index", 0)) % every == 0
 
-    def _prune_latest_bars_for_cycle(self, refresh_background, background_symbols):
+    def _prune_latest_bars_for_cycle(self, refresh_background, background_symbols, *, scanned_symbols=None):
         """Cycle-start bar-cache policy: priority symbols, SPY and the sector/
         industry ETFs always refetch; background symbols keep their cached bars
-        through off-cycles so the RRS scan costs them nothing."""
+        through off-cycles so the RRS scan costs them nothing.
+
+        It is also where SN2's kept M5 windows are bounded by the scanned set
+        and the per-cycle fetch counters are reset - one cycle-start hook, so a
+        symbol that leaves the scan cannot keep a window alive. `scanned_symbols`
+        is every name this cycle will scan (priority AND background); a caller
+        that does not name it is taken to have named the keep set in
+        `background_symbols`.
+        """
+        frame_keep = scanned_symbols
+        if frame_keep is None and not refresh_background:
+            frame_keep = background_symbols
+        # Looked up rather than called outright: this hook is also driven
+        # UNBOUND on a bare stub (`tests/test_bounce_learning.py` passes a
+        # SimpleNamespace that owns `latest_bars` and nothing else), and an
+        # object with no SN2 cache has no window to bound.
+        prune_windows = getattr(self, "_sn2_prune_windows", None)
+        if frame_keep is not None and callable(prune_windows):
+            prune_windows(frame_keep)
+        reset_counts = getattr(self, "_sn2_reset_cycle_counts", None)
+        if callable(reset_counts):
+            reset_counts()
         if refresh_background or not self.latest_bars:
             self.latest_bars = {}
             return
@@ -12749,6 +12786,265 @@ class BounceBot(EWrapper, EClient):
 
 
 
+    # ------------------------------------------------------------------
+    # SN2 - the M5 window is fetched WHOLE once a day, then extended
+    # ------------------------------------------------------------------
+    # WISHLIST item 4 (trader, 2026-09-08): this path asked IB for "5 D" of
+    # 5-minute bars for every symbol on every cycle - ~390 bars a symbol, 586
+    # symbol scans a cycle, ~120 MB off the wire and ~230,000 rows appended by
+    # the `historicalData` callback every 25 minutes, all of it on the
+    # interpreter lock the GUI needs. SN2 keeps the window and asks only for
+    # the bars since the last COMPLETED one. Nothing a detector reads changes:
+    # the merged list is the list a fresh "5 D" fetch would have produced, and
+    # `tests/test_ws_sn2_incremental_bars.py` pins that against a golden
+    # fixture recorded from the pre-SN2 code.
+
+    #: The bar size this path works in.
+    SN2_BAR_MINUTES = 5
+    #: The whole window, spelled exactly as it was before SN2.
+    SN2_FULL_WINDOW_DURATION = "5 D"
+    #: Every delta reaches one bar further back than the gap, so the kept
+    #: window's last bar comes back with it - without that overlap bar there is
+    #: nothing to check the series identity against.
+    SN2_DELTA_MARGIN_SECONDS = 300
+    #: A delta never spans a day: past this the window is refetched whole (IB
+    #: does not serve a seconds duration longer than a day either).
+    SN2_MAX_DELTA_SECONDS = 86_400
+    #: What to do with a window whose last SERVED bar was still forming.
+    #: False (the default) keeps the completed rows only - the forming bar
+    #: never enters the kept window at all, and the next delta re-reads it once
+    #: it has closed. True throws the whole window away and refetches it.
+    #: False by design: IB's historical cache has no complete/forming marker
+    #: and an `endDateTime=""` request's last row is ALWAYS the bar still
+    #: forming (`_rows_after_bounce_entry_for_session`), so True would refetch
+    #: the whole window on every cycle of the session and SN2 would save
+    #: nothing. Either way a forming bar is never merged into a later frame as
+    #: if it were final (plan.md sec 5).
+    SN2_FORMING_TAIL_FORCES_REFETCH = False
+
+    def _sn2_windows(self):
+        cache = getattr(self, "_sn2_bar_windows", None)
+        if cache is None:
+            cache = {}
+            self._sn2_bar_windows = cache
+        return cache
+
+    def cached_bounce_frame(self, symbol):
+        """The M5 window SN2 is holding for ``symbol``, or None.
+
+        The rows are the raw dicts `historicalData` appended, which is exactly
+        what the frame is rebuilt from, so a caller sees what the next cycle
+        would merge its delta onto.
+        """
+        entry = self._sn2_windows().get(str(symbol or "").strip().upper())
+        if not entry:
+            return None
+        return entry.get("rows") or None
+
+    def _sn2_forget(self, symbol):
+        self._sn2_windows().pop(str(symbol or "").strip().upper(), None)
+
+    def _sn2_prune_windows(self, keep_symbols):
+        """Drop the window of every symbol that left the scanned set.
+
+        ~600 symbols x ~390 rows is a bounded cache only while it is bounded BY
+        the scanned set; a name the trader removes must not keep paying rent.
+        """
+        keep = {str(item or "").strip().upper() for item in keep_symbols or ()}
+        cache = self._sn2_windows()
+        for key in [key for key in cache if key not in keep]:
+            cache.pop(key, None)
+
+    def _sn2_reset_cycle_counts(self):
+        self._sn2_cycle_counts = {
+            "full": 0, "full_bars": 0, "delta": 0, "delta_bars": 0,
+        }
+
+    def _sn2_count_fetch(self, kind, bars):
+        counts = getattr(self, "_sn2_cycle_counts", None)
+        if not isinstance(counts, dict):
+            self._sn2_reset_cycle_counts()
+            counts = self._sn2_cycle_counts
+        counts[kind] = counts.get(kind, 0) + 1
+        counts[f"{kind}_bars"] = counts.get(f"{kind}_bars", 0) + int(bars or 0)
+
+    def _sn2_log_cycle_fetch(self):
+        """One line per cycle naming what the M5 windows cost, full vs delta.
+
+        This is the line gate #<SN2> reads on the next live day: after the
+        first cycle of the session the full-window count should be a handful
+        of new names, not the whole scanned set.
+        """
+        counts = getattr(self, "_sn2_cycle_counts", None)
+        if not isinstance(counts, dict):
+            return
+        logging.info(
+            "SN2 M5 window fetch, cycle %s: %s full window(s) = %s bar(s), "
+            "%s delta(s) = %s bar(s); %s bar(s) fetched in total.",
+            getattr(self, "_scan_cycle_index", "?"),
+            counts.get("full", 0),
+            counts.get("full_bars", 0),
+            counts.get("delta", 0),
+            counts.get("delta_bars", 0),
+            counts.get("full_bars", 0) + counts.get("delta_bars", 0),
+        )
+
+    def _sn2_request_bars(self, symbol, contract, duration):
+        """One historical request; its raw rows, or None when it timed out."""
+        req_id = self.getReqId()
+        self.data[req_id] = []
+        self.data_ready_events[req_id] = threading.Event()
+
+        # Request historical data from IB
+        self.reqHistoricalData(
+            reqId=req_id,
+            contract=contract,
+            endDateTime="",  # up to now
+            durationStr=duration,
+            barSizeSetting="5 mins",
+            whatToShow="TRADES",
+            useRTH=1,
+            formatDate=1,
+            keepUpToDate=False,
+            chartOptions=[]
+        )
+
+        # Wait for data with timeout
+        if not self.data_ready_events[req_id].wait(timeout=15):
+            logging.warning(f"{symbol}: Timeout waiting for historical data.")
+            del self.data_ready_events[req_id]
+            self.data.pop(req_id, None)
+            return None
+
+        # `pop`, not `get`: this is the only reader of this buffer, and the
+        # hottest request path in the bot (one per symbol per scan cycle).
+        # Popping here frees it on every path, and it is the same list object
+        # `get` returned, so nothing downstream reads differently.
+        rows = self.data.pop(req_id, [])
+        del self.data_ready_events[req_id]
+        return rows
+
+    def _sn2_delta_seconds(self, entry, now_naive):
+        """How far back the next delta must reach, or None to refetch whole."""
+        if not entry:
+            return None
+        if entry.get("fetch_date") != now_naive.date():
+            return None  # the day roll: a "5 D" window slides and drops a session
+        if entry.get("forming_tail") and self.SN2_FORMING_TAIL_FORCES_REFETCH:
+            return None
+        last_dt = entry.get("last_dt")
+        if not isinstance(last_dt, datetime):
+            return None
+        gap = (now_naive - last_dt).total_seconds()
+        if gap <= 0:
+            return None
+        bar_seconds = 60 * int(self.SN2_BAR_MINUTES)
+        seconds = max(int(gap) + int(self.SN2_DELTA_MARGIN_SECONDS), 2 * bar_seconds)
+        if seconds >= int(self.SN2_MAX_DELTA_SECONDS):
+            return None
+        return seconds
+
+    def _sn2_merge(self, entry, delta_rows):
+        """The kept rows plus the delta, or None when they are not one series.
+
+        None is never an error worth raising: it means "refetch the window",
+        which is what the caller does.
+        """
+        if not delta_rows:
+            return None
+        parsed = []
+        for row in delta_rows:
+            dt = _parse_ib_bar_datetime(row.get("time"))
+            if dt is None:
+                return None
+            parsed.append((dt, row))
+
+        kept_rows = entry.get("rows") or []
+        kept_dts = entry.get("dts") or []
+        if not kept_rows or len(kept_rows) != len(kept_dts):
+            return None
+        last_dt = kept_dts[-1]
+        cached_by_dt = dict(zip(kept_dts, kept_rows))
+
+        overlap = [(dt, row) for dt, row in parsed if dt <= last_dt]
+        if not any(dt == last_dt for dt, _row in overlap):
+            return None  # the delta never reached the kept window's last bar
+        for dt, row in overlap:
+            cached = cached_by_dt.get(dt)
+            if cached is None or not _sn2_same_bar(cached, row):
+                return None  # a revised print: not the same series
+
+        new_pairs = [(dt, row) for dt, row in parsed if dt > last_dt]
+        sessions = entry.get("dates") or set()
+        if any(dt.date() not in sessions for dt, _row in new_pairs):
+            # A session the kept window does not have: a fresh "5 D" would have
+            # dropped its oldest one, so the window slid under us.
+            return None
+        return list(kept_rows) + [row for _dt, row in new_pairs]
+
+    def _sn2_keep_window(self, symbol, rows, *, now_naive):
+        """Keep the bars that were COMPLETE when they were served.
+
+        A forming bar is preview (plan.md sec 5), so it never enters the window
+        the next cycle merges onto: a preview price cannot be written into a
+        later frame as if it were final. The next delta re-reads that bar once
+        it has closed. Rows that are unreadable or out of order mean no window
+        is kept at all - the symbol simply pays for a whole one next cycle.
+        """
+        key = str(symbol or "").strip().upper()
+        cache = self._sn2_windows()
+        kept_rows = []
+        kept_dts = []
+        forming_tail = False
+        for row in rows or ():
+            dt = _parse_ib_bar_datetime(row.get("time"))
+            if dt is None or (kept_dts and dt <= kept_dts[-1]):
+                cache.pop(key, None)
+                return
+            if not _is_completed_bar({"dt": dt}, self.SN2_BAR_MINUTES, now=now_naive):
+                forming_tail = True
+                break
+            kept_rows.append(row)
+            kept_dts.append(dt)
+        if len(kept_rows) < 10:
+            cache.pop(key, None)
+            return
+        cache[key] = {
+            "rows": kept_rows,
+            "dts": kept_dts,
+            "dates": {dt.date() for dt in kept_dts},
+            "last_dt": kept_dts[-1],
+            "fetch_date": now_naive.date(),
+            "forming_tail": forming_tail,
+        }
+
+    def _sn2_window_bars(self, symbol, contract, now_naive):
+        """The five-day M5 window: the delta when it lines up, else the lot.
+
+        Returns the raw rows the frame is built from, or None when a request
+        timed out - the same early return this path had before SN2.
+        """
+        entry = self._sn2_windows().get(symbol)
+        seconds = self._sn2_delta_seconds(entry, now_naive)
+        if seconds is not None:
+            delta_rows = self._sn2_request_bars(symbol, contract, f"{seconds} S")
+            if delta_rows is None:
+                return None
+            self._sn2_count_fetch("delta", len(delta_rows))
+            merged = self._sn2_merge(entry, delta_rows)
+            if merged is not None:
+                return merged
+            logging.debug(
+                f"{symbol}: SN2 delta did not line up with the kept window; "
+                f"refetching {self.SN2_FULL_WINDOW_DURATION}"
+            )
+            self._sn2_forget(symbol)
+        rows = self._sn2_request_bars(symbol, contract, self.SN2_FULL_WINDOW_DURATION)
+        if rows is None:
+            return None
+        self._sn2_count_fetch("full", len(rows))
+        return rows
+
     def request_and_detect_bounce(self, symbol, allowed_bounce_types=None, *, scan_for_new_bounces=True):
         symbol = str(symbol or "").strip().upper()
         direction = self.get_symbol_direction(symbol)
@@ -12764,46 +13060,27 @@ class BounceBot(EWrapper, EClient):
                 logging.debug(f"{symbol}: Not within market hours for bounce detection.")
                 return
 
-        # Request 5 days of data to ensure we get enough market days
-        five_day_reqId = self.getReqId()
-        self.data[five_day_reqId] = []
-        self.data_ready_events[five_day_reqId] = threading.Event()
+        # Five days of 5-minute bars, so there are enough market days behind
+        # today. SN2: fetched WHOLE once per symbol per market-local day, then
+        # extended by a delta that asks only for the bars since the last
+        # completed one. `all_bars` below is the same list of raw rows a fresh
+        # "5 D" request would have produced, either way.
         contract = self.create_stock_contract(symbol)
-
-        # Request historical data from IB
-        self.reqHistoricalData(
-            reqId=five_day_reqId,
-            contract=contract,
-            endDateTime="",  # up to now
-            durationStr="5 D",  # Increased to 5 days to account for weekends/holidays
-            barSizeSetting="5 mins",
-            whatToShow="TRADES",
-            useRTH=1,
-            formatDate=1,
-            keepUpToDate=False,
-            chartOptions=[]
-        )
-
-        # Wait for data with timeout
-        if not self.data_ready_events[five_day_reqId].wait(timeout=15):
-            logging.warning(f"{symbol}: Timeout waiting for historical data.")
-            del self.data_ready_events[five_day_reqId]
-            self.data.pop(five_day_reqId, None)
+        now_naive = self._naive_market_local(get_market_local_now())
+        all_bars = self._sn2_window_bars(symbol, contract, now_naive)
+        if all_bars is None:
             return
 
-        # `pop`, not `get`: this is the only reader of this buffer, and the
-        # hottest request path in the bot (one per symbol per scan cycle,
-        # ~206 KB each). Popping here frees it on the short-data return below
-        # AND on the success path, and it is the same list object `get`
-        # returned, so nothing downstream reads differently.
-        all_bars = self.data.pop(five_day_reqId, [])
+        # The short-data guard is about the WHOLE window, so it reads the
+        # MERGED result: a 25-minute cycle's delta is about five bars and would
+        # trip a ten-bar guard that ran on the delta alone.
         if len(all_bars) < 10:
             logging.warning(f"{symbol}: Insufficient historical data, only {len(all_bars)} bars received")
-            del self.data_ready_events[five_day_reqId]
+            self._sn2_forget(symbol)
             return
 
-        # Clean up
-        del self.data_ready_events[five_day_reqId]
+        # Keep what the next cycle's delta will be merged onto.
+        self._sn2_keep_window(symbol, all_bars, now_naive=now_naive)
 
         # Cache 5-minute bars for RRS reuse
         self.latest_bars[symbol] = _dedupe_bars(_bars_to_ib(all_bars))
@@ -13868,7 +14145,9 @@ class BounceBot(EWrapper, EClient):
                 priority_symbols = self.get_priority_scan_symbols() & all_symbols
                 background_symbols = all_symbols - priority_symbols
                 refresh_background = self._is_background_refresh_cycle()
-                self._prune_latest_bars_for_cycle(refresh_background, background_symbols)
+                self._prune_latest_bars_for_cycle(
+                    refresh_background, background_symbols, scanned_symbols=all_symbols
+                )
                 self.build_atr_cache()
                 cycle_clock.mark("atr_cache")
 
@@ -14041,6 +14320,10 @@ class BounceBot(EWrapper, EClient):
                 # windows. Fetch only those orphaned names; active names were
                 # already refreshed by the normal scan above.
                 self._refresh_orphaned_technical_followups(all_symbols)
+
+                # SN2's measurement, once per cycle: what the M5 windows cost
+                # in bars, full windows against deltas.
+                self._sn2_log_cycle_fetch()
 
                 if not self.is_scanning_enabled():
                     continue
