@@ -52,6 +52,19 @@ from typing import Any, Iterable, Mapping
 #: The window in which the level has to hold. Minutes, from the entry.
 HELD_WINDOW_MINUTES = 30
 
+#: What the day-trade statistic IS, spelled ONCE, in the module that computes
+#: it. `working_lately` imports this name rather than restating it (packet
+#: WS-10I): two copies of a statistic's name agree only until somebody edits
+#: one, and this one is printed on four surfaces.
+HELD_RUN_STATISTIC_NAME = "held_run_score (P(held 30m) x trimmed MFE_R)"
+
+#: The QUESTION the day-trade population answers, so a day-trade cell can never
+#: be pooled with a swing one by accident: `favorable_direction` is a
+#: close-to-close direction rate over swing scan rows and this is a product
+#: measured over the first thirty minutes. Different numerator, different
+#: denominator, different unit.
+HELD_RUN_OUTCOME_KIND = "held_run_first_30_minutes"
+
 #: Measurement states (packet Q1, process review 2026-09-04 finding 1). "Held"
 #: used to be `not broke_early`, so an episode nothing had ever followed up read
 #: as held: 979 of 8,161 recent episodes on 2026-09-04. Only MEASURED_HELD is
