@@ -1,0 +1,446 @@
+"""The Trade Mentor's card - WISHLIST 10J, packet WS-TM item 3.
+
+Small, non-modal, docked under the chart beside the arm bar, and hidden unless
+something is due. It asks one question and gives three answers: **Submit**,
+**Read unchanged**, **Skip**. Everything else about it is a refusal to get in
+the way.
+
+**It never takes focus.** The hour can turn while the trader is typing a symbol
+into the arm bar's ticker box; a `setFocus()` here would eat that keystroke, and
+a modal dialog would eat the whole minute. The card is shown with
+`WA_ShowWithoutActivating` and never calls `setFocus`, `raise_` or
+`activateWindow`. The keys it does own (`Ctrl+Enter` to submit) are read through
+an event filter ON THE TEXT BOX, so they mean "submit" only while the cursor is
+in the card - a `QShortcut` at window scope would fire for every widget in the
+page.
+
+**The raw text goes to the store FIRST, through the store's one owner.**
+`market_journal_service.write_entry` writes it; nothing is parsed, scored,
+summarised or interpreted on the way in. Step 3 of the trader's brief (a local
+model filling a form from the text) reads the stored row LATER and is not in
+this packet - which is the whole reason the raw text is written first.
+
+**An unanswered prompt is no observation.** Half-typed text is kept in
+`trade_mentor_drafts.json` and is NEVER a journal row, never shown as a read and
+never counted as an answer. It survives the next hour replacing the card,
+because the trader typed it and the desk does not get to throw away what the
+trader typed.
+
+**"Read unchanged" is a NEW row, not a copy and not a correction.** It restates
+the previous read at the current time with `reaffirms` naming it. It does not
+supersede: the 09:00 read must still be readable beside the 11:00 one, or "my
+view has not changed for two hours" becomes indistinguishable from "I only ever
+said it once".
+
+Nothing here reaches a detector, a score, a gate, an alert, a watchlist, Focus,
+the review queue or `review_policy.json`, and nothing here pushes to a phone.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from trade_mentor_schedule import (
+    KIND_M5_D1,
+    KIND_M5_TRADES,
+    KIND_MANUAL,
+    PACIFIC,
+    MentorSlot,
+    manual_slot,
+)
+
+#: The trader's own reason when they dismiss a card by hand. Kept distinct from
+#: every absence reason the service records: "I looked and had nothing to say"
+#: is a different fact from "nobody was there".
+SKIP_TRADER = "trader_skip"
+
+_QUESTIONS = {
+    "m5": "What do you see on the 5-minute tape right now?",
+    KIND_M5_D1: "What do you see on the 5-minute tape right now?",
+    KIND_M5_TRADES: "What do you see on the 5-minute tape right now?",
+    KIND_MANUAL: "Your read, right now.",
+}
+
+_D1_QUESTION = "And the daily picture?"
+
+
+class TradeMentorCard(QWidget):
+    """One prompt, one answer, filed once."""
+
+    #: (slot_id) - the trader answered. The host tells the service, which never
+    #: shows the slot again.
+    answered = Signal(str)
+    #: (dict) - `{"slot_id", "skipped_reason"}`. The trader dismissed the card.
+    skipped = Signal(dict)
+    #: (str) - a line for the host's status area. Never a dialog.
+    statusChanged = Signal(str)
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        journal=None,
+        clock: Callable[[], datetime] | None = None,
+        drafts_path: Path | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("TradeMentorCard")
+        self._journal = journal
+        self._clock = clock or self._default_clock
+        if drafts_path is None:
+            from project_paths import TRADE_MENTOR_DRAFTS_FILE
+
+            drafts_path = TRADE_MENTOR_DRAFTS_FILE
+        self._drafts_path = Path(drafts_path)
+        self._drafts: dict[str, str] = {}
+        self._load_drafts()
+        self._slot: MentorSlot | None = None
+        self._previous: Mapping[str, Any] | None = None
+        self._submitted: set[str] = set()
+
+        # Never activates the window it appears in. This is the whole of the
+        # "no focus stealing" promise and it costs one attribute.
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+
+        self.prompt_label = QLabel("")
+        self.prompt_label.setObjectName("SectionTitle")
+        self.prompt_label.setWordWrap(True)
+        self.previous_label = QLabel("")
+        self.previous_label.setObjectName("MutedLabel")
+        self.previous_label.setWordWrap(True)
+        self.previous_label.setVisible(False)
+
+        self.text_box = QPlainTextEdit(self)
+        self.text_box.setPlaceholderText(
+            "In your own words. Nothing here is parsed or scored - it is stored "
+            "exactly as you type it."
+        )
+        self.text_box.setMaximumHeight(84)
+        self.text_box.installEventFilter(self)
+
+        self.d1_label = QLabel(_D1_QUESTION)
+        self.d1_label.setObjectName("MutedLabel")
+        self.d1_box = QPlainTextEdit(self)
+        self.d1_box.setMaximumHeight(84)
+        self.d1_box.installEventFilter(self)
+        self.d1_label.setVisible(False)
+        self.d1_box.setVisible(False)
+
+        self.trade_check_label = QLabel("")
+        self.trade_check_label.setObjectName("MutedLabel")
+        self.trade_check_label.setWordWrap(True)
+        self.trade_check_label.setVisible(False)
+
+        self.submit_button = QPushButton("Submit")
+        self.submit_button.setToolTip("File this read now (Ctrl+Enter).")
+        self.submit_button.clicked.connect(self.submit)
+        self.unchanged_button = QPushButton("Read unchanged")
+        self.unchanged_button.setToolTip(
+            "Files a NEW observation at this time that restates your previous "
+            "read. The earlier one stays exactly as you wrote it."
+        )
+        self.unchanged_button.clicked.connect(self.read_unchanged)
+        self.skip_button = QPushButton("Skip")
+        self.skip_button.setToolTip(
+            "Nothing is filed. An unanswered prompt is not an observation, and "
+            "anything you typed is kept as a draft."
+        )
+        self.skip_button.clicked.connect(self.skip)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("MutedLabel")
+        self.status_label.setWordWrap(True)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(6)
+        buttons.addWidget(self.submit_button)
+        buttons.addWidget(self.unchanged_button)
+        buttons.addWidget(self.skip_button)
+        buttons.addStretch(1)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+        layout.addWidget(self.prompt_label)
+        layout.addWidget(self.previous_label)
+        layout.addWidget(self.text_box)
+        layout.addWidget(self.d1_label)
+        layout.addWidget(self.d1_box)
+        layout.addWidget(self.trade_check_label)
+        layout.addLayout(buttons)
+        layout.addWidget(self.status_label)
+
+        self.setVisible(False)
+
+    # -- plumbing ---------------------------------------------------------
+    @staticmethod
+    def _default_clock() -> datetime:
+        return datetime.now(PACIFIC)
+
+    def _now(self) -> datetime:
+        moment = self._clock()
+        stamp = moment if moment.tzinfo else moment.astimezone()
+        return stamp.astimezone(PACIFIC)
+
+    def _service(self):
+        if self._journal is None:
+            from ui.services.market_journal_service import shared_journal_service
+
+            self._journal = shared_journal_service()
+        return self._journal
+
+    # -- drafts -----------------------------------------------------------
+    def _load_drafts(self) -> None:
+        try:
+            payload = json.loads(self._drafts_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(payload, dict):
+            for slot_id, record in payload.items():
+                if isinstance(record, Mapping):
+                    self._drafts[str(slot_id)] = str(record.get("text") or "")
+
+    def _save_drafts(self) -> None:
+        """Never costs the card. A draft that could not be written is a lost
+        half-thought; a card that refused to move on would be a lost hour."""
+        try:
+            self._drafts_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                slot_id: {"text": text} for slot_id, text in self._drafts.items() if text
+            }
+            tmp = self._drafts_path.with_name(self._drafts_path.name + ".tmp")
+            tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            tmp.replace(self._drafts_path)
+        except OSError:
+            logging.debug("Trade Mentor draft not saved.", exc_info=True)
+
+    def draft_for(self, slot_id: str) -> str:
+        """Whatever was typed against `slot_id` and never submitted."""
+        return self._drafts.get(str(slot_id), "")
+
+    def _stash_draft(self) -> None:
+        """Keep what is in the boxes, exactly as typed - trailing space and all."""
+        if self._slot is None:
+            return
+        text = self.text_box.toPlainText()
+        d1_text = self.d1_box.toPlainText()
+        combined = text if not d1_text else f"{text}\n{d1_text}"
+        if combined.strip():
+            self._drafts[self._slot.slot_id] = combined
+            self._save_drafts()
+
+    def _drop_draft(self, slot_id: str) -> None:
+        if self._drafts.pop(str(slot_id), None) is not None:
+            self._save_drafts()
+
+    # -- showing ----------------------------------------------------------
+    def show_slot(self, slot: MentorSlot, previous: Mapping[str, Any] | None = None) -> None:
+        """Put this prompt up, replacing whatever was there.
+
+        A new hour REPLACES an untouched card rather than stacking beside it -
+        one card is the trader's rule - and whatever was half-typed in the old
+        one is stashed on the way out.
+        """
+        self._stash_draft()
+        self._slot = slot
+        self._previous = dict(previous) if previous else None
+        kind = str(getattr(slot, "kind", "") or "")
+        self.prompt_label.setText(_QUESTIONS.get(kind, _QUESTIONS[KIND_MANUAL]))
+        restored = self.draft_for(slot.slot_id)
+        self.text_box.setPlainText(restored)
+        self.d1_box.setPlainText("")
+        show_d1 = kind == KIND_M5_D1
+        self.d1_label.setVisible(show_d1)
+        self.d1_box.setVisible(show_d1)
+        self.trade_check_label.setVisible(False)
+        if self._previous:
+            self.previous_label.setText(
+                "Your last read: " + str(self._previous.get("text") or "")
+            )
+            self.previous_label.setVisible(True)
+        else:
+            self.previous_label.setText("")
+            self.previous_label.setVisible(False)
+        self.unchanged_button.setEnabled(bool(self._previous))
+        self.status_label.setText(
+            "Post-close read." if bool(getattr(slot, "post_close", False)) else ""
+        )
+        self.setVisible(True)
+
+    def set_trade_check_summary(self, text: str) -> None:
+        """The 10:00 card's second section, in one line. Item 4 owns the detail."""
+        self.trade_check_label.setText(str(text or ""))
+        self.trade_check_label.setVisible(bool(text))
+
+    def give_a_read(self, now: datetime | None = None) -> MentorSlot:
+        """The manual door, open at all times - no slot has to be due.
+
+        A manual read is a real observation at a real time; it is marked
+        `manual` so a later reader never counts it as an answered prompt.
+        """
+        moment = now.astimezone(PACIFIC) if now and now.tzinfo else (now or self._now())
+        slot = manual_slot(moment)
+        self.show_slot(slot)
+        return slot
+
+    def hide_card(self) -> None:
+        self._stash_draft()
+        self._slot = None
+        self.setVisible(False)
+
+    # -- answering --------------------------------------------------------
+    def _session_for(self, slot: MentorSlot, moment: datetime) -> str:
+        if str(getattr(slot, "kind", "")) != KIND_MANUAL:
+            return str(slot.session)
+        try:
+            import market_journal
+
+            return market_journal.session_date_for(moment)
+        except Exception:  # noqa: BLE001 - a read is never lost to a calendar
+            return moment.date().isoformat()
+
+    def _mentor_payload(self, slot: MentorSlot, moment: datetime) -> dict[str, str]:
+        return {
+            "slot_id": str(slot.slot_id),
+            "prompt_kind": str(slot.kind),
+            "scheduled_at": slot.scheduled_at.isoformat(),
+            # The moment the trader actually replied. Separate from
+            # `scheduled_at` because a reply typed at 09:12 cannot claim to
+            # describe the market at 09:00, and separate from the ledger's own
+            # `created_at` because that is a UTC machine stamp of the same
+            # instant, not the trader's wall clock.
+            "responded_at": moment.isoformat(),
+        }
+
+    def submit(self) -> dict[str, Any]:
+        """File the raw text. Once per slot, whatever the button does."""
+        slot = self._slot
+        if slot is None:
+            return {"ok": False, "reason": "nothing is being asked"}
+        if slot.slot_id in self._submitted:
+            # A double click is one read. The guard is here rather than on the
+            # button because Ctrl+Enter reaches the same verb.
+            return {"ok": False, "reason": "this read is already filed"}
+        moment = self._now()
+        text = self.text_box.toPlainText().strip()
+        d1_text = self.d1_box.toPlainText().strip() if self.d1_box.isVisible() else ""
+        if not text and not d1_text:
+            self._set_status("Nothing typed, so nothing was filed.")
+            return {"ok": False, "reason": "an empty read is not an observation"}
+
+        session = self._session_for(slot, moment)
+        payload = self._mentor_payload(slot, moment)
+        written: list[dict[str, Any]] = []
+        # The M5 read and the D1 read are stored SEPARATELY even though one card
+        # collected both (the trader's brief). Two timeframes in one row would
+        # be one row that is true of neither.
+        for body, timeframe in ((text, "M5"), (d1_text, "D1")):
+            if not body:
+                continue
+            result = self._service().write_entry(
+                text=body,
+                session_date=session,
+                timeframe=timeframe,
+                origin="trade_mentor",
+                now=moment,
+                mentor=payload,
+            )
+            if not result.get("ok"):
+                self._set_status(str(result.get("reason") or "entry NOT saved"))
+                return result
+            written.append(result.get("entry") or {})
+
+        self._submitted.add(slot.slot_id)
+        self._drop_draft(slot.slot_id)
+        self.text_box.setPlainText("")
+        self.d1_box.setPlainText("")
+        self._set_status(f"Filed at {moment.strftime('%H:%M')}.")
+        self.answered.emit(slot.slot_id)
+        self.setVisible(False)
+        return {"ok": True, "entries": written}
+
+    def read_unchanged(self) -> dict[str, Any]:
+        """File a NEW row restating the previous read, at this time."""
+        slot = self._slot
+        if slot is None:
+            return {"ok": False, "reason": "nothing is being asked"}
+        previous = self._previous or {}
+        body = str(previous.get("text") or "").strip()
+        if not body:
+            return {"ok": False, "reason": "there is no earlier read to reaffirm"}
+        if slot.slot_id in self._submitted:
+            return {"ok": False, "reason": "this read is already filed"}
+        moment = self._now()
+        result = self._service().write_entry(
+            text=body,
+            session_date=self._session_for(slot, moment),
+            timeframe=str(previous.get("timeframe") or "M5"),
+            origin="trade_mentor",
+            now=moment,
+            mentor=self._mentor_payload(slot, moment),
+            # Names the read it restates, and deliberately NOT `supersedes`:
+            # superseding would hide the 09:00 read behind the 11:00 one.
+            reaffirms=str(previous.get("entry_id") or ""),
+        )
+        if not result.get("ok"):
+            self._set_status(str(result.get("reason") or "entry NOT saved"))
+            return result
+        self._submitted.add(slot.slot_id)
+        self._drop_draft(slot.slot_id)
+        self._set_status(f"Read unchanged, filed at {moment.strftime('%H:%M')}.")
+        self.answered.emit(slot.slot_id)
+        self.setVisible(False)
+        return result
+
+    def skip(self) -> dict[str, Any]:
+        """Dismiss without filing. Whatever was typed is kept as a draft."""
+        slot = self._slot
+        if slot is None:
+            return {"ok": False, "reason": "nothing is being asked"}
+        self._stash_draft()
+        record = {"slot_id": str(slot.slot_id), "skipped_reason": SKIP_TRADER}
+        self._slot = None
+        self.setVisible(False)
+        self.skipped.emit(dict(record))
+        return record
+
+    def _set_status(self, text: str) -> None:
+        self.status_label.setText(str(text or ""))
+        self.statusChanged.emit(str(text or ""))
+
+    # -- keys -------------------------------------------------------------
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt override)
+        """Ctrl+Enter submits, and only while the cursor is in this card.
+
+        An event filter on the two boxes rather than a `QShortcut`: a shortcut
+        lives at window scope, and a hidden card's shortcut competing with a
+        live one is the fault CLAUDE.md records for the rail bindings - two
+        bindings for one sequence fire neither.
+        """
+        try:
+            if (
+                watched in (self.text_box, self.d1_box)
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            ):
+                self.submit()
+                return True
+        except Exception:  # noqa: BLE001 - a key handler never breaks the desk
+            logging.debug("Trade Mentor key handling failed.", exc_info=True)
+        return super().eventFilter(watched, event)
