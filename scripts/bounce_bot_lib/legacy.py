@@ -13890,15 +13890,14 @@ class BounceBot(EWrapper, EClient):
                     logging.exception("M5 Focus fast-lane scan failed.")
                 cycle_clock.mark("focus_fast_lane")
 
-                # Log strongest/weakest names for key intraday timeframes each cycle.
-                # Each run is timed on its own (S2 instrumentation, 2026-09-03):
-                # the preamble line used to say "rrs_scan 272s" for four runs and
-                # could not say which of them, or whether the GUI one, was slow.
+                # Strongest/weakest names for every intraday RRS timeframe, in
                 # ONE entry per cycle (SN3, 2026-09-12): run_rrs_scan measures
                 # 5m, 15m and 1h in a single walk of the universe and hands the
                 # GUI's selected timeframe the payload that walk already built.
-                # Four entries cost 275 s of CPU per cycle on 2026-09-08, on the
-                # interpreter lock the GUI needs.
+                # The four separate entries this replaces were timed one by one
+                # (S2 instrumentation, 2026-09-03) and cost 275 s of CPU per
+                # cycle on 2026-09-08, on the interpreter lock the GUI needs, so
+                # the stage is timed as the single thing it now is.
                 self.run_rrs_scan()
                 cycle_clock.mark("rrs_scan")
 
