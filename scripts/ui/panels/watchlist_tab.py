@@ -518,10 +518,15 @@ class WatchlistTabPanel(QFrame):
             if column == 0:
                 item.setData(KEY_ROLE, (row.symbol, row.side))
                 item.setToolTip(_row_tooltip(row))
-            if column == 4 and row.positions and any(p.stale for p in row.positions):
+            if column == 4:
                 # A stale sync is SHOWN, greyed. Never removed - uncertainty
-                # does not delete a position.
-                item.setForeground(QColor(theme.color("text_muted")))
+                # does not delete a position. Set on BOTH branches: the table
+                # diffs in place, so a row that stops being stale has to lose
+                # the grey or it would keep saying "old" about a fresh sync.
+                stale = bool(row.positions) and any(p.stale for p in row.positions)
+                item.setForeground(
+                    QColor(theme.color("text_muted" if stale else "text_primary"))
+                )
 
     # -------------------------------------------------------------- selection
     def selected_key(self) -> tuple[str, str] | None:
