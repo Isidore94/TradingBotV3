@@ -421,7 +421,13 @@ class SymbolSnapshotWidget(QWidget):
         # history control - the pan handler deliberately has no fetch in it,
         # because a pan that fetches is a fetch on the paint path.
         self.m5_older_button = QPushButton(_LOAD_OLDER_TEXT)
-        self.m5_older_button.setObjectName("SubtleButton")
+        if self._compact:
+            # Same discipline as PaintLinesButton: the desk's embedded pane is
+            # height-starved, and the theme's rowChrome property drops the
+            # button padding and border so this rides the legend row without
+            # taking pixels back off the candles. Variants live in theme.qss.
+            self.m5_older_button.setFlat(True)
+            self.m5_older_button.setProperty("rowChrome", True)
         self.m5_older_button.setToolTip(
             "Add two more intraday sessions from the scan cache. "
             f"Up to {M5_MAX_SESSIONS} sessions per symbol; never fetches."

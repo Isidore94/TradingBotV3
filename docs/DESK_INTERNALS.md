@@ -3526,12 +3526,13 @@ a symbol switch resets the count to two.
 
 ### What was not built, and why
 
-**H1/H4 (packet item 3).** The desk draws neither. `bounce_bot_lib/legacy.py` builds
-completed H1 bars and `master_avwap_lib/legacy.py:28422` aggregates H4 by session; both are
-detector inputs, and neither reaches a chart, a widget or a payload. (The packet pointed at
-`:28105`, which is not the resampler - the code is the fact.) The packet's own instruction
-was "if the desk does not draw H1/H4 today, say so and stop at D1/M5". A 500-bar target is
-only meaningful once such a chart exists.
+**H1/H4 (packet item 3).** The desk draws neither. `bounce_bot_lib/legacy.py._closed_h1_bars`
+aggregates completed H1 bars and `master_avwap_lib/legacy.py:28235
+resample_intraday_bars_to_4h` resamples H4 from that H1 history; both feed the HTF trend/
+retest/EMA15-rejection study, and neither reaches a chart, a widget or a payload. Every
+`CandleChart.set_data` call in `scripts/ui/` passes `timeframe="d1"` or `"m5"` and nothing
+else. The packet's own instruction was "if the desk does not draw H1/H4 today, say so and
+stop at D1/M5". A 500-bar target is only meaningful once such a chart exists.
 
 **The centre pane's own provenance line.** Item 4 asks for the oldest date in "the chart's
 existing provenance strip". Exactly one exists - Chart Review's `provenance_state`, which now

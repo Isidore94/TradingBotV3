@@ -352,10 +352,12 @@ only provenance strip the desk has (Chart Review's); the centre pane has none to
 add to.
 
 **H1/H4 (item 3) was not built, because the desk draws neither.**
-`bounce_bot_lib/legacy.py` builds completed H1 bars and
-`master_avwap_lib/legacy.py` aggregates H4 by session, both as detector inputs —
-no chart, no widget, no payload. The packet's own instruction applies: stop at
-D1/M5. A 500-bar H1/H4 target is only meaningful once an H1/H4 chart exists.
+`bounce_bot_lib/legacy.py._closed_h1_bars` aggregates completed H1 bars and
+`master_avwap_lib/legacy.py:28235 resample_intraday_bars_to_4h` resamples H4
+from that H1 history; both feed the HTF study, and neither reaches a chart, a
+widget or a payload — every `set_data` call in `scripts/ui/` passes `"d1"` or
+`"m5"`. The packet's own instruction applies: stop at D1/M5. A 500-bar H1/H4
+target is only meaningful once an H1/H4 chart exists.
 
 Tests: `tests/test_ws_ch_chart_history.py` over a 1,300-session golden fixture.
 
