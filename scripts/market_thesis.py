@@ -192,9 +192,12 @@ _CONDITION_MARKERS = (
     "unless",
     "only if",
     "on condition that",
-    "while",
     "assuming",
 )
+#: "while" is deliberately NOT a condition marker. It is temporal at least as
+#: often as it is conditional ("while I was watching"), and a false condition
+#: becomes a question that quotes the trader back at themselves about something
+#: they never conditioned anything on.
 
 #: What makes the trader wrong, in their own words. Detected as a SENTENCE, so
 #: the quote reads as a sentence rather than as a clipped fragment.
