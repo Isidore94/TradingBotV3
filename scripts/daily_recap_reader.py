@@ -227,6 +227,22 @@ class RecapRow:
     d1_environment: str = UNKNOWN
     occurrences: int = 1
     pending: bool = False
+    # -- the two context labels (packet WS-10I) ----------------------------
+    #: The environment KNOWN when the opportunity was observed, which is not
+    #: always `d1_environment` above: that is the label OF the session, and a
+    #: 10:35 decision could not have had it, because the rule reads the
+    #: session's completed daily bars and publishes at the close. This field is
+    #: what the decision could know, and `observation_certainty` says which -
+    #: `session`, `prior_session` or `unknown`.
+    observation_context: str = UNKNOWN
+    observation_certainty: str = ""
+    #: The environment known at the ENTRY, present only where a fill is matched
+    #: to this row. Never invented for an unmatched opportunity, never blended
+    #: with the observation label: the two routinely differ and that is the
+    #: readable part. `date_only` means the fill carried no time of day.
+    entry_context: str = ""
+    entry_certainty: str = ""
+    entry_flagged: bool = False
 
 
 @dataclass(frozen=True)
@@ -290,6 +306,55 @@ class RecapSession:
         if name not in VIEW_NAMES:
             raise ValueError(f"no such view: {name!r}")
         return getattr(self, name)
+
+
+def _observation_only(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The observation half as `RecapRow` keyword arguments. No entry is invented."""
+    return {
+        "observation_context": str(payload.get("observation") or UNKNOWN),
+        "observation_certainty": str(payload.get("observation_certainty") or ""),
+    }
+
+
+def _both_contexts(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Both halves as `RecapRow` keyword arguments, side by side."""
+    both = _observation_only(payload)
+    both.update(
+        {
+            "entry_context": str(payload.get("entry") or ""),
+            "entry_certainty": str(payload.get("entry_certainty") or ""),
+            "entry_flagged": bool(payload.get("entry_flagged")),
+        }
+    )
+    return both
+
+
+def _context_labels(
+    observed: Any, entered: Any, labels: Mapping[str, str]
+) -> dict[str, Any]:
+    """The row's two context labels, through `context_join`'s ONE time rule.
+
+    Packet WS-10I. The rule is not restated here: a clock before its session's
+    close reads the PREVIOUS exchange session, a clock with no time of day
+    reads the previous completed session and is FLAGGED, and a session nobody
+    labelled reads `unknown`. A recap row that computed its own version of that
+    would be a second opinion about what a decision could know.
+    """
+    try:
+        import context_join
+
+        return context_join.recap_context_labels(
+            {"observed_at": observed or "", "entry_at": entered or ""},
+            labels_by_session=labels,
+        )
+    except Exception:  # noqa: BLE001 - a label never costs the row it sits on
+        return {
+            "observation": UNKNOWN,
+            "observation_certainty": "",
+            "entry": "",
+            "entry_certainty": "",
+            "entry_flagged": False,
+        }
 
 
 def _sort_key(row: RecapRow, key: str) -> tuple:
@@ -629,6 +694,9 @@ def _worked_today_view(
                 },
                 pick_key=(session_date, outcome.symbol, outcome.side, "m5"),
                 d1_environment=labels.get(outcome.trade_date, UNKNOWN),
+                # An intraday alert is the case the observation context exists
+                # for: the session's own label was not published when it fired.
+                **_observation_only(_context_labels(outcome.entry_time, "", labels)),
             )
         )
     view = RecapView(
@@ -758,6 +826,10 @@ def _recent_swings_view(
             },
             pick_key=(scan_date, symbol, side, "swing"),
             d1_environment=labels.get(scan_date, UNKNOWN),
+            # A swing scan row is decided on the session's own completed bars,
+            # so the scan DATE is handed over rather than a moment inside it:
+            # that session's label is exactly what the decision knew.
+            **_observation_only(_context_labels(scan_date, "", labels)),
             pending=is_pending,
         )
         (pending if is_pending else rows).append(row)
@@ -1084,6 +1156,16 @@ def _decision_rows(
                 detail=detail,
                 pick_key=(session_date, first.symbol, first.side, first.category),
                 d1_environment=labels.get(session_date, UNKNOWN),
+                # Both labels on a MATCHED row (WS-10I): the tape the decision
+                # was made in and the tape the fill happened in. An unmatched
+                # decision has no `trade_opened_at`, so it gets no entry label.
+                **_both_contexts(
+                    _context_labels(
+                        first.observed_at,
+                        str((joined or {}).get("trade_opened_at") or ""),
+                        labels,
+                    )
+                ),
                 occurrences=len(members),
             )
         )
@@ -1242,6 +1324,11 @@ def _rejected_that_worked_view(
                 detail=dict(row.detail),
                 pick_key=row.pick_key,
                 d1_environment=row.d1_environment,
+                observation_context=row.observation_context,
+                observation_certainty=row.observation_certainty,
+                entry_context=row.entry_context,
+                entry_certainty=row.entry_certainty,
+                entry_flagged=row.entry_flagged,
                 occurrences=row.occurrences,
             )
         )

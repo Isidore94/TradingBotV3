@@ -4405,8 +4405,21 @@ guard, red before any of this existed at `6e3854aa`) and
 `tests/test_ws_10i_context_join_build.py` (the builder's 9 for the surface seams the
 tester's file does not pin, proven red by restoring the pre-change files).
 
-**Reopen trigger.** WS-DR's Daily Recap wires `recap_context_labels` into its rows; a
-second benchmark is cut on; the trader asks for the thesis review on a screen of its own.
+### The Daily Recap's two labels
+
+WS-DR landed on the sweep branch the same day, so the wiring is here rather than owed.
+`RecapRow` keeps its own `d1_environment` - the label OF the session, which is what WS-ENV
+joined and what WS-DR's tests pin - and gains `observation_context` beside it, which is
+what the decision COULD KNOW. For an intraday row those two differ by one session and the
+difference is the point: a 10:35 alert is labelled with the previous session's tape, and
+the Environment cell's tooltip still names the session's own label so nothing is hidden. A
+matched decision carries `entry_context` from the preference report's `trade_opened_at`,
+and the cell prints `observed → entered`; an unmatched opportunity prints one label,
+because there is no fill and there is nothing to invent.
+
+**Reopen trigger.** A second benchmark is cut on; the trader asks for the thesis review on
+a screen of its own; a recap row's own `d1_environment` is reconciled with the observation
+context (a lead decision, not a builder's).
 ## The sentences CLAUDE.md moved here on 2026-09-13 (WISHLIST sweep docs pass)
 
 `CLAUDE.md` had grown to 52.0 KB against its ~45 KB limit (the 0.25 memory section and the sweep's rule lines). The 34 longest bullets were shortened to their seams and each one's ORIGINAL text is reproduced below, verbatim and unedited, in `CLAUDE.md` order. **Nothing was deleted.** Where a bullet below and the current `CLAUDE.md` differ, the shortened rule in `CLAUDE.md` is the binding one and this is the full account behind it; the incident sections elsewhere in this file remain the deeper record. The one wording change beyond shortening: the auto-tagging rule now names FOUR lanes (WS-10E's `trader_note` lane), the story under "The four auto-tagging lanes".

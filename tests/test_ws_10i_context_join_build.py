@@ -240,3 +240,91 @@ def test_the_cut_is_idempotent_and_the_page_is_the_same_twice(chosen):
     assert [
         row.line for section in first.sections for row in section.rows
     ] == [row.line for section in second.sections for row in section.rows]
+
+
+# ---------------------------------------------------------------------------
+# item 3 - the Daily Recap WIRING (WS-DR landed on the sweep branch 2026-09-13)
+# ---------------------------------------------------------------------------
+
+
+def test_the_recap_rows_carry_both_context_labels():
+    """The packet's item 3, second half: WS-DR's recap row now carries the
+    OBSERVATION context on every row and the ENTRY context beside it on a
+    matched trade - two labels, never one blended into the other, and never an
+    entry label on an opportunity nobody took."""
+    import daily_recap_reader
+
+    # The store labels 2026-09-10 and 2026-09-09; 2026-09-08 is unlabelled.
+    labels = {"2026-09-10": "bullish_strong", "2026-09-09": "neutral"}
+
+    # An intraday decision on 2026-09-10 could not know 2026-09-10's own label.
+    intraday = daily_recap_reader._context_labels("2026-09-10 10:35:00", "", labels)
+    assert intraday["observation"] == "neutral"
+    assert intraday["observation_certainty"] == "prior_session"
+    assert intraday["entry"] == ""
+
+    # A swing scan row IS decided on that session's completed bars.
+    swing = daily_recap_reader._context_labels("2026-09-09", "", labels)
+    assert swing["observation"] == "neutral"
+    assert swing["observation_certainty"] == "session"
+
+    # A matched fill carries the entry context too - 10:20 PT is 13:20 ET, which
+    # is before the close, so it reads the previous session and is NOT flagged.
+    matched = daily_recap_reader._context_labels(
+        "2026-09-10T09:50:11-07:00", "2026-09-10T10:20:00-07:00", labels
+    )
+    assert matched["entry"] == "neutral"
+    assert matched["entry_certainty"] == "prior_session"
+    assert matched["entry_flagged"] is False
+
+    # A broker file's date-only fill is flagged and takes the previous session.
+    date_only = daily_recap_reader._context_labels(
+        "2026-09-10T09:50:11-07:00", "2026-09-10 00:00:00", labels
+    )
+    assert date_only["entry_certainty"] == "date_only"
+    assert date_only["entry_flagged"] is True
+
+    # The row carries the five fields beside - never instead of - WS-DR's own
+    # session label, which answers a different question.
+    row = daily_recap_reader.RecapRow(
+        symbol="AAPL", side="LONG", source="pick_feedback", category="m5",
+        capture_id="pf-1", observed_at=None, measures={}, unavailable={},
+        detail={}, pick_key=("2026-09-10", "AAPL", "LONG", "m5"),
+        d1_environment="bullish_strong",
+        **daily_recap_reader._both_contexts(matched),
+    )
+    assert row.observation_context == "neutral"
+    assert row.entry_context == "neutral"
+    assert row.d1_environment == "bullish_strong"
+
+
+def test_the_recap_environment_cell_shows_two_labels_only_where_there_is_a_fill():
+    """The panel prints `observed -> entered` on a matched row and the
+    observation alone on an unmatched one, with the session's own label and the
+    certainties in the tooltip."""
+    from ui.panels.daily_recap_panel import DailyRecapPanel
+
+    class _Row:
+        d1_environment = "bullish_strong"
+        observation_context = "neutral"
+        observation_certainty = "prior_session"
+        entry_context = "compressed"
+        entry_certainty = "date_only"
+        entry_flagged = True
+
+    class _Unmatched(_Row):
+        entry_context = ""
+        entry_certainty = ""
+        entry_flagged = False
+
+    cell = DailyRecapPanel._cell
+    text, tip = cell(None, _Row(), "Environment", None)
+    assert text == "neutral → compressed"
+    assert "prior_session" in tip and "date_only" in tip
+    assert "bullish_strong" in tip, "the session's own label is still readable"
+    assert "not known" in tip, "a date-only fill says so"
+
+    alone, alone_tip = cell(None, _Unmatched(), "Environment", None)
+    assert alone == "neutral"
+    assert "→" not in alone
+    assert "entered in" not in alone_tip

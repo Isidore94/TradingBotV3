@@ -489,7 +489,30 @@ class DailyRecapPanel(QFrame):
                 detail.get("trade_id") or ""
             )
         if header == "Environment":
-            return str(getattr(row, "d1_environment", "")), ""
+            # Packet WS-10I: the label the decision COULD KNOW, and the one the
+            # fill happened in beside it where there is a fill. Two labels, an
+            # arrow between them, never one blended into the other - and never
+            # an entry label on an opportunity nobody took.
+            observation = str(
+                getattr(row, "observation_context", "")
+                or getattr(row, "d1_environment", "")
+            )
+            entry = str(getattr(row, "entry_context", "") or "")
+            certainty = str(getattr(row, "observation_certainty", "") or "")
+            text = f"{observation} → {entry}" if entry else observation
+            tip = f"observed in `{observation}`" + (f" ({certainty})" if certainty else "")
+            if entry:
+                entry_certainty = str(getattr(row, "entry_certainty", "") or "")
+                tip += f"; entered in `{entry}`"
+                if entry_certainty:
+                    tip += f" ({entry_certainty})"
+                if getattr(row, "entry_flagged", False):
+                    tip += " - read with care: the fill's own time is not known"
+            tip += (
+                f". The session itself was labelled `{getattr(row, 'd1_environment', '')}`, "
+                "which is published at its close."
+            )
+            return text, tip
         if header == "Status":
             return str(detail.get("status") or ""), ""
         return "", ""
