@@ -550,7 +550,18 @@ def test_the_market_journal_scope_comment_matches_the_code():
 
 def test_the_scope_behaviour_is_unchanged():
     """The comment was the defect. Whether it SHOULD be nightly is the
-    trader's decision, and this packet changed no behaviour."""
+    trader's decision, and P6 changed no behaviour.
+
+    P6's own claim is about `market_journal` and is untouched: it was already on
+    the slate and this packet only corrected the comment that denied it. The
+    tuple grew once since, and by a recorded decision rather than by drift -
+    `preference_to_trade` joined on 2026-09-12 (WS-AI1, lead decision on
+    WISHLIST 5C, the trader able to overrule: the bounded statement-to-trade
+    summary is fed "into the existing AI package", and the package that reaches
+    the trader is the unattended nightly one). Still pinned as the exact tuple,
+    here and in `tests/test_opt_in_evidence_scopes.py` and
+    `tests/test_veto_cohort_grading.py`, so a seventh cannot arrive by accident.
+    """
     from ai_jobs.briefs import DEFAULT_SCOPES
 
     assert DEFAULT_SCOPES == (
@@ -559,6 +570,7 @@ def test_the_scope_behaviour_is_unchanged():
         "setup_trackers",
         "journal_review",
         "market_journal",
+        "preference_to_trade",
     )
 
 
