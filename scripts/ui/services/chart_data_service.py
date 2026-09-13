@@ -54,7 +54,7 @@ DEFAULT_MAX_THREADS = 2
 #: widget owns its own service. The cap is UNCHANGED here deliberately - the
 #: packet did not name it and 41 MB is well inside the desk's budget - but it
 #: is now a number someone chose rather than one nobody had looked at.
-_LAST_SNAPSHOT_CAP = 60
+_LAST_SNAPSHOT_CAP = 12  # WS-CH (lead 2026-09-13): a 1,000-session snapshot is ~700 KB, so 12 is ~8 MB per service (60 was ~41 MB)
 #: Symbols whose materialized bar dicts stay resident (cached_bar_dicts). The
 #: D1 poll set is the Focus list plus whatever is armed - about 105 names on
 #: the day this was measured - so this holds it comfortably. Each entry is

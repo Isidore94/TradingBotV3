@@ -702,6 +702,38 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **The theta picks are recorded and graded (WS-TH, WISHLIST item 6, 2026-09-13, sweep
+  branch).** `scripts/theta_pick_tracker.py` records one row per `(symbol, scan_date,
+  play_type)` in `theta_picks.jsonl` (`project_paths.THETA_PICKS_FILE`) from the RUNNER right
+  after `write_theta_put_report` - the scan's own output pass, never `legacy.py`'s tracker save
+  (`legacy.py` READ, zero bytes changed). A key already present is not rewritten; a repeat
+  appearance is its own row and keeps `first_seen_scan_date`; a failed append or a malformed
+  row loses the row, never the scan. The row carries the support set as the scan built it
+  (SMA_50/100/200, never SMA_20, which `_is_valid_theta_support_entry` drops) with `held` read
+  off the LEVEL (`level <= close`) and never off `distance_atr` (clamped to 0.0 for a level up
+  to 0.05 ATR overhead); the report's own rank; both scores (`score` = the option's
+  `rank_score`, `base_score` = the support score); and the sold strike either way (`strike` for
+  a sold put, `short_strike` / `long_strike` for a PCS, never a NULL strike on a spread).
+  `grade_theta_picks` writes `master_avwap_theta_outcomes.csv`
+  (`MASTER_AVWAP_THETA_OUTCOMES_FILE`) beside the tier outcomes through temp-and-rename: held
+  above the sold strike at the EXACT 5th / 10th / 20th exchange session, `held_at_expiry` only
+  once the expiry session is complete, `mae_atr` and `first_support_broken` from the session
+  LOWS (which is why `closes_for` hands back `{date: {close, low, high}}`), only a support
+  HOLDING on the scan date can break; a session the calendar has not reached is `pending`
+  (`target_session_not_complete`), never a break; a pick with no option quote is `unmeasured`,
+  never a loss; `rs_flag` is `not_measured` (the theta score has no RS term). The overnight
+  `theta_pick_grading` slot (`scripts/ai_jobs/theta_grading.py`) is deterministic, calls no
+  model, is idempotent, and is APPENDED at the END of the deterministic stage directly after
+  `daily_digest` - both slot-order pins gained the one name in that position, nothing crossed a
+  stage. `theta_readout` builds support-combo x play-type cells with the hold rate FIRST, `n`
+  (first appearances; `repeat_days` beside it, never summed in) and the ONE Wilson bound,
+  sorted by the bound, floored on `MIN_REPORTABLE_N`; the tercile grade line reuses
+  `setup_points_evidence.Cell`'s wording and refuses under 30 per third. The Setup Tracker gains
+  a **Theta** tab (sentence above, grade line below, built once on the read worker). Shadow
+  only: nothing reaches the theta scan, score or report, a detector, an alert, a watchlist,
+  Focus, the review queue or `review_policy.json`. Tests: `tests/test_ws_th_theta_tracker.py`
+  (27), `tests/test_ws_th_theta_grading_slot.py` (5). Long form: DESK_INTERNALS "TH - the theta
+  picks are graded, never changed".
 - **One RRS pass per cycle (WS-SN3, WISHLIST item 4, 2026-09-13, sweep branch).**
   `BounceBot.run_rrs_scan` walks the universe ONCE per scan cycle and produces the 5m, 15m and
   1h payloads together, where it used to be entered four times - once per timeframe and once
@@ -887,6 +919,36 @@ They are evidence and must not be loaded as context.
 
 ### Charts, review, alerts, and phone surfaces
 
+- **The chart's bars and the chart's view are two different numbers (WS-CH, WISHLIST 10H,
+  2026-09-13, sweep branch).** `chart_snapshot.D1_HISTORY_SESSIONS` (1,000, about four NYSE
+  years) is how far back a daily payload REACHES and `D1_DEFAULT_SESSIONS` (90) is how many bars
+  it OPENS on; the durable parquet store always held the years and `build_d1_snapshot` always
+  computed indicators over the full history before slicing, so this costs one longer slice of
+  bars already in memory and NO provider request. The payload carries `oldest_available` (the
+  oldest bar drawn) and `history_truncated` (the store holds more), capped by what the store has.
+  `CandleChart.set_data(..., initial_view_sessions=N)` holds every bar and frames the tail, so
+  panning left reveals the older ones with no request; the y-range comes from the VISIBLE window
+  while the log/linear decision still asks every bar. `chart_levels.build_d1_levels` gained
+  `price_range_bars` and `ChartDataService` passes the INITIAL VISIBLE window, so
+  `horizontal_levels`' price filter and clutter budget behave exactly as before and panning does
+  not recompute levels (lead ruling). `SymbolSnapshotWidget._start_d1_backfill` is untouched by
+  design - it still sizes its stale-store catch-up off the host's `d1_sessions` (260 / 754
+  calendar days), so one chart click never asks a provider for four years. On M5 a **Load
+  older** button on the legend row adds two sessions through the same in-memory
+  `bot.m5_chart_bars(max_sessions=n)` read, capped at ten per symbol per desk session; the
+  chunks overlap so the merge CUTS at the fresh chunk's first bar, the view is preserved by
+  CANDLE identity (`visible_bar_span` / `restore_bar_span`) because older bars arrive on the
+  left, a stale symbol's result is dropped, and a raising provider costs the older bars and never
+  the chart (`older bars unavailable`). The pan-left trigger was deliberately not wired: a pan
+  that fetches is a fetch on the paint path. `provenance_state` prints `D1 back to <date>` with
+  `(more behind)`. H1/H4 were NOT built - the desk draws neither (the H4 resampler is
+  `resample_intraday_bars_to_4h` at `legacy.py:28235`, read only). A consequence: the shadow
+  AVWAP band challenger lines now draw for anchors older than 90 sessions, correctly anchored
+  (display only). Measured: 1,000 candles + 14 overlays cost `set_data` 24-31 ms and a paint
+  15-22 ms; one built snapshot is 701 KB against 75 KB at 90 sessions, so
+  `chart_data_service._LAST_SNAPSHOT_CAP` (60) means ~41 MB per chart service - documented, cap
+  unchanged, the trader may lower it. Tests: `tests/test_ws_ch_chart_history.py` over the
+  1,300-session golden `tests/fixtures/ws_ch_chart_history_v1.json`.
 - **The alert feed diffs itself instead of rebuilding (WS-SN4, WISHLIST item 4, 2026-09-13,
   sweep branch).** `ui/panels/alert_center_panel.py` states what the feed should look like ONCE,
   in `_feed_target_rows`, and both paths read it: `_sync_feed` reconciles the rows on screen
@@ -2302,6 +2364,19 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   `claude/ws-j1-journal-splitter` `9ae8d6d0` (sonnet builder): `_apply_splitter_ratio` on
   show/resize until the trader drags; the tag-review note label pinned vertically Fixed. The
   lead re-verified its 6 tests. Gate #105.
+- **WS-TH (WISHLIST item 6) - a Setup Tracker for the theta plays**, branch
+  `claude/ws-th-theta-tracker-build` `ee676ae5`: `scripts/theta_pick_tracker.py` (recorder,
+  grader, readout), the runner hook after `write_theta_put_report`,
+  `scripts/ai_jobs/theta_grading.py` at the END of the deterministic stage, a Theta tab on the
+  Setup Tracker, `THETA_PICKS_FILE` / `MASTER_AVWAP_THETA_OUTCOMES_FILE`. `legacy.py` read only.
+  27 tester tests + 5 builder-added. Suite 7421 green, ruff clean, smoke 7/7, selftest 75/75.
+  Gate #106.
+- **WS-CH (WISHLIST 10H) - more chart history without making the desk slow**, branch
+  `claude/ws-ch-chart-history-build` `91bc7480`: `D1_HISTORY_SESSIONS` 1,000 reached with a
+  90-session opening view, `oldest_available` / `history_truncated`, `initial_view_sessions` on
+  the chart, levels computed for the opening window, **Load older** on M5 (+2 sessions, cap 10,
+  view kept by candle identity), the provenance strip's `D1 back to`. H1/H4 not drawn by the
+  desk, so not built. Suite 7410 green, ruff clean, smoke 7/7, selftest 75/75. Gate #107.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
