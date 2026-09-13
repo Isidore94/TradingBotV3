@@ -3492,3 +3492,103 @@ PIXELS for the exact token, because "bright red" is a claim about what the trade
 
 **Reopen trigger.** A new capture verb joins the decision family; the trader asks for a
 third mark or for one of the two to mean something else.
+
+## 10A - last scan, latest bar and shown report are three clocks (2026-09-12, WISHLIST sweep)
+
+**The rule in CLAUDE.md.** Every Master AVWAP scan writes
+`master_avwap_scan_manifest.json` and one append-only line to
+`master_avwap_scan_manifest_history.jsonl` (`scripts/master_avwap_lib/scan_manifest.py`,
+`project_paths` constants, temp + rename) recording three separate clocks: **when the scan
+ran** (`started_at` / `finished_at`, aware market-local), **how fresh its INPUT bars were**
+(`latest_input_bar_session` + `preview_bar_used`), and **what it published** (`outputs`, one
+entry per file with its row count). `status` is `ok` only when the scan reached its whole
+universe, `partial` when it RETURNED having fetched fewer symbols than `universe_size`, and
+`failed` when it raised - and a failed scan **touches no output file**, so the last good
+report keeps its bytes AND its mtime. `freshness_line` builds one sentence from that
+manifest and the report's mtime; the Setups status row and the System Health check
+`master_scan_freshness` print the SAME sentence. `scripts/master_avwap_lib/scan_replay.py`
+replays one session for one symbol from the dated copies and reconstructs nothing.
+
+**Why.** The trader's report (WISHLIST 10A): *"the strongest Master AVWAP updates seem to
+arrive in the final hour or at EOD, even when the app says it updated earlier"*, and *"a
+recent file timestamp proves neither fresh input bars nor good discovery"*. That is two
+complaints wearing one coat, and the desk could answer neither. The Setups panel showed
+`Last run: <stamp>`, written only by `_on_scan_finished` - so after a failed scan, or after
+any restart, it said nothing at all about what was on screen, and the old report sat there
+looking current. `Setups as of <date>` came from the report's own contents, not from the
+scan. Nothing anywhere said whether the daily bars behind a 12:31 report were Thursday's
+completed ones or today's forming preview. `run_result` was an in-memory dict (`runner.py`)
+that died with the process.
+
+**The three clocks, and why they are three.** A 12:31 report built from Thursday's bars is
+correct and current; a 12:31 report built from a forming Friday bar is a preview; a 12:31
+report that is really Tuesday's file, kept because Wednesday and Thursday both failed, is
+a trap. One timestamp cannot tell those apart, and every single one of them is a different
+trade. So the strip says all three:
+
+```
+Scan ok 12:31 · inputs through Thu 09-10 (D1 complete) · shown: 12:31 report
+Scan ok 11:05 · inputs through Wed 11-25 · inputs: today preview · shown: 11:05 report
+Scan partial 12:31 (940 of 1097 symbols) · inputs through Thu 09-10 (D1 complete) · shown: 12:31 report
+Scan FAILED 13:02 · showing 12:31 report (stale)
+Scan: not recorded yet · no report
+```
+
+**Which session counts as complete is the calendar's answer, not a date comparison.**
+`input_bar_freshness` asks WS-FC1's `daily_bar_cache.last_completed_session` **once per
+scan** (the 2026-09-03 freeze was an uncached calendar at 84% of the GIL samples; a
+per-symbol question over 1,097 frames would put it back) and then classifies every frame
+against that one answer. A frame whose newest row is dated an incomplete session sets
+`preview_bar_used` and contributes its newest COMPLETED row instead - so a forming bar is a
+labelled preview and never moves `latest_input_bar_session`, which is plan.md sec 5's
+completed-bars rule spelled for a manifest. `market_calendar` models no early closes, so the
+half day after Thanksgiving is a preview until 16:00 ET: conservative in the only direction
+that matters.
+
+**Two clocks, deliberately spelled apart.** `freshness_line` renders every stamp **in the
+offset the stamp itself carries** and never re-converts it, so a manifest written at 12:31
+New York prints 12:31 on a Pacific desk - "when did the scan run" is a question about the
+desk. The replay's four checkpoint windows (`open < 11:00`, `midday [11:00, 15:00)`,
+`final hour [15:00, 16:00)`, `close >= 16:00`) are the opposite question - where in the
+MARKET's day a scan landed - and convert to **exchange** time for that reason alone.
+Without the conversion a Pacific 09:58 stamp (12:58 in New York, squarely midday) would be
+filed under the open, and the trader's own "it arrives in the final hour" claim would be
+answered with the wrong checkpoint every day. Pinned by
+`tests/test_ws_10a_scan_freshness_builder.py`.
+
+**The dated copies exist because the desk kept none.** The priority report is overwritten by
+every scan, so there was no historic snapshot for the replay to read and the discovery half
+of the brief was unanswerable. The smallest useful copy per PUBLISHING scan now lands in
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\scan_reports\<YYYY-MM-DD>_<HHMM>.json` - run id,
+status, `finished_at`, `latest_input_bar_session`, `preview_bar_used` and one
+`{symbol, side, bucket}` row per published row. A FAILED scan gets no copy: a snapshot
+listing zero rows would read to the replay as "the name was not in the report", which is a
+reconstruction. The cap is `REPORT_COPY_RETENTION_SESSIONS` (30) counted as the 30 most
+recent **distinct dates**, not the newest 30 files - counting files would let one busy
+Friday evict the week before it, shortening the window exactly when there is most to look
+at.
+
+**The replay refuses rather than reconstructs.** A checkpoint with no recorded copy prints
+`open · no recorded snapshot` and nothing else, and a day that recorded nothing prints
+`delay unmeasured` instead of a number. Re-running today's scanner over an old session would
+answer with today's data and today's code; the brief asks for the missing proof to be
+labelled, not filled in. When both are recorded the summary names first eligibility (the
+first snapshot carrying the name in ANY bucket), first publication (the first carrying it in
+`favorite_setup`) and the delay in minutes - the number the trader is actually asking for.
+
+**Never on paint.** The manifest is read by `_ScanFreshnessWorker` off the Qt thread, started
+from the EXISTING `refresh_from_reports` path. The Qt thread does two `stat` calls first
+(`_scan_freshness_signature`) and starts no worker when neither file moved, because the
+report watcher fires that refresh several times around a scan and a second worker racing the
+first is how "never on paint" quietly becomes "usually not on paint".
+
+**`legacy.py` diff is ZERO.** This packet carried no trader yes for the ask-first file, so
+the manifest is a new module called from `runner.run_master` - the wrapper that already owns
+both the success and the failure branch. `record_scan` never raises: an evidence store may
+not cost the thing it records (plan.md sec 5), and a scan that produced a good report must
+not be turned into a failure by a full disk.
+
+**Reopen trigger.** The trader asks for a fourth checkpoint or different window boundaries;
+a second process starts publishing the priority report (the manifest assumes one writer per
+report); the dated copies are asked to carry more than symbol/side/bucket, which is the
+point at which their size stops being free.
