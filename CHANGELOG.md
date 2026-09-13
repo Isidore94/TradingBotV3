@@ -702,6 +702,29 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **One RRS pass per cycle (WS-SN3, WISHLIST item 4, 2026-09-13, sweep branch).**
+  `BounceBot.run_rrs_scan` walks the universe ONCE per scan cycle and produces the 5m, 15m and
+  1h payloads together, where it used to be entered four times - once per timeframe and once
+  more for whichever the GUI had selected - each entry re-walking the universe and rebuilding
+  every symbol's O(n^2) `_build_intraday_rrs_profile` from the same 5-minute bars (275 s of CPU
+  per cycle on 2026-09-08, on the interpreter lock the GUI needs). Everything
+  timeframe-independent is measured once; aggregation, alignment and RRS run per timeframe
+  inside the walk. `RRS_CYCLE_TIMEFRAME_KEYS` is `("5m", "15m", "1h")` and a 30m GUI selection
+  joins the same walk. `rrs_payload_for(timeframe_key)` is the new seam and `latest_rrs_payload`
+  IS the GUI timeframe's entry (the same object), so one `rrs_snapshot` reaches
+  `rrsSnapshotChanged` per cycle; `_intraday_rrs_profile_for_cycle` caches the profile on the
+  SYMBOL's last bar dt (SPY gaining a bar the symbol did not print cannot move it), today's rows
+  only, pruned to the scanned universe. Reference-ETF bars are bucketed once per (ETF, timeframe)
+  per cycle and the industry map is read from memory instead of re-read per symbol per pass. No
+  formula, threshold, universe, ETF alignment or output field changed: the payloads are
+  BYTE-IDENTICAL to the four-pass recording `tests/fixtures/ws_sn3_rrs_four_pass.json` made on
+  the pre-SN3 code at 204f4640 (never regenerate it; its contract metadata was added without
+  touching the recording). Deliberately kept: `_record_environment_focus_history` still runs
+  four times a cycle because its `hit_count` feeds `bouncebot.*_hit_count`, a scoring input;
+  dropping the now-duplicate fourth call is an ask-first for the trader with golden fixtures
+  first. Write-only diagnostics (`rrs_strength_scan.csv`, `rrs_group_strength.csv`, the industry
+  map's `seen_count`) lose their duplicate blocks. Tests: `tests/test_ws_sn3_one_rrs_pass.py`,
+  `tests/test_ws_sn3_fixture_contract.py`.
 - **A forming bar never reaches the daily-bar cache (WS-FC1, WISHLIST item 2, 2026-09-12, sweep
   branch).** `scripts/master_avwap_lib/daily_bar_cache.py` holds the rule both CSV writers now
   route through (`legacy._write_cached_daily_bar_frame` and
@@ -1201,6 +1224,17 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **The Journal's Trades splitter opens at its declared 3:2 and the tag-review row no longer
+  eats the tab (WS-J1, WISHLIST item 1 leftover, 2026-09-13, sweep branch).** Two layout defects
+  in `scripts/ui/panels/journal/trades_tab.py`: the `QSplitter` declared `setStretchFactor` 3:2
+  but never `setSizes`, so the opening split came from the children's size hints (measured
+  1347 / 2105, the trader's 39/61) - `showEvent` / `resizeEvent` now call `_apply_splitter_ratio`
+  until the trader's own drag (`splitterMoved`) sets `_splitter_user_sized` and the tab stands
+  down for the desk session, nothing persisted; and `tag_filter_note` (an empty label) kept Qt's
+  default `Preferred` vertical policy as the row's only growable item, so the ROW absorbed ~960 px
+  of a 2,160 px tab above an empty table (the blank band) - pinned `(Preferred, Fixed)`. Layout
+  only: no number, sort, read or write moved (golden headers/row-count pinned). Tests:
+  `tests/test_ws_j1_journal_splitter.py` (6).
 - **The Weekend Prep verdict card's two cohort lines read NUMBERS** (WS-5A,
   2026-09-12; `scripts/weekend_verdict.py` + `scripts/ui/panels/weekend_prep_panel.py`).
   Neither line had ever printed a cohort: `best_cohort_line` read `avg_r_h3` /
@@ -2259,6 +2293,15 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   ×N badges re-stamped from `repeat_counts()`, `AlertFeedItem.apply_focus_state`; a veto 220 ms
   -> 8.5 ms, a focus flush 224 ms -> 6.2 ms offscreen. Suite 7401 green (one tester assertion
   corrected by the lead), ruff clean, smoke 7/7, selftest 75/75. Gate #103.
+- **WS-SN3 (WISHLIST item 4) - one RRS pass per cycle**, branch `claude/ws-sn3-one-rrs-pass-build`
+  `ca1c1a6e`: one universe walk producing 5m/15m/1h, `rrs_payload_for`, the per-symbol profile
+  cache keyed on the last bar's dt, ETF bars bucketed once per timeframe, the industry map read from
+  memory; byte-identical to the four-pass golden recorded at 204f4640. Builder's suite 7394 green
+  but for the fixture-contract test it then fixed (the lead re-verified 57 targeted tests). Gate #104.
+- **WS-J1 (WISHLIST item 1 leftover) - the Journal's Trades splitter and the blank band**, branch
+  `claude/ws-j1-journal-splitter` `9ae8d6d0` (sonnet builder): `_apply_splitter_ratio` on
+  show/resize until the trader drags; the tag-review note label pinned vertically Fixed. The
+  lead re-verified its 6 tests. Gate #105.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
