@@ -94,6 +94,12 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # R1 amendment: the AWAY day's return surface.
     "away_recap",
     "ui.panels.away_recap_panel",
+    # WS-DR: the Daily Recap that took the nav slot. `ui.panels.daily_recap_panel`
+    # is a top-level import in `ui.app` and needs no entry; the READER is
+    # imported by name inside `_RecapReadWorker.run`, which is the same lazy
+    # shape `away_recap` is listed for - a bundle missing it would launch and
+    # then fail the first time the trader opened the page.
+    "daily_recap_reader",
     # WISHLIST 10J: the Trade Mentor. Every one of these is reached through a
     # FUNCTION-LEVEL import - `ui.app` imports the service inside `__init__`,
     # the service imports `user_presence` inside its own, and both the window

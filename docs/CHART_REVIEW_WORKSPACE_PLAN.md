@@ -633,3 +633,22 @@ processed by the bot eventually."*
 Everything in this file's hard boundary holds unchanged. Nothing written here
 mutes, suppresses, scores, gates, ranks or alerts, and `review_policy.json` still
 has no suppression field.
+
+## 12. Where those captures are read back (WISHLIST 10F, packet WS-DR, 2026-09-13)
+
+The Daily Recap page (`scripts/ui/panels/daily_recap_panel.py`, over
+`scripts/daily_recap_reader.py`) is the first surface that reads this file's
+captures back to the trader as the day they were made in, and it changes nothing
+here: it opens `trader_annotations.jsonl` and the pass sidecars READ-ONLY, writes
+nothing, mutes nothing and reaches no detector, score, alert, watchlist, Focus,
+review queue or `review_policy.json`. It keeps every distinction this document
+draws — a quick like and a claimed like are separate rows, a note is neither an
+endorsement nor a rejection and appears in neither, one pass carrying two reason
+codes is ONE decision whose cohorts are never summed, `unfavorite` is never
+graded, and a coded veto's `reason_code` travels as the trader's own words rather
+than being re-resolved. Two clicks on one opportunity link into one row with an
+occurrence count, and the credit starts at the FIRST click: a like taken at 12:30
+is never credited with the 10:00 high, and where the pass sidecar makes the
+timing knowable the post-decision excursion is measured from the last completed
+bar at the decision instead. A row click charts through `show_board_symbol`, so a
+recap row is a board look and never a re-queue.

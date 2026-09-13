@@ -166,8 +166,11 @@ def test_focus_picks_is_top_level_app_page():
         # into a diary.
         "Market Journal",
         # R1 amendment 2026-08-24: the AWAY day's return surface, which
-        # replaced a 317-item chart review queue.
-        "AWAY Recap",
+        # replaced a 317-item chart review queue. WS-DR (WISHLIST 10F,
+        # 2026-09-13) took the slot for EVERY Auto mode and renamed it: the
+        # page now reads the day from the durable stores rather than from this
+        # process's alert list.
+        "Daily Recap",
         # R8 registered Weekend Prep next to Journal: the weekend routine reads
         # the journal the walk-away and auto-tag steps depend on.
         "Weekend Prep",
