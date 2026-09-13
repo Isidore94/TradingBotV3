@@ -30,6 +30,7 @@ Nothing here may be weakened; only added to.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -581,7 +582,7 @@ def test_the_digest_order_is_untouched_by_the_tag():
     symbols = [
         line.split(". ", 1)[1].split(" ", 1)[0]
         for line in _swing_lines(text)
-        if line[:1].isdigit()
+        if re.match(r"^\d+\. ", line)
     ]
     assert symbols == ["WRONGL", "RIGHTL", "WRONGS"]
     assert "TV paste: WRONGL,RIGHTL,WRONGS" in text
