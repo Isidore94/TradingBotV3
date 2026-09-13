@@ -702,6 +702,32 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **The M5 window is fetched whole once a day, then extended (WS-SN2, WISHLIST item 4,
+  2026-09-13, sweep branch).** `BounceBot.request_and_detect_bounce`
+  (`scripts/bounce_bot_lib/legacy.py`) asked IB for `durationStr="5 D"` of 5-minute bars for
+  every symbol on every cycle - ~390 bars a symbol, ~120 MB and ~230,000 rows a 25-minute cycle
+  on the interpreter lock the GUI needs. It now fetches the whole window ONCE per symbol per
+  market-local day, keeps the raw rows (`_sn2_bar_windows`), and every later cycle asks only for
+  the bars since the last completed one (`"<n> S"` reaching `SN2_DELTA_MARGIN_SECONDS` past the
+  gap so the overlap bar returns) and merges them: measured 342 bars on the first cycle and 7
+  per cycle after (49x fewer). The frame the detectors read is the frame a fresh `5 D` fetch
+  would have produced - same rows, order, dtypes and index (the merged raw rows go through the
+  unchanged `pd.DataFrame(all_bars)`; the `len(all_bars) < 10` guard judges the MERGED result) -
+  pinned by `tests/fixtures/ws_sn2_fresh_frames.json`, recorded on the pre-SN2 code at
+  b8bdec24. The window is refetched WHOLE on the market-local day roll, on an overlap bar whose
+  dt or close moved (`_sn2_same_bar`), on a delta that never reached the kept last bar or that
+  carries a session the window does not have, on a gap of a day or more, and on unreadable or
+  out-of-order rows. **A bar that was still forming when served never enters the kept window**
+  (`completed_bars.is_completed_bar`), so a preview price can never be merged into a later frame
+  as final; the packet's literal alternative - refetch the whole window on a forming tail - is
+  one constant away (`SN2_FORMING_TAIL_FORCES_REFETCH`, False by lead decision because IB's
+  `endDateTime=""` ALWAYS serves a forming last bar, so that rule would refetch every cycle and
+  SN2 would save nothing; the tester's assertion was corrected to the shipped invariant).
+  `_prune_latest_bars_for_cycle(scanned_symbols=...)` bounds the cache by the scanned set and
+  `_sn2_log_cycle_fetch` writes one line per cycle naming full windows against deltas. Steady
+  cost ~90-100 MB of kept rows in place of the same amount churned every cycle. Nothing below
+  the fetch changed. Tests: `tests/test_ws_sn2_incremental_bars.py`,
+  `tests/test_ws_sn2_incremental_bars_builder.py`.
 - **Last scan, latest input bar and shown report are three clocks (WS-10A, WISHLIST 10A,
   2026-09-13, sweep branch).** Every Master AVWAP scan writes `master_avwap_scan_manifest.json`
   and one append-only line to `master_avwap_scan_manifest_history.jsonl`
@@ -2549,6 +2575,13 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   `like_mode` / `verdict_family` / `match_state` at the end of the columns (schema v2, first 19
   byte-identical), `n_statements_by_family`, a degraded-not-skipped unreadable journal, Weekend
   Prep's tenth view "Said no". Suite 7487 green, ruff clean, smoke 7/7, selftest 75/75. Gate #112.
+- **WS-SN2 (WISHLIST item 4) - the M5 window is fetched once a day, then extended**, branch
+  `claude/ws-sn2-incremental-bars-build` `dddcd9b4`: kept raw windows, `"<n> S"` deltas with an
+  overlap bar, whole-window refetch on the day roll / a moved overlap bar / a gap, forming bars
+  never kept (`SN2_FORMING_TAIL_FORCES_REFETCH = False` by lead decision - IB always serves a
+  forming last bar), one fetch line per cycle; 342 bars then 7 per cycle. The lead corrected one
+  tester assertion to the shipped invariant. Suite 7718 green but for that one, ruff clean,
+  smoke 7/7, selftest 80/80. Gate #113.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
