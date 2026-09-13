@@ -864,6 +864,28 @@ They are evidence and must not be loaded as context.
 
 ### Charts, review, alerts, and phone surfaces
 
+- **The board's picks reach the scan, and every row says why not (WS-10B, WISHLIST 10B,
+  2026-09-12, sweep branch).** The DESK chain was traced and is PINNED end to end by
+  `tests/test_ws_10b_board_to_scan.py`: board publication -> rows with an empty `failed_floors`
+  -> the ONE adoption gate -> `FocusPickStore.add_many` -> the `focus_auto_picks.json` marker ->
+  `_inject_into_shared` (appends only when absent, so a refresh appends nothing and a
+  trader-typed line is never touched) -> `longs.txt` / `shorts.txt` -> `BounceBot.get_scan_symbol_set`,
+  rebuilt from those files every cycle, so an adopted name is scanned on the NEXT cycle without
+  a restart. **AWAY was the broken link** - it neither adopted nor staged - and now STAGES the
+  eligible rows through the queue's existing owner (`autopilot_core.stage_auto_populate_candidates`:
+  one lock, one file, the per-side cap, a name already listed or decided today skipped) with
+  `gate_bar_end` left EMPTY so `pending_pick_gate_ok` refuses until the DESK flip's
+  re-verification measures it; EVENING and OFF do nothing and nothing new polls. Every board row
+  carries an `adoption` verdict written where `_auto_adopt_strength_board` decides - `adopted` /
+  `already_in_focus` / `staged (AWAY)` / `not today` / `declined today` / `mode EVENING` /
+  `mode OFF` / `not adopted: floor <what it missed>` / `not adopted: <the gate's reason
+  verbatim>` - rendered as the LAST column of both side tables, `Scan`: text only, no colour
+  vote, NOT sortable (a scan list re-ordered by how the machine answered is not the trader's
+  ranking); a row with no verdict is BLANK. One INFO line per refresh: `Strength board: N rows,
+  A adopted, S staged, R not adopted (reasons: ...)`. Scanner inclusion and Focus adoption stay
+  DISTINCT: nothing scans a row the gate refused. `FocusPickStore.shared_watchlist_path()` is
+  the accessor the staging call uses. Two private helpers (`_stage_strength_board_picks`,
+  `_publish_strength_board_adoption`) serve only that one function in the alert file.
 - **The setups table's two mark columns state the day's decisions (WS-SX, WISHLIST item 8,
   2026-09-12, sweep branch).** `scripts/pick_feedback.py` `decisions_today` / `DayDecisions`,
   `scripts/ui/widgets/setup_delegate.py` `set_decision_lookup`,
@@ -2010,6 +2032,35 @@ They are evidence and must not be loaded as context.
 
 ### Shadow challengers
 
+- **D1 market environments, labelled per session and cut in the readouts (WS-ENV, WISHLIST item
+  7, 2026-09-12, sweep branch).** One label per session per benchmark, decided ONCE by the pure,
+  versioned rule `d1_environment_v1` in `scripts/indicators/d1_environment.py`
+  (`classify_environment`): fewer than 34 completed daily bars is `unknown/warmup`; an
+  unmeasurable ATR14 is `unknown/unmeasurable`; `range_atr <= 3.0` is `compressed` - tested
+  FIRST, so a quiet uptrend inside a three-ATR box is compressed, not trending; then `slope_atr`
+  beyond +/-0.5 ATR with the close on the same side of SMA20 is `trending_up` / `trending_down`;
+  else `mixed`. ATR14 is Wilder at the last bar over the WHOLE supplied series
+  (`indicators.atr.wilder_atr`), pinned by a hand-computed golden over 184 recorded SPY
+  sessions. `scripts/d1_environment_store.py` appends one JSONL row per `(session, benchmark,
+  rule_version)` to `project_paths.D1_ENVIRONMENT_FILE`: never rewritten, a new rule version
+  written BESIDE the old one, each benchmark its own row, `written_at` aware and market-local,
+  `labels_by_session` one mtime-cached read, every failure swallowed.
+  `runner.record_d1_environment` runs as a sibling of `bridge_earnings_anchor_caches_to_csv`,
+  fetches SPY/QQQ/IWM through the SAME pinned `fetch_daily_bars`, drops the forming bar through
+  `completed_bars`, and logs `D1 environment: SPY=.. QQQ=.. IWM=.. (d1_environment_v1, bars
+  through <session>)`; a failure never fails the scan. `scripts/d1_environment_join.py`
+  `attach_environment` joins on `scan_date` - the tape the decision was made in, never the exit
+  - in place, on one store read. Research > Results gains "By environment (SPY,
+  d1_environment_v1)" under Bot x Swing only: win rate first with `n` and the ONE Wilson bound,
+  sorted by the bound, the `MIN_REPORTABLE_N` floor labelling a row and never hiding it,
+  `unknown` its own row pooled into nothing, no verdict line because it names no leader, and the
+  champion sections byte-identical. The window is `ENVIRONMENT_WINDOW_SESSIONS` (6 x
+  `LATELY_SESSIONS` = 120), declared because 20 sessions of SPY is usually one environment.
+  `python -m d1_environment_store backfill` is dry by default and prints `DATA_DIR` first.
+  Shadow only - nothing reaches a detector, score, alert, watchlist, Focus, the review queue or
+  `review_policy.json`, and no `legacy.py` line changed. Tests:
+  `tests/test_ws_env_d1_environment.py` (35) + `tests/test_ws_env_d1_environment_builder.py`
+  (5); rule in DESK_INTERNALS "ENV - one D1 environment label per session, joined by scan date".
 - **Exit frameworks, split by setup family (WS-EF1, WISHLIST item 3, 2026-09-12, sweep
   branch).** `master_avwap_exit_framework_by_family.csv` is written beside
   `master_avwap_exit_framework_stats.csv` in the same guarded tracker save pass, by the SAME
@@ -2170,6 +2221,16 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   reader defects fixed), a Trades-detail reader, the `preference_to_trade` scope (7,668 chars on
   the live report copy, 48% of its source cap) joining the nightly slate by lead decision. Suite
   7328 green, ruff clean, smoke 7/7, selftest 74/74. Gate #100.
+- **WS-10B (WISHLIST 10B) - the board's picks reach the scan and every row says why not**,
+  branch `claude/ws-10b-board-to-scan-build` `a1b9fccd`: the DESK chain traced and pinned end to
+  end (it was intact), AWAY staging built at `stage_auto_populate_candidates` (it was the broken
+  link), the per-row `adoption` verdict as the board's `Scan` column, one log line per refresh.
+  Suite 7380 green, ruff clean, smoke 7/7, selftest 75/75. Gate #101.
+- **WS-ENV (WISHLIST item 7) - D1 market environments**, branch `claude/ws-env-d1-environment`
+  `bb4b8dc0`: the pure versioned rule `d1_environment_v1` with a 184-session hand-computed golden,
+  the append-only store, the runner hook beside the anchor bridge, the backfill CLI (dry run: SPY
+  33/69/43/27/12), the scan-date join and the "By environment" section on Research > Results.
+  Suite 7404 green, ruff clean, smoke 7/7, selftest 75/75. Gate #102.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 
