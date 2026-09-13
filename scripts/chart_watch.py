@@ -19,7 +19,8 @@ calibrated to.
 
 import json
 import os
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -36,7 +37,23 @@ WATCH_KINDS = {
     "lod_avwap": "LOD AVWAP",
     "vwap_bounce": "VWAP bounce",
     "band_bounce": "σ-band bounce",
+    "h1_ema_bounce": "H1 retester",
 }
+
+#: WISHLIST 10C. The trader picks a weekly-pattern name and then waits for a
+#: better entry: the hourly chart coming back to its 15-EMA and holding it.
+H1_EMA_BOUNCE_KIND = "h1_ema_bounce"
+
+#: Watch kinds that are NOT session-scoped. Every other kind on this surface
+#: dies at midnight because it is a statement about today's tape ("a new high
+#: for the session"); the H1 retester is a statement about a multi-day
+#: pattern and is given ten TRADING days by `armed_alert_expiry`, so it
+#: survives a desk restart and tomorrow's date roll. One name, three readers:
+#: `load_chart_watches` (which otherwise drops the whole file on a market-date
+#: mismatch), `watch_is_stale` (which the panel's M5 poll uses to retire), and
+#: the armed inventory's health column. A kind in here also belongs on the D1
+#: armed-event feed rather than the session M5 list.
+PERSISTENT_WATCH_KINDS = frozenset({H1_EMA_BOUNCE_KIND})
 
 # The σ-band button mirrors the day-trade tracker's measured M5 winners:
 # long = dynamic_vwap_upper_band (ride above +1σ, dip-tag it, reclaim),
@@ -123,6 +140,14 @@ class ChartWatch:
     side: str = "WATCH"
     baseline: float | None = None
     source_text: str = ""
+    #: Stable identity for this ARM, so a fire can be de-duplicated on the
+    #: phone and a disarm/re-arm is unambiguously a new episode rather than a
+    #: second chance at the old one. Blank on every row written before
+    #: WISHLIST 10C - absent is blank, never an error.
+    watch_id: str = ""
+    #: What the trader is waiting for, in their own words, for the armed
+    #: inventory to print back at them.
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -135,6 +160,9 @@ class ChartWatchTrigger:
     # bounce kinds a WATCH-side watch can hit either way; "" when the watch's
     # own side already says it.
     resolved_side: str = ""
+    # Measured facts the hosting panel copies onto the fired alert's payload.
+    # Empty for every kind whose message already says everything it measured.
+    details: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _naive(moment: datetime) -> datetime:
@@ -213,18 +241,40 @@ def arm_chart_watch(
         baseline = max(float(bar["high"]) for bar in session)
     elif kind == "new_lod" and session:
         baseline = min(float(bar["low"]) for bar in session)
+    resolved_side = side if side in ("LONG", "SHORT") else "WATCH"
     return ChartWatch(
         symbol=str(symbol or "").strip().upper(),
         kind=kind,
         armed_at=moment,
-        side=side if side in ("LONG", "SHORT") else "WATCH",
+        side=resolved_side,
         baseline=baseline,
         source_text=str(source_text or ""),
+        watch_id=uuid.uuid4().hex,
+        reason=watch_reason(kind, resolved_side),
     )
 
 
+def watch_reason(kind: str, side: str) -> str:
+    """What the trader is waiting for, for the armed inventory to print back.
+
+    Only the kinds whose condition is not already obvious from their label and
+    baseline carry one; everything else keeps the blank it has always had.
+    """
+    if kind == H1_EMA_BOUNCE_KIND:
+        label = side if side in ("LONG", "SHORT") else "EITHER SIDE"
+        return f"waiting for an H1 15-EMA bounce ({label})"
+    return ""
+
+
 def watch_is_stale(watch: ChartWatch, *, now: datetime | None = None) -> bool:
-    """A watch never survives into the next session."""
+    """A session watch never survives into the next session.
+
+    A PERSISTENT kind does: it is a statement about a multi-day pattern, not
+    about today's tape, and its life is counted in trading days by
+    `armed_alert_expiry` instead.
+    """
+    if str(getattr(watch, "kind", "") or "") in PERSISTENT_WATCH_KINDS:
+        return False
     moment = _naive(now or datetime.now())
     return _naive(watch.armed_at).date() != moment.date()
 
@@ -250,7 +300,80 @@ def evaluate_chart_watch(
         return _evaluate_vwap_bounce(watch, completed)
     if watch.kind == "band_bounce":
         return _evaluate_band_bounce(watch, completed)
+    # The H1 retester is deliberately absent: it is not a session-scoped M5
+    # condition and is evaluated once per COMPLETED H1 BAR by
+    # `evaluate_h1_bounce_watch` below, from the same cached M5 bars.
     return None
+
+
+#: The ATR the H1 rule measures its distances in (Wilder, on H1 bars).
+H1_ATR_LENGTH = 14
+
+
+def evaluate_h1_bounce_watch(
+    watch: ChartWatch,
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+):
+    """Run `h1_ema_bounce_v1` against the desk's cached M5 bars.
+
+    Returns the rule's own `H1Bounce` (or `None` when nothing is measurable):
+    the CALLER decides what a verdict costs, because a confirmation and an
+    invalidation both end the watch but only one of them is an event worth a
+    phone buzz.
+
+    Cost, since this runs on the Qt thread inside the 60 s armed poll: one
+    O(bars) pass to bucket ~1,100 cached M5 dicts into H1, one O(bars) ATR and
+    one O(bars) EMA over the ~55 resulting bars, per armed H1 watch. Nothing
+    is fetched and nothing is written; the M5 dicts are already materialised
+    by `_m5_bars_for`.
+
+    A WATCH-side arm (the chart had no side) is evaluated BOTH ways and the
+    first confirmation wins - the same courtesy the VWAP and σ-band kinds
+    already extend. It is never invalidated, because a close a full ATR
+    through the line is the other side's setup, not this one's failure.
+    """
+    from indicators.atr import wilder_atr
+    from indicators.h1_ema_bounce import REASON_INVALIDATED, closed_h1_bars, evaluate
+
+    h1_bars = closed_h1_bars(m5_bars)
+    if not h1_bars:
+        return None
+    atr = wilder_atr(h1_bars, H1_ATR_LENGTH)
+    sides = (
+        (watch.side,) if watch.side in ("LONG", "SHORT") else ("LONG", "SHORT")
+    )
+    results = [
+        result
+        for result in (evaluate(h1_bars, side, atr=atr, now=now) for side in sides)
+        if result is not None
+    ]
+    if not results:
+        return None
+    for result in results:
+        if result.fired:
+            return result
+    live = [result for result in results if result.reason != REASON_INVALIDATED]
+    return live[0] if live else results[0]
+
+
+def h1_bounce_message(watch: ChartWatch, result) -> str:
+    """The one line the alert, the phone and the decision log all read."""
+    side = str(getattr(result, "side", "") or "").upper() or watch.side
+    touch = getattr(result, "touch_bar_dt", None)
+    confirm = getattr(result, "confirm_bar_dt", None)
+    when = ""
+    if isinstance(touch, datetime) and isinstance(confirm, datetime):
+        when = (
+            f" - tagged {touch.strftime('%m/%d %H:%M')}, "
+            f"reclaimed {confirm.strftime('%m/%d %H:%M')}"
+        )
+    distance = getattr(result, "distance_atr", None)
+    how_close = f" ({distance:.2f} ATR off the line)" if distance is not None else ""
+    return (
+        f"{watch.symbol} {side}: H1 15-EMA retest confirmed{when}{how_close}"
+    )
 
 
 def _evaluate_extreme(
@@ -483,6 +606,8 @@ def chart_watch_to_dict(watch: ChartWatch) -> dict:
         "side": watch.side,
         "baseline": watch.baseline,
         "source_text": watch.source_text,
+        "watch_id": watch.watch_id,
+        "reason": watch.reason,
     }
 
 
@@ -508,6 +633,9 @@ def chart_watch_from_dict(payload: Mapping[str, Any]) -> ChartWatch | None:
         side=side if side in ("LONG", "SHORT") else "WATCH",
         baseline=baseline,
         source_text=str(payload.get("source_text") or ""),
+        # Absent on every row written before WISHLIST 10C: blank, never a raise.
+        watch_id=str(payload.get("watch_id") or ""),
+        reason=str(payload.get("reason") or ""),
     )
 
 
@@ -544,13 +672,18 @@ def load_chart_watches(
         return []
     if not isinstance(payload, dict):
         return []
-    if str(payload.get("market_date") or "") != _market_date_text(market_date):
-        return []  # armed watches never survive into a new session
+    # Session watches never survive into a new session. The PERSISTENT kinds
+    # do - an H1 retester is armed for ten TRADING days, so a desk restart (or
+    # simply tomorrow) must not silently retire it while the session-scoped
+    # kinds beside it in the same file still go.
+    same_session = str(payload.get("market_date") or "") == _market_date_text(market_date)
     watches = []
     for item in payload.get("watches") or []:
         if isinstance(item, Mapping):
             watch = chart_watch_from_dict(item)
-            if watch is not None:
+            if watch is None:
+                continue
+            if same_session or watch.kind in PERSISTENT_WATCH_KINDS:
                 watches.append(watch)
     return watches
 
