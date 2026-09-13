@@ -100,6 +100,34 @@ Anything marked ⚠ is a point I'm least sure of — please check those first.
   confirmation stack.
 - Post-earnings setups use the tighter **1-close** stop-failure discipline.
 
+## Theta plays (sold puts and put credit spreads)
+
+- **The play is a support STACK, not a setup signal.** `evaluate_theta_put_candidate`
+  (`legacy.py`) collects every level at or just below the close - SMA_50/100/200, the current
+  and previous AVWAPE centres and their 1st-dev bands, a support trendline, a compression
+  low, stored high-volume horizontals - scores them by source weight and distance in ATR
+  (`_theta_support_quality`), and requires a major SMA plus `THETA_MIN_SUPPORT_LEVELS` of
+  them. `evaluate_theta_pcs_candidate` is the same evaluation at a two-support minimum.
+  `_apply_best_option_to_theta_row` then REPLACES the support score with the chosen option's
+  `rank_score` and keeps the support score as `base_score`; the report ranks on the former.
+  Two things surprise every reader: **SMA_20 is built and then dropped**
+  (`_is_valid_theta_support_entry`), and **a level up to 0.05 ATR ABOVE the close is kept
+  with its distance clamped to 0.0**, so overhead and on-price are indistinguishable by
+  distance. There is **no relative-strength term** anywhere in this scoring.
+- **Since 2026-09-12 (packet WS-TH) the picks are tracked and graded, and nothing about the
+  play changed.** `scripts/theta_pick_tracker.py` records one row per (symbol, scan date,
+  play type) in `theta_picks.jsonl` from the runner right after the report, carrying the
+  support set with `held` read off the LEVEL (never the clamped distance), the rank and both
+  scores, and the sold strike, expiry and premium - `short_strike`/`long_strike` for a
+  spread, so a credit spread is never a NULL strike. The overnight `theta_pick_grading` slot
+  writes `master_avwap_theta_outcomes.csv`: held above the sold strike at the exact 5th, 10th
+  and 20th exchange session and at the option's own expiry, maximum adverse excursion in ATR,
+  and which support broke first. The Setup Tracker's **Theta** tab shows support-combo cells
+  with the hold rate first, its `n` and the one Wilson lower bound, sorted by the bound, plus
+  a tercile grade line for the score. Shadow only; the RS cut reads `not_measured` because
+  the score has no RS term to cut on. Long form: `docs/DESK_INTERNALS.md` "TH - the theta
+  picks are graded, never changed".
+
 ## Intraday major setups (BounceBot, M5)
 
 - ~20 bounce/trigger types on completed 5-minute bars (`bounce_bot_lib/legacy.py`
