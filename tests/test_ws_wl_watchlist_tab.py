@@ -867,6 +867,34 @@ def desk_home():
         pick_feedback.clear_reviewed_today_cache()
 
 
+def _shutdown(widget) -> None:
+    """Close a desk AND stop every timer under it before letting it go.
+
+    `close()` + `deleteLater()` is not enough: `deleteLater` only runs on the
+    NEXT event-loop pass, and a `QTimer` child keeps firing until then - or
+    forever, if nothing pumps. Measured here 2026-09-13: a leaked
+    `MasterAvwapPanel` refresh timer fired inside another test's
+    `processEvents()` and made
+    `test_ws_10a_scan_freshness.py::test_the_manifest_is_read_on_the_refresh_path_and_never_on_paint`
+    report "the manifest was re-read 4 time(s) while painting" - a failure in a
+    file this packet never touches, in one full-suite run out of five.
+    """
+    from PySide6.QtCore import QTimer
+
+    for service in ("strength_board_service", "watchlist_tab_service"):
+        stop = getattr(getattr(widget, service, None), "shutdown", None)
+        if callable(stop):
+            try:
+                stop()
+            except Exception:  # noqa: BLE001 - teardown never fails a test
+                pass
+    for timer in widget.findChildren(QTimer):
+        timer.stop()
+    widget.close()
+    widget.deleteLater()
+    _spin(8)
+
+
 @pytest.fixture
 def desk(desk_home):
     from ui.panels.trading_desk import TradingDeskPanel
@@ -874,9 +902,7 @@ def desk(desk_home):
     panel = TradingDeskPanel(workspace_mode="workspace")
     _lay_out(panel, *WINDOWED_DESK)
     yield panel
-    panel.close()
-    panel.deleteLater()
-    _spin()
+    _shutdown(panel)
 
 
 def _tab(desk):
@@ -1030,9 +1056,7 @@ def test_no_price_alert_entry_is_lost_across_the_retirement(desk_home):
         assert counts.get("AMD") == 1
         assert counts.get("INTC") == 1
     finally:
-        panel.close()
-        panel.deleteLater()
-        _spin()
+        _shutdown(panel)
 
 
 # ---------------------------------------------------------------------------
@@ -1384,9 +1408,7 @@ def test_the_journal_button_opens_the_watchlist_on_the_positions_view(desk_home)
                 assert tabs.currentWidget() is tab
         assert tab.view() == watchlist_views.VIEW_POSITIONS
     finally:
-        window.close()
-        window.deleteLater()
-        _spin()
+        _shutdown(window)
 
 
 # ---------------------------------------------------------------------------
@@ -1417,6 +1439,4 @@ def test_the_watchlist_tab_fits_without_a_horizontal_scrollbar(desk_home, width,
         )
         assert len(tab.visible_rows()) == 24
     finally:
-        panel.close()
-        panel.deleteLater()
-        _spin()
+        _shutdown(panel)
