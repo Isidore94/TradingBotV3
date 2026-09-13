@@ -201,6 +201,30 @@ def _measured_fixture(tmp_path: Path) -> tuple[Path, Path, datetime]:
             "entries": [],
         },
     )
+    # WS-10A: an `ok` scan manifest and the report it published, so the D1
+    # scan's three clocks are MEASURED here like every other dimension rather
+    # than adding a second unknown. Both are sandbox copies - see `_build`.
+    _write(
+        diagnostics / "master_avwap_scan_manifest.json",
+        {
+            "run_id": "master_scan-fixture",
+            "status": "ok",
+            "started_at": "2026-07-13T12:05:00-07:00",
+            "finished_at": "2026-07-13T12:29:00-07:00",
+            "universe_size": 3,
+            "symbols_fetched": 3,
+            "daily_bar_source_counts": {"yahoo": 3},
+            "latest_input_bar_session": "2026-07-10",
+            "preview_bar_used": False,
+            "daily_bars_forming_dropped": 0,
+            "daily_bars_invalid_dropped": 0,
+            "outputs": [],
+        },
+    )
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    (diagnostics / "master_avwap_priority_setups.txt").write_text(
+        "NVDA LONG favorite_setup 88.4\n", encoding="utf-8"
+    )
     # R10.B: a small outcome store, so the claim-semantics dimension is
     # MEASURED here like every other one rather than adding a second unknown.
     # Two declared families and no undeclared one, which is what HEALTHY means
@@ -407,6 +431,15 @@ def _build(diagnostics: Path, registry: Path, now: datetime, **kwargs) -> dict:
     from operations_audit import build_operations_audit
 
     kwargs.setdefault("process_snapshot", dict(_IDLE_PROCESS_SNAPSHOT))
+    # WS-10A: the D1 scan manifest and the report it publishes live in the
+    # SHARED HOME in production, so the sandbox has to name its own copies -
+    # the same convention the away report, the journal and the outcome store
+    # already follow here. Without this, one test's leftover manifest in the
+    # session-wide temp home would decide another test's verdict.
+    kwargs.setdefault("scan_manifest_path", diagnostics / "master_avwap_scan_manifest.json")
+    kwargs.setdefault(
+        "priority_report_path", diagnostics / "master_avwap_priority_setups.txt"
+    )
     return build_operations_audit(
         now=now, diagnostics_dir=diagnostics, candidate_registry_path=registry, **kwargs
     )
@@ -464,6 +497,11 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         # "this desk was never asked to import Questrade" rather than an
         # unmeasured unknown, exactly as `ai_jobs` above.
         "questrade_chain",
+        # WS-10A: the D1 scan's three clocks in one sentence - when it ran, how
+        # fresh its INPUT bars were, and which report is on screen. HEALTHY
+        # here because the fixture below writes an `ok` manifest; with no
+        # manifest at all it is UNKNOWN, never green.
+        "master_scan_freshness",
     }
     # Every dimension H2 implemented reports a measured status, and the ONLY
     # remaining UNKNOWN is the one nothing captures.
