@@ -28,6 +28,15 @@ else fills, publishing a file nothing scores from.
 most interesting row in the file — it is the skip — so it is written with an
 empty `trade_id` and an explicit `traded` of "no". A trade whose paper grade has
 not matured yet carries a blank forward return, never a zero.
+
+**The record is SYMMETRIC (WS-5B, WISHLIST 5, block B).** Until 2026-09-13 this
+module asked the stores for likes, favorites and passes and never asked for a
+rejection at all, so the report could say *"you liked it and did not take it"*
+and could never say *"you vetoed it and took it anyway"* — which is the half of
+the record that costs money. Every explicit verdict is now a statement in its
+own channel, `verdict_family` keeps the two halves from ever being pooled, and
+`unfavorite` is still absent BY DECISION: taking a name out of Focus is
+housekeeping, not a judgement (CLAUDE.md P5, "`unfavorite` is never graded").
 """
 
 from __future__ import annotations
@@ -43,7 +52,12 @@ from project_paths import OUTPUT_DIR
 
 _log = logging.getLogger(__name__)
 
-SCHEMA = "preference_trade_outcomes_v1"
+#: v2 adds the reject half of the record and the three columns that describe it
+#: (WS-5B). The first nineteen columns did not move: `ai_summary.
+#: preference_to_trade_section` reads `match_basis`, `trade_id` and
+#: `session_date` out of this file by name, and a reader of the published 19
+#: sees exactly what it saw before.
+SCHEMA = "preference_trade_outcomes_v2"
 
 #: Where the report lands. Beside the other read-only journal reports.
 REPORT_FILE = OUTPUT_DIR / "preference_trade_outcomes.csv"
@@ -92,7 +106,56 @@ COLUMNS = [
     "paper_forward_return_h3",
     "paper_forward_return_h5",
     "paper_cohort",
+    # WS-5B, AT THE END. Everything above is the published contract.
+    "like_mode",
+    "verdict_family",
+    "match_state",
 ]
+
+#: The two halves of the record. They are never added into one number: "I said
+#: take it" and "I said leave it" are two answers to two different questions.
+FAMILY_ENDORSE = "endorse"
+FAMILY_REJECT = "reject"
+
+#: Every channel that carries a REFUSAL. One map, because a channel that lands
+#: in the wrong family pools a veto with a like and no downstream reader could
+#: tell. A channel absent from this set is an endorsement — which is what every
+#: channel that existed before WS-5B was, so an old row read back with a blank
+#: `verdict_family` reads `endorse` and is right.
+REJECT_CHANNELS = frozenset(
+    {
+        "annotation:veto",
+        "annotation:pass",
+        "pick_feedback:dislike",
+        "pick_feedback:not_today",
+        "review_event:m5_click_away",
+    }
+)
+
+#: What the join could say. `matched` is a trade found (however weak the basis);
+#: the three misses are DIFFERENT answers and a single blank cannot carry them.
+MATCH_STATE_MATCHED = "matched"
+MATCH_STATE_WINDOW_OPEN = "window_open"
+MATCH_STATE_NO_MATCH_AFTER_WINDOW = "no_match_after_window"
+MATCH_STATE_JOURNAL_UNAVAILABLE = "journal_unavailable"
+#: RESERVED and never emitted today (lead ruling, WS-5B): no path in this module
+#: can currently tell "the matcher could not run" apart from "the journal could
+#: not be read", and inventing a path to produce it would be inventing evidence.
+#: The name is in the vocabulary so a later packet that CAN tell them apart does
+#: not have to rename `journal_unavailable` out from under a shipped reader.
+MATCH_STATE_MATCHING_UNAVAILABLE = "matching_unavailable"
+MATCH_STATES = (
+    MATCH_STATE_MATCHED,
+    MATCH_STATE_WINDOW_OPEN,
+    MATCH_STATE_NO_MATCH_AFTER_WINDOW,
+    MATCH_STATE_JOURNAL_UNAVAILABLE,
+    MATCH_STATE_MATCHING_UNAVAILABLE,
+)
+
+
+def verdict_family_for(channel: Any) -> str:
+    """`endorse` or `reject` for one channel name. The ONE place it is decided."""
+    return FAMILY_REJECT if str(channel or "") in REJECT_CHANNELS else FAMILY_ENDORSE
 
 
 def _as_date(value: Any) -> date | None:
@@ -159,37 +222,111 @@ def collect_statements(
     annotations_path: Path | None = None,
     feedback_path: Path | None = None,
     favorites_path: Path | None = None,
+    events_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Every statement the trader made about a name in the window.
+    """Every explicit verdict the trader made about a name in the window.
 
-    Four channels, each read through the module that owns its store rather than
-    a second parser here:
+    Four stores, each read through the module that owns it rather than a second
+    parser here, and BOTH families of verdict:
 
-    * ``like_claim`` and ``pass`` from the annotation log;
+    * ``like_claim`` (with its P9 mode), ``veto`` (with its reason code and the
+      vocabulary version that coded it) and ``pass`` from the annotation log;
     * ``swing_favorite`` from the swing favorites store - the trader's own
-      end-of-day list;
-    * ``like`` from `pick_feedback`.
+      end-of-day list, resolved per session so a retraction is honoured;
+    * ``like``, ``dislike`` and ``not_today`` from `pick_feedback`;
+    * the M5 click-away from the review-event store, because a click away from
+      an M5 alert IS a pass (trader, 2026-09-01).
+
+    ``unfavorite`` is NOT here and never will be: taking a name out of Focus is
+    housekeeping, and reading it as a negative judgement would teach the loop a
+    lesson the trader never gave it (CLAUDE.md P5).
 
     A statement with no side is KEPT and marked, unlike the cohorts which
     refuse to grade one: this report is about what was said and whether it was
     acted on, and a sideless statement was still made.
+
+    **One thing said once is ONE statement.** The annotation log heals torn
+    tails rather than claiming atomicity, so a row can reach the file twice; a
+    duplicate would double its family count. Identity is the store's own event
+    id where there is one, and the statement itself where there is not.
     """
     statements: list[dict[str, Any]] = []
     statements.extend(_annotation_statements(since, until, annotations_path))
     statements.extend(_favorite_statements(since, until, favorites_path))
     statements.extend(_feedback_statements(since, until, feedback_path))
+    statements.extend(_review_event_statements(since, until, events_path))
+    statements = _deduplicate(statements)
     statements.sort(key=lambda row: (row["session_date"], row["symbol"], row["channel"]))
     return statements
+
+
+def _statement_identity(row: Mapping[str, Any]) -> tuple:
+    """What makes two rows the SAME statement.
+
+    The store's own id when it has one - that is the strongest identity there
+    is - and otherwise the statement itself, because a store with no id (swing
+    favorites, `pick_feedback`) cannot distinguish a torn duplicate from a
+    second identical click, and one of those two readings is always safe.
+    """
+    ident = str(row.get("statement_id") or "").strip()
+    if ident:
+        return (str(row.get("channel") or ""), ident)
+    return (
+        str(row.get("channel") or ""),
+        row.get("session_date"),
+        str(row.get("symbol") or ""),
+        str(row.get("side") or ""),
+        str(row.get("statement") or ""),
+        str(row.get("statement_detail") or ""),
+    )
+
+
+def _deduplicate(statements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple] = set()
+    out: list[dict[str, Any]] = []
+    for row in statements:
+        key = _statement_identity(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def _veto_detail(row: Mapping[str, Any]) -> str:
+    """The reason code AND the vocabulary version that coded it.
+
+    Cohort identity on write is `(vocab_version, reason_code)`, so a reject
+    statement that dropped the version could not be joined back to the cohort
+    it was graded in. An UNCODED veto is legal and is not a coded one (P10 A1):
+    it carries no code and no version, and it says so rather than borrowing the
+    current vocabulary's number.
+    """
+    code = str(row.get("reason_code") or "").strip()
+    version = str(row.get("vocab_version") or "").strip()
+    if code and version:
+        return f"{code} (v{version})"
+    if code:
+        return code
+    return "uncoded"
 
 
 def _annotation_statements(since: date, until: date, path: Path | None) -> list[dict[str, Any]]:
     try:
         from project_paths import TRADER_ANNOTATIONS_FILE
-        from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_PASS, load_annotations
+        from ui.annotations.store import (
+            EVENT_LIKE_CLAIM,
+            EVENT_PASS,
+            EVENT_VETO,
+            like_mode_of,
+            load_annotations,
+        )
 
         rows = load_annotations(
             Path(path or TRADER_ANNOTATIONS_FILE),
-            event_types=(EVENT_LIKE_CLAIM, EVENT_PASS),
+            # WS-5B: the veto joins the two that were already asked for. The
+            # reject half was missing because nothing ever ASKED for it.
+            event_types=(EVENT_LIKE_CLAIM, EVENT_PASS, EVENT_VETO),
         )
     except Exception as exc:  # noqa: BLE001 - a channel is never worth the report
         _log.debug("Annotation statements unavailable: %s", exc)
@@ -201,9 +338,17 @@ def _annotation_statements(since: date, until: date, path: Path | None) -> list[
         if session is None or not (since <= session <= until):
             continue
         kind = str(row.get("event_type") or "")
+        like_mode = ""
         if kind == "like_claim":
             statement = "liked"
             detail = str(row.get("claimed_setup_id") or "")
+            # P9: a quick like names no setup and a claimed one must. Absence
+            # reads `claimed`, because a claim was REQUIRED until P9 - and that
+            # rule lives in `like_mode_of`, never copied here.
+            like_mode = like_mode_of(row)
+        elif kind == "veto":
+            statement = "vetoed"
+            detail = _veto_detail(row)
         else:
             statement = "passed"
             codes = [str(code or "").strip() for code in (row.get("reason_codes") or []) if code]
@@ -217,6 +362,8 @@ def _annotation_statements(since: date, until: date, path: Path | None) -> list[
                 "statement": statement,
                 "statement_detail": detail,
                 "statement_id": str(row.get("event_id") or ""),
+                "like_mode": like_mode,
+                "verdict_family": verdict_family_for(f"annotation:{kind}"),
             }
         )
     return out
@@ -259,9 +406,28 @@ def _favorite_statements(since: date, until: date, path: Path | None) -> list[di
                     "statement": "picked",
                     "statement_detail": str(row.get("origin") or "today's swing list"),
                     "statement_id": "",
+                    # A favorite is not a rail like, and it never had a mode.
+                    "like_mode": "",
+                    "verdict_family": FAMILY_ENDORSE,
                 }
             )
     return out
+
+
+#: The `pick_feedback` verdicts that are STATEMENTS, and what each one says.
+#:
+#: `unfavorite` is deliberately not a key. It is in neither of `pick_feedback`'s
+#: own LIKE/REJECT maps either, for the same reason: removing a name from Focus
+#: is housekeeping and the trader never passed judgement on it.
+#:
+#: `not_today` is NARROWER than `dislike` (packet R2) - one session thrown back,
+#: not the name itself - so the two ride in separate channels and are never
+#: combined into one verdict.
+_FEEDBACK_STATEMENTS: dict[str, tuple[str, str]] = {
+    "like": ("pick_feedback:like", "liked"),
+    "dislike": ("pick_feedback:dislike", "disliked"),
+    "not_today": ("pick_feedback:not_today", "not today"),
+}
 
 
 def _feedback_statements(since: date, until: date, path: Path | None) -> list[dict[str, Any]]:
@@ -283,7 +449,7 @@ def _feedback_statements(since: date, until: date, path: Path | None) -> list[di
                     row = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(row, dict) and str(row.get("verdict") or "") == "like":
+                if isinstance(row, dict) and str(row.get("verdict") or "") in _FEEDBACK_STATEMENTS:
                     raw.append(row)
     except OSError as exc:
         _log.debug("Pick feedback unavailable: %s", exc)
@@ -294,15 +460,79 @@ def _feedback_statements(since: date, until: date, path: Path | None) -> list[di
         session = _as_date(row.get("trade_date"))
         if session is None or not (since <= session <= until):
             continue
+        verdict = str(row.get("verdict") or "")
+        channel, statement = _FEEDBACK_STATEMENTS[verdict]
+        origin = str(row.get("origin") or "")
+        if verdict == "like":
+            detail = origin
+        else:
+            # The trader's OWN WORDS, carried so a reader can see why. It is
+            # never machine-coded into a reason cohort (CLAUDE.md P5) and it is
+            # not one of `ai_summary.PREFERENCE_EXAMPLE_COLUMNS`, so it reaches
+            # a person and not a model.
+            detail = str(row.get("reason") or "").strip() or origin
         out.append(
             {
                 "session_date": session,
                 "symbol": _symbol(row.get("symbol")),
                 "side": _side(row.get("side")),
-                "channel": "pick_feedback:like",
-                "statement": "liked",
-                "statement_detail": str(row.get("origin") or ""),
+                "channel": channel,
+                "statement": statement,
+                "statement_detail": detail,
                 "statement_id": "",
+                # A ★ on a board carries no P9 mode: it was neither the quick
+                # key nor the claim dialog, and naming either would be a claim
+                # about a keypress that never happened.
+                "like_mode": "",
+                "verdict_family": verdict_family_for(channel),
+            }
+        )
+    return out
+
+
+def _review_event_statements(since: date, until: date, path: Path | None) -> list[dict[str, Any]]:
+    """The M5 click-away. A click away from an M5 alert IS a pass.
+
+    Trader, 2026-09-01 - never "fixed", and `clicked_away_from_m5_alert` is
+    never renamed, because `review_learning` and `pick_feedback` both key on
+    it. It has no verb of its own: it is an `action: "skip"` review event whose
+    detail reason is that string.
+    """
+    try:
+        import project_paths
+        from pick_feedback import M5_CLICK_AWAY_REASON
+        from review_events import load_review_events
+
+        target = Path(path) if path is not None else Path(project_paths.ALERT_REVIEW_EVENTS_FILE)
+        rows = load_review_events(target)
+    except Exception as exc:  # noqa: BLE001 - a channel is never worth the report
+        _log.debug("Review-event statements unavailable: %s", exc)
+        return []
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("action") or "").strip().lower() != "skip":
+            continue
+        detail = row.get("detail")
+        reason = ""
+        if isinstance(detail, dict):
+            reason = str(detail.get("reason") or "").strip().lower()
+        if reason != M5_CLICK_AWAY_REASON:
+            continue
+        session = _as_date(row.get("trade_date")) or _as_date(row.get("ts"))
+        if session is None or not (since <= session <= until):
+            continue
+        out.append(
+            {
+                "session_date": session,
+                "symbol": _symbol(row.get("symbol")),
+                "side": _side(row.get("side")),
+                "channel": "review_event:m5_click_away",
+                "statement": "clicked away",
+                "statement_detail": M5_CLICK_AWAY_REASON,
+                "statement_id": str(row.get("review_record_id") or ""),
+                "like_mode": "",
+                "verdict_family": FAMILY_REJECT,
             }
         )
     return out
@@ -442,19 +672,76 @@ def load_paper_grades() -> dict[tuple[str, str, str], dict[str, Any]]:
     return grades
 
 
+def match_state_for(
+    said_on: date | None,
+    *,
+    matched: bool,
+    reference: date,
+    journal_available: bool = True,
+) -> str:
+    """Which of the four answers this row is. WS-5B.
+
+    A blank ``trade_id`` was carrying three different facts at once, and they
+    are not the same answer:
+
+    * ``matched``               -- a trade was found. How firm the link is stays
+      in ``match_confidence`` / ``match_basis``; this column never upgrades it.
+    * ``window_open``           -- the 10-SESSION window has not closed yet.
+      Not a miss; not yet an answer.
+    * ``no_match_after_window`` -- the window closed with no trade. The real
+      "said it, did not do it".
+    * ``journal_unavailable``   -- the journal could not be read, so the second
+      half of the row was never measured.
+
+    The arithmetic is `statement_window_end(said_on) > reference`, which is the
+    SAME comparison `ai_summary._preference_window_open` already makes from
+    `match_basis` + `session_date`. Two readers, one answer: if they disagreed
+    the desk would hold two truths about one row.
+    """
+    if not journal_available:
+        return MATCH_STATE_JOURNAL_UNAVAILABLE
+    if matched:
+        return MATCH_STATE_MATCHED
+    if not isinstance(said_on, date):
+        # Uncertainty reads CLOSED, exactly as the AI section reads it: a date
+        # nobody can parse must not count as "still waiting", which would
+        # quietly shrink the number of real misses.
+        return MATCH_STATE_NO_MATCH_AFTER_WINDOW
+    return (
+        MATCH_STATE_WINDOW_OPEN
+        if statement_window_end(said_on) > reference
+        else MATCH_STATE_NO_MATCH_AFTER_WINDOW
+    )
+
+
 def build_rows(
     statements: list[dict[str, Any]],
     trades: list[Mapping[str, Any]],
     *,
     grades: dict[tuple[str, str, str], dict[str, Any]] | None = None,
     now: datetime | None = None,
+    journal_available: bool = True,
 ) -> list[dict[str, Any]]:
-    """One row per statement: what was said, whether it was taken, what it did."""
-    stamp = (now or datetime.now()).isoformat(timespec="seconds")
+    """One row per statement: what was said, whether it was taken, what it did.
+
+    ``journal_available=False`` is the honest shape of an unreadable journal:
+    the statements are still published, ``match_basis`` stays EMPTY (which is
+    exactly how `ai_summary.preference_to_trade_section` already recognises the
+    bucket) and every row says ``journal_unavailable`` in its own column. The
+    trader still SAID it; a gap in one half of the row is not a reason to
+    publish nothing.
+    """
+    moment = now or datetime.now()
+    stamp = moment.isoformat(timespec="seconds")
+    reference = moment.date()
     grades = grades if grades is not None else {}
     rows: list[dict[str, Any]] = []
     for statement in statements:
-        match = match_trade(statement, trades)
+        match = (
+            match_trade(statement, trades)
+            if journal_available
+            else {"trade": None, "confidence": 0.0, "basis": ""}
+        )
         trade = match["trade"]
         session_text = statement["session_date"].isoformat()
         grade = grades.get((session_text, statement["symbol"], statement["side"])) or {}
@@ -492,6 +779,18 @@ def build_rows(
                 "paper_forward_return_h3": _float_or_blank(grade.get("h3")),
                 "paper_forward_return_h5": _float_or_blank(grade.get("h5")),
                 "paper_cohort": str(grade.get("cohort") or ""),
+                # WS-5B. A statement that arrived without a family (a caller
+                # building rows by hand, or a channel added later) is read from
+                # its channel rather than guessed.
+                "like_mode": str(statement.get("like_mode") or ""),
+                "verdict_family": str(statement.get("verdict_family") or "")
+                or verdict_family_for(statement.get("channel")),
+                "match_state": match_state_for(
+                    statement.get("session_date"),
+                    matched=trade is not None,
+                    reference=reference,
+                    journal_available=journal_available,
+                ),
             }
         )
     return rows
@@ -520,7 +819,14 @@ def trade_level_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     risk_by_trade: dict[str, bool] = {}
     matched = 0
     all_rows = list(rows)
+    # WS-5B: the two families, ALWAYS both keys. A missing key would read as a
+    # family with no rows and a family that does not exist, and those are
+    # different facts. A row with no family at all is an endorsement, because
+    # every channel that could write one before WS-5B was.
+    by_family: dict[str, int] = {FAMILY_ENDORSE: 0, FAMILY_REJECT: 0}
     for row in all_rows:
+        family = str((row or {}).get("verdict_family") or "").strip() or FAMILY_ENDORSE
+        by_family[family] = by_family.get(family, 0) + 1
         trade_id = str((row or {}).get("trade_id") or "").strip()
         if not trade_id:
             continue
@@ -540,6 +846,7 @@ def trade_level_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     recorded = sum(1 for present in risk_by_trade.values() if present)
     return {
         "n_statements": len(all_rows),
+        "n_statements_by_family": by_family,
         "n_statements_matched": matched,
         "n_trades_matched": n_trades,
         "net_pnl": sum(net_by_trade.values()),
@@ -562,7 +869,10 @@ def summary_note(rows: Iterable[Mapping[str, Any]], summary: Mapping[str, Any] |
     """
     rows = list(rows)
     summary = dict(summary) if summary is not None else trade_level_summary(rows)
+    families = summary.get("n_statements_by_family") or {}
     return (
+        f"{families.get(FAMILY_ENDORSE, 0)} endorsement(s) and "
+        f"{families.get(FAMILY_REJECT, 0)} refusal(s), never pooled. "
         f"{len(rows)} statement(s) inside a {TRADE_WINDOW_NOTE} window; "
         f"{summary['n_statements_matched']} matched a trade over "
         f"{summary['n_trades_matched']} distinct trade(s) "
@@ -605,17 +915,22 @@ def run_preference_trade_outcomes(
     until = moment.date()
     since = until - timedelta(days=max(1, int(window_days)))
 
+    journal_available = True
+    journal_note = ""
     if trades is None:
         try:
-            from journal_store import JournalStore
+            import journal_store
 
-            trades = list(JournalStore().list_trades())
+            trades = list(journal_store.JournalStore().list_trades())
         except Exception as exc:  # noqa: BLE001
-            return {
-                "status": "skipped",
-                "reason": f"journal unavailable: {exc}",
-                "rows": 0,
-            }
+            # WS-5B: the trader still SAID it. Publishing nothing threw away the
+            # whole left-hand half of the record because the right-hand half was
+            # unreadable - and it left the report's last good copy describing a
+            # different night. The statements are written, `match_basis` stays
+            # empty and every row says `journal_unavailable` out loud.
+            trades = []
+            journal_available = False
+            journal_note = f"journal unavailable: {exc}"
 
     statements = collect_statements(since=since, until=until)
     if not statements:
@@ -624,11 +939,18 @@ def run_preference_trade_outcomes(
             "reason": (
                 f"no statements recorded between {since} and {until} - an absent "
                 "record, not a window without opinions"
+                + (f". {journal_note}" if journal_note else "")
             ),
             "rows": 0,
         }
 
-    rows = build_rows(statements, trades, grades=load_paper_grades(), now=moment)
+    rows = build_rows(
+        statements,
+        trades,
+        grades=load_paper_grades(),
+        now=moment,
+        journal_available=journal_available,
+    )
     written = write_rows(rows, report_path)
     taken = sum(1 for row in rows if row["traded"] == "yes")
     # ST5.2 / live gate #79: BOTH grains travel out of the slot, so the ledger
@@ -636,10 +958,11 @@ def run_preference_trade_outcomes(
     # instead of leaving a reader to assume they are the same number.
     summary = trade_level_summary(rows)
     return {
-        "status": "ok" if written else "degraded",
+        "status": "ok" if (written and journal_available) else "degraded",
         "rows": len(rows),
         "taken": taken,
         "not_taken": len(rows) - taken,
+        "n_statements_by_family": summary["n_statements_by_family"],
         "n_statements_matched": summary["n_statements_matched"],
         "n_trades_matched": summary["n_trades_matched"],
         "duplicate_statement_rows": summary["duplicate_statement_rows"],
@@ -650,6 +973,7 @@ def run_preference_trade_outcomes(
             f"{len(rows)} statement(s) between {since} and {until} matched inside a "
             f"{TRADE_WINDOW_NOTE} window; {taken} were traded, "
             f"{len(rows) - taken} were not. " + summary_note(rows, summary)
+            + (f" {journal_note}." if journal_note else "")
             + ("" if written else " The report could not be written.")
         ),
     }
@@ -658,6 +982,15 @@ def run_preference_trade_outcomes(
 __all__ = [
     "COLUMNS",
     "DEFAULT_WINDOW_DAYS",
+    "FAMILY_ENDORSE",
+    "FAMILY_REJECT",
+    "MATCH_STATES",
+    "MATCH_STATE_JOURNAL_UNAVAILABLE",
+    "MATCH_STATE_MATCHED",
+    "MATCH_STATE_MATCHING_UNAVAILABLE",
+    "MATCH_STATE_NO_MATCH_AFTER_WINDOW",
+    "MATCH_STATE_WINDOW_OPEN",
+    "REJECT_CHANNELS",
     "REPORT_FILE",
     "SCHEMA",
     "TRADE_WINDOW_DAYS",
@@ -666,10 +999,12 @@ __all__ = [
     "build_rows",
     "collect_statements",
     "load_paper_grades",
+    "match_state_for",
     "match_trade",
     "run_preference_trade_outcomes",
     "statement_window_end",
     "summary_note",
     "trade_level_summary",
+    "verdict_family_for",
     "write_rows",
 ]
