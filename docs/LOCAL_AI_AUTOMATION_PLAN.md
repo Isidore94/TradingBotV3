@@ -2141,3 +2141,63 @@ read filed against the 09:00 slot at 09:12 describes 09:12. `mentor.scheduled_at
 `mentor.responded_at` are stored separately so no later reader has to guess which, and a
 model that averages them would be inventing a minute nobody observed.
 
+
+## 11 The market story and the thesis: code computes, the model explains (WISHLIST 10D/10K, packet WS-10D)
+
+Steps 1-3 of WISHLIST 10D are built deterministically, and the narration of them is
+deliberately NOT in this packet. The reason is Â§1's reason: a model that writes the
+story also decides what the story is, and the trader asked for the sequence — what I
+expected, what the market did, what changed, what remains open — not for a summary of
+it.
+
+**Three source kinds, never blurred.** `scripts/market_story.py` builds one session's
+`DailyStory` out of exactly three labelled parts. `trader_said` is the trader's own
+entries, verbatim, in `created_at` order, each carrying `written_after_the_session` and
+`predicts_this_session` — the same sentence typed at 11:00 and at 21:00 is a prediction
+and a description, and the story says which. `measured` is arithmetic over COMPLETED
+daily bars for the six benchmarks (`SPY QQQ IWM VXX TLT USO`), each cell carrying
+`bars_through`, `bars_used` and the named rule version behind every number; a benchmark
+with no bars is `unmeasured` with every field `None` and a reason naming it. `ai_said`
+is the third kind and is **always empty in this packet**; it exists as a field so the
+surface rendering a story never has to guess whether a sentence came from a person or a
+model. A session with no note has an EMPTY `trader_said` and a sentence saying so: no
+note, no invented thesis.
+
+**Which session an entry belongs to is one rule.** `EvidenceLedger.append` applies its
+own fields last and overwrites the `session_date` `build_entry` computed with the
+market-local date of the WRITE, so a note typed at 21:00 Pacific is stored under the
+next session. `market_journal.session_of_entry` recomputes it from `created_at` (which
+the ledger does not touch) and is the ONE selector; the desk's Story pane and the
+overnight rollup both call it. Repairing the ledger stamp is a separate packet. An entry
+deliberately filed against an older session cannot be recovered by either route, because
+its intended date never reached disk — stated rather than hidden.
+
+**The thesis is extracted, quoted, and never graded by the outcome.**
+`scripts/market_thesis.py` reads a note with a small versioned vocabulary into `claim`,
+`horizon` (counted in exchange SESSIONS), `stance`, `condition`, `invalidation` and
+`benchmarks`. Every field carries a span that reproduces it exactly, so a paraphrase
+cannot pass. `unstated` is a real answer and carries no span. The invalidation and the
+condition are found first and blanked out of the text the stance is read from, because an
+invalidation states the opposite of the claim by construction. A later note is linked only
+inside the horizon and only on the same benchmark: same stance SUPPORTS, a reversal
+CONTRADICTS, a stance-less mention only MENTIONS. Rows live in `market_theses.jsonl`,
+append-only, keyed on `entry_id` + `extractor_version`; a trader edit is a NEW row that
+supersedes the draft, and the journal entry is never touched.
+
+**An imported forecast is outside commentary** (WISHLIST 10K). It is a journal entry with
+`origin = external_forecast` plus a `kind=forecast` sidecar carrying `source_model`,
+`created_at_claimed`, `imported_at`, `target_week` and the scenarios as pasted. An unknown
+creation time stays the literal `unknown` and is never filled from the import moment — a
+later import is not information known earlier. `active_theses` never returns a forecast;
+it becomes the trader's view only when they write an entry adopting it.
+
+**The rollups count and never narrate.** `market_story_rollups` is the last deterministic
+nightly slot (decision 0018: appended inside its stage, never reordered across stages). A
+month is not the sum of its weeks — the five ISO weeks touching September 2026 hold 24
+sessions while September has 21 — so each week belongs to the month of its Thursday, a
+month pack exists only for a month that owns a week, and the month adds its uncovered days
+afterwards. Every pack names its covered, expected and missing sessions, carries the open
+theses forward, and is rebuilt only when its `inputs_hash` changed. Narrating these packs
+joins the existing narration stage in a later packet; nothing here calls a model, and
+nothing here reaches a detector, score, gate, alert, watchlist, Focus, the review queue or
+`review_policy.json`.
