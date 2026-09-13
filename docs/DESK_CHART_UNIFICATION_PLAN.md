@@ -286,6 +286,81 @@ appear everywhere that symbol renders that day. Section 6.1 additionally require
 one live ignored-symbol armed-watch hit that feeds/sounds while automatic Focus D1
 interest for that ignored symbol remains absent.
 
+## History and the viewport (packet WS-CH, 2026-09-13)
+
+The trader's sentence was *"200 candles is not enough"* (WISHLIST 10H). The
+answer separates two questions R4 had treated as one: how many bars a payload
+**holds** and how many the chart **opens on**.
+
+**D1.** `chart_snapshot.D1_HISTORY_SESSIONS` (1,000, roughly four NYSE years) is
+how far back a daily payload reaches; `D1_DEFAULT_SESSIONS` (90) stays the
+opening window. The durable parquet store already held years — `load_d1_bars`
+has always read the FULL history and `build_d1_snapshot` has always computed
+indicators over it before slicing — so the only thing that was ever short was
+the slice. This costs one longer slice of bars already in memory and **no
+provider request whatsoever**. The payload is a target capped by what the store
+holds: it carries `oldest_available` (the oldest bar drawn) and
+`history_truncated` (there is more behind it), and a symbol with 300 stored
+sessions reports 300 and `False`, because there is nothing left to pan to and
+saying otherwise invites the trader to drag at a wall.
+
+`CandleChart.set_data(..., initial_view_sessions=N)` frames the tail while the
+widget holds every bar, so **panning left reveals the older bars with no
+request of any kind**. The y-range is taken from the visible window — a
+four-year scale flattens today's candles into a line — while the log/linear
+decision still asks every bar, because a bar off the left edge is one pan away
+and flipping the scale mid-drag is worse than opening linear. Downsampling
+(`setClipToView` + auto peak) was already in place for exactly this and stops
+being a no-op here. Measured offscreen at 1,000 candles with 14 overlays:
+`set_data` ~24-31 ms, `grab()` ~15-22 ms.
+
+Both hosts are the same widget. The centre Visual Alert Review pane
+(`AlertChartReview` → `SymbolSnapshotWidget(compact=True)`) opens on 90; Chart
+Review keeps its own `CHART_REVIEW_D1_SESSIONS` (520) opening window; both now
+hold 1,000 behind it.
+
+**Levels do not follow the payload.** `chart_levels.build_d1_levels` gained
+`price_range_bars` and `ChartDataService` hands it the INITIAL VISIBLE window,
+so `horizontal_levels`' price filter behaves exactly as it did before the
+history grew: a 2021 store level is not admitted to a chart opened on 2026, and
+the per-bucket clutter budget is not spent on lines nobody can see. **Panning
+left does not recompute levels** — the payload is fixed at build time and the
+paint path reads no caches (Milestone 8 stands).
+
+**The provider request did not grow.** `SymbolSnapshotWidget._start_d1_backfill`
+still sizes its catch-up off the host's `d1_sessions` (260 calendar days
+compact, 754 for Chart Review), not off the history target. That path is a
+repair for a stale symbol, not a history import; the store is filled by the scan
+pipeline. A test caps it at 800 calendar days.
+
+**M5 in bounded chunks.** The intraday chart opens on today's two sessions and a
+**Load older** button on the M5 legend row adds two more, through the same
+in-memory `bot.m5_chart_bars(max_sessions=n)` read the chart already used —
+never a fetch, and the pan handler deliberately has no trigger in it, because a
+pan that fetches is a fetch on the paint path. Ten sessions per symbol per desk
+session is the ceiling. The chunks overlap by construction, so the merge cuts at
+the fresh chunk's first bar rather than unioning: no bar appears twice, and a
+bot whose cache has since shrunk cannot take history off a chart that has it.
+Older bars arrive on the LEFT, so the view is preserved by CANDLE IDENTITY
+(`CandleChart.visible_bar_span` / `restore_bar_span`), never by index range. A
+raising provider costs the older bars and never the chart: the extra sessions
+roll back, the drawn bars stay, and the button reads `older bars unavailable`.
+
+**The oldest date is in the strip, not a popup.** `provenance_state` appends
+`D1 back to <date>`, with `(more behind)` when the store holds more. That is the
+only provenance strip the desk has (Chart Review's); the centre pane has none to
+add to.
+
+**H1/H4 (item 3) was not built, because the desk draws neither.**
+`bounce_bot_lib/legacy.py._closed_h1_bars` aggregates completed H1 bars and
+`master_avwap_lib/legacy.py:28235 resample_intraday_bars_to_4h` resamples H4
+from that H1 history; both feed the HTF study, and neither reaches a chart, a
+widget or a payload — every `set_data` call in `scripts/ui/` passes `"d1"` or
+`"m5"`. The packet's own instruction applies: stop at D1/M5. A 500-bar H1/H4
+target is only meaningful once an H1/H4 chart exists.
+
+Tests: `tests/test_ws_ch_chart_history.py` over a 1,300-session golden fixture.
+
 ## The two held-back items — resolved 2026-08-18
 
 R4 recorded two items as held under the ask-first rule rather than skipped. The

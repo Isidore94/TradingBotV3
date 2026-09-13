@@ -48,7 +48,7 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 | [`AUTO_MODES_AND_QUIET_HOURS_PLAN.md`](AUTO_MODES_AND_QUIET_HOURS_PLAN.md) | Phase 0.5 R1: mode matrix, quiet hours, phone push |
 | [`M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`](M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md) | Phase 0.5 R2: Focus adoption gate, provenance, M5 strength board |
 | [`SWING_QUALITY_AND_FEEDBACK_PLAN.md`](SWING_QUALITY_AND_FEEDBACK_PLAN.md) | Phase 0.5 R3: swing quality classifier, pre-close honesty, dislike reasons |
-| [`DESK_CHART_UNIFICATION_PLAN.md`](DESK_CHART_UNIFICATION_PLAN.md) | Phase 0.5 R4: CaptureRail on every chart, armed-alert paint, repetition control |
+| [`DESK_CHART_UNIFICATION_PLAN.md`](DESK_CHART_UNIFICATION_PLAN.md) | Phase 0.5 R4: CaptureRail on every chart, armed-alert paint, repetition control; plus WS-CH's "History and the viewport" (how many bars exist vs how many are visible) |
 | [`M5_SIGNAL_ENGINES_PLAN.md`](M5_SIGNAL_ENGINES_PLAN.md) | Phase 0.5 R5: pure indicators, completed-bars rule, LRSI/confluence/ORB engines |
 | [`JOURNAL_RELIABILITY_AND_UX_PLAN.md`](JOURNAL_RELIABILITY_AND_UX_PLAN.md) | Phase 0.5 R7: broker import, reconciliation, the five-tab Journal |
 | [`WEEKEND_PREP_PLAN.md`](WEEKEND_PREP_PLAN.md) | Phase 0.5 R8: guided weekend routine and strength boards |
