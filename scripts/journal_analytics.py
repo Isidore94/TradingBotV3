@@ -4,8 +4,9 @@ import csv
 import json
 import logging
 import math
+import re
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
@@ -169,6 +170,234 @@ def _date_distance_score(trade_date: date, context_date: date, lookback_days: in
 #: way only.
 TRADER_CAPTURE_SOURCE = "trader_capture"
 
+#: ``auto_tag_candidates.source`` prefix for WS-10E's Market Journal lane. The
+#: stored value is ``trader_note:market_journal``, and it sits BETWEEN the
+#: capture lane and the fuzzy scanner lane: prose the trader typed about a name
+#: while the trade was open is weaker than a structured claim carrying an event
+#: id, and stronger than a scanner row that merely fell near the same day.
+TRADER_NOTE_SOURCE = "trader_note"
+
+#: The ``match_basis`` a note-lane candidate carries: ``note:<entry_id>``. The
+#: same shape the packet found already living in ``context_row_id``, kept as one
+#: constant so the reader and the writer cannot disagree about the prefix.
+NOTE_MATCH_BASIS_PREFIX = "note:"
+
+#: What a note-lane candidate is worth. Below the capture lane's 0.90/0.95 -
+#: a written sentence is not a structured claim - and above the scanner lane,
+#: whose observed ceiling is 0.80 (P6a's own histogram: tracker + same day +
+#: same side is 0.72). Both numbers clear ``journal_bulk_tag``'s 0.70, so a
+#: setup the trader NAMED reaches the provisional writer under the same
+#: threshold every other lane is measured against.
+#:
+#: The ORDER, though, is by LANE and never by these numbers - see
+#: ``suggest_for_trade`` and ``JournalStore.list_auto_tag_candidates``.
+NOTE_LANE_CONFIDENCE = 0.88
+NOTE_LANE_CONFIDENCE_NO_SIDE = 0.84
+
+#: How far before the open a note still counts: ONE trading session. A thesis
+#: typed the afternoon before the fill is about the trade; the same words a week
+#: earlier are about the ticker.
+NOTE_WINDOW_MARGIN_SESSIONS = 1
+
+#: Words that make a note's own side explicit. A note that states the OPPOSITE
+#: side of the trade never matches it (the packet's rule: never a match on
+#: ticker alone), and a note that states neither is side-silent and may match
+#: either - silence is not a contradiction.
+_LONG_WORDS = ("long", "longs", "longed", "bought", "buying", "reclaim", "reclaimed")
+_SHORT_WORDS = ("short", "shorts", "shorted", "shorting", "sold")
+
+_LONG_PATTERN = re.compile(r"\b(" + "|".join(_LONG_WORDS) + r")\b", re.IGNORECASE)
+_SHORT_PATTERN = re.compile(r"\b(" + "|".join(_SHORT_WORDS) + r")\b", re.IGNORECASE)
+
+#: Compiled ``(token_count, slug, pattern)`` triples, longest phrase first.
+#: Built once from :data:`setup_docs.SETUP_DOCS` - the encyclopedia the desk
+#: already keeps - so the vocabulary this lane recognises cannot drift from the
+#: one every other surface names a setup by.
+_SETUP_CLAIM_PATTERNS: list[tuple[int, str, re.Pattern[str]]] | None = None
+
+
+def _lane_rank(source: Any) -> int:
+    """Which lane a candidate belongs to. Lower leads.
+
+    ONE ordering, used by ``suggest_for_trade`` and mirrored by
+    ``JournalStore.list_auto_tag_candidates``' SQL. The shape lane is ranked
+    last by the store rather than here because a shape tag is appended after
+    this function has already ordered the setup lanes.
+    """
+    text = str(source or "")
+    if text.startswith(f"{TRADER_CAPTURE_SOURCE}:"):
+        return 0
+    if text.startswith(f"{TRADER_NOTE_SOURCE}:"):
+        return 1
+    return 2
+
+
+def slugify_setup(value: Any) -> str:
+    """One spelling of a setup name: lowercase, non-alphanumerics collapsed."""
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _setup_claim_patterns() -> list[tuple[int, str, re.Pattern[str]]]:
+    """Every phrase that NAMES a setup, as a whole-token regular expression.
+
+    Two spellings per family - the registry key (``avwap_breakout``) and the
+    encyclopedia's own label (``AVWAP Breakout``) - joined by a bounded run of
+    non-alphanumerics so ``AVWAP Breakout``, ``avwap-breakout`` and
+    ``avwap_breakout`` are one phrase and ``avwap ... breakout`` a page apart is
+    not.
+
+    A single-token phrase is DROPPED. ``general`` is a family key and an
+    ordinary English word, and a lane that matched it would tag a trade because
+    the trader wrote "general weakness". Every real family name is two tokens or
+    more, so the rule costs nothing and closes the whole class.
+
+    A vocabulary that cannot be read yields an empty list: this lane then
+    matches nothing, which is the direction that invents no tags.
+    """
+    global _SETUP_CLAIM_PATTERNS
+    if _SETUP_CLAIM_PATTERNS is not None:
+        return _SETUP_CLAIM_PATTERNS
+    try:
+        from setup_docs import SETUP_DOCS
+
+        families = dict(SETUP_DOCS)
+    except Exception:  # noqa: BLE001 - a vocabulary source is never fatal
+        logging.debug("Setup vocabulary unavailable to the auto-tagger.", exc_info=True)
+        families = {}
+    patterns: list[tuple[int, str, re.Pattern[str]]] = []
+    seen: set[tuple[str, str]] = set()
+    for key, entry in families.items():
+        slug = slugify_setup(key)
+        if not slug:
+            continue
+        label = str((entry or {}).get("label") or "")
+        # A parenthetical is a qualifier the trader never types - "(Favorite)",
+        # "(study)" - and leaving it in would build a phrase nothing matches.
+        label = re.sub(r"\([^)]*\)", " ", label)
+        for phrase in (str(key), label):
+            tokens = [part for part in re.split(r"[^a-z0-9]+", phrase.lower()) if part]
+            if len(tokens) < 2:
+                continue
+            expression = r"\b" + r"[^a-z0-9]{1,4}".join(
+                re.escape(token) for token in tokens
+            ) + r"\b"
+            if (slug, expression) in seen:
+                continue
+            seen.add((slug, expression))
+            patterns.append((len(tokens), slug, re.compile(expression, re.IGNORECASE)))
+    patterns.sort(key=lambda item: (-item[0], item[1], item[2].pattern))
+    _SETUP_CLAIM_PATTERNS = patterns
+    return patterns
+
+
+def clear_setup_claim_patterns() -> None:
+    """Forget the compiled vocabulary. For tests and a forced re-read."""
+    global _SETUP_CLAIM_PATTERNS
+    _SETUP_CLAIM_PATTERNS = None
+
+
+def setup_claims_in_text(text: Any) -> list[tuple[str, str]]:
+    """``(slug, span)`` for every setup this text NAMES, longest phrase first.
+
+    The span is the matched words taken verbatim out of the text, never a
+    paraphrase and never the whole sentence: it is what a reader is shown when
+    they ask why a tag says what it says.
+    """
+    body = str(text or "")
+    if not body.strip():
+        return []
+    found: list[tuple[str, str]] = []
+    claimed: set[str] = set()
+    for _size, slug, pattern in _setup_claim_patterns():
+        if slug in claimed:
+            continue
+        match = pattern.search(body)
+        if match is None:
+            continue
+        claimed.add(slug)
+        found.append((slug, match.group(0)))
+    return found
+
+
+def stated_side_in_text(text: Any) -> str:
+    """``LONG``, ``SHORT`` or ``""`` - the side the writer's own words claim.
+
+    Both families of words present means the sentence is about both sides
+    (``"short covered, went long"``), and that is not a claim about one: it
+    answers ``""``, which matches either trade rather than refusing both.
+    """
+    body = str(text or "")
+    says_long = bool(_LONG_PATTERN.search(body))
+    says_short = bool(_SHORT_PATTERN.search(body))
+    if says_long == says_short:
+        return ""
+    return "LONG" if says_long else "SHORT"
+
+
+def _market_moment(value: Any) -> datetime | None:
+    """`value` as an aware market-local datetime, or None."""
+    moment = _parse_datetime(value)
+    if moment is None:
+        return None
+    try:
+        from market_calendar import MARKET_TZ
+    except Exception:  # pragma: no cover - zoneinfo is stdlib on 3.12
+        from zoneinfo import ZoneInfo
+
+        MARKET_TZ = ZoneInfo("America/New_York")
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=MARKET_TZ)
+    return moment.astimezone(MARKET_TZ)
+
+
+def decode_note_lane(value: Any) -> dict[str, Any]:
+    """The stored note-lane verdict, as a mapping. ``{}`` when there is none."""
+    if isinstance(value, dict):
+        return dict(value)
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def format_note_lane_line(value: Any) -> str:
+    """The one sentence every surface prints for the note lane (WS-10E item 3).
+
+    Three shapes and no fourth: the claim it found and where it read it, the
+    refusal to reach when the window held notes that named nothing, and the
+    honest blank when the trade's own clock cannot establish a window at all.
+    """
+    data = decode_note_lane(value)
+    if not data:
+        return ""
+    verdict = str(data.get("verdict") or "")
+    if verdict == "unmeasured":
+        reason = str(data.get("reason") or "").strip() or "no window"
+        return f"note lane: unmeasured ({reason})"
+    if verdict == "claim":
+        return (
+            f"note lane: {data.get('tag')} from note {data.get('entry_id')} "
+            f"\"{data.get('span')}\""
+        )
+    count = int(data.get("candidates") or 0)
+    return f"note lane: no explicit claim in {count} candidate note(s)"
+
+
+def note_lane_tag(value: Any) -> str:
+    """The setup this trade's note lane claimed, or ``""``.
+
+    What Weekend Prep's Tag Week compares a provisional tag against, so the
+    trader can see which proposals came out of their own words.
+    """
+    data = decode_note_lane(value)
+    if str(data.get("verdict") or "") != "claim":
+        return ""
+    return str(data.get("tag") or "").strip()
+
 
 class AutoTagger:
     """Suggest journal setup tags from existing bot outputs without importing scanner code."""
@@ -189,6 +418,7 @@ class AutoTagger:
         self.lookback_calendar_days = int(lookback_calendar_days)
         self._context_rows: list[dict[str, Any]] | None = None
         self._capture_rows: list[dict[str, Any]] | None = None
+        self._note_rows: list[dict[str, Any]] | None = None
 
     def load_capture_rows(self) -> list[dict[str, Any]]:
         """The trader's OWN statements about a name, with their event ids.
@@ -361,6 +591,226 @@ class AutoTagger:
                 }
             )
         return rows
+
+    # ------------------------------------------------------------ WS-10E ---
+    # The Market Journal lane. Everything below reads FOUR things about an
+    # entry - its id, its actual write time, the symbols it is about, and its
+    # own words - and nothing whatsoever about what any trade did.
+
+    def load_market_note_rows(self) -> list[dict[str, Any]]:
+        """The trader's written entries, projected to what this lane may use.
+
+        Cached on the instance like ``load_capture_rows``: ``refresh_auto_tags``
+        walks every trade in the journal, and re-reading the ledger 204 times
+        for a store that held 43 entries on 2026-09-12 would be a file read per
+        trade for one answer.
+
+        A SUPERSEDED entry is dropped. The Market Journal corrects by appending
+        an entry that names the one it replaces, so reading both would let a
+        sentence the trader has already retracted go on naming a setup.
+
+        Read-only, and any failure yields NOTHING rather than raising - this
+        runs behind an OK button, and a source that cannot be read must cost its
+        own suggestions and never the pane.
+        """
+        if self._note_rows is not None:
+            return self._note_rows
+        try:
+            import market_journal
+            from evidence_ledger import EvidenceLedger
+
+            ledger = EvidenceLedger(
+                stream=market_journal.STREAM,
+                schema=market_journal.SCHEMA_MARKET_JOURNAL_ENTRY,
+            )
+            entries = list(ledger.read(event_types=("entry",)).rows)
+        except Exception:  # noqa: BLE001 - a suggestion source is never fatal
+            logging.debug("Market Journal unavailable to the auto-tagger.", exc_info=True)
+            self._note_rows = []
+            return self._note_rows
+
+        replaced = {
+            str(entry.get("supersedes") or "").strip()
+            for entry in entries
+            if str(entry.get("supersedes") or "").strip()
+        }
+        rows: list[dict[str, Any]] = []
+        for entry in entries:
+            entry_id = str(entry.get("entry_id") or "").strip()
+            if not entry_id or entry_id in replaced:
+                continue
+            # `created_at` is when the entry was actually WRITTEN. The ledger
+            # overwrites `session_date` with the session of the append, so the
+            # session field answers a different question and this window is not
+            # about it.
+            written_at = _market_moment(entry.get("created_at"))
+            body = str(entry.get("text") or "")
+            symbols = {
+                _normalize_symbol(item)
+                for item in (entry.get("symbols") or ())
+                if _normalize_symbol(item)
+            }
+            if written_at is None or not body.strip() or not symbols:
+                continue
+            rows.append(
+                {
+                    "entry_id": entry_id,
+                    "written_at": written_at,
+                    "symbols": symbols,
+                    "text": body,
+                    "side": stated_side_in_text(body),
+                    "claims": setup_claims_in_text(body),
+                }
+            )
+        rows.sort(key=lambda row: (row["written_at"], row["entry_id"]))
+        self._note_rows = rows
+        return rows
+
+    def note_window_for(self, trade: dict[str, Any]) -> tuple[datetime, datetime] | None:
+        """The trade's OWN window, or ``None`` when its clock cannot say.
+
+        Open to close, widened by one trading session BEFORE the open so a
+        thesis typed the afternoon before the fill still belongs to the trade.
+
+        ``None`` for a date-only broker fill. The statement importers stamp a
+        fill at midnight market-local precisely so ``is_date_only`` can
+        recognise it, and midnight is not a time a fill happens at - so the
+        trade has no intraday window and uncertainty here emits nothing.
+        """
+        from journal_trade_shape import is_date_only
+
+        opened = _market_moment(trade.get("opened_at") or trade.get("trade_date"))
+        if opened is None:
+            return None
+        closed = _market_moment(trade.get("closed_at")) or opened
+        if is_date_only(opened) or is_date_only(closed):
+            return None
+        first, last = (opened, closed) if opened <= closed else (closed, opened)
+        try:
+            from market_calendar import previous_session
+
+            start_day = first.date()
+            for _step in range(max(0, NOTE_WINDOW_MARGIN_SESSIONS)):
+                start_day = previous_session(start_day)
+        except Exception:  # noqa: BLE001 - a calendar refusal falls back NARROWER
+            logging.debug("Note window margin unavailable; using the open.", exc_info=True)
+            start_day = first.date()
+        start = datetime.combine(start_day, time(0, 0), tzinfo=first.tzinfo)
+        return (start, last)
+
+    def note_lane_report(self, trade: dict[str, Any]) -> dict[str, Any]:
+        """What this lane saw for one trade, and what it concluded.
+
+        Three verdicts and no fourth: ``claim`` (a note inside the window named
+        a setup this desk knows), ``no_claim`` (notes were there and named
+        none - said out loud, because a silent lane and an empty window look
+        identical to a reader), and ``unmeasured`` (the trade's own clock
+        cannot establish a window).
+
+        The ``notes`` list travels to the advisory package so a model can cite
+        an entry by id; every other reader stores and prints the rest.
+        """
+        symbol = _normalize_symbol(trade.get("symbol"))
+        direction = _normalize_side(trade.get("direction"))
+        window = self.note_window_for(trade)
+        if not symbol or window is None:
+            return {
+                "verdict": "unmeasured",
+                "reason": "date-only fill" if symbol else "no symbol",
+                "candidates": 0,
+                "tag": "",
+                "entry_id": "",
+                "span": "",
+                "notes": [],
+            }
+        start, end = window
+        seen: list[dict[str, Any]] = []
+        for row in self.load_market_note_rows():
+            if symbol not in row["symbols"]:
+                continue
+            written_at = row["written_at"]
+            if not (start <= written_at <= end):
+                continue
+            side = str(row.get("side") or "")
+            if side and direction and side != direction:
+                # The words say the other side. A thesis about a short is not
+                # evidence about a long, and matching on the ticker alone is
+                # exactly what the packet forbids.
+                continue
+            seen.append(row)
+        best: dict[str, Any] = {}
+        for row in seen:
+            for slug, span in row["claims"]:
+                best = {"tag": slug, "entry_id": row["entry_id"], "span": span}
+                break
+            if best:
+                break
+        payload = {
+            "verdict": "claim" if best else "no_claim",
+            "reason": "",
+            "candidates": len(seen),
+            "tag": best.get("tag", ""),
+            "entry_id": best.get("entry_id", ""),
+            "span": best.get("span", ""),
+            "notes": [
+                {
+                    "note_id": row["entry_id"],
+                    "written_at": row["written_at"].isoformat(timespec="minutes"),
+                    "text": row["text"],
+                    "side_words": row["side"] or "none stated",
+                }
+                for row in seen
+            ],
+        }
+        return payload
+
+    def note_lane_candidates(self, trade: dict[str, Any]) -> list[dict[str, Any]]:
+        """The lane's suggestions for one trade, in the tagger's own shape.
+
+        At most one per note that names a setup: the trader wrote a sentence
+        about a name, and the sentence's claim is the candidate. Each carries
+        ``match_basis = note:<entry_id>`` and the quoted ``span`` it matched, so
+        the record answers "why does this say avwap_breakout?" without
+        re-deriving anything.
+        """
+        symbol = _normalize_symbol(trade.get("symbol"))
+        direction = _normalize_side(trade.get("direction"))
+        window = self.note_window_for(trade)
+        if not symbol or window is None:
+            return []
+        start, end = window
+        found: list[dict[str, Any]] = []
+        for row in self.load_market_note_rows():
+            if symbol not in row["symbols"]:
+                continue
+            written_at = row["written_at"]
+            if not (start <= written_at <= end):
+                continue
+            side = str(row.get("side") or "")
+            if side and direction and side != direction:
+                continue
+            if not row["claims"]:
+                continue
+            slug, span = row["claims"][0]
+            basis = f"{NOTE_MATCH_BASIS_PREFIX}{row['entry_id']}"
+            found.append(
+                {
+                    "tag": slug,
+                    "confidence": (
+                        NOTE_LANE_CONFIDENCE if side else NOTE_LANE_CONFIDENCE_NO_SIDE
+                    ),
+                    "source": f"{TRADER_NOTE_SOURCE}:market_journal",
+                    "context_row_id": basis,
+                    "match_basis": basis,
+                    "span": span,
+                    "link_only": False,
+                    "rationale": (
+                        f"you wrote this on {written_at.date().isoformat()} "
+                        f"({basis}): \"{span}\"; inside this trade's own window"
+                    ),
+                }
+            )
+        return found
 
     def load_context_rows(self) -> list[dict[str, Any]]:
         """The scanner-output rows the tagger matches trades against.
@@ -562,6 +1012,25 @@ class AutoTagger:
                 ),
             }
 
+        # -------------------------------------------------------- WS-10E ---
+        # The Market Journal lane, between the capture lane and the scanner's.
+        # A tag the trader WROTE never displaces a claim they STRUCTURED, so a
+        # slot the capture lane already owns is left alone.
+        for note in self.note_lane_candidates(trade):
+            tag = str(note.get("tag") or "").strip()
+            if not tag:
+                continue
+            current = candidates.get(tag)
+            if current is not None and str(current.get("source") or "").startswith(
+                f"{TRADER_CAPTURE_SOURCE}:"
+            ):
+                continue
+            if current is not None and float(current.get("confidence", 0.0) or 0.0) >= float(
+                note.get("confidence", 0.0) or 0.0
+            ):
+                continue
+            candidates[tag] = dict(note)
+
         for row in self.load_context_rows():
             if _normalize_symbol(row.get("symbol")) != symbol:
                 continue
@@ -593,9 +1062,12 @@ class AutoTagger:
                 f"{source}; {symbol}; context {context_date.isoformat()}; "
                 f"{row.get('setup_family') or 'setup'}"
             )
-            if str(current.get("source") or "").startswith(f"{TRADER_CAPTURE_SOURCE}:") if current else False:
-                # A fuzzy match never displaces the trader's own statement,
-                # whatever its computed confidence.
+            if current is not None and str(current.get("source") or "").startswith(
+                (f"{TRADER_CAPTURE_SOURCE}:", f"{TRADER_NOTE_SOURCE}:")
+            ):
+                # A fuzzy match never displaces the trader's own statement -
+                # structured (the capture lane) or written (WS-10E's note
+                # lane) - whatever its computed confidence.
                 continue
             if current is None or confidence > float(current.get("confidence", 0.0) or 0.0):
                 candidates[tag] = {
@@ -629,9 +1101,13 @@ class AutoTagger:
         ordered = sorted(
             candidates.values(),
             key=lambda item: (
-                # The capture lane leads: the trader's own statement about this
-                # name on this day outranks anything inferred about it.
-                0 if str(item.get("source") or "").startswith(f"{TRADER_CAPTURE_SOURCE}:") else 1,
+                # BY LANE, never by confidence. The capture lane leads: the
+                # trader's own structured statement about this name on this day
+                # outranks anything inferred about it. WS-10E's note lane is
+                # second - prose they typed inside the trade's own window is
+                # weaker than a claim carrying an event id and stronger than a
+                # scanner row that merely fell near the same date.
+                _lane_rank(item.get("source")),
                 -float(item.get("confidence", 0.0) or 0.0),
                 str(item.get("tag") or ""),
             ),

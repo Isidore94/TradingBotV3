@@ -247,6 +247,18 @@ NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     # compete with it. Every surface renders it beside a match confidence or
     # says "no match".
     ("auto_tag_candidates", "context_row_id", "TEXT NOT NULL DEFAULT ''"),
+    # WS-10E (2026-09-13). The Market Journal lane matches on WORDS, which is
+    # the first lane that does, so the candidate has to record what it matched
+    # and where. `match_basis` is `note:<entry_id>`; `match_span` is the phrase
+    # quoted verbatim out of the entry. Additive and empty for every existing
+    # row, because no lane before this one had a span to record.
+    ("auto_tag_candidates", "match_basis", "TEXT NOT NULL DEFAULT ''"),
+    ("auto_tag_candidates", "match_span", "TEXT NOT NULL DEFAULT ''"),
+    # WS-10E. The note lane's VERDICT for a trade, including the two verdicts
+    # that produce no candidate at all - notes that named nothing, and a
+    # date-only broker fill whose window cannot be established. Derived state
+    # beside `auto_tag_summary`, re-written by every `refresh_auto_tags`.
+    ("trades", "note_lane_json", "TEXT NOT NULL DEFAULT ''"),
     # P6a (2026-09-01): which lane a setup tag came from. The DEFAULT is what
     # makes this safe on a live database - every row that already exists was
     # typed or accepted by the trader, so it becomes `confirmed` the moment the
