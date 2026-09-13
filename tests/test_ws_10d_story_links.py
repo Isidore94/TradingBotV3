@@ -62,6 +62,61 @@ def _entry(text: str, *, hour: int):
     )
 
 
+def test_the_nightly_slot_reads_the_journal_itself_and_groups_by_the_one_rule(tmp_path):
+    """`stories=None` is the path the overnight run actually takes.
+
+    Every other rollup test hands `run_market_story_rollups` its stories, so
+    the default - read the journal, group it, build a daily story per session -
+    had no cover at all. It is driven here over a REAL ledger, and the evening
+    entry is the point: written 21:00 Pacific on Friday the 11th, the ledger
+    stamps its `session_date` `2026-09-12` (00:00 New York), and the pack must
+    still name 2026-09-11 and never a Saturday the exchange never opened.
+    """
+    import market_journal
+    import market_story_rollups as rollups
+    from evidence_ledger import EvidenceLedger
+
+    ledger = EvidenceLedger(
+        stream=market_journal.STREAM,
+        schema=market_journal.SCHEMA_MARKET_JOURNAL_ENTRY,
+        directory=tmp_path / "ledger",
+    )
+    for hour, text in ((7, NOTE), (21, "Evening write-up: I sized up too late.")):
+        moment = datetime(2026, 9, 11, hour, 0, tzinfo=PACIFIC)
+        entry = market_journal.build_entry(
+            text=text,
+            session_date=SESSION,
+            timeframe="D1",
+            symbols=("SPY",),
+            origin=market_journal.ORIGIN_JOURNAL_PAGE,
+            now=moment,
+        )
+        stored = ledger.append(entry, now=moment)
+    assert stored["session_date"] == "2026-09-12", "the ledger stamp trap is real"
+
+    out = tmp_path / "rollups"
+    result = rollups.run_market_story_rollups(
+        session_date=SESSION,
+        now=datetime(2026, 9, 12, 6, 0, tzinfo=ZoneInfo("UTC")),
+        out_dir=out,
+        journal_dir=tmp_path / "ledger",
+        theses_path=tmp_path / "market_theses.jsonl",
+    )
+    assert result["status"] == "ok", result
+    assert result["rebuilt"] == 3, result  # the week, the month, the quarter
+
+    import json
+
+    pack = json.loads((out / "weekly" / "2026-W37.json").read_text(encoding="utf-8"))
+    assert list(pack["sessions_covered"]) == [SESSION]
+    assert "2026-09-12" not in pack["sessions_covered"]
+    assert "2026-09-12" not in pack["sessions_expected"], "Saturday is not a session"
+    texts = [
+        entry["text"] for block in pack["sessions"] for entry in block["entries"]
+    ]
+    assert NOTE in texts and any("Evening write-up" in text for text in texts)
+
+
 @pytest.fixture(scope="module")
 def qapp():
     pytest.importorskip("PySide6", reason="the Market Journal page is Qt")

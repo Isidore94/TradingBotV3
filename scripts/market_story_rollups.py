@@ -361,6 +361,7 @@ def run_market_story_rollups(
     stories: Iterable[Any] | None = None,
     out_dir: Path | None = None,
     theses_path: Path | None = None,
+    journal_dir: Path | None = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
     """Rebuild the packs whose inputs changed. Deterministic, no model.
@@ -375,7 +376,7 @@ def run_market_story_rollups(
     target = Path(out_dir) if out_dir is not None else _default_out_dir()
 
     if stories is None:
-        stories = _stories_from_journal()
+        stories = _stories_from_journal(journal_dir)
     listed = list(stories or ())
     if not listed:
         return {
@@ -458,7 +459,7 @@ def _open_theses(moment: datetime, *, path: Path | None = None) -> list[dict[str
         return []
 
 
-def _stories_from_journal() -> list[Any]:
+def _stories_from_journal(journal_dir: Path | None = None) -> list[Any]:
     """Every session the journal has words for, as a daily story.
 
     Headless: it reads the ledger directly rather than through the Qt service,
@@ -471,10 +472,19 @@ def _stories_from_journal() -> list[Any]:
         import market_story
         from evidence_ledger import EvidenceLedger
 
-        result = EvidenceLedger(
-            stream=market_journal.STREAM,
-            schema=market_journal.SCHEMA_MARKET_JOURNAL_ENTRY,
-        ).read()
+        ledger = (
+            EvidenceLedger(
+                stream=market_journal.STREAM,
+                schema=market_journal.SCHEMA_MARKET_JOURNAL_ENTRY,
+                directory=Path(journal_dir),
+            )
+            if journal_dir is not None
+            else EvidenceLedger(
+                stream=market_journal.STREAM,
+                schema=market_journal.SCHEMA_MARKET_JOURNAL_ENTRY,
+            )
+        )
+        result = ledger.read()
         entries = market_journal.resolve_entries(result.rows)
     except Exception:  # noqa: BLE001 - an unreadable journal is no story
         _log.debug("Market journal unreadable for the rollups.", exc_info=True)
