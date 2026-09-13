@@ -101,6 +101,8 @@ class H1Bounce:
     touch_bar_dt: datetime | None = None
     confirm_bar_dt: datetime | None = None
     ema: float | None = None
+    #: The close of the confirm bar - the price the verdict was read at.
+    confirm_close: float | None = None
     atr: float | None = None
     distance_atr: float | None = None
     skipped_bars: int = 0
@@ -325,6 +327,7 @@ def evaluate(
                 side=direction,
                 confirm_bar_dt=bars[index]["dt"],
                 ema=ema[index],
+                confirm_close=bars[index]["close"],
                 atr=atr_value,
                 skipped_bars=skipped,
                 reasons=tuple(reasons),
@@ -345,6 +348,7 @@ def evaluate(
             side=direction,
             confirm_bar_dt=confirm["dt"],
             ema=confirm_ema,
+            confirm_close=confirm["close"],
             atr=atr_value,
             skipped_bars=skipped,
             reasons=("no bar tagged the 15-EMA inside the age window",),
@@ -366,6 +370,7 @@ def evaluate(
         "touch_bar_dt": touch_bar["dt"],
         "confirm_bar_dt": confirm["dt"],
         "ema": confirm_ema,
+        "confirm_close": confirm["close"],
         "atr": atr_value,
         "distance_atr": distance_atr,
         "skipped_bars": skipped,

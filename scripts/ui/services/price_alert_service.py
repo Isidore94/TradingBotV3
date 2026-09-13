@@ -27,6 +27,9 @@ _POLL_END_HOUR = 17
 
 ALWAYS_ON_SETTING = "price_alerts_always_on"
 
+#: How many announced watch ids to remember (see `notify_armed_watch`).
+_ANNOUNCED_WATCH_ID_LIMIT = 2_000
+
 
 class PriceAlertService(QObject):
     """Polls last prices for armed alert entries and fires push notifications.
@@ -54,6 +57,8 @@ class PriceAlertService(QObject):
         )
         self._last_push_error = ""
         self._writer_refusal_logged = False
+        #: Armed-watch ids already announced to the phone this session.
+        self._announced_watch_ids: set[str] = set()
         self._timer = QTimer(self)
         self._timer.setInterval(_POLL_INTERVAL_MS)
         self._timer.timeout.connect(self.check_now)
@@ -134,6 +139,56 @@ class PriceAlertService(QObject):
         if not result.get("ok") and not result.get("error"):
             result["error"] = "No ntfy topic configured yet."
         self._last_push_error = str(result.get("error") or "")
+        self.statusChanged.emit(self.status_snapshot())
+        return result
+
+    def notify_armed_watch(
+        self, *, watch_id: str, title: str, message: str
+    ) -> dict[str, Any]:
+        """Push one TRADER-ARMED watch hit, once, in every Auto mode.
+
+        AWAY is the only mode that pushes routine output. The armed
+        Research/Focus price alerts are the standing exception - the trader
+        asked for that exact condition and is waiting on it - and an armed
+        chart watch is the same request made from the chart instead of the
+        Focus board, so it rides the SAME sender rather than growing a second
+        door to the phone (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`).
+
+        De-duplicated by `watch_id`: an arm is one episode, so a poll that
+        somehow sees the same fire twice buzzes once. ``ok`` means a push left
+        the desk, which a de-duplicated repeat did not.
+        """
+        watch_id = str(watch_id or "").strip()
+        if not self.engine_enabled:
+            return {
+                "ok": False,
+                "error": "Phone pushes originate from the main desk only.",
+            }
+        if watch_id and watch_id in self._announced_watch_ids:
+            return {"ok": False, "deduplicated": True, "watch_id": watch_id}
+        result = dict(
+            push_notify.send_push(
+                str(title or "Armed watch"),
+                str(message or ""),
+                priority="urgent",
+                tags="bell",
+            )
+            or {}
+        )
+        if watch_id:
+            self._announced_watch_ids.add(watch_id)
+            # An arm is one episode and a fired watch disarms, so this set only
+            # ever grows by one per fire; the cap is belt and braces for a desk
+            # that stays open for weeks.
+            while len(self._announced_watch_ids) > _ANNOUNCED_WATCH_ID_LIMIT:
+                self._announced_watch_ids.pop()
+        result["watch_id"] = watch_id
+        self._last_push_error = str(result.get("error") or "")
+        logging.info(
+            "ARMED WATCH %s (push %s)",
+            message,
+            "sent" if result.get("ok") else (self._last_push_error or "not configured"),
+        )
         self.statusChanged.emit(self.status_snapshot())
         return result
 

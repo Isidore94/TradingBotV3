@@ -40,6 +40,7 @@ from chart_watch import (
     BAND_BOUNCE_PRIME_BUCKETS,
     BAND_BOUNCE_TRACKER_TYPES,
     ChartWatch,
+    ChartWatchTrigger,
     D1EventWatch,
     D1LevelWatch,
     D1_EVENT_KINDS,
@@ -53,6 +54,8 @@ from chart_watch import (
     evaluate_chart_watch,
     evaluate_d1_event_watch,
     evaluate_d1_level_watch,
+    evaluate_h1_bounce_watch,
+    h1_bounce_message,
     completed_session_bars,
     load_any_bounce_watches,
     load_chart_watches,
@@ -63,6 +66,8 @@ from chart_watch import (
     save_d1_event_watches,
     save_d1_level_watches,
     watch_is_stale,
+    H1_EMA_BOUNCE_KIND,
+    PERSISTENT_WATCH_KINDS,
 )
 import focus_adoption_gate
 import regime_pause_hold
@@ -4570,12 +4575,46 @@ class AlertCenterPanel(QFrame):
             dwell_ms=self._review_dwell_ms(symbol),
             detail={"kind": kind, "baseline": watch.baseline},
         )
+        if kind == H1_EMA_BOUNCE_KIND:
+            self.statusChanged.emit(
+                f"{symbol}: {label} armed - {watch.reason}. "
+                f"{self._h1_warmup_note(symbol)}"
+            )
+            return True
         level = f" against {watch.baseline:.2f}" if watch.baseline is not None else ""
         self.statusChanged.emit(
             f"{symbol}: {label} watch armed{level} - the first completed "
             "M5 bar that meets it flags red in the Alert Center."
         )
         return True
+
+    def _h1_warmup_note(self, symbol: str) -> str:
+        """What the H1 rule can see for this symbol RIGHT NOW, measured.
+
+        The rule needs `WARMUP_BARS` completed H1 bars before it will answer at
+        all, and the desk's cached M5 window is five sessions (SN2), which
+        aggregates to about 35. Saying so at the click - from the bars actually
+        in hand, never from a remembered number - is the difference between a
+        watch that is waiting and a watch the trader thinks is watching.
+        """
+        try:
+            from indicators.h1_ema_bounce import WARMUP_BARS, closed_h1_bars
+
+            have = len(
+                closed_h1_bars(
+                    self._m5_bars_for(symbol, sessions=self.H1_WATCH_M5_SESSIONS)
+                )
+            )
+        except Exception:  # pragma: no cover - a note must never cost the arm
+            return "It evaluates on every completed H1 bar."
+        if have >= WARMUP_BARS:
+            return (
+                f"{have} completed H1 bars cached - it evaluates on every new one."
+            )
+        return (
+            f"Only {have} completed H1 bars are cached and the rule needs "
+            f"{WARMUP_BARS}, so it reports NOT MEASURED until more arrive."
+        )
 
     def disarm_chart_watch_for(self, symbol: str, kind: str) -> bool:
         """Public disarm surface (the toggles' off-click). True if removed."""
@@ -4670,20 +4709,40 @@ class AlertCenterPanel(QFrame):
         note = self._tracker_note_for(watch, hit, moment)
         if note:
             trigger = f"{trigger} | {note}"
+        payload = {
+            "chart_watch_kind": kind,
+            "armed_at": watch.armed_at.isoformat(),
+            "source_text": getattr(watch, "source_text", "")
+            or getattr(watch, "candle_date", ""),
+        }
+        watch_id = str(getattr(watch, "watch_id", "") or "")
+        if watch_id:
+            payload["watch_id"] = watch_id
+        # Everything the evaluation measured, for the kinds that measure more
+        # than their own message says (the H1 retester's two bar times and its
+        # full reason list). Never allowed to overwrite the keys above.
+        for key, value in dict(getattr(hit, "details", None) or {}).items():
+            payload.setdefault(str(key), value)
         return BounceAlert(
             time_text=moment.strftime("%H:%M:%S"),
             symbol=watch.symbol,
             side=side,
             trigger=trigger,
-            timeframe="D1" if (kind in D1_LEVEL_KINDS or kind in D1_EVENT_KINDS) else "M5",
+            timeframe=(
+                "D1"
+                if (
+                    kind in D1_LEVEL_KINDS
+                    or kind in D1_EVENT_KINDS
+                    # A persistent watch is a multi-day arm and belongs beside
+                    # the other armed events on the D1 feed, never on the
+                    # session M5 list (which is today's intraday tape).
+                    or kind in PERSISTENT_WATCH_KINDS
+                )
+                else "M5"
+            ),
             tag=CHART_WATCH_TAG,
             raw_text=f"CHART WATCH {watch.symbol} ({side}): {trigger}",
-            payload={
-                "chart_watch_kind": kind,
-                "armed_at": watch.armed_at.isoformat(),
-                "source_text": getattr(watch, "source_text", "")
-                or getattr(watch, "candle_date", ""),
-            },
+            payload=payload,
         )
 
     def _tracker_note_for(self, watch, hit, moment: datetime) -> str:
@@ -5380,7 +5439,183 @@ class AlertCenterPanel(QFrame):
         )
         return True
 
+    #: How many sessions of cached M5 bars an H1 retester asks for. The desk's
+    #: own window is five (SN2) and `_m5_bars_for` never fetches, so this is a
+    #: ceiling rather than a request: ask for what the rule's warm-up wants and
+    #: take what is cached.
+    H1_WATCH_M5_SESSIONS = 10
+
+    def _poll_h1_bounce_watches(self, now: datetime | None = None) -> None:
+        """The armed H1 retesters, evaluated once per tick (WISHLIST 10C).
+
+        Rides the D1 EVENT poll rather than the 30 s chart-watch one because
+        an H1 retester is a multi-day arm: it needs that poll's trading-day
+        expiry pass, and re-reading its bars four times an hour would answer
+        the same question four times - a completed H1 bar only arrives once an
+        hour, and this returns the same verdict until it does.
+
+        Cost on the Qt thread: for each ARMED H1 watch (a handful, by hand),
+        one O(bars) bucketing pass over the already-materialised M5 dicts plus
+        an O(bars) ATR and EMA over the ~35 resulting H1 bars. No fetch, no
+        file read, no allocation beyond that list.
+
+        `None` from the rule is NOT MEASURED - too little history, or bars
+        that stopped arriving - and a watch in that state simply waits.
+        Uncertainty never deletes.
+        """
+        armed = [
+            watch
+            for watch in self._chart_watches
+            if watch.kind in PERSISTENT_WATCH_KINDS
+        ]
+        if not armed:
+            return
+        moment = now or datetime.now()
+
+        def _key(watch) -> tuple:
+            return (watch.symbol, watch.kind, watch.watch_id, watch.armed_at)
+
+        kept, expired = self._expire_armed_watches(
+            "chart_watches", armed, now=moment
+        )
+        if expired:
+            gone = {_key(watch) for watch in armed} - {_key(watch) for watch in kept}
+            self._chart_watches = [
+                watch for watch in self._chart_watches if _key(watch) not in gone
+            ]
+            self._save_chart_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+            armed = kept
+            if not armed:
+                return
+
+        finished: set[tuple] = set()
+        triggered: list[ChartWatchTrigger] = []
+        for watch in armed:
+            try:
+                result = evaluate_h1_bounce_watch(
+                    watch,
+                    self._m5_bars_for(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS),
+                    now=moment,
+                )
+            except Exception:
+                logging.debug(
+                    "H1 retester evaluation failed for %s", watch.symbol, exc_info=True
+                )
+                continue
+            if result is None:
+                continue
+            if result.fired:
+                finished.add(_key(watch))
+                triggered.append(
+                    ChartWatchTrigger(
+                        watch=watch,
+                        price=float(result.confirm_close or 0.0),
+                        bar_dt=result.confirm_bar_dt or moment,
+                        message=h1_bounce_message(watch, result),
+                        resolved_side=result.side,
+                        details={
+                            "watch_id": watch.watch_id,
+                            "reason": watch.reason,
+                            "rule_version": result.rule_version,
+                            "touch_bar_dt": (
+                                result.touch_bar_dt.isoformat()
+                                if result.touch_bar_dt is not None
+                                else ""
+                            ),
+                            "confirm_bar_dt": (
+                                result.confirm_bar_dt.isoformat()
+                                if result.confirm_bar_dt is not None
+                                else ""
+                            ),
+                            "ema": result.ema,
+                            "atr": result.atr,
+                            "distance_atr": result.distance_atr,
+                            "skipped_bars": result.skipped_bars,
+                            # One event per watch recording ALL the measured
+                            # reasons - the packet's own rule.
+                            "reasons": list(result.reasons),
+                        },
+                    )
+                )
+            elif result.reason == "invalidated":
+                # The level did not hold. The arm is over and the trader is
+                # told, but this is not an event worth a phone buzz: nothing
+                # to do about it, and the chart says the same thing.
+                finished.add(_key(watch))
+                self._record_review_event(
+                    "watch_invalidated",
+                    symbol=watch.symbol,
+                    side=watch.side,
+                    detail={
+                        "kind": watch.kind,
+                        "watch_id": watch.watch_id,
+                        "reasons": list(result.reasons),
+                        "rule_version": result.rule_version,
+                    },
+                )
+                self.statusChanged.emit(
+                    f"{watch.symbol}: H1 retester disarmed - price closed through "
+                    "the 15-EMA against the setup."
+                )
+
+        if finished:
+            self._chart_watches = [
+                watch for watch in self._chart_watches if _key(watch) not in finished
+            ]
+            self._save_chart_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+        for hit in triggered:
+            self._record_review_event(
+                "watch_fired",
+                symbol=hit.watch.symbol,
+                side=str(getattr(hit, "resolved_side", "") or hit.watch.side).upper(),
+                detail={
+                    "kind": hit.watch.kind,
+                    "watch_id": hit.watch.watch_id,
+                    "message": str(hit.message or ""),
+                    "reasons": list((hit.details or {}).get("reasons") or ()),
+                },
+            )
+            # The phone first: a broken display path must never be able to
+            # suppress the buzz the trader armed this for.
+            self._push_armed_watch(hit)
+            self.add_alert(self._chart_watch_alert(hit, moment))
+
+    def _push_armed_watch(self, hit) -> None:
+        """One phone event per armed-watch fire, through the ONE armed sender.
+
+        AWAY is the only mode that pushes routine output; the armed
+        Research/Focus price alerts are the recorded exception that pushes in
+        every mode, and a watch the trader armed from the chart is the same
+        request made from a different surface - so it rides that sender rather
+        than opening a second door. De-duplication is by watch id, inside the
+        service. Delivery is best-effort: an unconfigured topic or a dead
+        network must never cost the alert behind it.
+        """
+        service = getattr(self, "price_alert_service", None)
+        if service is None:
+            return
+        watch = hit.watch
+        label = WATCH_KINDS.get(watch.kind, watch.kind)
+        try:
+            service.notify_armed_watch(
+                watch_id=str(getattr(watch, "watch_id", "") or ""),
+                title=f"{label}: {watch.symbol}",
+                message=str(hit.message or ""),
+            )
+        except Exception:
+            logging.debug(
+                "Armed-watch push failed for %s", watch.symbol, exc_info=True
+            )
+
     def _poll_d1_event_watches(self, now: datetime | None = None) -> None:
+        # The H1 retesters live in the chart-watch store but keep this poll's
+        # clock, so they are evaluated BEFORE the early return below - which
+        # asks only whether any D1 EVENT watch is armed.
+        self._poll_h1_bounce_watches(now=now)
         if not self._d1_event_watches:
             return
         moment = now or datetime.now()
