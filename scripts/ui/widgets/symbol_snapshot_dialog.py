@@ -488,12 +488,15 @@ class SymbolSnapshotWidget(QWidget):
             self._m5_sessions = M5_DEFAULT_SESSIONS
             self._m5_older_failed = False
             self._m5_view_restore = None
-            self._sync_older_button()
         self._symbol = symbol
         # Retained so refresh() can re-pull the M5 cache on a timer tick. The
         # hosting panel passes a fresh bot on its own ticks; this reference
         # only carries the popup between clicks.
         self._bot = bot
+        # After both, never between: the button's enabled state is a fact about
+        # the symbol and bot this widget is now showing.
+        if switched:
+            self._sync_older_button()
         known = self._data.last_snapshot(symbol)
         if known is not None:
             self._render_snapshots(known[0], known[1])

@@ -43,8 +43,17 @@ _log = logging.getLogger(__name__)
 #: Two workers: one serving the chart the trader is looking at, one draining
 #: the prefetch queue behind it. More would just contend for the same disk.
 DEFAULT_MAX_THREADS = 2
-#: Built snapshots kept for instant repaint on revisit. Small next to the bar
-#: cache itself - these are only the ~90 shown bars plus overlay series.
+#: Built snapshots kept for instant repaint on revisit.
+#:
+#: MEASURED 2026-09-13 (WS-CH), because the comment here used to say "small
+#: next to the bar cache itself - these are only the ~90 shown bars plus
+#: overlay series" and that stopped being true when the D1 payload went to
+#: D1_HISTORY_SESSIONS: one built D1 snapshot is 75 KB at 90 sessions and
+#: 701 KB at 1,000 (1,000 bar dicts plus 14 overlay series of 1,000 floats),
+#: so a full cache is about 41 MB per service rather than 4.4 MB. Each chart
+#: widget owns its own service. The cap is UNCHANGED here deliberately - the
+#: packet did not name it and 41 MB is well inside the desk's budget - but it
+#: is now a number someone chose rather than one nobody had looked at.
 _LAST_SNAPSHOT_CAP = 60
 #: Symbols whose materialized bar dicts stay resident (cached_bar_dicts). The
 #: D1 poll set is the Focus list plus whatever is armed - about 105 names on
