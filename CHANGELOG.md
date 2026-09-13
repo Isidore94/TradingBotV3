@@ -702,6 +702,35 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **A forming bar never reaches the daily-bar cache (WS-FC1, WISHLIST item 2, 2026-09-12, sweep
+  branch).** `scripts/master_avwap_lib/daily_bar_cache.py` holds the rule both CSV writers now
+  route through (`legacy._write_cached_daily_bar_frame` and
+  `_seed_daily_bar_cache_from_durable`; the `legacy.py` diff is 19 lines at the writer seam the
+  trader's FC1 prompt authorized): a row whose session is not complete in EXCHANGE time
+  (`astimezone`, inclusive of the 16:00 ET close - `market_calendar` models no early closes, so a
+  half day waits until 16:00, safe never early) is `forming_dropped`, a completed row breaking
+  `low <= open, close <= high` is `invalid_dropped`, forming wins over invalid so
+  `kept + forming + invalid == fetched`; the filter is vectorised and an internal failure refuses
+  NOTHING (WARNING) because a cache that stops updating is worse than one counted row. The run
+  manifest ALWAYS carries `daily_bars_forming_dropped` / `daily_bars_invalid_dropped` (even at
+  zero, on the failure path too); one INFO line per scan names both, one DEBUG line per dropped
+  row. The in-process frame cache holds the FILTERED frame; `fetch_daily_bars`' RETURN value is
+  unchanged, so the scan's D1 indicators see what they saw. Repair: `cd scripts && python -m
+  master_avwap_lib.daily_bar_cache repair [--apply] [--cache-dir]`, dry run by default, prints
+  `DATA_DIR` then the cache dir, refuses a target under `C:\TradingBotData`, removes only an
+  invalid or forming LAST row, refetches that session through `fetch_daily_bars_from_yahoo`
+  (window widened to reach an old session), temp + rename. Dry run on a COPY of the live cache
+  (2026-09-12): 1,988 files, 66 end in an impossible candle (2026-09-11 x55 - an ONGOING defect,
+  not the trader's older 100), 64 get a completed replacement, MCW and TERN return no Yahoo data
+  and lose the row; **`--apply` on the live cache is the trader's action and was never run**.
+  What the bad rows touched (copy of the tracker mirror): 443 records had the bad date inside
+  their replay window (270 setups / 169 studies / 4 controls), 443 had band levels recomputed
+  from it, 441 were marked on it, ZERO had a fill booked on it (`gap_aware_v2` refuses an
+  invalid bar); the next persisted tracker write rebuilds every record, so no tracker repair is
+  owed. Two seams reported, NOT edited (ask-first, outside the yes):
+  `legacy._persist_durable_daily_bars` still writes the UNFILTERED frame to the durable Parquet
+  mirror, and `fetch_daily_bars`' return still carries today's forming bar to the D1 indicators.
+  Tests: `tests/test_ws_fc1_daily_bar_cache.py` (tester, 17), `tests/test_ws_fc1_daily_bar_cache_builder.py`.
 - **A watchlist edit is a dated event, never a verdict (WS-5D, 2026-09-12, sweep branch).**
   `scripts/watchlist_intent_events.py` (schema `watchlist_intent_event_v1`,
   `WATCHLIST_INTENT_EVENTS_FILE` in the shared home) appends one row per symbol that joins or
@@ -2066,6 +2095,12 @@ after code completion; nothing merges to `main` before that. One bullet per pack
   floor kept at 5. Six existing test files re-fixtured to the typed shape. Suite 7324 green, ruff
   clean, smoke 7/7, selftest 74/74. Gate #96.
 - **WS-EF1 (WISHLIST item 3) - exit frameworks split by setup family**, branch `claude/ws-ef1-exit-by-family` `a55cf320`: the by-family export from the SAME builder (`by_family=True`), `population` from the record, the family picker on the Exit frameworks tab, 24 pooled cells reconciled to 672 family rows with zero mismatches. Suite 7331 green, ruff clean, smoke 7/7, selftest 74/74. Gate #97.
+- **WS-FC1 (WISHLIST item 2) - a forming bar never reaches the daily-bar cache**, branch
+  `claude/ws-fc1-forming-candles` `0134ff12`: `master_avwap_lib/daily_bar_cache.py` (the rule,
+  the counters, the repair CLI), a 19-line `legacy.py` writer-seam change, manifest counters
+  always present, one log line per scan; dry run on a copy: 66 of 1,988 files; 443 tracker
+  records touched, zero fills. `--apply` and two ask-first seams are the trader's. Suite 7332
+  green, ruff clean, smoke 7/7, selftest 74/74. Gate #98.
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 

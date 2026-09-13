@@ -50,6 +50,7 @@ from gui_text_highlighter import (
     tree_tags_for_values,
 )
 from .setup_tagging import derive_setup_tag_payload
+from . import daily_bar_cache  # WS-FC1: the daily-bar cache's write guard
 from . import selection_policy as selection_policy_lib
 
 from project_paths import (
@@ -3178,7 +3179,12 @@ def _seed_daily_bar_cache_from_durable(symbol: str, cache_path: Path) -> pd.Data
         _DAILY_BAR_FRAME_CACHE[symbol] = durable
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            durable.to_csv(cache_path, index=False)
+            # WS-FC1: the seed is the other writer of this CSV, so it obeys the
+            # same refusal. Only the FILE is filtered - the frame handed back to
+            # the caller is the durable store's own answer, unchanged.
+            writable, _seed_counts = daily_bar_cache.filter_writable_rows(durable, symbol=symbol)
+            if not writable.empty:
+                writable.to_csv(cache_path, index=False)
             _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = _daily_bar_cache_file_mtime(symbol) or datetime.now()
         except Exception:
             _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.now()
@@ -3245,6 +3251,17 @@ def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
 def _write_cached_daily_bar_frame(symbol: str, df: pd.DataFrame) -> None:
     symbol = str(symbol or "").strip().upper()
     normalized = _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_CACHE)
+    # WS-FC1: a forming session bar and an impossible candle never reach the
+    # cache. The rule, the counters and the repair live in daily_bar_cache so
+    # this ask-first file's diff stays at the writer seam.
+    offered = normalized
+    normalized, _drop_counts = daily_bar_cache.filter_writable_rows(normalized, symbol=symbol)
+    if normalized.empty and not offered.empty:
+        # Every row was refused: keep the last verified file rather than
+        # replacing it with an empty one (missing data is uncertainty).
+        logging.debug("%s: no writable daily bars in this refresh; cache left as it was.", symbol)
+        return
+    normalized = _set_daily_bar_source(normalized, DAILY_BAR_SOURCE_CACHE)
     cache_path = _daily_bar_cache_file(symbol)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     normalized.to_csv(cache_path, index=False)
