@@ -817,43 +817,54 @@ def _lay_out(widget, width: int, height: int) -> None:
     _spin()
 
 
+#: The shared-home stores a desk test writes through. `conftest.py` has already
+#: pointed `TRADINGBOTV3_DATA_DIR` at a temp folder, so none of these can reach
+#: `C:\TradingBotData` - but they ARE shared with the rest of the suite, so the
+#: fixture SAVES and RESTORES rather than blanking and walking away.
+_DESK_HOME_FILES = (
+    "LONGS_FILE",
+    "SHORTS_FILE",
+    "SWING_LONGS_FILE",
+    "SWING_SHORTS_FILE",
+    "FOCUS_LONGS_FILE",
+    "FOCUS_SHORTS_FILE",
+    "SWING_FAVORITES_FILE",
+    "WATCHLIST_INTENT_EVENTS_FILE",
+    "PRICE_ALERTS_FILE",
+    "FOCUS_PICK_MEMBERSHIP_FILE",
+    "TRADER_ANNOTATIONS_FILE",
+)
+
+#: Blanked to "" rather than deleted: the four plain watchlists and the two
+#: Focus files are READ by name and a missing one logs a warning on every load.
+_DESK_HOME_BLANKED = _DESK_HOME_FILES[:6]
+
+
 @pytest.fixture
 def desk_home():
-    """Blank the shared-home stores the desk writes, before AND after.
+    """Start each desk test from an empty shared home, and put it back after."""
+    paths = [getattr(project_paths, name) for name in _DESK_HOME_FILES]
+    saved = {path: (path.read_bytes() if path.is_file() else None) for path in paths}
+    blanked = {getattr(project_paths, name) for name in _DESK_HOME_BLANKED}
 
-    `conftest.py` has already pointed `TRADINGBOTV3_DATA_DIR` at a temp folder,
-    so nothing here can reach `C:\\TradingBotData`; this only keeps one desk
-    test from reading another's leftovers.
-    """
-    targets = (
-        project_paths.LONGS_FILE,
-        project_paths.SHORTS_FILE,
-        project_paths.SWING_LONGS_FILE,
-        project_paths.SWING_SHORTS_FILE,
-        project_paths.FOCUS_LONGS_FILE,
-        project_paths.FOCUS_SHORTS_FILE,
-    )
-
-    def _blank():
-        for path in targets:
-            path.parent.mkdir(parents=True, exist_ok=True)
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path in blanked:
             path.write_text("", encoding="utf-8")
-        for path in (
-            project_paths.SWING_FAVORITES_FILE,
-            project_paths.WATCHLIST_INTENT_EVENTS_FILE,
-            project_paths.PRICE_ALERTS_FILE,
-            project_paths.FOCUS_PICK_MEMBERSHIP_FILE,
-            project_paths.TRADER_ANNOTATIONS_FILE,
-        ):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists():
-                path.unlink()
+        elif path.exists():
+            path.unlink()
 
-    _blank()
     pick_feedback.clear_reviewed_today_cache()
-    yield project_paths
-    _blank()
-    pick_feedback.clear_reviewed_today_cache()
+    try:
+        yield project_paths
+    finally:
+        for path, payload in saved.items():
+            if payload is None:
+                if path.exists():
+                    path.unlink()
+            else:
+                path.write_bytes(payload)
+        pick_feedback.clear_reviewed_today_cache()
 
 
 @pytest.fixture
