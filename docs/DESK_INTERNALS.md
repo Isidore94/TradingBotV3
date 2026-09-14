@@ -5101,3 +5101,103 @@ Focus store, so it must not need one to exist. The star and the X are untouched.
 **Reopen trigger.** The trader asks for a claimed pick to reach Focus or a watchlist
 automatically, for the fade to be a different clock from the Focus fade, for the queue gate
 to key on the setup as well as the side, or for a claimed row to carry a score of its own.
+
+## D1C-B - the claimed picks are graded where likes already were (2026-09-14, packet D1C-B)
+
+Trader, 2026-09-14: *"Reuse the existing outcome and evidence services. Measure manually
+claimed opportunities from the claim time forward, retaining the claimed setup and the
+measurements known then. Let me compare FAV, HC and My liked trades, and compare the setup
+types I claimed. Show sample sizes, pending and unmeasured results, and the existing
+uncertainty measures. Handle overlapping buckets explicitly. Repeated clicks must not create
+extra independent trades. Keep opportunity results separate from actual journal trade
+results. Use these results to show what has worked best over time. Do not automatically
+change ranking weights, detector rules or promotion status."*
+
+**No second pipeline was built.** Both sides of this readout were already graded forward
+before `scripts/claimed_pick_evidence.py` existed, and neither is regraded by it. The LIKE
+side is `ui/annotations/like_cohort.py` delegating to `human_focus_tracking`
+(`HORIZONS = (1, 3, 5, 10)`, `entry_close` the claim day's close), written nightly by the
+deterministic slot `ai_jobs.cohorts.run_like_cohort_grading`. The TRACKER side is
+`master_avwap_tier_outcomes.csv` through the ONE reader
+`swing_evidence.read_eligible_rows(..., POLICY_SCANROW_V1)`. The new module reads four files
+and writes none.
+
+**TWO CLOCKS, AND THE SAME NUMBER MEANS TWO DIFFERENT THINGS.** Both sides are measured at
+`evidence_stats.SWING_HORIZON_SESSIONS` (5), but the like cohort counts five EXCHANGE
+SESSIONS from the claim day's close and the tracker counts five SCAN ROWS - the symbol's own
+fifth later scan row, which on a name the scan misses for a week is a longer span of calendar
+than five sessions. So the two n's sit side by side, each labelled with its own clock in the
+cell, and **no number anywhere is their sum**. The tab test that proves it asserts that
+`n_liked + n_fav` appears in no rendered cell.
+
+**An overlap is NAMED, never merged.** A liked pick whose symbol and side also carry a FAV or
+Near tier row with `scan_date == session_date` is counted once in My liked trades, once in
+FAV, and once in `also_fav` / `also_near`. The report prints `of which N also FAV that day`.
+A union of two populations on two clocks is not a sample, so there is no union.
+
+**HC is UNMEASURED in words and never 0%.** `priority_bucket` in the live tracker is
+{`favorite_setup` 8,258, `near_favorite_zone` 16,299, blank 1,809} over 26,366 rows and
+carries NO `high_conviction` row: HC is an overlay computed at feed-write time
+(`legacy._priority_is_high_conviction`) and never stamped on an outcome row. The cell reads
+`unmeasured: the tracker records favorite_setup / near_favorite_zone only (0 HC rows)`. The
+same reader grades HC the day the tracker ever stamps it - there is a fixture that proves it.
+
+**Three lead rulings, 2026-09-14, on what the tracker's cells may say.**
+
+1. `POLICY_SCANROW_V1.immature_value` is empty - a v1 outcome row cannot exist until the
+   symbol's own later scan row does - so `read_eligible_rows` never yields a pending row for
+   it. The tracker cells print `0 (mature by construction)` rather than a bare zero, print
+   `-` for `unmeasured` rather than 0, and the READ-LEVEL exclusions (`EligibleRead.excluded`,
+   e.g. `stale_horizon 1, wrong_horizon 1`) are printed ONCE as `tracker read excluded: ...`
+   instead of being repeated per bucket. A dash says "not asked here"; a zero would say
+   "asked, and the answer was none". My liked trades keeps its own real pending and
+   unmeasured counts, because this week's claims genuinely have not reached their fifth
+   session.
+2. **`all` is an EXPLICIT wide window.** `read_eligible_rows(end=)` moves only the RIGHT edge
+   of the lately window, so the `all` group passes `window=("0001-01-01", as_of)`; `lately`
+   passes `lately_window(as_of)`. The tester found this; the test pins it by showing that
+   `end=` alone grades four FAV rows where the wide window grades five.
+3. The phrase `of which N also FAV that day` lives in `render_text`, with a test.
+
+**Repeated clicks are one trade, twice over.** `like_cohort.like_pick_rows` already keeps the
+first claim of the day per `(trade_date, symbol, side)`; the reader de-duplicates again on
+`(session_date, symbol, side)` and counts what it dropped in `dropped_duplicates`. Three
+`claim` rows for one key in `claimed_picks.jsonl` are one thesis: `_claim_index` keeps the
+first. A quick like (P9, Alt+L) names no setup, so it is excluded and counted once in the
+footnote `quick likes excluded: N` - never silently dropped. A `like_unclaimed` pick is a
+real cohort and a real answer, but it is not one of MY CLAIMED trades and is not read here.
+
+**Ground rule 10: no new statistic.** Every number is a count or
+`swing_headline.wilson_lower_bound` (z 1.96). Win rate leads, the sort is the BOUND, and the
+leader line names a setup only at `evidence_stats.MIN_REPORTABLE_N` (30) - otherwise it says
+`no setup has n >= 30 yet (best n was K)`.
+
+**The journal is a different surface.** Opportunity results and actual trade results are
+never merged: this module imports nothing from `journal_store`, `preference_trade_outcomes`
+or `journal_analytics`, and there are tests that make those three unimportable and still
+build both the reader and the tab. What the trader actually traded lives in the Journal and
+in the said-vs-did preference report.
+
+**Where it is read.** ONE renderer, `render_text`, printed by
+`python -m claimed_pick_evidence [--window lately|all] [--as-of YYYY-MM-DD]`, and a
+`My claims` tab on Research > Setup Tracker built through `_make_explained_tab` - two tables
+(`claim_population_table` over `CLAIM_POPULATION_COLUMNS`, `claim_setup_table` over
+`CLAIM_SETUP_COLUMNS`), the leader line as the status sentence and the footnotes below.
+`_make_explained_tab` gained an `extra` slot for the second block; every existing caller is
+unchanged. The four stores are read inside `_read_tracker_exports`, on the panel's existing
+`ReadWorker`, beside the other fourteen exports and memoized on one signature tuple - **the
+CSV/JSONL loads never run on the Qt thread**, and a failed read degrades to a sentence rather
+than blanking the page.
+
+**Nothing moves.** No ranking weight, `review_policy.json`, detector, alert, watchlist, Focus
+entry, promotion status, tracker file or like-cohort file is written, and the like cohort's
+nightly slot is untouched. Nothing under `ai_jobs/` changed.
+
+**Tests.** `tests/test_d1c_claim_grading_reader.py` (24), `_tab.py` (11), `_cli.py` (6) -
+41 written red by the tester before any of this existed - plus `_render.py` (6) added by the
+builder for the three lead rulings.
+
+**Reopen trigger.** The tracker starts stamping `high_conviction` on an outcome row; the
+trader asks for the two clocks to be pooled, for a claimed setup's record to feed a ranking
+weight or a promotion, or for this readout to reach the AI evidence package (nothing in
+`ai_jobs` reads it today).
