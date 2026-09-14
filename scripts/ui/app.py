@@ -234,7 +234,7 @@ class MainWindow(QMainWindow):
         # own thirty-minute timer.
         # WISHLIST 10J. The Trade Mentor's scheduler is owned by the WINDOW for
         # the same reason the Working-lately service is: it holds one timer and
-        # one state file, and the surface it drives (the card under the chart)
+        # one state file, and the surface it drives (the reusable Mentor popup)
         # is built more than once in this process's lifetime. The card is the
         # Alert Center's; the decision about when to show it is this one's.
         from ui.services.trade_mentor_context_service import TradeMentorContextService
@@ -1088,7 +1088,7 @@ class MainWindow(QMainWindow):
         return rows[-1] if rows else None
 
     def _show_trade_mentor_prompt(self, slot) -> None:
-        """Put a due prompt under the chart, with whatever it needs to ask."""
+        """Show a due prompt in its reusable popup, with its question."""
         review = self.trading_panel.alert_center.chart_review
         try:
             review.show_mentor_slot(slot, previous=self._previous_mentor_read(str(slot.session)))

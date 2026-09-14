@@ -1,18 +1,17 @@
 """The Trade Mentor's card - WISHLIST 10J, packet WS-TM item 3.
 
-Small, non-modal, docked under the chart beside the arm bar, and hidden unless
-something is due. It asks one question and gives three answers: **Submit**,
-**Read unchanged**, **Skip**. Everything else about it is a refusal to get in
-the way.
+Small, modeless, and shown in the reusable Trade Mentor popup only when needed.
+It asks one question and gives three answers: **Submit**, **Read unchanged**,
+**Skip**. Everything else about it is a refusal to get in the way.
 
-**It never takes focus.** The hour can turn while the trader is typing a symbol
-into the arm bar's ticker box; a `setFocus()` here would eat that keystroke, and
-a modal dialog would eat the whole minute. The card is shown with
-`WA_ShowWithoutActivating` and never calls `setFocus`, `raise_` or
-`activateWindow`. The keys it does own (`Ctrl+Enter` to submit) are read through
-an event filter ON THE TEXT BOX, so they mean "submit" only while the cursor is
-in the card - a `QShortcut` at window scope would fire for every widget in the
-page.
+**The scheduled show does not take focus.** The hour can turn while the trader
+is typing a symbol into the arm bar's ticker box; a `setFocus()` here would eat
+that keystroke, and a modal dialog would eat the whole minute. The popup is
+shown with `WA_ShowWithoutActivating` and never calls `setFocus`, `raise_` or
+`activateWindow`; a trader click still focuses its ordinary text box. The keys
+it does own (`Ctrl+Enter` to submit) are read through an event filter ON THE
+TEXT BOX, so they mean "submit" only while the cursor is in the card - a
+`QShortcut` at window scope would fire for every widget in the page.
 
 **The raw text goes to the store FIRST, through the store's one owner.**
 `market_journal_service.write_entry` writes it; nothing is parsed, scored,
