@@ -454,8 +454,12 @@ def test_the_fallback_fetches_at_most_once_per_completed_hour():
     assert cache.request("AAPL", now=moment) is True
     assert cache.request("AAPL", now=moment + timedelta(minutes=1)) is False
     assert cache.request("AAPL", now=moment + timedelta(minutes=14)) is False
-    # The next hour is a new question.
-    assert cache.request("AAPL", now=moment + timedelta(minutes=30)) is True
+    # The next COMPLETED BUCKET is a new question. The session's buckets are
+    # open-relative (06:30, 07:30 ... 12:30), so 12:15 is still the same 10:30
+    # bucket this ask already answered and 12:31 is the first moment a new one
+    # (11:30, closed at 12:30) exists - fixture corrected by RV-H1-HISTORY
+    # 2026-09-13, the assertion's meaning unchanged.
+    assert cache.request("AAPL", now=moment + timedelta(minutes=46)) is True
 
 
 def test_the_fetched_series_drops_the_forming_hour_and_converts_the_zone():

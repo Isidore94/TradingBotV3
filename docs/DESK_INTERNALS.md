@@ -4357,6 +4357,28 @@ grace, or for a prompt to survive being away.
   health cell names the source, `H1 from cache` / `H1 from yfinance`, so no verdict is
   read without knowing which history produced it. The alternative - a wider M5 window
   for armed symbols in `bounce_bot_lib` - stays the trader's ask; `v1` keeps its 45.
+- **The need is measured on the PRIMARY series, never on the one that was chosen**
+  (repair 2026-09-13, review blocker B1). `_h1_bars_for_watch` asked for a refresh only
+  when the CHOSEN series was short of the warm-up, so the moment the fallback held 45
+  bars nothing ever asked again while the desk's own window stayed at ~35 for ever - the
+  watch was then judged on ageing bars until the rule's 24 h staleness answered "not
+  measured" for good. `chart_watch.h1_bars_for_watch` returns the yfinance series only
+  when the primary is short, so that source IS the short answer and the panel asks on it.
+- **The refresh cadence is a completed SESSION-ALIGNED bucket, not the wall-clock hour**
+  (repair 2026-09-13). `H1HistoryCache.request` keys its refusal on
+  `h1_history.last_completed_h1_bucket` - open-relative buckets 06:30, 07:30 ... 12:30
+  market-local, the last one 30 minutes long and closed at the bell - because a new
+  answer can only exist when one of those has completed. The clock-hour key both
+  refetched twice inside one bucket (11:45 and 12:15) and refetched every hour all
+  evening, when no bucket can complete at all. A fetched bar is admitted on the same
+  rule: `h1_bucket_end` walks the short 12:30 bucket to the 13:00 bell, so the two
+  series agree instead of standing one bar apart for an hour every session.
+- **A refresh that fails after a success keeps the bars and says they STOPPED** (repair
+  2026-09-13). The held bars are still the best answer available and the watch keeps
+  being judged on them, so the health cell reads `H1 from yfinance (stale - last refresh
+  failed)` through the new `H1HistoryCache.last_refresh_failed`; the next completed
+  bucket retries. `unavailable` keeps its own meaning - nothing was EVER fetched -
+  and still prints `not measured (N of 45 H1 bars, yfinance unavailable)`.
 - **Tests:** `tests/test_ws_10c_h1_retester.py` (the packet's, written red - 25 of 26
   green; the 26th clicks an `ArmBar` with no symbol charted, where every watch toggle is
   disabled by design, and is left red rather than weakened) and

@@ -4618,14 +4618,28 @@ class AlertCenterPanel(QFrame):
         Reads only what is already in memory. When the cached window is short
         of the warm-up it ASKS the fallback for a refresh and returns whatever
         it has right now - the first cycle after arming simply reports "not
-        measured", and the answer lands before the next completed hour.
+        measured", and the answer lands before the next completed bucket.
+
+        **The need is measured on the PRIMARY series, never on the chosen one**
+        (repair RV-H1-HISTORY, review blocker B1, 2026-09-13). Asking only when
+        the CHOSEN series was short meant that once the fallback held 45 bars
+        nothing ever asked again, while the desk's own window stayed at ~35 for
+        ever - so the watch was judged on ageing bars until the rule's 24 h
+        staleness answered "not measured" for good. `h1_bars_for_watch` hands
+        back the yfinance series only when the primary is short of the warm-up,
+        so that source IS the short answer; otherwise `bars` is the primary and
+        its own length is the test. No second aggregation pass.
         """
         m5_bars = self._m5_bars_for(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS)
         cache = self._h1_history_cache()
         fallback = cache.bars_for(watch.symbol) if cache is not None else None
         bars, source = h1_bars_for_watch(m5_bars, fallback_h1_bars=fallback)
-        if cache is not None and len(bars) < self._h1_warmup_bars():
-            cache.request(watch.symbol, now=now or datetime.now())
+        if cache is not None:
+            primary_is_short = (
+                source == H1_SOURCE_YFINANCE or len(bars) < self._h1_warmup_bars()
+            )
+            if primary_is_short:
+                cache.request(watch.symbol, now=now or datetime.now())
         return bars, source
 
     @staticmethod
@@ -4646,6 +4660,13 @@ class AlertCenterPanel(QFrame):
         bars)` rather than `ok`. An armed surface whose job is to say "these
         are the exact conditions I am waiting on" must not report a watch as
         healthy when it cannot evaluate at all.
+
+        Since the RV-H1-HISTORY repair (2026-09-13) there is a third honest
+        state: bars that are GOOD but STOPPED. A refresh that fails after a
+        success keeps the bars it already has - they are still the best answer
+        - and the cell says so, because an ageing verdict must not read exactly
+        like a live one. `unavailable` keeps its own meaning: nothing was ever
+        fetched at all.
         """
         if str(getattr(watch, "kind", "") or "") not in PERSISTENT_WATCH_KINDS:
             return ""
@@ -4654,15 +4675,30 @@ class AlertCenterPanel(QFrame):
             return ""
         if have >= needed:
             # It can answer - and the trader can see WHICH history answered it.
-            return (
-                "H1 from yfinance"
-                if source == H1_SOURCE_YFINANCE
-                else "H1 from cache"
-            )
+            if source != H1_SOURCE_YFINANCE:
+                return "H1 from cache"
+            if self._h1_refresh_failed(watch.symbol):
+                return "H1 from yfinance (stale - last refresh failed)"
+            return "H1 from yfinance"
         cache = self._h1_history_cache()
         if cache is not None and cache.unavailable(watch.symbol):
             return f"not measured ({have} of {needed} H1 bars, yfinance unavailable)"
         return f"not measured ({have} of {needed} H1 bars)"
+
+    def _h1_refresh_failed(self, symbol) -> bool:
+        """True when the fallback's LAST refresh for this symbol failed.
+
+        A note never costs its caller, and a cache stand-in without the reader
+        simply answers "not stale" rather than raising in the health cell.
+        """
+        cache = self._h1_history_cache()
+        reader = getattr(cache, "last_refresh_failed", None)
+        if reader is None:
+            return False
+        try:
+            return bool(reader(symbol))
+        except Exception:  # pragma: no cover - a health cell never raises
+            return False
 
     def _h1_warmup_counts(self, watch) -> tuple[int | None, int, str]:
         """(H1 bars available, bars the rule needs, source). One O(bars) pass."""
