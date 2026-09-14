@@ -311,13 +311,15 @@ def test_the_bar_is_the_left_column_before_the_chart():
         splitter = desk.desk_splitter
         assert splitter is not None
         assert splitter.count() == 3
-        # The bar shares its column with "Today's swing picks" (2026-08-31),
-        # so the column is what the splitter holds - and the bar is still the
+        # The column is what the splitter holds - and the bar is still the
         # first thing in it, still before the chart. That is the trader rule.
+        # D1C-L (trader, 2026-09-14) took "Today's swing picks" out of this
+        # column and put it under the setups on the right, so the third child
+        # is the D1 column; the left column's shape is unchanged.
         assert splitter.widget(0) is desk.m5_column
         assert desk.m5_column.widget(0) is desk.m5_alert_bar
         assert splitter.widget(1) is desk.alert_center
-        assert splitter.widget(2) is desk.master_workspace
+        assert splitter.widget(2) is desk.d1_column
         # Wired both ways: alerts flow in, a click flows back.
         alert = _m5("NVDA")
         desk.alert_center.m5AlertPosted.emit(alert)

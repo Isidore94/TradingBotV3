@@ -227,7 +227,13 @@ def test_toggling_the_setups_never_stacks_duplicate_split_handlers():
 
 
 def test_tabs_mode_always_shows_the_setups_tab():
-    """A tab that refused to draw itself would just look broken."""
+    """A tab that refused to draw itself would just look broken.
+
+    Since D1C-L (2026-09-14) the thing workspace mode HIDES is `d1_column`, so
+    that is what this guard reads: `master_workspace.isHidden()` alone can no
+    longer fail, because nothing hides the workspace itself any more. The
+    workspace assertion is kept beside it - both must be showable.
+    """
     from ui.panels.trading_desk import TradingDeskPanel
 
     desk = TradingDeskPanel(workspace_mode="workspace")
@@ -238,8 +244,10 @@ def test_tabs_mode_always_shows_the_setups_tab():
     for _ in range(4):
         _app.processEvents()
     hidden_button = desk.setups_toggle.isVisibleTo(desk)
+    column_shown = not desk.d1_column.isHidden()
     workspace_shown = not desk.master_workspace.isHidden()
     desk.close()
+    assert column_shown, "the tab's own widget must be shown in tabs mode"
     assert workspace_shown, "the setups tab must be shown in tabs mode"
     assert not hidden_button, "the hide toggle is a workspace-mode control"
 
