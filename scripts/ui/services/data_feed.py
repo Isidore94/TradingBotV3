@@ -161,9 +161,30 @@ def _ensure_classification_badge(row: SetupRow) -> None:
         badges.append(label)
 
 
+def _record_bucket_key(row: SetupRow, bucket: str) -> None:
+    """Remember that this row belongs to `bucket` as well (packet D1C-A).
+
+    The fold below merged display LABELS only, so an HC row that was also a FAV
+    carried both words and no key - and the chip filter, which asks in raw
+    bucket keys, could never see the second membership. One line here is what
+    makes "FAV + Liked shows the HC+FAV+claimed row" answerable.
+    """
+    key = str(bucket or "").strip().lower()
+    if not key:
+        return
+    keys = row.raw.setdefault("bucket_keys", [])
+    if not isinstance(keys, list):
+        keys = []
+        row.raw["bucket_keys"] = keys
+    if key not in keys:
+        keys.append(key)
+
+
 def _merge_classification_badges(existing: SetupRow, duplicate: SetupRow) -> None:
     _ensure_classification_badge(existing)
     _ensure_classification_badge(duplicate)
+    _record_bucket_key(existing, existing.bucket)
+    _record_bucket_key(existing, duplicate.bucket)
     badges = existing.raw["classification_badges"]
     for label in duplicate.raw.get("classification_badges") or []:
         if label and label not in badges:

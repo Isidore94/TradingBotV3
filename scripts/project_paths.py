@@ -400,6 +400,17 @@ TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
 # never in front of it, and nothing in the running system reads this file to
 # detect, score, rank, gate or alert (plan.md sec 5).
 SWING_FAVORITES_FILE = PERSISTENT_DATA_DIR / "swing_favorites.jsonl"
+# Packet D1C-A (2026-09-14, trader). Append-only JSONL of the D1 setups the
+# trader LIKED AND CLAIMED on a review chart: one row per action (`claim`,
+# `drop`, `expire`), identity `(symbol, side, claimed_setup_id)`, replayed in
+# file order so the last action per key wins. It sits beside
+# `swing_favorites.jsonl` because it is the same storage class - small,
+# trader-authored, shared home - and it is read by exactly two surfaces: the
+# Master AVWAP setups table (the claimed row) and the chart-review queue gate
+# (this D1 chart has been answered). It places nothing on Focus, injects
+# nothing into a watchlist and carries no suppression field: nothing here
+# detects, scores, ranks, gates or alerts (plan.md sec 5).
+CLAIMED_PICKS_FILE = PERSISTENT_DATA_DIR / "claimed_picks.jsonl"
 # Packet WS-TH (2026-09-12, WISHLIST item 6). Append-only JSONL of the theta
 # picks the D1 scan already printed to `master_avwap_theta_puts.txt`: one row per
 # (symbol, scan_date, play_type), written from the RUNNER right after the report,

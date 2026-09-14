@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -15,7 +15,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -36,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from project_paths import (
     ALERT_REVIEW_EVENTS_FILE,
+    CLAIMED_PICKS_FILE,
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_PRIORITY_SETUPS_FILE,
     get_local_setting,
@@ -66,17 +66,43 @@ from ui.widgets.setup_detail_view import SetupDetailView
 # The segmented bucket selector. Values are sets of RAW bucket keys, so a
 # selection can span several buckets - which the old single-label combo box
 # could not express at all.
-BUCKET_SELECTIONS = {
-    "fav_hc_near": ("Fav + HC + Near", "Favorites, high conviction, and near-zone setups"),
-    "fav_hc": ("Fav + HC", "Favorites and high conviction only"),
-    "all": ("All", "Every bucket, including study and tracking rows"),
+# Packet D1C-A (trader, 2026-09-14): *"Provide independently selectable FAV,
+# HC, and My liked trades filters. Let me select any combination."* The three
+# exclusive selections that lived here could express three views and no others,
+# so "favourites and my liked trades" - the trader's own reading order - was
+# unselectable. These are five CHIPS: any combination of the first four, and
+# `All`, which means no bucket filter at all.
+#: "the claims file has never been read", which is not the same answer as "the
+#: file is not there" (a real, cacheable stamp of None).
+_CLAIMS_UNREAD = object()
+
+CHIP_ALL = "all"
+BUCKET_CHIP_KEYS = (
+    "favorite_setup",
+    "high_conviction",
+    "near_favorite_zone",
+    "claimed_like",
+)
+BUCKET_CHIPS = {
+    "favorite_setup": ("FAV", "Favourite setups"),
+    "high_conviction": ("HC", "High-conviction setups"),
+    "near_favorite_zone": ("Near", "Near the favourite zone"),
+    "claimed_like": ("Liked", "Setups you liked and claimed on a review chart"),
+    CHIP_ALL: ("All", "Every bucket, including study and tracking rows"),
 }
-BUCKET_SELECTION_KEYS = {
-    "fav_hc_near": {"favorite_setup", "high_conviction", "near_favorite_zone"},
-    "fav_hc": {"favorite_setup", "high_conviction"},
+#: No setting yet: the trader's four working buckets. `All` is one click away.
+DEFAULT_BUCKET_CHIPS = frozenset(BUCKET_CHIP_KEYS)
+#: The new persisted key (a sorted list of raw bucket keys).
+SETTING_BUCKET_CHIPS = "qt_setups_bucket_chips"
+#: ...and the one it replaces, migrated ONCE on the first read. Each old value
+#: gains `claimed_like`, because a trader looking at their favourites wants the
+#: ones they claimed themselves in the same view.
+SETTING_BUCKET_FILTER_LEGACY = "qt_setups_bucket_filter"
+BUCKET_FILTER_MIGRATION = {
+    "fav_hc_near": {"favorite_setup", "high_conviction", "near_favorite_zone", "claimed_like"},
+    "fav_hc": {"favorite_setup", "high_conviction", "claimed_like"},
     "all": set(),
 }
-DEFAULT_BUCKET_SELECTION = "fav_hc_near"
 _SHADOW_SECTION_TITLE = "Stretched - shadow would demote (NO LIVE CHANGE)"
 _SHADOW_ROW_RE = re.compile(r"^\s{2}(?P<symbol>[A-Z][A-Z0-9._\-]*)\s+(?:LONG|SHORT)\s+")
 
@@ -381,7 +407,14 @@ class MasterAvwapPanel(QWidget):
     rowsChanged = Signal(int, int, int)
     statusChanged = Signal(str)
 
-    def __init__(self, focus_service=None, parent=None, *, review_events_path=None) -> None:
+    def __init__(
+        self,
+        focus_service=None,
+        parent=None,
+        *,
+        review_events_path=None,
+        claimed_picks_path=None,
+    ) -> None:
         super().__init__(parent)
         self.focus_service = focus_service
         # Swing-side decision log for the review-learning loop: the table's
@@ -400,6 +433,23 @@ class MasterAvwapPanel(QWidget):
             if review_events_path is not None
             else (ALERT_REVIEW_EVENTS_FILE if default_store else None)
         )
+        # Packet D1C-A. The trader's claimed D1 picks, merged into this table
+        # on every refresh. Same gate as the review-events path above: a test
+        # panel writes and reads nothing unless it was handed a path, so the
+        # live store is never touched from a bare `MasterAvwapPanel()`.
+        self._claimed_picks_path = (
+            Path(claimed_picks_path)
+            if claimed_picks_path is not None
+            else (CLAIMED_PICKS_FILE if default_store else None)
+        )
+        #: mtime+size+day keyed cache over the claims file. ONE small read when
+        #: the file changed, never one per refresh and never on the paint path
+        #: (nothing expensive on the Qt thread). The DAY is part of the key
+        #: because the fade is a session clock: a desk left running past
+        #: midnight has to re-ask.
+        self._claims_cache: list[dict] = []
+        self._claims_cache_stamp: object = _CLAIMS_UNREAD
+        self._claims_cache_day: str = ""
         self.scan_service = ScanService(self)
         self.scan_service.started.connect(self._on_scan_started)
         self.scan_service.finished.connect(self._on_scan_finished)
@@ -469,6 +519,9 @@ class MasterAvwapPanel(QWidget):
             self.focus_service.focusChanged.connect(
                 self._focus_repaint_coalescer.request
             )
+        # Packet D1C-A, lead ruling: registered OUTSIDE the `focus_service`
+        # block above, because dropping a claim touches no Focus store.
+        self.table.add_row_action("Drop my claim", self._drop_row_claim)
         self._request_decision_refresh()
 
         self.empty_state = EmptyState(
@@ -556,10 +609,7 @@ class MasterAvwapPanel(QWidget):
         self._column_profile = ""
         self._build_layout()
         self.set_column_profile("compact")
-        self.set_bucket_selection(
-            str(get_local_setting("qt_setups_bucket_filter", DEFAULT_BUCKET_SELECTION)
-                or DEFAULT_BUCKET_SELECTION)
-        )
+        self.set_bucket_chips(self._load_bucket_chip_keys())
         self._configure_report_watcher()
         self.refresh_from_reports(emit_empty=False)
         # QFileSystemWatcher can miss atomic replacements on synced/network
@@ -629,24 +679,27 @@ class MasterAvwapPanel(QWidget):
 
     # ------------------------------------------------------------------
     def _build_bucket_toggle(self) -> None:
-        """Segmented bucket selector replacing the combo box.
+        """Five independently checkable bucket chips (packet D1C-A).
 
-        The combo could only ever express ONE bucket label, so the desk's
-        headline view - favourites and high-conviction together - was
-        unselectable. These map to sets of raw bucket keys instead.
+        They replace three EXCLUSIVE selections, which is why this is not a
+        `QButtonGroup` any more: that group's whole job was making sure only
+        one could be on, and the trader asked for exactly the opposite. A row
+        passes when ANY of its buckets is checked (`row.bucket_keys &
+        selected`), so a row that is HC and FAV and claimed shows under each of
+        the three rather than under whichever one happened to be primary.
         """
-        self.bucket_buttons: dict[str, QPushButton] = {}
-        self._bucket_group = QButtonGroup(self)
-        self._bucket_group.setExclusive(True)
-        for key, (label, tip) in BUCKET_SELECTIONS.items():
+        self.bucket_chips: dict[str, QPushButton] = {}
+        for key, (label, tip) in BUCKET_CHIPS.items():
             button = QPushButton(label)
             button.setCheckable(True)
             button.setToolTip(tip)
             button.clicked.connect(
-                lambda _checked=False, selection=key: self.set_bucket_selection(selection)
+                lambda _checked=False, chip=key: self._on_bucket_chip_clicked(chip)
             )
-            self._bucket_group.addButton(button)
-            self.bucket_buttons[key] = button
+            self.bucket_chips[key] = button
+        # The old name for the same widgets, now keyed by raw bucket key
+        # instead of by view name.
+        self.bucket_buttons = self.bucket_chips
 
     def _build_points_toggle(self) -> None:
         """The point-system switch (trader, 2026-09-08): reorders, never hides.
@@ -834,15 +887,61 @@ class MasterAvwapPanel(QWidget):
         self.overflow_button.setMenu(menu)
         self._overflow_menu = menu
 
-    def set_bucket_selection(self, selection: str) -> None:
-        """Filter the table to a named group of buckets, and remember it."""
-        selection = selection if selection in BUCKET_SELECTIONS else DEFAULT_BUCKET_SELECTION
-        self._bucket_selection = selection
-        button = self.bucket_buttons.get(selection)
-        if button is not None and not button.isChecked():
-            button.setChecked(True)
-        save_local_setting("qt_setups_bucket_filter", selection)
+    def _load_bucket_chip_keys(self) -> set[str]:
+        """The stored chip selection, migrating the old exclusive value ONCE.
+
+        An empty stored list is a real answer (`All`), so it is the ABSENCE of
+        the new key - never its emptiness - that triggers the migration.
+        """
+        stored = get_local_setting(SETTING_BUCKET_CHIPS, None)
+        if isinstance(stored, (list, tuple, set)):
+            return {
+                str(key).strip().lower() for key in stored if str(key).strip()
+            } & set(BUCKET_CHIP_KEYS)
+        legacy = str(
+            get_local_setting(SETTING_BUCKET_FILTER_LEGACY, "") or ""
+        ).strip().lower()
+        if legacy in BUCKET_FILTER_MIGRATION:
+            return set(BUCKET_FILTER_MIGRATION[legacy])
+        return set(DEFAULT_BUCKET_CHIPS)
+
+    def active_bucket_chip_keys(self) -> set[str]:
+        """The bucket keys the trader has chosen. Empty means `All`."""
+        return set(getattr(self, "_bucket_chip_keys", set()))
+
+    def set_bucket_chips(self, keys) -> None:
+        """Check exactly these chips, remember them, and re-filter.
+
+        Empty means no bucket filter: `All` lights up and every row shows. That
+        is the same answer as "nothing checked", which is why the trader can
+        never end up with a blank strip hiding the whole table.
+        """
+        selected = {
+            str(key).strip().lower() for key in (keys or ()) if str(key).strip()
+        } & set(BUCKET_CHIP_KEYS)
+        self._bucket_chip_keys = selected
+        for key in BUCKET_CHIP_KEYS:
+            chip = self.bucket_chips.get(key)
+            if chip is not None and chip.isChecked() != (key in selected):
+                chip.setChecked(key in selected)
+        all_chip = self.bucket_chips.get(CHIP_ALL)
+        if all_chip is not None and all_chip.isChecked() != (not selected):
+            all_chip.setChecked(not selected)
+        save_local_setting(SETTING_BUCKET_CHIPS, sorted(selected))
         self._apply_filters()
+
+    def _on_bucket_chip_clicked(self, key: str) -> None:
+        """One chip was clicked; the selection is what the chips now say."""
+        if key == CHIP_ALL:
+            self.set_bucket_chips(set())
+            return
+        self.set_bucket_chips(
+            {
+                chip_key
+                for chip_key in BUCKET_CHIP_KEYS
+                if self.bucket_chips[chip_key].isChecked()
+            }
+        )
 
     def _repaint_focus_stars(self) -> None:
         """Repaint the table because Focus membership moved. Presentation only."""
@@ -916,10 +1015,14 @@ class MasterAvwapPanel(QWidget):
         selected buckets, so a report of unbucketed or study-only rows shows
         them rather than an empty table the trader cannot explain.
         """
-        keys = BUCKET_SELECTION_KEYS.get(getattr(self, "_bucket_selection", ""), set())
+        keys = self.active_bucket_chip_keys()
         if not keys:
             return set()
-        available = {row.bucket.strip().lower() for row in self.model.rows()}
+        # Asked of every bucket a row belongs to, not just its primary one: a
+        # claimed high-conviction row answers to HC and to Liked.
+        available: set[str] = set()
+        for row in self.model.rows():
+            available |= row.bucket_keys
         return keys if (keys & available) else set()
 
     def set_column_profile(self, profile: str) -> None:
@@ -1470,8 +1573,14 @@ class MasterAvwapPanel(QWidget):
         if self._uses_default_feedback_paths:
             _apply_reviewed_today_badges(rows)
         self._request_decision_refresh()
+        # The rows AS THEY ARRIVED are the scan's, so the four re-apply paths
+        # (points switch, learned weights, family records, Working-lately
+        # order) hand the scan's rows back here and the claims are merged
+        # afresh - which is also how a dropped claim leaves the table.
         self._working_lately_source_rows = list(rows)
-        rows = self._by_points(self._prioritised(self._working_lately_source_rows))
+        rows = self._by_points(
+            self._prioritised(self._merge_active_claims(self._working_lately_source_rows))
+        )
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
         self._apply_filters()
@@ -1494,6 +1603,112 @@ class MasterAvwapPanel(QWidget):
             sum(1 for row in rows if row.bucket.strip().lower() in {"favorite_setup", "high_conviction"}),
             sum(1 for row in rows if row.bucket.strip().lower() == "near_favorite_zone"),
         )
+
+    # ------------------------------------------------------------------
+    # Packet D1C-A: the trader's claimed D1 picks
+    # ------------------------------------------------------------------
+    def active_claims(self) -> list[dict]:
+        """The live claims, from an mtime-keyed cache over the claims file.
+
+        Trader, 2026-09-14: *"Claimed picks must survive refreshes, rescans and
+        restarts."* The FILE is the persistence - this panel holds no list of
+        its own, so a second panel built on the same store sees the same picks.
+        """
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return []
+        try:
+            stat = Path(path).stat()
+            stamp: object = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        try:
+            today = date.today().isoformat()
+        except Exception:  # noqa: BLE001 - a clock never costs the table
+            today = self._claims_cache_day
+        if stamp == self._claims_cache_stamp and today == self._claims_cache_day:
+            return self._claims_cache
+        rows: list[dict] = []
+        if stamp is not None:
+            try:
+                import claimed_picks
+
+                rows = claimed_picks.active_claims(Path(path))
+            except Exception:  # noqa: BLE001 - an unreadable store costs no row
+                rows = []
+        self._claims_cache = rows
+        self._claims_cache_stamp = stamp
+        self._claims_cache_day = today
+        return rows
+
+    def _merge_active_claims(self, rows: list[SetupRow]) -> list[SetupRow]:
+        """The scan's rows plus the trader's claims. Pure, and never in place."""
+        claims = self.active_claims()
+        if not claims:
+            return list(rows)
+        try:
+            from ui.services.claimed_setup_rows import merge_claims
+
+            return merge_claims(rows, claims)
+        except Exception:  # noqa: BLE001 - a claim never costs the scan's rows
+            return list(rows)
+
+    def refresh_claims(self) -> None:
+        """A claim was made, dropped or expired: re-merge from the scan's rows.
+
+        The slot the Alert Center's `claimsChanged` reaches. It re-reads one
+        small file and re-sorts rows already in memory; nothing is re-scanned.
+        """
+        self._claims_cache_stamp = _CLAIMS_UNREAD
+        source = getattr(self, "_working_lately_source_rows", None)
+        if source is not None:
+            self.set_rows(list(source))
+
+    def _drop_row_claim(self, proxy_index) -> None:
+        """"Drop my claim" - end a claim, and only a claim.
+
+        Registered UNCONDITIONALLY, outside the `focus_service` block beside
+        it: a claim writes nothing to Focus (D1C0 decision 1), so dropping one
+        must not need a Focus service to exist. The ★ and the ✕ are untouched -
+        a veto or a dislike never retracts a claim, and only this verb or the
+        ten-session fade ends one (P5).
+        """
+        if not proxy_index.isValid():
+            return
+        row = self.model.row_at(self.proxy.mapToSource(proxy_index).row())
+        if row is None:
+            return
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        setup_id = str(raw.get("claimed_setup_id") or "").strip()
+        if "claimed_like" not in row.bucket_keys or not setup_id:
+            message = f"{row.symbol}: not one of your claimed picks."
+            self.status_label.setText(message)
+            self.statusChanged.emit(message)
+            return
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return
+        written = None
+        try:
+            import claimed_picks
+
+            written = claimed_picks.record_drop(
+                row.symbol, row.side, setup_id, source="setups_table", path=Path(path)
+            )
+        except Exception:  # noqa: BLE001 - never raise out of a menu action
+            written = None
+        if written is None:
+            message = (
+                f"{row.symbol}: the claim could not be dropped - "
+                "claimed_picks.jsonl could not be written."
+            )
+            self.status_label.setText(message)
+            self.statusChanged.emit(message)
+            return
+        self.refresh_claims()
+        message = f"{row.symbol}: claim dropped. Nothing else changed."
+        self.status_label.setText(message)
+        self.statusChanged.emit(message)
 
     def filtered_rows(self) -> list[SetupRow]:
         rows: list[SetupRow] = []

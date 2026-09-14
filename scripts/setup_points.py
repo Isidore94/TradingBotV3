@@ -38,7 +38,15 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 #: The buckets the point ranking reorders; everything else keeps its place after them.
-RANKED_BUCKETS = frozenset({"favorite_setup", "near_favorite_zone", "high_conviction"})
+#: `claimed_like` joined them in packet D1C-A (trader, 2026-09-14: *"Rank
+#: manually claimed picks using the existing setup-ranking system"*) - the SAME
+#: four inputs on the same scale, from whatever the claim carried, with a
+#: missing input scoring 0 and saying so. A ranked row with no total still
+#: sorts after every ranked row that has one, so a claim never jumps a measured
+#: pick by being unmeasured.
+RANKED_BUCKETS = frozenset(
+    {"favorite_setup", "near_favorite_zone", "high_conviction", "claimed_like"}
+)
 
 SETTING_KEY = "rank_setups_by_points"
 #: The trader's switch that lets the PROPOSED multipliers apply (default OFF).

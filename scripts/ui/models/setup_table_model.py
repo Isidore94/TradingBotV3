@@ -319,7 +319,12 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             return False
         if self.bucket != "ALL" and row.bucket_label != self.bucket:
             return False
-        if self.buckets and row.bucket.strip().lower() not in self.buckets:
+        # Packet D1C-A: a row passes when ANY of its buckets is selected. A
+        # row belongs to several buckets (HC and FAV folded into one row; a
+        # claimed like added on top), and the old single-key compare could
+        # only ever ask about the primary one - so "FAV + Liked" hid the
+        # HC+FAV+claimed row that satisfies both halves of it.
+        if self.buckets and not (row.bucket_keys & self.buckets):
             return False
         if self.max_dte is not None and row.days_to_earnings is not None and row.days_to_earnings > self.max_dte:
             return False

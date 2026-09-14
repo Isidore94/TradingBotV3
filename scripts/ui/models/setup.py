@@ -6,6 +6,11 @@ from typing import Any
 
 SETUP_BUCKET_LABELS = {
     "favorite_setup": "Favorite",
+    # Packet D1C-A (trader, 2026-09-14): a D1 setup the trader LIKED AND
+    # CLAIMED on a review chart. It is a bucket like any other here - a chip
+    # the trader can filter on - and it grants nothing: a like never makes a
+    # row a favourite or a high-conviction pick, and never invents a score.
+    "claimed_like": "My liked trade",
     "near_favorite_zone": "Near",
     "high_conviction": "High Conviction",
     "post_earnings_play": "Post Earnings",
@@ -82,6 +87,25 @@ class SetupRow:
             normalized,
             normalized.replace("_", " ").title() if normalized else "Unbucketed",
         )
+
+    @property
+    def bucket_keys(self) -> set[str]:
+        """Every bucket this row belongs to, as raw keys.
+
+        One row can belong to several buckets - the scan's own feed folds a
+        high-conviction entry and a favourite entry for the same opportunity
+        into ONE row - and until packet D1C-A that fold merged the display
+        LABELS only, so nothing recorded that an HC row was also a FAV and no
+        filter could ever ask. `raw["bucket_keys"]` is that record; `bucket`
+        stays the row's primary bucket and is always included.
+        """
+        raw = self.raw if isinstance(self.raw, dict) else {}
+        keys = {str(self.bucket or "").strip().lower()}
+        extra = raw.get("bucket_keys")
+        if isinstance(extra, (list, tuple, set)):
+            keys.update(str(key).strip().lower() for key in extra)
+        keys.discard("")
+        return keys
 
     @property
     def bucket_display(self) -> str:
