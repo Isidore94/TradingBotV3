@@ -5022,3 +5022,170 @@ the builder), plus the re-pointed place-pinning tests in
 
 **Reopen trigger.** The trader asks for the strip back under the M5 list, wants it
 visible while the setups column is hidden, or asks for the D1 column to open by default.
+
+## D1C - a claimed D1 like is a pick, and the chart is done (2026-09-14, packet D1C-A)
+
+**The trader's words (2026-09-14).** *"The left side of the Trading Desk is for M5
+trades. The right side is for D1 trades. When I like and claim a D1 setup, it becomes a
+ranked pick I can follow in Master AVWAP Setups. I should not have to keep reviewing the
+same D1 chart. ... This request intentionally changes the old 'claimed likes place
+nothing' rule for D1 claims. Update that contract narrowly."*
+
+**What it changed.** Until this packet a claimed like wrote one annotation row and moved
+the chart on. The name was judged and then nowhere: the row sat in
+`trader_annotations.jsonl`, which no trader-facing surface reads, and the same D1 flag
+fired again an hour later and put the same chart back up. The claim is now also a PICK -
+one row in the Master AVWAP setups table - and the chart it was made on is finished with
+while the claim is active.
+
+**The store** (`scripts/claimed_picks.py`, `project_paths.CLAIMED_PICKS_FILE`). Append-
+only JSONL beside `swing_favorites.jsonl`, whose shape it copies deliberately: one row per
+ACTION (`claim`, `drop`, `expire`), never rewritten, replayed in file order with the last
+action per key winning; both clocks on every row (`claim_at` tz-aware machine-local,
+`claim_at_utc`, and `session_date` market-local), and `path=` on every function so a test
+never resolves the live home folder. Identity is `(symbol, side, claimed_setup_id)` - the
+same symbol claimed LONG and SHORT, or under two setups, is two picks, because they are
+two theses and they grade apart. The queue gate asks a coarser question and gets
+`active_keys`, which is `(symbol, side)` only.
+
+A second `claim` of an active key **appends nothing** and returns the existing row marked
+`duplicate`. Repeated clicks are one pick, and the caller still treats it as a success:
+the pick exists, so the chart is still done with.
+
+**The expiry and removal rules.** A claim is active until the trader drops it (`Drop my
+claim` on the row) or `focus_picks.FADE_TRADING_DAYS` (10) TRADING days pass, counted by
+`market_calendar.trading_days_between`. Both are referenced BY NAME - the constant and the
+clock are the quiet-Focus-pick fade's, so a re-tuned fade moves both together. The two are
+NOT due on the same session, and that is the packet's own rule rather than a defect: a
+claim fades on `sessions > FADE_TRADING_DAYS` ("more than ten trading days"), which comes
+due on the ELEVENTH session, one session later than the Focus fade's `>=` on the tenth. A
+claim is the trader's own thesis and gets the benefit of the last day.
+`sweep_expired` appends one `expire` row per faded claim, is idempotent, and runs from the
+panel's day roll only: the fade can only change when the session does. **A calendar that
+cannot answer expires nothing** - `trading_days_between` raises outside its validated
+range, every caller of it deletes something when it answers, and uncertainty never deletes
+(plan.md sec 5). A veto, a dislike, a day-trade pass or a "Not today" never retracts a
+claim (P5): only the verb that made it, or the fade, can unmake it.
+
+**The horizon is resolved explicitly, once** (`claimed_picks.claim_horizon`). The risk the
+trader named was real and measurable: `CaptureRail._timeframe` is `"D1"` from construction
+and `AlertChartReview.set_alert` never re-pointed it, so every chart in the review queue
+told the rail it was a D1 chart - which also meant an M5 chart's like was filed without the
+M5 sidecar bars it was made on. So the answer comes from the ALERT and the CLAIM, and there
+is no rail in the resolver's signature for a stale value to arrive through:
+
+1. `alert.is_d1` -> `"d1"`;
+2. the panel's own `_is_m5_review_alert` answer, handed to the widget as a flag with the
+   alert (the widget never imports the panel) -> `"m5"`;
+3. otherwise the claimed setup's registry group. **The registry has no day-trade group** -
+   `setup_docs.all_setup_docs_by_group()` is Main swing / Earnings cycle / Study /
+   Playbook research, all four of them daily theses - so a named family answers `"d1"` and
+   `none_of_these`, an unknown id and an empty id answer `""`. The `"m5"` answer comes only
+   from the flag, never from a group name, and this packet invented no group.
+
+`""` places nothing and says so (`claimed; horizon unknown - not placed in Setups`).
+
+**The stale-timeframe read is a SECOND bug at the same seam, and it is fixed separately.**
+The rail's `timeframe` is not the horizon - it is what the annotation row RECORDS and what
+decides whether the M5 bars ride along as a sidecar - so `set_alert` now passes
+`bounce.capture_timeframe(alert.timeframe)` into `set_context`, NORMALISED and never blank.
+Both halves of that matter and the first review round found both: `set_context` is
+`if timeframe:`, so handing it a typed symbol's empty string left the rail on the PREVIOUS
+chart's answer and filed a daily look as `M5` with an M5 sidecar behind it; and a live
+`BounceAlert.from_callback` alert says `"5m"`, which upper-cases to `"5M"` and misses
+`_record_like`'s `== "M5"` compare - so the one path the attachment exists for was the one
+losing its bars. `capture_timeframe` lives beside `BounceAlert` because the spelling is the
+alert's own, is pure and TOTAL (`"5m"`/`"M5"`/`"5"` -> `M5`, everything else -> `D1`), and
+answers `D1` for a 15m or 1h alert because the review pane has no chart of its own for
+those - which is exactly what the rail said before it existed. `set_context` keeps
+`if timeframe:`, so every other caller is unchanged.
+
+**Save, confirm, then retire.** `AlertChartReview._route_claimed_like` writes through an
+INJECTED `claim_writer` (the panel binds it to its own store) and emits
+`claimPlaced(alert, claim_row)` only with a row in hand. A failed write emits
+`likeRecorded` instead - the like stands, the chart stays, `_review_queue` is untouched -
+and the rail reads `NOT PLACED - claimed_picks.jsonl could not be written; chart kept`.
+That status needed a seam of its own: `_record_like` emits `captured` and `commit_like`
+then writes its own "LIKE SYM - setup" line, so a host's message was overwritten a
+microsecond later and the trader never saw it. `CaptureRail.set_capture_status` /
+`take_capture_status_override` let a listener's word outrank the verb's for that one
+commit - the verb knows the row was written, the listener knows what became of it, and the
+second fact is the one to act on.
+
+`AlertCenterPanel._place_claimed_d1` records `like_advance` through the UNCHANGED
+`_record_like_advance` (the name is historical and `review_learning.TAKE_ACTIONS` keys on
+it), states `claimed <setup> - placed in Setups`, retires through
+`_retire_claimed_review`, and emits `claimsChanged`. **`_retire_claimed_review` is a
+separate METHOD, not a flag on `_retire_review_alert`.** That body is the PARKING verb: it
+writes `remove_today`, adds the symbol to `_parked_symbols`, drops an auto-adopted Focus
+pick and runs three early-return branches. A claim is none of those things, and a flag
+threaded through that ladder would be one edit away from parking a name the trader had
+just said yes to.
+
+**The repeat-review gate** sits in `_enqueue_review_alert` after the parked check and
+BEFORE `_is_m5_review_alert` is consulted, so every M5 alert still reaches the M5 bar
+exactly as it did. It fires only for `alert.is_d1` scan alerts that are not chart-watch
+hits, and keys on `(symbol, side)`: a claimed LONG says nothing about a SHORT thesis, and
+an armed chart-watch is a condition the trader is waiting on. `_active_claim_keys` is an
+mtime+size+day keyed cache - one small read when the file changed, never one per alert,
+because an alert burst is exactly where a per-alert read would be paid for. The day is part
+of the key because the fade is a session clock. Everything upstream of that line is
+untouched: the backing list, the feed, History, the D1 badge, the evidence streams, the
+AWAY recap and the phone push are all written before it. **This is a display decision that
+withholds nothing** - the repetition-control precedent - and the skip is COUNTED
+(`_claimed_d1_skipped`) and stated on the review pane the way the movers-only hidden count
+is. Nothing is written to `review_policy.json`, which still has no suppression field.
+
+**The row** (`ui/services/claimed_setup_rows.merge_claims`, pure). A claim that matches a
+scan row - same symbol, side and setup FAMILY - is a LABEL: the row gains the bucket key
+`claimed_like` and the badge `My liked trade` and keeps its own score, bucket and rank,
+because the scan measured it and the like did not. A claim the scan does not carry becomes
+a NEW row with `score=None`. **A like invents no score and grants no status:**
+`priority_score` at claim time is not a scan score, and the Score cell of a claimed-only
+row is blank. `known_at_claim` is carried BOTH nested (the honest record of what the desk
+had) and flattened onto `raw` (where `setup_points.score_row` looks) - two readers, two
+shapes, one set of numbers. What is deliberately NOT flattened is a `setup_family` derived
+from the claimed id: the point system reads that field as a MEASUREMENT (a family named
+`..._bounce` scores `BOUNCE_NAMED` on its name alone), so a claimed name the scan never
+carried leaves it absent and scores +10 - clean path and nothing else - with the notes
+naming every unmeasured part. `none_of_these` maps to no family and therefore matches no
+scan row; it becomes its own row rather than silently labelling one it was never about.
+
+**One row, all its labels.** `SetupRow.bucket_keys` is `{bucket} | raw["bucket_keys"]`, and
+`data_feed._merge_classification_badges` now records the folded row's BUCKET as well as its
+label. Until this packet the fold merged display labels only, so nothing recorded that an
+HC row was also a FAV and no filter could ask - which is why "FAV + Liked" could not have
+been built on the old row model at all.
+
+**Five chips, any combination** (`FAV` / `HC` / `Near` / `Liked` / `All`), replacing three
+exclusive selections that could express three views and no others. A row passes when
+`row.bucket_keys & selected` is non-empty; `All` means no bucket filter; no chip checked
+reads as `All`. Persisted under `qt_setups_bucket_chips` (a sorted list) with a ONE-TIME
+migration of `qt_setups_bucket_filter` - each old value gains `claimed_like`, because a
+trader looking at their favourites wants the ones they claimed themselves in the same view.
+An empty stored list is a real answer, so it is the ABSENCE of the new key that triggers
+the migration.
+
+**Ranking.** `setup_points.RANKED_BUCKETS` gains `claimed_like`, so with the Points switch
+ON a claimed pick is ordered by the SAME four inputs as FAV/HC/Near - and a ranked row with
+no total still sorts after every ranked row that has one, so a claim never jumps a measured
+pick by being unmeasured. With the switch OFF, claimed-only rows follow the scan's rows in
+claim-time order, newest first. `autopilot_core.order_swing_picks` (the AWAY digest) is NOT
+changed: it ranks the SCAN's picks, and a claim is not a scan pick.
+
+**Drop my claim** is registered on the setups table UNCONDITIONALLY, outside the
+`focus_service is not None` block beside it (lead ruling): dropping a claim touches no
+Focus store, so it must not need one to exist. The star and the X are untouched.
+
+**Tests.** `tests/test_d1c_claimed_picks_store.py`, `_route.py`, `_queue.py`, `_panel.py` -
+83 collected. 73 were written RED by the tester before any of this existed; the builder
+added ten. Four in the first pass: the skip-count display the packet left to it, the
+"exactly one verdict and no rejection" invariant, the proof that the pre-packet advance
+route records the next chart's impression too, and a drop on a LABELLED scan row. Six in
+the reviewer's fix round: the timeframe normaliser itself, a typed symbol charted after an
+M5 alert, a real `from_callback` `"5m"` alert, a D1 flag, a claim `json.dumps` refuses, and
+the menu that offers "Drop my claim" only where it can act.
+
+**Reopen trigger.** The trader asks for a claimed pick to reach Focus or a watchlist
+automatically, for the fade to be a different clock from the Focus fade, for the queue gate
+to key on the setup as well as the side, or for a claimed row to carry a score of its own.

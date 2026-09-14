@@ -93,6 +93,12 @@ def panel(tmp_path, monkeypatch):
         ignored_symbols_path=tmp_path / "ignored.json",
         parked_symbols_path=tmp_path / "parked.json",
         review_events_path=tmp_path / "alert_review_events.jsonl",
+        # Packet D1C-A: a claimed D1 like now WRITES a pick, and an active
+        # claim keeps that D1 chart out of repeat review. Without a per-test
+        # path the claims land in the session-wide test home, where one test's
+        # claim would gate the next test's AAPL chart. Isolation only - no
+        # assertion in this file changed.
+        claimed_picks_path=tmp_path / "claimed_picks.jsonl",
     )
     monkeypatch.setattr(made, "_alerts_may_sound", lambda: False)
     monkeypatch.setattr(made, "_review_movers_only", False, raising=False)
@@ -315,19 +321,30 @@ def test_the_pane_offers_both_like_signals_one_per_mode(panel):
     T1.2 asserted `likeAdvanceRequested` was absent. It is back, because there
     is now a like that really does advance - and `likeRecorded` stays for the
     quick like that really does not.
+
+    AMENDED for packet D1C-A (trader, 2026-09-14: *"This request intentionally
+    changes the old 'claimed likes place nothing' rule for D1 claims"*). The
+    chart in this fixture is a D1 alert, and a claimed like on a D1 chart now
+    SAVES a pick first and travels on `claimPlaced`; `likeAdvanceRequested` is
+    still the claimed like's signal on an M5 chart and on a claim the registry
+    cannot name (both pinned in `tests/test_d1c_claimed_picks_route.py`). One
+    signal per outcome, still exactly one fired - the assertion is as strict as
+    it was, against the contract that replaced it.
     """
     pane = panel.chart_review
     assert hasattr(pane, "likeRecorded"), "the quick like reports and stays"
     assert hasattr(pane, "likeAdvanceRequested"), "the claimed like advances"
+    assert hasattr(pane, "claimPlaced"), "a claimed D1 like places a pick"
 
     fired: list[str] = []
     pane.likeRecorded.connect(lambda _a: fired.append("recorded"))
     pane.likeAdvanceRequested.connect(lambda _a: fired.append("advance"))
+    pane.claimPlaced.connect(lambda _a, _row: fired.append("placed"))
     rail = pane.capture_rail
 
     _claim(rail)
     assert rail.commit_like() is not None
-    assert fired == ["advance"], "a CLAIMED like fires the advance signal"
+    assert fired == ["placed"], "a CLAIMED like on a D1 chart places the pick"
 
     fired.clear()
     assert rail.commit_quick_like() is not None

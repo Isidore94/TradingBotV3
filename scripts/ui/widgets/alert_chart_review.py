@@ -18,6 +18,7 @@ from ui.models.bounce import (
     FOCUS_REVIEW_TAG,
     MANUAL_CHART_TAG,
     BounceAlert,
+    capture_timeframe,
     is_auto_pick_alert,
 )
 from ui import theme
@@ -85,6 +86,14 @@ class AlertChartReview(QWidget):
     # chart"). Two signals rather than one with a flag, because the host's two
     # answers really are different verbs and a flag would be read wrong once.
     likeAdvanceRequested = Signal(object)
+    # (alert, claim_row) - a CLAIMED like on a D1 chart was SAVED as a pick.
+    # Packet D1C-A (trader, 2026-09-14: *"A successful D1 'Like and claim' must
+    # add the pick to Master AVWAP Setups immediately ... Save and confirm the
+    # pick before removing its D1 item from Visual Chart Review"*). Emitted only
+    # after the store has returned a row, so the host retires a chart that has a
+    # pick behind it and never one that does not. A DUPLICATE claim comes this
+    # way too - the pick exists, which is what the signal means.
+    claimPlaced = Signal(object, object)
     focusRequested = Signal(object)
     skipRequested = Signal(object)
     crossFocusToggled = Signal(object)
@@ -122,9 +131,22 @@ class AlertChartReview(QWidget):
         annotations_path=None,
         dock_arm_bar: bool = True,
         dock_capture_rail: bool = True,
+        claim_writer=None,
     ) -> None:
         super().__init__(parent)
         self.alert: BounceAlert | None = None
+        # Packet D1C-A. The ONE writer a claimed D1 like reaches. The HOST owns
+        # the store and binds this, exactly as it owns the review-events and
+        # parked-symbols files; None means this pane has no store behind it and
+        # a claimed like takes the pre-packet route (advance, place nothing).
+        # There is deliberately no default writer here: a widget that reached
+        # for `claimed_picks.record_claim` itself would write the live store
+        # from a pane nobody gave a store to.
+        self._claim_writer = claim_writer
+        #: The host's answer to "is this an M5 review alert?", handed in with
+        #: the alert. The widget never imports the panel, and the horizon must
+        #: not be guessed from the chart's own timeframe.
+        self._alert_is_m5_review = False
         self._cross_labels = ("Add to D1 Focus", "✓ In D1 Focus")
         # Where each control dock goes is the HOST's decision, not this
         # widget's, and the two are decided SEPARATELY because they cost very
@@ -319,6 +341,21 @@ class AlertChartReview(QWidget):
         )
         self.hidden_button.clicked.connect(self.revealHiddenRequested)
 
+        # Packet D1C-A's count, beside the withheld one. A claimed chart is
+        # ANSWERED, not withheld, so this is a muted label and not a button:
+        # there is nothing to reveal, and the row it refers to is in the setups
+        # table. It still states a number, so "the queue went quiet" can never
+        # be confused with "the desk stopped charting".
+        self.claimed_skipped_label = QLabel("")
+        self.claimed_skipped_label.setObjectName("MutedLabel")
+        self.claimed_skipped_label.setVisible(False)
+        self.claimed_skipped_label.setToolTip(
+            "D1 charts skipped because you already liked and claimed that "
+            "setup. Nothing was deleted or muted - the pick is in Master "
+            "AVWAP Setups, its alerts still fire, and its M5 alerts still "
+            "reach the list on the left. Drop the claim to see the chart again."
+        )
+
         # The arm bar's own "Nothing armed" line goes with it when the host
         # takes the bar onto a tab, so the state it carried has to survive on
         # the row that never hides. It is a COUNT, not the inventory: the
@@ -394,6 +431,7 @@ class AlertChartReview(QWidget):
         buttons.addWidget(self.give_a_read_button)
         buttons.addStretch(1)
         buttons.addWidget(self.hidden_button)
+        buttons.addWidget(self.claimed_skipped_label)
         buttons.addWidget(self.armed_summary)
         buttons.addWidget(self.queue_label)
 
@@ -510,7 +548,95 @@ class AlertChartReview(QWidget):
             if like_mode_of(row) == LIKE_MODE_QUICK:
                 self.likeRecorded.emit(self.alert)
             else:
-                self.likeAdvanceRequested.emit(self.alert)
+                self._route_claimed_like(row)
+
+    def _route_claimed_like(self, row: dict) -> None:
+        """A CLAIMED like, routed by the HORIZON of the thesis it names.
+
+        Packet D1C-A (trader, 2026-09-14). The desk has two sides and they get
+        different answers:
+
+        * **d1** - the right side of the desk. The pick is SAVED first, and
+          only a saved pick retires the chart (`claimPlaced`). A store that
+          could not be written keeps the chart and says so: the like still
+          stands (its annotation row was written before we got here and is
+          never conditional on the placement), but the trader is not going to
+          lose a chart to a pick that does not exist.
+        * **m5** - the left side. Unchanged: the claimed like advances and
+          places nothing, because an intraday entry is not a swing pick.
+        * **""** - the registry cannot name the claim (`none_of_these`, or an
+          id it has never heard of). Unchanged route, plus a line that says
+          why nothing was placed. A horizon nobody can resolve is not a pick
+          anybody can rank.
+        """
+        import claimed_picks
+
+        alert = self.alert
+        if self._claim_writer is None:
+            # This pane has no claim store behind it - a bare widget, or a host
+            # that does not own one. It cannot place a pick, so it behaves
+            # exactly as it did before packet D1C-A: the claimed like advances
+            # and places nothing. Deliberately NOT the failure route: nothing
+            # was lost, because nothing was ever going to be written, and a
+            # pane that reached for the DEFAULT store would write the live
+            # `claimed_picks.jsonl` from a widget that owns no store at all.
+            self.likeAdvanceRequested.emit(alert)
+            return
+        claimed_setup_id = str(row.get("claimed_setup_id") or "").strip()
+        horizon = claimed_picks.claim_horizon(
+            alert, claimed_setup_id, is_m5_review=self._alert_is_m5_review
+        )
+        if horizon != claimed_picks.HORIZON_D1:
+            if not horizon:
+                self.capture_rail.set_capture_status(
+                    "claimed; horizon unknown - not placed in Setups", ok=False
+                )
+            self.likeAdvanceRequested.emit(alert)
+            return
+        claim_row = self._place_claim(alert, row, claimed_setup_id)
+        if claim_row is None:
+            self.capture_rail.set_capture_status(
+                "NOT PLACED - claimed_picks.jsonl could not be written; chart kept",
+                ok=False,
+            )
+            self.likeRecorded.emit(alert)
+            return
+        self.claimPlaced.emit(alert, claim_row)
+
+    def _place_claim(self, alert, row: dict, claimed_setup_id: str):
+        """Write the claim. Returns the stored row, or None when it failed.
+
+        Every failure is None, including an unexpected one: the caller's answer
+        to "it did not save" is to keep the chart and say so, which is the
+        right answer whatever went wrong.
+        """
+        import claimed_picks
+
+        writer = self._claim_writer
+        payload = getattr(alert, "payload", None)
+        try:
+            return writer(
+                symbol=alert.symbol,
+                # The LIKE ROW's side, not the alert's. They agree whenever an
+                # alert put the chart up (`set_alert` points the rail at it),
+                # and where they differ the row is right: a typed symbol has no
+                # side at all, and the rail's selector is the trader's own
+                # answer for the chart in front of them.
+                side=str(row.get("side") or "").strip() or alert.side,
+                horizon=claimed_picks.HORIZON_D1,
+                claimed_setup_id=claimed_setup_id,
+                source=claimed_picks.claim_source(
+                    row.get("surface") or SURFACE_CHART_REVIEW, alert
+                ),
+                # The like row and the claim row join on this: two stores, one
+                # gesture, and a reader has to be able to walk from the pick
+                # back to the words the trader typed about it.
+                annotation_ref=str(row.get("event_id") or row.get("created_at") or ""),
+                known_at_claim=claimed_picks.known_at_claim_from_payload(payload),
+                note=str(row.get("note") or ""),
+            )
+        except Exception:  # noqa: BLE001 - a failed placement keeps the chart
+            return None
 
     def _on_veto_day_trade(self, _row: dict) -> None:
         """Vetoed the D1, keeping the name for an M5 trade.
@@ -649,14 +775,38 @@ class AlertChartReview(QWidget):
         guidance_text: str = "",
         in_focus: bool = False,
         auto_adopted: bool = False,
+        is_m5_review: bool = False,
     ) -> None:
         self.alert = alert
+        # The HOST's answer to "does this alert belong to the M5 bar?", handed
+        # in rather than re-derived: `_is_m5_review_alert` lives on the panel
+        # and this widget never imports the panel (packet D1C-A item 2).
+        self._alert_is_m5_review = bool(is_m5_review)
         # Re-point capture, clearing the previous chart's level reference: a
         # stale ref_level_id would attribute this alert's veto to a line the
         # trader clicked on a different symbol.
         self.capture_rail.set_context(
             symbol=alert.symbol,
             side=alert.side if alert.side in ("LONG", "SHORT") else None,
+            # Packet D1C-A, the correctness fix behind the trader's *"do not
+            # rely on a stale chart timeframe"*: the rail is constructed on
+            # "D1" and this call never re-pointed it, so every chart in the
+            # queue left it saying D1 - and `_record_like` reads it to decide
+            # whether to attach the M5 sidecar. An M5 chart's like was
+            # therefore filed without the bars it was made on. The HORIZON does
+            # not come from here (see `claimed_picks.claim_horizon`); this is
+            # the sidecar's read, and it has to be the chart's own answer.
+            #
+            # NORMALISED, and never blank (reviewer blocker, 2026-09-14).
+            # `set_context` is `if timeframe:`, so handing it the alert's raw
+            # value left a typed symbol - whose alert names no timeframe - on
+            # the PREVIOUS chart's answer, filing a daily look as `M5` with an
+            # M5 sidecar behind it. And a live `from_callback` alert says
+            # `"5m"`, which upper-cases to `"5M"` and misses `_record_like`'s
+            # `== "M5"` compare, so the one path the attachment exists for was
+            # the one losing its bars. One seam owns both: `capture_timeframe`,
+            # beside `BounceAlert` because the alert's spelling is its own.
+            timeframe=capture_timeframe(alert.timeframe),
             ref_level_id="",
             ref_level_family="",
         )
@@ -931,6 +1081,23 @@ class AlertChartReview(QWidget):
         if count:
             self.hidden_button.setText(
                 f"{count} hidden (inside yesterday's range / wrong side of VWAP or SMA) - show"
+            )
+
+    def set_claimed_skipped_count(self, count: int = 0) -> None:
+        """The honest line about the repeat D1 charts a claim is holding back.
+
+        Packet D1C-A, built the way `set_hidden_count` above is built and for
+        the same reason: the review pane never goes quiet without saying why. A
+        LABEL rather than a button, because there is nothing to reveal - the
+        chart is not withheld, the thesis is answered, and the pick is sitting
+        in the setups table where the trader put it. Nothing is deleted, muted
+        or written to `review_policy.json`.
+        """
+        count = max(0, int(count or 0))
+        self.claimed_skipped_label.setVisible(count > 0)
+        if count:
+            self.claimed_skipped_label.setText(
+                f"{count} D1 chart(s) skipped - already claimed"
             )
 
     def set_any_bounce_armed(self, armed: bool = False) -> None:

@@ -45,6 +45,31 @@ FOCUS_D1_EVENT_TAG = "focus_d1_event"
 FOCUS_FADED_TAG = "focus_faded"
 
 
+#: Which of the review pane's TWO charts a capture made on it is about.
+#:
+#: The pane draws a D1 and an M5, and the capture rail's `timeframe` is both
+#: what the annotation row records and what decides whether the M5 bars are
+#: attached as a sidecar. It therefore has to be a total function of the
+#: alert - never blank, because a blank one leaves `CaptureRail.set_context`'s
+#: `if timeframe:` on the PREVIOUS chart's answer, and never a spelling the
+#: `== "M5"` compare cannot read.
+#:
+#: The spellings are real: `_timeframe_from_text` writes `"5m"`, `"15m"`,
+#: `"30m"`, `"1h"`, `"H1"`, `"D1"` or `""`, and hand-built alerts elsewhere say
+#: `"M5"`. Everything that is not a five-minute alert answers `"D1"` - the pane
+#: has no 15m or 1h chart, so a capture on one of those was read on the daily,
+#: which is exactly what the rail said before this function existed.
+_M5_TIMEFRAME_SPELLINGS = frozenset({"5m", "m5", "5", "5min", "5mins", "m5s"})
+CAPTURE_TIMEFRAME_M5 = "M5"
+CAPTURE_TIMEFRAME_D1 = "D1"
+
+
+def capture_timeframe(timeframe: Any) -> str:
+    """`"M5"` for a five-minute alert, `"D1"` for everything else. Pure, total."""
+    text = str(timeframe or "").strip().lower().replace(" ", "")
+    return CAPTURE_TIMEFRAME_M5 if text in _M5_TIMEFRAME_SPELLINGS else CAPTURE_TIMEFRAME_D1
+
+
 def is_auto_pick_alert(alert: Any) -> bool:
     return str(getattr(alert, "tag", "") or "") == AUTO_PICK_TAG
 

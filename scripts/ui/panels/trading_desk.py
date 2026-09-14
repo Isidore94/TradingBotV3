@@ -139,6 +139,11 @@ class TradingDeskPanel(QWidget):
         # poller (plan.md sec 5). Injected rather than constructed there on
         # purpose: the panel uses the store, the desk owns it.
         self.alert_center.price_alert_service = self.price_alert_service
+        # Packet D1C-A (trader, 2026-09-14). The left side of the desk claims a
+        # D1 setup; the right side is where the pick has to appear "within a
+        # second". One signal, one re-read of one small file - the setups table
+        # re-merges rows it already holds and nothing is re-scanned.
+        self.alert_center.claimsChanged.connect(self.master_panel.refresh_claims)
         self.watchlists_panel.set_bounce_service(self.bounce_panel.service)
         self.master_panel.set_bounce_service(self.bounce_panel.service)
         self.industry_panel.set_bounce_service(self.bounce_panel.service)

@@ -402,6 +402,50 @@ when to run it is a separate change.
 A like writes **one annotation row** carrying the claimed setup id, and that
 is all. There is deliberately no second likes store.
 
+**SUPERSEDED IN PART for the D1 CLAIMED like, packet D1C-A, 2026-09-14**
+(trader: *"The left side of the Trading Desk is for M5 trades. The right side
+is for D1 trades. When I like and claim a D1 setup, it becomes a ranked pick I
+can follow in Master AVWAP Setups. I should not have to keep reviewing the same
+D1 chart. ... This request intentionally changes the old 'claimed likes place
+nothing' rule for D1 claims. Update that contract narrowly."*)
+
+The new rule, and it is deliberately narrow:
+
+* A **CLAIMED** like whose horizon resolves to **`d1`** writes ONE row into
+  `claimed_picks.jsonl` (`scripts/claimed_picks.py`, append-only, identity
+  `(symbol, side, claimed_setup_id)`), and that row becomes ONE row in the
+  Master AVWAP setups table with the chip **My liked trade**. A second claim of
+  an active key appends nothing and is still a success - the pick exists.
+* **The pick is saved and confirmed BEFORE the chart is retired.** A store that
+  could not be written keeps the chart, fires `likeRecorded`, and says
+  `NOT PLACED - claimed_picks.jsonl could not be written; chart kept`. The
+  annotation row is written first either way and is never conditional on the
+  placement, so the like stands whatever became of the pick.
+* **The horizon is resolved explicitly, once** (`claimed_picks.claim_horizon`):
+  the alert's `is_d1`, else the panel's `_is_m5_review_alert` answer handed in
+  as a flag, else the claimed setup's registry group. It never reads the
+  capture rail's timeframe. An unresolvable horizon (`none_of_these`, an id the
+  registry never heard of) places NOTHING and says so.
+* **While the claim is active, that same D1 thesis stays out of repeat review** -
+  keyed on `(symbol, side)`, D1 SCAN alerts only, at the one door into the
+  queue. An armed chart-watch still queues, every M5 alert still reaches the M5
+  bar, and detection, the feed, History, the evidence streams, the AWAY recap
+  and the phone push are all upstream and untouched. The skip is COUNTED and
+  stated on the review pane, the way the movers-only hidden count is.
+* **Everything else in this section still holds.** A claim writes NOTHING to
+  Focus, injects nothing into a watchlist, parks no symbol and grants no alert
+  privilege; "Add to Swing Focus" on the row remains the explicit placement
+  verb. The retirement is `_retire_claimed_review`, a SEPARATE method from the
+  parking verb - a claim is the trader saying yes to a name, and the body that
+  writes `remove_today` and parks the symbol must never run on it.
+* A claim ends when the trader drops it (**Drop my claim** on the row) or after
+  `focus_picks.FADE_TRADING_DAYS` trading days. A veto, a dislike or a pass
+  never retracts one: verdicts stay separate (P5).
+
+The paragraphs below are the contract as it stood before that, and they remain
+the rule for the QUICK like, for a claimed like on an M5 chart, and for a claim
+the registry cannot name.
+
 **SUPERSEDED for the CLAIMED like, packet T2, 2026-09-04** (trader, second
 pass: *"for the 'like and claim' part of the capture tab, a double click of any
 of the setups there should be sufficient. I shouldnt have to type anything below
