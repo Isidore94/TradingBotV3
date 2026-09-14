@@ -837,8 +837,9 @@ def test_a_scheduled_popup_stays_quiet_but_a_real_click_can_type_and_submit(tmp_
     # the live gate does. This attribute keeps the scheduled show non-activating
     # while still allowing the real click below to focus the editor.
     assert popup.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-    assert not bool(popup.windowFlags() & Qt.WindowType.ToolTip)
-    assert not bool(popup.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus)
+    flags = popup.windowFlags()
+    assert (flags & Qt.WindowType.WindowType_Mask) != Qt.WindowType.ToolTip
+    assert not bool(flags & Qt.WindowType.WindowDoesNotAcceptFocus)
 
     QTest.mouseClick(card.text_box.viewport(), Qt.MouseButton.LeftButton)
     QTest.keyClicks(card.text_box, "SPY held VWAP")
