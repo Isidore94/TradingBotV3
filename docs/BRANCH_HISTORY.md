@@ -193,8 +193,10 @@ contained) was left for that session.
 
 ## The 2026-09-14 consolidation (trader: *"combine all of todays work from codex and claude into 1 branch and delete all the other (except for main)"*)
 
-**What survives.** `main` (d31a3923, untouched), `claude/wishlist-sweep-2026-09-12` (13d8b9de - the
-RUNNING desk's checkout, which is why it could not be moved or deleted in the same pass), and
+**What survives.** `main` (d31a3923, untouched) and, since the second pass the same afternoon
+(trader: *"close the desk then delete the sweep branch"* - the desk was closed gently, the checkout
+moved, and `claude/wishlist-sweep-2026-09-12` at 13d8b9de deleted locally and on origin; every one of
+its commits is an ancestor of the combined branch), only
 **`claude/desk-combined-2026-09-14`** (84d4ca10 + the docs stamp above it), the single work
 branch. The combined branch is the sweep tip 13d8b9de (Codex's day: `codex/mentor-popup-context`
 with `codex/mentor-context-resilience`, `codex/m5-rank-left`, `codex/chart-symbol-isolation`,
