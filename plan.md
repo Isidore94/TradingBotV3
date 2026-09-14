@@ -388,6 +388,14 @@ is the trader's live validation (#119-#121) and the merge decision, which travel
 
 ## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — IN BUILD on `claude/wishlist-sweep-2026-09-12`
 
+**2026-09-14 trader-directed WS-DR follow-up - BUILT by the lead:** the Daily Recap reads TODAY by
+itself at 12:00 Pacific (`scripts/daily_recap_schedule.py` pure, one `QTimer` on the panel started in
+`showEvent`, `local_settings.json` `daily_recap_auto_time`), once per session, provisional until the
+13:00 Pacific close and re-read on page select or Refresh; every Auto mode, no scan/push/write
+(`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` amendment 2026-09-14). **Live gate #122 owed:** one
+session day on the desk - the page shows today's session after 12:00 Pacific without a click, and after
+the close the entry no longer reads "provisional".
+
 **2026-09-14 trader-directed WS-TM follow-up - BUILT and reviewed:** replaced the under-chart Mentor card
 with a reusable modeless pop-up and attached hidden, bounded market context for VXX,
 RSP, USO, TLT, IWM, QQQ, SPY, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLU, XLV and XLY.

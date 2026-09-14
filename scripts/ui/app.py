@@ -1032,6 +1032,9 @@ class MainWindow(QMainWindow):
         # while a test is still monkeypatching what it reads.
         self.trade_mentor_service.start()
         self._sync_trade_mentor_label()
+        # Trader request 2026-09-14: the Daily Recap reads today by itself at
+        # 12:00 Pacific. Same seam, same reason - the tick reads a setting.
+        self.daily_recap_panel.start()
 
     # -- Trade Mentor (WISHLIST 10J) --------------------------------------
     def _trade_mentor_cached_bars(self, timeframe, symbols, *, now, timeout_seconds):

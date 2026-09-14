@@ -19,12 +19,12 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14, two streams combined on ONE branch (`claude/desk-combined-2026-09-14`, trader instruction "combine all of today's work from codex and claude into 1 branch").** Codex: the Trade Mentor pop-up/context, the M5 left-grade display and the chart-symbol isolation repair, loaded into the desk checkout at 13d8b9de (their entries below). Claude: the claimed D1 picks - packets D1C-A / D1C-L / D1C-B, tester -> builder -> reviewer each, integrated as `lead/d1c-integration` 38fbcc6b. The combined tree merges the two with three conflicts resolved by hand (both constructor parameters kept in `alert_chart_review.py`; both CHANGELOG and checkpoint entries kept). Every other branch was deleted after a full-refs backup bundle (`%LOCALAPPDATA%\\TradingBotV3\\diagnostics\\branches-backup-2026-09-14.bundle`). |
+| Latest work | **2026-09-14: the Daily Recap fills itself in at 12:00 Pacific (trader-directed WS-DR follow-up), built by the lead on the combined desk branch `claude/desk-combined-2026-09-14`.** New pure `scripts/daily_recap_schedule.py`, one `QTimer` on `DailyRecapPanel` started in `showEvent`, setting `daily_recap_auto_time` (default 12:00), once per session, provisional until the 13:00 Pacific close, the picker relabelled after the close; the WS-DR wall-clock flake is fixed. Before it: the two 2026-09-14 streams (Codex's Mentor pop-up/context, M5 left-grade and chart-symbol isolation; Claude's claimed D1 picks) combined on this one branch at 84d4ca10 with every other branch deleted after a backup bundle. Live checks remain open. |
 | Working branch | **`claude/desk-combined-2026-09-14`** is the ONLY work branch beside `main`, locally and on origin, and it is the desk checkout's branch since 2026-09-14 ~13:45 PT (the trader: "close the desk then delete the sweep branch"). `claude/wishlist-sweep-2026-09-12` is deleted; its whole history is an ancestor of the combined branch. No merge to `main`. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Branches with commits in NO surviving branch now live only in the backup bundle: `claude/s1-quick-verbs` (8), `claude/ws-rp-shared-report-build` (4, the unfinished WS-RP build), `claude/ws-rp-shared-report`, `claude/rv-h1-arm-time`, `claude/rv-h1-phone-worker`, `claude/ws-ai1-enrichment-status-build`, `claude/avwap-band-challenger`, `testing-week-2026-08-17` (1 each). Still recorded: 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | **Trader: start the desk (`trading_desk.cmd`) when ready - it now runs the combined branch - and run the combined live checks: Mentor gate #110, the M5 left-grade and chart-symbol-switch checks, and gates #119-#121, inside the sweep test week (#94-#118).** Lead notes: `tests/test_ws_10a_scan_freshness.py::...never_on_paint` and `tests/test_ws_dr_daily_recap.py::...today_offered` are known flakes (order / wall-clock after the close); the checkpoint and CHANGELOG are far over their size rules and an archive pass is owed; the research warehouse build for run `master_scan-20260914T200417Z-b0feb75a` was cut short by the close and will be redone by the next scan (shadow evidence, by design). |
-| Trader actions owed | Start the desk when ready and test. Confirm or overrule two lead decisions: a claim places in the setups table ONLY (no Focus, no watchlist), and a veto never retracts a claim (only `Drop my claim` or the ten-trading-day fade does). Say whether WS-RP's unfinished build should be restored from the backup bundle. Cache repair and environment backfill remain separate. |
-| Last verified baseline | **Combined tree 84d4ca10 (Codex's 13d8b9de + Claude's 38fbcc6b): 8142 passed, 1 failed, 5 skipped, 72 subtests in 651 s; ruff clean; smoke 7/7; source selftest 81/81.** The one failure is `tests/test_ws_dr_daily_recap.py::test_the_page_opens_on_the_last_completed_session_with_today_offered`, which reads the REAL clock: run at 13:19 PDT (after the 16:00 ET close) today IS the last completed session, so no `Today (provisional)` entry is offered - a wall-clock test, not a regression of either stream (it fails alone in its file at that hour too); it should freeze its clock (follow-up owed). Before the combine: the Claude tree 02b9d3c6 gave 8117 passed / 0 failed, and Codex's checkpoint cell recorded 195 targeted tests + a 7980-pass full run on be99127d. |
+| Next action | **Trader: start the desk (`trading_desk.cmd`) when ready - the checkout is the combined branch plus the Daily Recap timer - and run the combined live checks: Mentor gate #110, the M5 left-grade and chart-symbol-switch checks, gates #119-#121, and gate #122 (the Daily Recap shows today after 12:00 Pacific without a click; after the close the entry no longer reads "provisional"), inside the sweep test week (#94-#118).** Lead notes: `tests/test_ws_10a_scan_freshness.py::...never_on_paint` is a known order flake (the WS-DR wall-clock flake is fixed as of this entry); the checkpoint and CHANGELOG are far over their size rules and an archive pass is owed; the research warehouse build for run `master_scan-20260914T200417Z-b0feb75a` was cut short by the close and will be redone by the next scan (shadow evidence, bounded). |
+| Trader actions owed | Restart the desk to pick up the Daily Recap timer (a pushed commit is live at the next restart), then test. Confirm or overrule two lead decisions: a claim places in the setups table ONLY (no Focus, no watchlist), and a veto never retracts a claim (only `Drop my claim` or the ten-trading-day fade does). Say whether WS-RP's unfinished build should be restored from the backup bundle. Cache repair and environment backfill remain separate. |
+| Last verified baseline | **Combined branch with the Daily Recap timer: full suite 8181 passed, 6 skipped, 72 subtests in 545 s (exit 0; a first run with -x stopped on the known order flake tests/test_ws_wl_watchlist_tab.py::test_selection_survives_a_refresh, which passes alone); ruff clean; smoke 7/7; source selftest 81/81.** The WS-DR picker test now freezes nothing but reads the clock BOTH ways (before the close it expects a provisional Today entry, after it expects today at the head), so the one wall-clock failure recorded on the combined tree 84d4ca10 (8142 passed, 1 failed, 5 skipped) is closed. Full-suite claims for the earlier streams stand as recorded in their dated entries. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
 | Desk | **Closed by the lead at the trader's word (2026-09-14 ~13:45 PT), gently (a window-close request; the close-slot scan, tracker write and scoring analysis had finished; the warehouse build child was reaped by the desk's own shutdown).** The checkout was then moved to the combined branch. Not restarted: the next start is the trader's, and it uses the combined code. |
 
@@ -159,6 +159,50 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-14 — The Daily Recap fills itself in at 12:00 Pacific (trader-directed, WS-DR follow-up)
+
+Trader request: *"I want it to auto populate at 12pm PST each day so at end of
+day I can review it."* The page read a session only on page select or Refresh
+and opened on the last COMPLETED session, so an end-of-day visit showed
+yesterday until the picker was moved. Built by the lead alone on the combined
+desk branch `claude/desk-combined-2026-09-14` (a bounded UI-timer change over an existing pure reader; no
+tester/reviewer round).
+
+What landed: `scripts/daily_recap_schedule.py` is the PURE decision -
+`due_session(now, auto_time, last_fired_session)` returns today's ISO date when
+today is an exchange session, the Pacific wall clock (`America/Los_Angeles`,
+DST-aware) has reached the configured time and this session has not fired, else
+`None`; a mistyped setting, a weekend, a holiday and a calendar refusal are all
+`None`. The setting is `local_settings.json` `daily_recap_auto_time` (default
+`"12:00"`, `""`/`"off"` disables). `DailyRecapPanel` owns one `QTimer` (60 s),
+started by `MainWindow.showEvent` beside the Mentor's and never in the
+constructor; `poll_auto_read` -> `show_session(today)` refills the picker,
+selects today and reloads, once per session per process, so a desk started at
+15:00 reads today on its first tick. Two lead decisions the trader may overrule:
+(1) 12:00 Pacific is an hour BEFORE the 13:00 Pacific close, so the automatic
+read is provisional by the reader's own label and the page's next read (page
+select still reloads; Refresh) after the close is the measured one - the time
+was built exactly as asked and left as a setting rather than moved to the
+close; (2) the read runs in every Auto mode including AWAY, because it is a
+store read on the page's own worker with no scan, fetch, push or write, and so
+is outside `auto_scanning_due` (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`
+amendment 2026-09-14). Also fixed: `reload` now refreshes the session list when
+the newest completed session moved (selection kept by DATE), so today loses its
+"provisional" label after the close without a restart; the WS-DR picker test
+was a wall-clock flake after 13:00 Pacific and is now clock-aware.
+
+Files: `scripts/daily_recap_schedule.py` (new), `scripts/ui/panels/daily_recap_panel.py`,
+`scripts/ui/app.py` (one `start()` line in `showEvent`; the panel already sat in the
+shutdown list), `tests/test_daily_recap_auto_populate.py` (new, 39), `tests/test_ws_dr_daily_recap.py`
+(one test), CHANGELOG inventory + Recent changes, plan.md Phase 0.26, the quiet-hours
+amendment. No detector, score, alert, watchlist, Focus or evidence path touched; no new
+dependency or asset, so no frozen-exe rebuild trigger.
+
+Verification: see the glance block's baseline (full suite, ruff, smoke 7/7, selftest 81/81).
+**Live gate #122 owed:** one session day on the desk after a restart - the page shows
+today's session after 12:00 Pacific without a click, and after the close the entry no
+longer reads "provisional".
 
 ### 2026-09-14 — M5 alert grades at the left (Phase 0.14 display follow-up)
 

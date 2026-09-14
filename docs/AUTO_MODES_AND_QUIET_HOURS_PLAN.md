@@ -503,3 +503,38 @@ daemon thread. It is not gated on quiet hours or on the Auto mode for the same r
 the push is not: the trader armed the condition by hand and is waiting on it. It scans
 nothing, discovers nothing, adopts nothing and writes nothing - one symbol, one
 interval, in memory - and it is the same shape as the group RS/RW tape's own clock.
+
+---
+
+## Amendment 2026-09-14 - the Daily Recap fills itself in at 12:00 Pacific (trader-directed, WS-DR follow-up)
+
+Trader, 2026-09-14: *"I want it to auto populate at 12pm PST each day so at end of day I
+can review it."* Until this amendment the Daily Recap read a session only when the page
+was opened or Refresh was pressed, and it opened on the last COMPLETED session, so a
+visit at the end of the day showed yesterday until the picker was moved by hand.
+
+**What it does.** One `QTimer` on `DailyRecapPanel`, started by the window in
+`showEvent` beside the Trade Mentor's and never in a constructor, asks
+`scripts/daily_recap_schedule.due_session` once a minute. At the configured Pacific
+wall-clock time on an exchange session it refills the session list, selects TODAY and
+reads it, once per session per process. The time is the `local_settings.json` key
+`daily_recap_auto_time` (default `"12:00"`; `""` / `"off"` disables; a mistyped value
+disables rather than guesses). Pacific is `America/Los_Angeles`, DST-aware, exactly as
+the Mentor's slots are. A desk started after the hour reads today on its first tick; a
+weekend or holiday noon reads nothing; a calendar refusal reads nothing.
+
+**What the noon read IS.** 12:00 Pacific is 15:00 ET, one hour before the regular
+close, so the automatic read is labelled provisional by the reader's own
+`_is_provisional` and the page says so. Every later read of the same session - the
+page opened at the end of the day (page select still reloads), or Refresh - is the
+closed-and-measured one, and the session list is now refilled at the head of every
+read so today is relabelled from "provisional" to a plain completed entry after the
+close instead of keeping its start-of-day label until a restart.
+
+**Why it is not a starter under the quiet-hours rule.** It starts no scanner, fetches
+no bars, pushes nothing to the phone and writes no store: it is a store read on the
+page's own worker, the same read a click performs. It therefore runs in every Auto
+mode - AWAY included, so the page is ready when the trader returns - and stays outside
+`autopilot_core.auto_scanning_due`, for the same reason the Trade Mentor's fixed hours
+and the armed-watch H1 fetch above are outside it. The push-exception count stays at
+two; the AWAY digest and `autopilot_today.txt` are untouched.

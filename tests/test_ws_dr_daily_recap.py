@@ -1317,14 +1317,21 @@ def test_the_page_opens_on_the_last_completed_session_with_today_offered(make_pa
 
     page = make_page()
 
-    assert page.session_date() == market_calendar.last_completed_session(
-        datetime.now()
-    ).isoformat()
+    now = datetime.now()
+    completed = market_calendar.last_completed_session(now).isoformat()
+    assert page.session_date() == completed
     entries = [
         page.session_picker.itemText(index) for index in range(page.session_picker.count())
     ]
     provisional = [text for text in entries if "Today" in text and "provisional" in text]
-    assert provisional, f"no explicitly provisional Today entry in {entries}"
+    if now.date().isoformat() == completed:
+        # Run after the close on a session day: today IS the completed head
+        # and must not also be offered as a provisional entry (the pre-2026-09-14
+        # form of this test only passed before 13:00 Pacific).
+        assert not provisional, f"a closed session offered as provisional in {entries}"
+        assert page.session_picker.itemData(0) == completed
+    else:
+        assert provisional, f"no explicitly provisional Today entry in {entries}"
     assert page.lookback_sessions() == 3
 
 

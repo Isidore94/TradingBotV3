@@ -23,14 +23,29 @@ board chart holds no place in the waiting list, so nothing here is ever
 re-queued or skip-counted. The chart widget has no marker seam, so the decision
 time travels in the row's own Time column and its tooltip rather than being
 invented into one.
+
+**It fills itself in once a day (trader request, 2026-09-14).** One `QTimer`,
+started by the host AFTER the window shows and never in the constructor, asks
+`daily_recap_schedule.due_session` once a minute; at the configured Pacific
+wall-clock time (default 12:00, `local_settings.json`
+`daily_recap_auto_time`) on an exchange session it refills the session list,
+selects TODAY and reads it, once per session per process. A desk started after
+that time reads today on its first tick. Noon Pacific is an hour before the
+regular close, so that read is labelled provisional by the reader itself and
+the next read of the same session - the page opened at the end of the day, or
+Refresh - is the closed one. The read is a store read on a worker: no scan, no
+push, no write, so it runs in every Auto mode and is not a starter under the
+quiet-hours rule (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`, amendment
+2026-09-14).
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -44,8 +59,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import daily_recap_schedule
 from ui import theme
 from ui.widgets.data_table import apply_width_rule_to_table_widget
+
+#: How often the page asks whether its automatic read is due. A minute is the
+#: Trade Mentor's cadence for the same question; the answer is a function of
+#: the clock, so a late tick reads the same session a punctual one would.
+AUTO_POLL_INTERVAL_MS = 60_000
 
 #: How many completed sessions the picker offers behind today. Long enough to
 #: read back a week the trader was away for, short enough that the list is a
@@ -173,11 +194,29 @@ class DailyRecapPanel(QFrame):
     #: (symbol, side) - the host performs the Focus add through FocusService.
     focusAddRequested = Signal(str, str)
 
-    def __init__(self, focus_service=None, parent=None) -> None:
+    def __init__(
+        self,
+        focus_service=None,
+        parent=None,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        auto_time_reader: Callable[[], Any] | None = None,
+    ) -> None:
         super().__init__(parent)
         self._focus_service = focus_service
         self._worker: _RecapReadWorker | None = None
         self._session: Any = None
+        # The automatic read (trader request 2026-09-14). `clock` and
+        # `auto_time_reader` are injectable so a test can put the page at
+        # 12:00 Pacific on a session without waiting for one.
+        self._clock: Callable[[], datetime] = clock or datetime.now
+        self._auto_time_reader: Callable[[], Any] = (
+            auto_time_reader or daily_recap_schedule.auto_time_from_settings
+        )
+        self._auto_fired_session: str | None = None
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(AUTO_POLL_INTERVAL_MS)
+        self._auto_timer.timeout.connect(self._on_auto_tick)
         self._view_rows: dict[str, tuple] = {name: () for name in VIEW_ORDER}
         self._staged_rows: list[tuple[str, str]] = []
 
@@ -298,17 +337,23 @@ class DailyRecapPanel(QFrame):
         self._sorts[name] = sort_picker
         return page
 
-    def _fill_session_picker(self) -> None:
+    def _fill_session_picker(self, select: str | None = None) -> None:
         """Completed sessions, newest first, with Today offered as PROVISIONAL.
 
         Today is in the list because the trader asks about it, and it is marked
         provisional in the entry itself rather than only in a note: a session
         that has not closed cannot be compared with one that has, and the label
         is the only thing standing between those two readings.
+
+        Re-runnable: the list is a function of the clock, and a desk that was
+        started before the close would otherwise still call today "provisional"
+        in the picker at 21:00. `select` names the session to leave selected
+        (the newest completed one when absent or unknown). Signals are blocked
+        throughout, so a refill never triggers a read by itself.
         """
         import market_calendar
 
-        now = datetime.now()
+        now = self._clock()
         self.session_picker.blockSignals(True)
         try:
             self.session_picker.clear()
@@ -331,9 +376,88 @@ class DailyRecapPanel(QFrame):
                 self.session_picker.addItem(
                     f"Today ({today}) - provisional, the session is not closed", today
                 )
-            self.session_picker.setCurrentIndex(0)
+            wanted = self.session_picker.findData(select) if select else -1
+            self.session_picker.setCurrentIndex(max(0, wanted))
         finally:
             self.session_picker.blockSignals(False)
+
+    def _refresh_session_picker(self) -> None:
+        """Rebuild the list only when the newest completed session has moved.
+
+        Called at the head of every read so a Refresh after the close relabels
+        today from "provisional" to a plain completed entry. The selection is
+        kept by its DATA (the ISO date), never by its index.
+        """
+        import market_calendar
+
+        try:
+            head = market_calendar.last_completed_session(self._clock()).isoformat()
+        except Exception:  # noqa: BLE001 - a calendar refusal keeps the list as is
+            return
+        if self.session_picker.count() and self.session_picker.itemData(0) == head:
+            return
+        self._fill_session_picker(select=self.session_date())
+
+    # -- the automatic read ------------------------------------------------
+    def start(self) -> None:
+        """Begin the once-a-minute due check. Called by the host after the
+        window is up, never in the constructor: a timer started during
+        construction runs while a test is still monkeypatching what it reads."""
+        if not self._auto_timer.isActive():
+            self._auto_timer.start()
+
+    def auto_fired_session(self) -> str | None:
+        """The session this process has already read automatically, if any."""
+        return self._auto_fired_session
+
+    def next_auto_read_at(self) -> datetime | None:
+        """The next Pacific instant the automatic read is due; a label, never
+        the decision (`daily_recap_schedule.due_session` is the decision)."""
+        try:
+            return daily_recap_schedule.next_fire_at(
+                self._clock(), auto_time=self._configured_auto_time()
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _configured_auto_time(self):
+        try:
+            raw = self._auto_time_reader()
+        except Exception:  # noqa: BLE001 - settings unreadable: not due
+            return None
+        # A reader may hand back the parsed time or the raw setting text.
+        if raw is None or hasattr(raw, "hour"):
+            return raw
+        return daily_recap_schedule.parse_auto_time(raw)
+
+    def _on_auto_tick(self) -> None:
+        try:
+            self.poll_auto_read()
+        except Exception:  # noqa: BLE001 - a timer slot never raises into Qt
+            logging.debug("Daily Recap automatic read failed.", exc_info=True)
+
+    def poll_auto_read(self) -> str | None:
+        """One due check. Returns the session read, or `None` when nothing was
+        due. Fires at most once per session per process; the memory is this
+        process's, so a desk restarted after the hour reads today again, which
+        is the behaviour the trader asked for (the page is ready when they
+        come to it)."""
+        due = daily_recap_schedule.due_session(
+            self._clock(),
+            auto_time=self._configured_auto_time(),
+            last_fired_session=self._auto_fired_session,
+        )
+        if due is None:
+            return None
+        self._auto_fired_session = due
+        self.show_session(due)
+        return due
+
+    def show_session(self, session_date: str) -> None:
+        """Select `session_date` in the picker and read it. The picker is
+        refilled first so today is in the list under its current label."""
+        self._fill_session_picker(select=str(session_date))
+        self.reload()
 
     # -- the controls ------------------------------------------------------
     def session_date(self) -> str:
@@ -354,6 +478,7 @@ class DailyRecapPanel(QFrame):
         """Ask the worker for the selected session. Never blocks the page."""
         if self._worker is not None and self._worker.isRunning():
             return
+        self._refresh_session_picker()
         self._worker = _RecapReadWorker(self.session_date(), self.lookback_sessions(), self)
         self._worker.loaded.connect(self.render_session)
         self._worker.failed.connect(self._render_failure)
@@ -585,9 +710,19 @@ class DailyRecapPanel(QFrame):
         self.chartRequested.emit(symbol, str(getattr(row, "side", "") or ""))
 
     def shutdown(self) -> None:
+        try:
+            self._auto_timer.stop()
+        except RuntimeError:  # pragma: no cover - already torn down
+            pass
         worker = self._worker
         if worker is not None and worker.isRunning():
             worker.wait(2000)
 
 
-__all__ = ["DailyRecapPanel", "LOOKBACK_CHOICES", "VIEW_COLUMNS", "VIEW_ORDER"]
+__all__ = [
+    "AUTO_POLL_INTERVAL_MS",
+    "DailyRecapPanel",
+    "LOOKBACK_CHOICES",
+    "VIEW_COLUMNS",
+    "VIEW_ORDER",
+]
