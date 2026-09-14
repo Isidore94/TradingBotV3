@@ -130,22 +130,29 @@ class TradeMentorContextService(QObject):
     def _build(self, moment: datetime) -> dict[str, Any]:
         cached: dict[str, Mapping[str, Any]] = {"m5": {}, "d1": {}}
         session_key = _completed_session_key(moment)
-        has_valid_d1 = bool(session_key and session_key in self._d1_cache)
-        if has_valid_d1:
-            cached["d1"] = self._d1_cache[session_key]
+        saved_d1 = self._d1_cache.get(session_key, {}) if session_key else {}
+        cached["d1"] = dict(saved_d1)
         if self._cache_loader is not None:
             for timeframe in ("m5", "d1"):
-                # A completed-session cache was validated as a full usable
-                # snapshot.  Do not replace it with a transient empty or
-                # stale local cache on the next hourly read.
-                if timeframe == "d1" and has_valid_d1:
-                    continue
                 try:
                     candidate = self._cache_loader(
                         timeframe, SYMBOLS, now=moment, timeout_seconds=self._timeout_seconds
                     )
                     if isinstance(candidate, Mapping):
-                        cached[timeframe] = _normalize_bars(candidate, timeframe)
+                        normalized = _normalize_bars(candidate, timeframe)
+                        if timeframe == "d1" and saved_d1:
+                            # Each saved D1 symbol has already passed the
+                            # completed-session check. A local cache can fill
+                            # a gap but cannot replace a valid saved symbol.
+                            cached[timeframe].update(
+                                {
+                                    symbol: bars
+                                    for symbol, bars in normalized.items()
+                                    if symbol not in saved_d1
+                                }
+                            )
+                        else:
+                            cached[timeframe] = normalized
                 except Exception:
                     logging.debug("Trade Mentor %s cache unreadable.", timeframe, exc_info=True)
         initial = build_context(
@@ -179,11 +186,6 @@ class TradeMentorContextService(QObject):
                 except Exception as exc:  # noqa: BLE001 - a leg may fail alone
                     failures[timeframe] = str(exc) or f"{timeframe} loader failed"
                     sources[timeframe] = "cached" if cached[timeframe] else "unavailable"
-                    # With no usable bars from either leg, a second network
-                    # batch cannot improve this request's explicit absence.
-                    # The hour failure throttle owns the next retry.
-                    if not final["m5"] and not final["d1"]:
-                        break
                     continue
                 fresh = _normalize_bars(fetched, timeframe)
                 final[timeframe].update(fresh)
@@ -198,8 +200,14 @@ class TradeMentorContextService(QObject):
                 status = row[f"{timeframe}_status"]
                 if status == "unavailable":
                     row[f"{timeframe}_reason"] = failure
-        if session_key and all(row["d1_status"] == "measured" for row in context["readings"]):
-            self._d1_cache[session_key] = dict(final["d1"])
+        if session_key:
+            valid_d1 = {
+                row["symbol"]: final["d1"][row["symbol"]]
+                for row in context["readings"]
+                if row["d1_status"] == "measured" and row["symbol"] in final["d1"]
+            }
+            if valid_d1:
+                self._d1_cache[session_key] = valid_d1
         self._prune_caches()
         return context
 
