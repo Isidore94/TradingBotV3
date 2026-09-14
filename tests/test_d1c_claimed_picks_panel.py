@@ -741,3 +741,39 @@ def test_the_claimed_rows_menu_offers_drop_my_claim(tmp_path, monkeypatch):
         )
     finally:
         panel.deleteLater()
+
+
+def test_dropping_the_claim_on_a_scan_row_keeps_the_row_and_takes_the_label_off(
+    tmp_path, monkeypatch
+):
+    """ADDED BY THE BUILDER: a claim on a name the SCAN also carries.
+
+    The packet's own drop test uses a claimed-only row, which leaves the other
+    half untested - and it is the half that can go wrong, because a labelled
+    scan row has to carry the claimed setup id for the drop to know which pick
+    to end. The scan's row is the scan's: dropping the claim takes the label
+    off and leaves the row, its bucket and its score exactly where they were.
+    """
+    import claimed_picks
+
+    claims = tmp_path / "claimed_picks.jsonl"
+    _write_claims(claims, [_claim("MSFT", "LONG", "avwap_band_bounce")])
+    panel, _ = _build_panel(tmp_path, monkeypatch)
+    try:
+        panel.refresh_from_reports()
+        row = _row_named(panel, "MSFT")
+        assert "claimed_like" in row.bucket_keys
+        assert row.raw.get("claimed_setup_id") == "avwap_band_bounce"
+
+        actions = {label: callback for label, callback in panel.table._row_actions}
+        index = panel.model.rows().index(row)
+        actions["Drop my claim"](panel.proxy.mapFromSource(panel.model.index(index, 0)))
+
+        assert [r["action"] for r in claimed_picks.load_rows(claims)] == ["claim", "drop"]
+        after = _row_named(panel, "MSFT")
+        assert "claimed_like" not in after.bucket_keys
+        assert after.bucket == "high_conviction", "the scan's row is the scan's"
+        assert after.score == 88.0
+        assert "My liked trade" not in after.bucket_display
+    finally:
+        panel.deleteLater()

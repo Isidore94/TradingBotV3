@@ -139,8 +139,14 @@ def _copy_for_label(row: SetupRow) -> SetupRow:
     return dataclasses.replace(row, raw=raw, setup_tags=list(row.setup_tags or []))
 
 
-def _label_as_claimed(row: SetupRow) -> SetupRow:
+def _label_as_claimed(row: SetupRow, claim: Mapping[str, Any]) -> SetupRow:
     labelled = _copy_for_label(row)
+    # The claim that labelled it, carried on the row: "Drop my claim" needs the
+    # setup id to end the right pick, and a labelled scan row is a claimed pick
+    # just as much as a claimed-only row is. The scan's own measurements are
+    # untouched - this adds provenance, never a number.
+    labelled.raw["claimed_setup_id"] = str(claim.get("claimed_setup_id") or "").strip()
+    labelled.raw["claim_at"] = str(claim.get("claim_at") or "")
     keys = labelled.raw["bucket_keys"]
     primary = str(labelled.bucket or "").strip().lower()
     if primary and primary not in keys:
@@ -255,7 +261,7 @@ def merge_claims(
         family = claimed_family(setup_id)
         index = by_opportunity.get((symbol, side, family)) if family else None
         if index is not None:
-            merged[index] = _label_as_claimed(merged[index])
+            merged[index] = _label_as_claimed(merged[index], claim)
             continue
         unmatched.append(claim)
 
