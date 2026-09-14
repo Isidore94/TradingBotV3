@@ -79,6 +79,8 @@ from PySide6.QtWidgets import (  # noqa: E402
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtCore import QObject, Qt, Signal  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 
 _app = QApplication.instance() or QApplication([])
 
@@ -712,19 +714,77 @@ def test_the_card_never_takes_focus_from_what_the_trader_is_doing(tmp_path):
     host.close()
 
 
-def test_the_chart_host_docks_the_card_and_keeps_a_give_a_read_button(tmp_path):
-    """Under the chart, beside the arm bar - and the arm bar stays exactly where it
-    is. Hidden until something is due, with the manual button always reachable."""
+class _DeferredMentorContext(QObject):
+    """The real card sees only the service boundary, never a loader or thread."""
+
+    contextReady = Signal(str, object)
+    contextUnavailable = Signal(str, object)
+
+    def __init__(self):
+        super().__init__()
+        self.requests: list[tuple[str, datetime | None]] = []
+
+    def request_context(self, request_id: str, *, now=None) -> bool:
+        self.requests.append((request_id, now))
+        return True
+
+
+def test_the_chart_host_reuses_a_modeless_popup_and_keeps_the_arm_bar_under_the_chart(tmp_path):
+    """The Mentor is its own small window. It cannot take chart height or focus.
+
+    A scheduled show, the manual door, Escape and the window close button all use the
+    SAME popup. Closing keeps the typed draft and records one skip; a later show puts
+    the draft back. The arm bar remains in the chart layout throughout.
+    """
     from ui.widgets.alert_chart_review import AlertChartReview
     from ui.widgets.trade_mentor_card import TradeMentorCard
 
-    review = AlertChartReview(dock_arm_bar=True)
-    review.show()
+    context_service = _DeferredMentorContext()
+    review = AlertChartReview(
+        dock_arm_bar=True, mentor_context_service=context_service
+    )
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    typing_here = QLineEdit(host)
+    layout.addWidget(typing_here)
+    layout.addWidget(review)
+    host.show()
+    typing_here.setFocus()
     _app.processEvents()
 
     cards = review.findChildren(TradeMentorCard)
     assert len(cards) == 1, "the host owns exactly one mentor card"
-    assert not cards[0].isVisible(), "nothing is due, so nothing is shown"
+    card = cards[0]
+    popup = review.mentor_popup
+    assert popup.isWindow()
+    assert not popup.isModal()
+    assert popup.isAncestorOf(card)
+    assert review.layout().indexOf(card) == -1
+    assert review.layout().indexOf(popup) == -1
+    assert review.layout().indexOf(review.arm_bar) >= 0
+
+    skipped: list[dict] = []
+    card.skipped.connect(skipped.append)
+    active_before = QApplication.activeWindow()
+    review.show_mentor_slot(_nine_slot())
+    _app.processEvents()
+    assert popup.isVisible()
+    assert QApplication.focusWidget() is typing_here
+    assert QApplication.activeWindow() is active_before
+
+    card.text_box.setPlainText("keep this draft")
+    QTest.keyClick(popup, Qt.Key.Key_Escape)
+    _app.processEvents()
+    assert not popup.isVisible()
+    assert skipped[-1]["slot_id"] == _nine_slot().slot_id
+
+    review.show_mentor_slot(_nine_slot())
+    _app.processEvents()
+    assert review.mentor_popup is popup, "each host reuses one popup"
+    assert card.text_box.toPlainText() == "keep this draft"
+    popup.close()  # The title-bar X is the same close path.
+    _app.processEvents()
+    assert not popup.isVisible()
 
     buttons = [
         button
@@ -733,7 +793,118 @@ def test_the_chart_host_docks_the_card_and_keeps_a_give_a_read_button(tmp_path):
     ]
     assert len(buttons) == 1
     assert buttons[0].isEnabled()
-    review.close()
+    buttons[0].click()
+    _app.processEvents()
+    assert review.mentor_popup is popup
+    assert popup.isVisible(), "Give a read opens the existing popup"
+    review.hide_mentor_popup()
+    assert not popup.isVisible(), "expiry and pause use the host hide seam"
+    assert review.layout().indexOf(review.arm_bar) >= 0
+    host.close()
+
+
+def _context_snapshot(captured_at: str, *, direction: str = "up") -> dict:
+    """A hand-written shallow snapshot. Scalar values must survive AI bounding."""
+    symbols = (
+        "VXX", "RSP", "USO", "TLT", "IWM", "QQQ", "SPY", "XLB", "XLC",
+        "XLE", "XLF", "XLI", "XLK", "XLP", "XLU", "XLV", "XLY",
+    )
+    return {
+        "schema": "trade_mentor_context_v1",
+        "captured_at": captured_at,
+        "availability": "available",
+        "reason": "",
+        "readings": [
+            {
+                "symbol": symbol,
+                "m5_status": "measured",
+                "m5_reason": "",
+                "m5_as_of": captured_at,
+                "m5_change_30m_pct": 1.25,
+                "m5_direction": direction,
+                "m5_vs_session_vwap": "above",
+                "d1_status": "measured",
+                "d1_reason": "",
+                "d1_as_of": "2026-09-11",
+                "d1_change_5d_pct": 2.5,
+                "d1_vs_sma20": "above",
+            }
+            for symbol in symbols
+        ],
+    }
+
+
+def test_the_current_context_is_saved_with_submit_and_unchanged_reads_and_survives_the_ai_source(tmp_path):
+    """One read owns one as-of snapshot. A late result cannot rewrite it.
+
+    This drives the real card and real ledger, then reads the exact persisted journal
+    through the existing AI source. The shallow structure is deliberate: `_bounded`
+    cuts at depth six, while all seventeen scalar readings remain visible here.
+    """
+    from ai_summary import build_evidence_package
+    from ui.widgets.trade_mentor_card import TradeMentorCard
+    import trade_mentor_schedule as schedule
+
+    journal = _journal(tmp_path)
+    clock = _Clock(_pacific(NORMAL_SESSION, 9, 12, 0))
+    context_service = _DeferredMentorContext()
+    card = TradeMentorCard(
+        journal=journal,
+        clock=clock,
+        drafts_path=tmp_path / "drafts.json",
+        context_service=context_service,
+    )
+    nine = _nine_slot()
+    first_context = _context_snapshot("2026-09-14T09:11:55-07:00", direction="up")
+    card.show_slot(nine)
+    assert context_service.requests == [(nine.slot_id, _pacific(NORMAL_SESSION, 9, 12, 0))]
+    context_service.contextReady.emit(nine.slot_id, first_context)
+    _app.processEvents()
+    card.text_box.setPlainText("SPY is holding the open.")
+    card.submit()
+
+    eleven = [slot for slot in schedule.slots_for_session(NORMAL_SESSION) if slot.scheduled_at.hour == 11][0]
+    clock.set(_pacific(NORMAL_SESSION, 11, 2, 0))
+    card.show_slot(eleven, previous=journal.entries_for("2026-09-14")[-1])
+    second_context = _context_snapshot("2026-09-14T11:01:50-07:00", direction="down")
+    # The 09:00 worker result arrives after the next prompt: it is not allowed to
+    # change either the current card or the already filed 09:00 note.
+    context_service.contextReady.emit(nine.slot_id, second_context)
+    _app.processEvents()
+    context_service.contextReady.emit(eleven.slot_id, second_context)
+    _app.processEvents()
+    card.read_unchanged()
+
+    rows = [row for row in journal.entries_for("2026-09-14") if row.get("origin") == "trade_mentor"]
+    assert [row["text"] for row in rows] == ["SPY is holding the open.", "SPY is holding the open."]
+    assert rows[0]["mentor"]["context"] == first_context
+    assert rows[1]["mentor"]["context"] == second_context
+
+    # A manual read can be saved while its context is still loading. It remains a
+    # normal note, with an explicit unavailable snapshot rather than stale values.
+    card.give_a_read()
+    card.text_box.setPlainText("Still watching the tape.")
+    card.submit()
+    rows = [row for row in journal.entries_for("2026-09-14") if row.get("origin") == "trade_mentor"]
+    assert rows[-1]["text"] == "Still watching the tape."
+    assert rows[-1]["mentor"]["context"]["availability"] == "unavailable"
+    assert "pending" in rows[-1]["mentor"]["context"]["reason"].lower()
+
+    ledger_path = next((tmp_path / "ledger").glob("*.jsonl"))
+    evidence = build_evidence_package(
+        ["market_journal"],
+        source_overrides={"journal.entries": ledger_path},
+        now=_pacific(NORMAL_SESSION, 12),
+        session_date=NORMAL_SESSION.isoformat(),
+    )
+    source = next(row for row in evidence["sources"] if row["source_id"] == "journal.entries")
+    ai_row = next(row for row in source["content"] if row.get("text") == "SPY is holding the open.")
+    ai_context = ai_row["mentor"]["context"]
+    assert ai_context["captured_at"] == first_context["captured_at"]
+    assert [row["symbol"] for row in ai_context["readings"]] == [
+        row["symbol"] for row in first_context["readings"]
+    ]
+    assert ai_context["readings"][6]["m5_direction"] == "up"
 
 
 # ---------------------------------------------------------------------------
