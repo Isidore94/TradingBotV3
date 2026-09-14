@@ -76,6 +76,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -801,6 +802,106 @@ def test_the_chart_host_reuses_a_modeless_popup_and_keeps_the_arm_bar_under_the_
     assert not popup.isVisible(), "expiry and pause use the host hide seam"
     assert review.layout().indexOf(review.arm_bar) >= 0
     host.close()
+
+
+def test_a_scheduled_popup_stays_quiet_but_a_real_click_can_type_and_submit(tmp_path):
+    """Scheduled is non-activating; a trader's click deliberately takes focus.
+
+    ToolTip and WindowDoesNotAcceptFocus are permanent window-level refusals, so
+    the normal modeless popup must not use either. This is a real click and key
+    sequence through the host's popup, backed by a scratch journal.
+    """
+    from ui.widgets.alert_chart_review import AlertChartReview
+
+    context_service = _DeferredMentorContext()
+    review = AlertChartReview(
+        dock_arm_bar=True, mentor_context_service=context_service
+    )
+    review.mentor_card._journal = _journal(tmp_path)
+    review.mentor_card._clock = _Clock(_pacific(NORMAL_SESSION, 9, 12, 0))
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    typing_here = QLineEdit(host)
+    layout.addWidget(typing_here)
+    layout.addWidget(review)
+    host.show()
+    typing_here.setFocus()
+    _app.processEvents()
+
+    review.show_mentor_slot(_nine_slot())
+    _app.processEvents()
+    popup = review.mentor_popup
+    card = review.mentor_card
+    # Offscreen Qt has no Windows window manager to prove an activation race;
+    # the live gate does. This attribute keeps the scheduled show non-activating
+    # while still allowing the real click below to focus the editor.
+    assert popup.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert not bool(popup.windowFlags() & Qt.WindowType.ToolTip)
+    assert not bool(popup.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus)
+
+    QTest.mouseClick(card.text_box.viewport(), Qt.MouseButton.LeftButton)
+    QTest.keyClicks(card.text_box, "SPY held VWAP")
+    _app.processEvents()
+    assert QApplication.focusWidget() is card.text_box
+    assert card.text_box.toPlainText() == "SPY held VWAP"
+    QTest.keyClick(
+        card.text_box,
+        Qt.Key.Key_Return,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    _app.processEvents()
+    rows = review.mentor_card._journal.entries_for("2026-09-14")
+    assert [row["text"] for row in rows if row.get("origin") == "trade_mentor"] == [
+        "SPY held VWAP"
+    ]
+    assert not popup.isVisible(), "Ctrl+Enter files through the same popup"
+
+    review.give_a_read_button.click()
+    _app.processEvents()
+    assert review.mentor_popup is popup
+    QTest.mouseClick(card.text_box.viewport(), Qt.MouseButton.LeftButton)
+    QTest.keyClicks(card.text_box, "Manual read")
+    assert card.text_box.toPlainText() == "Manual read"
+    host.close()
+
+
+def test_a_three_trade_ten_oclock_popup_scrolls_to_its_submit_controls(tmp_path):
+    """Three missing-trade forms may be tall, but no control may leave the screen."""
+    import trade_mentor_schedule as schedule
+    import trade_mentor_trade_check as check
+    from ui.widgets.alert_chart_review import AlertChartReview
+
+    review = AlertChartReview(mentor_context_service=_DeferredMentorContext())
+    review.mentor_card._journal = _journal(tmp_path)
+    review.mentor_card._clock = _Clock(_pacific(NORMAL_SESSION, 10, 5, 0))
+    ten = next(slot for slot in schedule.slots_for_session(NORMAL_SESSION) if slot.scheduled_at.hour == 10)
+    review.show_mentor_slot(ten)
+    task = check.TradeCheckTask(
+        reviewed_session="2026-09-11",
+        journal_ready=True,
+        trades=tuple(
+            check.TradeQuestion(
+                trade_id=f"T{index}",
+                symbol=f"SYM{index}",
+                direction="LONG",
+                missing=tuple(check.MATERIAL_FIELDS),
+            )
+            for index in range(1, 4)
+        ),
+    )
+    review.mentor_card.set_trade_check(task)
+    _app.processEvents()
+
+    popup = review.mentor_popup
+    scrolls = popup.findChildren(QScrollArea)
+    assert len(scrolls) == 1, "the tall form needs one reachable scroll surface"
+    scroll = scrolls[0]
+    assert popup.height() <= popup.screen().availableGeometry().height()
+    scroll.ensureWidgetVisible(review.mentor_card.submit_button)
+    _app.processEvents()
+    button_pos = review.mentor_card.submit_button.mapTo(popup, review.mentor_card.submit_button.rect().center())
+    assert popup.rect().contains(button_pos), "the bottom submit control is reachable"
+    popup.close()
 
 
 def _context_snapshot(captured_at: str, *, direction: str = "up") -> dict:
