@@ -557,7 +557,8 @@ Trader-directed display follow-up, 2026-09-14: expose the existing champion grad
 at the far left of each M5 alert row (PROVEN, S, A, B, C, D; ungraded `—`).
 This uses the alert's recorded grade, not a new score or Working-lately ordinal.
 Built on `codex/m5-rank-left` (d8eb0755), independent GO with 116 focused checks;
-the live narrow-column check remains owed. Existing ordering and gates stay open.
+loaded into the normal desk checkout on 2026-09-14 under “load it”. The live
+narrow-column check remains owed. Existing ordering and gates stay open.
 
 **Status at 2026-09-02, after round R4 Part A.** V1, V2 and V3 are all merged to
 `main` (V3 fast-forwarded from `claude/v3-keep-it-honest` the evening of

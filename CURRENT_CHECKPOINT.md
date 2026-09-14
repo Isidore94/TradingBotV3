@@ -19,14 +19,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: trader-directed M5 alert grade placement**, a Phase 0.14 display follow-up. Existing champion grades lead the compact row; no ranking formula changes. Built on `codex/m5-rank-left`; focused checks: **116 passed**. Independent review: **GO on d8eb0755**, 116 passed, old-source reversal reproduced 8 failures, ruff clean. The independently accepted sweep repairs remain the prior baseline. |
-| Working branch | Desk: **`claude/wishlist-sweep-2026-09-12`**, b8ebd5a4. M5 grade display work: **`codex/m5-rank-left`**, isolated under `.claude/worktrees/m5-rank-left` from that desk tip. No main merge or branch switch is authorized by this display task. |
+| Latest work | **2026-09-14: trader-directed M5 alert grade placement**, a Phase 0.14 display follow-up. Existing champion grades lead the compact row; no ranking formula changes. Loaded into the normal desk checkout under the trader's “load it” instruction; focused checks: **116 passed**. Independent review: **GO on d8eb0755**, 116 passed, old-source reversal reproduced 8 failures, ruff clean. The independently accepted sweep repairs remain the prior baseline. |
+| Working branch | **`claude/wishlist-sweep-2026-09-12`**, fast-forwarded from b8ebd5a4 to reviewed M5 display delivery d125b809, followed by this documentation-only delivery stamp. No branch switch or main merge. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | Load the accepted M5 display change after the trader closes the desk, then restart for the narrow-column live check. Trader live check: grades visible at the left in the narrow M5 list. The test-week gates #94–#118 remain owed; WS-RP remains outside this task. |
-| Trader actions owed | Close the desk when ready for the M5 display update; then restart and check the left-hand grades. Continue the open live gates. Cache repair and environment backfill remain separate trader actions; this local code update runs neither. |
+| Next action | Trader: start the updated desk for the narrow-column live check. Trader live check: grades visible at the left in the narrow M5 list. The test-week gates #94–#118 remain owed; WS-RP remains outside this task. |
+| Trader actions owed | Start the desk and check the left-hand grades. Continue the open live gates. Cache repair and environment backfill remain separate trader actions; this local code update runs neither. |
 | Last verified baseline | **Independent acceptance of exact 6753f9fd: 7968 passed, 5 skipped, 72 subtests, 2 existing pandas warnings, exit 0 in 546.40 s; ruff clean, smoke 7/7, source selftest 81/81.** Scratch data and LOCALAPPDATA were asserted before product use; AI writer lock was free. Reviewers reproduced the old seams and the bad timezone mutation. That full-suite result predates the M5 display patch; the patch has 116 focused passes and has independent GO on d8eb0755. No new full-suite baseline is claimed. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
-| Desk | **2026-09-14: running `launch_gui.py` processes observed during the M5 display task.** The desk checkout is not being switched or merged while running; no restart performed. |
+| Desk | **2026-09-14: no Python/TradingBot desk processes found before loading the M5 update.** The clean checkout was fast-forwarded in place; no restart performed. |
 
 ### 2026-09-14 — M5 alert grades at the left (Phase 0.14 display follow-up)
 
@@ -42,9 +42,10 @@ inspected a dark 240 px preview with all seven labels readable. Independent
 review: GO on d8eb0755, 116 passed; reverting only the display source reproduced
 the eight failures and restoring HEAD left the reviewer worktree clean. The full-suite baseline above remains historical, not rerun.
 
-Delivery is pending: `launch_gui.py` is running in the desk checkout, which
-remains at b8ebd5a4. No desk update or restart performed. Live proof owed: after
-loading and restarting, confirm the left grade on the narrow M5 list and that
+Delivery completed under the trader's “load it” instruction: no desk processes
+were running; the clean checkout fast-forwarded from b8ebd5a4 to d125b809.
+Code and tests match reviewed d8eb0755 exactly; no restart performed. Live proof
+owed: after starting, confirm the left grade on the narrow M5 list and that
 a clicked row still charts normally. Existing test-week gates remain open.
 
 ### Open gates, newest first
