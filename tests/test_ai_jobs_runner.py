@@ -319,6 +319,11 @@ EXPECTED_SLOT_ORDER = (
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.
     "market_story_rollups",
+    # WS-RP (2026-09-13): one measured report for the session - the five
+    # WISHLIST 10K answers with their populations. Deterministic, no model; it
+    # reads what the slots above it wrote and feeds nothing above it, so it
+    # CLOSES the deterministic stage.
+    "measured_report",
     # stage 2 - narration, moved here as a unit by decision 0018
     "ai_summary",
     "ticker_briefs",

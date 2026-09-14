@@ -1813,6 +1813,45 @@ def _window_days(end: str, sessions: int) -> list[str]:
         return []
 
 
+def _latest_measured_report(root: Path) -> dict[str, Any]:
+    """The newest measured report under `root`, named not summarised (WS-RP).
+
+    The index points at the file the numbers were READ from - the newest
+    version, because a `_v2` supersedes the `_v1` beside it - and carries its
+    `report_id` so a reader can tell whether the page they are looking at and
+    the export they were handed are the same document. It computes nothing: a
+    failure to read one is an absent key, never a wrong number.
+    """
+    try:
+        from ai_jobs import measured_report_publish
+
+        payload = measured_report_publish.latest_published(Path(root))
+    except Exception as exc:  # noqa: BLE001 - the index never costs the packs
+        _log.info("Entry index: no measured report could be read (%s).", exc)
+        return {}
+    if not payload:
+        return {}
+    path = Path(str(payload.get("_path") or ""))
+    cells = payload.get("cells") or []
+    return {
+        "path": str(path),
+        "markdown_path": str(path.with_suffix(".md")),
+        "report_id": str(payload.get("report_id") or ""),
+        "as_of": str(payload.get("as_of") or ""),
+        "session_date": str(payload.get("session_date") or ""),
+        "cells": len(cells),
+        "cells_measured": sum(
+            1 for cell in cells
+            if isinstance(cell, Mapping) and str(cell.get("state") or "") == "measured"
+        ),
+        "note": (
+            "One measured report per session, published by the `measured_report` "
+            "slot. The `.md` sibling is the readable brief; the JSON carries "
+            "every cell with its population, window, clock and sources."
+        ),
+    }
+
+
 def build_entry_index(root: Path, *, as_of: str | date | None = None) -> dict[str, Any]:
     """The whole index, computed. Deterministic; no model is called from here."""
     root = Path(root)
@@ -1941,6 +1980,13 @@ def build_entry_index(root: Path, *, as_of: str | date | None = None) -> dict[st
             ),
         },
         **section_payload,
+        # WS-RP (2026-09-13): a TOP-LEVEL key, deliberately NOT a fifth
+        # section. `ENTRY_INDEX_SECTIONS` is a published four-tuple whose
+        # members are cell families from the fact packs; the measured report is
+        # a different document with its own id, so it is named here and read
+        # from its own file rather than folded into a contract it does not
+        # belong to.
+        "measured_report": _latest_measured_report(root),
         "pending_experiments": _pending_experiments(),
         # A frontier model opens a ticker brief only for a STATED question.
         # This list is deliberately empty: nothing here may invent one.
