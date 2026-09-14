@@ -41,6 +41,7 @@ from test_ws_10c_h1_retester import (  # noqa: E402
     _mirror,
     golden_long_h1_bars,
     golden_m5_series,
+    pin_armed_before_the_golden_bounce,
 )
 
 
@@ -181,6 +182,7 @@ def test_an_invalidated_retest_disarms_and_never_reaches_the_phone(
     recorder = _Recorder()
     panel.price_alert_service = recorder
     panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    pin_armed_before_the_golden_bounce(panel)
     before = len(panel._alerts)
 
     panel._poll_d1_event_watches(now=_bucket_dt(54) + timedelta(hours=1))
@@ -221,6 +223,7 @@ def test_the_fired_row_records_every_measured_reason(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol, **kw: [])
     panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    pin_armed_before_the_golden_bounce(panel)
 
     panel._poll_d1_event_watches(now=GOLDEN_CONFIRM_DT + timedelta(hours=1))
 
@@ -392,6 +395,7 @@ def test_a_short_cache_reaches_the_rule_through_the_fetched_h1_history(
     recorder = _Recorder()
     panel.price_alert_service = recorder
     panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    pin_armed_before_the_golden_bounce(panel)
     watch = next(w for w in panel._chart_watches if w.kind == WATCH_KIND)
 
     fetched = cache.fetch_now("AAPL", now=GOLDEN_CONFIRM_DT + timedelta(hours=1))

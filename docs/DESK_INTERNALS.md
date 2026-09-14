@@ -4320,6 +4320,32 @@ grace, or for a prompt to survive being away.
   `watch_is_stale` and `_evaluate_extreme` depend on it. The rows that LEAVE the store
   (`fired`, `invalidated`, the expiry row) carry the bar times the rule measured,
   attached to that same clock; nothing strips an offset off an aware stamp.
+- **A new arm never fires on an old bounce** (repair 2026-09-13, review blocker B2).
+  `h1_ema_bounce_v1` anchors its verdict at the LAST completed bar and knows nothing
+  about arm times, so a series that already held a finished reclaim fired the instant the
+  trader armed - on a move that was over before they pressed the button (the review's
+  reproduction: golden confirm bar 11:30-12:30, `armed_at` 13:30, one poll -> one alert,
+  watch disarmed). **Warm-up keeps every bar** - the EMA and the ATR are still computed
+  over the whole series - and what is fenced is the EVENT: the rule's `confirm_bar_dt`
+  (the reclaim bar for a confirmation, the closing-through bar for an invalidation) is
+  eligible only when its END is strictly after `armed_at`, which is the existing
+  armed-watch convention (`_evaluate_extreme`: `_bar_end(bar) <= armed_at` is pre-arm),
+  inclusive on the pre-arm side; the bar end is `h1_history.h1_bucket_end`, so the short
+  12:30 bucket ends at the bell. A candle that was FORMING when the button was pressed is
+  post-arm once it completes, the same courtesy the M5 kinds give. A pre-arm confirmation
+  or invalidation comes back from `chart_watch.evaluate_h1_bars` as `pre_arm` - a
+  `chart_watch`-level verdict, **never an indicator reason**, the frozen rule sheet is not
+  edited and not asked a different question: while a pre-arm closing-through bar sits
+  inside the rule's age window the rule keeps saying `invalidated` and the watch simply
+  waits, exactly as it waits on `awaiting_reclaim`. Nothing fires, nothing is recorded, no
+  push, no feed row, and the watch stays armed. The comparison ATTACHES the desk's
+  market-local zone to a naive stamp and keeps an aware one as the instant it is
+  (`autopilot_core._gate_moment`'s pattern, never `chart_watch._naive`): stripping an arm
+  written three hours west of the desk would read it three hours EARLIER than it happened
+  and turn a pre-arm arm back into a post-arm one. `armed_at` round-trips through
+  `chart_watches.json` unchanged, so a restart is not a second chance, and a disarm +
+  re-arm is a new `watch_id` with a new `armed_at` to which the bounce that already fired
+  is pre-arm too.
 - **Where it fires.** The armed poll is `_poll_d1_event_watches`, and the H1 pass runs at
   its HEAD - before its "no D1 event watches armed" early return, which would otherwise
   make the feature invisible whenever the trader had no D1 event armed. The fired event

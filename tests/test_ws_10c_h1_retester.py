@@ -108,6 +108,30 @@ def _bucket_dt(index: int) -> datetime:
     )
 
 
+def pin_armed_before_the_golden_bounce(panel, *, kind=None):
+    """FIXTURE correction, RV-H1-ARM-TIME 2026-09-13 - not a weakened assertion.
+
+    `arm_chart_watch_for` stamps `armed_at = datetime.now()`, i.e. today, which
+    is AFTER the golden bars of 2026-08-26. Under the pre-arm fence (a watch
+    never fires on a bounce that finished before it was armed) that fixture
+    arms the watch an hour AFTER the reclaim it then expects to fire on - it
+    encoded the very defect the fence repairs. Pinning `armed_at` an hour
+    before the touch bar restores what these tests were always about: the
+    trader armed, and THEN the bounce printed. Every assertion is untouched.
+    """
+    kind = kind or WATCH_KIND
+    armed_at = GOLDEN_TOUCH_DT - timedelta(hours=1)
+    panel._chart_watches = [
+        dataclasses.replace(watch, armed_at=armed_at)
+        if watch.kind == kind
+        else watch
+        for watch in panel._chart_watches
+    ]
+    return next(
+        (watch for watch in panel._chart_watches if watch.kind == kind), None
+    )
+
+
 def _ramp_closes(count: int) -> list[float]:
     """A steadily rising close series: the EMA slope is unambiguously > 0."""
     return [100.0 + 0.25 * index for index in range(count)]
@@ -639,6 +663,7 @@ def test_the_existing_poll_fires_the_h1_retest_once_and_then_disarms(monkeypatch
     monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol, **kw: [])
 
     panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    pin_armed_before_the_golden_bounce(panel)
     watch = next(w for w in panel._chart_watches if w.kind == WATCH_KIND)
     before = len(panel._alerts)
     moment = GOLDEN_CONFIRM_DT + timedelta(hours=1)
@@ -673,6 +698,7 @@ def test_the_fired_watch_lands_on_the_d1_feed_as_an_armed_event(monkeypatch, tmp
     )
     monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol, **kw: [])
     panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    pin_armed_before_the_golden_bounce(panel)
 
     panel._poll_d1_event_watches(now=GOLDEN_CONFIRM_DT + timedelta(hours=1))
 
@@ -770,6 +796,7 @@ def test_one_phone_event_per_fire_routed_through_the_price_alert_service(
 
     panel.price_alert_service = _Recorder()
     panel.arm_chart_watch_for("AAPL", "LONG", WATCH_KIND)
+    pin_armed_before_the_golden_bounce(panel)
     watch = next(w for w in panel._chart_watches if w.kind == WATCH_KIND)
 
     moment = GOLDEN_CONFIRM_DT + timedelta(hours=1)

@@ -5576,6 +5576,13 @@ class AlertCenterPanel(QFrame):
         `None` from the rule is NOT MEASURED - too little history, or bars
         that stopped arriving - and a watch in that state simply waits.
         Uncertainty never deletes.
+
+        **A new arm never fires on an old bounce** (repair RV-H1-ARM-TIME,
+        2026-09-13): `evaluate_h1_bars` returns `pre_arm` - neither fired nor
+        `invalidated` - for a confirmation or invalidation whose event bar had
+        already closed when the watch was armed, so this loop leaves that watch
+        armed and writes no row, sends no push and draws no alert, exactly as
+        it does for `awaiting_reclaim`.
         """
         armed = [
             watch

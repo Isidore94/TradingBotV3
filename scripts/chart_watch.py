@@ -20,7 +20,7 @@ calibrated to.
 import json
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -369,8 +369,129 @@ def evaluate_h1_bounce_watch(
     return evaluate_h1_bars(watch, h1_bars, now=now)
 
 
+#: A `chart_watch`-level verdict, NEVER an indicator reason: the frozen rule
+#: measured a real confirmation or invalidation, but its event bar had already
+#: finished printing when this watch was armed. `h1_ema_bounce_v1` is a
+#: statement about a series and knows nothing about arm times; deciding whose
+#: episode an event belongs to is this module's job, exactly as it is for the
+#: M5 kinds (`_evaluate_extreme`).
+H1_PRE_ARM_REASON = "pre_arm"
+
+
+def _market_local_zone():
+    """The desk's market-local zone, or None when there is no zone database."""
+    try:
+        from market_session import get_market_local_timezone
+
+        zone, _name = get_market_local_timezone()
+    except Exception:  # pragma: no cover - settings or tzdata unavailable
+        return None
+    return zone
+
+
+def _comparable_moments(left: datetime, right: datetime) -> tuple[datetime, datetime]:
+    """Two stamps that can be compared as instants - ATTACH, never strip.
+
+    `autopilot_core._gate_moment`'s pattern, and the 2026-08-19 outage's
+    lesson: a naive stamp here is market-local by this store's own convention
+    (`armed_at` stays naive) so the desk's zone is ATTACHED to it, while an
+    aware stamp is already an instant and is kept as the instant it is.
+    Stripping instead would read an arm written three hours west of the desk
+    as three hours EARLIER than it happened, turning a pre-arm arm into a
+    post-arm one - the quiet version of the same bug.
+    """
+    if (left.tzinfo is None) == (right.tzinfo is None):
+        return left, right
+    zone = _market_local_zone()
+    if zone is None:  # pragma: no cover - last resort, no zone to attach
+        return _naive(left), _naive(right)
+    if left.tzinfo is None:
+        left = left.replace(tzinfo=zone)
+    if right.tzinfo is None:
+        right = right.replace(tzinfo=zone)
+    return left, right
+
+
+def h1_bar_end(bar_dt: datetime) -> datetime:
+    """When the session-aligned H1 bar starting at `bar_dt` finished printing.
+
+    `bar_dt + 60 min`, except the day's short closing bucket, which ends at the
+    bell - the one definition, shared with the fetched history
+    (`h1_history.h1_bucket_end`), so the two sources cannot disagree about when
+    a bar became the past.
+    """
+    try:
+        from h1_history import h1_bucket_end
+
+        return h1_bucket_end(bar_dt)
+    except Exception:  # pragma: no cover - market_session unavailable
+        return bar_dt + timedelta(minutes=60)
+
+
+def h1_event_is_post_arm(watch: ChartWatch, event_bar_dt: datetime | None) -> bool:
+    """Is this event bar the armed trader's, rather than yesterday's news?
+
+    Eligible when the bar's END is STRICTLY after `armed_at`, which is the
+    armed-watch convention the M5 kinds already hold (`_evaluate_extreme`:
+    `_bar_end(bar) <= armed_at` is a pre-arm bar), inclusive on the pre-arm
+    side. A bar that was still FORMING when the button was pressed (started
+    before, ends after) is therefore the trader's once it completes - the same
+    courtesy the M5 kinds give.
+    """
+    armed_at = getattr(watch, "armed_at", None)
+    if not isinstance(event_bar_dt, datetime) or not isinstance(armed_at, datetime):
+        # Nothing measured to fence on; the caller keeps whatever it had.
+        return True
+    end, armed = _comparable_moments(h1_bar_end(event_bar_dt), armed_at)
+    return end > armed
+
+
+def _fence_pre_arm(watch: ChartWatch, result):
+    """A confirmation or invalidation that finished before the arm is not an event.
+
+    The frozen rule is NOT asked a different question and the series is NOT
+    trimmed: the EMA and the ATR still warm up over every bar, and while a
+    pre-arm closing-through bar sits inside the rule's age window the rule
+    keeps answering `invalidated` - the watch simply waits, exactly as it waits
+    on `awaiting_reclaim`, until that bar ages out or a post-arm event lands.
+    """
+    from indicators.h1_ema_bounce import REASON_INVALIDATED
+
+    if result is None:
+        return None
+    if not (result.fired or result.reason == REASON_INVALIDATED):
+        return result
+    event_bar_dt = getattr(result, "confirm_bar_dt", None)
+    if h1_event_is_post_arm(watch, event_bar_dt):
+        return result
+    note = "the event bar had already closed when this watch was armed"
+    if isinstance(event_bar_dt, datetime):
+        note = (
+            f"the {event_bar_dt.strftime('%m/%d %H:%M')} bar closed at "
+            f"{h1_bar_end(event_bar_dt).strftime('%H:%M')}, before this watch "
+            "was armed"
+        )
+    return replace(
+        result,
+        fired=False,
+        reason=H1_PRE_ARM_REASON,
+        reasons=tuple(result.reasons) + (note,),
+    )
+
+
 def evaluate_h1_bars(watch: ChartWatch, h1_bars, *, now: datetime | None = None):
-    """The rule against a series the caller has already chosen (see above)."""
+    """The rule against a series the caller has already chosen (see above).
+
+    **Only a POST-ARM event may finish the watch.** The rule anchors its
+    verdict at the LAST completed bar, so a series that already holds a
+    finished bounce would otherwise fire the instant the trader armed - on a
+    move that was over before they pressed the button (review blocker B2,
+    2026-09-13). Every bar is still kept for warm-up; what is fenced is the
+    EVENT, whose bar must END strictly after `armed_at` (`h1_event_is_post_arm`).
+    A pre-arm confirmation or invalidation comes back as `pre_arm`: not fired,
+    not invalidated, so the caller leaves the watch armed and nothing is
+    recorded, pushed or drawn.
+    """
     from indicators.atr import wilder_atr
     from indicators.h1_ema_bounce import REASON_INVALIDATED, evaluate
 
@@ -381,9 +502,12 @@ def evaluate_h1_bars(watch: ChartWatch, h1_bars, *, now: datetime | None = None)
         (watch.side,) if watch.side in ("LONG", "SHORT") else ("LONG", "SHORT")
     )
     results = [
-        result
-        for result in (evaluate(h1_bars, side, atr=atr, now=now) for side in sides)
-        if result is not None
+        fenced
+        for fenced in (
+            _fence_pre_arm(watch, evaluate(h1_bars, side, atr=atr, now=now))
+            for side in sides
+        )
+        if fenced is not None
     ]
     if not results:
         return None
