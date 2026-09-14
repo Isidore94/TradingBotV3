@@ -51,9 +51,13 @@ M5_COLUMN_SPLIT_KEY = "qt_m5_column_split_sizes_v1"
 # retired M5 drag is never replayed onto a layout it was not dragged for, and
 # dragging this one never disturbs the three-column desk split above.
 D1_COLUMN_SPLIT_KEY = "qt_d1_column_split_sizes_v1"
-#: Opening weights for that split: the setups lead, the swing picks strip takes
-#: the bottom fifth, and the trader's drag replaces both from then on.
-D1_COLUMN_WEIGHTS = (4, 1)
+#: Opening weights for that split: the setups lead and the swing picks strip
+#: takes the bottom seventh, then the trader's drag replaces both. 6:1 rather
+#: than 4:1 because the strip's content is about 150 px tall - at the trader's
+#: own 3456 x 2160 the 4:1 opening handed it 399 px of mostly empty chip area
+#: (reviewer, 2026-09-14). It is a floor with no ceiling either way: the drag
+#: is what decides from the first time the trader uses it.
+D1_COLUMN_WEIGHTS = (6, 1)
 
 
 class TradingDeskPanel(QWidget):

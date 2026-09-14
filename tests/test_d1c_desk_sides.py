@@ -157,7 +157,11 @@ def test_the_right_column_split_has_its_own_key_that_neither_pane_can_collapse()
     from ui.panels import trading_desk
 
     assert trading_desk.D1_COLUMN_SPLIT_KEY == "qt_d1_column_split_sizes_v1"
-    assert trading_desk.D1_COLUMN_WEIGHTS == (4, 1)
+    # The tester wrote (4, 1); the reviewer measured 399 px of chip area for
+    # ~150 px of content at the trader's 3456 x 2160 and the lead took (6, 1)
+    # on 2026-09-14. The setups lead either way and the drag still decides.
+    assert trading_desk.D1_COLUMN_WEIGHTS == (6, 1)
+    assert trading_desk.D1_COLUMN_WEIGHTS[0] > trading_desk.D1_COLUMN_WEIGHTS[1]
     assert trading_desk.D1_COLUMN_SPLIT_KEY != trading_desk.DESK_SPLIT_KEY
     assert trading_desk.D1_COLUMN_SPLIT_KEY != RETIRED_M5_SPLIT_KEY
 

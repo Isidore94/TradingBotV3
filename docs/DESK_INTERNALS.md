@@ -165,6 +165,8 @@ would only bound disk growth.
 
   **The "taken" badge is display only.** It joins the day's picks against the TRADE journal (what the trader traded, `journal_feed`) — not the Market Journal (what they thought) — on symbol, marking a pick whose symbol has a trade opened on or after the pick date. It runs on a worker thread because the journal is sqlite over a year of fills, the window is bounded to 10 days because an unbounded query grows without limit, and it returns nothing when the journal would have to be created or migrated to answer: a display badge must never be the thing that triggers a schema migration. It derives no rate, grade or statistic — ground rule 10's statistics contract lives in `evidence_stats`, not in a chip.
 
+  **SUPERSEDED 2026-09-14 — the placement only.** The trader moved the strip to the RIGHT column, under the Master AVWAP setups: see "D1C-L - M5 left, D1 right" at the end of this file. The two writes, the retraction, the `vetted` like-origin, the "taken" badge and the Copy/Paste seam below are unchanged; only the paragraph that follows is out of date.
+
   **Where it lives, and who decides how big it is.** The M5 alerts surface is a TAB in tabs mode and the tall left COLUMN in workspace mode, and the trader's saved setting is `workspace` — so the alert bar and the strip share one host (`TradingDeskPanel.m5_column`) that both modes mount, and the strip is the bottom of it either way. Nothing here touches `M5AlertBar` or any alert routing.
 
   That host is a **vertical `QSplitter`**, not a fixed stack — trader, same day: *"the tab needs to be resizable relative to the M5 alerts tab, I should be able to drag it up to see more."* It carries its own settings key (`qt_m5_column_split_sizes_v1`) so this drag and the desk's three-column drag never overwrite each other, and `setChildrenCollapsible(False)` because a strip dragged to nothing is one the trader cannot find again. The chip area therefore has a **floor and no ceiling**: a maximum height would make "drag it up to see more" do nothing past it.
@@ -4985,7 +4987,10 @@ longer applied, tracked or written by the desk. The constant survives as the NAM
 value that is deliberately left alone in `local_settings.json` - the trader's old drag is
 not deleted, just never replayed. The D1 split has its OWN new key,
 `D1_COLUMN_SPLIT_KEY = "qt_d1_column_split_sizes_v1"`, weights `D1_COLUMN_WEIGHTS =
-(4, 1)`, through the same `desk_layout.apply_saved_sizes / track_preset / persist_sizes`.
+(6, 1)`, through the same `desk_layout.apply_saved_sizes / track_preset / persist_sizes`.
+The opening weights are 6:1 and not 4:1 because the reviewer measured the strip at 399 px
+for about 150 px of content at the trader's own 3456 x 2160 - the chip area keeps its
+floor and no ceiling either way, and the first drag replaces the preset for good.
 
 **The column is what hides, never the workspace inside it.** `set_setups_visible`, the
 open-hidden state and F9's reveal all act on `d1_column`, so the strip comes and goes

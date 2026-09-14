@@ -182,7 +182,7 @@ def test_a_second_request_while_a_build_is_running_does_not_start_a_second(tmp_p
 # ===========================================================================
 
 
-def test_the_strip_is_the_top_of_the_m5_column_and_the_column_keeps_its_two_panes():
+def test_the_strip_is_the_top_of_the_m5_bar_and_the_column_holds_that_bar_alone():
     """Above the M5 list, inside the alerts widget.
 
     Mounted INSIDE the bar rather than as a splitter child of the column on
