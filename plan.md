@@ -369,7 +369,7 @@ weights - every one is a named constant at the top of `setup_points.py`.
 **2026-09-14 trader-directed WS-TM follow-up - BUILT and reviewed:** replaced the under-chart Mentor card
 with a reusable modeless pop-up and attached hidden, bounded market context for VXX,
 RSP, USO, TLT, IWM, QQQ, SPY, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLU, XLV and XLY.
-Built on `codex/mentor-popup-context` from the accepted sweep baseline; independent review GO at 074c5ec7 and final full-suite exit 0 at be99127d (7980 passed). Loading into the stopped desk remains owed.
+Built on `codex/mentor-popup-context` from the accepted sweep baseline; independent review GO at 074c5ec7 and final full-suite exit 0 at be99127d (7980 passed). Local loading is authorized by the trader's "load it" instruction; the combined M5/Mentor screen checks pass 190 tests. Restart and live proof remain owed.
 The context keeps completed-bar short-term and daily measurements with explicit
 as-of times and missing/stale states, beside the unchanged trader words. Acquisition
 runs off the GUI thread only when a prompt is opened, with hourly M5 and daily D1
@@ -567,7 +567,8 @@ Trader-directed display follow-up, 2026-09-14: expose the existing champion grad
 at the far left of each M5 alert row (PROVEN, S, A, B, C, D; ungraded `—`).
 This uses the alert's recorded grade, not a new score or Working-lately ordinal.
 Built on `codex/m5-rank-left` (d8eb0755), independent GO with 116 focused checks;
-the live narrow-column check remains owed. Existing ordering and gates stay open.
+loaded into the normal desk checkout on 2026-09-14 under “load it”. The live
+narrow-column check remains owed. Existing ordering and gates stay open.
 
 **Status at 2026-09-02, after round R4 Part A.** V1, V2 and V3 are all merged to
 `main` (V3 fast-forwarded from `claude/v3-keep-it-honest` the evening of

@@ -19,14 +19,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: combining the accepted Mentor pop-up/context and M5 left-grade display for local loading.** Both have independent GO. The desk was closed for the trader's "load it" instruction; the M5 update landed concurrently, so this scratch merge preserves both. Source files do not conflict; shared status documents are reconciled. |
+| Latest work | **2026-09-14: Mentor pop-up/context and M5 left-grade display combined for trader-authorized local loading.** Both retain their reviewed source unchanged; the combined screen/evidence suite passed 190 tests, smoke 7/7 and selftest 81/81. Only documentation conflicted. Live checks remain open. |
 | Working branch | Desk: `claude/wishlist-sweep-2026-09-12`; integration: `codex/mentor-popup-context`, including the concurrently loaded M5 display tip d125b809. No main merge or branch switch is part of this local update. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | Load the reviewed WS-TM follow-up into the sweep checkout only while the desk is stopped, then perform gate #110. The wider test week, WS-RP and the final main-merge decision remain separate. |
-| Trader actions owed | Load the accepted follow-up while the desk is stopped; no restart has been performed. Native Windows focus and the amended gate #110 remain live checks alongside the wider test week. Cache repair and environment backfill remain separate trader actions. |
-| Last verified baseline | **be99127d: 7980 passed, 5 skipped, 72 subtests; pytest returned 0 and the process exited naturally with 0.** Test time 1027.22s; Qt cleanup took over a minute after the summary. Independent review GO on identical behavior at 074c5ec7: 130 focused passed, ruff clean; lead smoke 7/7 and source selftest 81/81 passed. Scratch data paths were asserted; the AI writer lock was free. |
+| Next action | Start the updated desk and perform Mentor gate #110 plus the narrow M5 left-grade check. The wider test week, WS-RP and final main-merge decision remain separate. |
+| Trader actions owed | Start the desk when ready; check the Mentor pop-up and left-hand M5 grades. Native focus and all remaining test-week gates still need live proof. No restart or data repair was performed by this loading step. |
+| Last verified baseline | **Combined integration 089ad3db: 190 targeted tests passed (exit 0), smoke 7/7 and selftest 81/81.** Mentor component be99127d previously passed 7980 full-suite tests, 5 skipped, 72 subtests, natural exit 0; that full run predates the M5 combination. Independent GOs: Mentor 074c5ec7 and M5 d8eb0755. No combined full-suite claim; source files merge unchanged. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE; an isolated branch must first be loaded into its stopped checkout before the next restart can use it. |
-| Desk | **Closed before the trader-authorized loading step.** The first fast-forward correctly refused a concurrent M5 update; no work was overwritten. The combined scratch commit will be loaded only while the desk remains stopped. No restart or live-store write has occurred. |
+| Desk | **Stopped for the trader's "load it" instruction.** Loading preserves the concurrent M5 delivery a4399bce and adds Mentor without changing the sweep branch. No main merge, restart or live-store write. |
 
 ### 2026-09-14 — M5 alert grades at the left (Phase 0.14 display follow-up)
 
@@ -42,9 +42,10 @@ inspected a dark 240 px preview with all seven labels readable. Independent
 review: GO on d8eb0755, 116 passed; reverting only the display source reproduced
 the eight failures and restoring HEAD left the reviewer worktree clean. The full-suite baseline above remains historical, not rerun.
 
-Delivery is pending: `launch_gui.py` is running in the desk checkout, which
-remains at b8ebd5a4. No desk update or restart performed. Live proof owed: after
-loading and restarting, confirm the left grade on the narrow M5 list and that
+Delivery completed under the trader's “load it” instruction: no desk processes
+were running; the clean checkout fast-forwarded from b8ebd5a4 to d125b809.
+Code and tests match reviewed d8eb0755 exactly; no restart performed. Live proof
+owed: after starting, confirm the left grade on the narrow M5 list and that
 a clicked row still charts normally. Existing test-week gates remain open.
 
 ### Open gates, newest first
@@ -175,6 +176,22 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-14 - COMBINED LOCAL DELIVERY
+
+The trader said "load it" after being asked to close the desk. No launch_gui.py
+process was present. The first fast-forward refused because another authorized
+session had just loaded the M5 grade change. Scratch integration 089ad3db preserves
+both reviewed source trees, resolving only shared status-document conflicts;
+a4399bce then contributes the M5 delivery stamp without code changes. Combined
+checks passed 190 tests in 23.74s, exit 0; smoke 7/7 and selftest 81/81 passed using
+asserted scratch paths. An earlier AI-first ordering crashed in a Qt paint test;
+the standard Mentor-first sequence passed without source or test edits. This is
+recorded as the existing Qt order sensitivity, not erased from validation history.
+The previous Mentor full-suite result remains a component baseline, not a new
+combined full run. Loading uses a stopped-checkout fast-forward; no main merge,
+branch switch, restart or live-store write is included. Gate #110 and the M5
+narrow-list check remain owed.
 
 ### 2026-09-14 - MENTOR POP-UP AND HIDDEN MARKET CONTEXT (WS-TM follow-up)
 

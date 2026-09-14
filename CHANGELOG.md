@@ -2528,8 +2528,8 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 ## Recent changes (the last two build days)
 
 - **2026-09-14 — WS-TM pop-up/context follow-up built and reviewed.** The trader requested an
-  independent prompt box and hidden lightweight market trends. Work is isolated on
-  `codex/mentor-popup-context`; the running desk and its stores remain unchanged.
+  independent prompt box and hidden lightweight market trends. The build was isolated on
+  `codex/mentor-popup-context`; the trader then authorized local loading with "load it". The combined delivery preserves the concurrent M5 left-grade change; 190 shared screen/evidence tests pass. No restart or live-store write is included.
   Red tests proved the popup, independent data failures, partial daily-cache retention and bounded AI handoff before their fixes. The final full suite passed 7980 tests with natural exit 0; detailed verification is in the checkpoint.
 
 ### 2026-09-14 — M5 alert grades at the left (trader-directed)
@@ -2539,6 +2539,8 @@ The row now leads with `[PROVEN]` or its recorded `[S]` through `[D]` grade;
 `[—]` marks an ungraded alert. It uses the Alert Center's existing readers.
 The time, side, ticker, trigger, repeat count and evidence suffixes follow.
 No score, list ordering, alert emission or evidence contract changes.
+Loaded into the normal desk checkout on 2026-09-14 under the trader's “load it”
+instruction. Reviewed code is unchanged; restart/live proof remains owed.
 Verification and local delivery status: `CURRENT_CHECKPOINT.md`.
 
 ### 2026-09-12 - WISHLIST sweep: one feature dump on `claude/wishlist-sweep-2026-09-12` (trader-directed)
