@@ -440,8 +440,13 @@ def h1_event_is_post_arm(watch: ChartWatch, event_bar_dt: datetime | None) -> bo
     """
     armed_at = getattr(watch, "armed_at", None)
     if not isinstance(event_bar_dt, datetime) or not isinstance(armed_at, datetime):
-        # Nothing measured to fence on; the caller keeps whatever it had.
-        return True
+        # An event that cannot be dated is NOT the trader's (lead ruling on
+        # the arm-time reviewer's advisory, 2026-09-13): missing data is
+        # uncertainty, never confirmation, so the fence fails CLOSED - the
+        # watch stays armed and answers on the next bar it can date.
+        # Unreachable today (`armed_at` is a required field and the frozen
+        # rule stamps `confirm_bar_dt` on every fire and invalidation).
+        return False
     end, armed = _comparable_moments(h1_bar_end(event_bar_dt), armed_at)
     return end > armed
 
