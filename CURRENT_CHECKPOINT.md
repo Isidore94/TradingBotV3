@@ -19,14 +19,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: trader-directed M5 alert grade placement**, a Phase 0.14 display follow-up. Existing champion grades lead the compact row; no ranking formula changes. Built on `codex/m5-rank-left`; focused checks: **116 passed**. Independent review: **GO on d8eb0755**, 116 passed, old-source reversal reproduced 8 failures, ruff clean. The independently accepted sweep repairs remain the prior baseline. |
-| Working branch | Desk: **`claude/wishlist-sweep-2026-09-12`**, b8ebd5a4. M5 grade display work: **`codex/m5-rank-left`**, isolated under `.claude/worktrees/m5-rank-left` from that desk tip. No main merge or branch switch is authorized by this display task. |
+| Latest work | **2026-09-14: CH-SYM loaded under the trader's "load it" instruction.** The accepted chart reset cf642311 is combined with the M5 grade display d8eb0755 already present in the desk checkout. Both source fixes are unchanged; only the checkpoint needed a merge resolution. |
+| Working branch | **`claude/wishlist-sweep-2026-09-12` remains the desk branch.** Integration was prepared on `codex/chart-load` from the observed local tip d125b809, preserving the M5 grade update and adding `codex/chart-symbol-isolation`. The clean, closed desk is fast-forwarded to this integration; no main merge or branch switch. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | Load the accepted M5 display change after the trader closes the desk, then restart for the narrow-column live check. Trader live check: grades visible at the left in the narrow M5 list. The test-week gates #94–#118 remain owed; WS-RP remains outside this task. |
-| Trader actions owed | Close the desk when ready for the M5 display update; then restart and check the left-hand grades. Continue the open live gates. Cache repair and environment backfill remain separate trader actions; this local code update runs neither. |
-| Last verified baseline | **Independent acceptance of exact 6753f9fd: 7968 passed, 5 skipped, 72 subtests, 2 existing pandas warnings, exit 0 in 546.40 s; ruff clean, smoke 7/7, source selftest 81/81.** Scratch data and LOCALAPPDATA were asserted before product use; AI writer lock was free. Reviewers reproduced the old seams and the bad timezone mutation. That full-suite result predates the M5 display patch; the patch has 116 focused passes and has independent GO on d8eb0755. No new full-suite baseline is claimed. |
-| Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
-| Desk | **2026-09-14: running `launch_gui.py` processes observed during the M5 display task.** The desk checkout is not being switched or merged while running; no restart performed. |
+| Next action | **Trader: open the desk and check stock switches, same-stock Load older, and the left-hand M5 grade.** Local loading is complete; live proof and test-week gates #94-#118 remain open. WS-RP remains outside this task. |
+| Trader actions owed | Open the desk when ready. Check that each chart uses only its own stock prices and the narrow M5 list shows grades on the left. No cache repair or environment backfill was performed. |
+| Last verified baseline | **CH-SYM cf642311: 7973 passed, 5 skipped, 72 subtests, 2 existing pandas warnings, exit 0; ruff clean, smoke 7/7, selftest 81/81.** M5 display d8eb0755 has independent GO and 116 focused passes. Combined unchanged-source integration: 156 focused tests passed, exit 0 in 21.65 s, ruff clean; no new combined full-suite baseline is claimed. |
+| Frozen exe | No rebuild required: both fixes change existing Python code only. The source checkout now contains the fixes; the next desk start uses them. |
+| Desk | **No running desk process was found before the 2026-09-14 CH-SYM load.** The stopped checkout was updated in place; no restart was performed. |
 
 ### 2026-09-14 — M5 alert grades at the left (Phase 0.14 display follow-up)
 
@@ -42,8 +42,9 @@ inspected a dark 240 px preview with all seven labels readable. Independent
 review: GO on d8eb0755, 116 passed; reverting only the display source reproduced
 the eight failures and restoring HEAD left the reviewer worktree clean. The full-suite baseline above remains historical, not rerun.
 
-Delivery is pending: `launch_gui.py` is running in the desk checkout, which
-remains at b8ebd5a4. No desk update or restart performed. Live proof owed: after
+Delivery reconciliation during CH-SYM load: the observed local tip d125b809
+already contained this M5 source fix, despite the prior pending wording. The
+desk was closed. CH-SYM integration preserves this fix; no restart performed. Live proof owed: after
 loading and restarting, confirm the left grade on the narrow M5 list and that
 a clicked row still charts normally. Existing test-week gates remain open.
 
@@ -175,6 +176,39 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-14 - CH-SYM: chart history must belong to the displayed symbol
+
+Trader reported false D1 gaps and a SYM preview near zero, then answered "yes"
+to the scoped chart-file repair and regression test. This satisfies the
+file-scoped ask-first rule for `symbol_snapshot_dialog.py`, which also houses
+chart alert actions. Phase 0.26 / WS-CH repair; no detector or scoring change.
+
+Read-only evidence: SYM's local chart feather held 2026-09-14 OHLC
+40.50 / 41.24 / 40.30 / 41.06, and the 08:06 scan logged 41.21. Source recon
+and a reproduction of the actual widget methods found that switching names
+left `_m5` owned by the previous name; the history merge reused those bars
+when the new name returned no M5 data. This can manufacture the new D1
+preview and widen the level-filter range. The exact screenshot's in-memory
+payload was not captured, so the source defect is proven and its attribution
+to that screenshot remains an inference.
+
+CH-SYM was built on `codex/chart-symbol-isolation` from b8ebd5a4. The trader
+then said "load it". The desk was confirmed closed; integration from current
+local tip d125b809 preserves its M5 grade change and loads CH-SYM. No restart. Integration verification: 156 chart/M5/capture tests passed
+(exit 0, 21.65 s), ruff clean, and both source files match their accepted
+commits exactly. Tester,
+builder and independent review are complete. Tester commit 937b90e7 reproduced
+all five failures. The 19-line repair is cf642311 and passed 95 builder checks; independent
+review returned GO with 41 checks and a five-red/five-green old-source replay.
+Full suite: 7973 passed, 5 skipped, 72 subtests, 2 existing pandas warnings,
+819.64 s, exit 0; ruff clean, smoke 7/7, source selftest 81/81. The test
+process emitted a temporary-folder QFileSystemWatcher warning during cleanup
+and then exited successfully. Accepted source SHA256:
+`8EC581D7E8CAA6DF231EEADB4923B8993BE1C75707015F5CA3CFD4EF09945004`.
+Live gate: after loading the repair and restarting, switch among stocks at
+different prices, including one with no M5 cache; today's D1 candle must
+belong to the displayed stock, and same-stock Load older must still work.
 
 ### 2026-09-14 - LOCAL REVIEWED REPAIRS READY FOR TEST
 

@@ -238,6 +238,13 @@ Agent operations, trader-authorized 2026-09-09: Astra lead with Luna/Terra deleg
 is configured in `.codex/` and governed by `docs/AGENT_TEAM.md`. This is repository
 setup, not a product phase; build order and all live/promotion gates below are unchanged.
 
+CH-SYM (2026-09-14) is a trader-authorized repair to Phase 0.26's built WS-CH
+chart history: isolate retained bars on a symbol switch. **BUILT and independently
+accepted on `codex/chart-symbol-isolation`; loaded into the local sweep checkout
+on the trader's 2026-09-14 "load it" instruction, preserving the M5 grade update.**
+Implementation and verification are recorded in `CURRENT_CHECKPOINT.md`; live chart-switch proof
+remains part of the test week. This advances no later phase or promotion gate.
+
 The phases below are dependency order, not a menu. `CURRENT_CHECKPOINT.md` names the
 one active item. Finish that item before moving down the list unless the trader
 explicitly redirects the work. Elapsed evidence collection may run in parallel only
