@@ -834,6 +834,29 @@ def _context_snapshot(captured_at: str, *, direction: str = "up") -> dict:
     }
 
 
+def _ai_context_rows(mentor: dict) -> tuple[str, list[dict]]:
+    """Decode the two accepted AI-source representations in test code only.
+
+    The durable journal row stays the full ``mentor.context`` dict. The bounded AI
+    extract may replace it with column-headed compact rows, because the model needs
+    the same facts but not six KiB per note. This is deliberately not a product
+    helper: this test checks that either representation means the same thing.
+    """
+    context = mentor.get("context")
+    if isinstance(context, dict):
+        return str(context["captured_at"]), list(context["readings"])
+    compact = mentor["context_compact"]
+    columns = compact["columns"]
+    if isinstance(columns, str):
+        columns = columns.split("|")
+    rows: list[dict] = []
+    for values in compact["rows"]:
+        if isinstance(values, str):
+            values = values.split("|")
+        rows.append(dict(zip(columns, values)))
+    return str(compact["captured_at"]), rows
+
+
 def test_the_current_context_is_saved_with_submit_and_unchanged_reads_and_survives_the_ai_source(tmp_path):
     """One read owns one as-of snapshot. A late result cannot rewrite it.
 
@@ -863,6 +886,25 @@ def test_the_current_context_is_saved_with_submit_and_unchanged_reads_and_surviv
     card.text_box.setPlainText("SPY is holding the open.")
     card.submit()
 
+    # The AI extract is allowed to compact the context, but a small source budget
+    # must still carry every reading, its captured time, and the trader's words.
+    ledger_path = next((tmp_path / "ledger").glob("*.jsonl"))
+    evidence = build_evidence_package(
+        ["market_journal"],
+        source_overrides={"journal.entries": ledger_path},
+        now=_pacific(NORMAL_SESSION, 12),
+        session_date=NORMAL_SESSION.isoformat(),
+        budget_chars=3_000,
+    )
+    source = next(row for row in evidence["sources"] if row["source_id"] == "journal.entries")
+    ai_row = next(row for row in source["content"] if row.get("text") == "SPY is holding the open.")
+    captured_at, ai_readings = _ai_context_rows(ai_row["mentor"])
+    assert captured_at == first_context["captured_at"]
+    assert [row["symbol"] for row in ai_readings] == [
+        row["symbol"] for row in first_context["readings"]
+    ]
+    assert ai_readings[6]["m5_direction"] == "up"
+
     eleven = [slot for slot in schedule.slots_for_session(NORMAL_SESSION) if slot.scheduled_at.hour == 11][0]
     clock.set(_pacific(NORMAL_SESSION, 11, 2, 0))
     card.show_slot(eleven, previous=journal.entries_for("2026-09-14")[-1])
@@ -889,22 +931,6 @@ def test_the_current_context_is_saved_with_submit_and_unchanged_reads_and_surviv
     assert rows[-1]["text"] == "Still watching the tape."
     assert rows[-1]["mentor"]["context"]["availability"] == "unavailable"
     assert "pending" in rows[-1]["mentor"]["context"]["reason"].lower()
-
-    ledger_path = next((tmp_path / "ledger").glob("*.jsonl"))
-    evidence = build_evidence_package(
-        ["market_journal"],
-        source_overrides={"journal.entries": ledger_path},
-        now=_pacific(NORMAL_SESSION, 12),
-        session_date=NORMAL_SESSION.isoformat(),
-    )
-    source = next(row for row in evidence["sources"] if row["source_id"] == "journal.entries")
-    ai_row = next(row for row in source["content"] if row.get("text") == "SPY is holding the open.")
-    ai_context = ai_row["mentor"]["context"]
-    assert ai_context["captured_at"] == first_context["captured_at"]
-    assert [row["symbol"] for row in ai_context["readings"]] == [
-        row["symbol"] for row in first_context["readings"]
-    ]
-    assert ai_context["readings"][6]["m5_direction"] == "up"
 
 
 # ---------------------------------------------------------------------------
