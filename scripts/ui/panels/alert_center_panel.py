@@ -6562,6 +6562,13 @@ class AlertCenterPanel(QFrame):
         # A3: the fade clock is measured in sessions, so the day roll is
         # exactly when a pick can come due.
         self.run_focus_fade_check()
+        # Packet D1C-A: a claim's fade is the SAME clock, so it comes due here
+        # and only here. The skip counts are day-scoped like the queue - a
+        # count of yesterday's skipped charts says nothing about today.
+        self._claimed_d1_skipped.clear()
+        self.chart_review.set_claimed_skipped_count(0)
+        self._sweep_expired_claims()
+        self.claimsChanged.emit()
 
     def _park_review_symbol(self, symbol: str) -> None:
         """Keep a symbol's chart out of the review queue for the day."""
