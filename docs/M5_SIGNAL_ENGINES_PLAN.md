@@ -595,15 +595,16 @@ symbol's hourly bars through `yfinance` (`interval="60m"`, `prepost=False`) on
 its own one-shot daemon thread — the group RS/RW tape precedent: **zero IB
 traffic and no engine change**. The rules it holds: the desk's cache stays
 PRIMARY and a full window never touches the network; at most one fetch per
-completed H1 bar per armed symbol; never on the Qt thread (the poll reads
+completed SESSION-ALIGNED H1 bucket per armed symbol (06:30 ... 12:30 market-local, the last closing at the bell; repair RV-H1-HISTORY 2026-09-13), asked whenever the desk's PRIMARY window is short; never on the Qt thread (the poll reads
 memory and asks for a refresh, it never waits); completed bars only through
 `completed_bars.is_completed_bar`, with the exchange zone CONVERTED to
 market-local by `astimezone` and only then dropped; and a failed download is a
 refusal, never an empty tape.
 
 The Armed inventory's health column names the source — `H1 from cache` /
-`H1 from yfinance` — and an unreachable fetch reads
-`not measured (N of 45 H1 bars, yfinance unavailable)`. **`v1` keeps its 45.**
+`H1 from yfinance` — a fallback whose LAST refresh failed reads
+`H1 from yfinance (stale - last refresh failed)` (the bars are kept and still judged on), and an
+unreachable fetch reads `not measured (N of 45 H1 bars, yfinance unavailable)`. **`v1` keeps its 45.**
 The alternative remains the trader's to decide: a wider M5 window for armed
 symbols in `bounce_bot_lib`, or a `v2` rule sheet measured on less history —
 never a lowered constant wearing the `v1` name.

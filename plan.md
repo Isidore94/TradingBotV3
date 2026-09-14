@@ -395,6 +395,8 @@ recorded, the trader may overrule. Deferred by lead decision: SN1, 5E, 10D step-
 steps 3-4, 10C steps 2-3. Follow-up owed (found by the 10D tester, not fixed): `EvidenceLedger.append`
 files an evening Pacific note under the next New-York session.
 
+**Astra's independent review (2026-09-13) and its repairs.** The review of the sweep at 85781c8f returned NO-GO on four blockers (B1 stale backup H1 history, B2 a new arm firing on an old bounce, B3 the armed phone push on the Qt thread, B4 gate 107 asking for the retired Chart Review page) plus one verification packet (the Journal migration-failure test depended on test order). All five are repaired on branches off the sweep tip c4df3ac8 - `claude/rv-h1-history`, `claude/rv-h1-arm-time`, `claude/rv-h1-phone-worker` (a chain, in that order), `claude/rv-live-gate-107`, `claude/rv-journal-test-order` - each with red tests first and an independent reviewer GO by reproduction, combined on `lead/rv-integration` for Astra's acceptance. Sections 5-7 still bind: the frozen `h1_ema_bounce_v1` was not edited, no detector, score, sigma, threshold, retired emitter, watchlist adoption or review policy changed. Still open: Astra's final GO, the trader's test week (gates #94-#118, #116 amended), WS-RP, and the merge decision.
+
 ## Phase 0.25 — Workspace memory (WISHLIST 11, trader 2026-09-12) — BUILT the same day on `main`; verification gate #93 owed
 
 Trader, 2026-09-12: *"for now integrate the memory changes then standby"*, authorizing WISHLIST
