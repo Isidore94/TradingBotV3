@@ -254,9 +254,30 @@ def test_a_claim_records_like_advance_once_and_parks_nothing(panel, monkeypatch)
     do_claim(panel.chart_review.capture_rail)
     assert panel.chart_review.capture_rail.commit_like() is not None
 
-    assert recorded == ["like_advance"], (
+    # AMENDED NARROWLY (lead ruling, 2026-09-14). This read
+    # `recorded == ["like_advance"]`, which also forbade the `shown` impression
+    # of the NEXT chart - and retiring a claimed chart ADVANCES the queue
+    # (packet item 3), so putting the next chart up records that it was seen.
+    # The pre-packet claimed route does the same (`_advance_after_like` ->
+    # `_advance_review_queue` -> `_render_current_review`), which is why
+    # `tests/test_t1_capture_and_board_like.py:277` uses `in` at this seam;
+    # the equality pinned a route that never existed. What the test is FOR is
+    # unchanged and is now stated directly: exactly one forward record, and no
+    # rejection of any kind.
+    assert recorded.count("like_advance") == 1, (
         f"exactly one review event, under its historical name; got {recorded}"
     )
+    for rejection in (
+        "remove_today",
+        "skip",
+        "dislike",
+        "focus_review_remove",
+        "unfavorite",
+        "veto_day_trade",
+    ):
+        assert rejection not in recorded, (
+            f"a claim is not a {rejection}; got {recorded}"
+        )
     assert retired == [], (
         "`_retire_review_alert` is the PARKING verb - the claim route must have "
         "its own `_retire_claimed_review`"
