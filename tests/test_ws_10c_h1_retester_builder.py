@@ -511,3 +511,35 @@ def test_a_failed_fetch_is_unavailable_and_never_an_empty_tape():
     assert cache.fetch_now("AAPL", now=datetime(2026, 8, 26, 12, 0)) == []
     assert cache.unavailable("AAPL") is True
     assert cache.bars_for("AAPL") == []
+
+
+def test_an_aware_now_is_converted_onto_the_session_clock_not_stripped():
+    """Added by the RV-H1-HISTORY repair, 2026-09-13.
+
+    The cadence key is computed against `market_session`'s NAIVE market-local
+    session bounds, so an aware `now` - which every caller that goes through
+    `get_market_local_now` has - must be CONVERTED (N1's rule), not compared
+    across awareness and not stripped of its offset. The panel passes a naive
+    clock today; this is the guard on the seam, on the Qt thread, where a
+    TypeError would cost the health cell.
+    """
+    from h1_history import last_completed_h1_bucket
+    from market_session import get_market_local_timezone
+
+    local_tz, _ = get_market_local_timezone()
+    naive = datetime(2026, 8, 26, 14, 0)
+    aware = naive.replace(tzinfo=local_tz)
+
+    assert last_completed_h1_bucket(aware) == last_completed_h1_bucket(naive)
+
+    cache = _h1_cache([])
+    assert cache.request("AAPL", now=aware) is True
+    assert cache.request("AAPL", now=naive) is False  # the same bucket
+
+
+def test_the_short_closing_bucket_ends_at_the_bell_and_a_full_one_at_the_hour():
+    """Added by the RV-H1-HISTORY repair, 2026-09-13: `h1_bucket_end` itself."""
+    from h1_history import h1_bucket_end
+
+    assert h1_bucket_end(datetime(2026, 8, 26, 11, 30)) == datetime(2026, 8, 26, 12, 30)
+    assert h1_bucket_end(datetime(2026, 8, 26, 12, 30)) == datetime(2026, 8, 26, 13, 0)

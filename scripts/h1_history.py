@@ -175,6 +175,10 @@ def last_completed_h1_bucket(moment: datetime) -> datetime | None:
     60-second armed poll asks for nothing all evening. None when the session
     cannot be resolved at all - the caller then falls back to the clock hour.
     """
+    if moment.tzinfo is not None:
+        # The session bounds are naive market-local, so an aware caller is
+        # CONVERTED onto that clock - never stripped (N1).
+        moment = _market_local(moment) or moment.replace(tzinfo=None)
     reference = moment
     for _ in range(8):  # a long weekend plus holidays, then give up
         bounds = _session_bounds(reference)
