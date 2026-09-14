@@ -1,4 +1,4 @@
-﻿# Current checkpoint
+# Current checkpoint
 
 This file is the frequently refreshed active-work, branch, and verification stamp.
 
@@ -19,14 +19,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: claimed D1 picks (trader-directed) - three packets D1C-A / D1C-L / D1C-B built, reviewed by reproduction and integrated on `lead/d1c-integration` (code tip 02b9d3c6, docs commit on top) above the sweep tip b8ebd5a4.** A CLAIMED like on a D1 chart saves a pick to `claimed_picks.jsonl`, appears at once in Master AVWAP Setups (`My liked trade`, ranked by the same points), retires that D1 chart without parking the symbol, and keeps the same (symbol, side) D1 scan alert out of repeat review while the claim is active; the swing favorites strip moved under the setups on the right; a `My claims` tab on Research > Setup Tracker grades the claims beside FAV / HC / Near. D1C-B's review: NO-GO on an overlap blocker, fixed at ba234f1a, then GO (the claims-joined trailing clause is the one open advisory). |
-| Working branch | **`claude/wishlist-sweep-2026-09-12`** is still the desk checkout's branch (b8ebd5a4, untouched today). The new work sits on **`lead/d1c-integration`** (pushed), a merge of `claude/d1c-desk-sides-build` efc61a32, `claude/d1c-claimed-picks-build` 270dd839 and `claude/d1c-claim-grading-build` ba234f1a above the sweep tip (code tip 02b9d3c6), plus this docs commit. Loading it into the desk checkout, restarting, and any merge to `main` are the trader's calls (instruction 2026-09-14: no restart, no merge to main). |
-| Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | **Trader: decide whether to fast-forward the stopped desk checkout to `lead/d1c-integration` and restart, then run gates #119-#121 with the sweep test week (#94-#118).** Owed to the lead: none. Open lead notes: `tests/test_ws_10a_scan_freshness.py::test_the_manifest_is_read_on_the_refresh_path_and_never_on_paint` failed once in the full integration run and passes in isolation and in its file (pre-existing order flake family, see the Last verified baseline cell); the checkpoint and CHANGELOG are far over their size rules and an archive pass is owed. |
-| Trader actions owed | Load `lead/d1c-integration` into the desk checkout when ready (it is a fast-forward of the sweep branch), restart, and test gates #119-#121. Two lead decisions to confirm or overrule: a claim places in the setups table ONLY (no Focus, no watchlist), and a veto never retracts a claim (only `Drop my claim` or the ten-trading-day fade does). Cache repair and environment backfill remain separate trader actions. |
-| Last verified baseline | **Lead run on the final integration tree 02b9d3c6 (L + A + B above the sweep tip): 8117 passed, 0 failed, 5 skipped, 72 subtests, exit 0 in 722.93 s (AI writer lock probed free); ruff clean; smoke 7/7; source selftest 81/81.** The earlier L+A run gave 8059 passed / 1 failed on the freshness paint flake (passes alone and in its file); the untouched base b8ebd5a4 gave 7968 passed / 0 failed the same day. Scratch worktrees only; the desk checkout and every live store untouched. |
+| Latest work | **2026-09-14, two streams combined on ONE branch (`claude/desk-combined-2026-09-14`, trader instruction "combine all of today's work from codex and claude into 1 branch").** Codex: the Trade Mentor pop-up/context, the M5 left-grade display and the chart-symbol isolation repair, loaded into the desk checkout at 13d8b9de (their entries below). Claude: the claimed D1 picks - packets D1C-A / D1C-L / D1C-B, tester -> builder -> reviewer each, integrated as `lead/d1c-integration` 38fbcc6b. The combined tree merges the two with three conflicts resolved by hand (both constructor parameters kept in `alert_chart_review.py`; both CHANGELOG and checkpoint entries kept). Every other branch was deleted after a full-refs backup bundle (`%LOCALAPPDATA%\\TradingBotV3\\diagnostics\\branches-backup-2026-09-14.bundle`). |
+| Working branch | **`claude/desk-combined-2026-09-14`** (pushed) is the single surviving work branch beside `main`. The desk checkout is still on `claude/wishlist-sweep-2026-09-12` at 13d8b9de because the desk was RUNNING when the combine was done (two `launch_gui.py` processes and their scan workers) and a running desk's checkout is never moved. When the desk is stopped: `git merge --ff-only claude/desk-combined-2026-09-14` in the checkout, then the sweep branch can go too. No merge to `main`. |
+| Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Branches with commits in NO surviving branch now live only in the backup bundle: `claude/s1-quick-verbs` (8), `claude/ws-rp-shared-report-build` (4, the unfinished WS-RP build), `claude/ws-rp-shared-report`, `claude/rv-h1-arm-time`, `claude/rv-h1-phone-worker`, `claude/ws-ai1-enrichment-status-build`, `claude/avwap-band-challenger`, `testing-week-2026-08-17` (1 each). Still recorded: 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
+| Next action | **Trader: stop the desk when convenient, fast-forward its checkout to `claude/desk-combined-2026-09-14`, restart, then run the combined live checks - Mentor gate #110, the M5 left-grade and chart-symbol-switch checks, and gates #119-#121 - inside the sweep test week (#94-#118).** Lead notes: `tests/test_ws_10a_scan_freshness.py::...never_on_paint` is a known order flake (its panel's own watcher/poll timer fires inside the paint loop under load; passes alone); the checkpoint and CHANGELOG are far over their size rules and an archive pass is owed. |
+| Trader actions owed | Stop the desk, load `claude/desk-combined-2026-09-14` into the checkout, restart, and test. Confirm or overrule two lead decisions: a claim places in the setups table ONLY (no Focus, no watchlist), and a veto never retracts a claim (only `Drop my claim` or the ten-trading-day fade does). Say whether WS-RP's unfinished build should be restored from the bundle. Cache repair and environment backfill remain separate. |
+| Last verified baseline | {{COMBINED_BASELINE}} |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
-| Desk | **Not restarted today.** No process was stopped or started by this work; the desk checkout stays at b8ebd5a4 on the sweep branch until the trader loads the integration branch. The prior recorded restart remains historical; live gates are not marked passed. |
+| Desk | **Running at the time of the combine (two `launch_gui.py` processes plus scan workers), on the checkout at 13d8b9de.** Nothing was stopped, started or written under it; the combined branch reaches the desk only when the trader stops it, loads the branch and restarts. Live gates are not marked passed. |
 
 ### Open gates, newest first
 
@@ -43,7 +43,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | 113 | **New bars only (WS-SN2, WISHLIST item 4, sweep branch)** - next live day after a restart: `trading_bot.log` carries one `SN2 M5 window fetch, cycle N: A full window(s) = B bar(s), C delta(s) = D bar(s); E bar(s) fetched in total` line per cycle, and from the SECOND cycle of the session onward `C` is most of the scanned set and `E` is down by an order of magnitude from the first cycle's (expect roughly 230,000 -> under 20,000 rows a cycle); `thread_cpu.jsonl`'s `run_strategy` core fraction in hour 13 is below SN3's reading; the day's M5 alerts for the names that alerted the day before still fire. NOT a failure: a handful of full windows every cycle (a new name, a halted name, a revised print - each logged as a refetch); the first cycle of the session being all full windows; the desk's RAM ~100 MB higher (the kept windows). A FAILURE is `A` staying at the whole scanned set every cycle (IB's forming last bar tripping a refetch - check `SN2_FORMING_TAIL_FORCES_REFETCH`) or any alert the previous day produced that this day does not | Next live day on the sweep branch |
 | 112 | **The said-vs-did report has both halves (WS-5B, WISHLIST 5B, sweep branch)** - after the next nightly `preference_trade_outcomes` slot on the sweep branch the ledger reason reads `N endorsement(s) and M refusal(s), never pooled` beside `n_trades_matched`, and the CSV header ends `like_mode,verdict_family,match_state` with `schema` = `preference_trade_outcomes_v2`. PASS on day one: the reject half is NON-EMPTY and the LARGER one (live counts 2026-09-13 over 45 days: 473 vetoes, 401 not-todays, 91 M5 click-aways, 27 dislikes vs 148 claimed likes, 623 pick likes, 1 pass) - a reject count of 0 is the failure; then Weekend Prep > Focus Review shows a tenth button "Said no" whose table lists the week's refusals with `Match state` filled and whose note counts them apart from the likes. NOT a failure: a refusal with `no match` + `window_open`; `matching_unavailable` never appearing; the `unfavorite` rows never appearing; an empty "Said no" table in a quiet week; the AI package's `preference_to_trade` counts growing | Next nightly preference_trade_outcomes slot + Weekend Prep on the sweep branch |
 | 111 | **The Journal tags a trade from the setup the trader wrote about it (WS-10E, WISHLIST 10E, sweep branch)** - on the first nightly run after the desk restarts, with a closed trade and a Market Journal note about that symbol written inside the trade's own window naming a setup: the Journal's Trades detail for that trade shows a `note lane: <setup> from note mj-... "<the words you typed>"` line above the overnight AI note, and Weekend Prep's Tag this week lists that trade with `provisional` in Status and `your journal note` in the new `From` column, waiting to be confirmed. PASS on day one is that ONE such row exists and the quoted span is words the trader actually typed. NOT a failure: `note lane: no explicit claim in N candidate note(s)` (the lane refusing to reach); `note lane: unmeasured (date-only fill)` on a broker-imported trade; no line at all on a trade the tagger has not visited since (press Rebuild auto tags); a confirmed tag staying exactly as it was | First nightly run on the sweep branch with a closed trade + a same-window note |
-| 110 | **Trade Mentor prompts and files a read (WS-TM, WISHLIST 10J steps 1-2, sweep branch)** - the next DESK session after a restart with the Settings checkbox ON: at the first whole hour from 07:00 Pacific a small card appears UNDER the chart beside the arm bar (which has not moved) asking for a read, without stealing focus; Submit files ONE Market Journal entry carrying the time it was actually written and the Settings "next prompt" line advances; at 10:00 the card's second section lists only yesterday's trades missing a stop or a thesis (or says `journal not ready` when the broker statement has not landed); leave the desk an hour and nothing piles up, the missed hour recorded as skipped; "Pause today" silences the day; in AWAY nothing appears and no push is sent. Quick check: press "Give a read" on the chart pane at any time and the entry lands in the Market Journal with the right time. NOT a failure on day one: no card during an hour the trader was idle over 20 minutes; a 10:00 section saying nothing is missing; an empty "Your last read" on the first prompt; the checkbox OFF (it ships OFF) | Next DESK session on the sweep branch with the checkbox ON |
+| 110 | **Trade Mentor pop-up and hidden context (WS-TM, amended by trader 2026-09-14)** - after loading the reviewed branch with the desk stopped: Give a read opens one editable modeless window, and another click reuses it; typing and Ctrl+Enter save the raw read, while X/Escape keep a draft and record a skip. The 10:00 trade form scrolls with every control reachable; the arm bar and chart height stay fixed. With the Settings checkbox ON, the next eligible whole hour opens the same window without taking keyboard focus from the field being typed in (native Windows live check; offscreen verifies intent flags, not window-manager behavior). Pause and expiry hide it; AWAY still opens no automatic prompt. A saved read carries its own hidden, timestamped context for the 17 requested symbols, and the existing AI journal source keeps their compact measurements beside the words. NOT a failure: an explicit missing/stale/pending context, no prompt after over 20 minutes idle, or the checkbox OFF (default); automatic AI coaching remains unbuilt. | Trader, next restart after loading the reviewed follow-up; native focus and live cache/provider freshness remain owed |
 | 109 | **Three clocks on the scan (WS-10A, WISHLIST 10A, sweep branch)** - after the next desk restart the Setups panel's status row carries one line with three clocks (`Scan ok HH:MM - inputs through <Day MM-DD> (D1 complete) - shown: HH:MM report`) and System Health shows the SAME sentence under `master_scan_freshness`. PASS on day one: after the close slot, `data/runtime/master_avwap_scan_manifest.json` says `latest_input_bar_session` = today with `preview_bar_used: false`, `status: ok` and `symbols_fetched == universe_size` (~1,097 - if `universe_size` were wrong every scan would read `partial`, the one thing no test proves on the real payload); and `cd scripts && python -m master_avwap_lib.scan_replay --symbol <a name the trader picks> --session <today>` prints a four-checkpoint trace. NOT a failure: an intraday scan saying `inputs: today preview` (the forming-bar rule working); `close - no recorded snapshot` before the close slot has run; `Scan: not recorded yet - no report` on the very first launch; a `partial` line on a day a provider dropped symbols - the manifest being truthful is the point | Next scan on the sweep branch |
 | 108 | **Wrong side is shown, never hidden (WS-WS, WISHLIST item 9, sweep branch)** - at the next desk restart: (1) on the Master AVWAP setups table, a LONG whose close sits under its current AVWAPE carries an amber `wrong side` chip immediately right of its bucket chip, and hovering that cell shows the bucket label with a second line naming the side and what was read (`LONG below AVWAPE (band zone LOWER_1 to VWAP)`); a SHORT above its anchor carries the same chip; on the 2026-09-11 scan look for NU, JCI, NUE, MFC (LONG, under) and HDB (SHORT, over) - roughly one row in five, about 93 of 435; (2) NOTHING disappears or moves: row count, sort, bucket filter, movers-only, the Points switch and the scores are what they were, and the chip is absent from every other column; (3) the next AWAY digest tags such picks ` [wrong side]` after the symbol and ends the pick list with `N wrong side of the anchor`. NOT a failure: a refresh with no wrong-side row (a clean board is a real answer); the chip absent in the compact profile (the cell is 96 px; the tooltip still says it). STILL OPEN (trader): hide vs mark, the previous anchor, and the other surfaces | Trader, next restart + next AWAY digest on the sweep branch |
 | 107 | **Chart history and the viewport (WS-CH, WISHLIST 10H, sweep branch; rewritten 2026-09-13 after Astra's review B4 - the standalone Chart Review page was retired by WS-WL and is not a door)** - next restart: (1) chart any symbol on the centre Visual Alert Review chart through a door that exists: a ticker click anywhere on the desk, or the Watchlist tab's **Chart** / **Chart only** buttons (Ctrl+L, type a name, Chart only) - it opens on the same ~90 daily candles as before (same price scale, same painted levels, no line from four years ago), and dragging LEFT keeps producing bars back to roughly four years (up to 1,000 sessions, whatever the store holds) with no pause and no network; (2) on a symbol the bot is scanning, press **Load older** under the M5 chart twice - the bars extend by two sessions each time and the candles you were looking at stay exactly where they were; after four presses the chart holds ten sessions and the button reads `Load older · 10-session max`; (3) the desk stays clickable throughout. NOT a failure: a symbol that pans back only a year or two (the store holds what the scan built); the drawn levels stopping at the left edge of the opening window (levels are computed for the opening view and panning does not recompute them); `older bars unavailable` on the button (the cache could not serve the older sessions, the chart is untouched) or the button doing nothing on a symbol outside the scan set; there is NO `D1 back to <date>` readout on the centre chart (that strip lived on the retired page; an oldest-date readout on the centre pane is an open trader decision, DESK_INTERNALS "The centre pane's own provenance line"). Still owed by this gate: the live proof that the centre chart's D1 history reaches the store's oldest sessions on a real symbol | Trader, next restart on the sweep branch |
@@ -160,6 +160,27 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
 
+### 2026-09-14 — M5 alert grades at the left (Phase 0.14 display follow-up)
+
+Trader request: “the ranking needs to be on the left side of it.” The compact
+bar stripped the tier from its trigger label. `row_text` now leads with the
+Alert Center's canonical PROVEN/tier reading, or `[—]` when ungraded. No new
+score, ordinal, sorting or alert decision is introduced. Repeat rows read the
+newest alert's grade; the tooltip explains the labels.
+
+Build: `codex/m5-rank-left`, tester 81e686b0 (8 expected failures, 1 existing
+layout pass), fix d8eb0755. Focused Qt tests: 116 passed; ruff clean. The lead
+inspected a dark 240 px preview with all seven labels readable. Independent
+review: GO on d8eb0755, 116 passed; reverting only the display source reproduced
+the eight failures and restoring HEAD left the reviewer worktree clean. The full-suite baseline above remains historical, not rerun.
+
+Delivery reconciliation during CH-SYM load: the observed local tip d125b809
+already contained this M5 source fix; delivery stamp a4399bce arrived during
+integration and is preserved too. The
+desk was closed. CH-SYM integration preserves this fix; no restart performed. Live proof owed: after
+loading and restarting, confirm the left grade on the narrow M5 list and that
+a clicked row still charts normally. Existing test-week gates remain open.
+
 ### 2026-09-14 - CLAIMED D1 PICKS (trader-directed; packets D1C-A / D1C-L / D1C-B; integration `lead/d1c-integration`)
 
 **Trader, 2026-09-14 (pasted "Copy this to Fable"):** *"The left side of the Trading Desk is for M5 trades. The right side is for D1 trades. When I like and claim a D1 setup, it becomes a ranked pick I can follow in Master AVWAP Setups. I should not have to keep reviewing the same D1 chart."* Five numbered asks; *"Treat this prompt as authorization for the described placement, ranking integration, review routing and layout changes ... Prove the behavior with failing tests first ... Use isolated worktrees. Do not restart the desk or merge to main without my instruction."*
@@ -177,6 +198,111 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 **Integration:** `lead/d1c-integration` in a scratch worktree: L (de4c7b91) then A (c1b3a579, one DESK_INTERNALS append conflict, both entries kept) then B, then this docs commit. Full suite on L+A: 8059 passed / 1 failed / 5 skipped, 905 s, the failure `tests/test_ws_10a_scan_freshness.py::test_the_manifest_is_read_on_the_refresh_path_and_never_on_paint` ("re-read 8 time(s) while painting"), which passes in isolation and in its file; the A reviewer had already seen it fail in a `-p no:randomly` full run and pass alone, and `test_ws_sx_star_x` fails 4/14 in isolation on the untouched base while passing inside the suite - the Qt suite is order-flaky in both directions on the sweep branch and the base was re-run whole to attribute it: b8ebd5a4 gave 7968 passed / 0 failed in 967 s, so one sample does not pin the flake on the base either; by mechanism it is the freshness test's own panel watcher and poll timer firing inside its paint loop under load, and the claims file is neither watched nor polled (the d1c files run directly before it pass 85/85). Final tree: 8117 passed / 0 failed / 5 skipped in 723 s, ruff clean, smoke 7/7, selftest 81/81.
 
 **Docs reconciled in this commit:** CLAUDE.md/AGENTS.md (T1 line gains the D1C clause; the swing-picks line names the right column), CHANGELOG inventory (three paragraphs under "Charts, review, alerts, and phone surfaces") + Recent changes, plan.md Phase 0.27 + table row, DESK_INTERNALS (three packet entries on the branches, the 2026-08-31 pointer, the CLAUDE.md mirror line), CHART_REVIEW_WORKSPACE_PLAN section 7 (on the A branch). Owed: an archive pass - this file is ~370 KB against the three-build-day rule and CHANGELOG's Recent changes holds far more than two days.
+### 2026-09-14 - COMBINED LOCAL DELIVERY
+
+**Delivered:** a second concurrent update added accepted chart-symbol isolation.
+Integration 7a4187b7 preserves that source, M5 left-grade display and Mentor source
+without code conflicts. All 195 combined tests passed (24.94s, exit 0), smoke 7/7
+and selftest 81/81 passed with scratch paths asserted. The normal clean, stopped
+sweep checkout then fast-forwarded from a1a41954 to 7a4187b7. This delivery stamp
+changes documentation only; no main merge, branch switch, restart or live-store
+write. The trader can start the desk for the three remaining live checks.
+
+The trader said "load it" after being asked to close the desk. No launch_gui.py
+process was present. The first fast-forward refused because another authorized
+session had just loaded the M5 grade change. Scratch integration 089ad3db preserves
+both reviewed source trees, resolving only shared status-document conflicts;
+a4399bce then contributes the M5 delivery stamp without code changes. Combined
+checks passed 190 tests in 23.74s, exit 0; smoke 7/7 and selftest 81/81 passed using
+asserted scratch paths. An earlier AI-first ordering crashed in a Qt paint test;
+the standard Mentor-first sequence passed without source or test edits. This is
+recorded as the existing Qt order sensitivity, not erased from validation history.
+The previous Mentor full-suite result remains a component baseline, not a new
+combined full run. Loading uses a stopped-checkout fast-forward; no main merge,
+branch switch, restart or live-store write is included. Gate #110 and the M5
+narrow-list check remain owed.
+
+### 2026-09-14 - MENTOR POP-UP AND HIDDEN MARKET CONTEXT (WS-TM follow-up)
+
+Trader request: "the trade mentor stuff should be a pop up box" and hidden trends
+for VXX, RSP, USO, TLT, IWM, QQQ, SPY, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLU, XLV,
+XLY, kept lightweight for later AI feedback. This is an explicit WS-TM redirection
+within Phase 0.26, including the Mentor-only hosting seam in the chart widget.
+Existing scheduling, raw journal writes, missed-slot records and present-trader
+rules stay. Scope: modeless window, bounded background measurements, timestamped
+hidden attachment and the existing AI evidence reader. No dedicated coaching,
+detector, scoring, alert decisions or new hourly AI invocation.
+
+Worktree: `.claude/worktrees/codex-mentor-popup-context`, branch
+`codex/mentor-popup-context`, base b8ebd5a4. Luna recon verified hosting, save,
+cache and AI reader seams. Terra red tests, build and independent review follow.
+Lead owns documentation. Live gate #110 remains owed; no desk restart or live
+data write is part of the build.
+
+Independent review of d41fc8f3 returned **NO-GO** after reproducing four context
+defects: a timeframe failure discarded the good half; a real snapshot caused the
+3,000-character AI package to drop its note; compact projection lost source/rule
+and stale-state metadata; and an empty local daily cache overwrote the valid
+session cache, causing repeat downloads. The editable pop-up and bounded daemon
+shutdown passed review (blocked-fetch process exit reproduced in 0.375 seconds).
+Corrections are isolated on `codex/mentor-context-resilience` from d41fc8f3 while
+the original full suite finished its tests but hung during exit; red tests precede the repair. No acceptance or live
+gate is claimed from the initial 125 focused passes. Tester e01c14bd proved the four review defects. Lead found two residual gaps in e5c7a555: an M5 failure still skipped the independent D1 request when both caches were empty, and partial D1 responses were lost on the next hour. Tester resume hit the agent thread limit twice, so lead committed the two red reproductions at d93a055c (2 failed, 3 passed); builder remained the separate source writer and the independent reviewer later reproduced both rollback sets. The old abort-all call-count pin now requires one attempt per timeframe, retaining its same-hour retry throttle.
+
+Independent reviewer **GO at 074c5ec7**: 130 focused tests passed, ruff clean;
+rolling back to e5c7a555 reproduced the two residual failures, and rolling back to
+d41fc8f3 reproduced the original three failing tests. A real varied 17-symbol
+snapshot and short journal note retained all values in the existing 3,000-character
+AI source budget (2,201 characters). Oversized exceptional notes/reasons retain the
+source's explicit exclusion banner; there is no budget increase. Lead smoke 7/7 and
+selftest 81/81 passed on 074c5ec7 with scratch paths asserted. Final full suite ran
+on that same behavior. be99127d changes only stale under-chart source comments and
+was integrated before the final run. A diagnostic launcher attempt was stopped because it imported project_paths before conftest established its scratch settings; the corrected runner asserts the conftest-owned data path after that setup. This launcher was outside the repository and changed no product behavior. No desk load, restart, live-store write or main
+merge has occurred.
+
+**Final acceptance:** the corrected full runner tested be99127d: **7980 passed,
+5 skipped, 72 subtests, 1027.22 seconds**, pytest return 0 and natural process exit
+0. No forced exit was used for this accepted run. Qt teardown was slow enough to
+emit one 60-second diagnostic dump (two pre-existing daemon CPU gauges and a native
+main-thread frame); it then completed normally. Reviewer traced the gauges to the
+startup-GC harness and retained GO; no out-of-scope harness or production repair was
+added. A Segoe UI offscreen check also verified the titled pop-up and reachable
+bottom controls in the long 10:00 form. Native Windows focus remains gate #110.
+The final documentation reconciles this item in the existing control files and
+specs; no Markdown file was added, so docs/README.md needs no routing change.
+
+### 2026-09-14 - CH-SYM: chart history must belong to the displayed symbol
+
+Trader reported false D1 gaps and a SYM preview near zero, then answered "yes"
+to the scoped chart-file repair and regression test. This satisfies the
+file-scoped ask-first rule for `symbol_snapshot_dialog.py`, which also houses
+chart alert actions. Phase 0.26 / WS-CH repair; no detector or scoring change.
+
+Read-only evidence: SYM's local chart feather held 2026-09-14 OHLC
+40.50 / 41.24 / 40.30 / 41.06, and the 08:06 scan logged 41.21. Source recon
+and a reproduction of the actual widget methods found that switching names
+left `_m5` owned by the previous name; the history merge reused those bars
+when the new name returned no M5 data. This can manufacture the new D1
+preview and widen the level-filter range. The exact screenshot's in-memory
+payload was not captured, so the source defect is proven and its attribution
+to that screenshot remains an inference.
+
+CH-SYM was built on `codex/chart-symbol-isolation` from b8ebd5a4. The trader
+then said "load it". The desk was confirmed closed; integration from current
+local tip d125b809 preserves its M5 grade change and loads CH-SYM. No restart. Integration verification: 156 chart/M5/capture tests passed
+(exit 0, 21.65 s), ruff clean, and both source files match their accepted
+commits exactly. Tester,
+builder and independent review are complete. Tester commit 937b90e7 reproduced
+all five failures. The 19-line repair is cf642311 and passed 95 builder checks; independent
+review returned GO with 41 checks and a five-red/five-green old-source replay.
+Full suite: 7973 passed, 5 skipped, 72 subtests, 2 existing pandas warnings,
+819.64 s, exit 0; ruff clean, smoke 7/7, source selftest 81/81. The test
+process emitted a temporary-folder QFileSystemWatcher warning during cleanup
+and then exited successfully. Accepted source SHA256:
+`8EC581D7E8CAA6DF231EEADB4923B8993BE1C75707015F5CA3CFD4EF09945004`.
+Live gate: after loading the repair and restarting, switch among stocks at
+different prices, including one with no M5 cache; today's D1 candle must
+belong to the displayed stock, and same-stock Load older must still work.
 
 ### 2026-09-14 - LOCAL REVIEWED REPAIRS READY FOR TEST
 

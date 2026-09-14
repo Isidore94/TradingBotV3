@@ -1,5 +1,13 @@
 # Desk chart unification — packet R4
 
+### M5 alert grade placement (trader, 2026-09-14)
+
+The M5 alert bar leads each row with the alert's existing champion grade:
+`[PROVEN]`, otherwise `[S]`, `[A]`, `[B]`, `[C]` or `[D]`; `[—]` means no grade.
+Use the same tier and PROVEN readers as the Alert Center. The label precedes
+the time so it survives a narrow column. This does not invent a numeric rank,
+recompute evidence, or change list order, folding, capture, copying or routing.
+
 Status: **BUILT 2026-08-16 — LIVE PROOFS OWED**, for `plan.md` Phase 0.5 **R4**.
 Authorized by the trader on 2026-08-15; built on `testing-week-2026-08-17` under
 the 2026-08-15 weekend redirect, after R3 closed.
@@ -359,7 +367,17 @@ widget or a payload — every `set_data` call in `scripts/ui/` passes `"d1"` or
 `"m5"`. The packet's own instruction applies: stop at D1/M5. A 500-bar H1/H4
 target is only meaningful once an H1/H4 chart exists.
 
-Tests: `tests/test_ws_ch_chart_history.py` over a 1,300-session golden fixture.
+**Symbol ownership (CH-SYM, trader-authorized repair 2026-09-14).** Retained
+history belongs to one symbol. Switching names clears the previous D1/M5
+snapshots and chart state before any pending read, capture, quick-fill or
+history merge can use them. A cached snapshot for the new name may render
+immediately. An empty or raising provider for the new name must never borrow
+the previous name's prices; same-symbol refreshes still retain older history.
+This repairs the WS-CH merge seam, not a price-jump filter: real gaps stay real.
+
+Tests: `tests/test_ws_ch_chart_history.py` over a 1,300-session golden fixture;
+`tests/test_chart_symbol_isolation.py` covers symbol switching, pending actions,
+empty/raising data reads and cached-symbol reuse.
 
 ## The two held-back items — resolved 2026-08-18
 

@@ -238,6 +238,13 @@ Agent operations, trader-authorized 2026-09-09: Astra lead with Luna/Terra deleg
 is configured in `.codex/` and governed by `docs/AGENT_TEAM.md`. This is repository
 setup, not a product phase; build order and all live/promotion gates below are unchanged.
 
+CH-SYM (2026-09-14) is a trader-authorized repair to Phase 0.26's built WS-CH
+chart history: isolate retained bars on a symbol switch. **BUILT and independently
+accepted on `codex/chart-symbol-isolation`; loaded into the local sweep checkout
+on the trader's 2026-09-14 "load it" instruction, preserving the M5 grade update.**
+Implementation and verification are recorded in `CURRENT_CHECKPOINT.md`; live chart-switch proof
+remains part of the test week. This advances no later phase or promotion gate.
+
 The phases below are dependency order, not a menu. `CURRENT_CHECKPOINT.md` names the
 one active item. Finish that item before moving down the list unless the trader
 explicitly redirects the work. Elapsed evidence collection may run in parallel only
@@ -380,6 +387,16 @@ outcome clocks are never pooled; `review_policy.json` has no suppression field. 
 is the trader's live validation (#119-#121) and the merge decision, which travels with the sweep branch's.
 
 ## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — IN BUILD on `claude/wishlist-sweep-2026-09-12`
+
+**2026-09-14 trader-directed WS-TM follow-up - BUILT and reviewed:** replaced the under-chart Mentor card
+with a reusable modeless pop-up and attached hidden, bounded market context for VXX,
+RSP, USO, TLT, IWM, QQQ, SPY, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLU, XLV and XLY.
+Built on `codex/mentor-popup-context` from the accepted sweep baseline; independent review GO at 074c5ec7 and final full-suite exit 0 at be99127d (7980 passed). Loaded into the normal stopped desk under the trader's "load it" instruction, preserving M5 grades and chart-symbol isolation; 195 combined checks pass. Restart and live proof remain owed.
+The context keeps completed-bar short-term and daily measurements with explicit
+as-of times and missing/stale states, beside the unchanged trader words. Acquisition
+runs off the GUI thread only when a prompt is opened, with hourly M5 and daily D1
+bounds; saving never waits for data. No new model call or coaching is authorized by
+this collection change. Gate #110 remains owed for the pop-up and context handoff.
 
 Trader, 2026-09-12: *"Start incorporating features from [WISHLIST.md]. Analyze the entire document and
 integrate in whatever order seems more efficient ... one big feature dump then I will test it over a
@@ -567,6 +584,13 @@ Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/arch
 Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: S1, S3, S4, F1, F2, F3 step 1 BUILT; S2 INSTRUMENTED (trim still measure-first, `legacy.py` ask-first); the lake REPAIRED and gate #56 MET; E2 resolved as a pin. **Still owed**: gate #55 (tee) and #57 (tracker parity, then 0017 step 2 moves readers one at a time); S1.3 (ONE Strength surface) needs a fresh packet; the `technical_integrity_events.jsonl` segment scheme is owed as its own packet; E1 is the trader's validation-week decision. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ## Phase 0.14 — Names first (decision 0016)
+
+Trader-directed display follow-up, 2026-09-14: expose the existing champion grade
+at the far left of each M5 alert row (PROVEN, S, A, B, C, D; ungraded `—`).
+This uses the alert's recorded grade, not a new score or Working-lately ordinal.
+Built on `codex/m5-rank-left` (d8eb0755), independent GO with 116 focused checks;
+loaded into the normal desk checkout on 2026-09-14 under “load it”. The live
+narrow-column check remains owed. Existing ordering and gates stay open.
 
 **Status at 2026-09-02, after round R4 Part A.** V1, V2 and V3 are all merged to
 `main` (V3 fast-forwarded from `claude/v3-keep-it-honest` the evening of

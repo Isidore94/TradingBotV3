@@ -503,19 +503,14 @@ def test_the_capture_rail_is_off_the_pane_and_the_arm_bar_is_not(panel):
     # The chart slot is the snapshot and its placeholder - mutually exclusive,
     # so they count as one row of the stack.
     slot_end = max(widgets.index(review.snapshot), widgets.index(review.empty_state))
-    # Under it: the arm bar, then the Trade Mentor's card, then the verb row.
-    # Nothing else.
-    #
-    # WISHLIST 10J / packet WS-TM added the third row and this assertion got
-    # STRONGER rather than looser. The rule the trader bought on 2026-08-20 is
-    # about CHART PIXELS, so the card is pinned two ways: it sits AFTER the arm
-    # bar (which keeps the exact position it has had since that day) and it is
-    # HIDDEN unless a prompt is due, so on an ordinary minute it costs the
-    # column nothing at all.
+    # Under it: the arm bar, then the one slim verb row. The Mentor is an
+    # independent modeless popup now, so it cannot borrow chart height.
     assert widgets[slot_end + 1] is review.arm_bar
-    assert widgets[slot_end + 2] is review.mentor_card
-    assert not review.mentor_card.isVisible(), "the mentor card costs no height until a prompt is due"
-    assert slot_end + 3 == layout.count() - 1, "something is stacked under the charts"
+    assert review.mentor_popup.isWindow()
+    assert layout.indexOf(review.mentor_popup) == -1
+    assert layout.indexOf(review.mentor_card) == -1
+    assert review.mentor_popup.isAncestorOf(review.mentor_card)
+    assert slot_end + 2 == layout.count() - 1, "something is stacked under the charts"
     assert rows[-1].layout() is not None, "the verb row must stay a layout row"
 
     assert review.isAncestorOf(review.arm_bar), "the hotbuttons come back"

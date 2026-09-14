@@ -1,18 +1,17 @@
 """The Trade Mentor's card - WISHLIST 10J, packet WS-TM item 3.
 
-Small, non-modal, docked under the chart beside the arm bar, and hidden unless
-something is due. It asks one question and gives three answers: **Submit**,
-**Read unchanged**, **Skip**. Everything else about it is a refusal to get in
-the way.
+Small, modeless, and shown in the reusable Trade Mentor popup only when needed.
+It asks one question and gives three answers: **Submit**, **Read unchanged**,
+**Skip**. Everything else about it is a refusal to get in the way.
 
-**It never takes focus.** The hour can turn while the trader is typing a symbol
-into the arm bar's ticker box; a `setFocus()` here would eat that keystroke, and
-a modal dialog would eat the whole minute. The card is shown with
-`WA_ShowWithoutActivating` and never calls `setFocus`, `raise_` or
-`activateWindow`. The keys it does own (`Ctrl+Enter` to submit) are read through
-an event filter ON THE TEXT BOX, so they mean "submit" only while the cursor is
-in the card - a `QShortcut` at window scope would fire for every widget in the
-page.
+**The scheduled show does not take focus.** The hour can turn while the trader
+is typing a symbol into the arm bar's ticker box; a `setFocus()` here would eat
+that keystroke, and a modal dialog would eat the whole minute. The popup is
+shown with `WA_ShowWithoutActivating` and never calls `setFocus`, `raise_` or
+`activateWindow`; a trader click still focuses its ordinary text box. The keys
+it does own (`Ctrl+Enter` to submit) are read through an event filter ON THE
+TEXT BOX, so they mean "submit" only while the cursor is in the card - a
+`QShortcut` at window scope would fire for every widget in the page.
 
 **The raw text goes to the store FIRST, through the store's one owner.**
 `market_journal_service.write_entry` writes it; nothing is parsed, scored,
@@ -98,6 +97,7 @@ class TradeMentorCard(QWidget):
         journal=None,
         clock: Callable[[], datetime] | None = None,
         drafts_path: Path | None = None,
+        context_service=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("TradeMentorCard")
@@ -113,6 +113,10 @@ class TradeMentorCard(QWidget):
         self._slot: MentorSlot | None = None
         self._previous: Mapping[str, Any] | None = None
         self._submitted: set[str] = set()
+        self._context_service = None
+        self._context_slot_id = ""
+        self._current_context: dict[str, Any] | None = None
+        self.set_context_service(context_service)
 
         # Never activates the window it appears in. This is the whole of the
         # "no focus stealing" promise and it costs one attribute.
@@ -228,6 +232,21 @@ class TradeMentorCard(QWidget):
             self._journal = shared_journal_service()
         return self._journal
 
+    def set_context_service(self, context_service) -> None:
+        """Attach the window-owned reader once; cards never own a worker."""
+        if context_service is self._context_service:
+            return
+        if self._context_service is not None:
+            try:
+                self._context_service.contextReady.disconnect(self._on_context_ready)
+                self._context_service.contextUnavailable.disconnect(self._on_context_unavailable)
+            except (RuntimeError, TypeError):
+                pass
+        self._context_service = context_service
+        if context_service is not None:
+            context_service.contextReady.connect(self._on_context_ready)
+            context_service.contextUnavailable.connect(self._on_context_unavailable)
+
     # -- drafts -----------------------------------------------------------
     def _load_drafts(self) -> None:
         try:
@@ -282,6 +301,25 @@ class TradeMentorCard(QWidget):
         """
         self._stash_draft()
         self._slot = slot
+        # A prompt owns its own snapshot.  Saving while the worker is still
+        # running records that absence now; a later result cannot mutate a
+        # journal row that already exists.
+        moment = self._now()
+        self._context_slot_id = str(slot.slot_id)
+        self._current_context = self._unavailable_context(
+            moment, "context pending"
+        )
+        if self._context_service is not None:
+            try:
+                accepted = self._context_service.request_context(slot.slot_id, now=moment)
+                if not accepted:
+                    self._current_context = self._unavailable_context(
+                        moment, "context unavailable or throttled"
+                    )
+            except Exception:  # noqa: BLE001 - context never costs a raw note
+                self._current_context = self._unavailable_context(
+                    moment, "context request failed"
+                )
         self._previous = dict(previous) if previous else None
         kind = str(getattr(slot, "kind", "") or "")
         self.prompt_label.setText(_QUESTIONS.get(kind, _QUESTIONS[KIND_MANUAL]))
@@ -312,6 +350,20 @@ class TradeMentorCard(QWidget):
             "Post-close read." if bool(getattr(slot, "post_close", False)) else ""
         )
         self.setVisible(True)
+
+    @staticmethod
+    def _unavailable_context(moment: datetime, reason: str) -> dict[str, Any]:
+        from trade_mentor_context import unavailable_context
+
+        return unavailable_context(now=moment, reason=reason)
+
+    def _on_context_ready(self, request_id: str, context: object) -> None:
+        if str(request_id) == self._context_slot_id and isinstance(context, Mapping):
+            self._current_context = dict(context)
+
+    def _on_context_unavailable(self, request_id: str, context: object) -> None:
+        if str(request_id) == self._context_slot_id and isinstance(context, Mapping):
+            self._current_context = dict(context)
 
     def _clear_trade_check(self) -> None:
         self._answer_inputs = {}
@@ -465,8 +517,8 @@ class TradeMentorCard(QWidget):
         except Exception:  # noqa: BLE001 - a read is never lost to a calendar
             return moment.date().isoformat()
 
-    def _mentor_payload(self, slot: MentorSlot, moment: datetime) -> dict[str, str]:
-        return {
+    def _mentor_payload(self, slot: MentorSlot, moment: datetime) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "slot_id": str(slot.slot_id),
             "prompt_kind": str(slot.kind),
             "scheduled_at": slot.scheduled_at.isoformat(),
@@ -477,6 +529,12 @@ class TradeMentorCard(QWidget):
             # instant, not the trader's wall clock.
             "responded_at": moment.isoformat(),
         }
+        payload["context"] = (
+            self._current_context
+            if self._context_slot_id == str(slot.slot_id) and self._current_context is not None
+            else self._unavailable_context(moment, "context pending")
+        )
+        return payload
 
     def submit(self) -> dict[str, Any]:
         """File the raw text. Once per slot, whatever the button does."""

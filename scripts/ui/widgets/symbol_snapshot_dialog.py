@@ -481,6 +481,11 @@ class SymbolSnapshotWidget(QWidget):
             return
         switched = symbol != self._symbol
         if switched:
+            # A chart is reused as the trader walks through names.  Its drawn
+            # snapshots are also the source for capture, quick-fill, painted
+            # level alerts, and the retained-M5-history merge, so no trace of
+            # the old name may survive while this name is pending.
+            self._clear_symbol_snapshot()
             # A new name starts at today's two sessions, and any older-bar
             # request still in flight for the old one is now stale: the render
             # path drops it on the symbol check, and this makes sure its
@@ -503,6 +508,20 @@ class SymbolSnapshotWidget(QWidget):
         elif switched:
             self._show_pending(symbol)
         self._request_snapshots()
+
+    def _clear_symbol_snapshot(self) -> None:
+        """Drop the rendered state that belongs only to the previous symbol."""
+        self._d1 = {}
+        self._m5 = {}
+        # Clearing levels first also clears a selected painted level.  Clear
+        # the earnings payload explicitly because its markers are retained by
+        # CandleChart independently of the D1 bars.
+        self.d1_chart.set_levels([])
+        self.d1_chart.set_earnings(None)
+        self.d1_chart.set_data([], [], timeframe="d1")
+        self.m5_chart.set_data([], [], timeframe="m5")
+        self.d1_chart.setVisible(False)
+        self.m5_chart.setVisible(False)
 
     def _request_snapshots(self) -> bool:
         """Queue an off-thread rebuild of both charts for the current symbol.

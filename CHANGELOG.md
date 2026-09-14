@@ -1017,6 +1017,13 @@ They are evidence and must not be loaded as context.
   watchlist, Focus or `review_policy.json` change, nothing re-ordered or filtered - hiding a
   wrong-side row, the previous anchor, and the other surfaces (M5 list, chart review, Focus)
   stay the trader's open questions. Tests: `tests/test_ws_ws_wrong_side.py` (58).
+- **CH-SYM symbol ownership repair (2026-09-14; loaded into the local sweep checkout).** A chart switch clears the previous
+  symbol's retained D1/M5 snapshots and chart state before reading the next symbol.
+  The WS-CH history merge therefore keeps older bars only for the same symbol;
+  missing new-symbol M5 data cannot become a foreign D1 preview or an old quick-fill
+  price. Cached snapshots for the selected symbol still render immediately.
+  Tests: `tests/test_chart_symbol_isolation.py`; acceptance and delivery state are
+  recorded in `CURRENT_CHECKPOINT.md`. No detector, score or provider change.
 - **The chart's bars and the chart's view are two different numbers (WS-CH, WISHLIST 10H,
   2026-09-13, sweep branch).** `chart_snapshot.D1_HISTORY_SESSIONS` (1,000, about four NYSE
   years) is how far back a daily payload REACHES and `D1_DEFAULT_SESSIONS` (90) is how many bars
@@ -1465,6 +1472,20 @@ They are evidence and must not be loaded as context.
   outcome field (grep-guard). Tests: `tests/test_ws_10e_note_tags.py` (13). Docs: DESK_INTERNALS
   "The four auto-tagging lanes"; `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`. The CLAUDE.md /
   AGENTS.md "three lanes" rule line is rewritten in the sweep's docs pass.
+- **Trade Mentor pop-up and hidden market context (WS-TM follow-up, trader 2026-09-14).**
+  On `codex/mentor-popup-context`, the chart host owns one reusable modeless pop-up,
+  with Submit, Read unchanged, Skip and draft preservation. It takes no chart height;
+  the arm bar stays in place. `scripts/trade_mentor_context.py` builds shallow,
+  completed-bar measurements for the trader's exact 17 symbols: 30-minute M5 change,
+  position against session VWAP, five-session D1 change and position against SMA20.
+  Unknown and stale readings carry reasons rather than zero. The context service
+  owns bounded background collection on prompt opening, uses available local caches
+  and batches missing coverage through Yahoo, with hourly M5 and completed-session
+  D1 reuse. Submit never waits for data. The snapshot stays under `mentor.context`
+  beside the original text, including on Read unchanged; a late worker cannot
+  change a saved note. `ai_summary` compacts only this attachment in `journal.entries`
+  for the existing AI budget; there are no new model calls or raw candle arrays.
+  Independent review is GO; 130 focused tests and the 7980-test full suite passed, with natural exit 0. Checkpoint gate #110 remains a live check.
 - **Trade Mentor: a prompt is a slot, an answer is a dated row (WS-TM, WISHLIST 10J steps 1-2,
   2026-09-13, sweep branch).** `scripts/trade_mentor_schedule.py` (pure) builds the day's
   `MentorSlot`s - whole hours from `FIRST_HOUR` 7 Pacific (`America/Los_Angeles`, DST-aware)
@@ -1480,7 +1501,7 @@ They are evidence and must not be loaded as context.
   recorded and never re-asked, AWAY / paused / idle beyond `IDLE_GRACE_MINUTES` (20) skip
   (`scripts/user_presence.py`: `GetLastInputInfo`, None off Windows reads PRESENT;
   `session_locked` is an injected callable, no lock hook yet). `ui/widgets/trade_mentor_card.py`
-  docks UNDER the chart after the arm bar (which did not move), hidden until due,
+  initially docked under the chart; the 2026-09-14 follow-up moves it to a pop-up,
   `WA_ShowWithoutActivating`, Ctrl+Enter scoped to its boxes; Submit writes the RAW text first
   through `market_journal_service.write_entry(origin="trade_mentor", mentor=..., reaffirms=...)`
   - `build_entry` / `write_entry` grew those two kwargs (present and empty on every other entry)
@@ -2520,6 +2541,21 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 ### 2026-09-14 - Claimed D1 picks: three packets D1C-A / D1C-L / D1C-B (trader-directed; integration `lead/d1c-integration` above the sweep tip b8ebd5a4)
 
 **Trader, 2026-09-14:** *"The left side of the Trading Desk is for M5 trades. The right side is for D1 trades. When I like and claim a D1 setup, it becomes a ranked pick I can follow in Master AVWAP Setups. I should not have to keep reviewing the same D1 chart ... This request intentionally changes the old 'claimed likes place nothing' rule for D1 claims. Update that contract narrowly."* Five numbered asks (placement, filters and ranking, finish the D1 review after claiming, the two sides of the desk, grading over time). Built as three packets off the LOCAL sweep branch (the desk runs it): **D1C-A** (`claude/d1c-claimed-picks-build`; tester d9b2861f, 73 red -> builder -> reviewer NO-GO on one blocker: the stale-timeframe fix left a blank timeframe standing, so a typed D1 look after an M5 chart stamped M5 with a sidecar -> fixed at 270dd839 by `bounce.capture_timeframe` -> reviewer GO), **D1C-L** (`claude/d1c-desk-sides-build`; seven red -> builder -> reviewer GO; fix round efc61a32 for the advisories: 6:1 opening split, a live tabs guard, doc pointers), **D1C-B** (`claude/d1c-claim-grading-build`; 41 red -> builder ceb869a9 -> reviewer NO-GO on one blocker: the overlap joined all liked rows against only the eligible horizon-5 tracker rows, blind to the newest sessions -> fixed at ba234f1a by `tracker_sightings` over the raw tier rows -> reviewer GO, FAV 22 / Near 31 overlaps reproduced on live copies with every other number unchanged). The inventory paragraphs under "Charts, review, alerts, and phone surfaces" are the contract. Lead decisions the trader may overrule: a claim places in the setups table ONLY (no Focus, no watchlist); active until "Drop my claim" or the Focus fade constant's trading days; a veto never retracts a claim; five chips; the grading surface is a Setup Tracker tab plus a CLI, not Research > Results; HC has no tier-outcome rows so it is reported unmeasured. Recon corrections recorded: the like handlers live in `alert_center_panel.py`, not `alert_chart_review.py`; `set_alert` never passed a timeframe, so the rail read "D1" for every pane chart. No desk restart and no merge to `main` (the trader's instruction); the integration branch is the trader's to load. Gates #119-#121.
+- **2026-09-14 — WS-TM pop-up/context follow-up built and reviewed.** The trader requested an
+  independent prompt box and hidden lightweight market trends. The build was isolated on
+  `codex/mentor-popup-context`; the trader then authorized local loading with "load it". Loaded with concurrent M5 left-grade and chart-symbol isolation changes preserved; 195 combined screen/evidence tests pass. No restart or live-store write is included.
+  Red tests proved the popup, independent data failures, partial daily-cache retention and bounded AI handoff before their fixes. The final full suite passed 7980 tests with natural exit 0; detailed verification is in the checkpoint.
+
+### 2026-09-14 — M5 alert grades at the left (trader-directed)
+
+The compact M5 list omitted the champion tier when shortening the trigger.
+The row now leads with `[PROVEN]` or its recorded `[S]` through `[D]` grade;
+`[—]` marks an ungraded alert. It uses the Alert Center's existing readers.
+The time, side, ticker, trigger, repeat count and evidence suffixes follow.
+No score, list ordering, alert emission or evidence contract changes.
+Loaded into the normal desk checkout on 2026-09-14 under the trader's “load it”
+instruction. Reviewed code is unchanged; restart/live proof remains owed.
+Verification and local delivery status: `CURRENT_CHECKPOINT.md`.
 
 ### 2026-09-12 - WISHLIST sweep: one feature dump on `claude/wishlist-sweep-2026-09-12` (trader-directed)
 

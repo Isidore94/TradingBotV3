@@ -98,8 +98,8 @@ class TestTheBar:
         bar.post(_m5("AAA", trigger="M5 regime-pause watch · new HOD", at="07:20:00"))
         assert [a.symbol for a in bar.alerts()] == ["AAA"]
         assert bar.count() == 1
-        assert row_text(bar.alerts()[0]) == "07:20  ▲ AAA  new HOD"
-        assert bar.list.item(0).text() == "07:20  ▲ AAA  new HOD  ×2"
+        assert row_text(bar.alerts()[0]) == "[—]  07:20  ▲ AAA  new HOD"
+        assert bar.list.item(0).text() == "[—]  07:20  ▲ AAA  new HOD  ×2"
         assert row_text(_m5("ZZZ", "SHORT", trigger="lrsi_cross_20")).endswith("▼ ZZZ  lrsi_cross_20")
 
     def test_copy_all_is_one_ticker_per_line_each_once_newest_first(self):
