@@ -4956,3 +4956,64 @@ pick; the added test pins the measured behaviour instead.
 renamed or folded in (two tabs a letter apart is a real cost), for a Positions view that
 shows money rather than quantity, or for the Watchlist to be a nav page of its own rather
 than a tab in the setups column.
+
+## D1C-L - M5 left, D1 right (2026-09-14, packet D1C-L)
+
+**The trader's two words, and which one wins.** 2026-08-31: *"at the end of the day I
+have a list of my top swing targets... put it at the very bottom of the M5 alerts tab,
+the tab is so long and I never use all of it."* 2026-09-14: *"Keep M5 trades and entries
+on the left. Put D1 picks and their management on the right. Inspect the existing
+swing-favorites strip, which currently sits below the left M5 list, and reconcile it with
+this layout without losing its actions."* The second SUPERSEDES the placement in the
+first - the same trader, the same strip, a later instruction - and nothing else about the
+2026-08-31 entry changes: the two writes, the `vetted` like-origin, the retraction row and
+the "took" badge are untouched by the move.
+
+**The shape.** `scripts/ui/panels/trading_desk.py` now builds two columns. `m5_column` is
+a ONE-CHILD vertical splitter holding `m5_alert_bar` (with the ST6.4 Working-lately line
+still mounted inside the bar, above the list). `d1_column` is a vertical splitter holding
+`master_workspace` on top and `swing_favorites_bar` under it, non-collapsible, the setups
+taking the stretch and the strip none. Workspace mode's horizontal splitter is
+`m5_column`, `alert_center`, `d1_column`; tabs mode's "Master AVWAP" tab holds
+`d1_column` and its "M5 alerts" tab holds `m5_column`.
+
+**Why `m5_column` stayed a splitter with one child.** Every mount, rescue and floor in
+the file names `m5_column`, and two shipped tests read `m5_column.widget(0)` for the bar.
+Keeping the wrapper kept all of those seams honest and kept the settings code at its
+simplest: one child means there is no split to save, so `M5_COLUMN_SPLIT_KEY` is no
+longer applied, tracked or written by the desk. The constant survives as the NAME of a
+value that is deliberately left alone in `local_settings.json` - the trader's old drag is
+not deleted, just never replayed. The D1 split has its OWN new key,
+`D1_COLUMN_SPLIT_KEY = "qt_d1_column_split_sizes_v1"`, weights `D1_COLUMN_WEIGHTS =
+(4, 1)`, through the same `desk_layout.apply_saved_sizes / track_preset / persist_sizes`.
+
+**The column is what hides, never the workspace inside it.** `set_setups_visible`, the
+open-hidden state and F9's reveal all act on `d1_column`, so the strip comes and goes
+WITH the setups: the trader opens that column to look at D1, and a strip out of sight
+while the column is hidden is the intended behaviour, not a failure.
+`_detach_mode_panels` rescues `d1_column` and NOT `master_workspace` - detaching the
+workspace would pull it out of the column and leave the column holding the strip alone -
+and `_apply_column_floors` puts the 420 px floor on the column the desk splitter holds.
+
+**A door that pointed at the old widget.** `show_watchlist`'s tabs-mode branch called
+`setCurrentWidget(self.master_workspace)`; the tab now holds the column, so that call
+would find no tab, raise nothing, and the Journal's "Positions on the Watchlist" button
+would do half its job in silence. It asks for `d1_column`.
+
+**A mode switch is not the trader seeing the strip.** `_detach_mode_panels` leaves the
+column parentless for a moment. Calling `setVisible(True)` on it THERE shows it as a
+top-level WINDOW, and every child gets a real `showEvent` - which fires
+`SwingFavoritesBar.firstShown`, whose one job is to re-derive the day's list from the
+store. On a desk that had chips on screen, a workspace<->tabs round trip threw them away.
+The visibility calls now come AFTER `addTab`, when the column has a (hidden) parent. This
+is the same class of defect as replaying a saved split onto a layout it was not dragged
+for: a layout change that quietly costs the trader something they typed.
+
+**Tests:** `tests/test_d1c_desk_sides.py` (seven written red by the tester, two added by
+the builder), plus the re-pointed place-pinning tests in
+`tests/test_qt_swing_favorites.py::TestWhereItLives`, one line in
+`tests/test_st6_service_and_surfaces.py` (the left column holds one pane now) and one in
+`tests/test_qt_m5_alert_bar.py` (the desk splitter's third child is `d1_column`).
+
+**Reopen trigger.** The trader asks for the strip back under the M5 list, wants it
+visible while the setups column is hidden, or asks for the D1 column to open by default.

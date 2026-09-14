@@ -362,3 +362,56 @@ def test_a_mode_round_trip_keeps_the_chips_and_every_strip_action_still_lands():
         assert retracted == [[{"symbol": "NVDA", "side": "long"}]]
     finally:
         _close(desk)
+
+
+# ---------------------------------------------------------------------------
+# Item 2 - the doors that pointed at the workspace still open (builder-added)
+# ---------------------------------------------------------------------------
+def test_show_watchlist_still_raises_the_master_avwap_tab_in_tabs_mode():
+    """WS-WL's door: the Journal's "Positions on the Watchlist" is a NAV call.
+
+    In tabs mode it has to raise the tab the workspace lives on. That tab now
+    holds the D1 COLUMN, so a `setCurrentWidget(master_workspace)` would find
+    no tab, raise nothing, and the button would silently do half its job.
+    """
+    desk = _desk()
+    try:
+        desk.set_mode("tabs")
+        _pump()
+        tabs = desk._mode_widget
+        assert isinstance(tabs, QTabWidget)
+        tabs.setCurrentWidget(desk.bounce_panel)
+        _pump()
+        assert tabs.tabText(tabs.currentIndex()) == "BounceBot"
+
+        assert desk.show_watchlist("positions") is True
+        _pump()
+        assert tabs.tabText(tabs.currentIndex()) == "Master AVWAP", (
+            "the nav call must raise the tab the workspace is on"
+        )
+        assert desk.master_workspace.tabs.currentWidget() is desk.watchlist_tab
+    finally:
+        _close(desk)
+
+
+def test_the_strip_keeps_its_chips_when_a_mode_switch_mounts_the_column():
+    """A mode switch must not fire the strip's one-shot `firstShown`.
+
+    `_detach_mode_panels` leaves the D1 column parentless for a moment; showing
+    it there would show it as a top-level WINDOW and hand every child a real
+    showEvent - and the strip answers its first showEvent by re-deriving the
+    day's list from the store, which throws away whatever is on it.
+    """
+    desk = _desk()
+    bar = desk.swing_favorites_bar
+    try:
+        shown: list[int] = []
+        bar.firstShown.connect(lambda: shown.append(1))
+        bar.set_favorites([{"symbol": "NVDA", "side": "long"}])
+        desk.set_mode("tabs")
+        _pump()
+        assert shown == [], "a mode switch is not the trader seeing the strip"
+        assert bar.symbols() == [("NVDA", "long")]
+        assert bar.isVisible() is False, "nothing was shown as a stray window"
+    finally:
+        _close(desk)

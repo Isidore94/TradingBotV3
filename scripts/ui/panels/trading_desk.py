@@ -39,12 +39,21 @@ from ui.widgets.working_lately_strip import WorkingLatelyStrip
 # v2 split saved with the bar in the middle must not be replayed onto it.
 DESK_SPLIT_KEY = "qt_desk_split_sizes_v3"
 
-# The bar/strip split inside the M5 alerts column. Its own key, so dragging it
-# never disturbs the three-column desk split above.
+# RETIRED by D1C-L (trader, 2026-09-14: "Keep M5 trades and entries on the
+# left. Put D1 picks and their management on the right."). The left column is
+# the M5 alert bar alone, so there is no bar/strip split to save there any
+# more. The constant is kept for one release as the name of the value already
+# sitting in `local_settings.json`: the desk neither applies nor writes it, and
+# the trader's old drag is left alone rather than deleted.
 M5_COLUMN_SPLIT_KEY = "qt_m5_column_split_sizes_v1"
-#: Opening weights for that split: the alert list leads, the strip takes the
-#: bottom quarter, and the trader's drag replaces both from then on.
-M5_COLUMN_WEIGHTS = (3, 1)
+
+# The setups/strip split inside the D1 column (D1C-L). Its own key, so the
+# retired M5 drag is never replayed onto a layout it was not dragged for, and
+# dragging this one never disturbs the three-column desk split above.
+D1_COLUMN_SPLIT_KEY = "qt_d1_column_split_sizes_v1"
+#: Opening weights for that split: the setups lead, the swing picks strip takes
+#: the bottom fifth, and the trader's drag replaces both from then on.
+D1_COLUMN_WEIGHTS = (4, 1)
 
 
 class TradingDeskPanel(QWidget):
@@ -184,12 +193,13 @@ class TradingDeskPanel(QWidget):
 
         # Trader, 2026-08-31: "at the end of the day I have a list of my top
         # swing targets... put it at the very bottom of the M5 alerts tab, the
-        # tab is so long and I never use all of it." The M5 alerts surface is a
-        # TAB in tabs mode and the tall left COLUMN in workspace mode - the
-        # trader runs workspace - so the bar and the strip share one host that
-        # both modes mount, and the strip is always the bottom of it. The bar
-        # keeps every pixel it wants: it takes the stretch, the strip takes
-        # none. Nothing here touches the bar or any alert routing.
+        # tab is so long and I never use all of it." That PLACEMENT was
+        # superseded by the same trader on 2026-09-14 (D1C-L): "Keep M5 trades
+        # and entries on the left. Put D1 picks and their management on the
+        # right." The strip is D1 management, so it is now the bottom of the D1
+        # column (`self.d1_column` below) - the right COLUMN in workspace mode
+        # and the "Master AVWAP" TAB in tabs mode. The strip itself, its two
+        # writes and every action on it are unchanged by the move.
         self.swing_favorites_bar = SwingFavoritesBar()
         self.swing_favorites_service = SwingFavoritesService(self.focus_service, parent=self)
         self.swing_favorites_bar.addRequested.connect(self._add_swing_favorites)
@@ -206,27 +216,44 @@ class TradingDeskPanel(QWidget):
         self.focus_service.picksFaded.connect(
             self.swing_favorites_service.retract_faded_picks
         )
-        # A SPLITTER, not a fixed stack (trader, 2026-08-31: "the tab needs to
-        # be resizable relative to the M5 alerts tab, I should be able to drag
-        # it up to see more"). Its own settings key, so this drag and the desk's
-        # three-column drag never overwrite each other. Neither pane collapses:
-        # a strip dragged to nothing is one the trader cannot find again.
+        # The LEFT column is M5 only (D1C-L). It stays a one-child vertical
+        # splitter rather than becoming the bar itself so every mount, rescue
+        # and floor in this file keeps the seam it already had: `m5_column` is
+        # what the desk splitter and the "M5 alerts" tab hold, and the bar is
+        # still `m5_column.widget(0)`. One child means there is no split to
+        # save - `M5_COLUMN_SPLIT_KEY` is no longer applied, tracked or
+        # written, and the value it named is left untouched in
+        # `local_settings.json`.
         self.m5_column = QSplitter(Qt.Orientation.Vertical)
         self.m5_column.addWidget(self.m5_alert_bar)
-        self.m5_column.addWidget(self.swing_favorites_bar)
         self.m5_column.setChildrenCollapsible(False)
         self.m5_column.setStretchFactor(0, 1)
-        self.m5_column.setStretchFactor(1, 0)
+
+        # The RIGHT column is D1: the setups workspace on top, the swing picks
+        # strip under it. A SPLITTER, not a fixed stack, for the trader's own
+        # 2026-08-31 reason ("I should be able to drag it up to see more") -
+        # only now the strip is draggable against the setups above it. Its own
+        # NEW settings key, so the retired M5 drag is never replayed onto a
+        # layout it was not dragged for, and this drag and the desk's
+        # three-column drag never overwrite each other. Neither pane
+        # collapses: a strip dragged to nothing is one the trader cannot find
+        # again. The setups take the stretch; the strip takes none.
+        self.d1_column = QSplitter(Qt.Orientation.Vertical)
+        self.d1_column.addWidget(self.master_workspace)
+        self.d1_column.addWidget(self.swing_favorites_bar)
+        self.d1_column.setChildrenCollapsible(False)
+        self.d1_column.setStretchFactor(0, 1)
+        self.d1_column.setStretchFactor(1, 0)
         desk_layout.apply_saved_sizes(
-            self.m5_column, M5_COLUMN_SPLIT_KEY, M5_COLUMN_WEIGHTS
+            self.d1_column, D1_COLUMN_SPLIT_KEY, D1_COLUMN_WEIGHTS
         )
         # Held at the preset until the trader drags it, then saved. Built once
         # here rather than per mode, so the drag survives a workspace<->tabs
         # switch the same way the column itself does.
         desk_layout.track_preset(
-            self, self.m5_column, M5_COLUMN_SPLIT_KEY, lambda _extent: M5_COLUMN_WEIGHTS
+            self, self.d1_column, D1_COLUMN_SPLIT_KEY, lambda _extent: D1_COLUMN_WEIGHTS
         )
-        desk_layout.persist_sizes(self, self.m5_column, M5_COLUMN_SPLIT_KEY)
+        desk_layout.persist_sizes(self, self.d1_column, D1_COLUMN_SPLIT_KEY)
         self._refresh_swing_favorites()
         # A day roll starts a new session, so the strip re-derives from the
         # store and comes back empty. Read-only: the rows themselves stay.
@@ -311,12 +338,22 @@ class TradingDeskPanel(QWidget):
             # column never competes with the charts for width, and a tab that
             # refused to show itself would just look broken.
             self.setups_toggle.setVisible(False)
-            self.master_workspace.setVisible(True)
             tabs = QTabWidget()
-            tabs.addTab(self.master_workspace, "Master AVWAP")
+            tabs.addTab(self.d1_column, "Master AVWAP")
             tabs.addTab(self.alert_center, "Alert Center")
             tabs.addTab(self.m5_column, "M5 alerts")
             tabs.addTab(self.bounce_panel, "BounceBot")
+            # AFTER the tab takes it, never before: `_detach_mode_panels` has
+            # just left the column parentless, so showing it there would show
+            # it as a top-level WINDOW - and every child would get a real
+            # showEvent, which is how the swing strip's one-shot `firstShown`
+            # fired (and re-derived its chips from an empty store) on a mode
+            # switch. Both are set: workspace mode hides the COLUMN and never
+            # the workspace itself, so the column is what has to be shown
+            # again, and the workspace is shown explicitly so a tab can never
+            # inherit a hidden flag from an earlier state.
+            self.d1_column.setVisible(True)
+            self.master_workspace.setVisible(True)
             self._mode_widget = tabs
             self.center_layout.addWidget(tabs)
             return
@@ -339,7 +376,9 @@ class TradingDeskPanel(QWidget):
         # setups.
         splitter.addWidget(self.m5_column)
         splitter.addWidget(self.alert_center)
-        splitter.addWidget(self.master_workspace)
+        # D1C-L: the right column is the D1 column - setups over the swing
+        # picks strip - where the setups workspace alone used to sit.
+        splitter.addWidget(self.d1_column)
         # The chart column leads. The old 1:2 stretch meant every pixel
         # added to the window went 2:1 to the setups table, so the charts got
         # relatively SMALLER on a bigger monitor.
@@ -373,7 +412,9 @@ class TradingDeskPanel(QWidget):
         # Applied after the split so the saved drag is what gets restored when
         # the column is shown again, not a width measured while it was hidden.
         self.setups_toggle.setVisible(True)
-        self.master_workspace.setVisible(self._setups_visible)
+        # The whole D1 column comes and goes, so the strip is out of sight
+        # while the setups are - the trader opens this column to look at D1.
+        self.d1_column.setVisible(self._setups_visible)
 
     def _set_chart_sink(self, sink) -> None:
         """Point every setups-column panel's ticker click at `sink` (or back
@@ -405,7 +446,9 @@ class TradingDeskPanel(QWidget):
         if not raised:
             return False
         if self.workspace_mode == "tabs" and isinstance(self._mode_widget, QTabWidget):
-            self._mode_widget.setCurrentWidget(self.master_workspace)
+            # The tab holds the D1 COLUMN since D1C-L; asking for the workspace
+            # itself would find no tab and silently leave the door shut.
+            self._mode_widget.setCurrentWidget(self.d1_column)
         self._reveal_watchlist_tab()
         if view:
             self.watchlist_tab.set_view(view)
@@ -506,8 +549,11 @@ class TradingDeskPanel(QWidget):
         # _clear_layout deletes whatever it still owns, so every long-lived
         # child must be reparented out first - including the tape host, which
         # a later mode switch would otherwise destroy under the tape.
+        # The D1 COLUMN is rescued, never the workspace inside it: detaching
+        # `master_workspace` would pull it out of `d1_column` and leave the
+        # column holding the strip alone.
         rescued = (
-            self.master_workspace,
+            self.d1_column,
             self.alert_center,
             self.m5_column,
             self.bounce_panel,
@@ -540,7 +586,9 @@ class TradingDeskPanel(QWidget):
         self.alert_center.setMinimumWidth(theme.px(360))
         # Wide enough for "07:09  ▲ SYMBOL  VWAP reclaim" and the two buttons.
         self.m5_column.setMinimumWidth(theme.px(150))
-        self.master_workspace.setMinimumWidth(theme.px(420))
+        # The floor belongs to the COLUMN the desk splitter holds (D1C-L), so
+        # it is the D1 column and not the workspace inside it.
+        self.d1_column.setMinimumWidth(theme.px(420))
 
     def apply_scaled_metrics(self) -> None:
         """Re-apply scale-dependent pixel budgets after a UI scale change."""
@@ -583,7 +631,7 @@ class TradingDeskPanel(QWidget):
         if self.workspace_mode != "workspace" or splitter is None:
             return
         if visible:
-            self.master_workspace.setVisible(True)
+            self.d1_column.setVisible(True)
             saved = self._setups_restore_sizes
             if saved and sum(saved) > 0 and len(saved) == splitter.count():
                 splitter.setSizes(saved)
@@ -604,7 +652,9 @@ class TradingDeskPanel(QWidget):
                 # without undoing that leaves BOTH columns invisible.
                 self.toggle_setups_expanded()
             self._setups_restore_sizes = splitter.sizes()
-            self.master_workspace.setVisible(False)
+            # The column, so the swing picks strip goes with the setups: it is
+            # D1 management and the trader opens this column to see D1.
+            self.d1_column.setVisible(False)
 
     def setups_visible(self) -> bool:
         return self._setups_visible

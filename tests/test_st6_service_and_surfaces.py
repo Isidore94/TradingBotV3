@@ -185,10 +185,15 @@ def test_a_second_request_while_a_build_is_running_does_not_start_a_second(tmp_p
 def test_the_strip_is_the_top_of_the_m5_column_and_the_column_keeps_its_two_panes():
     """Above the M5 list, inside the alerts widget.
 
-    Mounted INSIDE the bar rather than as a third splitter child on purpose:
-    the M5 column is a saved, draggable two-pane split (the alert list over the
-    swing favorites strip) and a third child would have the trader's saved sizes
-    replayed onto a layout they were never dragged for.
+    Mounted INSIDE the bar rather than as a splitter child of the column on
+    purpose: the strip belongs to the M5 bar, so it travels with the bar
+    wherever the column is mounted and no saved column split is ever replayed
+    onto a layout it was not dragged for.
+
+    D1C-L (trader, 2026-09-14) moved the swing favorites strip out of this
+    column to the D1 column on the right, so the left column now holds the M5
+    alert bar ALONE - the count below is re-pointed at that shape and nothing
+    else about this test changed.
     """
     from ui.panels.trading_desk import TradingDeskPanel
     from ui.widgets.working_lately_strip import WorkingLatelyStrip
@@ -196,8 +201,8 @@ def test_the_strip_is_the_top_of_the_m5_column_and_the_column_keeps_its_two_pane
     desk = TradingDeskPanel(workspace_mode="workspace")
     try:
         assert isinstance(desk.working_lately_strip, WorkingLatelyStrip)
-        # The column is untouched: two panes, the alert bar on top.
-        assert desk.m5_column.count() == 2
+        # The column is the M5 alert bar alone since D1C-L.
+        assert desk.m5_column.count() == 1
         assert desk.m5_column.widget(0) is desk.m5_alert_bar
         # And inside the alert bar, the strip is the first thing.
         assert desk.m5_alert_bar.layout().itemAt(0).widget() is desk.working_lately_strip
