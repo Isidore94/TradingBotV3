@@ -71,20 +71,20 @@ def _alert(symbol="AAA", side="LONG", trigger="new HOD", at="07:09:00", **extra)
 def test_the_row_carries_the_take_rate_when_the_desk_measured_one():
     """Fail-before-fix: `take_probability` does not exist and `row_text` has no
     suffix."""
-    assert row_text(_alert(review_take_prob=0.283)) == "07:09  ▲ AAA  new HOD  take 28%"
+    assert row_text(_alert(review_take_prob=0.283)) == "[B]  07:09  ▲ AAA  new HOD  take 28%"
 
 
 def test_no_guidance_is_SILENCE_not_a_zero():
     """A missing suffix says nothing. A 0% would be a claim about a segment
     nobody has measured."""
-    assert row_text(_alert()) == "07:09  ▲ AAA  new HOD"
+    assert row_text(_alert()) == "[B]  07:09  ▲ AAA  new HOD"
     assert take_probability(_alert()) is None
 
 
 def test_a_nonsense_probability_is_refused_rather_than_rendered():
     for value in ("not a number", -0.2, 1.5, None, float("nan")):
         assert take_probability(_alert(review_take_prob=value)) is None
-    assert row_text(_alert(review_take_prob=2.0)) == "07:09  ▲ AAA  new HOD"
+    assert row_text(_alert(review_take_prob=2.0)) == "[B]  07:09  ▲ AAA  new HOD"
 
 
 def test_the_bar_never_computes_the_take_rate_itself():
@@ -131,7 +131,7 @@ def test_a_repeat_folds_and_badges_instead_of_inserting_a_line():
     bar.post(_alert(at="07:10:00", trigger="new HOD"))
 
     assert bar.count() == 1
-    assert bar.list.item(0).text() == "07:10  ▲ AAA  new HOD  ×3"
+    assert bar.list.item(0).text() == "[B]  07:10  ▲ AAA  new HOD  ×3"
     # The row carries the NEWEST alert, so clicking it charts what just fired.
     assert bar.alerts()[0].time_text.startswith("07:10")
 
@@ -177,7 +177,10 @@ def test_a_single_alert_carries_no_badge_and_its_own_tooltip():
     bar = M5AlertBar()
     bar.post(_alert())
     assert "×" not in bar.list.item(0).text()
-    assert bar.list.item(0).toolTip() == "[B-TIER] AAA: new HOD"
+    assert bar.list.item(0).toolTip() == (
+        "Grade: PROVEN, then S through D; — means the alert is ungraded.\n\n"
+        "[B-TIER] AAA: new HOD"
+    )
 
 
 def test_copy_all_still_lists_one_symbol_per_row():
@@ -232,4 +235,4 @@ def test_a_folded_row_shows_the_take_rate_of_the_newest_alert():
     bar.post(_alert(at="07:00:00"))
     bar.post(_alert(at="07:10:00", review_take_prob=0.5))
 
-    assert bar.list.item(0).text() == "07:10  ▲ AAA  new HOD  ×2  take 50%"
+    assert bar.list.item(0).text() == "[B]  07:10  ▲ AAA  new HOD  ×2  take 50%"

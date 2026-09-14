@@ -19,14 +19,33 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: WS-TM pop-up/context BUILT and accepted.** Reviewed behavior 074c5ec7 plus comment-only cleanup be99127d passed 7980 tests (5 skipped, 72 subtests) with natural exit 0. The reusable editable pop-up carries hidden 17-symbol context into the existing AI journal source. No live gate is closed; WS-RP is outside this work. |
-| Working branch | **`codex/mentor-popup-context`**, isolated under `.claude/worktrees/`, based on accepted sweep tip b8ebd5a4. The running desk remains on `claude/wishlist-sweep-2026-09-12`; no main merge or restart is authorized here. |
+| Latest work | **2026-09-14: combining the accepted Mentor pop-up/context and M5 left-grade display for local loading.** Both have independent GO. The desk was closed for the trader's "load it" instruction; the M5 update landed concurrently, so this scratch merge preserves both. Source files do not conflict; shared status documents are reconciled. |
+| Working branch | Desk: `claude/wishlist-sweep-2026-09-12`; integration: `codex/mentor-popup-context`, including the concurrently loaded M5 display tip d125b809. No main merge or branch switch is part of this local update. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
 | Next action | Load the reviewed WS-TM follow-up into the sweep checkout only while the desk is stopped, then perform gate #110. The wider test week, WS-RP and the final main-merge decision remain separate. |
 | Trader actions owed | Load the accepted follow-up while the desk is stopped; no restart has been performed. Native Windows focus and the amended gate #110 remain live checks alongside the wider test week. Cache repair and environment backfill remain separate trader actions. |
 | Last verified baseline | **be99127d: 7980 passed, 5 skipped, 72 subtests; pytest returned 0 and the process exited naturally with 0.** Test time 1027.22s; Qt cleanup took over a minute after the summary. Independent review GO on identical behavior at 074c5ec7: 130 focused passed, ruff clean; lead smoke 7/7 and source selftest 81/81 passed. Scratch data paths were asserted; the AI writer lock was free. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE; an isolated branch must first be loaded into its stopped checkout before the next restart can use it. |
-| Desk | **The desk was running when the 2026-09-14 Mentor follow-up began.** Code work is isolated from its checkout; no restart or live-store write was performed. |
+| Desk | **Closed before the trader-authorized loading step.** The first fast-forward correctly refused a concurrent M5 update; no work was overwritten. The combined scratch commit will be loaded only while the desk remains stopped. No restart or live-store write has occurred. |
+
+### 2026-09-14 — M5 alert grades at the left (Phase 0.14 display follow-up)
+
+Trader request: “the ranking needs to be on the left side of it.” The compact
+bar stripped the tier from its trigger label. `row_text` now leads with the
+Alert Center's canonical PROVEN/tier reading, or `[—]` when ungraded. No new
+score, ordinal, sorting or alert decision is introduced. Repeat rows read the
+newest alert's grade; the tooltip explains the labels.
+
+Build: `codex/m5-rank-left`, tester 81e686b0 (8 expected failures, 1 existing
+layout pass), fix d8eb0755. Focused Qt tests: 116 passed; ruff clean. The lead
+inspected a dark 240 px preview with all seven labels readable. Independent
+review: GO on d8eb0755, 116 passed; reverting only the display source reproduced
+the eight failures and restoring HEAD left the reviewer worktree clean. The full-suite baseline above remains historical, not rerun.
+
+Delivery is pending: `launch_gui.py` is running in the desk checkout, which
+remains at b8ebd5a4. No desk update or restart performed. Live proof owed: after
+loading and restarting, confirm the left grade on the narrow M5 list and that
+a clicked row still charts normally. Existing test-week gates remain open.
 
 ### Open gates, newest first
 

@@ -563,6 +563,12 @@ Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/arch
 
 ## Phase 0.14 — Names first (decision 0016)
 
+Trader-directed display follow-up, 2026-09-14: expose the existing champion grade
+at the far left of each M5 alert row (PROVEN, S, A, B, C, D; ungraded `—`).
+This uses the alert's recorded grade, not a new score or Working-lately ordinal.
+Built on `codex/m5-rank-left` (d8eb0755), independent GO with 116 focused checks;
+the live narrow-column check remains owed. Existing ordering and gates stay open.
+
 **Status at 2026-09-02, after round R4 Part A.** V1, V2 and V3 are all merged to
 `main` (V3 fast-forwarded from `claude/v3-keep-it-honest` the evening of
 2026-09-02); R4 Part A is on `claude/r4-fixes`. What is NOT built, in one place so

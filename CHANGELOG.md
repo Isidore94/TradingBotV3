@@ -2532,6 +2532,15 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
   `codex/mentor-popup-context`; the running desk and its stores remain unchanged.
   Red tests proved the popup, independent data failures, partial daily-cache retention and bounded AI handoff before their fixes. The final full suite passed 7980 tests with natural exit 0; detailed verification is in the checkpoint.
 
+### 2026-09-14 — M5 alert grades at the left (trader-directed)
+
+The compact M5 list omitted the champion tier when shortening the trigger.
+The row now leads with `[PROVEN]` or its recorded `[S]` through `[D]` grade;
+`[—]` marks an ungraded alert. It uses the Alert Center's existing readers.
+The time, side, ticker, trigger, repeat count and evidence suffixes follow.
+No score, list ordering, alert emission or evidence contract changes.
+Verification and local delivery status: `CURRENT_CHECKPOINT.md`.
+
 ### 2026-09-12 - WISHLIST sweep: one feature dump on `claude/wishlist-sweep-2026-09-12` (trader-directed)
 
 Every WISHLIST item built as one feature dump for a week of trader testing; Astra reviews

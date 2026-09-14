@@ -1,5 +1,13 @@
 # Desk chart unification — packet R4
 
+### M5 alert grade placement (trader, 2026-09-14)
+
+The M5 alert bar leads each row with the alert's existing champion grade:
+`[PROVEN]`, otherwise `[S]`, `[A]`, `[B]`, `[C]` or `[D]`; `[—]` means no grade.
+Use the same tier and PROVEN readers as the Alert Center. The label precedes
+the time so it survives a narrow column. This does not invent a numeric rank,
+recompute evidence, or change list order, folding, capture, copying or routing.
+
 Status: **BUILT 2026-08-16 — LIVE PROOFS OWED**, for `plan.md` Phase 0.5 **R4**.
 Authorized by the trader on 2026-08-15; built on `testing-week-2026-08-17` under
 the 2026-08-15 weekend redirect, after R3 closed.
