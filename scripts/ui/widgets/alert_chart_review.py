@@ -134,11 +134,13 @@ class AlertChartReview(QWidget):
     ) -> None:
         super().__init__(parent)
         self.alert: BounceAlert | None = None
-        # Packet D1C-A. The ONE writer a claimed D1 like reaches, injected so a
-        # test drives the real route into a temp store and the live
-        # `claimed_picks.jsonl` is never touched. None means "the real one",
-        # resolved lazily in `_place_claim` - importing it here would drag the
-        # store into every widget construction for a verb most charts never use.
+        # Packet D1C-A. The ONE writer a claimed D1 like reaches. The HOST owns
+        # the store and binds this, exactly as it owns the review-events and
+        # parked-symbols files; None means this pane has no store behind it and
+        # a claimed like takes the pre-packet route (advance, place nothing).
+        # There is deliberately no default writer here: a widget that reached
+        # for `claimed_picks.record_claim` itself would write the live store
+        # from a pane nobody gave a store to.
         self._claim_writer = claim_writer
         #: The host's answer to "is this an M5 review alert?", handed in with
         #: the alert. The widget never imports the panel, and the horizon must
@@ -569,6 +571,16 @@ class AlertChartReview(QWidget):
         import claimed_picks
 
         alert = self.alert
+        if self._claim_writer is None:
+            # This pane has no claim store behind it - a bare widget, or a host
+            # that does not own one. It cannot place a pick, so it behaves
+            # exactly as it did before packet D1C-A: the claimed like advances
+            # and places nothing. Deliberately NOT the failure route: nothing
+            # was lost, because nothing was ever going to be written, and a
+            # pane that reached for the DEFAULT store would write the live
+            # `claimed_picks.jsonl` from a widget that owns no store at all.
+            self.likeAdvanceRequested.emit(alert)
+            return
         claimed_setup_id = str(row.get("claimed_setup_id") or "").strip()
         horizon = claimed_picks.claim_horizon(
             alert, claimed_setup_id, is_m5_review=self._alert_is_m5_review
@@ -600,8 +612,6 @@ class AlertChartReview(QWidget):
         import claimed_picks
 
         writer = self._claim_writer
-        if writer is None:
-            writer = claimed_picks.record_claim
         payload = getattr(alert, "payload", None)
         try:
             return writer(

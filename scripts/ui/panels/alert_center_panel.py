@@ -865,11 +865,13 @@ class AlertCenterPanel(QFrame):
             # Packet D1C-A. The pane owns the ROUTE; this panel owns the STORE,
             # exactly as it owns the review-events and parked-symbols files, so
             # the writer is bound to the panel's path here rather than resolved
-            # inside the widget. A panel with no claims path (a bare test
-            # panel) hands over a writer that writes nothing and returns None,
-            # so the chart is kept and the failure is stated - the same answer
-            # an unwritable store gets.
-            claim_writer=self._write_claim,
+            # inside the widget. A panel with NO claims path - a bare test
+            # panel - hands over NOTHING, and the pane keeps its pre-packet
+            # route: it cannot place a pick, and a desk that was never given a
+            # store has lost nothing by not writing one.
+            claim_writer=(
+                self._write_claim if self._claimed_picks_path is not None else None
+            ),
         )
         self.chart_review.removeTodayRequested.connect(
             self._remove_review_alert_for_today
