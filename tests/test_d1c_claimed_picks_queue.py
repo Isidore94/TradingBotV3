@@ -280,3 +280,30 @@ def test_the_claim_row_carries_no_suppression_field_of_any_kind(panel, tmp_path)
         "note",
     }, sorted(row)
     assert not (tmp_path / "review_policy.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# ADDED BY THE BUILDER (2026-09-14, lead ruling 4): the packet says the skip
+# count "shows in the review pane's status the way the movers-only hidden count
+# does", and left the display to the builder.
+# ---------------------------------------------------------------------------
+def test_the_skip_count_is_stated_on_the_review_pane(panel, tmp_path):
+    """A queue that goes quiet always says why. Nothing is withheld here - the
+    thesis was answered and the pick is in the setups table - so it is a muted
+    LABEL beside the movers-only button rather than a second reveal action."""
+    pane = panel.chart_review
+    assert not pane.claimed_skipped_label.isVisible() or not pane.claimed_skipped_label.text()
+
+    _claim_aapl(panel, tmp_path)
+    panel.add_alert(d1_alert("AAPL"))
+    panel.add_alert(d1_alert("AAPL"))
+
+    assert panel._claimed_d1_skipped.get("AAPL") == 2
+    text = pane.claimed_skipped_label.text()
+    assert "2" in text and "claimed" in text.lower(), text
+    assert "hidden" not in text.lower(), (
+        "a claimed chart is ANSWERED, not withheld - the movers-only line is "
+        "the one that says hidden"
+    )
+    # ...and it is not the reveal button: there is nothing to reveal.
+    assert pane.claimed_skipped_label is not pane.hidden_button

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -88,6 +88,7 @@ from project_paths import (
     ALERT_REVIEW_EVENTS_FILE,
     ALERT_REVIEW_PARKED_SYMBOLS_FILE,
     AUTO_POPULATE_PENDING_FILE,
+    CLAIMED_PICKS_FILE,
     FOCUS_D1_FLAGS_FILE,
     ANY_BOUNCE_WATCHES_FILE,
     D1_EVENT_WATCHES_FILE,
@@ -442,6 +443,10 @@ class _ClickableItem(QFrame):
 #: was never the same thing as "once per session".
 _HELD_RUN_INDEX_MEMO: dict | None = None
 
+#: Packet D1C-A: "the claims file has never been read", which is a different
+#: answer from "there is no claims file" (a real, cacheable stamp of None).
+_CLAIM_KEYS_UNREAD = object()
+
 
 class AlertCenterPanel(QFrame):
     """The sit-back-and-wait surface, split into two stacked feeds.
@@ -483,6 +488,11 @@ class AlertCenterPanel(QFrame):
     #: already fires - this exists so a surface that only shows the FADED
     #: count does not have to listen to every Focus mutation.
     focusFadedChanged = Signal()
+    #: Packet D1C-A: a claim was placed or dropped, so the surfaces that read
+    #: `claimed_picks.jsonl` re-read it. The setups table is the one that shows
+    #: the pick; this panel's own queue gate listens too, because a drop has to
+    #: take effect on the very next alert.
+    claimsChanged = Signal()
     #: R4 A10: `held_run_score`'s segment index, built once per session on a
     #: worker. `object` because the payload is a plain dict Qt must not marshal.
     _heldRunIndexLoaded = Signal(object)
@@ -501,6 +511,7 @@ class AlertCenterPanel(QFrame):
         review_guide=None,
         auto_pick_pending_path=None,
         focus_d1_flags_path=None,
+        claimed_picks_path=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -694,6 +705,28 @@ class AlertCenterPanel(QFrame):
             if self._focus_d1_flags_path is not None
             else set()
         )
+        # Packet D1C-A. The trader's claimed D1 picks. Gated exactly like the
+        # stores above - a bare test panel neither reads nor writes the live
+        # file - and this panel is only ever a READER of it plus the writer of
+        # the claim the chart in front of it produces.
+        self._claimed_picks_path = (
+            Path(claimed_picks_path)
+            if claimed_picks_path is not None
+            else (CLAIMED_PICKS_FILE if persist_ignored else None)
+        )
+        #: mtime+size+day keyed cache of the ACTIVE `(symbol, side)` keys. The
+        #: gate below runs on every alert and an alert burst is exactly where a
+        #: per-alert file read would be paid for, so the file is read once when
+        #: it changed and not again (nothing expensive on the Qt thread).
+        self._claim_keys_cache: set[tuple[str, str]] = set()
+        self._claim_keys_stamp: object = _CLAIM_KEYS_UNREAD
+        self._claim_keys_day: str = ""
+        #: How many repeat D1 charts the claim gate skipped, per symbol. A
+        #: COUNT, the way the movers-only filter's hidden count is: it hides
+        #: and states a number, it deletes nothing, mutes nothing and writes
+        #: nothing to `review_policy.json`.
+        self._claimed_d1_skipped: dict[str, int] = defaultdict(int)
+        self.claimsChanged.connect(self._on_claims_changed)
         # Previous-day extreme gate on Focus flagging (trader rule 2026-08-05:
         # "I don't want focus picks to flag if they are below the previous day
         # high for longs, or above the previous day low for shorts - otherwise
@@ -826,7 +859,17 @@ class AlertCenterPanel(QFrame):
         # the visual chart... I also need the ability to input a ticker
         # manually as well", same day). It stays welded under the chart.
         self.chart_review = AlertChartReview(
-            self, dock_arm_bar=True, dock_capture_rail=False
+            self,
+            dock_arm_bar=True,
+            dock_capture_rail=False,
+            # Packet D1C-A. The pane owns the ROUTE; this panel owns the STORE,
+            # exactly as it owns the review-events and parked-symbols files, so
+            # the writer is bound to the panel's path here rather than resolved
+            # inside the widget. A panel with no claims path (a bare test
+            # panel) hands over a writer that writes nothing and returns None,
+            # so the chart is kept and the failure is stated - the same answer
+            # an unwritable store gets.
+            claim_writer=self._write_claim,
         )
         self.chart_review.removeTodayRequested.connect(
             self._remove_review_alert_for_today
@@ -834,6 +877,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.vetoRetireRequested.connect(self._retire_after_veto)
         self.chart_review.likeRecorded.connect(self._after_like)
         self.chart_review.likeAdvanceRequested.connect(self._advance_after_like)
+        self.chart_review.claimPlaced.connect(self._place_claimed_d1)
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
@@ -2338,6 +2382,30 @@ class AlertCenterPanel(QFrame):
             and not self._alert_is_focus(alert)
         ):
             return
+        # Packet D1C-A (trader, 2026-09-14): *"Once claimed, keep that same D1
+        # setup out of repeat review while the claim remains active. ...
+        # Preserve M5 entry review for that symbol. This is a D1 review-queue
+        # change, not symbol-wide alert suppression."*
+        #
+        # So it sits HERE: after the parked check, and BEFORE the M5 routing
+        # below, which means every M5 alert still reaches the M5 bar exactly as
+        # it does today. It keys on (symbol, SIDE) - a claimed LONG says
+        # nothing about a SHORT thesis - and on D1 SCAN alerts only: a
+        # chart-watch hit is a condition the trader armed and is waiting on.
+        # Everything upstream of this line is untouched: the feed, History, the
+        # D1 badge, the evidence streams, the AWAY recap and the phone push are
+        # all written before it. Detection, the alert row and the outcome
+        # record are not this line's business at all.
+        if (
+            alert.is_d1
+            and not is_chart_watch_alert(alert)
+            and (alert.symbol, alert.side) in self._active_claim_keys()
+        ):
+            self._claimed_d1_skipped[alert.symbol] += 1
+            self.chart_review.set_claimed_skipped_count(
+                sum(self._claimed_d1_skipped.values())
+            )
+            return
         # Trader rule 2026-08-27: an intraday alert is a LINE in the M5 alert
         # bar, never a chart in the waiting list - "purge M5 alerts from the
         # waiting list and keep those for D1 alerts". Posted here, at the one
@@ -3046,6 +3114,10 @@ class AlertCenterPanel(QFrame):
             guidance_text=guidance.summary_text(),
             in_focus=self._alert_is_focus(alert),
             auto_adopted=self._alert_is_auto_adopted(alert),
+            # Packet D1C-A item 2: the horizon of a claim made on this chart.
+            # The panel owns `_is_m5_review_alert`; the pane never imports the
+            # panel, so the answer travels with the alert.
+            is_m5_review=self._is_m5_review_alert(alert),
         )
 
     def _alert_is_auto_adopted(self, alert: BounceAlert) -> bool:
@@ -3097,6 +3169,141 @@ class AlertCenterPanel(QFrame):
             self.statusChanged.emit(
                 f"Skipped {alert.symbol} for now; its feed item remains available."
             )
+        self._advance_review_queue()
+
+    # ------------------------------------------------------------------
+    # Packet D1C-A: a claimed D1 like is a pick, and the chart is done
+    # ------------------------------------------------------------------
+    def _active_claim_keys(self) -> set[tuple[str, str]]:
+        """`(symbol, side)` for every active claim, from an mtime-keyed cache.
+
+        One small read when the claims file CHANGED, never one per alert. The
+        day is part of the key because the fade is a session clock: a desk left
+        running past midnight has to ask again.
+        """
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return set()
+        try:
+            stat = Path(path).stat()
+            stamp: object = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        today = self._ignored_market_date
+        if stamp == self._claim_keys_stamp and today == self._claim_keys_day:
+            return self._claim_keys_cache
+        keys: set[tuple[str, str]] = set()
+        if stamp is not None:
+            try:
+                import claimed_picks
+
+                keys = claimed_picks.active_keys(Path(path))
+            except Exception:  # noqa: BLE001 - an unreadable store gates nothing
+                keys = set()
+        self._claim_keys_cache = keys
+        self._claim_keys_stamp = stamp
+        self._claim_keys_day = today
+        return keys
+
+    def _write_claim(self, **fields) -> dict | None:
+        """Write one claim into THIS panel's store. None when nothing was written.
+
+        The seam between the pane (which knows a claim was made) and the store
+        (which knows where the desk's claims live). It never raises: a failed
+        placement is an answer the caller acts on, not an exception on a click.
+        """
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return None
+        try:
+            import claimed_picks
+
+            row = claimed_picks.record_claim(path=Path(path), **fields)
+        except Exception:  # noqa: BLE001 - a failed placement keeps the chart
+            return None
+        if row is not None:
+            self._claim_keys_stamp = _CLAIM_KEYS_UNREAD
+        return row
+
+    def _on_claims_changed(self) -> None:
+        """A claim was placed or dropped: the gate re-reads on the next alert."""
+        self._claim_keys_stamp = _CLAIM_KEYS_UNREAD
+
+    def _sweep_expired_claims(self) -> None:
+        """The day roll's half of the lifecycle: one `expire` row per fade.
+
+        Here and nowhere else. The fade can only change when the session does,
+        so a timer asking more often would buy nothing and cost a file read; a
+        calendar that cannot answer expires nothing.
+        """
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return
+        try:
+            import claimed_picks
+
+            claimed_picks.sweep_expired(Path(path))
+        except Exception:  # noqa: BLE001 - a sweep never costs the day roll
+            pass
+        self._claim_keys_stamp = _CLAIM_KEYS_UNREAD
+
+    def _place_claimed_d1(self, alert: BounceAlert, claim_row: object) -> None:
+        """The pick was SAVED: record the like, say so, and finish the chart.
+
+        Trader, 2026-09-14: *"Save and confirm the pick before removing its D1
+        item from Visual Chart Review."* The save already happened - the pane
+        only emits `claimPlaced` with a row in hand - so this is the confirm
+        and the retire, in that order.
+
+        `_record_like_advance` is the UNCHANGED writer, so the review
+        scoreboard's take side sees exactly what it saw before: one
+        `like_advance` row, under the historical name `review_learning` keys
+        on. No second verdict is written (P5), and the retirement is
+        `_retire_claimed_review`, never the parking verb.
+        """
+        if not self._record_like_advance(alert):
+            return
+        setup = ""
+        if isinstance(claim_row, dict):
+            setup = str(claim_row.get("claimed_setup_id") or "").strip()
+        self.statusChanged.emit(
+            f"♥ {alert.symbol}: claimed {setup} - placed in Setups."
+            if setup
+            else f"♥ {alert.symbol}: claimed - placed in Setups."
+        )
+        self._retire_claimed_review(alert)
+        self.claimsChanged.emit()
+
+    def _retire_claimed_review(self, alert: BounceAlert) -> None:
+        """Take a claimed chart out of today's review, and do NOTHING else.
+
+        Deliberately a separate method from `_retire_review_alert`, not a flag
+        on it. That body is the PARKING verb: it writes a `remove_today` review
+        event, adds the symbol to `_parked_symbols`, drops an auto-adopted
+        Focus pick and runs three early-return branches for auto picks, faded
+        picks and Focus reviews. A claim is none of those things - the trader
+        said YES to this name - and a flag threaded through that ladder would
+        be one edit away from parking a name they just claimed.
+
+        So: the alert leaves the current slot, the waiting list and the hidden
+        set, and the next chart comes up. The symbol keeps alerting, keeps its
+        place in the feed and the phone push, and its M5 alerts are untouched.
+        The repeat-D1 gate in `_enqueue_review_alert` is what stops the same
+        chart coming back, and only while the claim is active.
+        """
+        symbol = getattr(alert, "symbol", "")
+        side = getattr(alert, "side", "")
+        if not symbol:
+            return
+        self._review_queue = [
+            queued
+            for queued in self._review_queue
+            if not (queued.symbol == symbol and queued.side == side)
+        ]
+        self._hidden_inside_range.pop(symbol, None)
+        current = self._current_review_alert
+        if current is not None and current.symbol == symbol:
+            self._current_review_alert = None
         self._advance_review_queue()
 
     def _record_like_advance(self, alert: BounceAlert) -> bool:

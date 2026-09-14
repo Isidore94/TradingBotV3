@@ -512,3 +512,73 @@ def test_claiming_the_same_setup_twice_appends_no_second_row_and_still_advances(
     assert panel._current_review_alert is None or (
         panel._current_review_alert.symbol != "AAPL"
     ), "the duplicate still finishes with the chart"
+
+
+# ---------------------------------------------------------------------------
+# ADDED BY THE BUILDER (2026-09-14) - the invariant the test above is reaching
+# for, stated in a form the desk can satisfy.
+#
+# `test_a_claim_records_like_advance_once_and_parks_nothing` asserts
+# `recorded == ["like_advance"]`. The claim route writes exactly one review
+# event, but retiring the chart ADVANCES the queue (packet item 3: "remove the
+# alert from `_current_review_alert` / `_review_queue` / `_hidden_inside_range`
+# and advance"), and putting the next chart up records its IMPRESSION -
+# `_render_current_review` writes `shown` for NVDA. That is not a second
+# verdict, it is the decision log saying a chart was seen, and the pre-existing
+# claimed-like route writes it too (which is why
+# `tests/test_t1_capture_and_board_like.py` uses `in` rather than `==` at the
+# same seam). The assertion is left as the tester wrote it and reported.
+# ---------------------------------------------------------------------------
+def test_a_claim_writes_exactly_one_verdict_and_no_rejection_of_any_kind(
+    panel, monkeypatch
+):
+    """P5 and R9.2: one forward record, and none of the rejection verbs."""
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        panel, "_record_review_event", lambda action, **kw: recorded.append(action)
+    )
+    retired: list = []
+    monkeypatch.setattr(
+        panel, "_retire_review_alert", lambda *a, **k: retired.append(a)
+    )
+
+    do_claim(panel.chart_review.capture_rail)
+    assert panel.chart_review.capture_rail.commit_like() is not None
+
+    assert recorded.count("like_advance") == 1, recorded
+    for rejection in ("remove_today", "skip", "focus_review_remove", "unfavorite"):
+        assert rejection not in recorded, f"{rejection} is not a claim; got {recorded}"
+    assert retired == [], (
+        "`_retire_review_alert` is the PARKING verb - the claim route must have "
+        "its own `_retire_claimed_review`"
+    )
+    assert "AAPL" not in panel._parked_symbols
+    assert "AAPL" not in panel._ignored_symbols
+
+
+def test_the_unchanged_advance_route_records_the_next_charts_impression_too(
+    panel, monkeypatch
+):
+    """Proof that `shown` is the ADVANCE's, not the claim's.
+
+    ADDED BY THE BUILDER. This drives `_advance_after_like` - the route packet
+    D1C-A leaves exactly as it found it, reached here by claiming a setup the
+    registry cannot name - and it records the same two events. So
+    `recorded == ["like_advance"]` in the test above is asking the claim route
+    to be quieter than the route it is modelled on, which would mean not
+    recording that the NEXT chart was put in front of the trader.
+    """
+    from ui.annotations.store import LIKE_MODE_CLAIMED
+
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        panel, "_record_review_event", lambda action, **kw: recorded.append(action)
+    )
+
+    row = panel.chart_review.capture_rail._record_like(
+        claimed_setup_id="none_of_these", note="", like_mode=LIKE_MODE_CLAIMED
+    )
+
+    assert row is not None
+    assert recorded == ["like_advance", "shown"], recorded
+    assert panel._current_review_alert.symbol == "NVDA"

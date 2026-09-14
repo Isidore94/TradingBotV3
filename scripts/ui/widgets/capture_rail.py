@@ -160,6 +160,9 @@ class CaptureRail(QFrame):
         # owns a different screen overrides it through `set_scan_context`.
         self._surface = verdicts.SURFACE_RAIL
         self._scan_context: dict[str, Any] = {}
+        # What a `captured` listener said about the row that was just written
+        # (packet D1C-A). None means "the verb's own status line stands".
+        self._capture_status_override: tuple[str, bool] | None = None
         # True only for the duration of a "veto but day-trade it" commit.
         # `captured` fires synchronously from inside commit_veto(), i.e.
         # BEFORE commit_veto_day_trade() can emit its own request, so a host
@@ -991,6 +994,9 @@ class CaptureRail(QFrame):
                 "NOT SAVED - the annotation log could not be written.", ok=False
             )
             return None
+        # Cleared right before the emit so whatever a listener says about THIS
+        # row is what the verb below reads - never a leftover from the last one.
+        self._capture_status_override = None
         self.captured.emit(EVENT_LIKE_CLAIM, row)
         return row
 
@@ -1030,7 +1036,13 @@ class CaptureRail(QFrame):
         # stays an explicit action on the Focus surfaces that own those files.
         self.like_note_input.clear()
         detail = self._merge_like_cohort_safely()
-        self._set_status(f"LIKE {row['symbol']} - {setup_id}{detail}")
+        # Packet D1C-A: a claimed D1 like is PLACED by the host while the emit
+        # above is running, and a placement that failed is the thing the trader
+        # needs to read. The host's line wins for this commit; with no host
+        # message the rail says what it has always said.
+        override = self.take_capture_status_override()
+        if override is None:
+            self._set_status(f"LIKE {row['symbol']} - {setup_id}{detail}")
         return row
 
 
@@ -1089,6 +1101,29 @@ class CaptureRail(QFrame):
         return row
 
     # ------------------------------------------------------------------
+    def set_capture_status(self, message: str, *, ok: bool = True) -> None:
+        """A capture LISTENER's word on what the row it just heard about did.
+
+        Packet D1C-A. `_record_like` emits `captured` and the verb that called
+        it then writes its own "LIKE SYM - setup" line, so a host that handled
+        the emit - "NOT PLACED ...", "claimed; horizon unknown ..." - was
+        overwritten a microsecond later and the trader never saw it. A message
+        left here OUTRANKS the verb's own for that one commit: the verb knows
+        the row was written, the listener knows what became of it, and the
+        second fact is the one the trader has to act on.
+
+        Cleared by :meth:`take_capture_status_override` as the verb finishes,
+        so it can never leak into the next click.
+        """
+        self._capture_status_override = (str(message or ""), bool(ok))
+        self._set_status(message, ok=ok)
+
+    def take_capture_status_override(self) -> tuple[str, bool] | None:
+        """The listener's message, if it left one, and clear it."""
+        override = getattr(self, "_capture_status_override", None)
+        self._capture_status_override = None
+        return override
+
     def _set_status(self, message: str, *, ok: bool = True) -> None:
         self.status_label.setText(message)
         colour = theme.color("long" if ok else "short")
