@@ -282,9 +282,28 @@ def compact_for_ai(context: Any) -> Any:
     if not isinstance(readings, list) or not all(isinstance(row, Mapping) for row in readings):
         return context
     # The evidence source keeps this under ``mentor.context_compact``.  The
-    # durable journal's full ``mentor.context`` remains untouched.
+    # durable journal's full ``mentor.context`` remains untouched.  Values
+    # shared by every symbol move into ``common`` so the journal source can
+    # keep a complete Mentor read within its existing evidence allowance.
+    common = {
+        key: context.get(key)
+        for key in ("schema", "captured_at", "availability", "reason", "rules", "sources")
+    }
+    columns: list[str] = []
+    for key in _M5_KEYS:
+        values = [row.get(key) for row in readings]
+        # These two headings keep the compact table directly readable by
+        # older evidence consumers.  All remaining uniform values belong in
+        # ``common`` and are restored by combining it with each row.
+        if key not in {"symbol", "m5_direction"} and values and all(value == values[0] for value in values[1:]):
+            common[key] = values[0]
+        else:
+            columns.append(key)
     return {
+        # Kept at the legacy location for existing bounded-source readers;
+        # ``common`` is the lossless representation used by new consumers.
         "captured_at": context.get("captured_at"),
-        "columns": list(_M5_KEYS),
-        "rows": [[row.get(key) for key in _M5_KEYS] for row in readings],
+        "common": common,
+        "columns": columns,
+        "rows": [[row.get(key) for key in columns] for row in readings],
     }

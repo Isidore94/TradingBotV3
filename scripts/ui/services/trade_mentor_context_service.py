@@ -45,7 +45,7 @@ class TradeMentorContextService(QObject):
         self._request_hour: tuple[str, int] | None = None
         self._hour_cache: dict[tuple[str, int], dict[str, Any]] = {}
         self._d1_cache: dict[str, dict[str, list[dict[str, Any]]]] = {}
-        self._failed_d1_sessions: set[str] = set()
+        self._d1_attempted_sessions: set[str] = set()
         self._failed_hours: set[tuple[str, int]] = set()
         self._closed = False
 
@@ -84,7 +84,17 @@ class TradeMentorContextService(QObject):
 
     def _run_worker(self, moment: datetime) -> None:
         try:
-            payload: dict[str, Any] = {"ok": True, "context": self._build(moment)}
+            context = self._build(moment)
+            no_measurements = all(
+                row.get("m5_status") == "unavailable"
+                and row.get("d1_status") == "unavailable"
+                for row in context.get("readings", ())
+            )
+            payload: dict[str, Any] = (
+                {"ok": False, "reason": "all context sources unavailable"}
+                if no_measurements
+                else {"ok": True, "context": context}
+            )
         except Exception as exc:  # noqa: BLE001 - no context must cost a read
             payload = {"ok": False, "reason": str(exc) or "context loader failed"}
         self._on_done(payload)
@@ -97,8 +107,8 @@ class TradeMentorContextService(QObject):
             self._failed_hours.discard(key)
         for key in sorted(self._d1_cache)[:-_MAX_D1_SESSION_CACHE]:
             self._d1_cache.pop(key, None)
-        for key in sorted(self._failed_d1_sessions)[:-_MAX_D1_SESSION_CACHE]:
-            self._failed_d1_sessions.discard(key)
+        for key in sorted(self._d1_attempted_sessions)[:-_MAX_D1_SESSION_CACHE]:
+            self._d1_attempted_sessions.discard(key)
 
     def _queue_delivery(self, kind: str, request_id: str, context: dict[str, Any]) -> None:
         """Deliver on the next GUI turn when called on Qt's GUI thread."""
@@ -120,10 +130,16 @@ class TradeMentorContextService(QObject):
     def _build(self, moment: datetime) -> dict[str, Any]:
         cached: dict[str, Mapping[str, Any]] = {"m5": {}, "d1": {}}
         session_key = _completed_session_key(moment)
-        if session_key and session_key in self._d1_cache:
+        has_valid_d1 = bool(session_key and session_key in self._d1_cache)
+        if has_valid_d1:
             cached["d1"] = self._d1_cache[session_key]
         if self._cache_loader is not None:
             for timeframe in ("m5", "d1"):
+                # A completed-session cache was validated as a full usable
+                # snapshot.  Do not replace it with a transient empty or
+                # stale local cache on the next hourly read.
+                if timeframe == "d1" and has_valid_d1:
+                    continue
                 try:
                     candidate = self._cache_loader(
                         timeframe, SYMBOLS, now=moment, timeout_seconds=self._timeout_seconds
@@ -144,31 +160,48 @@ class TradeMentorContextService(QObject):
             )
             for timeframe in ("m5", "d1")
         }
-        if session_key and session_key in self._failed_d1_sessions:
+        if session_key and session_key in self._d1_attempted_sessions:
             needed["d1"] = ()
         final = {name: dict(value) for name, value in cached.items()}
         sources: dict[str, str] = {}
+        failures: dict[str, str] = {}
         for timeframe in ("m5", "d1"):
             names = needed[timeframe]
             if names:
+                if timeframe == "d1" and session_key:
+                    # An empty or partial Yahoo response is still this
+                    # completed session's one bounded refresh attempt.
+                    self._d1_attempted_sessions.add(session_key)
                 try:
                     fetched = self._loader(
                         timeframe, names, now=moment, timeout_seconds=self._timeout_seconds
                     )
-                except Exception:
-                    if timeframe == "d1" and session_key:
-                        self._failed_d1_sessions.add(session_key)
-                    raise
+                except Exception as exc:  # noqa: BLE001 - a leg may fail alone
+                    failures[timeframe] = str(exc) or f"{timeframe} loader failed"
+                    sources[timeframe] = "cached" if cached[timeframe] else "unavailable"
+                    # With no usable bars from either leg, a second network
+                    # batch cannot improve this request's explicit absence.
+                    # The hour failure throttle owns the next retry.
+                    if not final["m5"] and not final["d1"]:
+                        break
+                    continue
                 fresh = _normalize_bars(fetched, timeframe)
                 final[timeframe].update(fresh)
                 sources[timeframe] = "mixed:cached,yahoo" if cached[timeframe] else "yahoo"
             else:
                 sources[timeframe] = "cached"
-        if session_key and final["d1"]:
-            self._d1_cache[session_key] = dict(final["d1"])
-        return build_context(
+        context = build_context(
             now=moment, m5_bars=final["m5"], d1_bars=final["d1"], sources=sources
         )
+        for timeframe, failure in failures.items():
+            for row in context["readings"]:
+                status = row[f"{timeframe}_status"]
+                if status == "unavailable":
+                    row[f"{timeframe}_reason"] = failure
+        if session_key and all(row["d1_status"] == "measured" for row in context["readings"]):
+            self._d1_cache[session_key] = dict(final["d1"])
+        self._prune_caches()
+        return context
 
     def _on_done(self, payload: object) -> None:
         self._worker = None

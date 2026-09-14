@@ -391,6 +391,7 @@ class AlertChartReview(QWidget):
             | Qt.WindowType.WindowCloseButtonHint,
         )
         self.mentor_popup.setObjectName("TradeMentorPopup")
+        self.mentor_popup.setWindowTitle("Trade Mentor")
         self.mentor_popup.setModal(False)
         self.mentor_popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.mentor_popup.setMaximumHeight(640)
