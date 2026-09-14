@@ -1772,7 +1772,7 @@ def _read_claim_evidence() -> dict[str, Any]:
         payload["signature"] = tuple(_csv_signature(path) for path in paths.values())
         inputs = claimed_pick_evidence.load_inputs()
         comparison = claimed_pick_evidence.build_comparison(
-            **inputs, as_of=date.today(), window=claimed_pick_evidence.WINDOW_LATELY
+            **inputs, as_of=date.today(), window=claimed_pick_evidence.WINDOW_RECENT
         )
         payload["populations"] = claim_population_table_rows(comparison)
         payload["setups"] = claim_setup_table_rows(comparison)

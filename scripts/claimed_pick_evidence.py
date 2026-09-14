@@ -125,9 +125,14 @@ PROVENANCE_CLAIMED = "claimed (claimed_picks.jsonl)"
 #: explicit `window=`.
 EARLIEST_WINDOW_START = "0001-01-01"
 
-WINDOW_LATELY = "lately"
+#: The two window NAMES. Deliberately not spelled `WINDOW_LATELY`: R4b's guard
+#: (`tests/test_r4b_one_lately_window.py`) reserves every `*LATELY*` constant
+#: name for `evidence_stats`, so that "lately" can never mean two lengths on
+#: this desk. These name a window; the LENGTH is `evidence_stats.LATELY_SESSIONS`
+#: and is read through `lately_window`, never restated here.
+WINDOW_RECENT = "lately"
 WINDOW_ALL = "all"
-WINDOWS = (WINDOW_LATELY, WINDOW_ALL)
+WINDOWS = (WINDOW_RECENT, WINDOW_ALL)
 
 
 # ---------------------------------------------------------------------------
@@ -672,7 +677,7 @@ def build_comparison(
     tier_rows: Iterable[Mapping[str, Any]] = (),
     claims: Iterable[Mapping[str, Any]] = (),
     as_of: Any = None,
-    window: str = WINDOW_LATELY,
+    window: str = WINDOW_RECENT,
 ) -> Comparison:
     """Grade both sides over both windows. PURE - it opens no file.
 
@@ -680,9 +685,9 @@ def build_comparison(
     :attr:`Comparison.by_window` always carries BOTH, so a surface can show two
     column groups off one build.
     """
-    asked = str(window or WINDOW_LATELY).strip().lower()
+    asked = str(window or WINDOW_RECENT).strip().lower()
     if asked not in WINDOWS:
-        asked = WINDOW_LATELY
+        asked = WINDOW_RECENT
     stamp = _as_of_iso(as_of)
 
     picks, quick_likes, duplicates = _dedupe_picks(like_picks)
@@ -691,7 +696,7 @@ def build_comparison(
     tier = _rows(tier_rows)
 
     windows = {
-        WINDOW_LATELY: tuple(lately_window(stamp)),
+        WINDOW_RECENT: tuple(lately_window(stamp)),
         # `read_eligible_rows(end=)` only moves the RIGHT edge of the lately
         # window, so "all" is an explicit wide window rather than an absent one.
         WINDOW_ALL: (EARLIEST_WINDOW_START, stamp),
@@ -751,7 +756,7 @@ def render_text(comparison: Comparison) -> str:
     first, last = comparison.window_dates
     span = (
         f"{first}..{last}"
-        if comparison.window == WINDOW_LATELY
+        if comparison.window == WINDOW_RECENT
         else f"every row through {last}"
     )
     lines = [
@@ -828,7 +833,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "four stores and writes nothing."
         ),
     )
-    parser.add_argument("--window", choices=list(WINDOWS), default=WINDOW_LATELY)
+    parser.add_argument("--window", choices=list(WINDOWS), default=WINDOW_RECENT)
     parser.add_argument("--as-of", dest="as_of", default=None, help="YYYY-MM-DD")
     parser.add_argument("--picks-path", default=None)
     parser.add_argument("--outcomes-path", default=None)
