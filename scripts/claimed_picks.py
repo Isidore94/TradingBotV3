@@ -177,13 +177,22 @@ def build_claim_row(
 
 
 def append_row(row: Mapping[str, Any], path: Path = CLAIMED_PICKS_FILE) -> bool:
-    """Append one row. Returns False when the write failed - never raises."""
+    """Append one row. Returns False when the write failed - never raises.
+
+    "Never raises" means never, not "never on an OSError". `known_at_claim`
+    carries whatever the alert's PAYLOAD held, so a value `json.dumps` refuses
+    is a live possibility rather than a hypothetical - and it must cost the
+    row, never the click that made it. The row is serialised INSIDE the try for
+    exactly that reason, and a refused row leaves nothing half-written behind
+    because nothing is opened until the text exists.
+    """
     try:
+        text = json.dumps(dict(row), sort_keys=True) + "\n"
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(dict(row), sort_keys=True) + "\n")
-    except OSError:
+            handle.write(text)
+    except (OSError, TypeError, ValueError):
         return False
     return True
 

@@ -328,14 +328,22 @@ class DataTable(QTableView):
         # Extra per-row context-menu actions; each callback receives the clicked
         # (proxy) QModelIndex. Used e.g. for "Add to Focus".
         self._row_actions: list[tuple[str, object]] = []
+        #: label -> predicate(index) deciding whether that action is OFFERED on
+        #: a given row. Kept beside `_row_actions` rather than inside it so the
+        #: list stays a list of (label, callback) pairs for everything that
+        #: already reads it.
+        self._row_action_visible: dict[str, object] = {}
         # §12: which columns may take the slack and which carry an identifier in
         # their tail. Empty means "measure it" - see `apply_width_rule`.
         self._text_columns: list[int] | None = None
         self._elide_columns: tuple[int, ...] = ()
         self._stretch_last: bool = True
 
-    def add_row_action(self, label: str, callback) -> None:
+    def add_row_action(self, label: str, callback, *, visible=None) -> None:
+        """Register a right-click verb. `visible(index)` limits which rows get it."""
         self._row_actions.append((label, callback))
+        if visible is not None:
+            self._row_action_visible[label] = visible
 
     def set_width_rule(
         self, *, text_columns=None, elide_columns=(), stretch_last: bool = True
@@ -367,11 +375,36 @@ class DataTable(QTableView):
         text = "\n".join("\t".join(values) for _, values in sorted(rows.items()))
         QApplication.clipboard().setText(text)
 
+    def row_actions_for(self, index) -> list[tuple[str, object]]:
+        """The row actions this particular row can actually be offered.
+
+        An action registered with a `visible` predicate is offered only on the
+        rows it can act on - a verb that could only answer "not one of those"
+        is noise in a menu the trader opens to do something. A predicate that
+        raises shows the action: the verbs behind these predicates all refuse a
+        row they cannot act on safely, so a broken predicate must not silently
+        take a working verb off the menu.
+        """
+        if not index.isValid():
+            return []
+        offered: list[tuple[str, object]] = []
+        for label, callback in self._row_actions:
+            predicate = self._row_action_visible.get(label)
+            if predicate is not None:
+                try:
+                    if not predicate(index):
+                        continue
+                except Exception:  # noqa: BLE001 - see the docstring
+                    pass
+            offered.append((label, callback))
+        return offered
+
     def _show_context_menu(self, point) -> None:
         menu = QMenu(self)
         index = self.indexAt(point)
-        if self._row_actions and index.isValid():
-            for label, callback in self._row_actions:
+        row_actions = self.row_actions_for(index)
+        if row_actions:
+            for label, callback in row_actions:
                 action = menu.addAction(label)
                 action.triggered.connect(
                     lambda _checked=False, cb=callback, idx=index: cb(idx)

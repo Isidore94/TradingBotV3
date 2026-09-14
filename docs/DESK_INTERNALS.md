@@ -4989,7 +4989,11 @@ the pick exists, so the chart is still done with.
 **The expiry and removal rules.** A claim is active until the trader drops it (`Drop my
 claim` on the row) or `focus_picks.FADE_TRADING_DAYS` (10) TRADING days pass, counted by
 `market_calendar.trading_days_between`. Both are referenced BY NAME - the constant and the
-clock are the quiet-Focus-pick fade's, and a copied number would let the two drift.
+clock are the quiet-Focus-pick fade's, so a re-tuned fade moves both together. The two are
+NOT due on the same session, and that is the packet's own rule rather than a defect: a
+claim fades on `sessions > FADE_TRADING_DAYS` ("more than ten trading days"), which comes
+due on the ELEVENTH session, one session later than the Focus fade's `>=` on the tenth. A
+claim is the trader's own thesis and gets the benefit of the last day.
 `sweep_expired` appends one `expire` row per faded claim, is idempotent, and runs from the
 panel's day roll only: the fade can only change when the session does. **A calendar that
 cannot answer expires nothing** - `trading_days_between` raises outside its validated
@@ -5013,10 +5017,22 @@ is no rail in the resolver's signature for a stale value to arrive through:
    `none_of_these`, an unknown id and an empty id answer `""`. The `"m5"` answer comes only
    from the flag, never from a group name, and this packet invented no group.
 
-`""` places nothing and says so (`claimed; horizon unknown - not placed in Setups`). The
-stale-timeframe read is fixed at the same seam: `set_alert` now passes
-`timeframe=alert.timeframe` into `set_context`, which is the SIDECAR's read and not the
-horizon's.
+`""` places nothing and says so (`claimed; horizon unknown - not placed in Setups`).
+
+**The stale-timeframe read is a SECOND bug at the same seam, and it is fixed separately.**
+The rail's `timeframe` is not the horizon - it is what the annotation row RECORDS and what
+decides whether the M5 bars ride along as a sidecar - so `set_alert` now passes
+`bounce.capture_timeframe(alert.timeframe)` into `set_context`, NORMALISED and never blank.
+Both halves of that matter and the first review round found both: `set_context` is
+`if timeframe:`, so handing it a typed symbol's empty string left the rail on the PREVIOUS
+chart's answer and filed a daily look as `M5` with an M5 sidecar behind it; and a live
+`BounceAlert.from_callback` alert says `"5m"`, which upper-cases to `"5M"` and misses
+`_record_like`'s `== "M5"` compare - so the one path the attachment exists for was the one
+losing its bars. `capture_timeframe` lives beside `BounceAlert` because the spelling is the
+alert's own, is pure and TOTAL (`"5m"`/`"M5"`/`"5"` -> `M5`, everything else -> `D1`), and
+answers `D1` for a 15m or 1h alert because the review pane has no chart of its own for
+those - which is exactly what the rail said before it existed. `set_context` keeps
+`if timeframe:`, so every other caller is unchanged.
 
 **Save, confirm, then retire.** `AlertChartReview._route_claimed_like` writes through an
 INJECTED `claim_writer` (the panel binds it to its own store) and emits
@@ -5096,7 +5112,13 @@ changed: it ranks the SCAN's picks, and a claim is not a scan pick.
 Focus store, so it must not need one to exist. The star and the X are untouched.
 
 **Tests.** `tests/test_d1c_claimed_picks_store.py`, `_route.py`, `_queue.py`, `_panel.py` -
-73 written red by the tester before any of this existed, plus two added by the builder.
+83 collected. 73 were written RED by the tester before any of this existed; the builder
+added ten. Four in the first pass: the skip-count display the packet left to it, the
+"exactly one verdict and no rejection" invariant, the proof that the pre-packet advance
+route records the next chart's impression too, and a drop on a LABELLED scan row. Six in
+the reviewer's fix round: the timeframe normaliser itself, a typed symbol charted after an
+M5 alert, a real `from_callback` `"5m"` alert, a D1 flag, a claim `json.dumps` refuses, and
+the menu that offers "Drop my claim" only where it can act.
 
 **Reopen trigger.** The trader asks for a claimed pick to reach Focus or a watchlist
 automatically, for the fade to be a different clock from the Focus fade, for the queue gate

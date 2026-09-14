@@ -494,3 +494,24 @@ def test_the_horizon_never_reads_the_rails_timeframe():
     assert "timeframe" not in parameters and "rail" not in parameters, parameters
     source = inspect.getsource(claimed_picks.claim_horizon)
     assert "_timeframe" not in source, "the resolver must never read the rail"
+
+
+def test_a_claim_the_json_writer_cannot_serialise_fails_without_raising(tmp_path):
+    """"Never raises" has to mean never, not "never on an OSError".
+
+    `known_at_claim` comes from an ALERT PAYLOAD - whatever the scanner put
+    there - so a value `json.dumps` refuses is a live possibility, and it must
+    cost the row rather than the click.
+    """
+    import claimed_picks
+
+    path = tmp_path / "claimed_picks.jsonl"
+
+    assert claimed_picks.append_row({"action": "claim", "bad": object()}, path=path) is False
+    assert claimed_picks.record_claim(
+        **_claim_kwargs(known_at_claim={"payload": object()}), path=path
+    ) is None
+    assert _read(path) == [], "a refused row leaves nothing behind"
+    # ...and the store still works for the next, well-formed claim.
+    assert claimed_picks.record_claim(**_claim_kwargs(), path=path) is not None
+    assert len(_read(path)) == 1

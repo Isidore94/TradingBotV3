@@ -520,8 +520,13 @@ class MasterAvwapPanel(QWidget):
                 self._focus_repaint_coalescer.request
             )
         # Packet D1C-A, lead ruling: registered OUTSIDE the `focus_service`
-        # block above, because dropping a claim touches no Focus store.
-        self.table.add_row_action("Drop my claim", self._drop_row_claim)
+        # block above, because dropping a claim touches no Focus store. It is
+        # OFFERED only on the rows it can act on (reviewer advisory): on a row
+        # with no claim behind it the verb could only answer "not one of your
+        # claimed picks", which is not a menu entry, it is noise.
+        self.table.add_row_action(
+            "Drop my claim", self._drop_row_claim, visible=self._row_is_claimed
+        )
         self._request_decision_refresh()
 
         self.empty_state = EmptyState(
@@ -1663,6 +1668,21 @@ class MasterAvwapPanel(QWidget):
         source = getattr(self, "_working_lately_source_rows", None)
         if source is not None:
             self.set_rows(list(source))
+
+    def _row_is_claimed(self, proxy_index) -> bool:
+        """Does this row carry a claim "Drop my claim" could end?
+
+        The same two facts the verb itself checks - the `claimed_like` bucket
+        key and a setup id to end - so the menu can never offer a verb that
+        would refuse.
+        """
+        if not proxy_index.isValid():
+            return False
+        row = self.model.row_at(self.proxy.mapToSource(proxy_index).row())
+        if row is None or "claimed_like" not in row.bucket_keys:
+            return False
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        return bool(str(raw.get("claimed_setup_id") or "").strip())
 
     def _drop_row_claim(self, proxy_index) -> None:
         """"Drop my claim" - end a claim, and only a claim.

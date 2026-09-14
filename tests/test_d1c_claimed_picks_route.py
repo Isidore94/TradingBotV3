@@ -603,3 +603,133 @@ def test_the_unchanged_advance_route_records_the_next_charts_impression_too(
     assert row is not None
     assert recorded == ["like_advance", "shown"], recorded
     assert panel._current_review_alert.symbol == "NVDA"
+
+
+# ---------------------------------------------------------------------------
+# Reviewer blocker (2026-09-14): the rail's timeframe is what the annotation
+# store RECORDS and what decides the M5 sidecar, so it has to be the chart in
+# front of the trader - never a leftover from the last one, and never a
+# spelling `_record_like`'s `== "M5"` compare cannot read.
+# ---------------------------------------------------------------------------
+def _m5_bars(count: int = 6) -> list[dict]:
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 14, 6, 30)
+    return [
+        {
+            "dt": start + timedelta(minutes=index * 5),
+            "open": 10.0,
+            "high": 10.2,
+            "low": 9.8,
+            "close": 10.0 + index * 0.1,
+            "volume": 1000,
+        }
+        for index in range(count)
+    ]
+
+
+def _like_rows(tmp_path) -> list[dict]:
+    path = tmp_path / "trader_annotations.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_a_typed_symbol_after_an_m5_chart_captures_as_a_d1_look(tmp_path, monkeypatch):
+    """A BLANK timeframe must not leave the rail on the last chart's answer.
+
+    `CaptureRail.set_context` is `if timeframe:`, so handing it the alert's own
+    empty string changed nothing - and a typed symbol charted right after an M5
+    alert filed its like as `timeframe: M5` with an M5 sidecar for a chart the
+    trader was reading as a daily. The review pane's chart is a D1 look when
+    the alert names no timeframe, and the row has to say so.
+    """
+    made = build_panel(tmp_path, monkeypatch)
+    try:
+        rail = made.chart_review.capture_rail
+        rail.set_m5_bars_provider(_m5_bars)
+
+        made.chart_alert(m5_alert("TSLA"))
+        assert rail._timeframe == "M5"
+
+        made.chart_symbol("AMD")
+        assert made._current_review_alert.symbol == "AMD"
+        assert rail._timeframe == "D1", (
+            "a typed symbol is a D1 look; the previous chart's M5 must not stick"
+        )
+
+        assert rail.commit_quick_like() is not None
+        row = _like_rows(tmp_path)[-1]
+        assert row["symbol"] == "AMD"
+        assert row["timeframe"] == "D1", row
+        assert "m5_bars_ref" not in row, (
+            "no M5 sidecar belongs on a daily look, however many bars are cached"
+        )
+    finally:
+        made.close()
+        made.deleteLater()
+
+
+def test_a_real_five_minute_alert_captures_as_m5_with_its_bars(tmp_path, monkeypatch):
+    """`BounceAlert.from_callback` writes `timeframe="5m"`, not `"M5"`.
+
+    Upper-cased that is `"5M"`, which `_record_like`'s `== "M5"` compare misses
+    - so the live intraday path, the one this whole attachment exists for, was
+    the one filing its likes without the bars they were made on.
+    """
+    from ui.models.bounce import BounceAlert
+
+    made = build_panel(tmp_path, monkeypatch)
+    try:
+        rail = made.chart_review.capture_rail
+        rail.set_m5_bars_provider(_m5_bars)
+
+        live = BounceAlert.from_callback(
+            "BOUNCE 5m: TSLA (long) reclaimed VWAP", "bounce_long"
+        )
+        assert live.timeframe == "5m", "the real shape this test exists for"
+        made.chart_alert(live)
+
+        assert rail._timeframe == "M5", f"got {rail._timeframe!r}"
+        assert rail.commit_quick_like() is not None
+        row = _like_rows(tmp_path)[-1]
+        assert row["timeframe"] == "M5", row
+        assert "m5_bars_ref" in row, (
+            "an M5 like references the chart it was made on (P9/N1)"
+        )
+    finally:
+        made.close()
+        made.deleteLater()
+
+
+def test_a_d1_flag_alert_still_captures_as_d1(tmp_path, monkeypatch):
+    made = build_panel(tmp_path, monkeypatch)
+    try:
+        rail = made.chart_review.capture_rail
+        rail.set_m5_bars_provider(_m5_bars)
+        made.add_alert(d1_alert("AAPL"))
+
+        assert rail._timeframe == "D1"
+        assert rail.commit_quick_like() is not None
+        row = _like_rows(tmp_path)[-1]
+        assert row["timeframe"] == "D1"
+        assert "m5_bars_ref" not in row
+    finally:
+        made.close()
+        made.deleteLater()
+
+
+def test_the_capture_timeframe_normaliser_is_pure_and_total():
+    """One seam, and it never answers blank: the pane draws two charts."""
+    from ui.models.bounce import capture_timeframe
+
+    for spelling in ("5m", "5M", "M5", "m5", " 5m ", "5"):
+        assert capture_timeframe(spelling) == "M5", spelling
+    # Everything else is the pane's daily chart, including the timeframes the
+    # review pane has no chart of its own for.
+    for spelling in ("D1", "1d", "d1", "", None, "15m", "1h", "H1"):
+        assert capture_timeframe(spelling) == "D1", spelling

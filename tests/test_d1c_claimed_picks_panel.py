@@ -777,3 +777,36 @@ def test_dropping_the_claim_on_a_scan_row_keeps_the_row_and_takes_the_label_off(
         assert "My liked trade" not in after.bucket_display
     finally:
         panel.deleteLater()
+
+
+def test_drop_my_claim_is_offered_on_a_claimed_row_and_not_on_the_others(
+    tmp_path, monkeypatch
+):
+    """Registered for every row, OFFERED on the rows it can act on.
+
+    Reviewer advisory (2026-09-14). The verb stays registered outside the
+    `focus_service` block - dropping a claim touches no Focus store - but a
+    menu that offers it on a row with no claim behind it is a verb that can
+    only answer "not one of your claimed picks".
+    """
+    claims = tmp_path / "claimed_picks.jsonl"
+    _write_claims(claims, [_claim("ZZZZ", "LONG", "avwap_band_bounce")])
+    panel, _ = _build_panel(tmp_path, monkeypatch)
+    try:
+        panel.refresh_from_reports()
+        # Still registered unconditionally, on a panel with no focus service.
+        assert "Drop my claim" in {label for label, _cb in panel.table._row_actions}
+
+        def _offered(symbol: str, side: str = "") -> set[str]:
+            row = _row_named(panel, symbol, side)
+            index = panel.model.rows().index(row)
+            proxy_index = panel.proxy.mapFromSource(panel.model.index(index, 0))
+            return {label for label, _cb in panel.table.row_actions_for(proxy_index)}
+
+        assert "Drop my claim" in _offered("ZZZZ")
+        assert "Drop my claim" not in _offered("TSLA"), (
+            "TSLA is a scan favourite the trader never claimed"
+        )
+        assert "Drop my claim" not in _offered("AMD")
+    finally:
+        panel.deleteLater()

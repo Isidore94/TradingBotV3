@@ -18,6 +18,7 @@ from ui.models.bounce import (
     FOCUS_REVIEW_TAG,
     MANUAL_CHART_TAG,
     BounceAlert,
+    capture_timeframe,
     is_auto_pick_alert,
 )
 from ui import theme
@@ -795,7 +796,17 @@ class AlertChartReview(QWidget):
             # therefore filed without the bars it was made on. The HORIZON does
             # not come from here (see `claimed_picks.claim_horizon`); this is
             # the sidecar's read, and it has to be the chart's own answer.
-            timeframe=alert.timeframe,
+            #
+            # NORMALISED, and never blank (reviewer blocker, 2026-09-14).
+            # `set_context` is `if timeframe:`, so handing it the alert's raw
+            # value left a typed symbol - whose alert names no timeframe - on
+            # the PREVIOUS chart's answer, filing a daily look as `M5` with an
+            # M5 sidecar behind it. And a live `from_callback` alert says
+            # `"5m"`, which upper-cases to `"5M"` and misses `_record_like`'s
+            # `== "M5"` compare, so the one path the attachment exists for was
+            # the one losing its bars. One seam owns both: `capture_timeframe`,
+            # beside `BounceAlert` because the alert's spelling is its own.
+            timeframe=capture_timeframe(alert.timeframe),
             ref_level_id="",
             ref_level_family="",
         )
