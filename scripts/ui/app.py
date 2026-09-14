@@ -237,8 +237,15 @@ class MainWindow(QMainWindow):
         # one state file, and the surface it drives (the card under the chart)
         # is built more than once in this process's lifetime. The card is the
         # Alert Center's; the decision about when to show it is this one's.
+        from ui.services.trade_mentor_context_service import TradeMentorContextService
         from ui.services.trade_mentor_service import TradeMentorService
 
+        self.trade_mentor_context_service = TradeMentorContextService(
+            self, cache_loader=self._trade_mentor_cached_bars
+        )
+        self.trading_panel.alert_center.chart_review.mentor_card.set_context_service(
+            self.trade_mentor_context_service
+        )
         self.trade_mentor_service = TradeMentorService(self)
         self.trade_mentor_service.promptDue.connect(self._show_trade_mentor_prompt)
         self.trade_mentor_service.promptExpired.connect(
@@ -1027,6 +1034,39 @@ class MainWindow(QMainWindow):
         self._sync_trade_mentor_label()
 
     # -- Trade Mentor (WISHLIST 10J) --------------------------------------
+    def _trade_mentor_cached_bars(self, timeframe, symbols, *, now, timeout_seconds):
+        """Read existing desk caches only; a miss is left for the service batch.
+
+        The M5 call is the BounceBot's documented memory-only chart accessor.
+        Daily CSVs are the scanner's local cache.  Neither request can start
+        IB or alter a detector, and this callback runs on the context worker.
+        """
+        names = tuple(str(symbol or "").strip().upper() for symbol in symbols)
+        if timeframe == "m5":
+            try:
+                bot = self.trading_panel.bounce_panel.service.current_bot()
+            except Exception:
+                bot = None
+            if bot is None:
+                return {}
+            result = {}
+            for symbol in names:
+                try:
+                    bars = bot.m5_chart_bars(symbol, max_sessions=2)
+                except Exception:
+                    bars = []
+                if bars:
+                    result[symbol] = bars
+            return result
+        if timeframe == "d1":
+            try:
+                from d1_environment_store import _cached_daily_bars
+
+                return {symbol: _cached_daily_bars(symbol) for symbol in names}
+            except Exception:
+                logging.debug("Trade Mentor D1 cache unreadable.", exc_info=True)
+        return {}
+
     def _previous_mentor_read(self, session: str):
         """The last read the Trade Mentor filed for this session, if any.
 
@@ -1145,6 +1185,10 @@ class MainWindow(QMainWindow):
         # Same list, same reason (WISHLIST 10J): one timer, owned here.
         try:
             self.trade_mentor_service.shutdown()
+        except Exception:
+            pass
+        try:
+            self.trade_mentor_context_service.shutdown(timeout_ms=250)
         except Exception:
             pass
         # Backstop for the shared writer lease: AutopilotService.shutdown

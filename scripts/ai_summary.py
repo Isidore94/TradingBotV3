@@ -1505,6 +1505,37 @@ def _read_path_content(path: Path) -> tuple[Any, bool, str, str]:
     return visible, truncated, SOURCE_STATUS_AVAILABLE, banner
 
 
+def _compact_trade_mentor_context(content: Any) -> Any:
+    """Keep a Mentor fact sheet inside the journal evidence budget.
+
+    This is a source projection only.  The journal retains the full flat
+    ``mentor.context`` object; AI receives the same scalar facts as rows under
+    column headings, without repeating the headings seventeen times.
+    """
+    if not isinstance(content, list):
+        return content
+    try:
+        from trade_mentor_context import compact_for_ai
+    except Exception:
+        return content
+    result: list[Any] = []
+    for item in content:
+        if not isinstance(item, Mapping):
+            result.append(item)
+            continue
+        row = dict(item)
+        mentor = row.get("mentor")
+        if isinstance(mentor, Mapping) and isinstance(mentor.get("context"), Mapping):
+            compact = compact_for_ai(mentor["context"])
+            if compact is not mentor["context"]:
+                projected = dict(mentor)
+                projected.pop("context", None)
+                projected["context_compact"] = compact
+                row["mentor"] = projected
+        result.append(row)
+    return result
+
+
 #: How many of the newest tracker records the extract carries. Enough to see
 #: the current book and the sessions around it; small enough to be a share of
 #: the evidence budget rather than all of it.
@@ -1710,6 +1741,8 @@ def _path_source(
             detail = str(extract["extract_note"])
     else:
         content, truncated, status, detail = _read_path_content(target)
+    if source_id == "journal.entries" and status == SOURCE_STATUS_AVAILABLE:
+        content = _compact_trade_mentor_context(content)
     # content_through is derived from the artifact's own records where the
     # format carries them, and only falls back to mtime when it does not. A
     # file rewritten nightly with unchanged data has a fresh mtime and stale

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QDialog,
+    QApplication,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -37,6 +39,59 @@ _NO_M5_WATCH_REASON = (
     "folds armed names into its M5 scan set, so bars land within a scan "
     "cycle and the watch starts evaluating then."
 )
+
+
+class _MentorPopup(QDialog):
+    """A non-modal tool window whose close paths have one explicit meaning."""
+
+    dismissed = Signal()
+    _RESTORE_FOCUS_EVENT = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(self, parent=None, flags=Qt.WindowType.Widget) -> None:
+        super().__init__(parent, flags)
+        self._focus_before_show = None
+
+    def show_with_preserved_focus(self, previous_focus) -> None:
+        self._focus_before_show = previous_focus
+        self.show()
+
+    def showEvent(self, event):  # noqa: N802 - Qt override
+        super().showEvent(event)
+        # Low priority runs after Qt has picked its automatic first child.  It
+        # never waits or installs a timer in the scheduled-prompt path.
+        QCoreApplication.postEvent(self, QEvent(self._RESTORE_FOCUS_EVENT), Qt.EventPriority.LowEventPriority.value)
+
+    def event(self, event):  # noqa: N802 - Qt override
+        if event.type() == self._RESTORE_FOCUS_EVENT:
+            previous = self._focus_before_show
+            self._focus_before_show = None
+            current = QApplication.focusWidget()
+            if previous is not None and current is not None and self.isAncestorOf(current):
+                previous.setFocus(Qt.FocusReason.OtherFocusReason)
+            return True
+        return super().event(event)
+
+    def focusInEvent(self, event):  # noqa: N802 - Qt override
+        super().focusInEvent(event)
+        current = QApplication.focusWidget()
+        previous = self._focus_before_show
+        # Qt gave this modeless tool one of its child controls.  Restore only
+        # in that exact case, so an actual user focus change is never undone.
+        if previous is not None and current is not None and (
+            current is self or self.isAncestorOf(current)
+        ):
+            previous.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def keyPressEvent(self, event):  # noqa: N802 - Qt override
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event):  # noqa: N802 - Qt override
+        self.dismissed.emit()
+        event.accept()
 
 
 class AlertChartReview(QWidget):
@@ -122,6 +177,7 @@ class AlertChartReview(QWidget):
         annotations_path=None,
         dock_arm_bar: bool = True,
         dock_capture_rail: bool = True,
+        mentor_context_service=None,
     ) -> None:
         super().__init__(parent)
         self.alert: BounceAlert | None = None
@@ -359,19 +415,32 @@ class AlertChartReview(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
-        # WISHLIST 10J. The Trade Mentor's card lives UNDER the chart, beside
-        # the arm bar, and the arm bar does not move: it is welded there by a
-        # trader decision (2026-08-20) and this feature is not the one that gets
-        # to renegotiate it. The card is hidden until a prompt is due, so it
-        # costs the height-starved desk column nothing on an ordinary minute.
-        #
-        # The host owns the card; the SERVICE that decides when to show it is
-        # owned by the window (`MainWindow`), because it holds a timer and a
-        # state file and this widget is built more than once.
+        # The Mentor is a small reusable modeless window, never a row under the
+        # chart.  The arm bar therefore keeps its fixed home and scheduled
+        # prompts cannot steal chart height.
         from ui.widgets.trade_mentor_card import TradeMentorCard
 
-        self.mentor_card = TradeMentorCard(self)
+        self.mentor_popup = _MentorPopup(
+            self,
+            Qt.WindowType.ToolTip
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowCloseButtonHint,
+        )
+        self.mentor_popup.setObjectName("TradeMentorPopup")
+        self.mentor_popup.setModal(False)
+        self.mentor_popup.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.mentor_popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        popup_layout = QVBoxLayout(self.mentor_popup)
+        popup_layout.setContentsMargins(0, 0, 0, 0)
+        self.mentor_card = TradeMentorCard(
+            self.mentor_popup, context_service=mentor_context_service
+        )
+        popup_layout.addWidget(self.mentor_card)
         self.mentor_card.setVisible(False)
+        self.mentor_popup.dismissed.connect(self._dismiss_mentor_popup)
+        self.mentor_card.answered.connect(lambda _slot_id: self.mentor_popup.hide())
+        self.mentor_card.skipped.connect(lambda _record: self.mentor_popup.hide())
         # Always reachable, whether or not anything is due: "I want to write a
         # read now" must never require waiting for the top of an hour. It sits
         # in the existing verb row rather than adding a second one - CLAUDE.md
@@ -422,10 +491,6 @@ class AlertChartReview(QWidget):
             layout.addWidget(self.arm_bar)
         else:
             self.arm_bar.setParent(None)
-        # Beside the arm bar, under the chart - and after it, so the arm bar
-        # keeps the exact position it has had since 2026-08-20 whether a prompt
-        # is up or not. Hidden, so it takes no height until one is.
-        layout.addWidget(self.mentor_card)
         if self._dock_capture_rail:
             layout.addWidget(self.capture_rail)
         else:
@@ -560,7 +625,7 @@ class AlertChartReview(QWidget):
 
     # -- Trade Mentor (WISHLIST 10J) --------------------------------------
     def show_mentor_slot(self, slot, previous=None) -> None:
-        """Put a due prompt up under the chart. Never steals focus.
+        """Put a due prompt in the modeless popup. Never steals focus.
 
         A new hour REPLACES whatever card was there; the card itself stashes any
         half-typed draft on the way out. Failure here is swallowed: a prompt is
@@ -568,23 +633,47 @@ class AlertChartReview(QWidget):
         with it.
         """
         try:
+            previous_focus = QApplication.focusWidget()
+            self.mentor_popup.setFocusProxy(previous_focus)
+            self.mentor_card.text_box.setFocusProxy(previous_focus)
+            self.mentor_card.d1_box.setFocusProxy(previous_focus)
             self.mentor_card.show_slot(slot, previous=previous)
+            self.mentor_popup.adjustSize()
+            self.mentor_popup.show_with_preserved_focus(previous_focus)
         except Exception:  # noqa: BLE001 - a prompt never costs the chart
             import logging
 
             logging.debug("Trade Mentor card could not be shown.", exc_info=True)
 
-    def hide_mentor_card(self) -> None:
+    def hide_mentor_popup(self) -> None:
         try:
             self.mentor_card.hide_card()
+            self.mentor_popup.hide()
         except Exception:  # noqa: BLE001
             import logging
 
             logging.debug("Trade Mentor card could not be hidden.", exc_info=True)
 
+    # Existing scheduler callers use this name.  Both paths hide the same
+    # reusable popup; expiry and Pause have already recorded their own state.
+    hide_mentor_card = hide_mentor_popup
+
+    def _dismiss_mentor_popup(self) -> None:
+        """Escape and the title-bar X mean one explicit trader skip."""
+        try:
+            self.mentor_card.skip()
+        finally:
+            self.mentor_popup.hide()
+
     def _on_give_a_read(self) -> None:
         try:
+            previous_focus = QApplication.focusWidget()
+            self.mentor_popup.setFocusProxy(previous_focus)
+            self.mentor_card.text_box.setFocusProxy(previous_focus)
+            self.mentor_card.d1_box.setFocusProxy(previous_focus)
             self.mentor_card.give_a_read()
+            self.mentor_popup.adjustSize()
+            self.mentor_popup.show_with_preserved_focus(previous_focus)
         except Exception:  # noqa: BLE001
             import logging
 
