@@ -198,6 +198,61 @@ def test_fresh_process_opens_an_already_v3_database_without_prepare_gate(qapp, t
         widget.deleteLater()
 
 
+def test_a_prepared_shared_journal_database_reports_no_preparation_needed():
+    """Order guard for the migration-failure test directly below this one.
+
+    Any earlier test in the suite that constructs a ``JournalStore`` at the
+    SHARED journal path (``journal_feed.journal_db_path()``, which resolves
+    under conftest's session-wide ``TRADINGBOTV3_DATA_DIR`` scratch directory)
+    leaves a prepared, current-schema database sitting at that path for every
+    later test. That is an ordinary thing for a suite test to do, and it is what
+    makes ``test_migration_failure_stays_visible_instead_of_claiming_no_accounts``
+    depend on what ran before it: that test patches ``journal_feed._STORE`` and
+    ``journal_feed.initialize_store`` but NOT ``journal_db_path``, so the panel
+    it builds reads whatever database is at the shared path. Prepared, the panel
+    takes the "no preparation needed" branch, ``refresh_accounts()`` legitimately
+    prints ``No accounts`` for an empty database, and the assertion that the
+    header must not say ``No accounts`` fails on a state no trader can reach.
+
+    This test performs that preparation deterministically, inside the file,
+    immediately above the test it affects - so the order dependence is
+    reproducible in one file instead of depending on which other file happened
+    to run first.
+
+    On its own it asserts something true, and it stays true after the fix: a
+    store constructed at the shared path leaves a current-schema database there,
+    so ``store_needs_preparation()`` is False for the shared path with no
+    process-local store held. It touches no live data - the shared path is
+    conftest's temp directory, asserted below - and it leaves
+    ``journal_feed._STORE`` exactly as it found it.
+    """
+    from journal_store import journal_database_needs_preparation
+
+    before = journal_feed._STORE
+    journal_feed._STORE = None
+    try:
+        shared_path = journal_feed.journal_db_path()
+        assert "tradingbotv3-pytest-shared-" in str(shared_path), (
+            "the shared journal path must resolve inside conftest's scratch directory, "
+            f"never a live store: {shared_path}"
+        )
+
+        # A plain JournalStore construction - exactly what any earlier suite test
+        # doing journal work performs. JournalStore opens a connection per call
+        # and closes it inside ``connection()``; dropping the reference is the
+        # close, and nothing is left holding the file.
+        store = JournalStore(shared_path)
+        assert Path(store.db_path) == shared_path
+        del store
+
+        assert shared_path.is_file()
+        assert not journal_database_needs_preparation(shared_path)
+        assert journal_feed._STORE is None
+        assert not journal_feed.store_needs_preparation()
+    finally:
+        journal_feed._STORE = before
+
+
 def test_migration_failure_stays_visible_instead_of_claiming_no_accounts(qapp, monkeypatch):
     from ui.panels.journal_panel import JournalPanel
 
