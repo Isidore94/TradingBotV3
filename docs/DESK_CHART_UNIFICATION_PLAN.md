@@ -359,7 +359,17 @@ widget or a payload — every `set_data` call in `scripts/ui/` passes `"d1"` or
 `"m5"`. The packet's own instruction applies: stop at D1/M5. A 500-bar H1/H4
 target is only meaningful once an H1/H4 chart exists.
 
-Tests: `tests/test_ws_ch_chart_history.py` over a 1,300-session golden fixture.
+**Symbol ownership (CH-SYM, trader-authorized repair 2026-09-14).** Retained
+history belongs to one symbol. Switching names clears the previous D1/M5
+snapshots and chart state before any pending read, capture, quick-fill or
+history merge can use them. A cached snapshot for the new name may render
+immediately. An empty or raising provider for the new name must never borrow
+the previous name's prices; same-symbol refreshes still retain older history.
+This repairs the WS-CH merge seam, not a price-jump filter: real gaps stay real.
+
+Tests: `tests/test_ws_ch_chart_history.py` over a 1,300-session golden fixture;
+`tests/test_chart_symbol_isolation.py` covers symbol switching, pending actions,
+empty/raising data reads and cached-symbol reuse.
 
 ## The two held-back items — resolved 2026-08-18
 

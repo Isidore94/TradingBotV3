@@ -19,14 +19,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: the trader authorized loading the independently accepted sweep repairs into the normal local checkout.** B1-B4, the Journal test-order repair and fd457d0c all received GO on 6753f9fd. This commit adds status documentation only; the tested code is unchanged. The sweep remains 25 of 26 packets built; WS-RP is outside this acceptance. |
-| Working branch | **`claude/wishlist-sweep-2026-09-12`** is the desk branch. The lead prepared this documentation commit in scratch on `codex/rv-local-test-ready` above accepted integration 6753f9fd, then fast-forwards the clean, stopped desk checkout to it under the trader's 2026-09-14 instruction. No merge to `main`, remote push or desk restart is part of this local update. |
-| Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | **Trader: start the desk from the updated local sweep checkout and run the test week (gates #94-#118; #107 rewritten and #116 amended).** Technical acceptance of the repair set is complete; live validation and the final main-merge decision remain open. WS-RP needs a separate current-status check before continuation. Non-blocking follow-ups remain weekend H1 refetches, shared phone-error status, the invalidated literal and the Journal guard prefix. |
-| Trader actions owed | Start the updated desk when ready and test the open live gates. Cache repair and environment backfill remain separate trader actions; this local code update runs neither. |
-| Last verified baseline | **Independent acceptance of exact 6753f9fd: 7968 passed, 5 skipped, 72 subtests, 2 existing pandas warnings, exit 0 in 546.40 s; ruff clean, smoke 7/7, source selftest 81/81.** Scratch data and LOCALAPPDATA were asserted before product use; AI writer lock was free. Reviewers reproduced the old seams and the bad timezone mutation. The 2026-09-14 update changes documentation only, so this code baseline remains unchanged; validation for this commit is diff/whitespace and code-tree identity. |
-| Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
-| Desk | **No running Python/TradingBot desk process was found before the 2026-09-14 local update.** No restart was performed. The next start uses the repaired sweep code. The prior recorded restart remains historical; live gates are not marked passed by this update. |
+| Latest work | **2026-09-14 CH-SYM: the trader-authorized chart symbol-isolation repair is built and independently accepted in scratch.** Switching names clears the previous D1/M5 snapshots and chart state before the history merge can reuse them. Five new regressions failed before the fix and pass after it. The sweep remains 25 of 26 packets built; WS-RP is outside this repair. |
+| Working branch | **`claude/wishlist-sweep-2026-09-12` remains the running desk branch at b8ebd5a4.** Accepted CH-SYM is on `codex/chart-symbol-isolation`, based on that exact tip. No desk-checkout update or main merge has occurred; load the accepted repair after the trader closes the desk. |
+| Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this chart repair closes none of them. |
+| Next action | **Trader: close the desk so the accepted CH-SYM repair can be loaded into the local sweep checkout; then restart and check chart switches.** Continue the test week (gates #94-#118), including same-symbol Load older. Technical acceptance passes; live validation and the final main-merge decision stay open. WS-RP still needs a separate status check. |
+| Trader actions owed | Close the desk for the CH-SYM local update, then restart and test chart switches. Cache repair and environment backfill remain separate trader actions; this repair runs neither. |
+| Last verified baseline | **CH-SYM cf642311 accepted code: 7973 passed, 5 skipped, 72 subtests, 2 existing pandas warnings, exit 0 in 819.64 s; ruff clean, smoke 7/7, source selftest 81/81.** AI runner lock was free and data paths were scratch. Independent review: GO, 41 focused tests passed and all five new regressions failed with the old source restored. Full-suite shutdown emitted a temporary-folder QFileSystemWatcher warning, then exited 0. |
+| Frozen exe | No rebuild required: CH-SYM changes only existing Python code and tests. The desk runs from source; load the accepted branch into the stopped local checkout before restarting. |
+| Desk | **The source desk was running during CH-SYM work on 2026-09-14 and remains untouched at b8ebd5a4.** The repair was built and tested in isolated worktrees. No stop, local update or restart was performed; restart alone before loading the repair would still run the old code. |
 
 ### Open gates, newest first
 
@@ -156,6 +156,36 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-14 - CH-SYM: chart history must belong to the displayed symbol
+
+Trader reported false D1 gaps and a SYM preview near zero, then answered "yes"
+to the scoped chart-file repair and regression test. This satisfies the
+file-scoped ask-first rule for `symbol_snapshot_dialog.py`, which also houses
+chart alert actions. Phase 0.26 / WS-CH repair; no detector or scoring change.
+
+Read-only evidence: SYM's local chart feather held 2026-09-14 OHLC
+40.50 / 41.24 / 40.30 / 41.06, and the 08:06 scan logged 41.21. Source recon
+and a reproduction of the actual widget methods found that switching names
+left `_m5` owned by the previous name; the history merge reused those bars
+when the new name returned no M5 data. This can manufacture the new D1
+preview and widen the level-filter range. The exact screenshot's in-memory
+payload was not captured, so the source defect is proven and its attribution
+to that screenshot remains an inference.
+
+Work is isolated on `codex/chart-symbol-isolation` from b8ebd5a4. The desk was
+running during investigation; it has not been stopped or updated. Tester,
+builder and independent review are complete. Tester commit 937b90e7 reproduced
+all five failures. The 19-line repair is cf642311 and passed 95 builder checks; independent
+review returned GO with 41 checks and a five-red/five-green old-source replay.
+Full suite: 7973 passed, 5 skipped, 72 subtests, 2 existing pandas warnings,
+819.64 s, exit 0; ruff clean, smoke 7/7, source selftest 81/81. The test
+process emitted a temporary-folder QFileSystemWatcher warning during cleanup
+and then exited successfully. Accepted source SHA256:
+`8EC581D7E8CAA6DF231EEADB4923B8993BE1C75707015F5CA3CFD4EF09945004`.
+Live gate: after loading the repair and restarting, switch among stocks at
+different prices, including one with no M5 cache; today's D1 candle must
+belong to the displayed stock, and same-stock Load older must still work.
 
 ### 2026-09-14 - LOCAL REVIEWED REPAIRS READY FOR TEST
 
