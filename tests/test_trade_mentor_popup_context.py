@@ -12,7 +12,7 @@ import sys
 import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -111,6 +111,24 @@ def _every_symbol(value):
 
 def _reading(context: dict, symbol: str) -> dict:
     return next(row for row in context["readings"] if row["symbol"] == symbol)
+
+
+def _signal_arrived(spy, *, timeout_seconds: float = 2.0) -> bool:
+    """Wait without starving a Python worker on Windows.
+
+    PySide's ``QSignalSpy.wait`` can return ``False`` here despite incrementing
+    its count after a Python ``QThread`` delivery. Pumping Qt and yielding a
+    few milliseconds proves the actual signal rather than that harness quirk.
+    """
+    deadline = monotonic() + timeout_seconds
+    app = QtWidgets.QApplication.instance()
+    while monotonic() < deadline:
+        app.processEvents()
+        if spy.count() >= 1:
+            return True
+        sleep(0.01)
+    app.processEvents()
+    return spy.count() >= 1
 
 
 def test_context_is_a_small_flat_all_symbol_snapshot_with_completed_bar_arithmetic():
@@ -236,7 +254,7 @@ def test_context_service_batches_off_the_gui_thread_caches_and_throttles_failure
     assert loader.calls[0][2] != main_thread, "the loader never runs on Qt's thread"
     assert service.request_context("slot-0901", now=NOW) is False, "one worker at a time"
     loader.release.set()
-    assert ready.wait(2_000)
+    assert _signal_arrived(ready)
     assert [(kind, names) for kind, names, _thread in loader.calls] == [
         ("m5", SYMBOLS), ("d1", SYMBOLS)
     ]
@@ -244,7 +262,7 @@ def test_context_service_batches_off_the_gui_thread_caches_and_throttles_failure
     # Same hour: the card gets a snapshot again without another batch.
     cached = QtTest.QSignalSpy(service.contextReady)
     assert service.request_context("manual-0910", now=NOW + timedelta(minutes=10)) is True
-    assert cached.wait(500)
+    assert _signal_arrived(cached, timeout_seconds=0.5)
     assert len(loader.calls) == 2
     service.shutdown(timeout_ms=250)
 
@@ -260,7 +278,7 @@ def test_context_service_batches_off_the_gui_thread_caches_and_throttles_failure
     failed = TradeMentorContextService(loader=broken, clock=lambda: NOW, timeout_seconds=1)
     unavailable = QtTest.QSignalSpy(failed.contextUnavailable)
     assert failed.request_context("slot-1000", now=NOW) is True
-    assert unavailable.wait(2_000)
+    assert _signal_arrived(unavailable)
     assert broken.calls == 1
     assert failed.request_context("slot-1001", now=NOW + timedelta(minutes=5)) is False
     assert broken.calls == 1, "a failed hour is throttled rather than retried"
