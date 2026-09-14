@@ -253,15 +253,17 @@ def test_a_prepared_shared_journal_database_reports_no_preparation_needed():
         journal_feed._STORE = before
 
 
-def test_migration_failure_stays_visible_instead_of_claiming_no_accounts(qapp, monkeypatch):
+def test_migration_failure_stays_visible_instead_of_claiming_no_accounts(qapp, tmp_path, monkeypatch):
     from ui.panels.journal_panel import JournalPanel
 
     monkeypatch.setattr(journal_feed, "_STORE", None)
+    monkeypatch.setattr(journal_feed, "journal_db_path", lambda: tmp_path / "unprepared.sqlite3")
     monkeypatch.setattr(
         journal_feed, "initialize_store", lambda: (_ for _ in ()).throw(RuntimeError("backup refused"))
     )
     widget = JournalPanel()
     try:
+        assert widget.prepare_button.isVisibleTo(widget)
         widget.prepare_button.click()
         assert widget._migration_worker.wait(5000)
         qapp.processEvents()
