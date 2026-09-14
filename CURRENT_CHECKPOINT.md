@@ -19,10 +19,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: Mentor pop-up/context and M5 left-grade display combined for trader-authorized local loading.** Both retain their reviewed source unchanged; the combined screen/evidence suite passed 190 tests, smoke 7/7 and selftest 81/81. Only documentation conflicted. Live checks remain open. |
-| Working branch | Desk: `claude/wishlist-sweep-2026-09-12`; integration: `codex/mentor-popup-context`, including the concurrently loaded M5 display tip d125b809. No main merge or branch switch is part of this local update. |
+| Latest work | **2026-09-14: Mentor pop-up/context, M5 left-grade display and chart-symbol isolation combined for trader-authorized local loading.** Both retain their reviewed source unchanged; the combined screen/evidence suite passed 190 tests, smoke 7/7 and selftest 81/81. Only documentation conflicted. Live checks remain open. |
+| Working branch | Desk: `claude/wishlist-sweep-2026-09-12`; integration: `codex/mentor-popup-context`, including concurrent M5 and chart-isolation delivery a1a41954. No main merge or branch switch is part of this local update. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | Start the updated desk and perform Mentor gate #110 plus the narrow M5 left-grade check. The wider test week, WS-RP and final main-merge decision remain separate. |
+| Next action | Start the updated desk and perform Mentor gate #110 plus the narrow M5 left-grade and chart-symbol-switch checks. The wider test week, WS-RP and final main-merge decision remain separate. |
 | Trader actions owed | Start the desk when ready; check the Mentor pop-up and left-hand M5 grades. Native focus and all remaining test-week gates still need live proof. No restart or data repair was performed by this loading step. |
 | Last verified baseline | **Combined integration 089ad3db: 190 targeted tests passed (exit 0), smoke 7/7 and selftest 81/81.** Mentor component be99127d previously passed 7980 full-suite tests, 5 skipped, 72 subtests, natural exit 0; that full run predates the M5 combination. Independent GOs: Mentor 074c5ec7 and M5 d8eb0755. No combined full-suite claim; source files merge unchanged. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE; an isolated branch must first be loaded into its stopped checkout before the next restart can use it. |
@@ -42,10 +42,11 @@ inspected a dark 240 px preview with all seven labels readable. Independent
 review: GO on d8eb0755, 116 passed; reverting only the display source reproduced
 the eight failures and restoring HEAD left the reviewer worktree clean. The full-suite baseline above remains historical, not rerun.
 
-Delivery completed under the trader's “load it” instruction: no desk processes
-were running; the clean checkout fast-forwarded from b8ebd5a4 to d125b809.
-Code and tests match reviewed d8eb0755 exactly; no restart performed. Live proof
-owed: after starting, confirm the left grade on the narrow M5 list and that
+Delivery reconciliation during CH-SYM load: the observed local tip d125b809
+already contained this M5 source fix; delivery stamp a4399bce arrived during
+integration and is preserved too. The
+desk was closed. CH-SYM integration preserves this fix; no restart performed. Live proof owed: after
+loading and restarting, confirm the left grade on the narrow M5 list and that
 a clicked row still charts normally. Existing test-week gates remain open.
 
 ### Open gates, newest first
@@ -241,6 +242,39 @@ added. A Segoe UI offscreen check also verified the titled pop-up and reachable
 bottom controls in the long 10:00 form. Native Windows focus remains gate #110.
 The final documentation reconciles this item in the existing control files and
 specs; no Markdown file was added, so docs/README.md needs no routing change.
+
+### 2026-09-14 - CH-SYM: chart history must belong to the displayed symbol
+
+Trader reported false D1 gaps and a SYM preview near zero, then answered "yes"
+to the scoped chart-file repair and regression test. This satisfies the
+file-scoped ask-first rule for `symbol_snapshot_dialog.py`, which also houses
+chart alert actions. Phase 0.26 / WS-CH repair; no detector or scoring change.
+
+Read-only evidence: SYM's local chart feather held 2026-09-14 OHLC
+40.50 / 41.24 / 40.30 / 41.06, and the 08:06 scan logged 41.21. Source recon
+and a reproduction of the actual widget methods found that switching names
+left `_m5` owned by the previous name; the history merge reused those bars
+when the new name returned no M5 data. This can manufacture the new D1
+preview and widen the level-filter range. The exact screenshot's in-memory
+payload was not captured, so the source defect is proven and its attribution
+to that screenshot remains an inference.
+
+CH-SYM was built on `codex/chart-symbol-isolation` from b8ebd5a4. The trader
+then said "load it". The desk was confirmed closed; integration from current
+local tip d125b809 preserves its M5 grade change and loads CH-SYM. No restart. Integration verification: 156 chart/M5/capture tests passed
+(exit 0, 21.65 s), ruff clean, and both source files match their accepted
+commits exactly. Tester,
+builder and independent review are complete. Tester commit 937b90e7 reproduced
+all five failures. The 19-line repair is cf642311 and passed 95 builder checks; independent
+review returned GO with 41 checks and a five-red/five-green old-source replay.
+Full suite: 7973 passed, 5 skipped, 72 subtests, 2 existing pandas warnings,
+819.64 s, exit 0; ruff clean, smoke 7/7, source selftest 81/81. The test
+process emitted a temporary-folder QFileSystemWatcher warning during cleanup
+and then exited successfully. Accepted source SHA256:
+`8EC581D7E8CAA6DF231EEADB4923B8993BE1C75707015F5CA3CFD4EF09945004`.
+Live gate: after loading the repair and restarting, switch among stocks at
+different prices, including one with no M5 cache; today's D1 candle must
+belong to the displayed stock, and same-stock Load older must still work.
 
 ### 2026-09-14 - LOCAL REVIEWED REPAIRS READY FOR TEST
 

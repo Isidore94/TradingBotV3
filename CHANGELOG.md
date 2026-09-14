@@ -1013,6 +1013,13 @@ They are evidence and must not be loaded as context.
   watchlist, Focus or `review_policy.json` change, nothing re-ordered or filtered - hiding a
   wrong-side row, the previous anchor, and the other surfaces (M5 list, chart review, Focus)
   stay the trader's open questions. Tests: `tests/test_ws_ws_wrong_side.py` (58).
+- **CH-SYM symbol ownership repair (2026-09-14; loaded into the local sweep checkout).** A chart switch clears the previous
+  symbol's retained D1/M5 snapshots and chart state before reading the next symbol.
+  The WS-CH history merge therefore keeps older bars only for the same symbol;
+  missing new-symbol M5 data cannot become a foreign D1 preview or an old quick-fill
+  price. Cached snapshots for the selected symbol still render immediately.
+  Tests: `tests/test_chart_symbol_isolation.py`; acceptance and delivery state are
+  recorded in `CURRENT_CHECKPOINT.md`. No detector, score or provider change.
 - **The chart's bars and the chart's view are two different numbers (WS-CH, WISHLIST 10H,
   2026-09-13, sweep branch).** `chart_snapshot.D1_HISTORY_SESSIONS` (1,000, about four NYSE
   years) is how far back a daily payload REACHES and `D1_DEFAULT_SESSIONS` (90) is how many bars
