@@ -19,14 +19,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: Mentor pop-up/context, M5 left-grade display and chart-symbol isolation combined for trader-authorized local loading.** Both retain their reviewed source unchanged; the combined screen/evidence suite passed 190 tests, smoke 7/7 and selftest 81/81. Only documentation conflicted. Live checks remain open. |
-| Working branch | Desk: `claude/wishlist-sweep-2026-09-12`; integration: `codex/mentor-popup-context`, including concurrent M5 and chart-isolation delivery a1a41954. No main merge or branch switch is part of this local update. |
+| Latest work | **2026-09-14: Mentor pop-up/context LOADED with the M5 left-grade and chart-symbol isolation fixes preserved.** The stopped desk fast-forwarded from a1a41954 to combined integration 7a4187b7. Combined checks: 195 passed, smoke 7/7, selftest 81/81. No source conflict, main merge, branch switch or restart. Live checks remain open. |
+| Working branch | **`claude/wishlist-sweep-2026-09-12` remains the desk branch**, loaded at integration 7a4187b7 plus this documentation-only stamp. Scratch integration is on `codex/mentor-popup-context`; all concurrently loaded M5 and chart fixes are retained. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
 | Next action | Start the updated desk and perform Mentor gate #110 plus the narrow M5 left-grade and chart-symbol-switch checks. The wider test week, WS-RP and final main-merge decision remain separate. |
 | Trader actions owed | Start the desk when ready; check the Mentor pop-up and left-hand M5 grades. Native focus and all remaining test-week gates still need live proof. No restart or data repair was performed by this loading step. |
-| Last verified baseline | **Combined integration 089ad3db: 190 targeted tests passed (exit 0), smoke 7/7 and selftest 81/81.** Mentor component be99127d previously passed 7980 full-suite tests, 5 skipped, 72 subtests, natural exit 0; that full run predates the M5 combination. Independent GOs: Mentor 074c5ec7 and M5 d8eb0755. No combined full-suite claim; source files merge unchanged. |
+| Last verified baseline | **Combined integration 7a4187b7: 195 targeted tests passed in 24.94s (exit 0), smoke 7/7 and selftest 81/81.** Mentor component be99127d previously passed 7980 full-suite tests, 5 skipped, 72 subtests, natural exit 0; that full run predates the M5/chart combination. Each source fix retains its independent GO. No combined full-suite claim; documentation is the only change after integration checks. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE; an isolated branch must first be loaded into its stopped checkout before the next restart can use it. |
-| Desk | **Stopped for the trader's "load it" instruction.** Loading preserves the concurrent M5 delivery a4399bce and adds Mentor without changing the sweep branch. No main merge, restart or live-store write. |
+| Desk | **Loaded while closed under the trader's "load it" instruction.** The clean sweep checkout fast-forwarded in place; no application launch, restart or live-store write was performed. The next start uses all three accepted changes. |
 
 ### 2026-09-14 — M5 alert grades at the left (Phase 0.14 display follow-up)
 
@@ -179,6 +179,14 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 
 
 ### 2026-09-14 - COMBINED LOCAL DELIVERY
+
+**Delivered:** a second concurrent update added accepted chart-symbol isolation.
+Integration 7a4187b7 preserves that source, M5 left-grade display and Mentor source
+without code conflicts. All 195 combined tests passed (24.94s, exit 0), smoke 7/7
+and selftest 81/81 passed with scratch paths asserted. The normal clean, stopped
+sweep checkout then fast-forwarded from a1a41954 to 7a4187b7. This delivery stamp
+changes documentation only; no main merge, branch switch, restart or live-store
+write. The trader can start the desk for the three remaining live checks.
 
 The trader said "load it" after being asked to close the desk. No launch_gui.py
 process was present. The first fast-forward refused because another authorized

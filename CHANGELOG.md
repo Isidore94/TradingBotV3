@@ -2536,7 +2536,7 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 
 - **2026-09-14 — WS-TM pop-up/context follow-up built and reviewed.** The trader requested an
   independent prompt box and hidden lightweight market trends. The build was isolated on
-  `codex/mentor-popup-context`; the trader then authorized local loading with "load it". The combined delivery preserves the concurrent M5 left-grade change; 190 shared screen/evidence tests pass. No restart or live-store write is included.
+  `codex/mentor-popup-context`; the trader then authorized local loading with "load it". Loaded with concurrent M5 left-grade and chart-symbol isolation changes preserved; 195 combined screen/evidence tests pass. No restart or live-store write is included.
   Red tests proved the popup, independent data failures, partial daily-cache retention and bounded AI handoff before their fixes. The final full suite passed 7980 tests with natural exit 0; detailed verification is in the checkpoint.
 
 ### 2026-09-14 — M5 alert grades at the left (trader-directed)

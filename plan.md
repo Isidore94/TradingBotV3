@@ -376,7 +376,7 @@ weights - every one is a named constant at the top of `setup_points.py`.
 **2026-09-14 trader-directed WS-TM follow-up - BUILT and reviewed:** replaced the under-chart Mentor card
 with a reusable modeless pop-up and attached hidden, bounded market context for VXX,
 RSP, USO, TLT, IWM, QQQ, SPY, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLU, XLV and XLY.
-Built on `codex/mentor-popup-context` from the accepted sweep baseline; independent review GO at 074c5ec7 and final full-suite exit 0 at be99127d (7980 passed). Local loading is authorized by the trader's "load it" instruction; the combined M5/Mentor screen checks pass 190 tests. Restart and live proof remain owed.
+Built on `codex/mentor-popup-context` from the accepted sweep baseline; independent review GO at 074c5ec7 and final full-suite exit 0 at be99127d (7980 passed). Loaded into the normal stopped desk under the trader's "load it" instruction, preserving M5 grades and chart-symbol isolation; 195 combined checks pass. Restart and live proof remain owed.
 The context keeps completed-bar short-term and daily measurements with explicit
 as-of times and missing/stale states, beside the unchanged trader words. Acquisition
 runs off the GUI thread only when a prompt is opened, with hourly M5 and daily D1
