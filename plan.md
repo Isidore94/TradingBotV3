@@ -256,6 +256,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.24** | Keep the desk snappy all day (SN1-SN6) | Trader 2026-09-08: cut the M5 scanner's hold on the interpreter without losing a scan, alert, board or evidence row. **SN5 (breathe) and SN6 (trader picks first) BUILT 2026-09-08 on `main`; live gate #92 owed. SN1-SN4 stay in WISHLIST until the trader moves them here.** |
 | **0.25** | Workspace memory (WISHLIST 11) | Trader 2026-09-12: a root `MEMORY.md` routing index and `memory/` provenance-tagged detail, adapted from JumpStarter M1; recall only, never authority. **BUILT 2026-09-12 on `main`; verification gate #93 owed.** |
 | **0.26** | WISHLIST sweep (trader 2026-09-12) | Every WISHLIST item built as ONE feature dump on the side branch `claude/wishlist-sweep-2026-09-12` for a week of trader testing, Astra review after code completion, then a merge decision. **IN BUILD; the per-item status table is the checkpoint entry "2026-09-12 - WISHLIST SWEEP".** |
+| **0.27** | Claimed D1 picks (trader 2026-09-14) | A CLAIMED like on a D1 chart becomes a ranked pick in Master AVWAP Setups, the D1 chart is done, M5 stays on the left and D1 on the right, and the claims are graded beside FAV/HC. **BUILT 2026-09-14 as packets D1C-A / D1C-L / D1C-B on `lead/d1c-integration` above the sweep tip; live gates #119-#121 owed; nothing merged to `main`.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -363,6 +364,20 @@ file applied only under the trader's `Points: learned weights` switch (default O
 Remaining, trader's call: turn the learned weights on once the grade line shows a lift over the
 floor; the AWAY digest's swing order by points (it ranks by the Wilson bound today); the base
 weights - every one is a named constant at the top of `setup_points.py`.
+
+## Phase 0.27 — Claimed D1 picks (trader 2026-09-14) — BUILT the same day on `lead/d1c-integration`; live gates #119-#121 owed
+
+Trader, 2026-09-14 (pasted to Fable): *"The left side of the Trading Desk is for M5 trades. The right side is
+for D1 trades. When I like and claim a D1 setup, it becomes a ranked pick I can follow in Master AVWAP
+Setups. I should not have to keep reviewing the same D1 chart."* Five asks, built as three packets with
+tester -> builder -> reviewer each (checkpoint entry "2026-09-14 - CLAIMED D1 PICKS"): **D1C-A** the store
+`claimed_picks.jsonl`, the explicit horizon, the save-then-retire route, the D1-only repeat-review gate,
+the row in the setups table, the five chips and the points ranking; **D1C-L** the strip under the setups in
+the right column; **D1C-B** the `My claims` grading tab and CLI. Sections 5-7 bind: no detector, score,
+alert-emit, watchlist or Focus change (a claim places in the setups table only, by lead decision the trader
+may overrule); evidence stores never cost the event; nothing on the Qt thread reads a file; the two
+outcome clocks are never pooled; `review_policy.json` has no suppression field. What remains for this phase
+is the trader's live validation (#119-#121) and the merge decision, which travels with the sweep branch's.
 
 ## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — IN BUILD on `claude/wishlist-sweep-2026-09-12`
 
