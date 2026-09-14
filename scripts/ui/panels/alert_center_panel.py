@@ -5712,6 +5712,14 @@ class AlertCenterPanel(QFrame):
         than opening a second door. De-duplication is by watch id, inside the
         service. Delivery is best-effort: an unconfigured topic or a dead
         network must never cost the alert behind it.
+
+        This call DISPATCHES and returns at once (RV-H1-PHONE-WORKER,
+        2026-09-13): `notify_armed_watch` makes the cheap decisions - the
+        engine check and the watch-id de-duplication - on this thread and
+        hands the send to a worker the service owns, so the `add_alert` right
+        after it draws the row while the phone is still answering. ``ok``
+        there means "accepted for delivery", and the outcome comes back on
+        the service's `statusChanged`, never here.
         """
         service = getattr(self, "price_alert_service", None)
         if service is None:

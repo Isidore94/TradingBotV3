@@ -469,14 +469,19 @@ mode**, through the SAME sender, as
 - **One door.** It calls `push_notify.send_push` exactly where `_notify` does, at the
   same `urgent` priority. No new sender, no new gate, no new kill switch, and
   `_push_swing_picks` / `_maybe_push_d1_events` stay AWAY-gated and untouched.
-- **One buzz per episode.** De-duplicated by `watch_id`; `ok` means a push left the
-  desk and a repeat returns `deduplicated`. Re-arming is a new id, so the trader can
+- **One buzz per episode.** De-duplicated by `watch_id`; `ok` means the push was
+  accepted for delivery by the one armed sender (since the 2026-09-13 repair below) and
+  a repeat returns `deduplicated`. Re-arming is a new id, so the trader can
   deliberately ask for the same condition again.
 - **Only a FIRE.** An invalidation or an expiry disarms the watch and is recorded, but
   never wakes anybody: there is nothing to act on.
 - **Delivery never costs the event.** The panel pushes BEFORE it draws the alert (a
   broken display path must not be able to suppress the phone), and a failed push is
-  logged, never raised.
+  logged, never raised. **Dispatch is synchronous and delivery is ASYNCHRONOUS** (repair
+  2026-09-13): `notify_armed_watch` decides on the Qt thread and sends on a daemon
+  worker the service owns, so the ten-second HTTP timeout is never spent on the GUI
+  thread; `shutdown()` waits up to `ARMED_PUSH_SHUTDOWN_WAIT_SECONDS` (2.0) for what is
+  in flight.
 
 This does not add a routine push: nothing automatic arms one of these watches. The
 count of always-on push exceptions stays at two, and this is a caller inside the first.

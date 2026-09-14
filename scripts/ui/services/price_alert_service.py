@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime
 from typing import Any
 
@@ -29,6 +30,12 @@ ALWAYS_ON_SETTING = "price_alerts_always_on"
 
 #: How many announced watch ids to remember (see `notify_armed_watch`).
 _ANNOUNCED_WATCH_ID_LIMIT = 2_000
+
+#: How long `shutdown()` waits, in TOTAL, for armed-watch deliveries that are
+#: still in flight. `push_notify`'s HTTP timeout is 10 s, so a dead endpoint
+#: would otherwise stall the desk's close; the threads are daemons, so what is
+#: still running when the budget expires can never hold the process.
+ARMED_PUSH_SHUTDOWN_WAIT_SECONDS = 2.0
 
 
 class PriceAlertService(QObject):
@@ -59,6 +66,11 @@ class PriceAlertService(QObject):
         self._writer_refusal_logged = False
         #: Armed-watch ids already announced to the phone this session.
         self._announced_watch_ids: set[str] = set()
+        #: Deliveries the service has handed to a worker and not yet joined.
+        #: The lock guards this list AND the announced set, because the Qt
+        #: thread adds to both while a worker may still be finishing.
+        self._armed_push_threads: list[threading.Thread] = []
+        self._armed_push_lock = threading.Lock()
         self._timer = QTimer(self)
         self._timer.setInterval(_POLL_INTERVAL_MS)
         self._timer.timeout.connect(self.check_now)
@@ -155,8 +167,23 @@ class PriceAlertService(QObject):
         door to the phone (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`).
 
         De-duplicated by `watch_id`: an arm is one episode, so a poll that
-        somehow sees the same fire twice buzzes once. ``ok`` means a push left
-        the desk, which a de-duplicated repeat did not.
+        somehow sees the same fire twice buzzes once.
+
+        **Dispatch is synchronous, delivery is not.** The caller is the GUI
+        poll (`_poll_h1_bounce_watches` -> `_push_armed_watch`) and
+        `push_notify`'s HTTP timeout is 10 s, so the transport may not run
+        here: this method makes only the cheap decisions - the engine check
+        and the watch-id de-duplication - and hands the send to a one-shot
+        daemon worker the service owns, mirroring `check_now`. ``ok`` now
+        means "accepted for delivery by the one armed sender", not "a push
+        left the desk"; the outcome arrives later on `_last_push_error`, the
+        ``ARMED WATCH ...`` log line and `statusChanged`, exactly the way
+        `_notify` already reports one.
+
+        The id joins `_announced_watch_ids` BEFORE the dispatch, so a second
+        call in the same tick is refused without waiting for the first send.
+        Refusals are unchanged: engine disabled ``{"ok": False, "error": ...}``,
+        duplicate ``{"ok": False, "deduplicated": True, "watch_id": ...}``.
         """
         watch_id = str(watch_id or "").strip()
         if not self.engine_enabled:
@@ -164,25 +191,56 @@ class PriceAlertService(QObject):
                 "ok": False,
                 "error": "Phone pushes originate from the main desk only.",
             }
-        if watch_id and watch_id in self._announced_watch_ids:
-            return {"ok": False, "deduplicated": True, "watch_id": watch_id}
-        result = dict(
-            push_notify.send_push(
-                str(title or "Armed watch"),
-                str(message or ""),
-                priority="urgent",
-                tags="bell",
-            )
-            or {}
-        )
         if watch_id:
-            self._announced_watch_ids.add(watch_id)
-            # An arm is one episode and a fired watch disarms, so this set only
-            # ever grows by one per fire; the cap is belt and braces for a desk
-            # that stays open for weeks.
-            while len(self._announced_watch_ids) > _ANNOUNCED_WATCH_ID_LIMIT:
-                self._announced_watch_ids.pop()
-        result["watch_id"] = watch_id
+            with self._armed_push_lock:
+                if watch_id in self._announced_watch_ids:
+                    return {"ok": False, "deduplicated": True, "watch_id": watch_id}
+                self._announced_watch_ids.add(watch_id)
+                # An arm is one episode and a fired watch disarms, so this set
+                # only ever grows by one per fire; the cap is belt and braces
+                # for a desk that stays open for weeks.
+                while len(self._announced_watch_ids) > _ANNOUNCED_WATCH_ID_LIMIT:
+                    self._announced_watch_ids.pop()
+        title_text = str(title or "Armed watch")
+        message_text = str(message or "")
+        thread = threading.Thread(
+            target=self._deliver_armed_watch,
+            args=(title_text, message_text),
+            name="armed-watch-push",
+            daemon=True,
+        )
+        with self._armed_push_lock:
+            # One thread per fire is the `check_now` pattern and the right
+            # shape here: an armed watch fires once and then disarms, so a
+            # standing consumer thread would idle for days to serve a handful
+            # of sends. The list is what lets `shutdown()` know what is still
+            # in flight.
+            self._armed_push_threads = [
+                existing for existing in self._armed_push_threads if existing.is_alive()
+            ]
+            self._armed_push_threads.append(thread)
+        thread.start()
+        return {"ok": True, "queued": True, "watch_id": watch_id}
+
+    def _deliver_armed_watch(self, title: str, message: str) -> None:
+        """Send one armed-watch push, off the Qt thread, and report it.
+
+        `send_push` never raises, but a transport that does must not lose the
+        event or kill the worker silently - so the call is wrapped and the
+        failure is logged with its traceback.
+        """
+        try:
+            result = dict(
+                push_notify.send_push(
+                    title, message, priority="urgent", tags="bell"
+                )
+                or {}
+            )
+        except Exception as exc:  # pragma: no cover - send_push does not raise
+            self._last_push_error = f"push failed: {exc}"
+            logging.exception("ARMED WATCH %s (push failed)", message)
+            self.statusChanged.emit(self.status_snapshot())
+            return
         self._last_push_error = str(result.get("error") or "")
         logging.info(
             "ARMED WATCH %s (push %s)",
@@ -190,10 +248,41 @@ class PriceAlertService(QObject):
             "sent" if result.get("ok") else (self._last_push_error or "not configured"),
         )
         self.statusChanged.emit(self.status_snapshot())
-        return result
 
     def shutdown(self) -> None:
         self._timer.stop()
+        self._join_armed_pushes()
+
+    def _join_armed_pushes(self) -> None:
+        """Wait for in-flight armed deliveries, with ONE total budget.
+
+        The desk closing should not lose a push that is a second from landing,
+        and it should not wait on a dead endpoint either; the workers are
+        daemons, so whatever outlives the budget cannot hold the process.
+
+        A worker's own `statusChanged` is QUEUED to the GUI thread (Qt's
+        auto-connection from a non-GUI thread), so an outcome that lands while
+        the desk is closing would never be delivered - the event loop it is
+        waiting on is the one that just stopped. Having WAITED for that
+        outcome, the joining thread reports it once itself; a status refresh
+        is idempotent, so a later queued copy costs nothing.
+        """
+        with self._armed_push_lock:
+            pending = [
+                thread for thread in self._armed_push_threads if thread.is_alive()
+            ]
+        deadline = time.monotonic() + ARMED_PUSH_SHUTDOWN_WAIT_SECONDS
+        for thread in pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
+        with self._armed_push_lock:
+            self._armed_push_threads = [
+                thread for thread in self._armed_push_threads if thread.is_alive()
+            ]
+        if pending:
+            self.statusChanged.emit(self.status_snapshot())
 
     # ------------------------------------------------------------------
     # Polling

@@ -4357,6 +4357,25 @@ grace, or for a prompt to survive being away.
   exception was never about price alerts; it is about a condition the trader armed by
   hand (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`, amendment 2026-09-13). The push goes
   out BEFORE the alert is drawn: a broken display path must not be able to suppress it.
+  **DISPATCHED before the alert is drawn, DELIVERED on the service's own worker**
+  (repair 2026-09-13, review blocker B3): the send itself is `push_notify`'s 10-second
+  HTTP call and the caller is the GUI poll, so on the Qt thread `notify_armed_watch` now
+  makes only the cheap decisions - the engine check and the watch-id de-duplication,
+  where the id joins `_announced_watch_ids` BEFORE the dispatch so a repeat in the same
+  tick is refused without waiting for the first send - hands the send to a one-shot
+  daemon thread the service owns and tracks (the `check_now` pattern; an armed watch
+  fires once and disarms, so a standing consumer thread would idle for days to serve a
+  handful of sends), and returns `{"ok": True, "queued": True, "watch_id": ...}`. **`ok`
+  means "accepted for delivery by the one armed sender"**, not "a push left the desk";
+  the outcome arrives afterwards on `_last_push_error`, the `ARMED WATCH ...` log line
+  and `statusChanged`, exactly as `_notify` already reports one, and a transport that
+  raises is logged with its traceback on the worker rather than lost. `shutdown()` joins
+  what is in flight with ONE budget, `ARMED_PUSH_SHUTDOWN_WAIT_SECONDS = 2.0`, then
+  returns - the threads are daemons, so a dead endpoint can never hold the process - and
+  because a worker's `statusChanged` is QUEUED to the GUI thread by Qt, the thread that
+  waited emits the final snapshot itself (the event loop it would have been delivered on
+  is the one that just stopped). No `auto_mode` gate is added: DESK, AWAY, EVENING and
+  OFF all still deliver.
 - **Cost on the Qt thread.** Per ARMED H1 watch, per 60 s tick: one O(bars) bucketing
   pass over M5 dicts `_m5_bars_for` has already materialised, then an O(bars) ATR and EMA
   over the ~35 resulting H1 bars. No fetch, no file read, no second copy of the series.
