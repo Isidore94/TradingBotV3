@@ -820,6 +820,8 @@ def test_a_scheduled_popup_stays_quiet_but_a_real_click_can_type_and_submit(tmp_
     )
     review.mentor_card._journal = _journal(tmp_path)
     review.mentor_card._clock = _Clock(_pacific(NORMAL_SESSION, 9, 12, 0))
+    review.mentor_card._drafts_path = tmp_path / "drafts.json"
+    review.mentor_card._drafts = {}
     host = QWidget()
     layout = QVBoxLayout(host)
     typing_here = QLineEdit(host)
