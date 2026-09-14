@@ -388,7 +388,7 @@ is the trader's live validation (#119-#121) and the merge decision, which travel
 
 ## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — IN BUILD on `claude/wishlist-sweep-2026-09-12`
 
-**2026-09-14 trader-directed WS-DR follow-up - BUILT by the lead:** the Daily Recap reads TODAY by
+**2026-09-14 trader-directed WS-DR follow-up - BUILT by the lead on `claude/desk-combined-2026-09-14` (the sweep's successor):** the Daily Recap reads TODAY by
 itself at 12:00 Pacific (`scripts/daily_recap_schedule.py` pure, one `QTimer` on the panel started in
 `showEvent`, `local_settings.json` `daily_recap_auto_time`), once per session, provisional until the
 13:00 Pacific close and re-read on page select or Refresh; every Auto mode, no scan/push/write

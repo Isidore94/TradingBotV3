@@ -2548,8 +2548,8 @@ start still reads today, a weekend or holiday reads nothing. The noon read is pr
 13:00 Pacific); the page's next read after the close is the measured one, and the session list now
 relabels today from "provisional" after the close without a restart. No scan, fetch, push or write:
 every Auto mode, outside quiet hours by the amendment in `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`.
-Inventory paragraph: "Application, runtime, and data ownership", Daily Recap. Built by the lead on the
-sweep branch; tests `tests/test_daily_recap_auto_populate.py`; live gate #122 (one noon on the desk).
+Inventory paragraph: "Application, runtime, and data ownership", Daily Recap. Built by the lead on the desk's
+combined branch `claude/desk-combined-2026-09-14`; tests `tests/test_daily_recap_auto_populate.py`; live gate #122 (one noon on the desk).
 Verification in `CURRENT_CHECKPOINT.md`.
 
 ### 2026-09-14 - Claimed D1 picks: three packets D1C-A / D1C-L / D1C-B (trader-directed; integration `lead/d1c-integration` above the sweep tip b8ebd5a4)
