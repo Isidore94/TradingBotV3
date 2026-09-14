@@ -2513,6 +2513,15 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 
 ## Recent changes (the last two build days)
 
+### 2026-09-14 — M5 alert grades at the left (trader-directed)
+
+The compact M5 list omitted the champion tier when shortening the trigger.
+The row now leads with `[PROVEN]` or its recorded `[S]` through `[D]` grade;
+`[—]` marks an ungraded alert. It uses the Alert Center's existing readers.
+The time, side, ticker, trigger, repeat count and evidence suffixes follow.
+No score, list ordering, alert emission or evidence contract changes.
+Verification and local delivery status: `CURRENT_CHECKPOINT.md`.
+
 ### 2026-09-12 - WISHLIST sweep: one feature dump on `claude/wishlist-sweep-2026-09-12` (trader-directed)
 
 Every WISHLIST item built as one feature dump for a week of trader testing; Astra reviews

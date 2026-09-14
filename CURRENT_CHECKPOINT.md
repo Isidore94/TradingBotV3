@@ -19,14 +19,33 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-14: the trader authorized loading the independently accepted sweep repairs into the normal local checkout.** B1-B4, the Journal test-order repair and fd457d0c all received GO on 6753f9fd. This commit adds status documentation only; the tested code is unchanged. The sweep remains 25 of 26 packets built; WS-RP is outside this acceptance. |
-| Working branch | **`claude/wishlist-sweep-2026-09-12`** is the desk branch. The lead prepared this documentation commit in scratch on `codex/rv-local-test-ready` above accepted integration 6753f9fd, then fast-forwards the clean, stopped desk checkout to it under the trader's 2026-09-14 instruction. No merge to `main`, remote push or desk restart is part of this local update. |
+| Latest work | **2026-09-14: trader-directed M5 alert grade placement**, a Phase 0.14 display follow-up. Existing champion grades lead the compact row; no ranking formula changes. Built on `codex/m5-rank-left`; focused checks: **116 passed**. Independent review: **GO on d8eb0755**, 116 passed, old-source reversal reproduced 8 failures, ruff clean. The independently accepted sweep repairs remain the prior baseline. |
+| Working branch | Desk: **`claude/wishlist-sweep-2026-09-12`**, b8ebd5a4. M5 grade display work: **`codex/m5-rank-left`**, isolated under `.claude/worktrees/m5-rank-left` from that desk tip. No main merge or branch switch is authorized by this display task. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
-| Next action | **Trader: start the desk from the updated local sweep checkout and run the test week (gates #94-#118; #107 rewritten and #116 amended).** Technical acceptance of the repair set is complete; live validation and the final main-merge decision remain open. WS-RP needs a separate current-status check before continuation. Non-blocking follow-ups remain weekend H1 refetches, shared phone-error status, the invalidated literal and the Journal guard prefix. |
-| Trader actions owed | Start the updated desk when ready and test the open live gates. Cache repair and environment backfill remain separate trader actions; this local code update runs neither. |
-| Last verified baseline | **Independent acceptance of exact 6753f9fd: 7968 passed, 5 skipped, 72 subtests, 2 existing pandas warnings, exit 0 in 546.40 s; ruff clean, smoke 7/7, source selftest 81/81.** Scratch data and LOCALAPPDATA were asserted before product use; AI writer lock was free. Reviewers reproduced the old seams and the bad timezone mutation. The 2026-09-14 update changes documentation only, so this code baseline remains unchanged; validation for this commit is diff/whitespace and code-tree identity. |
+| Next action | Load the accepted M5 display change after the trader closes the desk, then restart for the narrow-column live check. Trader live check: grades visible at the left in the narrow M5 list. The test-week gates #94–#118 remain owed; WS-RP remains outside this task. |
+| Trader actions owed | Close the desk when ready for the M5 display update; then restart and check the left-hand grades. Continue the open live gates. Cache repair and environment backfill remain separate trader actions; this local code update runs neither. |
+| Last verified baseline | **Independent acceptance of exact 6753f9fd: 7968 passed, 5 skipped, 72 subtests, 2 existing pandas warnings, exit 0 in 546.40 s; ruff clean, smoke 7/7, source selftest 81/81.** Scratch data and LOCALAPPDATA were asserted before product use; AI writer lock was free. Reviewers reproduced the old seams and the bad timezone mutation. That full-suite result predates the M5 display patch; the patch has 116 focused passes and has independent GO on d8eb0755. No new full-suite baseline is claimed. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
-| Desk | **No running Python/TradingBot desk process was found before the 2026-09-14 local update.** No restart was performed. The next start uses the repaired sweep code. The prior recorded restart remains historical; live gates are not marked passed by this update. |
+| Desk | **2026-09-14: running `launch_gui.py` processes observed during the M5 display task.** The desk checkout is not being switched or merged while running; no restart performed. |
+
+### 2026-09-14 — M5 alert grades at the left (Phase 0.14 display follow-up)
+
+Trader request: “the ranking needs to be on the left side of it.” The compact
+bar stripped the tier from its trigger label. `row_text` now leads with the
+Alert Center's canonical PROVEN/tier reading, or `[—]` when ungraded. No new
+score, ordinal, sorting or alert decision is introduced. Repeat rows read the
+newest alert's grade; the tooltip explains the labels.
+
+Build: `codex/m5-rank-left`, tester 81e686b0 (8 expected failures, 1 existing
+layout pass), fix d8eb0755. Focused Qt tests: 116 passed; ruff clean. The lead
+inspected a dark 240 px preview with all seven labels readable. Independent
+review: GO on d8eb0755, 116 passed; reverting only the display source reproduced
+the eight failures and restoring HEAD left the reviewer worktree clean. The full-suite baseline above remains historical, not rerun.
+
+Delivery is pending: `launch_gui.py` is running in the desk checkout, which
+remains at b8ebd5a4. No desk update or restart performed. Live proof owed: after
+loading and restarting, confirm the left grade on the narrow M5 list and that
+a clicked row still charts normally. Existing test-week gates remain open.
 
 ### Open gates, newest first
 
