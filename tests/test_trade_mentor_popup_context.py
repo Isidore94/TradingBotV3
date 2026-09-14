@@ -50,14 +50,34 @@ def _sessions_ending(last: date, count: int) -> list[date]:
 
 
 def _m5_bars(*, end_minute: int = 55) -> list[dict]:
-    """Seven completed regular-session bars with close 100 through 106."""
-    first = datetime(2026, 9, 14, 9, end_minute - 30, tzinfo=PACIFIC)
+    """A whole regular session, whose last seven closes are 100 through 106.
+
+    Session VWAP needs the session's volume. A fixture with only the last seven
+    bars is not a smaller valid session; it is a different claim. `end_minute`
+    is measured from 09:00 so the stale fixture can end at 09:00 without ever
+    constructing an invalid negative minute.
+    """
+    session_open = datetime(2026, 9, 14, 6, 30, tzinfo=PACIFIC)
+    last_start = datetime(2026, 9, 14, 9, 0, tzinfo=PACIFIC) + timedelta(
+        minutes=end_minute
+    )
     bars: list[dict] = []
-    for index in range(7):
-        close = 100.0 + index
+    starts: list[datetime] = []
+    stamp = session_open
+    while stamp <= last_start:
+        starts.append(stamp)
+        stamp += timedelta(minutes=5)
+    for index, stamp in enumerate(starts):
+        # The final seven bars give the exact 30-minute fact. Earlier session
+        # volume makes session VWAP a real measured value, not an approximation.
+        close = (
+            100.0 + (index - (len(starts) - 7))
+            if index >= len(starts) - 7
+            else 90.0
+        )
         bars.append(
             {
-                "dt": first + timedelta(minutes=5 * index),
+                "dt": stamp,
                 "open": close - 0.25,
                 "high": close + 0.5,
                 "low": close - 0.5,
@@ -161,6 +181,14 @@ def test_context_excludes_forming_future_and_malformed_bars_and_names_short_or_s
     assert rsp["m5_status"] == "unavailable"
     assert rsp["m5_change_30m_pct"] is None
     assert "aware" in rsp["m5_reason"].lower()
+
+    # Six surviving bars spanning 35 minutes are not a 30-minute measurement.
+    gap = [bar for bar in _m5_bars() if bar["dt"].strftime("%H:%M") != "09:40"]
+    gappy = build_context(now=NOW, m5_bars={"VXX": gap}, d1_bars={"VXX": _d1_bars()})
+    gappy_vxx = _reading(gappy, "VXX")
+    assert gappy_vxx["m5_status"] == "unavailable"
+    assert gappy_vxx["m5_change_30m_pct"] is None
+    assert "gap" in gappy_vxx["m5_reason"].lower()
 
     stale_now = datetime(2026, 9, 14, 11, 0, tzinfo=PACIFIC)
     stale = build_context(
