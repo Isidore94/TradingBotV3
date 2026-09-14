@@ -20,7 +20,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Latest work | **2026-09-14: CH-SYM loaded under the trader's "load it" instruction.** The accepted chart reset cf642311 is combined with the M5 grade display d8eb0755 already present in the desk checkout. Both source fixes are unchanged; only the checkpoint needed a merge resolution. |
-| Working branch | **`claude/wishlist-sweep-2026-09-12` remains the desk branch.** Integration was prepared on `codex/chart-load` from the observed local tip d125b809, preserving the M5 grade update and adding `codex/chart-symbol-isolation`. The clean, closed desk is fast-forwarded to this integration; no main merge or branch switch. |
+| Working branch | **`claude/wishlist-sweep-2026-09-12` remains the desk branch.** Integration was prepared on `codex/chart-load` from local tip d125b809 plus its delivery stamp a4399bce, preserving the M5 grade update and adding `codex/chart-symbol-isolation`. The clean, closed desk is fast-forwarded to this integration; no main merge or branch switch. |
 | Unmerged / open | G/ST lanes and Strength page are merged; older G5/G4b/G7 awaiting-merge wording is superseded. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim (about 49 KB, above ~45 KB). Still recorded: `claude/s1-quick-verbs`, 2026-09-03 lake incident call, lock-file sweep, 100/1,980 cached daily files ending in forming candles, and gate #57 mirror proof. See existing dated entries and gates; this setup task closes none of them. |
 | Next action | **Trader: open the desk and check stock switches, same-stock Load older, and the left-hand M5 grade.** Local loading is complete; live proof and test-week gates #94-#118 remain open. WS-RP remains outside this task. |
 | Trader actions owed | Open the desk when ready. Check that each chart uses only its own stock prices and the narrow M5 list shows grades on the left. No cache repair or environment backfill was performed. |
@@ -43,7 +43,8 @@ review: GO on d8eb0755, 116 passed; reverting only the display source reproduced
 the eight failures and restoring HEAD left the reviewer worktree clean. The full-suite baseline above remains historical, not rerun.
 
 Delivery reconciliation during CH-SYM load: the observed local tip d125b809
-already contained this M5 source fix, despite the prior pending wording. The
+already contained this M5 source fix; delivery stamp a4399bce arrived during
+integration and is preserved too. The
 desk was closed. CH-SYM integration preserves this fix; no restart performed. Live proof owed: after
 loading and restarting, confirm the left grade on the narrow M5 list and that
 a clicked row still charts normally. Existing test-week gates remain open.

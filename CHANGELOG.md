@@ -2527,6 +2527,8 @@ The row now leads with `[PROVEN]` or its recorded `[S]` through `[D]` grade;
 `[—]` marks an ungraded alert. It uses the Alert Center's existing readers.
 The time, side, ticker, trigger, repeat count and evidence suffixes follow.
 No score, list ordering, alert emission or evidence contract changes.
+Loaded into the normal desk checkout on 2026-09-14 under the trader's “load it”
+instruction. Reviewed code is unchanged; restart/live proof remains owed.
 Verification and local delivery status: `CURRENT_CHECKPOINT.md`.
 
 ### 2026-09-12 - WISHLIST sweep: one feature dump on `claude/wishlist-sweep-2026-09-12` (trader-directed)
