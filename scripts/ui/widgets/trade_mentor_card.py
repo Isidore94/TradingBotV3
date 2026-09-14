@@ -115,7 +115,8 @@ class TradeMentorCard(QWidget):
         self._previous: Mapping[str, Any] | None = None
         self._submitted: set[str] = set()
         self._context_service = None
-        self._context_by_slot: dict[str, dict[str, Any]] = {}
+        self._context_slot_id = ""
+        self._current_context: dict[str, Any] | None = None
         self.set_context_service(context_service)
 
         # Never activates the window it appears in. This is the whole of the
@@ -305,18 +306,19 @@ class TradeMentorCard(QWidget):
         # running records that absence now; a later result cannot mutate a
         # journal row that already exists.
         moment = self._now()
-        self._context_by_slot[str(slot.slot_id)] = self._unavailable_context(
+        self._context_slot_id = str(slot.slot_id)
+        self._current_context = self._unavailable_context(
             moment, "context pending"
         )
         if self._context_service is not None:
             try:
                 accepted = self._context_service.request_context(slot.slot_id, now=moment)
                 if not accepted:
-                    self._context_by_slot[str(slot.slot_id)] = self._unavailable_context(
+                    self._current_context = self._unavailable_context(
                         moment, "context unavailable or throttled"
                     )
             except Exception:  # noqa: BLE001 - context never costs a raw note
-                self._context_by_slot[str(slot.slot_id)] = self._unavailable_context(
+                self._current_context = self._unavailable_context(
                     moment, "context request failed"
                 )
         self._previous = dict(previous) if previous else None
@@ -357,15 +359,12 @@ class TradeMentorCard(QWidget):
         return unavailable_context(now=moment, reason=reason)
 
     def _on_context_ready(self, request_id: str, context: object) -> None:
-        # A worker result belongs only to the slot that requested it.  It may
-        # arrive after a new hour replaced the card, but still before that old
-        # slot is submitted; retaining it by id is safe and exact.
-        if isinstance(context, Mapping):
-            self._context_by_slot[str(request_id)] = dict(context)
+        if str(request_id) == self._context_slot_id and isinstance(context, Mapping):
+            self._current_context = dict(context)
 
     def _on_context_unavailable(self, request_id: str, context: object) -> None:
-        if isinstance(context, Mapping):
-            self._context_by_slot[str(request_id)] = dict(context)
+        if str(request_id) == self._context_slot_id and isinstance(context, Mapping):
+            self._current_context = dict(context)
 
     def _clear_trade_check(self) -> None:
         self._answer_inputs = {}
@@ -531,8 +530,10 @@ class TradeMentorCard(QWidget):
             # instant, not the trader's wall clock.
             "responded_at": moment.isoformat(),
         }
-        payload["context"] = self._context_by_slot.get(
-            str(slot.slot_id), self._unavailable_context(moment, "context pending")
+        payload["context"] = (
+            self._current_context
+            if self._context_slot_id == str(slot.slot_id) and self._current_context is not None
+            else self._unavailable_context(moment, "context pending")
         )
         return payload
 
@@ -642,15 +643,6 @@ class TradeMentorCard(QWidget):
         bindings for one sequence fire neither.
         """
         try:
-            if (
-                watched in (self.text_box, self.d1_box)
-                and event.type() == QEvent.Type.MouseButtonPress
-                and watched.focusProxy() is not None
-            ):
-                # The host temporarily points Qt's automatic opening focus at
-                # the chart field.  A real click is the trader choosing this
-                # box, so restore its normal text-entry focus first.
-                watched.setFocusProxy(None)
             if (
                 watched in (self.text_box, self.d1_box)
                 and event.type() == QEvent.Type.KeyPress

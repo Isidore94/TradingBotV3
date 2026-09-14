@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from PySide6.QtCore import QCoreApplication, QEvent, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QDialog,
-    QApplication,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -42,45 +42,9 @@ _NO_M5_WATCH_REASON = (
 
 
 class _MentorPopup(QDialog):
-    """A non-modal tool window whose close paths have one explicit meaning."""
+    """A normal modeless tool window whose close paths have one meaning."""
 
     dismissed = Signal()
-    _RESTORE_FOCUS_EVENT = QEvent.Type(QEvent.registerEventType())
-
-    def __init__(self, parent=None, flags=Qt.WindowType.Widget) -> None:
-        super().__init__(parent, flags)
-        self._focus_before_show = None
-
-    def show_with_preserved_focus(self, previous_focus) -> None:
-        self._focus_before_show = previous_focus
-        self.show()
-
-    def showEvent(self, event):  # noqa: N802 - Qt override
-        super().showEvent(event)
-        # Low priority runs after Qt has picked its automatic first child.  It
-        # never waits or installs a timer in the scheduled-prompt path.
-        QCoreApplication.postEvent(self, QEvent(self._RESTORE_FOCUS_EVENT), Qt.EventPriority.LowEventPriority.value)
-
-    def event(self, event):  # noqa: N802 - Qt override
-        if event.type() == self._RESTORE_FOCUS_EVENT:
-            previous = self._focus_before_show
-            self._focus_before_show = None
-            current = QApplication.focusWidget()
-            if previous is not None and current is not None and self.isAncestorOf(current):
-                previous.setFocus(Qt.FocusReason.OtherFocusReason)
-            return True
-        return super().event(event)
-
-    def focusInEvent(self, event):  # noqa: N802 - Qt override
-        super().focusInEvent(event)
-        current = QApplication.focusWidget()
-        previous = self._focus_before_show
-        # Qt gave this modeless tool one of its child controls.  Restore only
-        # in that exact case, so an actual user focus change is never undone.
-        if previous is not None and current is not None and (
-            current is self or self.isAncestorOf(current)
-        ):
-            previous.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def keyPressEvent(self, event):  # noqa: N802 - Qt override
         if event.key() == Qt.Key.Key_Escape:
@@ -422,21 +386,26 @@ class AlertChartReview(QWidget):
 
         self.mentor_popup = _MentorPopup(
             self,
-            Qt.WindowType.ToolTip
-            | Qt.WindowType.WindowDoesNotAcceptFocus
+            Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
             | Qt.WindowType.WindowCloseButtonHint,
         )
         self.mentor_popup.setObjectName("TradeMentorPopup")
         self.mentor_popup.setModal(False)
-        self.mentor_popup.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.mentor_popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.mentor_popup.setMaximumHeight(640)
+        self.mentor_popup.setMinimumWidth(420)
         popup_layout = QVBoxLayout(self.mentor_popup)
         popup_layout.setContentsMargins(0, 0, 0, 0)
         self.mentor_card = TradeMentorCard(
             self.mentor_popup, context_service=mentor_context_service
         )
-        popup_layout.addWidget(self.mentor_card)
+        self.mentor_scroll = QScrollArea(self.mentor_popup)
+        self.mentor_scroll.setObjectName("TradeMentorScroll")
+        self.mentor_scroll.setWidgetResizable(True)
+        self.mentor_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.mentor_scroll.setWidget(self.mentor_card)
+        popup_layout.addWidget(self.mentor_scroll)
         self.mentor_card.setVisible(False)
         self.mentor_popup.dismissed.connect(self._dismiss_mentor_popup)
         self.mentor_card.answered.connect(lambda _slot_id: self.mentor_popup.hide())
@@ -633,13 +602,9 @@ class AlertChartReview(QWidget):
         with it.
         """
         try:
-            previous_focus = QApplication.focusWidget()
-            self.mentor_popup.setFocusProxy(previous_focus)
-            self.mentor_card.text_box.setFocusProxy(previous_focus)
-            self.mentor_card.d1_box.setFocusProxy(previous_focus)
             self.mentor_card.show_slot(slot, previous=previous)
             self.mentor_popup.adjustSize()
-            self.mentor_popup.show_with_preserved_focus(previous_focus)
+            self.mentor_popup.show()
         except Exception:  # noqa: BLE001 - a prompt never costs the chart
             import logging
 
@@ -667,13 +632,9 @@ class AlertChartReview(QWidget):
 
     def _on_give_a_read(self) -> None:
         try:
-            previous_focus = QApplication.focusWidget()
-            self.mentor_popup.setFocusProxy(previous_focus)
-            self.mentor_card.text_box.setFocusProxy(previous_focus)
-            self.mentor_card.d1_box.setFocusProxy(previous_focus)
             self.mentor_card.give_a_read()
             self.mentor_popup.adjustSize()
-            self.mentor_popup.show_with_preserved_focus(previous_focus)
+            self.mentor_popup.show()
         except Exception:  # noqa: BLE001
             import logging
 
