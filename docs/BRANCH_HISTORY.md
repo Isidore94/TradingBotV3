@@ -1,6 +1,6 @@
 # Branch history and the consolidation to `main`
 
-Last reconciled: **2026-09-05**
+Last reconciled: **2026-09-14**
 
 This file records what each development branch was, and where its work ended up, so
 that deleting a merged branch never destroys the only account of what it contained.
@@ -190,6 +190,37 @@ the dated checkpoint entries and `docs/archive/` still name them, on purpose.
 
 One scratch worktree at a detached `b4ca820b` (another session's Temp scratchpad, not
 contained) was left for that session.
+
+## The 2026-09-14 consolidation (trader: *"combine all of todays work from codex and claude into 1 branch and delete all the other (except for main)"*)
+
+**What survives.** `main` (d31a3923, untouched), `claude/wishlist-sweep-2026-09-12` (13d8b9de - the
+RUNNING desk's checkout, which is why it could not be moved or deleted in the same pass), and
+**`claude/desk-combined-2026-09-14`** (84d4ca10 + the docs stamp above it), the single work
+branch. The combined branch is the sweep tip 13d8b9de (Codex's day: `codex/mentor-popup-context`
+with `codex/mentor-context-resilience`, `codex/m5-rank-left`, `codex/chart-symbol-isolation`,
+`codex/chart-load` all folded in and each `0 unique` against it) merged with
+`lead/d1c-integration` 38fbcc6b (Claude's day: `claude/d1c-desk-sides` 7762bc9b -> `-build`
+efc61a32, `claude/d1c-claimed-picks` d9b2861f -> `-build` 270dd839, `claude/d1c-claim-grading`
+6cfd2684 -> `-build` ba234f1a, all reviewed GO). Three conflicts resolved by hand: both new
+constructor parameters kept in `scripts/ui/widgets/alert_chart_review.py` (`claim_writer`,
+`mentor_context_service`); both sides' CHANGELOG and checkpoint entries kept; the glance block
+rewritten to name both streams. Loading the combined branch into the desk checkout is a plain
+fast-forward of the sweep branch once the desk is stopped.
+
+**The deletion.** 222 local and 84 remote branches deleted, every worktree but the desk checkout
+and the lead's scratch integration removed. A full-refs backup was taken FIRST:
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\branches-backup-2026-09-14.bundle` (140 MB, `git bundle
+verify` clean) - `git bundle list-heads <file>` names every deleted branch and `git fetch <file>
+<branch>:<branch>` restores one.
+
+**Containment.** Every deleted branch's commits are reachable from `claude/desk-combined-2026-09-14`
+EXCEPT these eight, whose unique commits now live only in the bundle: `claude/s1-quick-verbs`
+(8 commits, 2026-09-03, recorded as unmerged since then), `claude/ws-rp-shared-report-build` (4,
+the unfinished WS-RP build) and `claude/ws-rp-shared-report` (1, its red tests),
+`claude/rv-h1-arm-time` (1) and `claude/rv-h1-phone-worker` (1) (their `-build` tips landed;
+these are the testers' branches with one stale docs commit each), `claude/ws-ai1-enrichment-status-build`
+(1), `claude/avwap-band-challenger` (1, 2026-08-26) and `testing-week-2026-08-17` (1, 2026-08-20).
+WS-RP is the one a reader may want back: `git fetch <bundle> claude/ws-rp-shared-report-build:claude/ws-rp-shared-report-build`.
 
 ## Rule going forward
 
