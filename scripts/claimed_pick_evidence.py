@@ -792,6 +792,14 @@ def render_text(comparison: Comparison) -> str:
     if not comparison.by_setup:
         lines.append("  no claimed like has been graded yet")
     for row in comparison.by_setup:
+        if row.win_rate is None:
+            # Not graded is not a rate of zero. A family whose claims are all
+            # still pending has no answer yet, and printing one would invent it.
+            lines.append(
+                f"  {row.label:<28} not graded yet  n=0     "
+                f"pending {row.pending}  unmeasured {row.unmeasured}"
+            )
+            continue
         lines.append(
             f"  {row.label:<28} {_percent(row.win_rate):>5} win rate  n={row.n:<5} "
             f"wins={row.wins:<5} at least {_percent(row.bound)}  "
@@ -799,6 +807,7 @@ def render_text(comparison: Comparison) -> str:
         )
     lines.extend(["", comparison.leader, ""])
     lines.extend(comparison.footnotes)
+    lines.append("")
     lines.append(
         "Opportunity results only. Actual trades live in the Journal and the "
         "said-vs-did report; nothing here scores, ranks, gates, alerts or promotes."
