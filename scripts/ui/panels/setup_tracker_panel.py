@@ -393,6 +393,7 @@ CLAIM_POPULATION_COLUMNS = (
     ("unmeasured", "Unmeasured"),
     ("also_fav", "also FAV"),
     ("also_near", "also Near"),
+    ("also_hc", "also HC"),
     ("win_rate_all", "Win % (all)"),
     ("bound_all", "Win % low (all)"),
     ("n_all", "n (all)"),
@@ -400,8 +401,11 @@ CLAIM_POPULATION_COLUMNS = (
     ("note", "Note"),
 )
 
+#: `setup` is the DISPLAY label the CLI prints (`avwap_breakout`); `source` is
+#: the cohort id it joins back on (`like_avwap_breakout`) and rides at the end,
+#: so the tab and `python -m claimed_pick_evidence` name a setup the same way.
 CLAIM_SETUP_COLUMNS = (
-    ("source", "Claimed setup"),
+    ("setup", "Claimed setup"),
     ("win_rate", "Win %"),
     ("bound", "Win % (low)"),
     ("n", "n"),
@@ -409,6 +413,7 @@ CLAIM_SETUP_COLUMNS = (
     ("pending", "Pending"),
     ("unmeasured", "Unmeasured"),
     ("n_all", "n (all)"),
+    ("source", "Cohort id"),
 )
 
 CLAIM_TAB_TITLE = "My claims"
@@ -424,7 +429,11 @@ CLAIM_EXPLANATION = (
     "tracker's own populations from master_avwap_tier_outcomes.csv, measured over "
     "5 SCAN ROWS - the symbol's own fifth later scan row. THE TWO ARE SHOWN SIDE "
     "BY SIDE AND NEVER POOLED: where a liked pick was also a FAV or Near scan row "
-    "that day the OVERLAP IS NAMED in its own column and added to nothing. HC "
+    "that day the OVERLAP IS NAMED in its own column and added to nothing - and "
+    "'that day' means ANY tracker row for the name and side on the claim's own "
+    "session, at any horizon and whatever its eligibility, because the question "
+    "is what the scan SAW and not what has since matured (a claim made this "
+    "week has no fifth later scan row yet). HC "
     "reads unmeasured in words until the tracker ever stamps high_conviction on "
     "an outcome row - it is an overlay computed at feed-write time, and an "
     "unmeasured population is never 0%. Win rate leads with its n and the ONE "
@@ -1717,6 +1726,7 @@ def claim_population_table_rows(comparison: Any) -> list[dict[str, Any]]:
                 "unmeasured": _claim_count_cell(cell.unmeasured),
                 "also_fav": _claim_count_cell(cell.also_fav),
                 "also_near": _claim_count_cell(cell.also_near),
+                "also_hc": _claim_count_cell(cell.also_hc),
                 "win_rate_all": other.win_rate if other is not None else None,
                 "bound_all": other.bound if other is not None else None,
                 "n_all": int(other.n) if other is not None else None,
@@ -1736,6 +1746,7 @@ def claim_setup_table_rows(comparison: Any) -> list[dict[str, Any]]:
         other = wide_by_source.get(row.source)
         rows.append(
             {
+                "setup": row.label,
                 "source": row.source,
                 "win_rate": row.win_rate,
                 "bound": row.bound,
@@ -1770,7 +1781,12 @@ def _read_claim_evidence() -> dict[str, Any]:
     try:
         paths = claimed_pick_evidence.store_paths()
         payload["signature"] = tuple(_csv_signature(path) for path in paths.values())
-        inputs = claimed_pick_evidence.load_inputs()
+        # The three CSVs go through the page's OWN memo - the same
+        # `_csv_signature` the other fourteen exports use - so the 11 MB tier
+        # export is parsed once per file version rather than once per refresh
+        # (measured 0.33 s per refresh before this). The JSONL claim store is
+        # small and keeps the reader's own read.
+        inputs = claimed_pick_evidence.load_inputs(read_csv=_load_csv_rows_cached)
         comparison = claimed_pick_evidence.build_comparison(
             **inputs, as_of=date.today(), window=claimed_pick_evidence.WINDOW_RECENT
         )
@@ -1913,8 +1929,10 @@ def _table_render_plan(
 
 
 #: Parsed export rows, keyed by path, with the (mtime_ns, size) they came from.
-#: Bounded to one entry per export file - fourteen since packet M5, and they are
-#: rewritten by the scan, not by this page.
+#: Bounded to one entry per export file - fourteen since packet M5, plus D1C-B's
+#: three claim-evidence CSVs (the like cohort's picks and outcomes and the tier
+#: outcomes), and they are rewritten by the scan and the nightly run, not by
+#: this page.
 _CSV_ROW_CACHE: dict[str, tuple[tuple[int, int], list[dict]]] = {}
 
 

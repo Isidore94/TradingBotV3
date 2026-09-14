@@ -64,7 +64,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from evidence_stats import MIN_REPORTABLE_N, SWING_HORIZON_SESSIONS, lately_window
+from evidence_stats import MIN_REPORTABLE_N, SWING_HORIZON_SESSIONS
 from project_paths import (
     CLAIMED_PICKS_FILE,
     LIKE_COHORT_OUTCOMES_FILE,
@@ -94,6 +94,14 @@ LIKE_CLOCK = (
 TRACKER_CLOCK = (
     f"{SWING_HORIZON_SESSIONS} scan rows - the symbol's own fifth later scan row "
     "(tracker, POLICY_SCANROW_V1)"
+)
+
+#: What "that day" means in `also FAV / Near / HC that day`. Stated wherever the
+#: overlap is printed, because the reviewer's blocker was exactly this sentence
+#: being untrue: the count is a SIGHTING, not a graded observation.
+OVERLAP_BASIS = (
+    "that day = any tracker row for the name and side on the claim's own "
+    "session, at any horizon and whatever its eligibility"
 )
 
 #: What an HC cell says while the tracker has never stamped `high_conviction`.
@@ -161,6 +169,7 @@ class Population:
     #: Overlap, NAMED. `None` where the question does not apply.
     also_fav: int | None = None
     also_near: int | None = None
+    also_hc: int | None = None
     dropped_duplicates: int | None = None
     note: str = ""
 
@@ -366,13 +375,24 @@ def load_inputs(
     outcomes_path: Any = None,
     tier_path: Any = None,
     claims_path: Any = None,
+    read_csv: Any = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Read the four stores. The ONLY file read in this module.
 
     Returns exactly `build_comparison`'s four row arguments, so the CLI and the
     Setup Tracker's worker both call `build_comparison(**load_inputs(), ...)`
     and neither opens a file on a paint path or the Qt thread.
+
+    `read_csv` lets a caller that ALREADY memoizes CSV parses supply its own
+    reader. The Setup Tracker passes `_load_csv_rows_cached`, which keys on the
+    same `(mtime_ns, size)` signature as its other fourteen exports: the tier
+    file is 11 MB and this page refreshes on a spinbox step and on every tab
+    visit, so parsing it per refresh cost a measured 0.33 s of worker time for
+    a file the scan rewrites a few times a day. A reader passed here must not
+    have its rows mutated - nothing downstream does; `_rows` and
+    `read_eligible_rows` both copy every row they keep.
     """
+    reader = read_csv if callable(read_csv) else _read_csv
     paths = store_paths(
         picks_path=picks_path,
         outcomes_path=outcomes_path,
@@ -380,9 +400,9 @@ def load_inputs(
         claims_path=claims_path,
     )
     return {
-        "like_picks": _read_csv(paths["picks_path"]),
-        "like_outcomes": _read_csv(paths["outcomes_path"]),
-        "tier_rows": _read_csv(paths["tier_path"]),
+        "like_picks": reader(paths["picks_path"]),
+        "like_outcomes": reader(paths["outcomes_path"]),
+        "tier_rows": reader(paths["tier_path"]),
         "claims": _read_jsonl(paths["claims_path"]),
     }
 
@@ -428,17 +448,43 @@ def _outcome_index(
     return index
 
 
-def _tracker_days(rows: Iterable[Mapping[str, Any]], bucket: str) -> set[tuple[str, str, str]]:
-    """`(scan_date, symbol, side)` for one bucket's ELIGIBLE rows."""
-    return {
-        (
+def tracker_sightings(
+    tier_rows: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str, str], set[str]]:
+    """`(session, symbol, side)` -> the buckets the SCAN carried it in that day.
+
+    **Built from the TIER ROWS THEMSELVES - any horizon, whatever their
+    eligibility.** `also_fav` / `also_near` / `also_hc` answer "did the scan ALSO
+    carry this symbol and side in that bucket on the claim's own session?", which
+    is a question about what the scan SAW, not about what has since matured.
+
+    The first cut of this read the ELIGIBLE horizon-5 rows and the reviewer
+    reproduced the consequence on copies of the live stores (2026-09-14): FAV 18
+    against a true 22 and Near 17 against a true 31, with all 14 misses in the
+    NEWEST sessions - a claim made this week has no fifth later scan row yet, so
+    the tier file carries it only at horizon 1 and it could never be "also FAV
+    that day". Those are exactly the rows the trader is looking at.
+
+    Eligibility still governs the FAV / HC / Near POPULATIONS. That is a
+    different question - "what did this bucket's graded record do?" - and it is
+    answered by `read_eligible_rows` alone.
+    """
+    index: dict[tuple[str, str, str], set[str]] = {}
+    for row in tier_rows or ():
+        if not isinstance(row, Mapping):
+            continue
+        bucket = _text(row.get("priority_bucket")).lower()
+        if not bucket:
+            continue
+        key = (
             _text(row.get("scan_date"))[:10],
             _text(row.get("symbol")).upper(),
             _side(row.get("side")),
         )
-        for row in rows
-        if _text(row.get("priority_bucket")).lower() == bucket
-    }
+        if not key[0] or not key[1]:
+            continue
+        index.setdefault(key, set()).add(bucket)
+    return index
 
 
 def _dedupe_picks(
@@ -476,7 +522,7 @@ def _grade_liked(
     picks: Sequence[Mapping[str, Any]],
     outcomes: Mapping[tuple[str, str, str], Mapping[str, Any]],
     claims: Mapping[tuple[str, str, str], Mapping[str, Any]],
-    overlaps: Mapping[str, set[tuple[str, str, str]]],
+    sightings: Mapping[tuple[str, str, str], set[str]],
     window: tuple[str, str],
 ) -> list[LikedRow]:
     first, last = window
@@ -520,9 +566,9 @@ def _grade_liked(
                 claim_at=_text(claim.get("claim_at")) if claim else "",
                 known_at_claim=(claim.get("known_at_claim") if claim else None),
                 provenance=PROVENANCE_CLAIMED if claim else PROVENANCE_ANNOTATION_ONLY,
-                also_fav=key in overlaps["fav"],
-                also_near=key in overlaps["near"],
-                also_hc=key in overlaps["hc"],
+                also_fav=BUCKET_FAV in sightings.get(key, ()),
+                also_near=BUCKET_NEAR in sightings.get(key, ()),
+                also_hc=BUCKET_HC in sightings.get(key, ()),
             )
         )
     return out
@@ -618,21 +664,27 @@ def _excluded_footnote(excluded: Mapping[str, int]) -> str:
 def _window_report(
     *,
     window: str,
-    dates: tuple[str, str],
+    end: str | None,
+    wide_window: tuple[str, str] | None,
     picks: Sequence[Mapping[str, Any]],
     outcomes: Mapping[tuple[str, str, str], Mapping[str, Any]],
     claims: Mapping[tuple[str, str, str], Mapping[str, Any]],
     tier_rows: Sequence[Mapping[str, Any]],
+    sightings: Mapping[tuple[str, str, str], set[str]],
     quick_likes: int,
     duplicates: int,
 ) -> WindowReport:
-    read = read_eligible_rows(tier_rows, POLICY_SCANROW_V1, window=dates)
-    overlaps = {
-        "fav": _tracker_days(read.rows, BUCKET_FAV),
-        "near": _tracker_days(read.rows, BUCKET_NEAR),
-        "hc": _tracker_days(read.rows, BUCKET_HC),
-    }
-    liked_rows = _grade_liked(picks, outcomes, claims, overlaps, dates)
+    # `lately` passes `end=` and lets `POLICY_SCANROW_V1.window_sessions` own the
+    # LENGTH - one place says how long "lately" is, and it is not this module.
+    # `all` is the only caller that overrides the window outright, because
+    # `end=` moves the right edge alone.
+    read = read_eligible_rows(
+        tier_rows, POLICY_SCANROW_V1, end=end, window=wide_window
+    )
+    # The window the READ declared is the window this report is about, on both
+    # sides: one answer to "how long is lately", never two.
+    dates = (str(read.window[0]), str(read.window[1]))
+    liked_rows = _grade_liked(picks, outcomes, claims, sightings, dates)
     n, wins, pending, unmeasured = _counts(liked_rows)
 
     populations = {
@@ -648,6 +700,7 @@ def _window_report(
             unmeasured=unmeasured,
             also_fav=sum(1 for row in liked_rows if row.also_fav),
             also_near=sum(1 for row in liked_rows if row.also_near),
+            also_hc=sum(1 for row in liked_rows if row.also_hc),
             dropped_duplicates=duplicates,
         ),
         "fav": _tracker_population("fav", BUCKET_FAV, read.rows, read.pending),
@@ -661,7 +714,7 @@ def _window_report(
         footnotes.append(excluded)
     return WindowReport(
         window=window,
-        window_dates=dates,
+        window_dates=(dates[0], dates[1]),
         populations=populations,
         by_setup=by_setup,
         liked_rows=tuple(liked_rows),
@@ -695,24 +748,33 @@ def build_comparison(
     claim_index = _claim_index(claims)
     tier = _rows(tier_rows)
 
-    windows = {
-        WINDOW_RECENT: tuple(lately_window(stamp)),
-        # `read_eligible_rows(end=)` only moves the RIGHT edge of the lately
-        # window, so "all" is an explicit wide window rather than an absent one.
-        WINDOW_ALL: (EARLIEST_WINDOW_START, stamp),
+    # ONE index for both windows: a sighting is a fact about the scan's own
+    # session and does not change with the window being reported.
+    sightings = tracker_sightings(tier)
+
+    windows: dict[str, tuple[str | None, tuple[str, str] | None]] = {
+        # `lately`: `end=` only, so `POLICY_SCANROW_V1.window_sessions` owns the
+        # LENGTH and this module never restates it.
+        WINDOW_RECENT: (stamp, None),
+        # `all`: `read_eligible_rows(end=)` moves only the RIGHT edge of the
+        # lately window, so every-row is an explicit wide window, never an
+        # absent one.
+        WINDOW_ALL: (None, (EARLIEST_WINDOW_START, stamp)),
     }
     by_window = {
         name: _window_report(
             window=name,
-            dates=(dates[0], dates[1]),
+            end=end,
+            wide_window=wide,
             picks=picks,
             outcomes=outcomes,
             claims=claim_index,
             tier_rows=tier,
+            sightings=sightings,
             quick_likes=quick_likes,
             duplicates=duplicates,
         )
-        for name, dates in windows.items()
+        for name, (end, wide) in windows.items()
     }
     chosen = by_window[asked]
     return Comparison(
@@ -786,12 +848,25 @@ def render_text(comparison: Comparison) -> str:
         if key == "liked":
             lines.append(
                 f"  {'':<16} of which {int(population.also_fav or 0)} also FAV that day, "
-                f"{int(population.also_near or 0)} also Near that day "
+                f"{int(population.also_near or 0)} also Near that day, "
+                f"{int(population.also_hc or 0)} also HC that day "
                 "(named, never added)"
+            )
+            lines.append(
+                f"  {'':<16} {OVERLAP_BASIS}"
             )
             lines.append(
                 f"  {'':<16} repeated clicks folded: "
                 f"{int(population.dropped_duplicates or 0)}"
+            )
+            claimed = sum(
+                1 for row in comparison.liked_rows if row.provenance == PROVENANCE_CLAIMED
+            )
+            lines.append(
+                f"  {'':<16} claims joined: {claimed} with a claimed_picks row, "
+                f"{len(comparison.liked_rows) - claimed} annotation-only (pre-D1C) "
+                "- the claimed setup, claim time and what was known then are SHOWN, "
+                "never graded"
             )
     lines.extend(["", "By claimed setup (sorted by the Wilson lower bound)"])
     if not comparison.by_setup:

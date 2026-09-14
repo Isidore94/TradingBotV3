@@ -5130,14 +5130,29 @@ than five sessions. So the two n's sit side by side, each labelled with its own 
 cell, and **no number anywhere is their sum**. The tab test that proves it asserts that
 `n_liked + n_fav` appears in no rendered cell.
 
-**An overlap is NAMED, never merged.** A liked pick whose symbol and side also carry a FAV or
-Near tier row with `scan_date == session_date` is counted once in My liked trades, once in
-FAV, and once in `also_fav` / `also_near`. The report prints `of which N also FAV that day`.
-A union of two populations on two clocks is not a sample, so there is no union.
+**An overlap is NAMED, never merged, and it is the SCAN'S FACT.** `also_fav` / `also_near` /
+`also_hc` answer one question: *did the scan ALSO carry this symbol and side in that bucket on
+the claim's own session?* **"That day" means ANY tracker row for the name and side with
+`scan_date == session_date`, at any horizon and whatever its eligibility** - the index is
+built by `tracker_sightings` from the raw tier rows, not from `EligibleRead.rows`. A liked
+pick that matches is counted once in My liked trades, once in FAV, and once in `also_fav`; the
+report prints `of which N also FAV that day, M also Near that day, K also HC that day` and
+states the basis beside it. A union of two populations on two clocks is not a sample, so there
+is no union.
 
-**HC is UNMEASURED in words and never 0%.** `priority_bucket` in the live tracker is
-{`favorite_setup` 8,258, `near_favorite_zone` 16,299, blank 1,809} over 26,366 rows and
-carries NO `high_conviction` row: HC is an overlay computed at feed-write time
+The first cut read the ELIGIBLE horizon-5 rows and the reviewer reproduced the consequence on
+copies of the live stores (2026-09-14): FAV 18 against a true 22, Near 17 against a true 31,
+and **all 14 misses in the newest sessions**. A claim made this week has no fifth later scan
+row yet, so the tier file carries it only at horizon 1 - the rows the trader is actually
+looking at were the ones that could never match. Eligibility still governs the FAV / HC / Near
+POPULATIONS, which are a different question ("what did this bucket's graded record do?") and
+are still answered by `read_eligible_rows` alone. Two tests pin it: a liked row whose only
+tier row is horizon 1 IS counted, and the count equals the plain join over the raw tier rows
+in both windows.
+
+**HC is UNMEASURED in words and never 0%.** `priority_bucket` in the live tracker, read
+2026-09-14, is {`favorite_setup` 8,258, `near_favorite_zone` 16,299, blank 1,809} over 26,366
+rows and carries NO `high_conviction` row: HC is an overlay computed at feed-write time
 (`legacy._priority_is_high_conviction`) and never stamped on an outcome row. The cell reads
 `unmeasured: the tracker records favorite_setup / near_favorite_zone only (0 HC rows)`. The
 same reader grades HC the day the tracker ever stamps it - there is a fixture that proves it.
@@ -5153,10 +5168,14 @@ same reader grades HC the day the tracker ever stamps it - there is a fixture th
    "asked, and the answer was none". My liked trades keeps its own real pending and
    unmeasured counts, because this week's claims genuinely have not reached their fifth
    session.
-2. **`all` is an EXPLICIT wide window.** `read_eligible_rows(end=)` moves only the RIGHT edge
-   of the lately window, so the `all` group passes `window=("0001-01-01", as_of)`; `lately`
-   passes `lately_window(as_of)`. The tester found this; the test pins it by showing that
-   `end=` alone grades four FAV rows where the wide window grades five.
+2. **`all` is an EXPLICIT wide window, and it is the ONLY one.** `read_eligible_rows(end=)`
+   moves only the RIGHT edge of the lately window, so the `all` group passes
+   `window=("0001-01-01", as_of)`. `lately` passes `end=as_of` and nothing else, so
+   `POLICY_SCANROW_V1.window_sessions` owns the LENGTH and this module never restates how long
+   "lately" is; both sides of the report then take their dates from `EligibleRead.window`, so
+   the liked rows and the tracker rows can never be filtered over two different spans. The
+   tester found the `end=` trap; the test pins it by showing that `end=` alone grades four FAV
+   rows where the wide window grades five.
 3. The phrase `of which N also FAV that day` lives in `render_text`, with a test.
 
 **Repeated clicks are one trade, twice over.** `like_cohort.like_pick_rows` already keeps the
@@ -5185,17 +5204,23 @@ in the said-vs-did preference report.
 `CLAIM_SETUP_COLUMNS`), the leader line as the status sentence and the footnotes below.
 `_make_explained_tab` gained an `extra` slot for the second block; every existing caller is
 unchanged. The four stores are read inside `_read_tracker_exports`, on the panel's existing
-`ReadWorker`, beside the other fourteen exports and memoized on one signature tuple - **the
-CSV/JSONL loads never run on the Qt thread**, and a failed read degrades to a sentence rather
-than blanking the page.
+`ReadWorker`, beside the other fourteen exports - **the CSV/JSONL loads never run on the Qt
+thread**, and a failed read degrades to a sentence rather than blanking the page. TWO memos,
+both on the same `(mtime_ns, size)` signature: the RENDER memo (`_table_render_plan`) skips
+the model reset and column fit for both tables when nothing behind them changed, and the PARSE
+memo is the page's own `_load_csv_rows_cached`, which `load_inputs(read_csv=)` is handed so
+the 11 MB tier export is parsed once per file version rather than once per refresh - a
+measured 0.33 s of worker time per refresh on a page that refreshes on a spinbox step and on
+every tab visit. The JSONL claim store is small and keeps the reader's own read.
 
 **Nothing moves.** No ranking weight, `review_policy.json`, detector, alert, watchlist, Focus
 entry, promotion status, tracker file or like-cohort file is written, and the like cohort's
 nightly slot is untouched. Nothing under `ai_jobs/` changed.
 
 **Tests.** `tests/test_d1c_claim_grading_reader.py` (24), `_tab.py` (11), `_cli.py` (6) -
-41 written red by the tester before any of this existed - plus `_render.py` (6) added by the
-builder for the three lead rulings.
+41 written red by the tester before any of this existed - plus `_render.py` (6) for the three
+lead rulings and `_overlap.py` (10, nine of them red first) for the reviewer's blocker and the
+seven advisories it travelled with.
 
 **Reopen trigger.** The tracker starts stamping `high_conviction` on an outcome row; the
 trader asks for the two clocks to be pooled, for a claimed setup's record to feed a ranking
