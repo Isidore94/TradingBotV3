@@ -102,8 +102,20 @@ def take_probability(alert: Any) -> float | None:
     return number if 0.0 <= number <= 1.0 else None
 
 
+def alert_grade_label(alert: Any) -> str:
+    """The Alert Center's existing grade, rendered at the row's left edge."""
+    # `alert_center_panel` owns both readers and imports this widget, so defer the
+    # import until a row is drawn rather than creating an import cycle at startup.
+    from ui.panels.alert_center_panel import extract_alert_tier, is_proven_alert
+
+    if is_proven_alert(alert):
+        return "[PROVEN]"
+    tier = extract_alert_tier(alert)
+    return f"[{tier}]" if tier else "[—]"
+
+
 def row_text(alert: Any, *, repeats: int = 1) -> str:
-    """One line: time, side, ticker, what fired, and what the trader usually does.
+    """One line: grade, time, side, ticker, what fired, and take context.
 
     The take-rate suffix is P(take | shown) for this alert's segments, measured
     from the trader's own review decisions. The held/ran suffix is decision 0016
@@ -118,7 +130,10 @@ def row_text(alert: Any, *, repeats: int = 1) -> str:
     time_text = str(getattr(alert, "time_text", "") or "")[:5]
     side = str(getattr(alert, "side", "") or "")
     mark = "▲" if side == "LONG" else "▼" if side == "SHORT" else "·"
-    line = f"{time_text}  {mark} {getattr(alert, 'symbol', '')}  {alert_type_label(alert)}"
+    line = (
+        f"{alert_grade_label(alert)}  {time_text}  {mark} "
+        f"{getattr(alert, 'symbol', '')}  {alert_type_label(alert)}"
+    )
     if repeats > 1:
         line += f"  ×{repeats}"
     probability = take_probability(alert)
@@ -330,13 +345,16 @@ class M5AlertBar(QWidget):
         item.setData(_ALERT_ROLE, alert)
         item.setData(_REPEAT_ROLE, repeats)
         raw = str(getattr(alert, "raw_text", "") or "")
+        grade_help = (
+            "Grade: PROVEN, then S through D; — means the alert is ungraded.\n\n"
+        )
         if repeats > 1:
             raw = (
                 f"{repeats} alerts on this name this session; the newest is shown.\n"
                 "Every one of them is in the feed, History and the evidence "
                 f"files - this row folds them, it does not drop them.\n\n{raw}"
             )
-        item.setToolTip(raw)
+        item.setToolTip(f"{grade_help}{raw}")
         side = str(getattr(alert, "side", "") or "")
         token = "long" if side == "LONG" else "short" if side == "SHORT" else "text_muted"
         try:
