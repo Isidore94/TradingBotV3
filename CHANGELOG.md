@@ -11,6 +11,8 @@ surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
 checkout on 2026-08-26; see `CURRENT_CHECKPOINT.md`).
 
+**2026-09-14 local test preparation:** the trader authorized advancing the local sweep checkout to the independently accepted repair integration 6753f9fd plus status documentation. Repair behavior is unchanged from the reviewed build; the independent full suite passed 7968 tests with five skipped (exit 0), ruff was clean, smoke 7/7 and selftest 81/81. Live gates and the main-merge decision remain open; no restart or data repair was performed.
+
 Authoritative for: **what exists and the historical sequence of revisions**
 
 Remaining work: [`plan.md`](plan.md)
