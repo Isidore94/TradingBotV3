@@ -195,3 +195,45 @@ def test_daily_cache_survives_empty_next_hour_and_refreshes_once_next_session():
     assert len([call for call in empty_calls if call[0] == "d1"]) == 1
     empty._build(next_session)
     assert len([call for call in empty_calls if call[0] == "d1"]) == 2
+
+
+def test_missing_cache_m5_failure_still_fetches_useful_d1():
+    from trade_mentor_context import SYMBOLS
+    from ui.services.trade_mentor_context_service import TradeMentorContextService
+
+    calls = []
+    def loader(timeframe, names, **_kwargs):
+        calls.append((timeframe, tuple(names)))
+        if timeframe == 'm5':
+            raise OSError('M5 unavailable')
+        return _all(_d1)
+
+    service = TradeMentorContextService(loader=loader, clock=lambda: NOW)
+    context = service._build(NOW)
+    assert calls == [('m5', SYMBOLS), ('d1', SYMBOLS)]
+    assert all(row['d1_status'] == 'measured' for row in context['readings'])
+    assert all(row['m5_status'] == 'unavailable' for row in context['readings'])
+
+
+def test_partial_daily_fetch_survives_and_local_cache_fills_missing_symbol():
+    from trade_mentor_context import SYMBOLS
+    from ui.services.trade_mentor_context_service import TradeMentorContextService
+
+    calls, local = [], {}
+    def cache(timeframe, *_args, **_kwargs):
+        return dict(local) if timeframe == 'd1' else {}
+    def loader(timeframe, names, **_kwargs):
+        calls.append((timeframe, tuple(names)))
+        return {name: _d1() for name in SYMBOLS[:-1]} if timeframe == 'd1' else {}
+
+    service = TradeMentorContextService(loader=loader, cache_loader=cache, clock=lambda: NOW)
+    for hour in (0, 1):
+        rows = _readings(service._build(NOW + timedelta(hours=hour)))
+        assert all(rows[name]['d1_status'] == 'measured' for name in SYMBOLS[:-1])
+        assert rows[SYMBOLS[-1]]['d1_status'] == 'unavailable'
+    local[SYMBOLS[-1]] = _d1()
+    # A stale local entry must not overwrite its valid session-cached peer.
+    local[SYMBOLS[0]] = _d1(date(2026, 9, 10))
+    rows = _readings(service._build(NOW + timedelta(hours=2)))
+    assert all(row['d1_status'] == 'measured' for row in rows.values())
+    assert len([call for call in calls if call[0] == 'd1']) == 1

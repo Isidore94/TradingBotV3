@@ -279,7 +279,7 @@ def test_context_service_batches_off_the_gui_thread_caches_and_throttles_failure
     unavailable = QtTest.QSignalSpy(failed.contextUnavailable)
     assert failed.request_context("slot-1000", now=NOW) is True
     assert _signal_arrived(unavailable)
-    assert broken.calls == 1
+    assert broken.calls == 2
     assert failed.request_context("slot-1001", now=NOW + timedelta(minutes=5)) is False
-    assert broken.calls == 1, "a failed hour is throttled rather than retried"
+    assert broken.calls == 2, "a failed hour is throttled rather than retried"
     failed.shutdown(timeout_ms=250)
