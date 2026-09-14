@@ -366,6 +366,16 @@ weights - every one is a named constant at the top of `setup_points.py`.
 
 ## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — IN BUILD on `claude/wishlist-sweep-2026-09-12`
 
+**2026-09-14 trader-directed WS-TM follow-up - BUILT and reviewed:** replaced the under-chart Mentor card
+with a reusable modeless pop-up and attached hidden, bounded market context for VXX,
+RSP, USO, TLT, IWM, QQQ, SPY, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLU, XLV and XLY.
+Built on `codex/mentor-popup-context` from the accepted sweep baseline; independent review GO at 074c5ec7 and final full-suite exit 0 at be99127d (7980 passed). Loading into the stopped desk remains owed.
+The context keeps completed-bar short-term and daily measurements with explicit
+as-of times and missing/stale states, beside the unchanged trader words. Acquisition
+runs off the GUI thread only when a prompt is opened, with hourly M5 and daily D1
+bounds; saving never waits for data. No new model call or coaching is authorized by
+this collection change. Gate #110 remains owed for the pop-up and context handoff.
+
 Trader, 2026-09-12: *"Start incorporating features from [WISHLIST.md]. Analyze the entire document and
 integrate in whatever order seems more efficient ... one big feature dump then I will test it over a
 week. Astra will review but we will do that after code completion."* This is the explicit move of

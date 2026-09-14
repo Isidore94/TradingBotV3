@@ -1461,6 +1461,20 @@ They are evidence and must not be loaded as context.
   outcome field (grep-guard). Tests: `tests/test_ws_10e_note_tags.py` (13). Docs: DESK_INTERNALS
   "The four auto-tagging lanes"; `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`. The CLAUDE.md /
   AGENTS.md "three lanes" rule line is rewritten in the sweep's docs pass.
+- **Trade Mentor pop-up and hidden market context (WS-TM follow-up, trader 2026-09-14).**
+  On `codex/mentor-popup-context`, the chart host owns one reusable modeless pop-up,
+  with Submit, Read unchanged, Skip and draft preservation. It takes no chart height;
+  the arm bar stays in place. `scripts/trade_mentor_context.py` builds shallow,
+  completed-bar measurements for the trader's exact 17 symbols: 30-minute M5 change,
+  position against session VWAP, five-session D1 change and position against SMA20.
+  Unknown and stale readings carry reasons rather than zero. The context service
+  owns bounded background collection on prompt opening, uses available local caches
+  and batches missing coverage through Yahoo, with hourly M5 and completed-session
+  D1 reuse. Submit never waits for data. The snapshot stays under `mentor.context`
+  beside the original text, including on Read unchanged; a late worker cannot
+  change a saved note. `ai_summary` compacts only this attachment in `journal.entries`
+  for the existing AI budget; there are no new model calls or raw candle arrays.
+  Independent review is GO; 130 focused tests and the 7980-test full suite passed, with natural exit 0. Checkpoint gate #110 remains a live check.
 - **Trade Mentor: a prompt is a slot, an answer is a dated row (WS-TM, WISHLIST 10J steps 1-2,
   2026-09-13, sweep branch).** `scripts/trade_mentor_schedule.py` (pure) builds the day's
   `MentorSlot`s - whole hours from `FIRST_HOUR` 7 Pacific (`America/Los_Angeles`, DST-aware)
@@ -1476,7 +1490,7 @@ They are evidence and must not be loaded as context.
   recorded and never re-asked, AWAY / paused / idle beyond `IDLE_GRACE_MINUTES` (20) skip
   (`scripts/user_presence.py`: `GetLastInputInfo`, None off Windows reads PRESENT;
   `session_locked` is an injected callable, no lock hook yet). `ui/widgets/trade_mentor_card.py`
-  docks UNDER the chart after the arm bar (which did not move), hidden until due,
+  initially docked under the chart; the 2026-09-14 follow-up moves it to a pop-up,
   `WA_ShowWithoutActivating`, Ctrl+Enter scoped to its boxes; Submit writes the RAW text first
   through `market_journal_service.write_entry(origin="trade_mentor", mentor=..., reaffirms=...)`
   - `build_entry` / `write_entry` grew those two kwargs (present and empty on every other entry)
@@ -2512,6 +2526,11 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+- **2026-09-14 — WS-TM pop-up/context follow-up built and reviewed.** The trader requested an
+  independent prompt box and hidden lightweight market trends. Work is isolated on
+  `codex/mentor-popup-context`; the running desk and its stores remain unchanged.
+  Red tests proved the popup, independent data failures, partial daily-cache retention and bounded AI handoff before their fixes. The final full suite passed 7980 tests with natural exit 0; detailed verification is in the checkpoint.
 
 ### 2026-09-12 - WISHLIST sweep: one feature dump on `claude/wishlist-sweep-2026-09-12` (trader-directed)
 

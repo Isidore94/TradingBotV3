@@ -376,8 +376,8 @@ change that landed with it.
 ## Amendment 2026-09-12 — the Trade Mentor is a narrow fixed-time exception (WISHLIST 10J, packet WS-TM)
 
 Every **automatic starter** on this desk is gated on `autopilot_core.auto_scanning_due`,
-fail-open, and manual buttons are never gated. The Trade Mentor is neither: it starts
-nothing, scans nothing, fetches nothing and pushes nothing. It asks a **present human**
+fail-open, and manual buttons are never gated. The Trade Mentor does not start a
+scanner or push output. It asks a **present human**
 for a sentence at fixed Pacific wall-clock hours — hourly M5 reads from 07:00 until
 before the session's actual close, D1 reads at 08:00 and 12:00, and the previous
 session's missing trade fields at 10:00 — and files what they type in the Market
@@ -398,7 +398,17 @@ reason `away` and the hour is never asked again.
 **There is no phone push, and it does not become one.** The two standing exceptions to
 "AWAY is the only Auto mode that pushes routine output" (Research/Focus price alerts and
 EVENING's SPY ±1% wake alarm) are unchanged, and this is not a third: the surface is a
-card under the chart on the machine the trader is sitting at.
+modeless pop-up on the machine the trader is sitting at (placement amended by the
+trader on 2026-09-14).
+
+**2026-09-14 hidden context amendment:** opening an eligible prompt may request a
+bounded background snapshot of the trader's 17 named market ETFs. Existing usable
+caches are preferred, with bounded Yahoo batches for missing coverage, at most
+hourly M5 and once per completed session for D1. This is part of the same present-
+trader prompt exception, not a new periodic scanner: no separate timer, no IB, no
+per-symbol request loop, no model call and no waiting on Submit. Repeated failures
+respect the throttle. AWAY never opens an automatic prompt and therefore never
+starts this automatic context work. The manual Give a read door remains available.
 
 **Absence skips; it never queues.** Away, paused for the day, a locked workstation, or
 more than `IDLE_GRACE_MINUTES` (20) since the last keystroke or mouse move, each recorded

@@ -2119,6 +2119,22 @@ drop with its detail.
 
 ## 10 The Trade Mentor writes the corpus; the model reads it LATER (WISHLIST 10J, packet WS-TM)
 
+**2026-09-14 context follow-up:** the trader authorized a pop-up and hidden market
+measurements for 17 named ETFs. The existing `journal.entries` source receives the
+compact snapshot in the entry's `mentor` metadata beside the trader's original
+words. Preserve its capture time separately from scheduled and response times;
+these measurements describe the captured bars, not everything visible on a chart
+and not a verdict on the trader's thesis. Missing/stale fields remain unknown.
+The snapshot carries no candles or images, adds no source budget or hourly model
+call, and must survive the existing evidence reader's nesting and size bounds.
+The stored snapshot uses shallow named fields; only the `journal.entries` AI
+projection replaces repeated field names with one column header and compact value
+rows. The symbol, rule, source, capture time, stale/missing reason and numeric
+meaning survive that projection. Other entries and evidence scopes keep their
+existing representation. This keeps the attachment from spending the note's
+budget on seventeen copies of each field name.
+The dedicated structured interpretation and coaching steps below remain deferred.
+
 WISHLIST 10J has four steps. Steps 1 and 2 are built (packet WS-TM, 2026-09-12): a
 scheduler that asks a present trader for a market read on Pacific wall-clock hours, and
 a card that files the **raw text** in the Market Journal through that store's one

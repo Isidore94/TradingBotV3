@@ -4159,6 +4159,52 @@ point at which their size stops being free.
 
 ## TM - a prompt is a slot, an answer is a dated row (2026-09-12, WISHLIST 10J)
 
+**2026-09-14 follow-up, trader-authorized:** "the trade mentor stuff should be a pop
+up box" and "I dont need to see these values I jsut want the AI to have access to
+it", with lightweight context for VXX, RSP, USO, TLT, IWM, QQQ, SPY, XLB, XLC, XLE,
+XLF, XLI, XLK, XLP, XLU, XLV and XLY. This supersedes the under-chart placement below.
+The hosting seam in `alert_chart_review.py` is authorized by this request; alert
+decisions and the arm bar are outside the change.
+
+The new surface is one reusable modeless window per host. Scheduled prompts do not
+take keyboard focus. Closing or pressing Escape skips and preserves a draft; expiry
+and pause hide the window. Hidden market context is measurement, never trader text
+or an AI opinion. Each snapshot states its own capture time, rules, source and
+coverage; a response can be later and never backdates that snapshot. The two trend
+horizons stay distinct. Missing, stale or invalid inputs produce unknown values,
+never zero or an invented trend.
+
+The first context version uses completed M5 bars for the last 30-minute percentage
+change and direction, plus above/below session VWAP only when regular-session
+volume coverage is complete. Daily context uses the five-session percentage change
+and above/below SMA20, through the last completed session (including early closes).
+This is a small trend summary, not a reconstruction of every chart pattern. The
+raw journal retains the named scalar fields; the AI copy uses shared defaults and
+columns/rows. A varied 17-symbol snapshot plus a short real journal note was
+independently retained in 2,201 characters under the existing 3,000-character source
+budget. Exceptionally long notes or distinct missing-data reasons still obey the existing source limits: an oversized row is excluded with an explicit banner.
+
+Collection is bounded to those 17 symbols, off the Qt thread, with at most one
+worker and no new recurring timer. Opening a prompt requests context; repeated opens
+reuse the hourly M5 result and D1 results through the same completed session.
+Existing usable cache data is preferred; missing coverage may use bounded Yahoo
+batches, never a new per-symbol request loop or IB. Failures respect the same throttle. Submit
+does not wait, fetch or call a model; a pending/failed context is explicit and does
+not cost the journal write. A late result cannot change a saved note. The existing
+nightly Market Journal source carries the small snapshot beside the raw words;
+full bar arrays and images never enter this payload. Dedicated Mentor feedback
+remains deferred.
+
+The two data horizons fail independently: an unavailable M5 provider must not erase
+good daily context, nor vice versa. A completed-session D1 cache outranks an empty or
+stale local-cache response; otherwise the four missing/stale daily symbols would be
+downloaded again at every hourly prompt. The AI projection preserves schema, rules,
+sources, capture time and availability/reason, including a stale snapshot marker.
+Shared column defaults may compress repeated status/date/reason fields, but decoding
+must recover every original scalar. Acceptance tests use a real built snapshot and
+a persisted note inside the 3,000-character evidence budget, not a smaller fabricated
+snapshot.
+
 The Trade Mentor is the first thing on this desk that INTERRUPTS. Everything else waits
 to be looked at. That single fact decides almost every rule below, because an
 interruption that is wrong is worse than no interruption at all, and because the thing it
@@ -4248,13 +4294,12 @@ completeness view shows, never a fourth question and never silence. No broker co
 the session answers `journal not ready` and asks nothing — an empty questionnaire drawn
 from an incomplete import is a lie about the session.
 
-**The card never takes focus and the arm bar never moves.** `WA_ShowWithoutActivating`,
-no `setFocus`, no `raise_`, no `activateWindow`, not modal; `Ctrl+Enter` is an event
-filter ON THE TEXT BOXES, not a `QShortcut`, because a shortcut lives at window scope and
-a hidden card competing with a live binding is the rail-shortcut fault (two bindings for
-one sequence fire neither). The card is added to `AlertChartReview`'s layout AFTER the arm
-bar, hidden, so the arm bar keeps the position the trader welded it to on 2026-08-20 and
-the card costs the height-starved column nothing until a prompt is due.
+**The pop-up never takes focus and the arm bar never moves.** `WA_ShowWithoutActivating`,
+no `setFocus`, no `raise_`, no `activateWindow`, not modal; `Ctrl+Enter` is scoped to
+the text boxes, because a hidden widget competing with a live window shortcut makes
+both bindings fail. The original WS-TM card occupied `AlertChartReview`'s layout
+after the arm bar. The 2026-09-14 trader correction removes it from that layout:
+it is a separate window and consumes no chart height, even while open.
 
 **Ownership.** `MainWindow` owns the service (one timer, one state file, and the card's
 host is built more than once), started in `showEvent` and stopped in `closeEvent` beside
