@@ -60,7 +60,12 @@ CLAIM_SOURCE_TEXT = "auto: claimed pick"
 # B1 - the real push door, with only the transport stubbed
 # ---------------------------------------------------------------------------
 def _real_service(monkeypatch):
-    """A real `PriceAlertService` whose DELIVERY is a list, in DESK mode."""
+    """A real `PriceAlertService` whose DELIVERY is a list, in DESK mode.
+
+    Its 60-second poll timer is stopped at birth: this file is about the
+    armed-watch door, and a live timer left behind in the shared QApplication
+    would read `price_alerts` inside whatever test ran next.
+    """
     import autopilot_core
     from ui.services.price_alert_service import PriceAlertService
 
@@ -71,7 +76,9 @@ def _real_service(monkeypatch):
         "_deliver_armed_watch",
         lambda self, title, message: sent.append((title, message)),
     )
-    return PriceAlertService(), sent
+    service = PriceAlertService()
+    service._timer.stop()
+    return service, sent
 
 
 def test_a_standing_arm_reaches_the_phone_on_every_new_bar(monkeypatch):
