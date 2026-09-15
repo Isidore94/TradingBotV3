@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+from hashlib import sha256
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -30,9 +31,16 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 FIXTURES_DIR = Path(__file__).with_name("fixtures")
-GOLDEN_D1_ALERTS = json.loads(
+GOLDEN_D1_ALERT_FIXTURE = json.loads(
     (FIXTURES_DIR / "pct2_prechange_d1_upgrade_alerts.json").read_text(encoding="utf-8")
-)["expected_alerts"]
+)
+GOLDEN_RAW_D1_ALERTS = GOLDEN_D1_ALERT_FIXTURE["raw_alerts"]
+GOLDEN_D1_ALERTS = GOLDEN_D1_ALERT_FIXTURE["expected_alerts"]
+
+
+def _canonical_alert_bytes(alerts: list[dict]) -> bytes:
+    """The golden comparison is byte-stable across report formatting changes."""
+    return json.dumps(alerts, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 ARMED_AT = datetime(2026, 9, 10, 10, 0)
 FROZEN_LONG_LINE = {
@@ -266,6 +274,31 @@ def inject_frozen_break(rows, state, ib, **kwargs):
     )
 runner.refine_priority_rows_with_directional_filters = inject_frozen_break
 
+# Pin one actual pre-PCT-2 champion output in this otherwise isolated scan.
+# The saved fixture was emitted by e183db91's report writer with these exact
+# final-bucket fields.  The PCT-2 event must append beside it, never reshape it.
+real_apply_final_buckets = runner.apply_final_priority_buckets
+def pin_prechange_champion(rows, state, *args, **kwargs):
+    real_apply_final_buckets(rows, state, *args, **kwargs)
+    row = next(row for row in rows if row.get("symbol") == symbol)
+    row.update(
+        priority_bucket="favorite_setup",
+        score=242.0,
+        expected_r=1.25,
+        setup_family="earnings_gap",
+        favorite_zone="upper_1",
+        current_band_zone="upper_1",
+        last_trade_date="2026-09-12",
+    )
+runner.apply_final_priority_buckets = pin_prechange_champion
+runner.apply_expected_r_ranking = lambda *args, **kwargs: None
+# The pre-PCT-2 report was a real near -> favorite transition.  Seed only its
+# prior bucket so the real state-diff seam emits the pinned champion row.
+project_paths.MASTER_AVWAP_BUCKET_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+project_paths.MASTER_AVWAP_BUCKET_STATE_FILE.write_text(
+    json.dumps({"TLBR|LONG": {"bucket": "near_favorite_zone"}}), encoding="utf-8"
+)
+
 result = runner._run_master_impl(update_setup_tracker=False)
 saved = json.loads(Path(project_paths.MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE).read_text(encoding="utf-8"))
 row = next(row for row in result["priority_rows"] if row.get("symbol") == symbol)
@@ -300,7 +333,12 @@ def test_the_real_runner_path_adds_one_trendline_feed_row_in_its_own_data_dir(tm
     assert "TRENDLINE_BREAK" in payload["row"]["setup_tags"]
     matches = [row for row in payload["alerts"] if row.get("event_type") == "trendline_break"]
     champions = [row for row in payload["alerts"] if row.get("event_type") != "trendline_break"]
-    assert champions == GOLDEN_D1_ALERTS
+    golden_bytes = _canonical_alert_bytes(GOLDEN_D1_ALERTS)
+    assert GOLDEN_RAW_D1_ALERTS == GOLDEN_D1_ALERTS
+    assert sha256(_canonical_alert_bytes(GOLDEN_RAW_D1_ALERTS)).hexdigest() == GOLDEN_D1_ALERT_FIXTURE[
+        "raw_input_sha256"
+    ]
+    assert _canonical_alert_bytes(champions) == golden_bytes
     assert len(matches) == 1
     assert matches[0]["label"] == "Trendline break"
     assert matches[0]["break_date"] == "2026-09-11"
