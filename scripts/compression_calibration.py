@@ -273,10 +273,18 @@ def session_is_complete(session: str) -> bool:
 class _JsonWindow:
     """A bounded sliding window over a JSON text stream.
 
-    `raw_decode` needs the whole value it is parsing to be in one string, but
-    it does NOT need the rest of the file. So the window grows until the value
-    at hand parses and is discarded as soon as it has, which is what keeps the
-    1.26 GB tracker's peak a few megabytes rather than 3.79 GB.
+    `raw_decode` needs the whole value it is parsing to be in one string, but it
+    does NOT need the rest of the file. So the window grows until the value at
+    hand parses and is compacted once the reader has moved past a chunk's worth
+    of it, which is what keeps the 1.26 GB tracker's peak a few megabytes rather
+    than the 3.79 GB `read_text` cost.
+
+    The one thing to get right here is that **the window is addressed by OFFSET,
+    never by slicing**. The first attempt trimmed the buffer on every character
+    read; on a file written with `indent=1` that is a megabyte-sized `memcpy`
+    per whitespace character, and the run did not finish. `raw_decode` takes an
+    index, so nothing is ever copied to parse - the buffer is compacted at most
+    once per chunk consumed.
     """
 
     def __init__(self, handle, *, chunk_size: int = TRACKER_CHUNK_BYTES):
@@ -286,6 +294,10 @@ class _JsonWindow:
         self._base = 0
         self._eof = False
         self._decoder = json.JSONDecoder()
+        #: How many times the buffer has actually been copied. The invariant is
+        #: that this is O(file size / chunk), never O(characters read) - see
+        #: :meth:`_compact`. A test asserts it.
+        self.compactions = 0
 
     def _read_more(self) -> bool:
         if self._eof:
@@ -297,34 +309,48 @@ class _JsonWindow:
         self._buffer += data
         return True
 
-    def _trim(self, absolute: int) -> None:
-        cut = absolute - self._base
-        if cut > 0:
-            self._buffer = self._buffer[cut:]
+    def _compact(self, absolute: int) -> None:
+        """Drop what the reader has finished with - at most once per chunk."""
+        offset = absolute - self._base
+        if offset >= self._chunk:
+            self._buffer = self._buffer[offset:]
             self._base = absolute
+            self.compactions += 1
 
     def peek(self, absolute: int) -> str:
         """The character at `absolute`, or `""` at end of file."""
-        self._trim(absolute)
-        while not self._buffer and self._read_more():
-            pass
-        return self._buffer[0] if self._buffer else ""
+        while absolute - self._base >= len(self._buffer):
+            if not self._read_more():
+                return ""
+        return self._buffer[absolute - self._base]
 
     def skip_whitespace(self, absolute: int) -> int:
+        """Past any run of JSON whitespace, scanning inside the buffer."""
         while True:
-            char = self.peek(absolute)
-            if char and char in " \t\r\n":
-                absolute += 1
-                continue
-            return absolute
+            offset = absolute - self._base
+            buffer = self._buffer
+            length = len(buffer)
+            while offset < length and buffer[offset] in " \t\r\n":
+                offset += 1
+            absolute = self._base + offset
+            if offset < length:
+                self._compact(absolute)
+                return absolute
+            if not self._read_more():
+                return absolute
 
     def decode(self, absolute: int) -> tuple[Any, int]:
-        """Parse exactly one JSON value starting at `absolute`."""
-        self._trim(absolute)
+        """Parse exactly one JSON value starting at `absolute`.
+
+        Grows the window until the value is whole. Nothing is sliced: the
+        decoder is given the buffer and an index into it.
+        """
+        self._compact(absolute)
         while True:
-            if self._buffer:
+            offset = absolute - self._base
+            if offset < len(self._buffer):
                 try:
-                    value, end = self._decoder.raw_decode(self._buffer, 0)
+                    value, end = self._decoder.raw_decode(self._buffer, offset)
                     return value, self._base + end
                 except ValueError:
                     pass
@@ -334,22 +360,30 @@ class _JsonWindow:
     def skip_value(self, absolute: int) -> int:
         """Walk PAST one JSON value without building it.
 
-        Used for the tracker's non-record sections, which can be large and
-        which this report never reads: decoding them would put their whole
-        object graph in memory for nothing.
+        Used for the tracker's non-record sections, which can be large and which
+        this report never reads: decoding them would put their whole object
+        graph in memory for nothing. Scans inside the buffer, refilling only
+        when it runs out.
         """
-        char = self.peek(absolute)
-        if not char:
+        first = self.peek(absolute)
+        if not first:
             raise ValueError("unterminated JSON value")
-        if char in "{[":
-            depth = 0
-            in_string = False
-            escaped = False
-            while True:
-                char = self.peek(absolute)
-                if not char:
-                    raise ValueError("unterminated JSON container")
-                absolute += 1
+        # `structural` is decided from the first character; `in_string` is NOT
+        # pre-set, because the loop below consumes that first character too - a
+        # pre-set flag makes the OPENING quote read as the closing one.
+        structural = first in "{["
+        in_string = False
+        depth = 0
+        escaped = False
+        started = False
+        while True:
+            self._compact(absolute)
+            offset = absolute - self._base
+            buffer = self._buffer
+            length = len(buffer)
+            while offset < length:
+                char = buffer[offset]
+                offset += 1
                 if in_string:
                     if escaped:
                         escaped = False
@@ -357,34 +391,33 @@ class _JsonWindow:
                         escaped = True
                     elif char == '"':
                         in_string = False
+                        if not structural:
+                            return self._base + offset
                     continue
                 if char == '"':
                     in_string = True
-                elif char in "{[":
+                    started = True
+                    continue
+                if char in "{[":
                     depth += 1
-                elif char in "}]":
+                    started = True
+                    continue
+                if char in "}]":
                     depth -= 1
-                    if depth == 0:
-                        return absolute
-        if char == '"':
-            escaped = False
-            absolute += 1
-            while True:
-                char = self.peek(absolute)
-                if not char:
-                    raise ValueError("unterminated JSON string")
-                absolute += 1
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    return absolute
-        while True:
-            char = self.peek(absolute)
-            if not char or char in ",}] \t\r\n":
+                    if structural and depth == 0:
+                        return self._base + offset
+                    continue
+                if not structural:
+                    # A bare scalar (`true`, `null`, a number): it ends at the
+                    # first delimiter, and that delimiter is NOT consumed.
+                    if started and char in ",}] \t\r\n":
+                        return self._base + offset - 1
+                    started = True
+            absolute = self._base + offset
+            if not self._read_more():
+                if structural or in_string:
+                    raise ValueError("unterminated JSON value")
                 return absolute
-            absolute += 1
 
 
 def iter_tracker_records(path: Path | str, *, chunk_size: int = TRACKER_CHUNK_BYTES) -> Iterator[dict]:

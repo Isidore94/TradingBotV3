@@ -476,6 +476,53 @@ def test_the_tracker_is_streamed_and_never_read_whole(tmp_path, monkeypatch):
     assert readers and readers[0].largest_request <= limit
 
 
+def test_the_window_is_addressed_by_offset_and_never_sliced_per_character(tmp_path):
+    r"""The reason the first streaming attempt never finished.
+
+    It trimmed the buffer on every character read, and the tracker is written
+    with `indent=1` - so every newline and every leading space cost a
+    chunk-sized `memcpy`, and a 1.26 GB file would have copied petabytes. The
+    buffer is now addressed by OFFSET (`raw_decode` takes an index) and compacted
+    at most once per chunk consumed, which is what this counts.
+    """
+    import compression_calibration
+
+    payload = {
+        "setups": {
+            f"S{index}": {"symbol": f"S{index}", "scan_date": "2026-08-20", "pad": "z" * 400}
+            for index in range(2000)
+        }
+    }
+    path = tmp_path / "indented.json"
+    # `indent=1` is how the tracker is written, and it is what made the defect
+    # catastrophic rather than merely slow.
+    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    size = path.stat().st_size
+    chunk = 64 * 1024
+
+    windows: list[object] = []
+    real_window = compression_calibration._JsonWindow
+
+    class _Counting(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            windows.append(self)
+
+    compression_calibration._JsonWindow = _Counting
+    try:
+        records = list(compression_calibration.iter_tracker_records(path, chunk_size=chunk))
+    finally:
+        compression_calibration._JsonWindow = real_window
+
+    assert len(records) == 2000
+    assert windows, "the reader built no window"
+    compactions = windows[0].compactions
+    assert compactions <= (size // chunk) + 2, (
+        f"{compactions} buffer copies for {size} bytes at a {chunk}-byte chunk - "
+        "the window is being sliced per character again"
+    )
+
+
 def test_the_streamed_reader_survives_a_truncated_file(tmp_path):
     """A half-written tracker yields what it can and stops - never raises."""
     import compression_calibration
