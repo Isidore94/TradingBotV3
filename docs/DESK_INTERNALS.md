@@ -5621,10 +5621,10 @@ measure first, then tune.
   Focus auto-interest never constructs it. It is available only when the trader arms the chart.
 - **A line must not move after the arm.** `D1EventWatch` saves the scan candidate's explicit stable
   line id, type, endpoint dates/prices, lookback anchor, current projected price, log slope and
-  candidate break date, with side and the compact saved D1 report's actual parseable `generated_at`
-  as knowledge time. The minute poll reads no report and never consults a redraw; it validates every
-  frozen fact before confirming. An old or partial watch still loads, but is uncertainty and cannot
-  fire; an unparseable report time refuses the arm.
+  candidate break date, with side and the compact saved D1 report's actual offset-aware parseable
+  `generated_at` as knowledge time. The minute poll reads no report and never consults a redraw; it
+  validates every frozen fact before confirming. An old or partial watch still loads, but is
+  uncertainty and cannot fire; a missing, malformed or timezone-less report time refuses the arm.
 - **Only two completed D1 closes can prove it.** The prior close must be on or inside the frozen
   line and the next completed close must be through it in the setup direction. M5 bars, wicks,
   forming daily bars and a prior close already through do not count. The one-shot watch retires on

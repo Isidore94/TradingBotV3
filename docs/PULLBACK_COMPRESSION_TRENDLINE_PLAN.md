@@ -430,11 +430,11 @@ Items:
    `D1_EXTENSION_KINDS`, never `D1_PULLBACK_KINDS`. At arm time the compact saved D1 report supplies
    the scan candidate; the watch persists its explicit stable line id, type, endpoint dates/prices,
    projected current-line price, slope, lookback anchor, candidate break date and the report's actual
-   parseable `generated_at` as knowledge time. The poll validates every frozen fact before it can
+   offset-aware parseable `generated_at` as knowledge time. The poll validates every frozen fact before it can
    fire: a completed D1 close crosses the saved line only when the prior completed close was not
    already through. It never treats a wick, M5 bar, forming D1 bar, stale/missing frozen evidence or
-   a later scan redraw as confirmation. An unparseable report time refuses the arm; old/partial rows
-   load safely but cannot fire. Duplicate persisted watches yield one save and one emit per
+   a later scan redraw as confirmation. A missing, malformed or timezone-less report time refuses the
+   arm; old/partial rows load safely but cannot fire. Duplicate persisted watches yield one save and one emit per
    `(symbol, side, break_date)` sweep. Focus picks do NOT get it automatically; only an armed watch
    does.
 3. **Scan-level feed alert**: the saved bucket-upgrade report keeps every existing champion row

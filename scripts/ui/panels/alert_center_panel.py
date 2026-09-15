@@ -5987,6 +5987,8 @@ class AlertCenterPanel(QFrame):
             knowledge_at = datetime.fromisoformat(str(payload.get("generated_at") or ""))
         except (AttributeError, TypeError, ValueError):
             return None
+        if knowledge_at.tzinfo is None or knowledge_at.utcoffset() is None:
+            return None
         events = payload.get("alerts") if isinstance(payload, dict) else []
         for event in events or []:
             if not isinstance(event, dict):

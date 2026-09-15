@@ -296,6 +296,27 @@ def test_trendline_arm_uses_the_saved_report_generated_at_or_refuses(tmp_path, m
     invalid = AlertCenterPanel(d1_event_watches_path=tmp_path / "invalid.json")
     assert not invalid.arm_d1_event_watch("TLBR", "trendline_break", side="LONG")
 
+    report.write_text(
+        json.dumps(
+            {
+                # ISO-valid but timezone-less must not manufacture a market
+                # knowledge instant from the desk machine's local clock.
+                "generated_at": "2026-09-12T16:30:00",
+                "alerts": [
+                    {
+                        "event_type": "trendline_break",
+                        "symbol": "TLBR",
+                        "side": "LONG",
+                        "trendline_candidate": FROZEN_LONG_LINE,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    naive = AlertCenterPanel(d1_event_watches_path=tmp_path / "naive.json")
+    assert not naive.arm_d1_event_watch("TLBR", "trendline_break", side="LONG")
+
 
 def test_duplicate_persisted_trendline_watches_emit_once_for_one_break_date(tmp_path, monkeypatch):
     """One scan break is one alert even when an old store has duplicate rows."""
