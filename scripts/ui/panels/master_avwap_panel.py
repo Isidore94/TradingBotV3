@@ -94,6 +94,11 @@ BUCKET_CHIPS = {
 DEFAULT_BUCKET_CHIPS = frozenset(BUCKET_CHIP_KEYS)
 #: The new persisted key (a sorted list of raw bucket keys).
 SETTING_BUCKET_CHIPS = "qt_setups_bucket_chips"
+#: Trader, 2026-09-15: a row vetoed for the day leaves the setups table. OFF
+#: hides (and counts) the rejected rows; ON shows them with their red ✕.
+SETTING_SHOW_VETOED = "qt_setups_show_vetoed"
+#: Where a setups-table row is charted from; the centre chart quotes it.
+SETUPS_CHART_ORIGIN = "the Master AVWAP setups"
 #: ...and the one it replaces, migrated ONCE on the first read. Each old value
 #: gains `claimed_like`, because a trader looking at their favourites wants the
 #: ones they claimed themselves in the same view.
@@ -610,6 +615,7 @@ class MasterAvwapPanel(QWidget):
 
         self._build_bucket_toggle()
         self._build_points_toggle()
+        self._build_show_vetoed_toggle()
         self._build_overflow_menu()
         self._column_profile = ""
         self._build_layout()
@@ -662,6 +668,7 @@ class MasterAvwapPanel(QWidget):
             strip.addWidget(button)
         strip.addSpacing(6)
         strip.addWidget(self.points_toggle)
+        strip.addWidget(self.show_vetoed_toggle)
         strip.addWidget(self.search_input, 1)
         strip.addWidget(self.data_as_of_label)
         strip.addWidget(self.overflow_button)
@@ -728,6 +735,47 @@ class MasterAvwapPanel(QWidget):
         self.points_grade_label = QLabel("")
         self.points_grade_label.setObjectName("MutedLabel")
         self._refresh_points_tooltip()
+
+    def _build_show_vetoed_toggle(self) -> None:
+        """Trader, 2026-09-15: *"vetoing it for the day SHOULD remove it from the
+        list (but the stock should still be tracked for setup tracker purposes)."*
+
+        The table hides a row whose symbol the trader vetoed, disliked or parked
+        today (`pick_feedback.HIDDEN_REJECT_KINDS`) and says how many it is
+        holding back; the box brings them back with their red ✕. Presentation
+        only - the scan, the tracker and the evidence rows are untouched.
+        """
+        self.show_vetoed_toggle = QCheckBox("Show vetoed")
+        self.show_vetoed_toggle.setToolTip(
+            "A row you vetoed, disliked or parked for the day is hidden from this table "
+            "(the setup tracker keeps tracking it). Tick to show those rows again."
+        )
+        stored = bool(get_local_setting(SETTING_SHOW_VETOED, False))
+        self.show_vetoed_toggle.setChecked(stored)
+        self.proxy.set_filters(show_rejected=stored)
+        self.show_vetoed_toggle.toggled.connect(self._on_show_vetoed_toggled)
+
+    def _on_show_vetoed_toggled(self, checked: bool) -> None:
+        try:
+            save_local_setting(SETTING_SHOW_VETOED, bool(checked))
+        except Exception:  # noqa: BLE001 - a preference never costs the table
+            pass
+        self.proxy.set_filters(show_rejected=bool(checked))
+        self._refresh_show_vetoed_label()
+
+    def _refresh_show_vetoed_label(self) -> None:
+        hidden = self.proxy.hidden_rejected()
+        self.show_vetoed_toggle.setText(f"Show vetoed ({hidden})" if hidden else "Show vetoed")
+
+    def _rejected_today_symbols(self) -> frozenset[str]:
+        """Today's swing-side rejects, from the snapshot the ★/✕ columns read."""
+        decisions = self._day_decisions
+        if decisions is None:
+            return frozenset()
+        try:
+            return frozenset(decisions.rejected_symbols())
+        except Exception:  # noqa: BLE001 - an odd payload hides nothing
+            return frozenset()
 
     def _refresh_points_tooltip(self) -> None:
         """The checkbox tooltip carries the grade and the weights in force."""
@@ -952,6 +1000,11 @@ class MasterAvwapPanel(QWidget):
         """Repaint the table because Focus membership moved. Presentation only."""
         self.table.viewport().update()
 
+    def refresh_decisions(self) -> None:
+        """Public door for the desk: the trader decided something on the centre
+        chart (a veto, a claim), so the ★/✕ marks and the hide filter are stale."""
+        self._request_decision_refresh()
+
     def _request_decision_refresh(self) -> None:
         """Ask for ONE repaint of the ★/✕ columns, at most one per 200 ms.
 
@@ -989,6 +1042,10 @@ class MasterAvwapPanel(QWidget):
         self._day_decisions = payload
         self._day_decisions_date = str(getattr(payload, "trade_date", "") or "")
         self.delegate.set_decision_lookup(payload.for_symbol)
+        # Trader, 2026-09-15: a veto for the day removes the row. The same
+        # snapshot that paints the red ✕ now also hides the row (and counts it).
+        self.proxy.set_filters(rejected_symbols=self._rejected_today_symbols())
+        self._refresh_show_vetoed_label()
         self._repaint_focus_stars()
 
     def _check_decision_day_roll(self) -> None:
@@ -1843,7 +1900,7 @@ class MasterAvwapPanel(QWidget):
         if self._chart_sink is not None:
             # On the Trading Desk the centre chart is the one chart; the Space
             # / Prev / Next walk lands there too, one row at a time.
-            self._chart_sink(row.symbol, side=side, origin="the Master AVWAP setups")
+            self._chart_row_on_desk(row, proxy_index.row())
             return
         bot = None
         if self._bounce_service is not None:
@@ -1864,6 +1921,73 @@ class MasterAvwapPanel(QWidget):
             # never requires touching the table itself.
             review_host=self,
         )
+
+    def _chart_row_on_desk(self, row: SetupRow, proxy_row: int) -> bool:
+        """Chart one setups row on the centre chart, with the way to the next one.
+
+        Trader, 2026-09-15: *"when i click on master avwap setups tab and then I
+        click the veto or like and claim buttons it should cycle it to the next
+        pick."* The centre chart knows nothing of this table, so the row goes
+        over with a `next_pick` callback that charts the row after it in THIS
+        table's visible order; the Alert Center calls it instead of its own
+        waiting list when a chart opened from here is vetoed, claimed or
+        stepped past. Each charted row carries its own callback, so the walk
+        continues row by row until the table runs out.
+        """
+        if self._chart_sink is None:
+            return False
+        side = row.side if row.side in {"LONG", "SHORT"} else ""
+        symbol, row_side = row.symbol, row.side
+
+        def _next() -> bool:
+            return self._chart_next_pick(symbol, row_side, proxy_row)
+
+        return bool(
+            self._chart_sink(row.symbol, side=side, origin=SETUPS_CHART_ORIGIN, next_pick=_next)
+            is not False
+        )
+
+    def _row_at_proxy(self, proxy_row: int) -> SetupRow | None:
+        source = self.proxy.mapToSource(self.proxy.index(proxy_row, 0))
+        return self.model.row_at(source.row())
+
+    def _chart_next_pick(self, symbol: str, side: str, proxy_row: int) -> bool:
+        """Chart the visible row after `(symbol, side)`; False when there is none.
+
+        The row is looked up by identity first (its position may have moved
+        under a refresh); a row that has already left the table - the hide
+        filter caught up with the veto - is answered by the row that took its
+        place. The vetoed symbol itself and any symbol rejected today are
+        skipped, so the walk never lands on a chart the trader just finished.
+        """
+        if self._chart_sink is None:
+            return False
+        count = self.proxy.rowCount()
+        position = None
+        for candidate in range(count):
+            row = self._row_at_proxy(candidate)
+            if row is not None and row.symbol == symbol and row.side == side:
+                position = candidate
+                break
+        start = position + 1 if position is not None else max(0, int(proxy_row))
+        rejected = self._rejected_today_symbols()
+        for candidate in range(start, count):
+            row = self._row_at_proxy(candidate)
+            if row is None or not row.symbol or row.symbol == symbol or row.symbol in rejected:
+                continue
+            symbol_column = next(
+                column
+                for column, (key, _label) in enumerate(self.model.COLUMNS)
+                if key == "symbol"
+            )
+            index = self.proxy.index(candidate, symbol_column)
+            self.table.setCurrentIndex(index)
+            self.table.scrollTo(index)
+            return self._chart_row_on_desk(row, candidate)
+        message = f"End of the setups list - nothing after {symbol}."
+        self.status_label.setText(message)
+        self.statusChanged.emit(message)
+        return False
 
     def _open_symbol_snapshot_from_double_click(self, proxy_index) -> None:
         """Keep the existing row double-click without reopening symbol clicks."""

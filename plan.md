@@ -266,7 +266,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.25** | Workspace memory (WISHLIST 11) | Trader 2026-09-12: a root `MEMORY.md` routing index and `memory/` provenance-tagged detail, adapted from JumpStarter M1; recall only, never authority. **BUILT 2026-09-12 on `main`; verification gate #93 owed.** |
 | **0.26** | WISHLIST sweep (trader 2026-09-12) | Every WISHLIST item built as ONE feature dump on the side branch `claude/wishlist-sweep-2026-09-12` for a week of trader testing, Astra review after code completion, then a merge decision. **IN BUILD; the per-item status table is the checkpoint entry "2026-09-12 - WISHLIST SWEEP".** |
 | **0.27** | Claimed D1 picks (trader 2026-09-14) | A CLAIMED like on a D1 chart becomes a ranked pick in Master AVWAP Setups, the D1 chart is done, M5 stays on the left and D1 on the right, and the claims are graded beside FAV/HC. **BUILT 2026-09-14 as packets D1C-A / D1C-L / D1C-B on `lead/d1c-integration` above the sweep tip; live gates #119-#121 owed; nothing merged to `main`.** |
-| **0.28** | Day-trade watchlists reset after the close (trader 2026-09-15) | `longs.txt` / `shorts.txt` are wiped after every session's close by the first Auto Pilot tick that sees a list written at or before that close; a name typed after the close is tomorrow's; swing lists untouched. **BUILT 2026-09-15 on `claude/desk-combined-2026-09-14`; live gate #123 owed.** |
+| **0.28** | Trader's 2026-09-15 desk requests: day-trade watchlist reset (DTR) + setups-table cycle and veto-hide (SC) | DTR: `longs.txt` / `shorts.txt` are wiped after every session's close by the first Auto Pilot tick that sees a list written at or before that close; a name typed after the close is tomorrow's; swing lists untouched. SC: a chart opened from the Master AVWAP setups table cycles to the table's next row on veto / claim / Next, and a row vetoed for the day is hidden (counted, `Show vetoed` restores) while the tracker keeps tracking it. **BUILT 2026-09-15 on `claude/desk-combined-2026-09-14`; live gates #123 (DTR) and #124 (SC) owed.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -375,7 +375,24 @@ Remaining, trader's call: turn the learned weights on once the grade line shows 
 floor; the AWAY digest's swing order by points (it ranks by the Wilson bound today); the base
 weights - every one is a named constant at the top of `setup_points.py`.
 
-## Phase 0.28 — Day-trade watchlists reset after the close (trader 2026-09-15) — BUILT the same day on `claude/desk-combined-2026-09-14`; live gate #123 owed
+## Phase 0.28 — Trader's 2026-09-15 desk requests (DTR + SC) — BUILT the same day on `claude/desk-combined-2026-09-14`; live gates #123 and #124 owed
+
+**SC - the setups table cycles and hides.** Trader, 2026-09-15: *"when i click on master avwap setups tab and
+then I click the veto or like and claim buttons it should cycle it to the next pick. additionally vetoing it
+for the day SHOULD remove it from the list (but the stock should still be tracked for setup tracker
+purposes)"*. Built by the lead: `chart_symbol(..., next_pick=)` and `AlertCenterPanel._manual_next_pick`
+(consumed by `_advance_review_queue` instead of the waiting list; dropped by any other chart),
+`MasterAvwapPanel._chart_row_on_desk` / `_chart_next_pick` (the table's own walk, same symbol and today's
+rejects skipped, the selection following, "End of the setups list" when it runs out),
+`reviewDecisionRecorded` -> `refresh_decisions`, `SetupFilterProxyModel` `rejected_symbols` /
+`show_rejected` / `hidden_rejected()` fed by `DayDecisions.rejected_symbols()` over
+`pick_feedback.HIDDEN_REJECT_KINDS`, the `Show vetoed (N)` box (`qt_setups_show_vetoed`, default off).
+Sections 5-7 bind: presentation only - no detector, score, tracker, evidence or `review_policy.json`
+change; WS-SX's "a decision moves nothing" is amended to "a swing-side reject hides its row" and the
+test says so. Lead decisions the trader may overrule: the table's own ✕ (a coded dislike) hides too; the
+hide is per SYMBOL (both sides); a day-trade pass and an M5 click-away hide nothing.
+
+**DTR - the day-trade watchlists reset after the close.**
 
 Trader, 2026-09-15: *"i want all names wiped at the end of the day. its a daytrade watchlist not a
 permanent one."* Built by the lead: `scripts/daytrade_watchlist_reset.py` (pure rule `reset_due`, the

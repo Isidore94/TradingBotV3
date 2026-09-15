@@ -5421,3 +5421,67 @@ was; no writer may still remove one user-entered name by its own judgement.
 **Open for the trader.** Whether the M5 Focus picks should reset with the lists (today they fade
 on their own ten-session clock, `focus_picks.FADE_TRADING_DAYS`), and whether the 13:00 Pacific
 close is the right moment or the wipe should wait for the evening. Gate #123.
+
+## SC - the setups table cycles, and a veto for the day hides the row (2026-09-15, trader-directed)
+
+Trader, 2026-09-15: *"when i click on master avwap setups tab and then I click the veto or
+like and claim buttons it should cycle it to the next pick. additionally vetoing it for the
+day SHOULD remove it from the list (but the stock should still be tracked for setup tracker
+purposes)"*.
+
+**What was true before (recon, file:line verified).** A setups-table row click reached the
+centre chart through `MasterAvwapPanel._open_symbol_snapshot` -> `chart_symbol`, which built a
+`MANUAL_CHART_TAG` alert; `_select_review_alert` gave such a chart NO place in the waiting list
+(packet T1: a look is not a shown alert). Both retire paths - `_retire_after_veto` ->
+`_ignore_alert_symbol` and `_place_claimed_d1` -> `_retire_claimed_review` - ended in
+`_advance_review_queue`, which pops the ORDINARY waiting list and knows nothing of the table.
+So a veto on a setups chart showed whatever M5 / D1 alert was queued next, or "waiting". And
+WS-SX's ✕ mark was paint only: `SetupFilterProxyModel.filterAcceptsRow` had no decision
+predicate, so a vetoed row stayed in the table with a red ✕.
+
+**The cycle.** `chart_symbol` gained a `next_pick` callback - a caller's own "what comes after
+this chart", returning True when it charted something. It is stored on the panel
+(`_manual_next_pick`), consumed by `_advance_review_queue` BEFORE the waiting list is read (a
+veto, a claim and the Next verb all end there), and dropped in `_select_review_alert` the
+moment any non-manual chart takes the pane; a lookup-box or board chart passes none, which
+clears an older one. The setups panel passes one for every row it charts
+(`_chart_row_on_desk`): `_chart_next_pick` finds the row after `(symbol, side)` in the proxy's
+VISIBLE order - by identity first, because a refresh may have moved it; when the hide filter
+has already removed the vetoed row, the row now at its old index IS the next one - skips the
+same symbol (the other side of a name just vetoed) and any symbol rejected today, moves the
+table's selection and scrolls to it, and charts it with a fresh callback of its own. When the
+table runs out the status row reads `End of the setups list - nothing after X` and the
+waiting list takes over. A callback that raises is logged and the queue proceeds. The waiting
+list is never touched by the walk.
+
+**The hide.** `pick_feedback.HIDDEN_REJECT_KINDS` = `veto`, `dislike`, `not_today`,
+`remove_today` - the swing-side verdicts. A day-trade `pass` and an M5 click-away are
+verdicts on ANOTHER population (CLAUDE.md P5: no two verdicts are combined) and hide nothing.
+`DayDecisions.rejected_symbols()` reads the same snapshot that paints the ✕; the panel's
+`_on_day_decisions_ready` feeds it to `SetupFilterProxyModel.set_filters(rejected_symbols=)`,
+so the hide and the mark can never disagree. The strip's `Show vetoed (N)` box
+(`qt_setups_show_vetoed`, default OFF) restores the rows in their original order with their red
+✕. Per SYMBOL, as the ✕ mark is: vetoing the LONG thesis hides a SHORT row of the same name too.
+Presentation only - nothing is deleted, re-ordered or written; `filterAcceptsRow` is read by
+the view alone, and the Master AVWAP scan, the Setup Tracker's save pass and every evidence
+writer never see it, so the vetoed name is still tracked (the trader's parenthesis).
+
+**Why the setups table hears the chart's verdict at once.** WS-SX's marks refreshed through the
+Focus coalescer and the report poll; a chart veto that touched no Focus pick could wait 30 s.
+The Alert Center now emits `reviewDecisionRecorded` after a rail veto and a placed claim, and
+the desk connects it to `MasterAvwapPanel.refresh_decisions` (the same 200 ms coalescer).
+
+**What WS-SX loses.** Its item 5 said "a decision moves nothing". The trader amended it; the
+test that pinned it (`test_a_decision_marks_a_row_and_moves_nothing`) is now
+`test_a_veto_hides_its_row_and_show_vetoed_brings_it_back` and gate #99's red-✕ check is read
+with `Show vetoed` ticked. Three WS-SX paint tests are ORDER-DEPENDENT (they pass after
+`tests/test_qt_desk_ticker_clicks_chart_center.py` loads the theme and fail alone) - found
+here, pre-existing, not fixed.
+
+**Lead decisions the trader may overrule.** The table's own ✕ (a coded dislike) hides too - it
+is the same "not today" in the trader's hand; the hide is per symbol; a claimed row stays
+(labelled `My liked trade`) and the walk continues past it.
+
+**Reopen trigger.** The trader asks for the hidden rows to be REMOVED from the report, for the
+walk to follow the Points order instead of the visible order, or for the M5 alert bar to
+cycle the same way. Gate #124.

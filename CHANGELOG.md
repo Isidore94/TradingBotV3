@@ -1121,6 +1121,35 @@ They are evidence and must not be loaded as context.
   DISTINCT: nothing scans a row the gate refused. `FocusPickStore.shared_watchlist_path()` is
   the accessor the staging call uses. Two private helpers (`_stage_strength_board_picks`,
   `_publish_strength_board_adoption`) serve only that one function in the alert file.
+- **A chart opened from the setups table cycles through the table, and a veto for the day
+  hides the row (SC, trader 2026-09-15).** `AlertCenterPanel.chart_symbol` gained
+  `next_pick=`: a caller's own "what comes after this chart" (a callable returning True when it
+  charted something), stored as `_manual_next_pick`, CONSUMED by `_advance_review_queue`
+  instead of the waiting list - so a veto (`_retire_after_veto` -> `_ignore_alert_symbol`), a
+  claimed like (`_retire_claimed_review`) or the Next verb on a chart that came from the
+  setups table charts that table's next row - and dropped in `_select_review_alert` the
+  moment any non-manual chart takes the pane (a lookup-box chart passes none and clears it);
+  a callback that raises logs and falls back to the queue; the waiting list is never touched by
+  the walk. `MasterAvwapPanel._chart_row_on_desk` passes one for every row it charts
+  (`SETUPS_CHART_ORIGIN`), and `_chart_next_pick` finds the row after `(symbol, side)` in the
+  proxy's VISIBLE order (by identity first; a row the hide filter already removed is answered
+  by the row that took its place), skips the same symbol and any symbol rejected today,
+  moves the table's selection with it, and says `End of the setups list - nothing after X`
+  when it runs out. The Alert Center emits `reviewDecisionRecorded` after a rail veto and a
+  placed claim; the desk connects it to `MasterAvwapPanel.refresh_decisions` (the WS-SX
+  coalesced refresh), so the ✕ mark and the hide filter follow the chart's verdict at once.
+  **The hide:** `pick_feedback.HIDDEN_REJECT_KINDS` (`veto`, `dislike`, `not_today`,
+  `remove_today` - the swing-side verdicts; a day-trade `pass` and an M5 click-away are
+  verdicts on another population and hide nothing), `DayDecisions.rejected_symbols()`,
+  `SetupFilterProxyModel.set_filters(rejected_symbols=, show_rejected=)` +
+  `hidden_rejected()`, fed from the same `_on_day_decisions_ready` snapshot that paints the
+  ✕; the strip's `Show vetoed (N)` box (`qt_setups_show_vetoed`, default OFF) restores the
+  rows in their original order. Per SYMBOL, like the ✕ mark. Presentation only: nothing is
+  deleted, re-ordered or written; the scan, the Setup Tracker's save pass and every evidence
+  row never read the filter, so a vetoed name is still tracked. WS-SX's "a decision moves
+  nothing" clause is superseded for these kinds; `tests/test_ws_sx_star_x.py`'s moves-nothing
+  test became `test_a_veto_hides_its_row_and_show_vetoed_brings_it_back`. Tests:
+  `tests/test_setups_cycle_and_veto_hide.py` (16). Long form: `docs/DESK_INTERNALS.md` "SC".
 - **The setups table's two mark columns state the day's decisions (WS-SX, WISHLIST item 8,
   2026-09-12, sweep branch).** `scripts/pick_feedback.py` `decisions_today` / `DayDecisions`,
   `scripts/ui/widgets/setup_delegate.py` `set_decision_lookup`,
@@ -2563,6 +2592,8 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 ### 2026-09-15 - The day-trade watchlists are wiped after the close (trader-directed, lead on `claude/desk-combined-2026-09-14`)
 
 **Trader, 2026-09-15:** *"i want all names wiped at the end of the day. its a daytrade watchlist not a permanent one."* Built by the lead alone, no packet: `scripts/daytrade_watchlist_reset.py` (the stateless rule on the file's mtime against the last completed session's close, the atomic wipe, one `session_reset` intent row per name, a dry-run CLI), `AutopilotService._maybe_reset_daytrade_watchlists` on every tick before the weekend short-circuit and the open scan, `watchlist_intent_events.SOURCE_SESSION_RESET`, the `daytrade_watchlists_reset` switch (default ON). Decision 0020 amends the plan.md sec 5 invariant narrowly: the two day-trade lists are emptied WHOLE at a session boundary; a machine still never removes one user-entered name by its own judgement, and the swing lists keep the rule as it was. Lead decisions the trader may overrule: the M5 Focus picks are NOT reset with the lists (they fade on their own ten-session clock, and a Focus pick is scanned through the fast lane regardless); a name typed after the close is tomorrow's and survives. The inventory paragraph under "Scanning, candidates, and decision support" is the contract. Tests: `tests/test_daytrade_watchlist_reset.py` (26); the two Auto Pilot tick tests stub the new step. Gate #123.
+
+**Trader, 2026-09-15 (second ask, SC):** *"when i click on master avwap setups tab and then I click the veto or like and claim buttons it should cycle it to the next pick. additionally vetoing it for the day SHOULD remove it from the list (but the stock should still be tracked for setup tracker purposes)"*. Recon (Sonnet) confirmed a chart opened from the setups table never held a place in the waiting list, so a veto or a claim on it advanced to the QUEUE's next alert, and that WS-SX's ✕ mark hid nothing. Built by the lead: `chart_symbol(next_pick=)` consumed by `_advance_review_queue` instead of the waiting list and dropped by any other chart; the setups panel's own walk (`_chart_row_on_desk` / `_chart_next_pick`); `reviewDecisionRecorded` -> `refresh_decisions`; the proxy's reject filter over `pick_feedback.HIDDEN_REJECT_KINDS` with the `Show vetoed (N)` box. Presentation only; the tracker never reads it. Lead decisions the trader may overrule: the table's own ✕ (a coded dislike) hides too; the hide is per symbol; a day-trade pass and an M5 click-away hide nothing. The inventory paragraph under "Charts, review, alerts, and phone surfaces" is the contract. Tests: `tests/test_setups_cycle_and_veto_hide.py` (16); WS-SX's moves-nothing test rewritten. Gate #124. Note: three WS-SX paint tests are order-dependent (they need the theme a desk build loads; they pass after `tests/test_qt_desk_ticker_clicks_chart_center.py` and fail alone) - pre-existing, not fixed here.
 
 ### 2026-09-14 - The Daily Recap fills itself in at 12:00 Pacific (trader-directed, WS-DR follow-up)
 
