@@ -915,6 +915,26 @@ def test_missing_evidence_is_a_section_that_names_what_was_not_measured(tree):
         assert cell_id in named, cell_id
 
 
+def test_an_all_pending_real_shaped_warehouse_cohort_stays_pending_not_unknown(tree):
+    """Open occurrence rows are evidence still maturing, not unavailable evidence."""
+    pending_rows = tuple(
+        row for row in WAREHOUSE_ROWS if row["result_state"] == "open"
+    )
+    report = _build(
+        tree,
+        warehouse=_FakeWarehouse(pending_rows, tree["warehouse_partition"]),
+    )
+
+    hit_rate = report.cell(CELL_QUICK_HIT_RATE)
+    speed = report.cell(CELL_QUICK_MEDIAN)
+    assert hit_rate.state == STATE_PENDING
+    assert speed.state == STATE_PENDING
+    assert hit_rate.value is None
+    assert speed.value is None
+    assert not hit_rate.unavailable
+    assert not speed.unavailable
+
+
 # ---------------------------------------------------------------------------
 # 7. one report id - stable under a clock, moved by evidence
 # ---------------------------------------------------------------------------
@@ -1006,6 +1026,32 @@ def test_a_rerun_on_matured_data_writes_a_new_version_and_never_rewrites_the_old
     assert first.read_bytes() == original
     assert json.loads(second.read_text(encoding="utf-8"))["report_id"] != \
         json.loads(original.decode("utf-8"))["report_id"]
+
+
+def test_a_failed_markdown_sibling_removes_its_json_and_a_rerun_can_repair(tree, monkeypatch):
+    """A report is published as a JSON/Markdown pair, or not at all."""
+    from ai_jobs import digest
+
+    original_publish = digest._publish
+
+    def _fail_markdown(path, content):
+        if Path(path).suffix == ".md":
+            raise OSError("simulated markdown sibling failure")
+        return original_publish(path, content)
+
+    monkeypatch.setattr(digest, "_publish", _fail_markdown)
+    failed = _run_slot(tree)
+    json_path = tree["digests"] / f"measured_report_{SESSION}.json"
+    markdown_path = tree["digests"] / f"measured_report_{SESSION}.md"
+    assert failed["status"] != "ok"
+    assert not json_path.exists()
+    assert not markdown_path.exists()
+
+    monkeypatch.setattr(digest, "_publish", original_publish)
+    repaired = _run_slot(tree)
+    assert repaired["status"] == "ok"
+    assert json_path.exists()
+    assert markdown_path.exists()
 
 
 def test_the_entry_index_names_the_newest_report_without_touching_its_four_sections(tree):
