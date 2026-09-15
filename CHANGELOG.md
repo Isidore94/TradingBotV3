@@ -741,6 +741,16 @@ They are evidence and must not be loaded as context.
   positives, every measure's AUC 0.34-0.49. Tests: `tests/test_pct3_compression.py`,
   `_merge.py`, `_runner_publishes_compression.py`, `_calibration_accounting.py`; long form
   DESK_INTERNALS "PCT-3 - compression is measured before it is tuned".
+- **A trendline break is a frozen tag and event (packet PCT-2, trader 2026-09-15).** The existing
+  `TRENDLINE_BREAK` tag is pinned, not rebuilt. `find_directional_trendline_candidate` now carries
+  a stable line id plus both endpoint dates/prices. The saved D1 upgrade report appends exactly one
+  `Trendline break` row per `(symbol, side, break_date)` while its champion rows remain byte-identical.
+  `trendline_break` is an explicit D1 extension kind, never a Focus pullback: arming reads the compact
+  saved report once and persists the complete line plus its offset-aware `generated_at`; incomplete,
+  stale-format or timezone-less evidence refuses. Evaluation uses completed D1 closes only, never a
+  wick or forming bar, never substitutes a redraw, and collapses duplicate persisted watches to one
+  save and one fire. Tests: `tests/test_pct2_trendline_break.py` with a nonempty pre-change golden;
+  long form DESK_INTERNALS "PCT-2 - a trendline break is a tag and an event".
 - **The M5 window is fetched whole once a day, then extended (WS-SN2, WISHLIST item 4,
   2026-09-13, sweep branch).** `BounceBot.request_and_detect_bounce`
   (`scripts/bounce_bot_lib/legacy.py`) asked IB for `durationStr="5 D"` of 5-minute bars for
@@ -2598,7 +2608,7 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 
 ### 2026-09-15 (afternoon) - Phase 0.29: Pullback alert, trendline break, compression (trader-directed; packets PCT-1..3 on `claude/pullback-compression-2026-09-15`)
 
-**Trader, 2026-09-15:** a new tracker setup watched for a pullback on M15 (150-SMA) / M30 (75-SMA) with an LRSI reversal or an SMA retest, the H1 retester renamed the Pullback alert and carrying these; claim names for pullback, trendline break and compression break; a compression MEASURE because the compression veto is the most common one ("we need to fine tune this so we stop getting so many compressed picks"). Spec and resume brief: `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. **PCT-3 (compression) is built, reviewed by reproduction in three rounds and merged into the plan branch** - inventory paragraph under "Scanning, candidates, and decision support"; the two blockers the review found (the live scan's row seam is `runner.py`, not the legacy snapshot; the calibration join on tracker ENTRY dates dropped 127 of 213 vetoes) are fixed and pinned. **PCT-1 (the Pullback alert)** is built, merged and reviewer round 2 is GO with no blockers (gates #126-#129): 117 live-shaped names batched as `[50, 50, 17]` per interval, the end-to-end tick made six downloads, the first Qt tick measured 141 ms, the real `PriceAlertService` delivered three distinct per-fire keys and suppressed only the duplicate, and fail-before-fix was reproduced. The plan branch full suite is 8354 passed / 0 failed with ruff, smoke and selftest green. **PCT-2 (trendline-break event + feed alert)** is planned only; the `TRENDLINE_BREAK` tag already existed. Gates #124-#129 are in the checkpoint.
+**Trader, 2026-09-15:** a new tracker setup watched for a pullback on M15 (150-SMA) / M30 (75-SMA) with an LRSI reversal or an SMA retest, the H1 retester renamed the Pullback alert and carrying these; claim names for pullback, trendline break and compression break; a compression MEASURE because the compression veto is the most common one ("we need to fine tune this so we stop getting so many compressed picks"). Spec and resume brief: `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. **All three packets are built, reviewed by reproduction and merged into the plan branch.** PCT-3 adds the compression measure, chip, calibration CLI and `compression_break`; PCT-1 adds the Pullback alert, auto-arm and three claim names; PCT-2 adds one frozen completed-close trendline-break watch and one additive saved-report/feed row per `(symbol, side, break_date)`. PCT-2's review caught an empty old-alert golden; the repair pins a non-empty pre-change report byte-for-byte, requires full frozen line provenance with an offset-aware knowledge time, and collapses duplicate persisted watches. Its branch passed 8,362 tests with ruff, smoke and selftest green; independent review round three is GO. Gates #124-#130 are in the checkpoint.
 
 ### 2026-09-15 - The day-trade watchlists are wiped after the close (trader-directed, lead on `claude/desk-combined-2026-09-14`)
 

@@ -479,19 +479,17 @@ LRSI is the mirror - computed on negated closes, the same 80 cross - and the tra
 
 **State of the branch `claude/pullback-compression-2026-09-15` (tip = the last commit of this
 section's commit):** PCT-3 merged and reviewed (three rounds, GO on the third fix); PCT-1 merged
-and reviewer round 2 is GO with no blockers; PCT-2 not started. The desk checkout is still on
+and reviewer round 2 is GO with no blockers; PCT-2 merged and reviewer round 3 is GO with no
+blockers or advisories. The merged plan branch passed 8,362 tests / 0 failed / 6 skipped / 72
+subtests in 615.62 s, ruff clean, smoke 7/7 and source selftest 83/83. The desk checkout is still on
 `claude/desk-combined-2026-09-14` with another session's uncommitted "Show vetoed" work in it -
 do not switch it while the desk runs; when the trader wants this branch on the desk, merge the
 combined branch INTO this one (or this one into it) in a scratch worktree first.
 
 **Owed, in order:**
 
-1. (DONE by the lead at handoff: full suite on d2b9d46b = 8354 passed / 0 failed.) If you re-run it: the lead launched it detached at handoff
-   (`%TEMP%\claude\c--Users-Aaron-TradingBotV3\0147e739-2e79-4455-9d28-c893763a72ea\scratchpad\suite_merged_2.txt`);
-   if it is gone, re-run `.venv\Scripts\python.exe -m pytest tests/ -q` on this branch with the
-   AI lock probed. Known order flakes that pass alone: `test_ws_10a_scan_freshness.py::...never_on_paint`,
-   `test_ws_wl_watchlist_tab.py::test_selection_survives_a_refresh`, the four `test_ws_sx_star_x.py`
-   reject-colour tests when run ALONE. Anything else is real.
+1. **DONE:** merged plan branch at fd9997d2 passed 8,362 tests / 0 failed / 6 skipped / 72
+   subtests in 615.62 s with the AI lock free; ruff clean, smoke 7/7, source selftest 83/83.
 2. **DONE:** reviewer round 2 on PCT-1 is GO with no blockers. Section 1 records the live-shaped
    counts, download batches, Qt timing, real-service delivery and fail-before-fix proof.
 3. **DONE: PCT-2 - trendline break (section 7), reviewer round 3 GO.** The existing
@@ -506,7 +504,7 @@ combined branch INTO this one (or this one into it) in a scratch worktree first.
 4. **Daily Recap clean-up** - a separate trader request, not part of this spec. Start from
    `CURRENT_CHECKPOINT.md` entries "2026-09-14 - The Daily Recap fills itself in at 12:00 Pacific"
    and gate #115 / #122, and ask the trader what "cleaning up" means before building.
-5. When the trader loads this branch on the desk: gates #124-#129 in the checkpoint. The FIRST
+5. When the trader loads this branch on the desk: gates #124-#130 in the checkpoint. The FIRST
    scan widens `d1_features_history.csv` once (~2 min). The compression threshold / penalty
    change is a separate ask after the trader reads the calibration report (gate #125).
 
