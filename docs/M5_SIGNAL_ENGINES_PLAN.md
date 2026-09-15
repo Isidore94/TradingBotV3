@@ -590,7 +590,10 @@ aggregates to ~35 completed H1 bars — BELOW the 45-bar warm-up.
   beside it.
 
 **So the missing history is fetched, for ARMED SYMBOLS ONLY** (lead decision
-2026-09-13; the trader may overrule). `scripts/h1_history.py` reads that one
+2026-09-13; the trader may overrule). `scripts/intraday_history.py` (was
+`h1_history.py` until PCT-1 generalised it by `interval_minutes`;
+`h1_history.H1HistoryCache` is that class fixed at 60 and the hourly cadence is
+unchanged) reads that one
 symbol's hourly bars through `yfinance` (`interval="60m"`, `prepost=False`) on
 its own one-shot daemon thread — the group RS/RW tape precedent: **zero IB
 traffic and no engine change**. The rules it holds: the desk's cache stays

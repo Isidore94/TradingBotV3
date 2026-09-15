@@ -5421,3 +5421,95 @@ was; no writer may still remove one user-entered name by its own judgement.
 **Open for the trader.** Whether the M5 Focus picks should reset with the lists (today they fade
 on their own ten-session clock, `focus_picks.FADE_TRADING_DAYS`), and whether the 13:00 Pacific
 close is the right moment or the wipe should wait for the evening. Gate #123.
+
+## PCT-1 - the Pullback alert (2026-09-15, packet PCT-1)
+
+- **What the trader said (2026-09-15, chat).** *"we then monitor them for a pullback on a M15 or
+  M30 basis. on the M15 we use the 150 moving average on the M30 we use the 75. we wait for the
+  stock to go BELOW these levels then break back up. we can test entries on the breakup if they
+  are accompanied with an LRSI reversal on the same time frame in the past 3 bars or so. we can
+  also test on an M30 basis a breakup then waiting for an M30 or M15 LRSI reversal while staying
+  above teh relevant SMA for an entry. we can also test for retests of the SMA ... in the same
+  vein as H1 retester we should rename it to Pullback alert and include any of these phenomena in
+  the alert pattern."* Their four answers the same day: which names it watches - **"Chart arm +
+  my picks"**; what an LRSI reversal is - **"Cross up through 80. Ideally it was below 50 2-4 bars
+  previously too"**; and **"Yes, all of them"** to editing the ask-first files for this work.
+- **One button, one kind, four named triggers.** `WATCH_KINDS` has `pullback` -> "Pullback alert"
+  and no longer has `h1_ema_bounce`; the arm bar builds one button per kind, so the retester's
+  button is simply gone. A `ChartWatch` now carries `triggers`, `fired` (trigger -> the bar time
+  it last fired on) and `declined`. A row stored as `h1_ema_bounce` loads as a `pullback` watch
+  whose ONLY trigger is `h1_ema15_bounce`: nothing the trader armed is lost by the rename and
+  nothing they did not ask for is added to it. The H1 rule sheet `h1_ema_bounce_v1` is untouched -
+  it is one of the four things this watch waits for, and `evaluate_h1_bars` is called exactly as
+  it was.
+- **The rule sheet is frozen first, then wired.** `pullback_sma_reclaim_v1`
+  (`scripts/indicators/pullback_sma_reclaim.py`) is pure: completed session-aligned bar dicts in,
+  a frozen result out, `now` a parameter and no clock read inside. `sma_reclaim_lrsi` fires on the
+  reclaim bar when the LRSI crossed up through 80 on it or one of the two before it;
+  `reclaim_then_lrsi` is the M30 leg and fires on the later cross - on the M30 itself or on the
+  M15 companion series the caller hands in - while every completed M30 close holds the 75-SMA;
+  `sma_retest` fires on a bar AFTER the reclaim whose low comes within 0.25 ATR-14 of the line (or
+  through it) and which still closes on the right side. **The reclaim bar is never its own
+  retest.** Warm-up is the SMA's length plus ten (160 M15 / 85 M30 bars) and 24 h of silence is
+  stale; both answer `None`, which is NOT MEASURED, never a verdict.
+- **80 is a parameter, never a live level.** The oscillator is the champion's
+  `efficiency_lrsi.compute_efficiency_lrsi`, whose `CROSS_LEVELS (20, 50)` are the M5 engines'
+  and are neither read nor written here; a SHORT reads the NEGATED closes, the idiom
+  `m5_signal_engines.latest_lrsi_cross` already uses, so "cross up through 80" means the same
+  thing on both sides. `m5_signal_engines` and `bounce_bot_lib` are untouched.
+- **"Ideally it was below 50" is a label, not a gate.** The trader said *ideally*, so
+  `lrsi_from_below_50` rides every fire and every `watch_fired` row and gates nothing. It is
+  counted back from the CROSS bar (lead ruling, 2026-09-15).
+- **An episode is the unit, not a bar.** A completed close back under the SMA opens a new episode;
+  each trigger fires at most once inside one and again in the next. The panel carries the episode
+  state in memory between polls and the watch's `fired` map is the PERSISTED backstop, so a desk
+  restart does not re-announce a move the trader was already told about.
+- **A Pullback alert is a STANDING arm, except on the H1 leg.** An SMA fire records its bar and
+  leaves the watch armed for the next one, up to the ten-trading-day expiry or a disarm; the H1
+  leg keeps its WISHLIST 10C one-shot contract, because a completed retest is the pattern
+  finishing rather than a moment inside it.
+- **The trader's own picks arm themselves.** Inside the same 60-second poll and BEFORE any
+  evaluation, every active claimed D1 pick and every swing Focus name gets a `pullback` watch
+  carrying `auto: claimed pick` / `auto: swing Focus`. The sweep owns only what it armed - a watch
+  with no `auto:` source is the trader's own click and is never retired by it, the same "absence
+  of a marker means the trader owns it" rule Focus provenance holds. When the claim or pick is
+  gone the watch goes with one `watch_retired_source_gone` row. An unreadable store arms nothing
+  and retires nothing: uncertainty never deletes.
+- **A hand disarm of an auto-armed watch is REMEMBERED, not obeyed once.** The sweep runs every 60
+  seconds, so deleting the row would put it straight back and the trader could never turn one off.
+  So `disarm_chart_watch_for` keeps it with `declined=True` - persisted in the same store, hidden
+  from the Armed board, never evaluated, never pushed - until the claim or pick that armed it is
+  dropped. A watch the trader armed by HAND is still simply deleted.
+- **These push in every Auto mode.** They are the trader's own picks and they ride the existing
+  armed sender (`_push_armed_watch` -> `notify_armed_watch`), which is the recorded exception
+  class beside the Research/Focus price alerts; recorded as an amendment in
+  `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. One `watch_fired` review row per fire, carrying
+  `trigger`, `timeframe`, `rule_version` and `lrsi_from_below_50`.
+- **The M15 and M30 history is fetched, and never on the Qt thread.** The desk has no cached M15
+  or M30 series at all, so unlike the H1 leg these two have no primary to fall back FROM:
+  `IntradayHistoryCache` (`scripts/intraday_history.py`, the WISHLIST 10C H1 cache generalised by
+  `interval_minutes`; `h1_history.H1HistoryCache` is now that class fixed at 60) is the only
+  source. One yfinance call per completed session-aligned bucket per symbol, on the cache's own
+  worker, zero IB traffic. PCT-1 added one clause: **once the bell has rung on a session, a symbol
+  already asked for inside it is refused** - on a 15-minute grid four more buckets close between a
+  midday poll and the close, so the old per-bucket rule alone would fetch all evening for bars
+  that cannot move. A symbol never asked still gets its one catch-up fetch, so arming a watch at
+  18:00 is not blind until morning.
+- **The health cell is one state per timeframe, joined with `;`** - `H1 from cache; not measured
+  (0 of 160 M15 bars); M30 from yfinance`. Each H1 string is byte-identical to the one WS-10C
+  shipped; only the joining is new, and a watch stored before the rename still reads exactly as it
+  did. The M15/M30 halves READ the cache and never fetch: the poll is what asks, so a cosmetic
+  string never puts the network on the Qt thread's critical path. An armed surface whose job is to
+  say "these are the exact conditions I am waiting on" must not report `ok` beside a leg that
+  cannot evaluate at all.
+- **Three claim names, and a watch is still never a claim.** `pullback_sma_reclaim`,
+  `trendline_break` and `compression_break` join `SETUP_DOCS` under the new group "Entry timing
+  and breaks" and `EXTRA_CLAIM_IDS`, so the rail offers them; `setup_registry_v1.json` is
+  regenerated by `build_setup_registry.py --write`, never by hand. They are graded by name through
+  `claimed_pick_evidence._by_setup` and nothing else is needed for the "My claims" tab. WISHLIST
+  10C's fence still holds: an armed watch grades nothing, joins no cohort, and reaches no
+  detector, score, tier, gate, watchlist, Focus list, review queue or `review_policy.json`.
+- **One related widening in `claimed_picks`.** `record_drop`'s `claimed_setup_id` now defaults to
+  blank, and a retraction that names NO setup ends every claim on that `(symbol, side)` - the
+  whole thesis, which is what a caller that never knew the setup id means by "drop it". Every
+  existing caller still names its setup and is still exact.

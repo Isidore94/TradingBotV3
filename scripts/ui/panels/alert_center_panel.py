@@ -6323,8 +6323,13 @@ class AlertCenterPanel(QFrame):
         wanted = self._auto_pullback_sources(moment)
         if wanted is None:
             return False
+        # Existence is per SYMBOL, not per (symbol, side): the arm surface
+        # itself is per (symbol, kind), so a second side of the same name
+        # cannot be armed and asking every minute would only emit "already
+        # armed" sixty times an hour. A DECLINED row counts as existing -
+        # that is the whole point of remembering it.
         existing = {
-            (watch.symbol, watch.side)
+            watch.symbol
             for watch in self._chart_watches
             if watch.kind == PULLBACK_KIND
         }
@@ -6359,12 +6364,12 @@ class AlertCenterPanel(QFrame):
                 )
             changed = True
         for (symbol, side), source_text in sorted(wanted.items()):
-            if (symbol, side) in existing:
+            if symbol in existing:
                 continue
             if self.arm_chart_watch_for(
                 symbol, side, PULLBACK_KIND, source_text=source_text
             ):
-                existing.add((symbol, side))
+                existing.add(symbol)
                 changed = True
         if changed:
             self._save_chart_watches()

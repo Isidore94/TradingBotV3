@@ -17,7 +17,7 @@ checkout, and never a merge to `main` without the trader's word.
 
 | Packet | What | Status |
 |---|---|---|
-| PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | PLANNED 2026-09-15 - tester next |
+| PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | BUILT 2026-09-15 on `claude/pct-1-pullback` - all 8 items, the tester's 40 red tests green plus 4 added; live gate owed (section 5's gate text) |
 | PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | PLANNED 2026-09-15 - runs in parallel with PCT-1 (disjoint files) |
 | PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | PLANNED - after PCT-1 and PCT-3 land (shares their files) |
 

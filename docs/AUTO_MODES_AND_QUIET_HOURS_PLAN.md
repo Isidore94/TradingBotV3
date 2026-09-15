@@ -496,9 +496,26 @@ mode**, through the SAME sender, as
 This does not add a routine push: nothing automatic arms one of these watches. The
 count of always-on push exceptions stays at two, and this is a caller inside the first.
 
+**Amendment 2026-09-15 (packet PCT-1): a Pullback alert the DESK armed for the trader
+pushes in every mode too.** The H1 retester is now one trigger of the `pullback` watch,
+and PCT-1 gives that watch an auto-arm: every active claimed D1 pick and every swing
+Focus name is armed automatically (trader, 2026-09-15: *"Chart arm + my picks"*). So the
+sentence above - "nothing automatic arms one of these watches" - is no longer true, and
+the exception is stated once more rather than widened: **these are the trader's own
+picks**, named by their own claim or their own Focus list, and a watch armed off one of
+them is the same request as the button under the chart. It rides the SAME
+`notify_armed_watch` door, one buzz per fire, in DESK, AWAY, EVENING and OFF alike. The
+auto-arm sweep itself scans nothing, discovers nothing and adopts nothing: it reads two
+stores the trader wrote and arms one watch per name. The count of always-on push
+exceptions stays at two, and the M15/M30 fetch that rides with it
+(`scripts/intraday_history.py`) is the same one-symbol, one-interval, own-thread read as
+the H1 one below, outside quiet hours for the same reason.
+
 **One outbound fetch rides with it, and it is not a scan.** When an armed H1 retester's
-cached M5 window is short of the rule's warm-up, `scripts/h1_history.py` reads THAT
-SYMBOL's hourly bars through `yfinance`, at most once per completed H1 bar, on its own
+cached M5 window is short of the rule's warm-up, `scripts/intraday_history.py` (was
+`h1_history.py`; PCT-1 generalised it by `interval_minutes` and the hourly class is the
+same code) reads THAT SYMBOL's hourly bars through `yfinance`, at most once per
+completed H1 bar - and since PCT-1 its M15 and M30 bars the same way - on its own
 daemon thread. It is not gated on quiet hours or on the Auto mode for the same reason
 the push is not: the trader armed the condition by hand and is waiting on it. It scans
 nothing, discovers nothing, adopts nothing and writes nothing - one symbol, one
