@@ -106,7 +106,7 @@ change both places when a rule changes.
 - Entry: `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). One desk role, no flag; Desk Link/satellite, the mini-PC scanner, the Tk UI, `TickerMover.py` and `PyQt5` are all REMOVED, not dormant.
 - Market data: IBKR TWS/Gateway `127.0.0.1:7496` (`ibapi`) primary, `yfinance` fallback, bar source tracked per scan (`docs/BROKER_ADAPTERS.md`). On the desk the D1 scan's daily bars are PINNED to Yahoo by `local_settings.json` `daily_bars_source: "yahoo"` — a manifest full of Yahoo daily-bar successes is the pin working, not IB failing. IB serves intraday bars and the champion's M5 loop.
 - Engines: `scripts/master_avwap.py` (+`master_avwap_lib/`) D1 AVWAP swing scanner; `scripts/bounce_bot.py` (+`bounce_bot_lib/`) intraday M5 bounce detector; `market_prep/` pre-session services.
-- Inputs: plain-text watchlists (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`) in the shared home folder.
+- Inputs: plain-text watchlists (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`) in the shared home folder. **`longs.txt` / `shorts.txt` are the DAY-TRADE (M5) lists and are WIPED after each session's close** (trader 2026-09-15, decision 0020): `scripts/daytrade_watchlist_reset.py` is stateless - a list that holds names and was last written at or before the last completed session's close is emptied by the first Auto Pilot tick after that (every mode, before the weekend short-circuit and before the open scan), a name typed after the close survives to the next close, every name leaves alike with one WS-5D `remove` row (`session_reset`), and the swing lists are never touched. Long form: DESK_INTERNALS "DTR".
 - Storage: `C:\TradingBotData` is a plain LOCAL folder — no cloud drive (decision 0015). Per-machine caches under `%LOCALAPPDATA%\TradingBotV3` (`scripts/project_paths.py`); address home-folder stores by their `project_paths` named constants. The DAS `\\MINI-PC\Trading Bot Data` is the durable tier: **write local first, move to the DAS after.**
 - Shadow engines (`market_state.py`, `greatness_monitor`) emit JSONL promotion evidence only. Review-learning loop: Alert Center decisions → `alert_review_events.jsonl` → `review_learning.py` → AI-curated `review_policy.json` → chart annotations (`docs/REVIEW_LEARNING_LOOP.md`).
 
@@ -213,7 +213,7 @@ change both places when a rule changes.
 - No detector/scoring behavior change without golden-result fixtures first (plan.md Sections 5 and 7).
 - Never swap `calc_anchored_vwap_bands`' σ formula — every consumer is calibrated to the running-deviation variant.
 - Completed bars only for state transitions; a forming bar is preview. Missing data is uncertainty, never confirmation.
-- User-entered watchlist names are never auto-removed (CandidateRegistry enforces this; keep it true in any new writer).
+- User-entered watchlist names are never auto-removed by a machine judgement about one name (CandidateRegistry enforces this; keep it true in any new writer). The one exception is the day-trade lists' after-close reset (decision 0020), which empties `longs.txt` / `shorts.txt` whole at a session boundary and never picks a name.
 - One component owns each timer/thread/job/mutable shared export; a failed publish never destroys the last verified report.
 - Point-in-time research uses only information available at the simulated decision time; timestamps carry explicit timezones.
 - `review_policy.json` ranks and annotates only — it deliberately has no suppression field; do not add one.

@@ -64,10 +64,10 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 
 ## Decision records — accepted constraints
 
-[`decisions/`](decisions/) holds 19 short records, 0001 (decision-support only) to
-[`0019`](decisions/0019-tracker-selection-and-execution-defaults.md) (the Setup
-Tracker's three replay defaults become the repaired ones — `first_actionable_v2`,
-`gap_aware_v2`, `prior_session_v2`; the v1 names stay selectable). Read one before
+[`decisions/`](decisions/) holds 20 short records, 0001 (decision-support only) to
+[`0020`](decisions/0020-daytrade-watchlists-reset-after-close.md) (the day-trade
+lists `longs.txt` / `shorts.txt` are emptied whole after each session's close;
+the swing lists keep the never-auto-removed rule). Read one before
 changing a library, storage or architecture choice; **0016** is the trader's vision and
 priorities and breaks every prioritisation tie. Numbering is chronological.
 

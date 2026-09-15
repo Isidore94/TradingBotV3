@@ -870,6 +870,28 @@ They are evidence and must not be loaded as context.
   `read_events()` or `python -m watchlist_intent_events tail --list longs`; nothing consumes
   it yet and it reaches no detector, score, alert, Focus list, scanner or
   `review_policy.json`. Tests: `tests/test_ws_5d_watchlist_intent.py`.
+- **The day-trade watchlists are wiped after the close (trader 2026-09-15, decision 0020).**
+  `scripts/daytrade_watchlist_reset.py`: `longs.txt` / `shorts.txt` are the intraday (M5) lists
+  and nothing on them outlives its session. The rule is stateless - `reset_due(now, written_at)`
+  names the last completed exchange session (`market_calendar.last_completed_session`) when the
+  file holds names and its mtime is at or before that session's 16:00 ET close, and `None` when
+  the file was written after it (a name typed in the evening is tomorrow's and survives to
+  tomorrow's close). `apply_reset` empties a due list through `autopilot_core.write_watchlist_file`
+  (atomic, designated-writer gated) FIRST and then appends one WS-5D `remove` row per name with
+  the new source `session_reset` (`watchlist_intent_events.SOURCE_SESSION_RESET`, writer
+  `daytrade_watchlist_reset`), so the Watchlist tab's next load reconciles to an empty list and
+  invents no `observed_external` removals; a refused write records nothing; a failed append
+  costs the evidence, never the wipe; an emptied file's mtime is after the close, so a session is
+  never wiped twice. `AutopilotService._maybe_reset_daytrade_watchlists` runs on every 30-second
+  tick in every Auto mode, right after `_roll_day_state` - before the weekend short-circuit (a
+  Saturday start owes Friday's wipe) and before the open scan - and after a wipe forgets
+  `autopilot_written` and logs one line naming each list, its count and its session. The
+  `local_settings` switch `daytrade_watchlists_reset` (default ON) turns it off; the CLI
+  `python -m daytrade_watchlist_reset` is a dry run unless `--apply`. The swing lists, the
+  auto lists (their own day-roll clear), the Focus store and its injection membership are
+  untouched (a Focus pick is still scanned through the fast lane; its later un-injection finds
+  the name gone and records nothing); BounceBot re-reads the files every cycle and is untouched.
+  Tests: `tests/test_daytrade_watchlist_reset.py` (26). Long form: `docs/DESK_INTERNALS.md` "DTR".
 - **The M5 scanner breathes and scans the trader's picks first (SN5/SN6, 2026-09-08).**
   `BounceBot._breathe` waits `SYMBOL_BREATH_SECONDS` (0.02 s) on the stop event after each
   symbol in the fast lane and both sweep loops - pacing only, never `time.sleep`, nothing
@@ -2537,6 +2559,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-15 - The day-trade watchlists are wiped after the close (trader-directed, lead on `claude/desk-combined-2026-09-14`)
+
+**Trader, 2026-09-15:** *"i want all names wiped at the end of the day. its a daytrade watchlist not a permanent one."* Built by the lead alone, no packet: `scripts/daytrade_watchlist_reset.py` (the stateless rule on the file's mtime against the last completed session's close, the atomic wipe, one `session_reset` intent row per name, a dry-run CLI), `AutopilotService._maybe_reset_daytrade_watchlists` on every tick before the weekend short-circuit and the open scan, `watchlist_intent_events.SOURCE_SESSION_RESET`, the `daytrade_watchlists_reset` switch (default ON). Decision 0020 amends the plan.md sec 5 invariant narrowly: the two day-trade lists are emptied WHOLE at a session boundary; a machine still never removes one user-entered name by its own judgement, and the swing lists keep the rule as it was. Lead decisions the trader may overrule: the M5 Focus picks are NOT reset with the lists (they fade on their own ten-session clock, and a Focus pick is scanned through the fast lane regardless); a name typed after the close is tomorrow's and survives. The inventory paragraph under "Scanning, candidates, and decision support" is the contract. Tests: `tests/test_daytrade_watchlist_reset.py` (26); the two Auto Pilot tick tests stub the new step. Gate #123.
 
 ### 2026-09-14 - The Daily Recap fills itself in at 12:00 Pacific (trader-directed, WS-DR follow-up)
 

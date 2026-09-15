@@ -129,7 +129,9 @@ this roadmap.
   attempt, and configuration where those dimensions matter.
 - Every suggestion, alert, review, research row, and outcome must retain enough
   provenance to reconstruct what the system knew.
-- User-entered watchlist names are never automatically removed.
+- User-entered watchlist names are never automatically removed by a machine judgement about
+  one name. Amended 2026-09-15 (decision 0020): `longs.txt` / `shorts.txt` are day-trade lists
+  and are emptied WHOLE after each session's close; the swing lists keep the rule unchanged.
 
 ### Runtime and publication
 
@@ -264,6 +266,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.25** | Workspace memory (WISHLIST 11) | Trader 2026-09-12: a root `MEMORY.md` routing index and `memory/` provenance-tagged detail, adapted from JumpStarter M1; recall only, never authority. **BUILT 2026-09-12 on `main`; verification gate #93 owed.** |
 | **0.26** | WISHLIST sweep (trader 2026-09-12) | Every WISHLIST item built as ONE feature dump on the side branch `claude/wishlist-sweep-2026-09-12` for a week of trader testing, Astra review after code completion, then a merge decision. **IN BUILD; the per-item status table is the checkpoint entry "2026-09-12 - WISHLIST SWEEP".** |
 | **0.27** | Claimed D1 picks (trader 2026-09-14) | A CLAIMED like on a D1 chart becomes a ranked pick in Master AVWAP Setups, the D1 chart is done, M5 stays on the left and D1 on the right, and the claims are graded beside FAV/HC. **BUILT 2026-09-14 as packets D1C-A / D1C-L / D1C-B on `lead/d1c-integration` above the sweep tip; live gates #119-#121 owed; nothing merged to `main`.** |
+| **0.28** | Day-trade watchlists reset after the close (trader 2026-09-15) | `longs.txt` / `shorts.txt` are wiped after every session's close by the first Auto Pilot tick that sees a list written at or before that close; a name typed after the close is tomorrow's; swing lists untouched. **BUILT 2026-09-15 on `claude/desk-combined-2026-09-14`; live gate #123 owed.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -371,6 +374,19 @@ file applied only under the trader's `Points: learned weights` switch (default O
 Remaining, trader's call: turn the learned weights on once the grade line shows a lift over the
 floor; the AWAY digest's swing order by points (it ranks by the Wilson bound today); the base
 weights - every one is a named constant at the top of `setup_points.py`.
+
+## Phase 0.28 — Day-trade watchlists reset after the close (trader 2026-09-15) — BUILT the same day on `claude/desk-combined-2026-09-14`; live gate #123 owed
+
+Trader, 2026-09-15: *"i want all names wiped at the end of the day. its a daytrade watchlist not a
+permanent one."* Built by the lead: `scripts/daytrade_watchlist_reset.py` (pure rule `reset_due`, the
+file work `apply_reset`, a dry-run CLI), `AutopilotService._maybe_reset_daytrade_watchlists` on every
+tick before the weekend short-circuit and the open scan, the WS-5D source `session_reset`, the
+`daytrade_watchlists_reset` switch (default ON), decision 0020 amending the sec 5 watchlist invariant
+for these two lists only. Sections 5-7 bind: no detector, score or alert change (BounceBot re-reads the
+files every cycle and is untouched); the file is written first and the intent rows after; a refused
+write records nothing; the swing lists, the Focus store and its membership are untouched. What remains
+is the trader's live validation (#123) and the open question whether the M5 Focus picks should reset
+with the lists (they fade on their own ten-session clock today).
 
 ## Phase 0.27 — Claimed D1 picks (trader 2026-09-14) — BUILT the same day on `lead/d1c-integration`; live gates #119-#121 owed
 

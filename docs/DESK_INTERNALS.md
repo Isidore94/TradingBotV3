@@ -5359,3 +5359,65 @@ seven advisories it travelled with.
 trader asks for the two clocks to be pooled, for a claimed setup's record to feed a ranking
 weight or a promotion, or for this readout to reach the AI evidence package (nothing in
 `ai_jobs` reads it today).
+
+## DTR - the day-trade lists are wiped after the close (2026-09-15, trader-directed)
+
+The trader's words, 2026-09-15, after asking which lists are the intraday ones: *"and the longs
+and shorts.txt are wiped at the end of each day?"* - they were not - then *"i want all names
+wiped at the end of the day. its a daytrade watchlist not a permanent one."*
+
+**What was true before.** `longs.txt` / `shorts.txt` carried over indefinitely. Only the
+machine's own slice moved: the morning open scan replaced what Auto Pilot wrote last time
+(`merge_autopilot_watchlist` on `autopilot_written`), the 30-minute auto-populate rotated its
+owned slice (`rotate_auto_watchlists` on the day-scoped membership file), and BounceBot's
+triple-VWAP rule cut any name with four bad closes (`check_removal_conditions`, trader-typed
+names included). A name the trader typed and the tape never invalidated stayed for weeks.
+
+**The rule** (`scripts/daytrade_watchlist_reset.py`). Stateless: the file's modification time IS
+the record. A list that holds names and was last written at or before the close of the LAST
+COMPLETED exchange session (`market_calendar.last_completed_session`, 16:00 ET) is due; a list
+written after that close was written for the NEXT session and stays. Consequences that were
+checked, not assumed (`tests/test_daytrade_watchlist_reset.py`): a name typed Monday evening
+survives Tuesday morning and goes after Tuesday's close; a desk started on Saturday owes
+Friday's wipe; Labor Day is not a session; a write exactly at the close is still that
+session's; the desk's naive `datetime.now()` is read as local time; the mtime is compared as an
+aware UTC instant against the aware ET close (`astimezone`, never a stripped offset).
+
+**The order of writes.** The file first, through `autopilot_core.write_watchlist_file` (atomic
+temp-and-rename, designated-writer gated), then one WS-5D `remove` row per name with the new
+source `session_reset` - a machine writer labelled as one, so `watchlist_views` drops its
+authorship and `observe_list` on the next Watchlist-tab load reconciles to the empty list
+instead of inventing `observed_external` removals. A refused write records nothing (a `remove`
+for a name still on the file would describe a wipe that did not happen); a failed append costs
+the rows, never the wipe, and the log line says `0 of N intent rows recorded`. The emptied
+file's mtime is after the close, so the same session is never wiped twice and an empty list has
+nothing to do.
+
+**Who runs it.** `AutopilotService._maybe_reset_daytrade_watchlists` on every 30-second tick,
+right after `_roll_day_state` and BEFORE the weekend short-circuit and the open scan, in every
+Auto mode - it is a day roll like the autolongs/autoshorts clear, not a scan starter, so quiet
+hours do not gate it. After a wipe it forgets `autopilot_written` (there is nothing of Auto
+Pilot's own left for the morning merge to replace, and a stale record would let that merge drop
+a name the trader types before the open) and logs one line per wipe. A desk open at 13:00
+Pacific wipes within 30 seconds of the close; a desk closed at the close wipes on its first tick
+back. The CLI `python -m daytrade_watchlist_reset` is the trader's own door and a dry run
+unless `--apply`. The `local_settings` switch `daytrade_watchlists_reset` (default ON) turns it
+off without a code change.
+
+**What is deliberately untouched.** The swing lists (`swinglongs.txt` / `shortswings.txt`) are
+permanent by design. The auto lists have their own day-roll clear. `FocusPickStore` and its
+injection membership: an M5 Focus pick is scanned through the fast lane whether or not it is on
+`longs.txt`, and its later un-injection finds the name already gone and records nothing
+(`_uninject_from_shared` checks presence first). BounceBot re-reads both files every cycle
+(`self.longs = read_tickers(LONGS_FILENAME)`), so no detector file changed. Nothing here reaches
+a detector, score, alert, tier, the review queue or `review_policy.json`.
+
+**The invariant.** plan.md sec 5 said "user-entered watchlist names are never automatically
+removed"; that rule was written against a MACHINE JUDGEMENT about one name (the auto-populate
+rotation, the cross-machine writer race). Decision 0020 amends it narrowly: the day-trade lists
+are emptied WHOLE at a session boundary, every name alike; the swing lists keep the rule as it
+was; no writer may still remove one user-entered name by its own judgement.
+
+**Open for the trader.** Whether the M5 Focus picks should reset with the lists (today they fade
+on their own ten-session clock, `focus_picks.FADE_TRADING_DAYS`), and whether the 13:00 Pacific
+close is the right moment or the wipe should wait for the evening. Gate #123.

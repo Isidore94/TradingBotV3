@@ -70,12 +70,19 @@ SOURCE_TRADER_PASTE = "trader_paste"
 SOURCE_MACHINE_INJECT = "machine_inject"
 SOURCE_MACHINE_UNINJECT = "machine_uninject"
 SOURCE_OBSERVED_EXTERNAL = "observed_external"
+#: The day-trade lists' after-close reset (trader 2026-09-15,
+#: `daytrade_watchlist_reset`): every name on `longs` / `shorts` leaves at once
+#: because the session is over, never because anyone disliked it. A machine
+#: writer, labelled as one, so the Watchlist tab's authorship reading and the
+#: `observed_external` reconciliation both see a remove they can account for.
+SOURCE_SESSION_RESET = "session_reset"
 SOURCES = (
     SOURCE_TRADER_EDIT,
     SOURCE_TRADER_PASTE,
     SOURCE_MACHINE_INJECT,
     SOURCE_MACHINE_UNINJECT,
     SOURCE_OBSERVED_EXTERNAL,
+    SOURCE_SESSION_RESET,
 )
 
 #: The four plain watchlists, and what membership on each one means. `side` and

@@ -536,6 +536,11 @@ class AutopilotService(QObject):
         try:
             self._roll_day_state()
             now = datetime.now()
+            # The day-trade lists are wiped after the close (trader 2026-09-15).
+            # Before the weekend short-circuit: a desk started on Saturday
+            # still owes Friday's wipe. Before the open scan: the morning
+            # build must not merge yesterday's names as "the trader's".
+            self._maybe_reset_daytrade_watchlists(now)
             # Before every short-circuit below: the sweep must be stoppable on
             # a Friday evening and while Auto Pilot is OFF, and neither of
             # those paths reaches _ensure_bot_running.
@@ -659,6 +664,30 @@ class AutopilotService(QObject):
             self._log("New session - cleared autolongs.txt / autoshorts.txt for today's open scan.")
         except Exception:
             logging.exception("Auto watchlist day-roll clear failed")
+
+    def _maybe_reset_daytrade_watchlists(self, now: datetime) -> None:
+        """Wipe longs.txt / shorts.txt once their session has closed.
+
+        The rule and the file work live in `daytrade_watchlist_reset`
+        (stateless: the file's mtime against the last completed session's
+        close). This method only logs what happened and forgets what Auto
+        Pilot wrote: after a wipe there is nothing of "its own" left for the
+        next morning's merge to replace, and a stale list here would let that
+        merge drop a name the trader types before the open.
+        """
+        try:
+            import daytrade_watchlist_reset as reset
+
+            results = reset.apply_reset(now)
+        except Exception:
+            logging.exception("Day-trade watchlist reset failed")
+            return
+        wiped = [result for result in results if result.wiped]
+        if not wiped:
+            return
+        self._state["autopilot_written"] = {"longs": [], "shorts": []}
+        self._save_state()
+        self._log(f"Day-trade watchlists reset - {reset.describe(results)}.")
 
     def _ensure_bot_running(self, *, force: bool = False) -> None:
         service = self._bounce_service
