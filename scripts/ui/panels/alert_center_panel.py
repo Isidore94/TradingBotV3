@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -100,6 +101,7 @@ from project_paths import (
     AUTO_POPULATE_PENDING_FILE,
     CLAIMED_PICKS_FILE,
     FOCUS_D1_FLAGS_FILE,
+    MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
     ANY_BOUNCE_WATCHES_FILE,
     D1_EVENT_WATCHES_FILE,
     D1_LEVEL_WATCHES_FILE,
@@ -5956,9 +5958,42 @@ class AlertCenterPanel(QFrame):
         if kind in self.armed_d1_event_kinds(alert.symbol):
             self.disarm_d1_event_watch(alert.symbol, kind)
         else:
-            self.arm_d1_event_watch(alert.symbol, kind)
+            self.arm_d1_event_watch(alert.symbol, kind, side=alert.side)
 
-    def arm_d1_event_watch(self, symbol: str, kind: str) -> bool:
+    def _current_trendline_candidate(self, symbol: str, side: str = "") -> dict | None:
+        """The compact saved scan report is the arm-time source of the line.
+
+        This is a small report read on the explicit arm click, not the 38 MB
+        ai-state file and never part of the timer poll. A read failure is
+        uncertainty: the button refuses rather than re-deriving a line.
+        """
+        symbol = str(symbol or "").strip().upper()
+        requested_side = str(side or "").strip().upper()
+        try:
+            payload = json.loads(
+                Path(MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE).read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError):
+            return None
+        events = payload.get("alerts") if isinstance(payload, dict) else []
+        for event in events or []:
+            if not isinstance(event, dict):
+                continue
+            if str(event.get("event_type") or "").strip().lower() != "trendline_break":
+                continue
+            if str(event.get("symbol") or "").strip().upper() != symbol:
+                continue
+            event_side = str(event.get("side") or "").strip().upper()
+            if requested_side and event_side and event_side != requested_side:
+                continue
+            candidate = event.get("trendline_candidate")
+            if isinstance(candidate, dict):
+                frozen = dict(candidate)
+                frozen.setdefault("side", event_side)
+                return frozen
+        return None
+
+    def arm_d1_event_watch(self, symbol: str, kind: str, side: str = "") -> bool:
         symbol = str(symbol or "").strip().upper()
         if not symbol or kind not in D1_EVENT_KINDS:
             return False
@@ -5966,9 +6001,31 @@ class AlertCenterPanel(QFrame):
         if kind in self.armed_d1_event_kinds(symbol):
             self.statusChanged.emit(f"{symbol}: {label} alert already armed.")
             return False
-        self._d1_event_watches.append(
-            D1EventWatch(symbol=symbol, kind=kind, armed_at=datetime.now())
-        )
+        moment = datetime.now()
+        if kind == "trendline_break":
+            candidate = self._current_trendline_candidate(symbol, side)
+            resolved_side = str(side or "").strip().upper()
+            if not resolved_side and isinstance(candidate, dict):
+                resolved_side = str(candidate.get("side") or "").strip().upper()
+            if not isinstance(candidate, dict) or resolved_side not in {"LONG", "SHORT"}:
+                self.statusChanged.emit(
+                    f"{symbol}: Trendline break needs the saved scan line before it can arm."
+                )
+                return False
+            self._d1_event_watches.append(
+                D1EventWatch(
+                    symbol=symbol,
+                    kind=kind,
+                    armed_at=moment,
+                    side=resolved_side,
+                    trendline_candidate=candidate,
+                    trendline_knowledge_at=moment,
+                )
+            )
+        else:
+            self._d1_event_watches.append(
+                D1EventWatch(symbol=symbol, kind=kind, armed_at=moment)
+            )
         self._save_d1_event_watches()
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()

@@ -18,6 +18,7 @@ calibrated to.
 """
 
 import json
+import math
 import os
 import uuid
 from dataclasses import dataclass, field, replace
@@ -118,6 +119,10 @@ D1_EVENT_KINDS = {
     "avwape_break": "AVWAPE break",
     "avwape_dev1_bounce": "1σ bounce",
     "avwape_dev1_break": "1σ break",
+    # PCT-2 is deliberately the exception to the derived-level rule below:
+    # its scan line is frozen when the trader arms it, so a redraw cannot move
+    # the alert that was requested.
+    "trendline_break": "Trendline break",
 }
 
 # EXTENSION events say "the move is going": a new range high/low, or a close
@@ -138,6 +143,7 @@ D1_EXTENSION_KINDS = frozenset(
         "sma_break",
         "avwape_break",
         "avwape_dev1_break",
+        "trendline_break",
     }
 )
 D1_PULLBACK_KINDS = frozenset(D1_EVENT_KINDS) - D1_EXTENSION_KINDS
@@ -210,6 +216,13 @@ def _naive(moment: datetime) -> datetime:
     # arm times come from the same clock, so comparisons drop tzinfo rather
     # than convert across zones.
     return moment.replace(tzinfo=None) if moment.tzinfo is not None else moment
+
+
+def _parse_date(value: object) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def _session_bars(bars: Iterable[Mapping[str, Any]] | None, moment: datetime) -> list[dict[str, Any]]:
@@ -1026,6 +1039,13 @@ class D1EventWatch:
     symbol: str
     kind: str
     armed_at: datetime
+    # The ordinary D1 event kinds derive a moving reference afresh. A
+    # trendline is the opposite: preserve the scan geometry the trader saw at
+    # arm time. Old rows keep their three original fields and therefore load
+    # safely, but a trendline row without this evidence cannot confirm.
+    side: str = ""
+    trendline_candidate: dict[str, Any] | None = None
+    trendline_knowledge_at: datetime | None = None
 
     @property
     def direction(self) -> str:
@@ -1034,11 +1054,24 @@ class D1EventWatch:
 
 
 def d1_event_watch_to_dict(watch: D1EventWatch) -> dict:
-    return {
+    payload = {
         "symbol": watch.symbol,
         "kind": watch.kind,
         "armed_at": _naive(watch.armed_at).isoformat(),
     }
+    if watch.kind == "trendline_break":
+        payload.update(
+            {
+                "side": str(watch.side or "").strip().upper(),
+                "trendline_candidate": dict(watch.trendline_candidate or {}),
+                "trendline_knowledge_at": (
+                    _naive(watch.trendline_knowledge_at).isoformat()
+                    if watch.trendline_knowledge_at is not None
+                    else ""
+                ),
+            }
+        )
+    return payload
 
 
 def d1_event_watch_from_dict(payload: Mapping[str, Any]) -> D1EventWatch | None:
@@ -1050,7 +1083,22 @@ def d1_event_watch_from_dict(payload: Mapping[str, Any]) -> D1EventWatch | None:
         return None
     if not symbol or kind not in D1_EVENT_KINDS:
         return None
-    return D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
+    if kind != "trendline_break":
+        return D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
+    candidate = payload.get("trendline_candidate")
+    knowledge_at = payload.get("trendline_knowledge_at")
+    try:
+        knowledge = datetime.fromisoformat(str(knowledge_at)) if knowledge_at else None
+    except (TypeError, ValueError):
+        knowledge = None
+    return D1EventWatch(
+        symbol=symbol,
+        kind=kind,
+        armed_at=armed_at,
+        side=str(payload.get("side") or "").strip().upper(),
+        trendline_candidate=dict(candidate) if isinstance(candidate, Mapping) else None,
+        trendline_knowledge_at=knowledge,
+    )
 
 
 def save_d1_event_watches(watches: Iterable[D1EventWatch], path: Path) -> None:
@@ -1319,6 +1367,120 @@ def _cached_d1_event_levels(
     return levels
 
 
+def _trendline_candidate_is_frozen(candidate: Mapping[str, Any] | None) -> bool:
+    """Whether an armed trendline contains the irreducible scan evidence."""
+    if not isinstance(candidate, Mapping):
+        return False
+    try:
+        price = float(candidate.get("current_line_price"))
+        slope = float(candidate.get("slope_log_per_bar"))
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(price) or price <= 0 or not math.isfinite(slope):
+        return False
+    return all(
+        _parse_date(candidate.get(key)) is not None
+        for key in ("start_date", "end_date", "lookback_end")
+    )
+
+
+def _trendline_anchor_index(daily: list[dict], candidate: Mapping[str, Any]) -> int | None:
+    anchor_date = _parse_date(candidate.get("lookback_end"))
+    if anchor_date is None:
+        return None
+    for index, bar in enumerate(daily):
+        if _naive(bar["dt"]).date() == anchor_date:
+            return index
+    return None
+
+
+def _weekday_offset(anchor: date, target: date) -> int:
+    """Fallback only for a narrow post-arm daily slice without the anchor."""
+    if target == anchor:
+        return 0
+    sign = 1 if target > anchor else -1
+    cursor = anchor
+    steps = 0
+    while cursor != target:
+        cursor += timedelta(days=sign)
+        if cursor.weekday() < 5:
+            steps += sign
+    return steps
+
+
+def _frozen_trendline_price(
+    candidate: Mapping[str, Any], daily: list[dict], index: int
+) -> float | None:
+    """Project the arm-time line onto one completed D1 bar, never a redraw."""
+    try:
+        anchor_price = float(candidate["current_line_price"])
+        slope = float(candidate["slope_log_per_bar"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    anchor_index = _trendline_anchor_index(daily, candidate)
+    if anchor_index is None:
+        anchor_date = _parse_date(candidate.get("lookback_end"))
+        target_date = _naive(daily[index]["dt"]).date()
+        if anchor_date is None:
+            return None
+        offset = _weekday_offset(anchor_date, target_date)
+    else:
+        offset = index - anchor_index
+    exponent = slope * offset
+    if abs(exponent) > 50:
+        return None
+    price = anchor_price * math.exp(exponent)
+    return price if math.isfinite(price) and price > 0 else None
+
+
+def _evaluate_frozen_trendline_break(
+    watch: D1EventWatch, daily: list[dict], moment: datetime
+) -> ChartWatchTrigger | None:
+    """One close-through of the exact D1 line captured when the watch armed."""
+    if not _trendline_candidate_is_frozen(watch.trendline_candidate):
+        return None
+    if watch.trendline_knowledge_at is None:
+        return None
+    side = str(watch.side or "").strip().upper()
+    if side not in {"LONG", "SHORT"}:
+        return None
+    armed_at = _naive(watch.armed_at)
+    candidate = watch.trendline_candidate
+    for index, bar in enumerate(daily):
+        stamp = _naive(bar["dt"])
+        if stamp.date() <= armed_at.date() or stamp.date() >= moment.date() or index == 0:
+            continue
+        line = _frozen_trendline_price(candidate, daily, index)
+        prior_line = _frozen_trendline_price(candidate, daily, index - 1)
+        if line is None or prior_line is None:
+            continue
+        try:
+            previous_close = float(daily[index - 1]["close"])
+            close = float(bar["close"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        crossed = (
+            previous_close <= prior_line and close > line
+            if side == "LONG"
+            else previous_close >= prior_line and close < line
+        )
+        if not crossed:
+            continue
+        break_date = stamp.date().isoformat()
+        return ChartWatchTrigger(
+            watch=watch,  # type: ignore[arg-type]
+            price=close,
+            bar_dt=stamp,
+            message=(
+                f"Trendline break ({side.lower()}): closed {close:.2f} through "
+                f"frozen line {line:.2f} (D1 bar {stamp:%m/%d})"
+            ),
+            resolved_side=side.lower(),
+            details={"break_date": break_date, "line_price": line},
+        )
+    return None
+
+
 def evaluate_d1_event_watch(
     watch: D1EventWatch,
     m5_bars: Iterable[Mapping[str, Any]] | None,
@@ -1345,6 +1507,17 @@ def evaluate_d1_event_watch(
     """
     moment = _naive(now or datetime.now())
     armed_at = _naive(watch.armed_at)
+
+    daily = []
+    for bar in d1_bars or []:
+        stamp = bar.get("dt")
+        if isinstance(stamp, datetime):
+            daily.append(dict(bar))
+    daily.sort(key=lambda bar: _naive(bar["dt"]))
+    if watch.kind == "trendline_break":
+        # This event has no intraday path: a wick or a forming D1 bar is not
+        # confirmation, and the current scan is never consulted here.
+        return _evaluate_frozen_trendline_break(watch, daily, moment)
 
     session_bars = _session_bars(m5_bars, moment)
     completed = [bar for bar in session_bars if _bar_end(bar) <= moment]
@@ -1375,12 +1548,6 @@ def evaluate_d1_event_watch(
                     resolved_side=side,
                 )
 
-    daily = []
-    for bar in d1_bars or []:
-        stamp = bar.get("dt")
-        if isinstance(stamp, datetime):
-            daily.append(bar)
-    daily.sort(key=lambda bar: _naive(bar["dt"]))
     for bar in daily:
         bar_date = _naive(bar["dt"]).date()
         # Completed sessions only, strictly after the arm date (the armed

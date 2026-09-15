@@ -32,7 +32,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 FIXTURES_DIR = Path(__file__).with_name("fixtures")
 GOLDEN_D1_ALERTS = json.loads(
     (FIXTURES_DIR / "pct2_prechange_d1_upgrade_alerts.json").read_text(encoding="utf-8")
-)
+)["expected_alerts"]
 
 ARMED_AT = datetime(2026, 9, 10, 10, 0)
 FROZEN_LONG_LINE = {

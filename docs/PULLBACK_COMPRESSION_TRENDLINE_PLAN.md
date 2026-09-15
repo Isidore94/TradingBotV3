@@ -19,7 +19,7 @@ checkout, and never a merge to `main` without the trader's word.
 |---|---|---|
 | PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | **BUILT, review round 1 fixed, review round 2 GO, and MERGED into the plan branch** (`claude/pct-1-pullback` a6b4354a). Round 2 reproduced all six fixes with the real `PriceAlertService`, copied live-shaped stores and a counting multi-ticker downloader: 117 unique symbols; M15/M30/H1 each fetched in three chunks `[50, 50, 17]`; the 95-watch end-to-end tick made six downloads; first Qt tick 141 ms and warm tick 15 ms; three distinct per-fire keys delivered and only the duplicate was suppressed; closing bucket retained; machine rows excluded from takes; chart re-arm cleared `declined`. Focused suites: 67 passed, then 111 passed / 1 skipped; ruff clean; fail-before-fix reproduced. The merged branch full suite remains 8354 passed, 0 failed, 6 skipped in 578 s (ruff clean, smoke 7/7, selftest 83/83). Gates #126-#129 |
 | PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | **BUILT, REVIEWED (3 rounds) and MERGED into the plan branch 2026-09-15** (`claude/pct-3-compression` aaed1b01): both scan seams (`runner.py` + `legacy.py`), `compression_chip.py`, the delegate pill, the ai_state parse on a worker, `compression_calibration.py` (every veto joined / untracked / pending over the ACTIVE tracker population, streamed at 0.14 GB), `evaluate_compression_break_v1` + the `COMPRESSION_BREAK` tag added last under the cap. First live-copy reading: 213 vetoes (140 / 50 / 23), flag hit rate 0.18 with 2,631 false positives, every measure's AUC 0.34-0.49. Full suite on the merged branch: see section 1 note below the table |
-| PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | PLANNED - after PCT-1 and PCT-3 land (shares their files) |
+| PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | **BUILT on `claude/pct-2-trendline`, awaiting full verification and independent review.** The pre-existing tag remains pinned; the saved D1 report adds one `Trendline break` row without changing its champion rows. |
 
 Trader's order was 1 pullback, 2 compression breaks and trendline breaks, 3 compression measure.
 The compression-break tag needs the measure, so it rides PCT-3; PCT-2 is last only because it
@@ -426,17 +426,19 @@ Items:
 
 1. **Tag**: ALREADY BUILT - `setup_tagging.py:209-210` adds `TRENDLINE_BREAK` (confirmation) on
    `trendline_break_recent`; nothing to do but a test that pins it.
-2. **D1 event kind** `trendline_break` ("Trendline break") in `D1_EVENT_KINDS` and
-   `D1_EXTENSION_KINDS`: `d1_event_levels` carries the scan's frozen line (`trendline_level` from
-   `chart_levels`, projected to the session; identity `trendline_id`, endpoints and knowledge time
-   stored on the watch, a redrawn line never substituted), `_d1_event_hit` fires when the completed
-   D1 close is through the line in the setup's direction and the prior close was not, once per
-   (symbol, side, break date). Focus picks do NOT get it automatically (extension kind); armed
-   watches do.
-3. **Scan-level feed alert**: the seam where a new priority row becomes a D1 feed alert emits
-   `Trendline break` once per (symbol, side, break date) when the row carries the tag - the builder
-   locates that seam (the D1 wick-alert champion path) and adds the reason additively; a golden
-   fixture pins today's D1 alert set on a saved report before the change.
+2. **D1 event kind** `trendline_break` ("Trendline break") is in `D1_EVENT_KINDS` and
+   `D1_EXTENSION_KINDS`, never `D1_PULLBACK_KINDS`. At arm time the compact saved D1 report supplies
+   the scan candidate; the watch persists its side, line type, endpoint dates/prices, projected
+   current-line price, slope, lookback endpoint and knowledge time. The poll uses that frozen line
+   only: a completed D1 close crosses it in the setup direction only when the prior completed close
+   was not already through. It never treats a wick, M5 bar, forming D1 bar, stale/missing frozen
+   evidence or a later scan redraw as confirmation. Old rows load safely but cannot fire without the
+   frozen candidate. Focus picks do NOT get it automatically; only an armed watch does.
+3. **Scan-level feed alert**: the saved bucket-upgrade report keeps every existing champion row
+   byte-identical and appends `Trendline break` from the scan's frozen break candidate once per
+   `(symbol, side, break_date)`. Its `trigger_id` and reason carry that identity, so an observed
+   break is not mistaken for a moving rounded price level. The static old-report fixture pins the
+   additive boundary.
 4. **Docs**: DESK_INTERNALS entry "PCT-2 - a trendline break is a tag and an event".
 
 Tests (`tests/test_pct2_trendline_break.py`): tag present only with the flag; the event kind fires
@@ -487,14 +489,13 @@ combined branch INTO this one (or this one into it) in a scratch worktree first.
    reject-colour tests when run ALONE. Anything else is real.
 2. **DONE:** reviewer round 2 on PCT-1 is GO with no blockers. Section 1 records the live-shaped
    counts, download batches, Qt timing, real-service delivery and fail-before-fix proof.
-3. **PCT-2 - trendline break (section 7).** The `TRENDLINE_BREAK` tag already exists
-   (`setup_tagging.py:209-210`); build the D1 event kind `trendline_break` in `chart_watch.py`
-   (`D1_EVENT_KINDS` + `D1_EXTENSION_KINDS`, levels from `chart_levels.trendline_level` projected
-   to the session, identity + endpoints + knowledge time frozen on the watch) and the scan-level
-   feed alert (find the seam where a new priority row becomes a D1 feed alert; golden-pin today's
-   D1 alert set on a saved report first). Tester first, then builder, then reviewer. Branch
-   `claude/pct-2-trendline` off this branch. `legacy.py` / `chart_watch.py` /
-   `alert_center_panel.py` are covered by the trader's 2026-09-15 additive yes (section 2).
+3. **PCT-2 - trendline break (section 7). BUILT; reviewer next.** The existing
+   `TRENDLINE_BREAK` tag remains untouched. `chart_watch.py` now persists a frozen scan line for
+   the explicit `trendline_break` extension watch; `alert_center_panel.py` reads the compact saved
+   report on the trader's arm click and never on its timer; `legacy.py` adds endpoint prices to the
+   scan candidate and exactly one saved-report event per `(symbol, side, break_date)`. The tester's
+   six tests pass after five proved red before the production edits. Run the full gates, then have a
+   reviewer reproduce close-only firing, redraw immunity, the once-only key and golden preservation.
 4. **Daily Recap clean-up** - a separate trader request, not part of this spec. Start from
    `CURRENT_CHECKPOINT.md` entries "2026-09-14 - The Daily Recap fills itself in at 12:00 Pacific"
    and gate #115 / #122, and ask the trader what "cleaning up" means before building.
