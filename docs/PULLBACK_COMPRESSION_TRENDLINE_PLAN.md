@@ -463,3 +463,51 @@ on a charted name and watching a completed D1 close through the drawn line yield
    `docs/README.md` (this file's line), and the trader's `[stated]` lines in
    `memory/people/trader.md` (already added with the plan commit).
 5. The trader restarts the desk; never restart it yourself; never merge to `main` unasked.
+
+## 9. Handoff to the next session (written 2026-09-15 evening; the trader named Sol)
+
+The trader's closing words: *"as long as its functionally the same thats fine. finish up so Sol can
+take over cleaning up the daily recap and implementing the trendline break stuff."* (The short-side
+LRSI is the mirror - computed on negated closes, the same 80 cross - and the trader accepted that.)
+
+**State of the branch `claude/pullback-compression-2026-09-15` (tip = the last commit of this
+section's commit):** PCT-3 merged and reviewed (three rounds, GO on the third fix); PCT-1 merged
+with its review-round fixes but WITHOUT a second reviewer pass (the builder was stopped before its
+handoff at the trader's word); PCT-2 not started. The desk checkout is still on
+`claude/desk-combined-2026-09-14` with another session's uncommitted "Show vetoed" work in it -
+do not switch it while the desk runs; when the trader wants this branch on the desk, merge the
+combined branch INTO this one (or this one into it) in a scratch worktree first.
+
+**Owed, in order:**
+
+1. Read the merged-branch full suite result: the lead launched it detached at handoff
+   (`%TEMP%\claude\c--Users-Aaron-TradingBotV3\0147e739-2e79-4455-9d28-c893763a72ea\scratchpad\suite_merged_2.txt`);
+   if it is gone, re-run `.venv\Scripts\python.exe -m pytest tests/ -q` on this branch with the
+   AI lock probed. Known order flakes that pass alone: `test_ws_10a_scan_freshness.py::...never_on_paint`,
+   `test_ws_wl_watchlist_tab.py::test_selection_survives_a_refresh`, the four `test_ws_sx_star_x.py`
+   reject-colour tests when run ALONE. Anything else is real.
+2. Reviewer round 2 on PCT-1 (blockers only), against section 5 and the six blockers listed in
+   the section 1 status row: reproduce with the REAL `PriceAlertService` (delivery stubbed), a
+   counting multi-ticker downloader, and the live-shaped stores (copies of `claimed_picks.jsonl`,
+   `focus_swing_longs.txt`, `focus_swing_shorts.txt`). Measure the first tick's Qt time and
+   download count. Fix round if needed on `claude/pct-1-pullback`, then merge here.
+3. **PCT-2 - trendline break (section 7).** The `TRENDLINE_BREAK` tag already exists
+   (`setup_tagging.py:209-210`); build the D1 event kind `trendline_break` in `chart_watch.py`
+   (`D1_EVENT_KINDS` + `D1_EXTENSION_KINDS`, levels from `chart_levels.trendline_level` projected
+   to the session, identity + endpoints + knowledge time frozen on the watch) and the scan-level
+   feed alert (find the seam where a new priority row becomes a D1 feed alert; golden-pin today's
+   D1 alert set on a saved report first). Tester first, then builder, then reviewer. Branch
+   `claude/pct-2-trendline` off this branch. `legacy.py` / `chart_watch.py` /
+   `alert_center_panel.py` are covered by the trader's 2026-09-15 additive yes (section 2).
+4. **Daily Recap clean-up** - a separate trader request, not part of this spec. Start from
+   `CURRENT_CHECKPOINT.md` entries "2026-09-14 - The Daily Recap fills itself in at 12:00 Pacific"
+   and gate #115 / #122, and ask the trader what "cleaning up" means before building.
+5. When the trader loads this branch on the desk: gates #124-#129 in the checkpoint. The FIRST
+   scan widens `d1_features_history.csv` once (~2 min). The compression threshold / penalty
+   change is a separate ask after the trader reads the calibration report (gate #125).
+
+**Lead decisions the trader may overrule (all recorded in section 3 and the DESK_INTERNALS
+entries "PCT-1" / "PCT-3"):** AUTO-armed pullback watches push only the two reclaim triggers
+(a retest is a feed row); one watch per symbol; the `lrsi_from_below_50` clause is a label, not
+a gate; `compression_break` v1 = the Phase-6 rule plus a >= 1.0 ATR-20 bar; the calibration
+population is every tracker record ACTIVE on the session.
