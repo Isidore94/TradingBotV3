@@ -17,7 +17,7 @@ checkout, and never a merge to `main` without the trader's word.
 
 | Packet | What | Status |
 |---|---|---|
-| PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | **BUILT, review round 1 fixed, MERGED into the plan branch 2026-09-15 evening at the trader's word ("finish up quickly")** (`claude/pct-1-pullback` a6b4354a): the six review blockers are answered by the builder's fix commits 81e31d3d (ONE batched multi-ticker download per interval per bucket on one worker; the closing bucket fetched again; the after-the-bell clause removed) and dfeebc19 (`event_key` per fire on `notify_armed_watch`; `auto_arm_watch` / `auto_retire_watch` event kinds outside `TAKE_ACTIONS`; one save + one emit per sweep and evaluation off the Qt thread on a new completed bucket; a chart arm clears `declined`; `fired` keyed `trigger@timeframe`; the `record_drop` widening reverted; AUTO-armed watches push only `sma_reclaim_lrsi` / `reclaim_then_lrsi`, a retest is a feed row) plus `tests/test_pct1_pullback_review.py`. **OWED before the desk loads it:** reviewer round 2 by reproduction (the builder was stopped before its handoff; its fail-before-fix proof for the round is unrecorded), the lead's full suite on the merged branch is DONE: 8354 passed, 0 failed, 6 skipped in 578 s (ruff clean, smoke 7/7, selftest 83/83). Gates #126-#129 |
+| PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | **BUILT, review round 1 fixed, review round 2 GO, and MERGED into the plan branch** (`claude/pct-1-pullback` a6b4354a). Round 2 reproduced all six fixes with the real `PriceAlertService`, copied live-shaped stores and a counting multi-ticker downloader: 117 unique symbols; M15/M30/H1 each fetched in three chunks `[50, 50, 17]`; the 95-watch end-to-end tick made six downloads; first Qt tick 141 ms and warm tick 15 ms; three distinct per-fire keys delivered and only the duplicate was suppressed; closing bucket retained; machine rows excluded from takes; chart re-arm cleared `declined`. Focused suites: 67 passed, then 111 passed / 1 skipped; ruff clean; fail-before-fix reproduced. The merged branch full suite remains 8354 passed, 0 failed, 6 skipped in 578 s (ruff clean, smoke 7/7, selftest 83/83). Gates #126-#129 |
 | PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | **BUILT, REVIEWED (3 rounds) and MERGED into the plan branch 2026-09-15** (`claude/pct-3-compression` aaed1b01): both scan seams (`runner.py` + `legacy.py`), `compression_chip.py`, the delegate pill, the ai_state parse on a worker, `compression_calibration.py` (every veto joined / untracked / pending over the ACTIVE tracker population, streamed at 0.14 GB), `evaluate_compression_break_v1` + the `COMPRESSION_BREAK` tag added last under the cap. First live-copy reading: 213 vetoes (140 / 50 / 23), flag hit rate 0.18 with 2,631 false positives, every measure's AUC 0.34-0.49. Full suite on the merged branch: see section 1 note below the table |
 | PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | PLANNED - after PCT-1 and PCT-3 land (shares their files) |
 
@@ -472,8 +472,7 @@ LRSI is the mirror - computed on negated closes, the same 80 cross - and the tra
 
 **State of the branch `claude/pullback-compression-2026-09-15` (tip = the last commit of this
 section's commit):** PCT-3 merged and reviewed (three rounds, GO on the third fix); PCT-1 merged
-with its review-round fixes but WITHOUT a second reviewer pass (the builder was stopped before its
-handoff at the trader's word); PCT-2 not started. The desk checkout is still on
+and reviewer round 2 is GO with no blockers; PCT-2 not started. The desk checkout is still on
 `claude/desk-combined-2026-09-14` with another session's uncommitted "Show vetoed" work in it -
 do not switch it while the desk runs; when the trader wants this branch on the desk, merge the
 combined branch INTO this one (or this one into it) in a scratch worktree first.
@@ -486,11 +485,8 @@ combined branch INTO this one (or this one into it) in a scratch worktree first.
    AI lock probed. Known order flakes that pass alone: `test_ws_10a_scan_freshness.py::...never_on_paint`,
    `test_ws_wl_watchlist_tab.py::test_selection_survives_a_refresh`, the four `test_ws_sx_star_x.py`
    reject-colour tests when run ALONE. Anything else is real.
-2. Reviewer round 2 on PCT-1 (blockers only), against section 5 and the six blockers listed in
-   the section 1 status row: reproduce with the REAL `PriceAlertService` (delivery stubbed), a
-   counting multi-ticker downloader, and the live-shaped stores (copies of `claimed_picks.jsonl`,
-   `focus_swing_longs.txt`, `focus_swing_shorts.txt`). Measure the first tick's Qt time and
-   download count. Fix round if needed on `claude/pct-1-pullback`, then merge here.
+2. **DONE:** reviewer round 2 on PCT-1 is GO with no blockers. Section 1 records the live-shaped
+   counts, download batches, Qt timing, real-service delivery and fail-before-fix proof.
 3. **PCT-2 - trendline break (section 7).** The `TRENDLINE_BREAK` tag already exists
    (`setup_tagging.py:209-210`); build the D1 event kind `trendline_break` in `chart_watch.py`
    (`D1_EVENT_KINDS` + `D1_EXTENSION_KINDS`, levels from `chart_levels.trendline_level` projected
