@@ -166,6 +166,14 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "indicators.efficiency_lrsi",
     "indicators.smi",
     "indicators.heikin_ashi",
+    # PCT-1 (2026-09-15): the Pullback alert's rule sheet and the intraday
+    # history cache behind its M15/M30 legs. Both are imported inside a method
+    # of the Alert Center poll, so nothing proves they are bundled until a
+    # trader arms a watch on a frozen desk. `indicators` and the top-level
+    # scripts tree are both collected, so this adds no packaging trigger - it
+    # moves the discovery to the build gate.
+    "indicators.pullback_sma_reclaim",
+    "intraday_history",
     "journal_store",
     "journal_identity",
     "journal_migrate",

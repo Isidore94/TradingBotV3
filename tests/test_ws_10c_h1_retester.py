@@ -58,9 +58,26 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-WATCH_KIND = "h1_ema_bounce"
-BUTTON_LABEL = "H1 retester"
-ARM_REASON_LONG = "waiting for an H1 15-EMA bounce (LONG)"
+# PCT-1 (2026-09-15) renamed the kind and widened it: the H1 retester is now
+# the `h1_ema15_bounce` TRIGGER of the one "Pullback alert" watch. Only these
+# three pinned strings move; every assertion below is the one WS-10C shipped,
+# and the H1 rule sheet `h1_ema_bounce_v1` is untouched.
+WATCH_KIND = "pullback"
+BUTTON_LABEL = "Pullback alert"
+ARM_REASON_LONG = (
+    "waiting for a pullback entry (LONG): H1 15-EMA bounce, "
+    "M15/M30 SMA reclaim + LRSI, SMA retest"
+)
+
+#: PCT-1 item 6 widened the armed-inventory health cell to ONE STATE PER
+#: TIMEFRAME joined with `;`. Every H1 state below is the byte-identical
+#: string WS-10C shipped - it is now the FIRST part of the cell, and these
+#: fixtures give the two SMA timeframes no history at all, so this is what
+#: follows it. Pinned once here, appended where it is asserted, so the H1
+#: half of each pin stays exactly as strong as it was.
+PULLBACK_TIMEFRAME_TAIL = (
+    "; not measured (0 of 160 M15 bars); not measured (0 of 85 M30 bars)"
+)
 
 # ---------------------------------------------------------------------------
 # The golden fixture: hand-computed here, never by the module under test.

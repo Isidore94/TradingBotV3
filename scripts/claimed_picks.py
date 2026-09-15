@@ -367,7 +367,15 @@ def record_drop(
     now: datetime | None = None,
     path: Path = CLAIMED_PICKS_FILE,
 ) -> dict[str, Any] | None:
-    """The trader ends a claim. One append-only retraction row."""
+    """The trader ends a claim. One append-only retraction row.
+
+    ``claimed_setup_id`` is REQUIRED and the retraction is exact: a claim is
+    identified by ``(symbol, side, setup)`` and a drop ends the one it names.
+    PCT-1 briefly gave it a blank default and made a nameless drop end every
+    claim on that ``(symbol, side)``; the review sent that back, because a
+    wildcard retraction is a wider production semantic than any caller needed
+    (lead ruling 2026-09-15).
+    """
     row = build_claim_row(
         symbol=symbol,
         side=side,

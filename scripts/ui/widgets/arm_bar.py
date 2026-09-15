@@ -339,14 +339,21 @@ class ArmBar(QFrame):
             button.setToolTip(self._tooltip_for(kind))
 
     _WATCH_KIND_DETAILS = {
-        "h1_ema_bounce": (
-            "The hourly chart comes back to its 15-EMA and holds it: a "
-            "completed H1 bar tags the line (within 0.25 ATR) and a later one "
-            "- inside three bars - closes back through it, with the EMA "
-            "moving your way. A touch and a reclaim on the SAME candle is "
-            "ambiguous and does not fire. A close a full ATR the wrong side "
-            "of the line ends the watch. It needs 45 completed H1 bars before "
-            "it will answer at all."
+        "pullback": (
+            "Four ways a pullback can offer an entry, on one arm. (1) The "
+            "hourly chart comes back to its 15-EMA and holds it: a completed "
+            "H1 bar tags the line (within 0.25 ATR) and a later one - inside "
+            "three bars - closes back through it, with the EMA moving your "
+            "way; a touch and a reclaim on the SAME candle is ambiguous and "
+            "does not fire, and a close a full ATR the wrong side of the line "
+            "ends the watch. (2) A completed M15 close reclaims the 150-SMA "
+            "(M30: the 75) with an LRSI cross up through 80 on that bar or "
+            "the two before it. (3) The M30 has reclaimed and held the 75-SMA "
+            "and the LRSI crosses 80 later, on the M30 or the M15. (4) A "
+            "later bar retests the SMA - low within 0.25 ATR of it - and "
+            "still closes on the right side. Every fire names its trigger and "
+            "timeframe. It needs 45 completed H1 / 160 M15 / 85 M30 bars "
+            "before each leg will answer at all."
         ),
         "hod_avwap": (
             "AVWAP anchored on whichever candle made today's HOD (re-anchors if "

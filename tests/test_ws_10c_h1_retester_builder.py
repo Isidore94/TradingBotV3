@@ -35,6 +35,7 @@ from test_ws_10c_h1_retester import (  # noqa: E402
     BUTTON_LABEL,
     GOLDEN_ATR,
     GOLDEN_CONFIRM_DT,
+    PULLBACK_TIMEFRAME_TAIL,
     WATCH_KIND,
     _bucket_dt,
     _close_for_ema_offset,
@@ -253,13 +254,19 @@ def test_the_short_side_arms_with_its_own_reason():
     watch = arm_chart_watch(
         WATCH_KIND, "msft", "SHORT", [], now=datetime(2026, 8, 26, 7, 15)
     )
-    assert watch.reason == "waiting for an H1 15-EMA bounce (SHORT)"
+    assert watch.reason == (
+        "waiting for a pullback entry (SHORT): H1 15-EMA bounce, "
+        "M15/M30 SMA reclaim + LRSI, SMA retest"
+    )
     assert watch.watch_id
     # A chart with no side of its own still arms, and says so.
     either = arm_chart_watch(
         WATCH_KIND, "msft", "WATCH", [], now=datetime(2026, 8, 26, 7, 15)
     )
-    assert either.reason == "waiting for an H1 15-EMA bounce (EITHER SIDE)"
+    assert either.reason == (
+        "waiting for a pullback entry (EITHER SIDE): H1 15-EMA bounce, "
+        "M15/M30 SMA reclaim + LRSI, SMA retest"
+    )
     assert either.watch_id != watch.watch_id
 
 
@@ -341,18 +348,22 @@ def test_the_armed_inventory_says_not_measured_with_the_bar_count(
 
     assert panel._armed_watch_note(watch) == (
         f"not measured (14 of {WARMUP_BARS} H1 bars, yfinance unavailable)"
+        + PULLBACK_TIMEFRAME_TAIL
     )
 
     # It reaches the table the trader reads, in the health column.
     panel._refresh_armed_list()
     row = next(row for row in panel.armed_list._rows if row[0] == "AAPL")
-    assert row[5] == f"not measured (14 of {WARMUP_BARS} H1 bars, yfinance unavailable)"
+    assert row[5] == (
+        f"not measured (14 of {WARMUP_BARS} H1 bars, yfinance unavailable)"
+        + PULLBACK_TIMEFRAME_TAIL
+    )
 
     # With enough history of its own, the note names the source it used.
     monkeypatch.setattr(
         panel, "_m5_bars_for", lambda symbol, **kw: golden_m5_series(bars)
     )
-    assert panel._armed_watch_note(watch) == "H1 from cache"
+    assert panel._armed_watch_note(watch) == "H1 from cache" + PULLBACK_TIMEFRAME_TAIL
 
 
 def test_a_session_watch_never_gets_the_h1_note(monkeypatch, tmp_path):
@@ -404,7 +415,7 @@ def test_a_short_cache_reaches_the_rule_through_the_fetched_h1_history(
     series, source = panel._h1_bars_for_watch(watch)
     assert len(series) == len(bars)
     assert source == "yfinance"
-    assert panel._armed_watch_note(watch) == "H1 from yfinance"
+    assert panel._armed_watch_note(watch) == "H1 from yfinance" + PULLBACK_TIMEFRAME_TAIL
 
     panel._poll_d1_event_watches(now=GOLDEN_CONFIRM_DT + timedelta(hours=1))
 
@@ -447,7 +458,7 @@ def test_a_full_cache_never_uses_the_fallback(monkeypatch, tmp_path):
     series, source = panel._h1_bars_for_watch(watch)
     assert source == "cache"
     assert series[-1]["close"] == bars[-1]["close"]
-    assert panel._armed_watch_note(watch) == "H1 from cache"
+    assert panel._armed_watch_note(watch) == "H1 from cache" + PULLBACK_TIMEFRAME_TAIL
     assert asked == []  # nothing was even asked for
 
 

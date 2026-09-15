@@ -39,6 +39,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from test_ws_10c_h1_retester import (  # noqa: E402
+    PULLBACK_TIMEFRAME_TAIL,
     WATCH_KIND,
     golden_long_h1_bars,
     golden_m5_series,
@@ -211,7 +212,7 @@ def test_a_failed_refresh_after_a_success_keeps_the_bars_and_says_they_are_stale
 
     # First refresh lands: 45 bars, and the cell says where they came from.
     assert len(cache.fetch_now("AAPL", now=_at(SESSION_DAY, 13, 0))) == 45
-    assert panel._armed_watch_note(watch) == "H1 from yfinance"
+    assert panel._armed_watch_note(watch) == "H1 from yfinance" + PULLBACK_TIMEFRAME_TAIL
     _settle()
 
     # The next one fails. Nothing is thrown away - `fetch_now` hands back the
@@ -224,7 +225,9 @@ def test_a_failed_refresh_after_a_success_keeps_the_bars_and_says_they_are_stale
     series, source = panel._h1_bars_for_watch(watch, now=_at(SESSION_DAY, 14, 0))
     assert (len(series), source) == (45, "yfinance")
 
-    assert panel._armed_watch_note(watch) == "H1 from yfinance (stale - last refresh failed)"
+    assert panel._armed_watch_note(watch) == (
+        "H1 from yfinance (stale - last refresh failed)" + PULLBACK_TIMEFRAME_TAIL
+    )
 
     # `unavailable` keeps its meaning: nothing was EVER fetched.
     assert cache.unavailable("AAPL") is False
@@ -255,4 +258,5 @@ def test_a_symbol_that_never_fetched_still_reads_unavailable(monkeypatch, tmp_pa
     assert (
         panel._armed_watch_note(watch)
         == "not measured (35 of 45 H1 bars, yfinance unavailable)"
+        + PULLBACK_TIMEFRAME_TAIL
     )

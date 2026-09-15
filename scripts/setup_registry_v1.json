@@ -302,17 +302,19 @@
       "setup_id": "compression_break",
       "version": 1,
       "canonical_setup_id": "COMPRESSION_BREAK",
-      "docs_key": "",
+      "docs_key": "compression_break",
       "playbook_family": "",
-      "claim_id": "",
+      "claim_id": "compression_break",
       "family_tag_key": "",
-      "label": "",
+      "label": "Compression break",
       "role": "TRADE_SETUP",
       "status": "study",
       "exclusivity_group": "compression_break",
       "aliases": [],
       "sources": [
-        "legacy.py::*_STUDY_FAMILY"
+        "setup_docs.SETUP_DOCS",
+        "legacy.py::*_STUDY_FAMILY",
+        "setup_claims.all_setup_claims"
       ],
       "supported_sides": [],
       "structural_timeframe": "",
@@ -1394,6 +1396,41 @@
       "legacy_study_constant": "",
       "note": ""
     },
+    "pullback_sma_reclaim@1": {
+      "setup_id": "pullback_sma_reclaim",
+      "version": 1,
+      "canonical_setup_id": "PULLBACK_SMA_RECLAIM",
+      "docs_key": "pullback_sma_reclaim",
+      "playbook_family": "",
+      "claim_id": "pullback_sma_reclaim",
+      "family_tag_key": "",
+      "label": "Pullback reclaim (M15 150 / M30 75 SMA)",
+      "role": "TRADE_SETUP",
+      "status": "not_a_setup",
+      "exclusivity_group": "pullback_sma_reclaim",
+      "aliases": [],
+      "sources": [
+        "setup_docs.SETUP_DOCS",
+        "setup_claims.all_setup_claims"
+      ],
+      "supported_sides": [],
+      "structural_timeframe": "",
+      "context_timeframe": "",
+      "trigger_timeframe": "",
+      "completed_bar_trigger": "",
+      "primary_recipe": "",
+      "unestablished": [
+        "supported_sides",
+        "structural_timeframe",
+        "context_timeframe",
+        "trigger_timeframe",
+        "completed_bar_trigger",
+        "primary_recipe"
+      ],
+      "authoritative_when": "plan.md P4.1 (identity-graph freeze)",
+      "legacy_study_constant": "",
+      "note": ""
+    },
     "quiet_pullback_resume@1": {
       "setup_id": "quiet_pullback_resume",
       "version": 1,
@@ -1834,17 +1871,19 @@
       "setup_id": "trendline_break",
       "version": 1,
       "canonical_setup_id": "TRENDLINE_BREAK",
-      "docs_key": "",
+      "docs_key": "trendline_break",
       "playbook_family": "",
-      "claim_id": "",
+      "claim_id": "trendline_break",
       "family_tag_key": "",
-      "label": "",
+      "label": "Trendline break",
       "role": "TRADE_SETUP",
       "status": "study",
       "exclusivity_group": "trendline_break",
       "aliases": [],
       "sources": [
-        "legacy.py::*_STUDY_FAMILY"
+        "setup_docs.SETUP_DOCS",
+        "legacy.py::*_STUDY_FAMILY",
+        "setup_claims.all_setup_claims"
       ],
       "supported_sides": [],
       "structural_timeframe": "",
@@ -2103,6 +2142,13 @@
       "canonical": "TOP_PATTERN_WATCH",
       "family_tag_key": "top_pattern_tracking",
       "note": "the live scanner tags this family, but `setup_docs` has no entry for it - so it can be detected and never claimed",
+      "resolved_by": "plan.md P4.1 (identity-graph freeze)"
+    },
+    {
+      "kind": "documented_but_undetected",
+      "canonical": "PULLBACK_SMA_RECLAIM",
+      "docs_key": "pullback_sma_reclaim",
+      "note": "documented and claimable, but no `_FAMILY_TAGS` entry, no playbook detector and no `*_STUDY_FAMILY` constant names it - so nothing writes an occurrence under this id today",
       "resolved_by": "plan.md P4.1 (identity-graph freeze)"
     }
   ]

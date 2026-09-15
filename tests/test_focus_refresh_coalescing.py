@@ -469,7 +469,18 @@ def test_a_burst_refills_the_price_alert_symbols_once(tmp_path, monkeypatch):
     from ui.widgets.price_alert_board import PriceAlertBoard
 
     service = _service(tmp_path)
-    board = PriceAlertBoard(PriceAlertService(), service)
+    # `PriceAlertService()` starts its 60-second poll timer in the
+    # constructor, and this test never shuts it down - so for the rest of the
+    # session it kept ticking inside the shared QApplication and reading
+    # `price_alerts`. That is what made
+    # `test_g7_speed_pass.py::test_showing_the_research_tab_loads_only_the_
+    # child_whose_tab_is_open` count one unexplained `load_price_alerts` in a
+    # full-suite run: a wall-clock race between a leaked timer and that test's
+    # 0.5 s drain. Found while verifying PCT-1, unrelated to it; the timer is
+    # stopped here because this test is about the BOARD's coalescer.
+    alerts = PriceAlertService()
+    alerts._timer.stop()
+    board = PriceAlertBoard(alerts, service)
     refills: list[int] = []
     monkeypatch.setattr(board, "_refresh_symbol_choices", lambda: refills.append(1))
 
@@ -478,6 +489,7 @@ def test_a_burst_refills_the_price_alert_symbols_once(tmp_path, monkeypatch):
     assert refills == []
     board.flush_pending_refresh()
     assert refills == [1]
+    alerts.shutdown()
 
 
 def test_a_burst_refreshes_the_alert_feed_once(tmp_path, monkeypatch):
