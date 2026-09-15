@@ -451,6 +451,60 @@ def test_a_hand_armed_retest_still_buzzes(monkeypatch, tmp_path):
     assert len(sent) == len(triggers)
 
 
+def test_one_arming_tick_with_ninety_five_watches_is_a_handful_of_downloads(
+    monkeypatch, tmp_path
+):
+    """The reviewer counted 285 single-ticker downloads and 286 threads.
+
+    Driven through the panel with the REAL `IntradayHistoryCache` (only the
+    download is a list), so this is the end-to-end number rather than the
+    cache's own: 95 symbols on each of M15 and M30 is two chunks apiece.
+    """
+    import intraday_history
+
+    calls: list[tuple[int, int]] = []
+    real = intraday_history.IntradayHistoryCache
+
+    class _Counting(real):
+        def __init__(self, interval_minutes=60, **kwargs):
+            kwargs["downloader"] = self._download
+            super().__init__(interval_minutes, **kwargs)
+
+        def _download(self, symbols, **_kwargs):
+            calls.append((self.interval_minutes, len(symbols)))
+            return {name: None for name in symbols}
+
+    monkeypatch.setattr(intraday_history, "IntradayHistoryCache", _Counting)
+    import h1_history
+
+    monkeypatch.setattr(h1_history, "H1HistoryCache", lambda **kw: _Counting(60))
+    panel = _panel(monkeypatch, tmp_path)
+    _ninety_five_claims(tmp_path)
+
+    panel._poll_pullback_watches(now=bar_end(M15_RECLAIM_INDEX, 15))
+    settle_pullback(panel, timeout=20.0)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if not [
+            thread
+            for thread in threading.enumerate()
+            if thread.is_alive() and "history" in thread.name
+        ]:
+            break
+        time.sleep(0.01)
+
+    assert len(_pullback_watches(panel)) == 95
+    print("\nPCT-1 downloads for one arming tick of 95 watches: %d" % len(calls))
+    # Two chunks of 50 for each of the two SMA timeframes, and the paced H1
+    # leg's dozen in one or two more. Measured: 6. The bound is loose because
+    # where the batching window happens to fall can split one chunk; what is
+    # NOT allowed to drift is the shape - a chunk is at most 50 names, and 95
+    # watches are single figures of requests rather than 285.
+    assert len(calls) <= 10, calls
+    assert max(size for _interval, size in calls) <= 50
+    assert sum(size for _interval, size in calls) <= 95 * 3
+
+
 def test_the_worker_thread_is_the_only_one_and_it_finishes(monkeypatch, tmp_path):
     """No thread leak: one evaluation at a time, and it exits."""
     m15 = make_bars(M15_LONG_CLOSES[: M15_RECLAIM_INDEX + 1], 15)
