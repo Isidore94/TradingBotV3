@@ -44,8 +44,9 @@ They are evidence and must not be loaded as context.
   dated notes, prunable `context/`); rules in `CLAUDE.md` "Workspace memory", role
   paragraphs in `.claude/agents/*.md` and `.codex/agents/*.toml`. Recall only, never
   authority; adapted from JumpStarter M1 (`664e083`). Verification gate #93 owed.
-- **Codex agent operations (2026-09-09):** project defaults select Astra as lead and
-  Luna for unspecified helpers; recon uses Luna, builder/tester/reviewer use Terra.
+- **Codex agent operations (amended 2026-09-15):** removed the project Astra model pin
+  at the trader's request; session selection and user defaults choose the lead model.
+  Luna remains the default for unspecified helpers; recon uses Luna, builder/tester/reviewer use Terra.
   `docs/AGENT_TEAM.md` owns routing, escalation, isolation and final lead acceptance.
 
 - **Win rate leads every trader-facing SWING surface** (V3, decision 0016 answer
