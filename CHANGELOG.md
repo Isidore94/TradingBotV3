@@ -705,6 +705,42 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **Compression is measured, shown and calibrated before it is tuned (packet PCT-3, trader
+  2026-09-15, `claude/pullback-compression-2026-09-15`).** `summarize_anchor_compression` has
+  always computed a 0-3 `compression_score` and three ATR ratios and discarded them;
+  `legacy.compression_copy_through` now publishes all four plus `compression_rule_version =
+  "anchor_compression_v1"` on the priority row, the `ai_state` symbol entry, the feature row and
+  `build_tracker_setup_record` - at BOTH row builders, because the live desk scan runs
+  `runner._run_master_impl`'s loop and not `legacy._evaluate_priority_snapshot_for_date` (the
+  first build missed that; `tests/test_pct3_runner_publishes_compression.py` drives the real
+  runner in a child process with its own data dir and reads the ai_state and the feature CSV off
+  disk). The eight new fields join `runner`'s `feature_columns` allowlist (the first scan on this
+  build widens the 667 MB `d1_features_history.csv` once, about two minutes). Nothing is stamped
+  as measured when it was not: both copy-through helpers answer `None` and omit the rule version
+  when a ratio is missing, and `compression_break_recent` travels with its rule version or not at
+  all. Pure `scripts/compression_chip.py` is the reader (string-safe against `bool("False")`);
+  `SetupTableDelegate` paints an amber `caution` `compressed` pill after the bucket and wrong-side
+  chips with one tooltip line - display only, hiding and re-ordering nothing, moving no score. The
+  36 MB `ai_state` parse runs on `master_avwap_panel._AiStateCompressionWorker` through
+  `ai_state_levels.warm_cache()` behind an mtime+size key (one parse, one coalesced refresh, the
+  worker freed on `finished`); the Qt-thread `data_feed.merge_compression_from_ai_state` fills from
+  `cached_symbol_compression()` and never opens a file. New read-only
+  `scripts/compression_calibration.py` (`cd scripts && python -m compression_calibration --since
+  YYYY-MM-DD [--out DIR] [--live]`) counts every compression veto as `joined` / `untracked` /
+  `pending`, reads each session's ACTIVE tracker population (entry date to
+  `last_replayed_session`, a blank one collapsing to the entry day and saying so), recomputes a
+  missing anchor measure through `summarize_anchor_compression` itself, prints per measure `n =
+  vetoed / rest`, both medians and a rank-sum AUC over seven measures plus today's
+  `compression_flag` hit rate, writes one CSV, refuses the live stores without `--live`, never
+  reads a bar after the session, and streams the 1.26 GB tracker at 0.14 GB peak (the SQLite
+  mirror is not read, decision 0017). `legacy.evaluate_compression_break_v1` reuses
+  `assess_compression_break_context` plus a >= 1.0 ATR-20 bar-range clause
+  (`compression_break_recent` / `compression_break_v1_note` / `compression_break_v1`), and
+  `setup_tagging` adds `COMPRESSION_BREAK` LAST under the six-tag cap. First live-copy reading:
+  213 vetoes (140 joined / 50 untracked / 23 pending), flag hit rate 0.18 with 2,631 false
+  positives, every measure's AUC 0.34-0.49. Tests: `tests/test_pct3_compression.py`,
+  `_merge.py`, `_runner_publishes_compression.py`, `_calibration_accounting.py`; long form
+  DESK_INTERNALS "PCT-3 - compression is measured before it is tuned".
 - **The M5 window is fetched whole once a day, then extended (WS-SN2, WISHLIST item 4,
   2026-09-13, sweep branch).** `BounceBot.request_and_detect_bounce`
   (`scripts/bounce_bot_lib/legacy.py`) asked IB for `durationStr="5 D"` of 5-minute bars for
@@ -2559,6 +2595,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-15 (afternoon) - Phase 0.29: Pullback alert, trendline break, compression (trader-directed; packets PCT-1..3 on `claude/pullback-compression-2026-09-15`)
+
+**Trader, 2026-09-15:** a new tracker setup watched for a pullback on M15 (150-SMA) / M30 (75-SMA) with an LRSI reversal or an SMA retest, the H1 retester renamed the Pullback alert and carrying these; claim names for pullback, trendline break and compression break; a compression MEASURE because the compression veto is the most common one ("we need to fine tune this so we stop getting so many compressed picks"). Spec and resume brief: `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. **PCT-3 (compression) is built, reviewed by reproduction in three rounds and merged into the plan branch** - inventory paragraph under "Scanning, candidates, and decision support"; the two blockers the review found (the live scan's row seam is `runner.py`, not the legacy snapshot; the calibration join on tracker ENTRY dates dropped 127 of 213 vetoes) are fixed and pinned. **PCT-1 (the Pullback alert)** is built and in its review fix round (six blockers reproduced on live copies: the phone de-dup by `watch_id`, machine `arm_watch` rows graded as takes, a 1.9 s Qt tick, 285 single-symbol yfinance downloads, the closing bar dropped, a declined watch never re-armable). **PCT-2 (trendline-break event + feed alert)** is planned only; the `TRENDLINE_BREAK` tag already existed. Gates #124-#125 (PCT-3) in the checkpoint.
 
 ### 2026-09-15 - The day-trade watchlists are wiped after the close (trader-directed, lead on `claude/desk-combined-2026-09-14`)
 
