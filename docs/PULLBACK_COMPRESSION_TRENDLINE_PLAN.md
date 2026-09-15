@@ -18,7 +18,7 @@ checkout, and never a merge to `main` without the trader's word.
 | Packet | What | Status |
 |---|---|---|
 | PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | PLANNED 2026-09-15 - tester next |
-| PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | PLANNED 2026-09-15 - runs in parallel with PCT-1 (disjoint files) |
+| PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | RED TESTS COMMITTED 2026-09-15 (`claude/pct-3-compression` 8483a324, 40 failing / 3 pins) - builder spawned |
 | PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | PLANNED - after PCT-1 and PCT-3 land (shares their files) |
 
 Trader's order was 1 pullback, 2 compression breaks and trendline breaks, 3 compression measure.
@@ -183,8 +183,10 @@ break-then-retest of a trendline stays in WISHLIST).
   session_date, created_at, reason_code, vocab_version, timeframe, side, surface` plus
   `SCAN_CONTEXT_FIELDS` (`scan_date, tracker_setup_id, canonical_setup_id, priority_bucket, score,
   expected_r`, :130-137) when the caller supplied them. Vocabulary v3
-  `ui/annotations/vocabularies/veto_reasons_v3.json:27-33` code `compressed` (v1's
-  `support_resistance_cluttered` pools with it in `veto_cohort.canonical_veto_cohort`).
+  `ui/annotations/vocabularies/veto_reasons_v3.json:27-33` code `compressed`. **Correction (tester
+  2026-09-15):** v1's `support_resistance_cluttered` does NOT pool with it in
+  `veto_cohort.canonical_veto_cohort` (v2 called the swap "a NEW code, not a rename"); the
+  calibration CLI names both codes itself.
   Live counts 2026-08-20..09-15: 598 coded vetoes; `compressed` 189 + v1 25 = 214 (35.8 %), all
   `timeframe D1`, LONG 97 / SHORT 92; 136 rows carry no `reason_code`.
 - Setups table rows: `ui/services/data_feed.py` `load_setup_rows_from_priority_report` (:203-249)
@@ -198,6 +200,16 @@ break-then-retest of a trendline stays in WISHLIST).
   d1_environment.py:17-96` (`range_atr = 10-session range / ATR14 <= 3.0`).
 - Score pins: `tests/test_master_avwap_setups.py` asserts exact `score` values on synthetic
   frames (e.g. :1749, :2480, :2689); no whole-dict golden, so ADDITIVE fields do not break them.
+- **A compression-break rule ALREADY EXISTS** (tester 2026-09-15): `legacy.py`
+  `assess_compression_break_context` (:29086-29175) with `compression_break_today / _direction /
+  _level / _distance_atr / _prior_bars / _note`, `PHASE6_COMPRESSION_BREAK_BUFFER_ATR = 0.10`,
+  `PHASE6_COMPRESSION_MIN_PRIOR_BARS = 5` (:27649-27650), emitting a Phase-6 STUDY row (family
+  `PHASE6_COMPRESSION_BREAK_STUDY_FAMILY = "compression_break"`, :27645) from
+  `enrich_priority_rows_with_phase6_studies` (:29244, called once from `runner.py:2230`), which
+  `_evaluate_priority_snapshot_for_date` does NOT call. PCT-3 item 4 is therefore that rule plus
+  the >= 1.0 ATR-20 bar-range clause, evaluated in the snapshot function under the `_recent` /
+  `_rule_version` names - not a second detector. The claim name `compression_break` (PCT-1) is the
+  same concept as the study family and shares its id on purpose.
 
 ### 4.4 Trendlines today (PCT-2)
 
@@ -215,7 +227,9 @@ break-then-retest of a trendline stays in WISHLIST).
   PULLBACK kinds automatically (`_poll_focus_d1_interest`, `alert_center_panel.py:4391-4480`),
   EXTENSION kinds only when armed (`_poll_d1_event_watches`).
 - Families: `scripts/master_avwap_lib/setup_tagging.py` `_FAMILY_TAGS` (:19-38, 18 entries),
-  `derive_setup_tag_payload` (:130-233) - one `setup_family`, up to 6 `setup_tags`.
+  `derive_setup_tag_payload` (:130-233) - one `setup_family`, up to 6 `setup_tags`. **The
+  `TRENDLINE_BREAK` confirmation tag ALREADY EXISTS** (:209-210, on `trendline_break_recent`), so
+  PCT-2 item 1 is built; PCT-2 is the event kind and the feed alert only.
 
 ## 5. Packet PCT-1 - Pullback alert and the three claim names
 
@@ -341,13 +355,14 @@ Items:
    table per measure with n (vetoed / rest), medians, the rank-sum AUC, and the hit rate of the
    current `compression_flag` on the vetoed set. Proposes nothing, changes nothing, names its
    window. Point-in-time: bars after the session date are never read.
-4. **`compression_break` v1 tag** in `legacy.py` next to the compression evaluation: previous
-   completed session `is_compressed` (the same function on `price_slice[:-1]`), and the current
-   completed close above the compression range high (LONG) / below its low (SHORT) with the bar's
-   range >= 1.0 ATR-20 -> `compression_break_recent = True`, `compression_break_note`,
-   `compression_break_rule_version = "compression_break_v1"`; `setup_tagging` adds the
-   `COMPRESSION_BREAK` trigger tag when the flag is set. No score change (a characterization test
-   pins scores byte-identical on a fixture with and without the flag).
+4. **`compression_break` v1 tag** in `legacy.py` inside `_evaluate_priority_snapshot_for_date`,
+   reusing `assess_compression_break_context` (section 4.3) rather than a second rule: its
+   `compression_break_today` in the setup's direction AND the breaking bar's range >= 1.0 ATR-20 ->
+   `compression_break_recent = True`, `compression_break_note`,
+   `compression_break_rule_version = "compression_break_v1"` (the version key stamped on EVERY row);
+   `setup_tagging` adds the `COMPRESSION_BREAK` confirmation tag when the flag is set. The Phase-6
+   study row is untouched. No score change (a characterization test pins scores byte-identical on
+   a fixture with and without the flag).
 5. **Docs**: DESK_INTERNALS entry "PCT-3 - compression is measured before it is tuned", this file.
 
 Tests (`tests/test_pct3_compression.py`): the copy-through fields present on a synthetic priority
@@ -377,8 +392,8 @@ Tester first, then builder. Files: `setup_tagging.py`, `legacy.py` (tag only), `
 
 Items:
 
-1. **Tag**: `setup_tagging` adds the `TRENDLINE_BREAK` trigger tag when `trendline_break_recent`
-   is set (the scan already computes it); the tracker snapshot already carries the flag.
+1. **Tag**: ALREADY BUILT - `setup_tagging.py:209-210` adds `TRENDLINE_BREAK` (confirmation) on
+   `trendline_break_recent`; nothing to do but a test that pins it.
 2. **D1 event kind** `trendline_break` ("Trendline break") in `D1_EVENT_KINDS` and
    `D1_EXTENSION_KINDS`: `d1_event_levels` carries the scan's frozen line (`trendline_level` from
    `chart_levels`, projected to the session; identity `trendline_id`, endpoints and knowledge time
