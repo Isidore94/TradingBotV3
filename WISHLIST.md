@@ -715,7 +715,7 @@ Trader's words: "stop putting up longs below avwape and shorts above it."
 
 10. Better daily discovery, entry watches, journals and review — Fable 5.1 queue (2026-09-11)
 
-SWEEP: 10A, 10B, 10C step 1, 10D, 10E, 10F, 10G, 10H, 10I, 10J steps 1-2 and 10K step 1 BUILT (each sub-item carries its own SWEEP line); 10K steps 2 and 5 (WS-RP) land last.
+SWEEP: 10A, 10B, 10C step 1, 10D, 10E, 10F, 10G, 10H, 10I, 10J steps 1-2 and 10K steps 1, 2 and 5 are BUILT (each sub-item carries its own SWEEP line); WS-RP's live gate is owed.
 
 STATUS: PLANNED CANDIDATES. The trader asked for plans in this file, not implementation.
 No new product phase is authorized by this entry. Fable can investigate and prepare a
@@ -1349,11 +1349,10 @@ change, API call or runtime test is part of this planning update.
 
 ### 10K. One measured review for the trader, local AI and frontier model (2026-09-12)
 
-SWEEP: step 1 BUILT - packet WS-AI1 on `claude/ws-ai1-enrichment-status`, merged at e0683a31, gate #100 (the enrichment defect, honest completion status, the `preference_to_trade` section joins the nightly slate by lead decision); steps 2 and 5 are packet WS-RP, landing last.
+SWEEP: step 1 BUILT - packet WS-AI1 on `claude/ws-ai1-enrichment-status`, merged at e0683a31, gate #100 (the enrichment defect, honest completion status, the `preference_to_trade` section joins the nightly slate by lead decision); steps 2 and 5 BUILT as WS-RP on `codex/ws-rp-resume-2026-09-15`, live gate owed.
 
-STATUS: TRADER-REQUESTED INTEGRATION PLAN, NOT IMPLEMENTED. This conversation authorizes
-planning in WISHLIST, not app changes, live repairs, a model/provider change or automatic
-frontier calls. Fable uses this as the integration brief for selected work in items
+STATUS: STEPS 1, 2 AND 5 BUILT; LIVE VALIDATION OWED. This conversation did not authorize a
+model/provider change, live repair or automatic frontier call. Fable uses this as the integration brief for selected work in items
 5/7 and 10D/E/F/I/J, then records the bounded build selections in `plan.md`. Existing
 contracts in those entries remain; this section supersedes their disconnected build
 ordering and earlier assumptions that a successful AI job means useful advice exists.

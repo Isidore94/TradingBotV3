@@ -2086,6 +2086,19 @@ They are evidence and must not be loaded as context.
   runner's stage order is unchanged and `weekly_synthesis` stays optional. Tests:
   `tests/test_ws_ai1_enrichment_status.py`. Rule: DESK_INTERNALS "AI1 - an enrichment row is
   never blank on success"; contract: `docs/LOCAL_AI_AUTOMATION_PLAN.md` Phase 3.
+- **One shared measured report (WS-RP, WISHLIST 10K steps 2 + 5, 2026-09-15).**
+  `scripts/measured_report.py` is a pure, versioned five-answer contract: broker money once
+  per trade, side-adjusted opportunity and adverse movement, target speed in trading minutes,
+  EOD, and independent observation/follow-through session controls. Every cell carries its
+  population, window, reference clock, policy, source paths and measured/pending/unknown
+  state; its stable report id changes only when evidence matures. The deterministic nightly
+  `measured_report` slot publishes versioned JSON/Markdown siblings and indexes the newest
+  report without failing the night. Daily Recap's fifth **Review** tab reads that published
+  report off its worker and a manual Copy/Export emits a capped 32 KiB brief, payload and
+  manifest with the existing `ai_summary._ESTIMATED_CHARS_PER_TOKEN` estimate. No report path
+  calls a model, uploads, changes a live decision or writes a live store. Tests:
+  `tests/test_ws_rp_shared_report.py` (44 behavior checks plus two unchanged N3 guards) and
+  `tests/test_ai_jobs_runner.py` (deterministic-slot order). Gate #133.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
@@ -2636,6 +2649,15 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-15 (evening) - WS-RP shared measured report (WISHLIST 10K steps 2 + 5)
+
+The restored report implementation now sits on the current Daily Recap repair. It builds one
+report id from stable measured cells, publishes JSON/Markdown version siblings from the final
+deterministic nightly slot, renders those published cells on a fifth Daily Recap tab, and only
+copies or exports a frontier handoff after the trader clicks. The 44 tester-written behavior
+tests were red before the module existed and are green now; the two N3 selection guards remain
+green. Gate #133 is live proof after the next overnight run; no full-suite baseline is claimed.
 
 ### 2026-09-15 (afternoon) - Phase 0.29: Pullback alert, trendline break, compression (trader-directed; packets PCT-1..3 on `claude/pullback-compression-2026-09-15`)
 

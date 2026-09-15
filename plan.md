@@ -487,8 +487,9 @@ at #94. Live validation (section 6) is the trader's test week on the sweep branc
 `CURRENT_CHECKPOINT.md`):** WS-5D #94, WS-PT4 #95, WS-5A #96, WS-EF1 #97, WS-FC1 #98, WS-SX #99,
 WS-AI1 #100, WS-10B #101, WS-ENV #102, WS-SN4 #103, WS-SN3 #104, WS-J1 #105, WS-TH #106, WS-CH #107,
 WS-WS #108, WS-10A #109, WS-TM #110, WS-10E #111, WS-5B #112, WS-SN2 #113, WS-10D #114, WS-DR #115,
-WS-10C #116, WS-WL #117, WS-10I #118. Remaining: WS-RP (10K steps 2 and 5) lands last, then its docs
-lines (the docs pass itself is done: CLAUDE.md trimmed to 44.7 KB at f63167b0, plan/WISHLIST/memory lines). **Owed asks, all ask-first
+WS-10C #116, WS-WL #117, WS-10I #118. WS-RP (10K steps 2 and 5) is BUILT on
+`codex/ws-rp-resume-2026-09-15`, with its live gate owed; its control/spec docs are reconciled
+there. **Owed asks, all ask-first
 (the trader's word):** FC1's two seams (the Parquet mirror filter; `fetch_daily_bars`' forming-bar
 return) and the live `repair --apply`; ENV's legacy.py stamp on the tracker outcome row; SN3's
 duplicate fourth `_record_environment_focus_history` call; WS's hide-vs-mark, previous anchor and

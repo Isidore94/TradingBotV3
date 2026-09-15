@@ -390,7 +390,6 @@ class DailyRecapPanel(QFrame):
         self._sorts[name] = sort_picker
         return page
 
-    def _fill_session_picker(self, select: str | None = None) -> None:
     def _build_review_tab(self) -> QWidget:
         """The measured report, printed. It computes nothing and writes nothing.
 
