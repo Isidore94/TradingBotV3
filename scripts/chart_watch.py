@@ -37,23 +37,49 @@ WATCH_KINDS = {
     "lod_avwap": "LOD AVWAP",
     "vwap_bounce": "VWAP bounce",
     "band_bounce": "σ-band bounce",
-    "h1_ema_bounce": "H1 retester",
+    "pullback": "Pullback alert",
 }
 
-#: WISHLIST 10C. The trader picks a weekly-pattern name and then waits for a
-#: better entry: the hourly chart coming back to its 15-EMA and holding it.
+#: PCT-1 (trader, 2026-09-15: *"in the same vein as H1 retester we should
+#: rename it to Pullback alert and include any of these phenomena in the alert
+#: pattern"*). ONE button, ONE kind, named TRIGGERS: the hourly 15-EMA
+#: retester WISHLIST 10C shipped is now one of four things this watch waits
+#: for, and the other three are the trader's M15/M30 SMA pullback.
+PULLBACK_KIND = "pullback"
+
+#: The stored kind every watch armed before the rename carries. It is NOT a
+#: button any more and not in `WATCH_KINDS`; `chart_watch_from_dict` loads such
+#: a row as a `pullback` watch whose only trigger is the H1 bounce it was armed
+#: for, so nothing the trader armed is lost and nothing they did not ask for is
+#: added to it.
 H1_EMA_BOUNCE_KIND = "h1_ema_bounce"
+
+#: The four triggers a Pullback alert waits for. `h1_ema15_bounce` is the
+#: WISHLIST 10C rule, unchanged and still `h1_ema_bounce_v1`; the other three
+#: are `indicators.pullback_sma_reclaim`'s, on M15 and M30. Every fire names
+#: its trigger and its timeframe, so one button never hides which phenomenon
+#: spoke.
+TRIGGER_H1_EMA15_BOUNCE = "h1_ema15_bounce"
+TRIGGER_SMA_RECLAIM_LRSI = "sma_reclaim_lrsi"
+TRIGGER_RECLAIM_THEN_LRSI = "reclaim_then_lrsi"
+TRIGGER_SMA_RETEST = "sma_retest"
+PULLBACK_TRIGGERS = (
+    TRIGGER_H1_EMA15_BOUNCE,
+    TRIGGER_SMA_RECLAIM_LRSI,
+    TRIGGER_RECLAIM_THEN_LRSI,
+    TRIGGER_SMA_RETEST,
+)
 
 #: Watch kinds that are NOT session-scoped. Every other kind on this surface
 #: dies at midnight because it is a statement about today's tape ("a new high
-#: for the session"); the H1 retester is a statement about a multi-day
+#: for the session"); the Pullback alert is a statement about a multi-day
 #: pattern and is given ten TRADING days by `armed_alert_expiry`, so it
 #: survives a desk restart and tomorrow's date roll. One name, three readers:
 #: `load_chart_watches` (which otherwise drops the whole file on a market-date
 #: mismatch), `watch_is_stale` (which the panel's M5 poll uses to retire), and
 #: the armed inventory's health column. A kind in here also belongs on the D1
 #: armed-event feed rather than the session M5 list.
-PERSISTENT_WATCH_KINDS = frozenset({H1_EMA_BOUNCE_KIND})
+PERSISTENT_WATCH_KINDS = frozenset({PULLBACK_KIND})
 
 # The σ-band button mirrors the day-trade tracker's measured M5 winners:
 # long = dynamic_vwap_upper_band (ride above +1σ, dip-tag it, reclaim),
@@ -148,6 +174,20 @@ class ChartWatch:
     #: What the trader is waiting for, in their own words, for the armed
     #: inventory to print back at them.
     reason: str = ""
+    #: PCT-1: which phenomena this watch waits for. Empty on every kind but
+    #: `pullback` (whose condition IS its trigger list) and on every row
+    #: written before the rename - absent is empty, never an error.
+    triggers: tuple[str, ...] = ()
+    #: trigger -> the bar time it last fired on, so one event speaks once and
+    #: a NEW episode's event still speaks. Persisted, so a desk restart does
+    #: not re-announce a move the trader was already told about.
+    fired: Mapping[str, str] = field(default_factory=dict)
+    #: The trader disarmed a watch the desk armed for them. The row is KEPT so
+    #: the auto-arm sweep does not simply put it back while that claim or
+    #: Focus pick lives; it is hidden from the Armed board, never evaluated
+    #: and never pushed. A watch the trader armed by hand is deleted on
+    #: disarm, exactly as before.
+    declined: bool = False
 
 
 @dataclass(frozen=True)
@@ -251,6 +291,7 @@ def arm_chart_watch(
         source_text=str(source_text or ""),
         watch_id=uuid.uuid4().hex,
         reason=watch_reason(kind, resolved_side),
+        triggers=PULLBACK_TRIGGERS if kind == PULLBACK_KIND else (),
     )
 
 
@@ -258,11 +299,17 @@ def watch_reason(kind: str, side: str) -> str:
     """What the trader is waiting for, for the armed inventory to print back.
 
     Only the kinds whose condition is not already obvious from their label and
-    baseline carry one; everything else keeps the blank it has always had.
+    baseline carry one; everything else keeps the blank it has always had. The
+    Pullback alert names all three FAMILIES of trigger, because one button now
+    covers four phenomena and a health cell that said only "pullback" would
+    leave the trader guessing which one they are waiting on.
     """
-    if kind == H1_EMA_BOUNCE_KIND:
+    if kind == PULLBACK_KIND:
         label = side if side in ("LONG", "SHORT") else "EITHER SIDE"
-        return f"waiting for an H1 15-EMA bounce ({label})"
+        return (
+            f"waiting for a pullback entry ({label}): H1 15-EMA bounce, "
+            "M15/M30 SMA reclaim + LRSI, SMA retest"
+        )
     return ""
 
 
@@ -300,9 +347,11 @@ def evaluate_chart_watch(
         return _evaluate_vwap_bounce(watch, completed)
     if watch.kind == "band_bounce":
         return _evaluate_band_bounce(watch, completed)
-    # The H1 retester is deliberately absent: it is not a session-scoped M5
-    # condition and is evaluated once per COMPLETED H1 BAR by
-    # `evaluate_h1_bounce_watch` below, from the same cached M5 bars.
+    # The Pullback alert is deliberately absent: none of its four triggers is
+    # a session-scoped M5 condition. The `h1_ema15_bounce` one is evaluated
+    # once per COMPLETED H1 BAR by `evaluate_h1_bounce_watch` below, from the
+    # same cached M5 bars; the three SMA ones are evaluated on their own M15
+    # and M30 series by `indicators.pullback_sma_reclaim`.
     return None
 
 
@@ -773,18 +822,49 @@ def chart_watch_to_dict(watch: ChartWatch) -> dict:
         "source_text": watch.source_text,
         "watch_id": watch.watch_id,
         "reason": watch.reason,
+        "triggers": list(watch.triggers or ()),
+        "fired": dict(watch.fired or {}),
+        "declined": bool(watch.declined),
     }
 
 
 def chart_watch_from_dict(payload: Mapping[str, Any]) -> ChartWatch | None:
+    """One stored row, or None when it cannot be read at all.
+
+    A row stored as `h1_ema_bounce` before PCT-1 loads as a `pullback` watch
+    whose ONLY trigger is `h1_ema15_bounce`: nothing the trader armed is lost
+    by the rename, and nothing they did not ask for is added to it. A stored
+    `pullback` row with no trigger list is a row written by a build that had
+    only one list, so it gets all four.
+    """
     try:
         armed_at = datetime.fromisoformat(str(payload["armed_at"]))
         kind = str(payload["kind"])
         symbol = str(payload["symbol"] or "").strip().upper()
     except (KeyError, TypeError, ValueError):
         return None
+    stored_triggers = payload.get("triggers")
+    if kind == H1_EMA_BOUNCE_KIND:
+        kind = PULLBACK_KIND
+        if stored_triggers is None:
+            stored_triggers = [TRIGGER_H1_EMA15_BOUNCE]
     if not symbol or kind not in WATCH_KINDS:
         return None
+    if kind == PULLBACK_KIND:
+        triggers = tuple(
+            str(name)
+            for name in (
+                stored_triggers if stored_triggers is not None else PULLBACK_TRIGGERS
+            )
+        )
+    else:
+        triggers = ()
+    fired_payload = payload.get("fired")
+    fired = (
+        {str(key): str(value) for key, value in fired_payload.items()}
+        if isinstance(fired_payload, Mapping)
+        else {}
+    )
     baseline = payload.get("baseline")
     try:
         baseline = float(baseline) if baseline is not None else None
@@ -801,6 +881,9 @@ def chart_watch_from_dict(payload: Mapping[str, Any]) -> ChartWatch | None:
         # Absent on every row written before WISHLIST 10C: blank, never a raise.
         watch_id=str(payload.get("watch_id") or ""),
         reason=str(payload.get("reason") or ""),
+        triggers=triggers,
+        fired=fired,
+        declined=bool(payload.get("declined") or False),
     )
 
 

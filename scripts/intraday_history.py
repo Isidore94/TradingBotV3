@@ -385,7 +385,15 @@ class IntradayHistoryCache:
             bucket = moment.replace(minute=0, second=0, microsecond=0)
         else:
             bounds = _session_bounds(bucket)
-            session_over = bounds is not None and moment > bounds[1]
+            # The bounds are naive market-local, so an aware caller is
+            # CONVERTED onto that clock before the comparison, never stripped
+            # (N1) - the same rule `last_completed_bucket` holds above.
+            local_moment = _market_local(moment) or moment
+            session_over = (
+                bounds is not None
+                and local_moment.tzinfo is None
+                and local_moment > bounds[1]
+            )
         with self._lock:
             if key in self._in_flight:
                 return False

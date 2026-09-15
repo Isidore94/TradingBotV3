@@ -253,13 +253,19 @@ def test_the_short_side_arms_with_its_own_reason():
     watch = arm_chart_watch(
         WATCH_KIND, "msft", "SHORT", [], now=datetime(2026, 8, 26, 7, 15)
     )
-    assert watch.reason == "waiting for an H1 15-EMA bounce (SHORT)"
+    assert watch.reason == (
+        "waiting for a pullback entry (SHORT): H1 15-EMA bounce, "
+        "M15/M30 SMA reclaim + LRSI, SMA retest"
+    )
     assert watch.watch_id
     # A chart with no side of its own still arms, and says so.
     either = arm_chart_watch(
         WATCH_KIND, "msft", "WATCH", [], now=datetime(2026, 8, 26, 7, 15)
     )
-    assert either.reason == "waiting for an H1 15-EMA bounce (EITHER SIDE)"
+    assert either.reason == (
+        "waiting for a pullback entry (EITHER SIDE): H1 15-EMA bounce, "
+        "M15/M30 SMA reclaim + LRSI, SMA retest"
+    )
     assert either.watch_id != watch.watch_id
 
 

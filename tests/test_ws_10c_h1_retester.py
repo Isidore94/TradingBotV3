@@ -58,9 +58,16 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-WATCH_KIND = "h1_ema_bounce"
-BUTTON_LABEL = "H1 retester"
-ARM_REASON_LONG = "waiting for an H1 15-EMA bounce (LONG)"
+# PCT-1 (2026-09-15) renamed the kind and widened it: the H1 retester is now
+# the `h1_ema15_bounce` TRIGGER of the one "Pullback alert" watch. Only these
+# three pinned strings move; every assertion below is the one WS-10C shipped,
+# and the H1 rule sheet `h1_ema_bounce_v1` is untouched.
+WATCH_KIND = "pullback"
+BUTTON_LABEL = "Pullback alert"
+ARM_REASON_LONG = (
+    "waiting for a pullback entry (LONG): H1 15-EMA bounce, "
+    "M15/M30 SMA reclaim + LRSI, SMA retest"
+)
 
 # ---------------------------------------------------------------------------
 # The golden fixture: hand-computed here, never by the module under test.
