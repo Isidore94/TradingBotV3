@@ -21,13 +21,13 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
 | Latest work | **2026-09-15 (evening): WS-RP is built on `codex/ws-rp-resume-2026-09-15` above the reviewed Phase 0.29 and Daily Recap repair.** It adds one measured report, deterministic nightly publish, the fifth Daily Recap tab and manual-only handoff export (gate #133). |
-| Working branch | **`codex/ws-rp-resume-2026-09-15`** carries WS-RP. The desk checkout remains on `claude/desk-combined-2026-09-14` because it has the trader's uncommitted instruction/config edits; it was not switched or overwritten. No merge to `main`. |
+| Working branch | **`codex/ws-rp-resume-2026-09-15`** carries WS-RP. The shared desk checkout is clean `main` at `11b4bc9d`; this packet does not modify it. |
 | Unmerged / open | WS-RP restores the unfinished report code onto the current Daily Recap repair and preserves its state/reducer/after-close fixes. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim. Still recorded: 2026-09-03 lake incident call, lock-file sweep, cached forming candles, and gate #57 mirror proof. |
-| Next action | **Review WS-RP, then merge it with the combined test branch only after the trader's seven uncommitted desk files are safely committed or moved.** Live gates #123-#133 plus the older combined checks remain. |
+| Next action | **Review WS-RP, then integrate the completed Phase 0.26 build for the trader's live-validation week.** Live gates #94-#133 and the older combined checks remain. |
 | Trader actions owed | Restart after integration, let one overnight run finish, then inspect the Report files and Daily Recap Review tab for gate #133. Existing watchlist-reset, claim and veto questions remain. Cache repair and environment backfill remain separate. |
 | Last verified baseline | **Combined test branch `claude/test-combined-2026-09-15`: 8,388 passed, 0 failed, 6 skipped, 72 subtests in 686 s; ruff clean; smoke 7/7; source selftest 83/83.** The Phase 0.29-only parent passed 8,362 tests before the Daily Recap merge. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
-| Desk | **Closed by the lead at the trader's word (2026-09-14 ~13:45 PT), gently (a window-close request; the close-slot scan, tracker write and scoring analysis had finished; the warehouse build child was reaped by the desk's own shutdown).** The checkout was then moved to the combined branch. Not restarted: the next start is the trader's, and it uses the combined code. |
+| Desk | **The shared checkout is clean `main` at `11b4bc9d`.** The next start remains the trader's call; no builder switched, restarted or wrote through the desk checkout. |
 
 ### Open gates, newest first
 

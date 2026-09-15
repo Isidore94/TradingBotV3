@@ -2270,7 +2270,9 @@ no same-session EOD measure; unavailable warehouse evidence does not block the r
 
 The final deterministic `measured_report` slot publishes atomic JSON and Markdown siblings
 under the digest root, adds their identity to `entry_index.json`, and writes a new version only
-when the measured cells change. Its failure does not fail the night. The fifth Daily Recap tab
+when the measured cells change. A sibling failure removes the new JSON half, so a rerun repairs
+the pair without mistaking it for a verified version. An all-open warehouse cohort is `pending`,
+not `unknown`; an unreachable warehouse remains `unknown`. Its failure does not fail the night. The fifth Daily Recap tab
 reads the published report on its worker and may show an existing narration for that report id,
 but this feature makes no model call. Copy is clipboard-only; Export is trader-initiated and
 writes the brief, full payload and manifest. The brief is capped at 32 KiB UTF-8 and the

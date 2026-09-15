@@ -971,6 +971,7 @@ def _swing_cells(
     ))
 
     measured_n = len(hits) + len(unhit)
+    all_pending = bool(rows) and len(pending) == len(rows)
     cells.append(Cell(
         cell_id="quickest_result.swing.hit_rate",
         metric="share of MEASURED occurrences that reached the first target",
@@ -986,9 +987,10 @@ def _swing_cells(
         reference_clock=_CLOCK_EXCHANGE,
         exit_policy="first target of the recipe",
         version=version,
-        state=STATE_MEASURED if measured_n else STATE_UNKNOWN,
-        unavailable="" if measured_n else "nothing in this session has matured yet",
-        sources=sources if measured_n else (),
+        state=(STATE_MEASURED if measured_n else
+               STATE_PENDING if all_pending else STATE_UNKNOWN),
+        unavailable="" if (measured_n or all_pending) else "nothing in this session has matured yet",
+        sources=sources if (measured_n or all_pending) else (),
         section="opportunity_results",
     ))
     cells.append(_count_cell(
@@ -1033,9 +1035,10 @@ def _swing_cells(
         reference_clock=_CLOCK_EXCHANGE,
         exit_policy="first target of the recipe",
         version=version,
-        state=STATE_MEASURED if elapsed else STATE_UNKNOWN,
-        unavailable="" if elapsed else "no occurrence reached its first target yet",
-        sources=sources if elapsed else (),
+        state=(STATE_MEASURED if elapsed else
+               STATE_PENDING if all_pending else STATE_UNKNOWN),
+        unavailable="" if (elapsed or all_pending) else "no occurrence reached its first target yet",
+        sources=sources if (elapsed or all_pending) else (),
         section="opportunity_results",
     ))
 

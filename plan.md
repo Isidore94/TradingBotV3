@@ -448,7 +448,7 @@ may overrule); evidence stores never cost the event; nothing on the Qt thread re
 outcome clocks are never pooled; `review_policy.json` has no suppression field. What remains for this phase
 is the trader's live validation (#119-#121) and the merge decision, which travels with the sweep branch's.
 
-## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — IN BUILD on `claude/wishlist-sweep-2026-09-12`
+## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — BUILT; live validation owed
 
 **2026-09-14 trader-directed WS-DR follow-up - BUILT by the lead on `claude/desk-combined-2026-09-14` (the sweep's successor):** the Daily Recap reads TODAY by
 itself at 12:00 Pacific (`scripts/daily_recap_schedule.py` pure, one `QTimer` on the panel started in

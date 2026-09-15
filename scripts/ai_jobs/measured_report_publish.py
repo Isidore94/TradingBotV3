@@ -242,13 +242,25 @@ def run_measured_report(
         next_version = 1
 
     json_path, md_path = report_paths(target, day, next_version)
+    json_published = False
     try:
         digest._publish(
             json_path,
             json.dumps(report.as_dict(), indent=1, sort_keys=True, default=str) + "\n",
         )
+        json_published = True
         digest._publish(md_path, measured_report.render_markdown(report))
     except OSError as exc:
+        # The report is a pair. A JSON half is not a report: leave no version
+        # behind that makes a later rerun mistake a broken publish for a good
+        # one. Both paths are this NEW version, so cleanup cannot touch the
+        # last verified pair.
+        if json_published:
+            try:
+                json_path.unlink(missing_ok=True)
+                md_path.unlink(missing_ok=True)
+            except OSError:  # noqa: PERF203 - publish failure remains the result
+                _log.warning("Measured report: incomplete pair cleanup failed for %s", day)
         return {"status": ledger.STATUS_FAILED, "model": "",
                 "reason": f"the measured report could not be published: {exc}",
                 "outputs": []}
