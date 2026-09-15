@@ -509,6 +509,9 @@ class _Store:
 
     rows: tuple[dict[str, Any], ...]
     coverage: SourceCoverage
+    #: Only the streamed intraday store needs this: coverage stays full-file,
+    #: while a recap summary must name the selected session's append rows.
+    raw_rows_by_session: dict[str, int] = field(default_factory=dict)
 
 
 def _coverage(
@@ -684,6 +687,7 @@ def _read_intraday_outcomes(path: Path) -> _Store:
     target = Path(path)
     latest: dict[str, dict[str, Any]] = {}
     blank_ids: list[dict[str, Any]] = []
+    raw_rows_by_session: dict[str, int] = {}
     count = 0
     oldest: datetime | None = None
     newest: datetime | None = None
@@ -691,6 +695,9 @@ def _read_intraday_outcomes(path: Path) -> _Store:
         with target.open("r", encoding="utf-8", newline="") as handle:
             for row in csv.DictReader(handle):
                 count += 1
+                session = _session_text(row.get("trade_date"))
+                if session:
+                    raw_rows_by_session[session] = raw_rows_by_session.get(session, 0) + 1
                 stamp = _parse_moment(row.get("logged_at"))
                 if stamp is not None:
                     oldest = stamp if oldest is None or stamp < oldest else oldest
@@ -710,7 +717,11 @@ def _read_intraday_outcomes(path: Path) -> _Store:
         oldest=oldest,
         newest=newest,
     )
-    return _Store(tuple(latest.values()) + tuple(blank_ids), coverage)
+    return _Store(
+        tuple(latest.values()) + tuple(blank_ids),
+        coverage,
+        raw_rows_by_session=raw_rows_by_session,
+    )
 
 
 def _outcome_for(
@@ -1185,8 +1196,8 @@ def _decision_rows(
     statement are one row with `occurrences = 2`, and the credit starts at the
     FIRST one.
     """
-    grouped: dict[tuple[str, str, str, str, str], list[_Decision]] = {}
-    order: list[tuple[str, str, str, str, str]] = []
+    grouped: dict[tuple[str, str, str, str, str, str], list[_Decision]] = {}
+    order: list[tuple[str, str, str, str, str, str]] = []
     for decision in decisions:
         key = (
             session_date,
@@ -1194,6 +1205,7 @@ def _decision_rows(
             decision.side,
             decision.category,
             decision.verdict,
+            decision.timeframe,
         )
         if key not in grouped:
             grouped[key] = []
@@ -1711,7 +1723,15 @@ def read_session(
     )
     my_decisions = _with_rows(my_decisions, my_decisions.sorted_by(my_decisions.sort_key))
     rejected = _rejected_that_worked_view(session_date, my_decisions.rows, outcomes)
-    summary = _summary(intraday.coverage, outcomes, worked_today, my_decisions, recent_swings, rejected)
+    summary = _summary(
+        intraday,
+        session_date,
+        outcomes,
+        worked_today,
+        my_decisions,
+        recent_swings,
+        rejected,
+    )
 
     return RecapSession(
         session_date=session_date,
@@ -1730,7 +1750,8 @@ def read_session(
 
 
 def _summary(
-    intraday_coverage: SourceCoverage,
+    intraday: _Store,
+    session_date: str,
     outcomes: Sequence[_Outcome],
     worked_today: RecapView,
     decisions: RecapView,
@@ -1754,8 +1775,10 @@ def _summary(
         sorted(rejected.rows, key=lambda row: _sort_key(row, "favorable_pct"))[:3]
     )
     return RecapSummary(
-        raw_m5_update_rows=intraday_coverage.rows,
-        latest_m5_event_count=len(outcomes),
+        raw_m5_update_rows=intraday.raw_rows_by_session.get(session_date, 0),
+        latest_m5_event_count=sum(
+            outcome.trade_date == session_date for outcome in outcomes
+        ),
         m5_stock_side_count=len(worked_today.rows),
         m5_measured_count=len(measured_m5),
         m5_unmeasured_count=len(worked_today.rows) - len(measured_m5),

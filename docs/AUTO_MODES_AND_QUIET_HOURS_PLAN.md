@@ -544,9 +544,11 @@ two; the AWAY digest and `autopilot_today.txt` are untouched.
 The recap streams the append-only M5 outcome log and retains its latest state per
 nonblank event id; blank ids remain separate facts. `What worked today` then shows one
 whole best measured event per symbol/side (latest when none measured), never columns
-combined across events. The factual reader-owned summary names raw updates, latest
-events, stock/sides, measured states, declared top rows, decisions by M5/D1, swings
-and measured refusals that later worked; the panel only formats it.
+combined across events. The factual reader-owned summary names the SELECTED session's
+raw updates and latest events (while source coverage remains full-file), stock/sides,
+measured states, declared top rows, decisions by M5/D1, swings and measured refusals
+that later worked; the panel only formats it. Timeframe is part of each decision's
+identity, so an otherwise identical M5 and D1 verdict remain separate rows.
 
 Annotation `timeframe` is preserved. M5 decisions read the reduced M5 state; D1
 decisions read only their matching `session_horizon_outcomes` row at the selected

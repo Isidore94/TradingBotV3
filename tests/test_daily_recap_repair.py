@@ -346,6 +346,47 @@ def test_reader_summary_reports_factual_counts_and_declared_top_m5_rows(tmp_path
     assert summary.swing_counts == {"measured": 1, "pending": 1}
 
 
+def test_summary_m5_counts_are_scoped_to_the_selected_session(tmp_path):
+    """Coverage is full-file, but the recap sentence is about the chosen day."""
+    prior = _outcome("prior", "OLD", mfe="7.00")
+    prior["trade_date"] = "2026-09-11"
+    prior["logged_at"] = "2026-09-11T10:00:00-07:00"
+    other = _outcome("other", "BBB", mfe="3.00")
+    other["trade_date"] = "2026-09-10"
+    other["logged_at"] = "2026-09-10T10:00:00-07:00"
+    sources = _sources(
+        tmp_path,
+        outcomes=[
+            _outcome("selected", "AAA", status="registered"),
+            _outcome("selected", "AAA", logged="10:00:00", mfe="4.00"),
+            prior,
+            other,
+        ],
+    )
+
+    session = _read(sources)
+
+    assert session.coverage["intraday_outcomes"].rows == 4
+    assert session.summary.raw_m5_update_rows == 2
+    assert session.summary.latest_m5_event_count == 1
+
+
+def test_m5_and_d1_decisions_with_one_identity_stay_separate(tmp_path):
+    """Timeframe is part of a decision identity, never a display-only label."""
+    sources = _sources(
+        tmp_path,
+        outcomes=[_outcome("m5", "DUAL", mfe="4.00")],
+        horizons=[_horizon("DUAL", result="6.25")],
+        annotations=[_annotation("DUAL", "M5"), _annotation("DUAL", "D1")],
+    )
+
+    rows = [row for row in _read(sources).my_decisions.rows if row.symbol == "DUAL"]
+
+    assert [row.detail["timeframe"] for row in rows] == ["M5", "D1"]
+    assert rows[0].measures["day_mfe_pct"] == pytest.approx(4.0)
+    assert rows[1].measures["d1_result_pct"] == pytest.approx(6.25)
+
+
 def test_rendered_recap_places_the_readers_compact_summary_on_the_page(tmp_path, qapp):
     sources = _sources(
         tmp_path,
