@@ -5052,13 +5052,21 @@ def compression_copy_through(compression_summary: dict | None) -> dict:
     nothing here reads a bar, decides anything or touches a score.
     """
     summary = compression_summary if isinstance(compression_summary, dict) else {}
+    ratios = {
+        field: _coerce_float(summary.get(field)) for field in COMPRESSION_MEASURE_FIELDS[1:]
+    }
+    if any(value is None for value in ratios.values()):
+        # `summarize_anchor_compression` returns its default dict - score 0,
+        # three `None` ratios - whenever the slice is empty, the ATR-20 is
+        # missing or the anchor has no sigma. Publishing that 0 under
+        # `anchor_compression_v1` would say "the rule looked and found nothing
+        # tight", which is a measurement that never happened and exactly the
+        # number a calibration report would average. Not measured is `None`,
+        # and an unmeasured row carries no rule version at all.
+        return {"compression_score": None, **ratios}
     return {
         "compression_score": int(summary.get("compression_score", 0) or 0),
-        "compression_stdev_atr_ratio": _coerce_float(summary.get("compression_stdev_atr_ratio")),
-        "compression_range_atr_ratio": _coerce_float(summary.get("compression_range_atr_ratio")),
-        "compression_close_range_atr_ratio": _coerce_float(
-            summary.get("compression_close_range_atr_ratio")
-        ),
+        **ratios,
         "compression_rule_version": ANCHOR_COMPRESSION_RULE_VERSION,
     }
 

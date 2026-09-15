@@ -1546,8 +1546,17 @@ class MasterAvwapPanel(QWidget):
         self._ai_state_compression_key = signature
         worker = _AiStateCompressionWorker(self)
         worker.done.connect(self._on_ai_state_compression_ready)
+        # The worker is parented to the panel, so without this every scan-day's
+        # watcher signals leave a finished QThread alive for the life of the
+        # window - the same leak G7's fix round found on the read worker. Drop
+        # the reference and let Qt free it on the next event loop pass.
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_ai_state_compression_finished)
         self._ai_state_compression_worker = worker
         worker.start()
+
+    def _on_ai_state_compression_finished(self) -> None:  # pragma: no cover - signal seam
+        self._ai_state_compression_worker = None
 
     def _on_ai_state_compression_ready(self, changed: object) -> None:  # pragma: no cover - signal seam
         """One coalesced refresh, and only when the cache actually moved.

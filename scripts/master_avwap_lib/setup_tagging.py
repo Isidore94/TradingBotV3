@@ -209,15 +209,6 @@ def derive_setup_tag_payload(
         add("VWAP_RANGE_CONFIRMED", "confirmation", "vwap_range_confirmation=true")
     if bool(row.get("trendline_break_recent")):
         add("TRENDLINE_BREAK", "confirmation", "trendline_break_recent=true")
-    # PCT-3 item 4. A CONFIRMATION, in confirmation order, beside the trendline
-    # break it is a sibling of: `compression_break_v1` says the last completed
-    # session left a compressed box in this side's direction on a bar at least
-    # 1.0 ATR-20 wide. Added HERE rather than above the confirmations so it can
-    # never displace an older one under `DEFAULT_MAX_SETUP_TAGS`; a label added
-    # in 2026 may not cost a row a tag it has carried for a year. The rule lives
-    # once, in `legacy.evaluate_compression_break_v1`; this reads a flag.
-    if bool(row.get("compression_break_recent")):
-        add("COMPRESSION_BREAK", "confirmation", "compression_break_recent=true")
     if bool(row.get("sma_breakout_confirmed")):
         label = str(row.get("sma_breakout_sma_label") or "").strip().upper()
         add("SMA_BREAKOUT_CONFIRMED", "confirmation", f"sma_breakout_confirmed=true{label and f'; sma={label}'}")
@@ -225,6 +216,18 @@ def derive_setup_tag_payload(
         add("D1_RS" if side == "LONG" else "D1_RW", "context", "daily_relative_strength_score is side-aligned")
     if _side_aligned_score(row.get("industry_relative_strength_score"), side):
         add("INDUSTRY_RS" if side == "LONG" else "INDUSTRY_RW", "context", "industry_relative_strength_score is side-aligned")
+
+    # PCT-3 item 4, and it is LAST on purpose. `compression_break_v1` says the
+    # last completed session left a compressed box in this side's direction on a
+    # bar at least 1.0 ATR-20 wide - a real confirmation, but a NEW one, and
+    # `visible_tags` is `tags[:max_tags]`. Added anywhere earlier it pushes a tag
+    # off the end of a crowded row: added in confirmation order it displaced
+    # `D1_RS` on a row carrying `SMA_BREAKOUT_CONFIRMED`. A label added in 2026
+    # may not cost a row a tag it has carried for a year, so this one takes the
+    # last seat or none. The rule lives once, in
+    # `legacy.evaluate_compression_break_v1`; this reads a flag.
+    if bool(row.get("compression_break_recent")):
+        add("COMPRESSION_BREAK", "confirmation", "compression_break_recent=true")
 
     if not tags:
         add("UNCLASSIFIED_SETUP", "diagnostic", "no setup-family, trigger, or confirmation evidence")

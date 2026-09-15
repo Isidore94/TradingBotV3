@@ -379,13 +379,29 @@ and aborts if `DATA_DIR` resolves under `C:\TradingBotData` without `--live`; th
 frame compressed yesterday and expanding today, not on a frame expanding from no compression, and
 not on a small-range bar.
 
-Gate text: next scan after a restart, `master_avwap_ai_state.json` symbol entries carry
-`compression_score` and the three ratios; the setups table shows an amber `compressed` chip on
-rows the scan flags (hover: score, ratios, penalty) and NOTHING is hidden or reordered; the trader
-runs `cd scripts && python -m compression_calibration --since 2026-08-20 --live` and reads one
-table per measure. PASS on day one: the chip appears on at least one row and the CLI names n = 214
-(or the day's count) vetoed rows joined. NOT a failure: a low AUC on every measure (that is the
-finding); a `compression_break` tag on no row for days.
+Gate text (rewritten 2026-09-15 after review round 2 - the old PASS line named a number the
+report can no longer print, because a veto is now accounted for rather than "joined or dropped"):
+next scan after a restart, `master_avwap_ai_state.json` symbol entries carry `compression_score`,
+the three ratios, `compression_rule_version` and `compression_break_recent` +
+`compression_break_rule_version` - today's live file has 1003 symbols, 35 flagged and ZERO with a
+`compression_score`, so a non-zero count of entries carrying one IS the pass. The setups table
+shows an amber `compressed` chip on rows the scan flags (hover: score out of 3, the three ratios,
+the penalty), NOTHING is hidden or reordered, and the table does not hitch when the report file
+changes (the 36 MB ai_state parse is on a worker). The trader then runs
+`cd scripts && python -m compression_calibration --since 2026-08-20 --live` and reads one block
+per measure.
+
+**PASS on day one:** the chip appears on at least one row; and the report prints the three-bucket
+accounting `N vetoes: A joined, B untracked, C pending` with **A + B + C = N**, names the measured
+window and any excluded session, prints seven blocks each carrying an `n`, prints the
+`compression_flag hit rate` line, and writes one CSV.
+
+**NOT a failure:** a low AUC on every measure - that is the finding (the first live run:
+`213 vetoes: 140 joined, 50 untracked, 23 pending`, hit rate 0.18, every AUC 0.34-0.49); a
+`compression_break` tag on no row for days; no chip on the very first refresh after a scan (the
+cache warms on the worker and the chip lands on the next refresh, within a second); and - **the
+first scan on this build widens `d1_features_history.csv` (667 MB, 256 columns) by eight columns
+once, so expect that ONE scan to take roughly two minutes longer under the writer lock.**
 
 ## 7. Packet PCT-2 - Trendline break
 

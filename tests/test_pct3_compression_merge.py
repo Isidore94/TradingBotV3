@@ -479,22 +479,30 @@ def test_the_panel_s_own_refresh_parses_nothing_on_the_qt_thread(app, ai_state, 
 
     started = {"count": 0}
 
+    class _Signal:
+        """Just enough of a Qt signal to be connected to and never emitted."""
+
+        @staticmethod
+        def connect(_slot):
+            return None
+
     class _NoWorker:
-        """The worker, not started - this test is about the Qt thread only."""
+        """The worker, not started - this test is about the Qt thread only.
+
+        It carries `done` AND `finished`, because the panel connects both (the
+        second is what frees the thread, advisory 4 of review round 2). A stub
+        missing one of them is a test that would pass while the panel crashed.
+        """
 
         def __init__(self, *_args, **_kwargs):
             started["count"] += 1
-
-        @property
-        def done(self):
-            class _Signal:
-                @staticmethod
-                def connect(_slot):
-                    return None
-
-            return _Signal()
+            self.done = _Signal()
+            self.finished = _Signal()
 
         def start(self):
+            return None
+
+        def deleteLater(self):  # noqa: N802 (Qt spelling)
             return None
 
     monkeypatch.setattr(panel_module, "_AiStateCompressionWorker", _NoWorker)

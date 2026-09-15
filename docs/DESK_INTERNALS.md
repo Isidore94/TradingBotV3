@@ -5550,7 +5550,7 @@ is a finding, not a failure. 267 s, peak RSS 0.14 GB.
 **An anchor measure the record does not carry is RECOMPUTED, never printed as `nan`.** No live
 record carries the copy-through yet, so the three anchor measures came out `n = 0 / nan` - three
 empty tables in a seven-table report. `recompute_anchor_measures` runs the champion's own
-`calc_anchored_vwap_bands` at the record's anchor date and `compute_atr_from_ahlc`'s ATR-20 at the
+`calc_anchored_vwap_bands` at the record's anchor date and `compute_atr_from_ohlc`'s ATR-20 at the
 session, and hands both to `summarize_anchor_compression` - the same function, never a second
 copy. A row whose anchor cannot be had says `anchor unknown` and still carries the four
 fixed-window measures. Every row's source is a CSV column (`record` / `recomputed` /

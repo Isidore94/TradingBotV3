@@ -49,6 +49,12 @@ looking at. It is NOT "the rows the scan printed that morning" - the earlier
 version said "shown", which was wrong twice over, and the header now prints the
 definition it actually used.
 
+One honest limit, printed in the header too: `last_replayed_session` post-dates
+some records (they cluster in 2026-05..07), and a record without it collapses to
+its ENTRY DAY. Such a record can read as a one-day life it did not have, which
+SHRINKS a session's population rather than inventing one - the conservative
+direction, but a real gap, and named rather than smoothed over.
+
 Seven measures, no verdict
 --------------------------
 
@@ -905,6 +911,11 @@ def render_report(rows: Sequence[dict], summary: dict, *, since: str) -> str:
                 "population per session: every tracker record ACTIVE on it"
                 " (entered on or before it, still carried by it) - not the rows the scan"
                 " happened to print that morning"
+            ),
+            (
+                "a record with a blank `last_replayed_session` is active for its ENTRY DAY only"
+                " - that field post-dates some records (mostly 2026-05..07), so an older setup"
+                " can read as a one-day life it did not have"
             ),
             f"rows: {len(rows)} - {len(vetoed)} vetoed, {len(rest)} rest",
             f"codes pooled by name: {', '.join(sorted(COMPRESSION_VETO_CODES))}",
