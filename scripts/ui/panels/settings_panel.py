@@ -45,8 +45,22 @@ UI_SCALE_LABELS = {
 }
 
 
+#: WISHLIST 10J. Said in the place the trader turns it on, because "PST" is a
+#: wall clock with daylight saving and a prompt an hour out of step with the
+#: tape it describes is worse than no prompt.
+TRADE_MENTOR_SENTENCE = (
+    "Prompts on Pacific wall time (America/Los_Angeles, DST-aware): hourly M5 "
+    "reads 07:00 to the close, D1 at 08:00 and 12:00, the previous session's "
+    "trades at 10:00. Skipped when away, paused or locked."
+)
+
+
 class SettingsPanel(QFrame):
     stateChanged = Signal()
+    #: The trader pressed "Pause today". A request: the Trade Mentor service is
+    #: owned by the window (it holds the timer and the state file), and a panel
+    #: that wrote that state itself would be a second owner of it.
+    mentorPauseRequested = Signal()
 
     def __init__(
         self,
@@ -86,6 +100,23 @@ class SettingsPanel(QFrame):
         self.ui_scale_hint.setWordWrap(True)
         self._sync_scale_hint()
 
+        # WISHLIST 10J. Default OFF and persisted, and INDEPENDENT of the
+        # scanner's Auto setting - turning the scanner off must not be the way
+        # to stop the prompts, and turning it on must not start them.
+        self.trade_mentor_input = QCheckBox("Trade Mentor: ask me for a read on the hour")
+        self.trade_mentor_input.setChecked(bool(getattr(self.state, "trade_mentor_enabled", False)))
+        self.trade_mentor_input.toggled.connect(self._save)
+        self.trade_mentor_hint = QLabel(TRADE_MENTOR_SENTENCE)
+        self.trade_mentor_hint.setObjectName("MutedLabel")
+        self.trade_mentor_hint.setWordWrap(True)
+        self.trade_mentor_next = QLabel("Next prompt: -")
+        self.trade_mentor_next.setObjectName("MutedLabel")
+        self.trade_mentor_pause = QPushButton("Pause today")
+        self.trade_mentor_pause.setToolTip(
+            "Silences the rest of today only. Tomorrow's prompts are unaffected."
+        )
+        self.trade_mentor_pause.clicked.connect(self.mentorPauseRequested)
+
         details = get_tracker_storage_details()
         self.data_dir_label = QLabel(details.get("data_dir", ""))
         self.data_dir_label.setWordWrap(True)
@@ -113,6 +144,15 @@ class SettingsPanel(QFrame):
         form.addRow("Density", self.compact_input)
         form.addRow("UI scale", self.ui_scale_input)
         form.addRow("", self.ui_scale_hint)
+        form.addRow("Trade Mentor", self.trade_mentor_input)
+        form.addRow("", self.trade_mentor_hint)
+        mentor_row = QHBoxLayout()
+        mentor_row.setContentsMargins(0, 0, 0, 0)
+        mentor_row.setSpacing(8)
+        mentor_row.addWidget(self.trade_mentor_next)
+        mentor_row.addWidget(self.trade_mentor_pause)
+        mentor_row.addStretch(1)
+        form.addRow("", mentor_row)
         form.addRow("Data folder", self.data_dir_label)
         form.addRow("Storage source", self.source_label)
 
@@ -248,9 +288,25 @@ class SettingsPanel(QFrame):
         self.state.ui_scale = UI_SCALE_LABELS.get(
             self.ui_scale_input.currentText(), "auto"
         )
+        self.state.trade_mentor_enabled = self.trade_mentor_input.isChecked()
         self.state.save()
         self._sync_scale_hint()
         self.stateChanged.emit()
+
+    def set_next_prompt_at(self, moment) -> None:
+        """Say when the next Trade Mentor prompt is, or that there is none left.
+
+        Pushed in by the window that owns the service; this panel asks no clock
+        of its own. "Nothing left today" is stated rather than left blank - a
+        blank line reads as "it is broken".
+        """
+        if moment is None:
+            self.trade_mentor_next.setText("Next prompt: none left today")
+            return
+        try:
+            self.trade_mentor_next.setText(f"Next prompt: {moment.strftime('%H:%M')} Pacific")
+        except Exception:  # noqa: BLE001 - a label never breaks the page
+            self.trade_mentor_next.setText("Next prompt: -")
 
     def _sync_scale_hint(self) -> None:
         """Say what the scale resolves to, and that panes keep their own splits.

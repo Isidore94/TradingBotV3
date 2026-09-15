@@ -6,10 +6,17 @@ import threading
 import time
 from copy import deepcopy
 
+import d1_environment_store
+from indicators.d1_environment import classify_environment as classify_d1_environment
+
 from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
+# Packet WS-TH (2026-09-12). The theta picks the scan just printed, recorded as
+# shadow evidence in the scan's own output pass - never from `legacy.py`'s
+# tracker save (lead ruling (c)). A failed append loses the row, never the scan.
+from theta_pick_tracker import record_theta_picks
 
 # Scanner orchestration is extracted while helper functions continue to migrate.
 globals().update(
@@ -301,6 +308,101 @@ def bridge_earnings_anchor_caches_to_csv(
     except Exception:
         logging.exception("Earnings-anchor bridge failed (scan result unaffected).")
         return 0
+
+
+#: How many calendar days of daily bars the environment hook asks for. The rule
+#: warms up at 34 COMPLETED sessions and 260 calendar days is about 180 of them,
+#: so a holiday week, a stale cache and a fresh machine all still measure.
+D1_ENVIRONMENT_FETCH_DAYS = 260
+
+
+def _d1_environment_bars(frame) -> list[dict]:
+    """A daily-bar frame as plain dict bars, oldest first.
+
+    The indicator is pure and takes bars, not a DataFrame, so the conversion
+    lives here - on the runner side of the seam - rather than teaching an
+    indicator about pandas.
+    """
+    if frame is None:
+        return []
+    rows = frame
+    if hasattr(frame, "to_dict"):
+        if getattr(frame, "empty", False):
+            return []
+        rows = frame.to_dict("records")
+    bars: list[dict] = []
+    for row in rows or ():
+        try:
+            stamp = row.get("datetime", row.get("date"))
+            bars.append(
+                {
+                    "dt": stamp,
+                    "open": float(row.get("open")),
+                    "high": float(row.get("high")),
+                    "low": float(row.get("low")),
+                    "close": float(row.get("close")),
+                }
+            )
+        except (AttributeError, TypeError, ValueError):
+            continue
+    bars.sort(key=lambda bar: str(d1_environment_store.session_of(bar)))
+    return bars
+
+
+def record_d1_environment(ib=None, *, now, path=None, benchmarks=None) -> dict:
+    """Label today's finished session for each benchmark and append the rows.
+
+    WISHLIST 7, packet WS-ENV. Called as a sibling of
+    `bridge_earnings_anchor_caches_to_csv` at the end of a scan: the bars are
+    fetched through the SAME pinned daily fetch the scan itself uses
+    (`fetch_daily_bars`, which honours `daily_bars_source` - never a second
+    provider path), the FORMING bar is dropped through
+    `completed_bars.is_completed_bar` at daily length, and the pure rule in
+    `indicators.d1_environment` decides the label. The runner fetches; the
+    indicator stays pure.
+
+    Returns `{benchmark: label}` FOR THE LOG LINE ONLY. Nothing in the scan
+    branches on it: this is shadow evidence and reaches no detector, score,
+    alert, watchlist or Focus list (plan.md sec 5).
+
+    Every failure is logged and swallowed - an evidence store never costs the
+    thing it records, and the scan's own outputs are already on disk when this
+    runs.
+    """
+    names = tuple(benchmarks or d1_environment_store.BENCHMARKS)
+    labels: dict[str, str] = {}
+    through = ""
+    for symbol in names:
+        try:
+            frame = fetch_daily_bars(ib, symbol, D1_ENVIRONMENT_FETCH_DAYS)
+            bars = d1_environment_store.completed_daily_bars(
+                _d1_environment_bars(frame), now=now
+            )
+            if not bars:
+                logging.info("D1 environment: no completed daily bars for %s.", symbol)
+                continue
+            env = classify_d1_environment(bars)
+            d1_environment_store.append_environment(
+                env,
+                benchmark=symbol,
+                bars_through=env.as_of_session,
+                source=d1_environment_store.SOURCE_SCAN,
+                path=path,
+            )
+            labels[str(symbol)] = env.label
+            through = env.as_of_session or through
+        except Exception:
+            logging.exception(
+                "D1 environment reading failed for %s (scan result unaffected).", symbol
+            )
+    if labels:
+        logging.info(
+            "D1 environment: %s (%s, bars through %s)",
+            " ".join(f"{symbol}={label}" for symbol, label in labels.items()),
+            d1_environment_store.RULE_VERSION,
+            through or "unknown",
+        )
+    return labels
 
 
 def _log_phase_duration(label: str, since: float) -> float:
@@ -718,6 +820,8 @@ def _run_master_impl(
         write_theta_put_report(THETA_PUTS_FILE, [])
         return {
             "watchlist_label": watchlist_label,
+            "universe_size": 0,
+            "priority_rows": [],
             "tracked_rows": [],
             "theta_put_rows": [],
             "theta_pcs_rows": [],
@@ -1579,6 +1683,14 @@ def _run_master_impl(
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
             "compression_note": compression_summary.get("compression_note", ""),
+            # PCT-3 item 1. THIS loop - not
+            # `legacy._evaluate_priority_snapshot_for_date` - is what the live
+            # desk scan runs and what writes `master_avwap_ai_state.json`, so
+            # the copy-through has to be applied at BOTH seams or the desk never
+            # sees a number (measured 2026-09-15: 1003 symbols in the live
+            # ai_state, 35 flagged, 0 with a `compression_score`). The call is
+            # the same one; the rule lives once, in `compression_copy_through`.
+            **compression_copy_through(compression_summary),
             "latest_release_earnings_date": latest_release_context.get("earnings_date", "")
             or latest_known_earnings_context.get("earnings_date", ""),
             "latest_release_gap_date": latest_release_context.get("gap_date", ""),
@@ -1813,6 +1925,23 @@ def _run_master_impl(
         priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
         priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
         priority_summary["compression_note"] = effective_compression_note
+        # PCT-3 item 1: the measure's own score and ratios on the row the desk,
+        # the tracker and the calibration report all read. The penalty stays the
+        # EFFECTIVE one (breakout relief applied); the ratios are never relieved.
+        priority_summary.update(compression_copy_through(compression_summary))
+        # PCT-3 item 4: `compression_break_v1`, labelled and side-aware.
+        # Additive - no score, no Phase-6 study field, no gate.
+        compression_break = evaluate_compression_break_v1(
+            df,
+            anchor_date_iso=current_anchor_meta.get("date") if current_anchor_meta else None,
+            anchor_stdev=current_anchor_meta.get("stdev") if current_anchor_meta else None,
+            atr20=atr20,
+            side=side,
+            last_trade_date=last_trade_date,
+            last_bar=last_row,
+        )
+        priority_summary.update(compression_break)
+        symbol_entry.update(compression_break)
         symbol_entry["compression_penalty"] = int(effective_compression_penalty or 0)
         symbol_entry["compression_note"] = effective_compression_note
         if isinstance(entry_feature_snapshot, dict):
@@ -1927,6 +2056,15 @@ def _run_master_impl(
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(effective_compression_penalty or 0),
             "compression_note": effective_compression_note,
+            # PCT-3: the feature-history CSV is what the graders and the study
+            # readers actually read; a field that stops at the row is a field no
+            # report can ever join. Listed in `feature_columns` below.
+            **compression_copy_through(compression_summary),
+            "compression_break_recent": bool(compression_break.get("compression_break_recent")),
+            "compression_break_rule_version": str(
+                compression_break.get("compression_break_rule_version") or ""
+            ),
+            "compression_break_v1_note": str(compression_break.get("compression_break_v1_note") or ""),
             "setup_family": priority_summary.get("setup_family", ""),
             "setup_tags": ";".join(priority_summary.get("setup_tags") or []),
             "latest_release_earnings_date": (
@@ -2313,6 +2451,14 @@ def _run_master_impl(
     ]
     run_result: dict[str, object] = {
         "watchlist_label": watchlist_label,
+        # WS-10A: the two keys the scan manifest needs and the payload did not
+        # carry. `universe_size` is what the scan SET OUT to evaluate (the
+        # symbol set assembled from the watchlists above), so a scan that
+        # returned having reached fewer names can be called `partial` instead of
+        # `ok`; `priority_rows` is what it PUBLISHED, which is the row count of
+        # the priority report rather than the tracked subset.
+        "universe_size": len(symbols),
+        "priority_rows": priority_rows,
         "tracked_rows": tracked_rows,
         "bucket_upgrades": bucket_upgrades,
         "theta_put_rows": theta_put_rows,
@@ -2566,6 +2712,10 @@ def _run_master_impl(
         reviewed_symbols=reviewed_symbols,
     )
     write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
+    # WS-TH item 1: the same rows the report just printed, recorded once per
+    # (symbol, scan date, play type). Shadow evidence - it reads the rows and
+    # changes none of them - and it never raises into the scan.
+    record_theta_picks(theta_put_rows, theta_pcs_rows, today_run, datetime.now())
     favorite_watchlist_reference = datetime.now()
     favorite_watchlist_result = write_favorite_zone_watchlist_outputs(
         focus_path=MASTER_AVWAP_FOCUS_FILE,
@@ -2786,6 +2936,18 @@ def _run_master_impl(
         "compression_flag",
         "compression_penalty",
         "compression_note",
+        # PCT-3. `df_features` is built with `columns=feature_columns`, so a key
+        # the row carries and this list does not is silently dropped - the B4
+        # `assigned_tier` defect above, exactly. These are the measure and the
+        # v1 break verdict.
+        "compression_score",
+        "compression_stdev_atr_ratio",
+        "compression_range_atr_ratio",
+        "compression_close_range_atr_ratio",
+        "compression_rule_version",
+        "compression_break_recent",
+        "compression_break_rule_version",
+        "compression_break_v1_note",
         "post_earnings_active",
         "post_earnings_monitor_level",
         "post_earnings_break_intraday",
@@ -2982,6 +3144,10 @@ def _run_master_impl(
     save_json(PREV_CACHE_FILE, prev_cache)
     # Warehouse evidence only (see bridge_earnings_anchor_caches_to_csv).
     bridge_earnings_anchor_caches_to_csv(curr_cache, prev_cache, longs, shorts)
+    # Shadow evidence only (WISHLIST 7 / packet WS-ENV): one D1 environment row
+    # per benchmark for the session that just finished. Failure is logged, never
+    # raised, and the returned labels reach the log line and nothing else.
+    run_result["d1_environment"] = record_d1_environment(ib, now=datetime.now())
     save_history(history)
     save_json(AI_STATE_FILE, ai_state)
 
@@ -3084,6 +3250,19 @@ def run_master(
     from diagnostics import provider_counters
 
     provider_counters.begin_run()
+    # WS-FC1: the daily-bar write guard's refusals are per-run too, and they are
+    # published on both the success and the failure path - a scan that died
+    # halfway still says how many forming bars it refused.
+    from . import daily_bar_cache
+
+    daily_bar_cache.begin_run()
+    # WS-10A: the scan's own three clocks. `started_at` is taken HERE, from the
+    # one hook a test can freeze, so it can never be the same number as
+    # `finished_at` by accident - "it updated at 12:31" and "its newest input
+    # bar was Thursday's" are different facts and the trader needs both.
+    from . import scan_manifest
+
+    scan_started_at = scan_manifest.market_now()
     try:
         result = _run_master_impl(
             longs_path=longs_path,
@@ -3115,11 +3294,33 @@ def run_master(
                 result.get("tracker_catchup_sessions") or []
             )
         provider_counters.flush_to_manifest(recorder)
+        forming_dropped, invalid_dropped = daily_bar_cache.flush_to_manifest(recorder)
         recorder.finalize(status="ok")
+        scan_manifest.record_scan(
+            run_id=recorder.run_id,
+            started_at=scan_started_at,
+            finished_at=scan_manifest.market_now(),
+            run_result=result if isinstance(result, dict) else None,
+            forming_dropped=forming_dropped,
+            invalid_dropped=invalid_dropped,
+        )
         return result
     except BaseException as exc:
         provider_counters.flush_to_manifest(recorder)
+        forming_dropped, invalid_dropped = daily_bar_cache.flush_to_manifest(recorder)
         recorder.finalize(status="failed", error=repr(exc))
+        # The failed scan writes its manifest and touches NO output file: the
+        # last good report keeps its bytes and its mtime, and the strip labels
+        # it stale rather than a republished identical file claiming to be new.
+        scan_manifest.record_scan(
+            run_id=recorder.run_id,
+            started_at=scan_started_at,
+            finished_at=scan_manifest.market_now(),
+            run_result=None,
+            error=repr(exc),
+            forming_dropped=forming_dropped,
+            invalid_dropped=invalid_dropped,
+        )
         raise
     finally:
         clear_active_recorder()

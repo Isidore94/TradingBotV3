@@ -238,10 +238,16 @@ def test_the_veto_cohort_is_read_and_shown_beside_the_picks(tmp_path, monkeypatc
     assert [row["side"] for row in rows] == ["ALL", "LONG", "SHORT"]
     longs = rows[1]
     assert longs["cohort"] == "human_focus_veto"
-    assert longs["n"] == "43"
+    # WS-5A: `n`, `horizon_sessions` and the return are NUMBERS on the row -
+    # the verdict card reads this row too, and a formatted percent read as an R
+    # multiple is the defect that repaired. The `+0.74%` text still reaches the
+    # table; it is built at the display edge and asserted there
+    # (`tests/test_ws_5a_weekend_verdict.py`).
+    assert longs["n"] == 43
+    assert longs["horizon_sessions"] == 1
+    assert longs["avg_side_return_pct"] == pytest.approx(0.7353)
     # R4 B3: rate, Wilson lower bound and n in one cell.
     assert longs["win_rate"] == "56% (>=41%, n=43)"
-    assert longs["avg_return"] == "+0.74%"
     assert longs["profit_factor"] == "3.34"
 
 
@@ -285,9 +291,10 @@ def test_an_unmeasured_cohort_number_is_blank_never_zero(tmp_path, monkeypatch):
     )
 
     row = _read_veto_cohort()[0]
-    assert row["n"] == "4"
+    assert row["n"] == 4
     assert row["win_rate"] == ""
-    assert row["avg_return"] == ""
+    # WS-5A: `None`, never 0.0. The table still prints an empty Avg cell.
+    assert row["avg_side_return_pct"] is None
     assert row["profit_factor"] == ""
 
 
@@ -369,7 +376,8 @@ def test_the_cohort_reads_its_named_constant_too(tmp_path, monkeypatch):
         ["human_focus_veto,ALL,1,78,0.3462,-0.002584,0.7006,2026-08-22T02:15:51-04:00"],
     )
 
-    assert [row["n"] for row in _read_veto_cohort()] == ["78"]
+    # WS-5A: `n` is an int on the row now; the cell still reads `78`.
+    assert [row["n"] for row in _read_veto_cohort()] == [78]
 
 
 # ==========================================================================
@@ -405,10 +413,11 @@ def test_the_like_cohort_is_read_by_its_named_constant(tmp_path, monkeypatch):
 
     rows = _read_like_cohort()
 
-    assert [row["n"] for row in rows] == ["21", "4"]
+    # WS-5A: numbers on the row, formatting at the display edge.
+    assert [row["n"] for row in rows] == [21, 4]
+    assert rows[0]["avg_side_return_pct"] == pytest.approx(1.9011)
     # R4 B3: rate, bound and n in one cell.
     assert rows[0]["win_rate"] == "81% (>=60%, n=21)"
-    assert rows[0]["avg_return"] == "+1.90%"
     assert rows[0]["profit_factor"] == "6.55"
 
 
@@ -432,8 +441,10 @@ def test_an_unmeasured_like_statistic_is_blank_never_zero(tmp_path, monkeypatch)
     )
 
     row = _read_like_cohort()[0]
-    assert row["n"] == "2"
-    assert row["win_rate"] == "" and row["avg_return"] == "" and row["profit_factor"] == ""
+    # WS-5A: a number for n, `None` for the unmeasured return - never 0.0.
+    assert row["n"] == 2
+    assert row["avg_side_return_pct"] is None
+    assert row["win_rate"] == "" and row["profit_factor"] == ""
 
 
 def test_a_missing_like_file_is_an_absent_state_not_a_crash(tmp_path, monkeypatch):

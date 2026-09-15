@@ -13,7 +13,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from journal_analytics import TRADER_CAPTURE_SOURCE, AutoTagger, split_tags
+from journal_analytics import (
+    TRADER_CAPTURE_SOURCE,
+    TRADER_NOTE_SOURCE,
+    AutoTagger,
+    split_tags,
+)
 from journal_trade_shape import is_shape_tag, shape_tags
 from journal_identity import (
     contract_multiplier as _contract_multiplier_shared,
@@ -110,6 +115,14 @@ OPPORTUNITY_EVENT_TYPES = {
     "CLOSED",
     "REVIEWED",
     "NOTE",
+    # WISHLIST 10J. A material field the trader could not answer at the time and
+    # supplied the next morning, through the Trade Mentor's 10:00 check. An
+    # annotation KIND rather than a schema migration: it never touches
+    # `trade_annotations`, which the trader owns (I7), and it is labelled
+    # `recalled_after_session` in its payload so remembered risk can never be
+    # read as a documented pre-entry plan. `scripts/trade_mentor_trade_check.py`
+    # is its only writer.
+    "RECALLED",
 }
 
 
@@ -364,6 +377,23 @@ class JournalStore:
                     updated_at TEXT NOT NULL
                 );
 
+                -- WS-10E: what the Market Journal lane saw for one trade, as a
+                -- small JSON verdict. Derived state, re-written by every
+                -- `refresh_auto_tags` exactly like `auto_tag_summary`, and read
+                -- by the Journal's Trades detail and Weekend Prep's Tag Week so
+                -- neither pays for a ledger read on the Qt thread.
+                --
+                -- Its OWN table rather than a column on `trades`: `trades` is
+                -- assembly output and is pinned bit-for-bit by
+                -- `tests/test_journal_characterization.py`. A derived column
+                -- there would put the tagger inside the assembler's golden,
+                -- where a later lane change would read as an assembly change.
+                CREATE TABLE IF NOT EXISTS note_lane_verdicts (
+                    trade_id TEXT PRIMARY KEY,
+                    note_lane_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS trade_legs (
                     leg_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     trade_id TEXT NOT NULL,
@@ -401,6 +431,13 @@ class JournalStore:
                     -- P6: the trader statement this candidate came from, when
                     -- there is one. A POINTER, never a canonical link.
                     context_row_id TEXT NOT NULL DEFAULT '',
+                    -- WS-10E: WHAT the candidate was matched on, and the words
+                    -- it was matched against. `note:<entry_id>` plus the span
+                    -- quoted verbatim out of the Market Journal entry. Empty
+                    -- for every other lane, which matches on identity or on a
+                    -- date window rather than on text.
+                    match_basis TEXT NOT NULL DEFAULT '',
+                    match_span TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (trade_id, tag)
                 );
 
@@ -1864,9 +1901,15 @@ class JournalStore:
                        a.planned_risk AS planned_risk, COALESCE(a.risk_source, '') AS risk_source,
                        -- A trade with no annotation row at all has nothing a
                        -- machine wrote, so it reads as the trader's (P6a).
-                       COALESCE(a.tag_status, 'confirmed') AS tag_status
+                       COALESCE(a.tag_status, 'confirmed') AS tag_status,
+                       -- WS-10E: the note lane's verdict, joined rather than
+                       -- stored on `trades`. A trade the tagger has not visited
+                       -- since this packet landed reads '', which every reader
+                       -- renders as silence rather than as an empty window.
+                       COALESCE(n.note_lane_json, '') AS note_lane_json
                 FROM trades t
                 LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id
+                LEFT JOIN note_lane_verdicts n ON n.trade_id = t.trade_id
                 {where_sql}
                 ORDER BY t.trade_date DESC, t.opened_at DESC, t.symbol
                 """,
@@ -2401,8 +2444,8 @@ class JournalStore:
                         """
                         INSERT OR REPLACE INTO auto_tag_candidates(
                             trade_id, tag, confidence, source, rationale, created_at,
-                            context_row_id
-                        ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                            context_row_id, match_basis, match_span
+                        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             trade["trade_id"],
@@ -2412,12 +2455,47 @@ class JournalStore:
                             item.get("rationale", ""),
                             _now_iso(),
                             str(item.get("context_row_id") or ""),
+                            str(item.get("match_basis") or ""),
+                            str(item.get("span") or ""),
                         ),
                     )
+                # WS-10E. The note lane's VERDICT, stored beside the summary and
+                # for the same reason: the Trades detail and Weekend Prep's Tag
+                # Week have to be able to SAY what the lane concluded - including
+                # "the window held notes and none named a setup" and "this fill
+                # carries no clock time" - without reading the Market Journal
+                # ledger on the Qt thread. The `notes` list is dropped here; it
+                # exists for the advisory package, and storing it would put every
+                # note's full text into the journal database a second time.
+                report = tagger.note_lane_report(trade)
                 conn.execute(
-                    "UPDATE trades SET auto_tag_summary = ?, tag_confidence = ?, updated_at = ? WHERE trade_id = ?",
+                    """
+                    INSERT INTO note_lane_verdicts(trade_id, note_lane_json, updated_at)
+                    VALUES(?, ?, ?)
+                    ON CONFLICT(trade_id) DO UPDATE SET
+                        note_lane_json = excluded.note_lane_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        trade["trade_id"],
+                        _json_dumps(
+                            {key: value for key, value in report.items() if key != "notes"}
+                        ),
+                        _now_iso(),
+                    ),
+                )
+                conn.execute(
+                    "UPDATE trades SET auto_tag_summary = ?, tag_confidence = ?,"
+                    " updated_at = ? WHERE trade_id = ?",
                     (top_summary, top_confidence, _now_iso(), trade["trade_id"]),
                 )
+            # A rebuild re-keys trades, so a verdict can outlive the trade it was
+            # about. Dropped here rather than left to accumulate: this table is
+            # derived and nothing downstream may read a row whose trade is gone.
+            conn.execute(
+                "DELETE FROM note_lane_verdicts WHERE trade_id NOT IN"
+                " (SELECT trade_id FROM trades)"
+            )
 
     def save_ai_enrichment(
         self,
@@ -2429,6 +2507,10 @@ class JournalStore:
         evidence: Any = (),
         model: str = "",
         now: str = "",
+        status: str = "",
+        reason: str = "",
+        confidence: str = "",
+        supersedes_row_id: Any = "",
     ) -> None:
         """Append one ADVISORY enrichment row (LOCAL-AI Phase 3).
 
@@ -2440,14 +2522,28 @@ class JournalStore:
         Append-only: a second pass over the same trade adds a row rather than
         rewriting what an earlier night believed, which is what makes the
         history of the advice auditable.
+
+        WS-AI1 (2026-09-12) gave the row four more fields, and they are what
+        make a blank row readable:
+
+        * ``status`` -- ``enriched`` / ``abstained`` / ``failed``. An absent
+          status is the LEGACY blank written before this packet, and the
+          enrichment pass treats that absence as "never really done".
+        * ``reason`` -- why it abstained (the model's own ``unknowns``) or how
+          it failed (the error class and message). Never prose invented here.
+        * ``confidence`` -- the model's own ``low|medium|high``, or "".
+        * ``supersedes_row_id`` -- the ``enrichment_id`` this row replaces. A
+          POINTER: the superseded row is never touched, so the history of a
+          repaired night stays readable.
         """
         with self.connection() as conn:
             conn.execute(
                 """
                 INSERT INTO ai_trade_enrichment(
                     trade_id, session_date, schema, summary, tags, evidence_json,
-                    model, generated_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    model, generated_at, status, reason, confidence,
+                    supersedes_row_id
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(trade_id),
@@ -2458,6 +2554,10 @@ class JournalStore:
                     _json_dumps(list(evidence or ())),
                     str(model or ""),
                     str(now or _now_iso()),
+                    str(status or ""),
+                    str(reason or ""),
+                    str(confidence or ""),
+                    "" if supersedes_row_id in (None, "") else str(supersedes_row_id),
                 ),
             )
 
@@ -2479,6 +2579,11 @@ class JournalStore:
         ``midday`` above every setup match the scanner found -- and the setup
         match is the answer the trader opened the pane for.
 
+        WS-10E put the NOTE lane between the capture lane and the scanner's: a
+        sentence the trader typed about that name inside the trade's own window
+        is weaker than a structured claim carrying an event id, and stronger
+        than a scanner row that merely fell near the same date.
+
         P6 put the CAPTURE lane above both. A `trader_capture` candidate is the
         trader's own statement about that symbol on that day - a veto, a
         like+claim, a pass, or a chart they took action on - matched by exact
@@ -2491,9 +2596,15 @@ class JournalStore:
                 """
                 SELECT * FROM auto_tag_candidates
                 WHERE trade_id = ?
-                ORDER BY (source LIKE ?) DESC, (source LIKE ?) ASC, confidence DESC, tag
+                ORDER BY (source LIKE ?) DESC, (source LIKE ?) DESC,
+                         (source LIKE ?) ASC, confidence DESC, tag
                 """,
-                (trade_id, f"{TRADER_CAPTURE_SOURCE}:%", f"{TRADE_SHAPE_SOURCE}:%"),
+                (
+                    trade_id,
+                    f"{TRADER_CAPTURE_SOURCE}:%",
+                    f"{TRADER_NOTE_SOURCE}:%",
+                    f"{TRADE_SHAPE_SOURCE}:%",
+                ),
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 

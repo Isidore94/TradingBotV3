@@ -7,9 +7,10 @@ prompts between windows. The role definitions live in `.claude/agents/` and
 
 ## Codex-specific policy
 
-Codex roles are Astra for the lead; Luna at medium effort for reconnaissance, bounded
+The trader selects the lead model (2026-09-15); Astra is a suggested planning role,
+never a project model pin. Luna at medium effort handles reconnaissance, bounded
 docs and simple implementation; and Terra at high effort for normal implementation,
-tests and independent review. Astra decides, plans, orchestrates, accepts and integrates.
+tests and independent review. The selected lead decides, plans, orchestrates, accepts and integrates.
 
 - Escalate uncertainty Luna -> Terra -> Astra for targeted judgment. Never silently
   substitute a paid higher model.
@@ -165,7 +166,7 @@ branch, and does not spawn two builders on the same files.
 
 ### Codex setup
 
-`.codex/config.toml` selects the Astra lead, the Luna medium default for a helper whose
+`.codex/config.toml` leaves the session model unset and selects the Luna medium default for a helper whose
 model is unspecified, and at most three child threads excluding the lead. A higher-
 priority runtime setting may override these defaults. The tracked `.codex/agents/` files
 select their explicit role models. No desk restart or live-store write is needed here.

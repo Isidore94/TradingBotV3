@@ -458,9 +458,21 @@ FOCUS_REVIEW_VIEWS: tuple[tuple[str, str, str, str], ...] = (
         "Said vs did",
         "preference_table",
         "preference_note",
-        "One row per STATEMENT you made in the reviewed week, beside whether "
-        "you traded it and what it then did. The match is a JUDGEMENT, not a "
-        "link - 'no match' is a real answer.",
+        "One row per ENDORSEMENT you made in the reviewed week - a like, a "
+        "claim, a swing pick - beside whether you traded it and what it then "
+        "did. The match is a JUDGEMENT, not a link - 'no match' is a real "
+        "answer. The refusals are their own view, 'Said no'.",
+    ),
+    (
+        "Said no",
+        "preference_rejection_table",
+        "preference_rejection_note",
+        "One row per REFUSAL you recorded in the reviewed week - a veto, a "
+        "day-trade pass, a dislike, a not-today, a click away from an M5 alert "
+        "- beside whether you traded the name anyway. Never pooled with the "
+        "endorsements in 'Said vs did': a veto you took is a different lesson "
+        "from a like you skipped. 'Match state' says which kind of miss a blank "
+        "trade is - the window is still open, or it closed with nothing.",
     ),
     (
         "Said at the time",
@@ -587,6 +599,19 @@ class FocusReviewPage(_StepPage):
         self.preference_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.preference_note = QLabel("")
         self.preference_note.setWordWrap(True)
+
+        # WS-5B: the OTHER half of the same report. A veto the trader took
+        # anyway and a like they skipped are two different lessons, and one
+        # table sorted by date would read as one population.
+        self.preference_rejection_table = QTableWidget(
+            0, len(PREFERENCE_REJECTION_COLUMNS)
+        )
+        self.preference_rejection_table.setHorizontalHeaderLabels(
+            list(PREFERENCE_REJECTION_HEADERS)
+        )
+        self.preference_rejection_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.preference_rejection_note = QLabel("")
+        self.preference_rejection_note.setWordWrap(True)
 
         # Packet W2: R8 sec 6's last two DEFERRED joins. The cohorts above are
         # the two judgement mirrors - what was thrown away, what was endorsed.
@@ -1133,13 +1158,37 @@ class FocusReviewPage(_StepPage):
         )
 
     def _render_preference_trades(self, rows) -> None:
-        """What was said, whether it was taken, and what it did (P6).
+        """What was said, whether it was taken, and what it did (P6 + WS-5B).
 
         Every row shows its MATCH CONFIDENCE or says "no match": the join is a
         judgement - the trader could have taken the name that week for an
         unrelated reason - and a bare trade id would read as a fact. Nothing
         here mints an identifier; plan.md P5.3/P5.4 own the canonical one.
+
+        WS-5B: ONE read, TWO tables. The endorsements stay where they were and
+        the refusals get their own view, because a veto the trader took anyway
+        and a like they skipped are two lessons and nothing here pools them -
+        not the rows, not the notes, not the counts.
         """
+        # The family NAME comes from the module that writes it; a literal here
+        # would be a second copy of a vocabulary that has one owner. The module
+        # is already imported by the reader that produced these rows, so this
+        # costs a dict lookup on the Qt thread and no file.
+        from preference_trade_outcomes import FAMILY_REJECT
+
+        likes: list = []
+        rejects: list = []
+        for row in list(rows or []):
+            # ONE pass, and the family decides. Two rows that happen to be
+            # equal are still two statements, so nothing here compares rows.
+            target = (
+                rejects
+                if str(row.get("verdict_family") or "") == FAMILY_REJECT
+                else likes
+            )
+            target.append(row)
+        self._render_preference_rejections(rejects)
+        rows = likes
         self.preference_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             for column, key in enumerate(PREFERENCE_COLUMNS):
@@ -1151,9 +1200,10 @@ class FocusReviewPage(_StepPage):
         )
         if not rows:
             self.preference_note.setText(
-                "No preference/trade report for this week yet. It is written by the "
-                "overnight preference_trade_outcomes slot - an absent report, not a "
-                "week without opinions."
+                "No endorsements in the preference/trade report for this week. It is "
+                "written by the overnight preference_trade_outcomes slot - an absent "
+                "report, not a week without opinions. The refusals are in the "
+                "'Said no' view."
             )
             return
         taken = sum(1 for row in rows if str(row.get("traded") or "") == "yes")
@@ -1174,6 +1224,45 @@ class FocusReviewPage(_StepPage):
             "setup you named and skipped. Match confidence is a JUDGEMENT, not "
             "a link: a trade on the same name that week may have been taken for "
             "another reason entirely, and 'no match' is a real answer."
+        )
+
+    def _render_preference_rejections(self, rows) -> None:
+        """"Rejections that were traded anyway / not traded" (WS-5B).
+
+        The half of the record that costs money: a name you vetoed, passed on,
+        disliked, threw back for the day or clicked away from - beside whether
+        you took it anyway. Counted on its own, printed on its own, and never
+        added to the endorsements above it.
+        """
+        rows = list(rows or [])
+        self.preference_rejection_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            for column, key in enumerate(PREFERENCE_REJECTION_COLUMNS):
+                self.preference_rejection_table.setItem(
+                    index, column, QTableWidgetItem(str(row.get(key) or ""))
+                )
+        apply_width_rule_to_table_widget(
+            self.preference_rejection_table, text_columns=(0, 3), elide_columns=(3,)
+        )
+        if not rows:
+            self.preference_rejection_note.setText(
+                "No refusals recorded in this week's preference/trade report. An "
+                "absent record, not a week you agreed with everything - and a report "
+                "written before 2026-09-13 has no reject half at all."
+            )
+            return
+        taken = sum(1 for row in rows if str(row.get("traded") or "") == "yes")
+        pending = sum(
+            1 for row in rows if str(row.get("match_state") or "") == "window_open"
+        )
+        self.preference_rejection_note.setText(
+            f"{len(rows)} refusal(s) this week; {taken} were traded anyway and "
+            f"{len(rows) - taken} were not. {pending} still have an open "
+            "10-session window, which is not yet a miss. A refusal you traded "
+            "anyway is the expensive row - and the match is a JUDGEMENT, so a "
+            "trade on the same name may have been taken for another reason "
+            "entirely. Never added to the endorsements in 'Said vs did': two "
+            "verdicts are never combined."
         )
 
     def _render_cohort(self, rows) -> None:
@@ -1434,7 +1523,15 @@ class WalkawayPage(_StepPage):
         self._reload_review_data()
 
 
-TAG_WEEK_COLUMNS = ("Date", "Symbol", "Status", "Tag", "Net", "Week")
+#: WS-10E item 3 added `From`: which lane proposed the tag waiting in this row.
+#: Only one lane is named, and deliberately - "your journal note" is the one
+#: proposal the trader can check against something they themselves wrote, and a
+#: column that named every lane would be a machine-provenance column on a screen
+#: whose whole job is the trader's yes or no.
+TAG_WEEK_COLUMNS = ("Date", "Symbol", "Status", "Tag", "Net", "Week", "From")
+
+#: What that column says when the note lane is where the proposal came from.
+TAG_WEEK_NOTE_ORIGIN = "your journal note"
 
 #: The missing-planned-risk worklist (ST5.5). Newest first, ten-row floor, and a
 #: row that is clicked opens the trade where the trader can type the plan.
@@ -1622,6 +1719,10 @@ class TagWeekPage(_StepPage):
                 # is no longer one week, and a reader has to be able to see that
                 # without counting dates.
                 "this week" if row.get("in_review_week") else "backlog",
+                # WS-10E: marked when the waiting tag is the one the trader's
+                # OWN Market Journal note named. Blank otherwise - a row this
+                # cannot vouch for says nothing rather than naming a lane.
+                TAG_WEEK_NOTE_ORIGIN if _tag_came_from_a_note(row) else "",
             )
             for column, text in enumerate(values):
                 self.table.setItem(index, column, QTableWidgetItem(text))
@@ -1841,6 +1942,28 @@ def _open_journal_store(store=None, path=None):
     from journal_store import JournalStore
 
     return JournalStore(path) if path is not None else JournalStore()
+
+
+def _tag_came_from_a_note(row) -> bool:
+    """Is the provisional tag on this row the one the trader's note named?
+
+    Compared rather than flagged: the stored verdict says which setup the note
+    lane claimed for that trade, and the row says which tag is actually waiting.
+    A flag written at apply time would go on claiming a provenance the tag no
+    longer has once the trader edits it.
+
+    Only a PROVISIONAL row can be marked. A confirmed tag is the trader's own
+    answer and where the machine's guess came from stopped mattering.
+    """
+    from journal_analytics import note_lane_tag
+    from journal_store import TAG_STATUS_PROVISIONAL
+
+    if str(row.get("tag_status") or "") != TAG_STATUS_PROVISIONAL:
+        return False
+    claimed = note_lane_tag(row.get("note_lane_json"))
+    if not claimed:
+        return False
+    return str(row.get("setup_tags") or "").strip() == claimed
 
 
 def _read_week_tag_rows(bounds, *, store=None, path=None) -> list[dict]:
@@ -2586,7 +2709,7 @@ def _join_focus_week(bounds) -> list[dict[str, Any]]:
     return joined
 
 
-def _read_veto_cohort() -> list[dict[str, str]]:
+def _read_veto_cohort() -> list[dict[str, Any]]:
     """The graded veto cohort - R8 §6's last DEFERRED join (AI-P1).
 
     The Focus Pick Review subtitle has promised "the veto cohort beside them"
@@ -2626,43 +2749,18 @@ def _read_veto_cohort() -> list[dict[str, str]]:
     except OSError:
         return []
 
-    def _pct(value: str) -> str:
-        """A percentage, or BLANK. Never a substituted zero."""
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        try:
-            return f"{float(text) * 100:.1f}%"
-        except (TypeError, ValueError):
-            return text
-
-    def _signed_pct(value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        try:
-            return f"{float(text) * 100:+.2f}%"
-        except (TypeError, ValueError):
-            return text
-
-    def _ratio(value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        try:
-            return f"{float(text):.2f}"
-        except (TypeError, ValueError):
-            return text
-
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, Any]] = []
     for raw in raw_rows:
         row = {
             "cohort": veto_cohort.canonical_veto_cohort(raw.get("cohort") or ""),
             "side": str(raw.get("side") or "").strip(),
-            "horizon": str(raw.get("horizon_sessions") or "").strip(),
-            "n": str(raw.get("sample_count") or "").strip(),
-            "avg_return": _signed_pct(raw.get("avg_side_return")),
-            "profit_factor": _ratio(raw.get("profit_factor")),
+            "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+            # WS-5A: the typed half. `horizon_sessions`, `n` and
+            # `avg_side_return_pct` are NUMBERS here and are formatted at the
+            # display edge (`_fill_cohort_table`), because the verdict card
+            # reads this row too and a formatted percent read as an R multiple
+            # is the defect this replaced.
+            **_cohort_numeric_fields(raw),
         }
         # R4 B3: the rate, its bound and n in one cell, and the bound as the sort
         # key. Written AFTER the base row so it owns `win_rate` outright.
@@ -2701,7 +2799,7 @@ def _read_after_like_block() -> dict:
         return {}
 
 
-def _read_like_cohort() -> list[dict[str, str]]:
+def _read_like_cohort() -> list[dict[str, Any]]:
     """The graded LIKE cohort - R10.F's output, given its surface (packet 8b).
 
     The mirror of :func:`_read_veto_cohort`, and read the same way: by NAMED
@@ -2732,15 +2830,16 @@ def _read_like_cohort() -> list[dict[str, str]]:
     except OSError:
         return []
 
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, Any]] = []
     for raw in raw_rows:
         row = {
             "cohort": str(raw.get("cohort") or "").strip(),
             "side": str(raw.get("side") or "").strip(),
-            "horizon": str(raw.get("horizon_sessions") or "").strip(),
-            "n": str(raw.get("sample_count") or "").strip(),
-            "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
             "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+            # WS-5A: the same typed half the veto reader publishes. The two
+            # cohorts are the halves of one judgement and the card reads both,
+            # so they must not disagree about what a column MEANS.
+            **_cohort_numeric_fields(raw),
         }
         row.update(_cohort_headline_fields(raw))
         row.update(_cohort_robust_fields(raw))
@@ -2761,6 +2860,51 @@ COHORT_TABLE_HEADERS = (
 )
 
 
+def _cohort_numeric_fields(raw) -> dict[str, Any]:
+    """The typed half of a cohort row - WS-5A.
+
+    The two judgement tables are not the only reader of these rows: the
+    weekend verdict card reads them too. It used to look for `avg_r_h3` and
+    `n_h3`, keys nothing has ever written, so every cell was skipped and both
+    of its cohort lines said "nothing with enough behind it yet" against 115
+    graded veto rows and 129 graded like rows on the live desk. Had one
+    matched, the card would have printed a PERCENT return with an `R` after it.
+
+    So the row carries NUMBERS and the display edge does the formatting:
+
+    - ``horizon_sessions`` - the CSV's `horizon_sessions`, as an int (1/3/5/10);
+    - ``n`` - the CSV's `sample_count`, as an int;
+    - ``avg_side_return_pct`` - the CSV's `avg_side_return`, which is a
+      FRACTION on disk (`0.019011`), carried here as a PERCENT (`1.9011`).
+      The unit is in the name because the mistake this repairs was a unit
+      mistake.
+
+    A blank or unparseable cell is ``None``, never a substituted zero: old rows
+    have every key PRESENT and EMPTY, and "not measured" and "measured at zero"
+    are different facts.
+    """
+    return {
+        "horizon_sessions": _cohort_int(raw.get("horizon_sessions")),
+        "n": _cohort_int(raw.get("sample_count")),
+        "avg_side_return_pct": _cohort_fraction_as_pct(raw.get("avg_side_return")),
+    }
+
+
+def _cohort_cell_text(row, key: str) -> str:
+    """One table cell, built from the row's TYPED fields where it has them.
+
+    The trader's two tables read exactly as they did - `21`, `+1.90%` - but the
+    text is now made here rather than carried in the row, so a reader that
+    wants the number gets the number (WS-5A).
+    """
+    if key == "avg_return":
+        return _format_signed_pct_value(row.get("avg_side_return_pct"))
+    if key == "n":
+        value = row.get("n")
+        return "" if value is None else str(value)
+    return str(row.get(key) or "")
+
+
 def _fill_cohort_table(table, rows) -> None:
     """Write one horizon's rows, greying anything under the n floor.
 
@@ -2778,7 +2922,7 @@ def _fill_cohort_table(table, rows) -> None:
     for index, row in enumerate(rows):
         under_floor = not row.get("_meets_floor")
         for column, key in enumerate(COHORT_TABLE_COLUMNS):
-            item = QTableWidgetItem(str(row.get(key) or ""))
+            item = QTableWidgetItem(_cohort_cell_text(row, key))
             if under_floor and muted is not None:
                 item.setForeground(muted)
             if key == "ci" and row.get("ci_basis"):
@@ -2923,8 +3067,11 @@ def _cohort_view(rows, horizon: str) -> list[dict]:
     sample has no bound and sorts last inside its own group rather than being
     promoted by a default of zero.
     """
-    wanted = str(horizon or "").strip()
-    kept = [row for row in rows if str(row.get("horizon") or "").strip() == wanted]
+    # WS-5A: the horizon is compared as a NUMBER. The selector's data is the
+    # session count as text ("3"), the row carries `horizon_sessions` as an int,
+    # and `"3" == 3` is False - so the comparison happens in one type, here.
+    wanted = _cohort_int(horizon)
+    kept = [row for row in rows if row.get("horizon_sessions") == wanted]
     return sorted(
         kept,
         key=lambda row: (
@@ -2958,6 +3105,43 @@ def _cohort_signed_pct(value) -> str:
         return f"{float(text) * 100:+.2f}%"
     except (TypeError, ValueError):
         return text
+
+
+def _cohort_int(value) -> int | None:
+    """An integer, or `None`. Never a substituted zero (WS-5A)."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _cohort_fraction_as_pct(value) -> float | None:
+    """The CSV's fraction as a PERCENT number: `0.019011` -> `1.9011`.
+
+    `None` for a blank or unparseable cell, which is what the table prints as
+    an empty Avg and what the verdict card refuses to rank.
+    """
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number * 100.0
+
+
+def _format_signed_pct_value(value) -> str:
+    """A percent NUMBER as the cell the trader has always read: `+1.90%`."""
+    if value is None:
+        return ""
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return ""
 
 
 def _cohort_ratio(value) -> str:
@@ -3190,6 +3374,31 @@ PREFERENCE_HEADERS = (
     "Paper 5d",
 )
 
+#: WS-5B: the reject half, with the MATCH STATE on screen. "No trade yet" and
+#: "no trade, window closed" are the difference between a pending row and a
+#: broken promise, and the likes table never needed to tell them apart because
+#: the file could not say.
+PREFERENCE_REJECTION_COLUMNS = (
+    "session_date",
+    "symbol",
+    "side",
+    "statement",
+    "traded",
+    "match_state",
+    "match_confidence",
+    "journal_r",
+)
+PREFERENCE_REJECTION_HEADERS = (
+    "Date",
+    "Symbol",
+    "Side",
+    "What you refused",
+    "Traded",
+    "Match state",
+    "Match conf.",
+    "Journal R",
+)
+
 
 def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
     """This week's rows of the preference/trade report (P6).
@@ -3204,7 +3413,7 @@ def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
     # BY NAMED CONSTANT (R1, CLAUDE.md). Resolving a home-folder store by
     # rebuilding its name under a directory is what shipped a blank page for six
     # days; the module that writes this file already exports where it is.
-    from preference_trade_outcomes import REPORT_FILE
+    from preference_trade_outcomes import REPORT_FILE, verdict_family_for
 
     path = Path(REPORT_FILE)
     if not path.is_file():
@@ -3243,6 +3452,16 @@ def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
                 or str(raw.get("match_basis") or ""),
                 "journal_r": str(raw.get("journal_r") or ""),
                 "paper_forward_return_h5": str(raw.get("paper_forward_return_h5") or ""),
+                # WS-5B. The page cannot separate what the reader threw away.
+                # A pre-5B file has neither column: an absent family is an
+                # ENDORSEMENT (every channel that could write one back then
+                # was), read through the module's own map rather than a second
+                # copy of it here, and an absent state stays blank because the
+                # old file never measured which kind of miss a blank trade was.
+                "verdict_family": str(raw.get("verdict_family") or "").strip()
+                or verdict_family_for(raw.get("channel")),
+                "match_state": str(raw.get("match_state") or "").strip(),
+                "channel": str(raw.get("channel") or ""),
             }
         )
     rows.sort(key=lambda row: (row["session_date"], row["symbol"]))

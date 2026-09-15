@@ -266,6 +266,13 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         self.buckets: set[str] = set()
         self.max_dte: int | None = None
         self.search_text: str = ""
+        # Trader, 2026-09-15: a veto for the day removes the row from the list.
+        # `rejected_symbols` is today's swing-side rejects (pick_feedback
+        # HIDDEN_REJECT_KINDS), fed by the panel's decision snapshot; the rows
+        # are HIDDEN and counted, never deleted - `show_rejected` brings them
+        # back. The scan and the tracker never see this filter.
+        self.rejected_symbols: frozenset[str] = frozenset()
+        self.show_rejected: bool = False
         self.setSortRole(SORT_ROLE)
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
@@ -278,6 +285,8 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         buckets=_UNSET,
         max_dte=_UNSET,
         search_text: str | None = None,
+        rejected_symbols=_UNSET,
+        show_rejected: bool | None = None,
     ) -> None:
         """Update only the filters named by the caller.
 
@@ -302,7 +311,26 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             self.max_dte = max_dte
         if search_text is not None:
             self.search_text = search_text.strip().lower()
+        if rejected_symbols is not _UNSET:
+            self.rejected_symbols = frozenset(
+                str(symbol).strip().upper() for symbol in (rejected_symbols or ()) if str(symbol).strip()
+            )
+        if show_rejected is not None:
+            self.show_rejected = bool(show_rejected)
         self.endFilterChange()
+
+    def hidden_rejected(self) -> int:
+        """How many source rows the reject filter is holding back right now."""
+        if self.show_rejected or not self.rejected_symbols:
+            return 0
+        model = self.sourceModel()
+        if model is None:
+            return 0
+        return sum(
+            1
+            for row in model.rows()
+            if str(getattr(row, 'symbol', '') or '').strip().upper() in self.rejected_symbols
+        )
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()
@@ -313,13 +341,24 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         if not isinstance(row, SetupRow):
             return True
 
+        if (
+            not self.show_rejected
+            and self.rejected_symbols
+            and str(row.symbol or '').strip().upper() in self.rejected_symbols
+        ):
+            return False
         if row.score is not None and row.score < self.min_score:
             return False
         if self.side != "ALL" and row.side != self.side:
             return False
         if self.bucket != "ALL" and row.bucket_label != self.bucket:
             return False
-        if self.buckets and row.bucket.strip().lower() not in self.buckets:
+        # Packet D1C-A: a row passes when ANY of its buckets is selected. A
+        # row belongs to several buckets (HC and FAV folded into one row; a
+        # claimed like added on top), and the old single-key compare could
+        # only ever ask about the primary one - so "FAV + Liked" hid the
+        # HC+FAV+claimed row that satisfies both halves of it.
+        if self.buckets and not (row.bucket_keys & self.buckets):
             return False
         if self.max_dte is not None and row.days_to_earnings is not None and row.days_to_earnings > self.max_dte:
             return False

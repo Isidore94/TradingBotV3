@@ -536,6 +536,11 @@ class AutopilotService(QObject):
         try:
             self._roll_day_state()
             now = datetime.now()
+            # The day-trade lists are wiped after the close (trader 2026-09-15).
+            # Before the weekend short-circuit: a desk started on Saturday
+            # still owes Friday's wipe. Before the open scan: the morning
+            # build must not merge yesterday's names as "the trader's".
+            self._maybe_reset_daytrade_watchlists(now)
             # Before every short-circuit below: the sweep must be stoppable on
             # a Friday evening and while Auto Pilot is OFF, and neither of
             # those paths reaches _ensure_bot_running.
@@ -659,6 +664,30 @@ class AutopilotService(QObject):
             self._log("New session - cleared autolongs.txt / autoshorts.txt for today's open scan.")
         except Exception:
             logging.exception("Auto watchlist day-roll clear failed")
+
+    def _maybe_reset_daytrade_watchlists(self, now: datetime) -> None:
+        """Wipe longs.txt / shorts.txt once their session has closed.
+
+        The rule and the file work live in `daytrade_watchlist_reset`
+        (stateless: the file's mtime against the last completed session's
+        close). This method only logs what happened and forgets what Auto
+        Pilot wrote: after a wipe there is nothing of "its own" left for the
+        next morning's merge to replace, and a stale list here would let that
+        merge drop a name the trader types before the open.
+        """
+        try:
+            import daytrade_watchlist_reset as reset
+
+            results = reset.apply_reset(now)
+        except Exception:
+            logging.exception("Day-trade watchlist reset failed")
+            return
+        wiped = [result for result in results if result.wiped]
+        if not wiped:
+            return
+        self._state["autopilot_written"] = {"longs": [], "shorts": []}
+        self._save_state()
+        self._log(f"Day-trade watchlists reset - {reset.describe(results)}.")
 
     def _ensure_bot_running(self, *, force: bool = False) -> None:
         service = self._bounce_service
@@ -1911,21 +1940,12 @@ class AutopilotService(QObject):
             swing_data_date = str(swing_feed.get("data_date") or "")
             current_session_data = swing_data_date == datetime.now().date().isoformat()
             swing_rows = list(swing_feed.get("rows") or []) if current_session_data else []
-            picks = []
-            for row in swing_rows[:60]:
-                expected = getattr(row, "expected_r", None)
-                raw = getattr(row, "raw", None)
-                family = str((raw or {}).get("setup_family") or "") if isinstance(raw, dict) else ""
-                picks.append(
-                    {
-                        "symbol": getattr(row, "symbol", ""),
-                        "side": getattr(row, "side", ""),
-                        "bucket": getattr(row, "bucket_label", "") or getattr(row, "bucket", ""),
-                        "expected_r": expected,
-                        "family": family,
-                        "key_level": str(getattr(row, "key_level", "") or ""),
-                    }
-                )
+            # WS-PT4: ONE projection, in `autopilot_core`, so the digest's pick
+            # rows carry the point system's inputs (the scan row plus the two
+            # group-context readings) as well as the six display fields. The
+            # rows are the SAME enriched display rows the setups table shows,
+            # so the digest and the table score one reading, never two.
+            picks = [core.swing_pick_projection(row) for row in swing_rows[:60]]
             # The roster is built from the FULL feed, not the ten ranked picks:
             # "which names are favorites right now" is a membership question,
             # and answering it from a top-ten slice would silently shorten it.

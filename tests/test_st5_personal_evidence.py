@@ -190,12 +190,21 @@ def _statements(tmp_path, feedback_rows, *, since, until):
     empty_annotations.write_text("", encoding="utf-8")
     empty_favorites = tmp_path / "swing_favorites.jsonl"
     empty_favorites.write_text("", encoding="utf-8")
+    # WS-5B added a FOURTH store (the M5 click-away lives in the review-event
+    # log). This helper names every store it wants empty for the same reason it
+    # already named the other three: an unnamed one falls back to the shared
+    # test home folder, and a click-away another test wrote there is a
+    # statement this fixture never made. No assertion moved; the fixture is
+    # hermetic again.
+    empty_events = tmp_path / "alert_review_events.jsonl"
+    empty_events.write_text("", encoding="utf-8")
     return pto.collect_statements(
         since=since,
         until=until,
         annotations_path=empty_annotations,
         feedback_path=_feedback_file(tmp_path, feedback_rows),
         favorites_path=empty_favorites,
+        events_path=empty_events,
     )
 
 
@@ -381,6 +390,14 @@ def test_three_statements_about_one_trade_count_as_one_trade(tmp_path, monkeypat
     )
     monkeypatch.setattr(
         project_paths, "TRADER_ANNOTATIONS_FILE", tmp_path / "absent_annotations.jsonl"
+    )
+    # WS-5B added a FOURTH store to the slot's read (the M5 click-away lives in
+    # the review-event log). Every other store this test does not want is
+    # already pointed at an absent file or stubbed; an unnamed one falls back to
+    # the shared test home folder and a click-away another test wrote there
+    # arrives as a fourth statement. No assertion changed.
+    monkeypatch.setattr(
+        project_paths, "ALERT_REVIEW_EVENTS_FILE", tmp_path / "absent_review_events.jsonl"
     )
     result = pto.run_preference_trade_outcomes(
         now=datetime(2026, 9, 25, 20, 0, 0),

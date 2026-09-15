@@ -129,7 +129,9 @@ this roadmap.
   attempt, and configuration where those dimensions matter.
 - Every suggestion, alert, review, research row, and outcome must retain enough
   provenance to reconstruct what the system knew.
-- User-entered watchlist names are never automatically removed.
+- User-entered watchlist names are never automatically removed by a machine judgement about
+  one name. Amended 2026-09-15 (decision 0020): `longs.txt` / `shorts.txt` are day-trade lists
+  and are emptied WHOLE after each session's close; the swing lists keep the rule unchanged.
 
 ### Runtime and publication
 
@@ -235,8 +237,16 @@ Their old phase lists do not reorder Section 12.
 ## 12. Remaining work, in execution order
 
 Agent operations, trader-authorized 2026-09-09: Astra lead with Luna/Terra delegation
-is configured in `.codex/` and governed by `docs/AGENT_TEAM.md`. This is repository
+is governed by `docs/AGENT_TEAM.md`. Amended and BUILT 2026-09-15: the trader chooses
+the session model; `.codex/config.toml` no longer pins Astra. Helper defaults remain. This is repository
 setup, not a product phase; build order and all live/promotion gates below are unchanged.
+
+CH-SYM (2026-09-14) is a trader-authorized repair to Phase 0.26's built WS-CH
+chart history: isolate retained bars on a symbol switch. **BUILT and independently
+accepted on `codex/chart-symbol-isolation`; loaded into the local sweep checkout
+on the trader's 2026-09-14 "load it" instruction, preserving the M5 grade update.**
+Implementation and verification are recorded in `CURRENT_CHECKPOINT.md`; live chart-switch proof
+remains part of the test week. This advances no later phase or promotion gate.
 
 The phases below are dependency order, not a menu. `CURRENT_CHECKPOINT.md` names the
 one active item. Finish that item before moving down the list unless the trader
@@ -255,6 +265,11 @@ where the phase says so; it never authorizes an early promotion.
 | **0.23** | Setups ranked by a point system | Trader 2026-09-08: the setups table ordered by four graded inputs (family record, nearby S/R, RS/RW by direction, recent bounce) as a switch that only reorders, graded against the tracker's outcomes with a trader-gated self-correction. **BUILT 2026-09-08; gates #90-#91 owed.** |
 | **0.24** | Keep the desk snappy all day (SN1-SN6) | Trader 2026-09-08: cut the M5 scanner's hold on the interpreter without losing a scan, alert, board or evidence row. **SN5 (breathe) and SN6 (trader picks first) BUILT 2026-09-08 on `main`; live gate #92 owed. SN1-SN4 stay in WISHLIST until the trader moves them here.** |
 | **0.25** | Workspace memory (WISHLIST 11) | Trader 2026-09-12: a root `MEMORY.md` routing index and `memory/` provenance-tagged detail, adapted from JumpStarter M1; recall only, never authority. **BUILT 2026-09-12 on `main`; verification gate #93 owed.** |
+| **0.26** | WISHLIST sweep (trader 2026-09-12) | Every WISHLIST item built as ONE feature dump on the side branch `claude/wishlist-sweep-2026-09-12` for a week of trader testing, Astra review after code completion, then a merge decision. **IN BUILD; the per-item status table is the checkpoint entry "2026-09-12 - WISHLIST SWEEP".** |
+| **0.27** | Claimed D1 picks (trader 2026-09-14) | A CLAIMED like on a D1 chart becomes a ranked pick in Master AVWAP Setups, the D1 chart is done, M5 stays on the left and D1 on the right, and the claims are graded beside FAV/HC. **BUILT 2026-09-14 as packets D1C-A / D1C-L / D1C-B on `lead/d1c-integration` above the sweep tip; live gates #119-#121 owed; nothing merged to `main`.** |
+| **0.28** | Trader's 2026-09-15 desk requests: day-trade watchlist reset (DTR) + setups-table cycle and veto-hide (SC) | DTR wipes `longs.txt` / `shorts.txt` after each close. SC cycles a setups-table chart after veto / claim / Next and hides a vetoed row while the tracker keeps it. **BUILT; live gates #123 and #131 owed.** |
+| **0.29** | Pullback alert, trendline break, compression (trader 2026-09-15) | **BUILT, independently reviewed and merged.** PCT-3: compression measure, chip, calibration CLI and `compression_break` (gates #124-#125). PCT-1: Pullback alert, auto-arm and claim names (gates #126-#129). PCT-2: frozen completed-close trendline-break event plus additive D1-feed row (gate #130). Spec `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. |
+| **0.30** | Daily Recap repair (DR-REPAIR) | Streams and reduces M5 state, shows one whole best event per stock/side, uses D1 horizons for D1 decisions, keeps pending swings, states factual counts and re-reads once after the close. **BUILT and reviewed; live gate #132 owed.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -362,6 +377,127 @@ file applied only under the trader's `Points: learned weights` switch (default O
 Remaining, trader's call: turn the learned weights on once the grade line shows a lift over the
 floor; the AWAY digest's swing order by points (it ranks by the Wilson bound today); the base
 weights - every one is a named constant at the top of `setup_points.py`.
+
+## Phase 0.29 — Pullback alert, trendline break, compression (trader 2026-09-15) — BUILT, reviewed and merged; live gates #124-#130 owed
+
+Trader, 2026-09-15: strong names making new highs are watched for a pullback on M15 (150-SMA) and
+M30 (75-SMA): below the SMA, then a reclaim with an LRSI reversal ("cross up through 80, ideally
+below 50 two to four bars before"), or a reclaim then a later M30/M15 LRSI reversal while holding
+the SMA, or a retest of the SMA; the H1 retester is renamed the Pullback alert and carries all of
+these; new claim names for pullback, trendline break and compression break; compression is
+MEASURED and checked against the trader's vetoes (the most common veto, 36 % pooled) before any
+penalty is tuned. Answers recorded: chart arm plus auto-arm on claimed D1 picks and swing Focus;
+measure and chip first; every named ask-first file may be edited additively for this work. The
+spec, verified premises, packet texts, tests and gates: `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`.
+Sections 5-7 bind: no existing detector rule or score changes, completed bars only, missing history
+is `not measured`, nothing hidden, `review_policy.json` untouched. WISHLIST 10C steps 2-3 are
+narrowed into this phase (no H4; a trendline break-then-retest stays in WISHLIST).
+
+## Phase 0.28 — Trader's 2026-09-15 desk requests (DTR + SC) — BUILT; live gates #123 and #131 owed
+
+**SC - the setups table cycles and hides.** Trader, 2026-09-15: *"when i click on master avwap setups tab and
+then I click the veto or like and claim buttons it should cycle it to the next pick. additionally vetoing it
+for the day SHOULD remove it from the list (but the stock should still be tracked for setup tracker
+purposes)"*. Built by the lead: `chart_symbol(..., next_pick=)` and `AlertCenterPanel._manual_next_pick`
+(consumed by `_advance_review_queue` instead of the waiting list; dropped by any other chart),
+`MasterAvwapPanel._chart_row_on_desk` / `_chart_next_pick` (the table's own walk, same symbol and today's
+rejects skipped, the selection following, "End of the setups list" when it runs out),
+`reviewDecisionRecorded` -> `refresh_decisions`, `SetupFilterProxyModel` `rejected_symbols` /
+`show_rejected` / `hidden_rejected()` fed by `DayDecisions.rejected_symbols()` over
+`pick_feedback.HIDDEN_REJECT_KINDS`, the `Show vetoed (N)` box (`qt_setups_show_vetoed`, default off).
+Sections 5-7 bind: presentation only - no detector, score, tracker, evidence or `review_policy.json`
+change; WS-SX's "a decision moves nothing" is amended to "a swing-side reject hides its row" and the
+test says so. Lead decisions the trader may overrule: the table's own ✕ (a coded dislike) hides too; the
+hide is per SYMBOL (both sides); a day-trade pass and an M5 click-away hide nothing.
+
+**DTR - the day-trade watchlists reset after the close.**
+
+Trader, 2026-09-15: *"i want all names wiped at the end of the day. its a daytrade watchlist not a
+permanent one."* Built by the lead: `scripts/daytrade_watchlist_reset.py` (pure rule `reset_due`, the
+file work `apply_reset`, a dry-run CLI), `AutopilotService._maybe_reset_daytrade_watchlists` on every
+tick before the weekend short-circuit and the open scan, the WS-5D source `session_reset`, the
+`daytrade_watchlists_reset` switch (default ON), decision 0020 amending the sec 5 watchlist invariant
+for these two lists only. Sections 5-7 bind: no detector, score or alert change (BounceBot re-reads the
+files every cycle and is untouched); the file is written first and the intent rows after; a refused
+write records nothing; the swing lists, the Focus store and its membership are untouched. What remains
+is the trader's live validation (#123) and the open question whether the M5 Focus picks should reset
+with the lists (they fade on their own ten-session clock today).
+
+## Phase 0.30 — Daily Recap repair (DR-REPAIR) — BUILT and reviewed 2026-09-15; live gate #132 owed
+
+The recap now streams the append-only M5 log, keeps the latest state per nonblank event,
+and selects one complete best measured event per stock/side. It preserves annotation
+timeframe: M5 decisions use that reduced state while D1 decisions use only the matching
+session-horizon row and explicitly say measured, pending or unavailable. Pending swings
+are visible, the reader supplies a factual summary, and the existing worker reads once at
+the configured time plus once after the exchange-owned close. No detector, score, alert,
+queue, Focus, watchlist, or policy behavior changes. Gate #132 is the trader's next
+session confirmation of the compact rows and noon-plus-close refresh.
+
+## Phase 0.27 — Claimed D1 picks (trader 2026-09-14) — BUILT the same day on `lead/d1c-integration`; live gates #119-#121 owed
+
+Trader, 2026-09-14 (pasted to Fable): *"The left side of the Trading Desk is for M5 trades. The right side is
+for D1 trades. When I like and claim a D1 setup, it becomes a ranked pick I can follow in Master AVWAP
+Setups. I should not have to keep reviewing the same D1 chart."* Five asks, built as three packets with
+tester -> builder -> reviewer each (checkpoint entry "2026-09-14 - CLAIMED D1 PICKS"): **D1C-A** the store
+`claimed_picks.jsonl`, the explicit horizon, the save-then-retire route, the D1-only repeat-review gate,
+the row in the setups table, the five chips and the points ranking; **D1C-L** the strip under the setups in
+the right column; **D1C-B** the `My claims` grading tab and CLI. Sections 5-7 bind: no detector, score,
+alert-emit, watchlist or Focus change (a claim places in the setups table only, by lead decision the trader
+may overrule); evidence stores never cost the event; nothing on the Qt thread reads a file; the two
+outcome clocks are never pooled; `review_policy.json` has no suppression field. What remains for this phase
+is the trader's live validation (#119-#121) and the merge decision, which travels with the sweep branch's.
+
+## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — IN BUILD on `claude/wishlist-sweep-2026-09-12`
+
+**2026-09-14 trader-directed WS-DR follow-up - BUILT by the lead on `claude/desk-combined-2026-09-14` (the sweep's successor):** the Daily Recap reads TODAY by
+itself at 12:00 Pacific (`scripts/daily_recap_schedule.py` pure, one `QTimer` on the panel started in
+`showEvent`, `local_settings.json` `daily_recap_auto_time`), once per session, provisional until the
+13:00 Pacific close and re-read on page select or Refresh; every Auto mode, no scan/push/write
+(`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` amendment 2026-09-14). **Live gate #122 owed:** one
+session day on the desk - the page shows today's session after 12:00 Pacific without a click, and after
+the close the entry no longer reads "provisional".
+
+**2026-09-14 trader-directed WS-TM follow-up - BUILT and reviewed:** replaced the under-chart Mentor card
+with a reusable modeless pop-up and attached hidden, bounded market context for VXX,
+RSP, USO, TLT, IWM, QQQ, SPY, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLU, XLV and XLY.
+Built on `codex/mentor-popup-context` from the accepted sweep baseline; independent review GO at 074c5ec7 and final full-suite exit 0 at be99127d (7980 passed). Loaded into the normal stopped desk under the trader's "load it" instruction, preserving M5 grades and chart-symbol isolation; 195 combined checks pass. Restart and live proof remain owed.
+The context keeps completed-bar short-term and daily measurements with explicit
+as-of times and missing/stale states, beside the unchanged trader words. Acquisition
+runs off the GUI thread only when a prompt is opened, with hourly M5 and daily D1
+bounds; saving never waits for data. No new model call or coaching is authorized by
+this collection change. Gate #110 remains owed for the pop-up and context handoff.
+
+Trader, 2026-09-12: *"Start incorporating features from [WISHLIST.md]. Analyze the entire document and
+integrate in whatever order seems more efficient ... one big feature dump then I will test it over a
+week. Astra will review but we will do that after code completion."* This is the explicit move of
+every WISHLIST item into the build sequence, with these exclusions recorded by the lead (the trader
+may overrule): **SN1** (the scanner child process) waits for SN2-SN6's live proof as the trader's own
+prompt requires; **5E** (identity/journal coverage) is investigation that belongs to Phase 4's
+canonical-opportunity identity; **item 7's legacy.py outcome-row stamp** and **item 9's hide-or-detector
+change** stay ask-first and are replaced inside the sweep by a dated label store and a display-only
+badge. Sections 5-7 bind every packet: no detector, score, alert or order change; golden fixtures
+before any bar-frame or RRS change; completed bars only; evidence stores never cost the event; shadow
+evidence only. The status table, waves, packet names, branch names and lead decisions live in
+`CURRENT_CHECKPOINT.md` "2026-09-12 - WISHLIST SWEEP" and are updated as work lands; gates start
+at #94. Live validation (section 6) is the trader's test week on the sweep branch; nothing merges to
+`main` before it and Astra's review.
+
+**Built so far (2026-09-12/13, every packet on `claude/wishlist-sweep-2026-09-12`, gates in
+`CURRENT_CHECKPOINT.md`):** WS-5D #94, WS-PT4 #95, WS-5A #96, WS-EF1 #97, WS-FC1 #98, WS-SX #99,
+WS-AI1 #100, WS-10B #101, WS-ENV #102, WS-SN4 #103, WS-SN3 #104, WS-J1 #105, WS-TH #106, WS-CH #107,
+WS-WS #108, WS-10A #109, WS-TM #110, WS-10E #111, WS-5B #112, WS-SN2 #113, WS-10D #114, WS-DR #115,
+WS-10C #116, WS-WL #117, WS-10I #118. Remaining: WS-RP (10K steps 2 and 5) lands last, then its docs
+lines (the docs pass itself is done: CLAUDE.md trimmed to 44.7 KB at f63167b0, plan/WISHLIST/memory lines). **Owed asks, all ask-first
+(the trader's word):** FC1's two seams (the Parquet mirror filter; `fetch_daily_bars`' forming-bar
+return) and the live `repair --apply`; ENV's legacy.py stamp on the tracker outcome row; SN3's
+duplicate fourth `_record_environment_focus_history` call; WS's hide-vs-mark, previous anchor and
+other surfaces; AI1's slate decision (the `preference_to_trade` section joins the nightly slate) is
+recorded, the trader may overrule. Deferred by lead decision: SN1, 5E, 10D step-3 narration, 10J
+steps 3-4, 10C steps 2-3. Follow-up owed (found by the 10D tester, not fixed): `EvidenceLedger.append`
+files an evening Pacific note under the next New-York session.
+
+**Astra's independent review (2026-09-13) and its repairs.** The review of the sweep at 85781c8f returned NO-GO on four blockers (B1 stale backup H1 history, B2 a new arm firing on an old bounce, B3 the armed phone push on the Qt thread, B4 gate 107 asking for the retired Chart Review page) plus one verification packet (the Journal migration-failure test depended on test order). All five are repaired on branches off the sweep tip c4df3ac8 - `claude/rv-h1-history`, `claude/rv-h1-arm-time`, `claude/rv-h1-phone-worker` (a chain, in that order), `claude/rv-live-gate-107`, `claude/rv-journal-test-order` - each with red tests first and an independent reviewer GO by reproduction, combined on `lead/rv-integration` and independently accepted at 6753f9fd (7968 passed, 5 skipped, exit 0). On 2026-09-14 the trader authorized loading that exact code plus status-only documentation into the local sweep checkout. Sections 5-7 still bind: the frozen `h1_ema_bounce_v1` was not edited, no detector, score, sigma, threshold, retired emitter, watchlist adoption or review policy changed. Repair acceptance is complete. Still open: the trader's test week (gates #94-#118, #107 rewritten and #116 amended), WS-RP, and the final main-merge decision.
 
 ## Phase 0.25 — Workspace memory (WISHLIST 11, trader 2026-09-12) — BUILT the same day on `main`; verification gate #93 owed
 
@@ -518,6 +654,13 @@ Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/arch
 Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: S1, S3, S4, F1, F2, F3 step 1 BUILT; S2 INSTRUMENTED (trim still measure-first, `legacy.py` ask-first); the lake REPAIRED and gate #56 MET; E2 resolved as a pin. **Still owed**: gate #55 (tee) and #57 (tracker parity, then 0017 step 2 moves readers one at a time); S1.3 (ONE Strength surface) needs a fresh packet; the `technical_integrity_events.jsonl` segment scheme is owed as its own packet; E1 is the trader's validation-week decision. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ## Phase 0.14 — Names first (decision 0016)
+
+Trader-directed display follow-up, 2026-09-14: expose the existing champion grade
+at the far left of each M5 alert row (PROVEN, S, A, B, C, D; ungraded `—`).
+This uses the alert's recorded grade, not a new score or Working-lately ordinal.
+Built on `codex/m5-rank-left` (d8eb0755), independent GO with 116 focused checks;
+loaded into the normal desk checkout on 2026-09-14 under “load it”. The live
+narrow-column check remains owed. Existing ordering and gates stay open.
 
 **Status at 2026-09-02, after round R4 Part A.** V1, V2 and V3 are all merged to
 `main` (V3 fast-forwarded from `claude/v3-keep-it-honest` the evening of

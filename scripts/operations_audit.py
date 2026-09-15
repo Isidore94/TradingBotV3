@@ -59,7 +59,7 @@ import threading
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +77,8 @@ from project_paths import (
     INTRADAY_BOUNCE_OUTCOMES_FILE,
     JOURNAL_DB_FILE,
     MASTER_AVWAP_DAILY_BARS_DIR,
+    MASTER_AVWAP_PRIORITY_SETUPS_FILE,
+    MASTER_AVWAP_SCAN_MANIFEST_FILE,
     UNIVERSE_ALL_FILE,
     UNIVERSE_LONGS_FILE,
     UNIVERSE_SHORTS_FILE,
@@ -400,6 +402,17 @@ AI_STORE_DIR_ENV = "TRADINGBOTV3_AI_STORE_DIR"
 AI_STORE_DIR_SETTING = "ai_store_dir"
 AI_JOB_LEDGER_NAME = "ai_job_ledger.jsonl"
 
+#: Statuses that mean "the job ran and produced less than a trustworthy
+#: result". `degraded_no_narrative` is `ai_jobs.ledger.STATUS_DEGRADED`; the
+#: bare `degraded` is here only so a hand-written row is not silently ignored.
+#: Spelled out rather than imported because this module is read by the
+#: read-only System Health viewer and must not pull the AI package in.
+AI_JOB_DEGRADED_STATUSES = ("degraded_no_narrative", "degraded")
+
+#: Ledger field naming how complete the published document is (WS-AI1). Blank
+#: on every row written before 2026-09-12 and on jobs that publish no document.
+AI_JOB_COMPLETION_FIELD = "completion"
+
 
 def _ai_store_dir() -> Path | None:
     """The configured AI store root, or None when the batch layer is off."""
@@ -413,6 +426,65 @@ def _ai_store_dir() -> Path | None:
         return Path(raw).expanduser()
     except (OSError, ValueError):
         return None
+
+
+def _master_scan_freshness_check(
+    local_tz: tzinfo, manifest_path: Path, report_path: Path
+) -> dict[str, Any]:
+    """The D1 scan's three clocks, in ONE sentence - WS-10A item 2.
+
+    The same string the Setups strip shows, built by the same function: two
+    surfaces disagreeing about how fresh the scan is would be a second opinion
+    where the trader needs a fact.
+
+    Both files are PARAMETERS rather than lookups, on the convention every other
+    artifact here follows: an audit pointed at a sandbox must resolve nothing
+    back to the shared home, or one test's leftovers decide another test's
+    verdict. The production default is the shared home, because the manifest
+    describes the SCAN and not this machine's telemetry.
+
+    A scan that failed is UNHEALTHY because the report on screen is stale; a
+    partial one is DEGRADED because an absent name may mean nothing; no
+    manifest at all is UNKNOWN, never green.
+    """
+    try:
+        from master_avwap_lib import scan_manifest
+    except Exception as exc:  # noqa: BLE001 - the audit never depends on the scanner
+        return _check(
+            "master_scan_freshness",
+            "Master scan freshness",
+            STATUS_UNKNOWN,
+            f"The scan manifest could not be evaluated, so freshness is unmeasured: {exc}",
+            source=Path(__file__),
+        )
+
+    manifest = scan_manifest.read_manifest(manifest_path)
+    try:
+        report_mtime = datetime.fromtimestamp(report_path.stat().st_mtime, tz=local_tz)
+    except OSError:
+        report_mtime = None
+    summary = scan_manifest.freshness_line(manifest, report_mtime=report_mtime)
+    status = {
+        scan_manifest.STATUS_OK: STATUS_HEALTHY,
+        scan_manifest.STATUS_PARTIAL: STATUS_DEGRADED,
+        scan_manifest.STATUS_FAILED: STATUS_UNHEALTHY,
+    }.get(str((manifest or {}).get("status") or ""), STATUS_UNKNOWN)
+    return _check(
+        "master_scan_freshness",
+        "Master scan freshness",
+        status,
+        summary,
+        source=manifest_path,
+        updated_at=str((manifest or {}).get("finished_at") or ""),
+        details={
+            "status": (manifest or {}).get("status"),
+            "universe_size": (manifest or {}).get("universe_size"),
+            "symbols_fetched": (manifest or {}).get("symbols_fetched"),
+            "latest_input_bar_session": (manifest or {}).get("latest_input_bar_session"),
+            "preview_bar_used": bool((manifest or {}).get("preview_bar_used")),
+            "outputs": (manifest or {}).get("outputs") or [],
+        },
+    )
 
 
 def _market_calendar_check(today: datetime) -> dict[str, Any]:
@@ -642,26 +714,68 @@ def _ai_jobs_check(now: datetime, local_tz) -> dict[str, Any]:
         )
 
     last = rows[-1]
-    updated_at = str(last.get("ts") or last.get("timestamp") or "")
+    # WS-AI1. The ledger writes `started_at` and `finished_at`
+    # (`ai_jobs.ledger.record`); `ts`/`timestamp` were the names this reader
+    # guessed, so EVERY AI row read as undated and the freshness branch could
+    # never fire. The guessed names stay first because a hand-written or
+    # older row may carry them, and `finished_at` is the one that answers
+    # "when did this job end".
+    updated_at = str(
+        last.get("ts")
+        or last.get("timestamp")
+        or last.get("finished_at")
+        or last.get("started_at")
+        or ""
+    )
     age = _age_minutes(updated_at, now, local_tz)
     statuses = Counter(str(row.get("status") or "") for row in rows)
     failed = statuses.get("failed", 0)
-    degraded = statuses.get("degraded", 0)
+    # The ledger's constant is `degraded_no_narrative`
+    # (`ai_jobs.ledger.STATUS_DEGRADED`); this counted `degraded`, which no job
+    # has ever written, so a degraded night showed here as healthy. Both names
+    # are counted: the bare one so a hand-written row is not silently ignored.
+    degraded = sum(statuses.get(name, 0) for name in AI_JOB_DEGRADED_STATUSES)
 
     # Freshness is deliberately generous: the layer is nightly, so a run that
     # is hours old is normal and only a run that is more than a day-and-a-half
     # old suggests the schedule itself stopped firing.
+    # WS-AI1 item 4: the strip shows the completion WORD. The newest row that
+    # carries one wins - only the summary jobs publish a document, so the
+    # answer is "how complete was the last narrative this layer published",
+    # and a later deterministic slot must not blank it.
+    completion = ""
+    completion_job = ""
+    for row in reversed(rows):
+        word = str(row.get(AI_JOB_COMPLETION_FIELD) or "").strip()
+        if word:
+            completion = word
+            completion_job = str(row.get("job") or "")
+            break
+    completion_note = (
+        f" Last published summary completion: {completion}"
+        + (f" ({completion_job})." if completion_job else ".")
+        if completion
+        else ""
+    )
+
     if failed:
         status = STATUS_UNHEALTHY
-        summary = f"{failed} AI job(s) failed in the ledger; last row {updated_at or 'undated'}."
+        summary = (
+            f"{failed} AI job(s) failed in the ledger; last row "
+            f"{updated_at or 'undated'}.{completion_note}"
+        )
     elif degraded:
         status = STATUS_DEGRADED
-        summary = f"{degraded} AI job(s) degraded in the ledger; last row {updated_at or 'undated'}."
+        summary = (
+            f"{degraded} AI job(s) degraded in the ledger; last row "
+            f"{updated_at or 'undated'}.{completion_note}"
+        )
     else:
         status = _freshness_status(age, healthy_minutes=36 * 60, unhealthy_minutes=72 * 60)
         summary = (
             f"Last AI job row {updated_at or 'undated'}"
             + (f" ({age / 60:.1f}h ago)." if age is not None else " (age unknown).")
+            + completion_note
         )
 
     return _check(
@@ -678,6 +792,9 @@ def _ai_jobs_check(now: datetime, local_tz) -> dict[str, Any]:
             "last_job": str(last.get("job") or ""),
             "last_status": str(last.get("status") or ""),
             "age_hours": round(age / 60, 2) if age is not None else None,
+            "completion": completion,
+            "completion_job": completion_job,
+            "last_reason": str(last.get("reason") or ""),
         },
     )
 
@@ -2675,6 +2792,8 @@ def build_operations_audit(
     journal_db_path: Path | str | None = None,
     outcome_store_path: Path | str | None = None,
     writer_health_path: Path | str | None = None,
+    scan_manifest_path: Path | str | None = None,
+    priority_report_path: Path | str | None = None,
     universe_paths: Iterable[Path | str] | None = None,
     market_data_probe_path: Path | str | None = None,
     process_snapshot: dict[str, Any] | None = None,
@@ -2711,6 +2830,19 @@ def build_operations_audit(
         Path(writer_health_path)
         if writer_health_path is not None
         else diagnostics / writer_health.HEALTH_FILENAME
+    )
+    # WS-10A: the D1 scan's own manifest and the report it publishes. Named
+    # parameters so a sandbox audit stays self-contained; the shared home is
+    # only the default.
+    scan_manifest_file = (
+        Path(scan_manifest_path)
+        if scan_manifest_path is not None
+        else Path(MASTER_AVWAP_SCAN_MANIFEST_FILE)
+    )
+    priority_report_file = (
+        Path(priority_report_path)
+        if priority_report_path is not None
+        else Path(MASTER_AVWAP_PRIORITY_SETUPS_FILE)
     )
     if universe_paths is not None:
         universe_files = tuple(Path(item) for item in universe_paths)
@@ -2759,6 +2891,7 @@ def build_operations_audit(
         _questrade_chain_check(moment, journal_path),
         _outcome_claim_coverage_check(outcomes_path),
         _market_calendar_check(moment),
+        _master_scan_freshness_check(local_tz, scan_manifest_file, priority_report_file),
         manifest,
         _away_report_check(report_path, auto_state_path, moment, local_tz, market_phase),
         _industry_board_check(industry_path, moment, local_tz, market_phase),

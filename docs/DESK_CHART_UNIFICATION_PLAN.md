@@ -1,5 +1,13 @@
 # Desk chart unification — packet R4
 
+### M5 alert grade placement (trader, 2026-09-14)
+
+The M5 alert bar leads each row with the alert's existing champion grade:
+`[PROVEN]`, otherwise `[S]`, `[A]`, `[B]`, `[C]` or `[D]`; `[—]` means no grade.
+Use the same tier and PROVEN readers as the Alert Center. The label precedes
+the time so it survives a narrow column. This does not invent a numeric rank,
+recompute evidence, or change list order, folding, capture, copying or routing.
+
 Status: **BUILT 2026-08-16 — LIVE PROOFS OWED**, for `plan.md` Phase 0.5 **R4**.
 Authorized by the trader on 2026-08-15; built on `testing-week-2026-08-17` under
 the 2026-08-15 weekend redirect, after R3 closed.
@@ -286,6 +294,91 @@ appear everywhere that symbol renders that day. Section 6.1 additionally require
 one live ignored-symbol armed-watch hit that feeds/sounds while automatic Focus D1
 interest for that ignored symbol remains absent.
 
+## History and the viewport (packet WS-CH, 2026-09-13)
+
+The trader's sentence was *"200 candles is not enough"* (WISHLIST 10H). The
+answer separates two questions R4 had treated as one: how many bars a payload
+**holds** and how many the chart **opens on**.
+
+**D1.** `chart_snapshot.D1_HISTORY_SESSIONS` (1,000, roughly four NYSE years) is
+how far back a daily payload reaches; `D1_DEFAULT_SESSIONS` (90) stays the
+opening window. The durable parquet store already held years — `load_d1_bars`
+has always read the FULL history and `build_d1_snapshot` has always computed
+indicators over it before slicing — so the only thing that was ever short was
+the slice. This costs one longer slice of bars already in memory and **no
+provider request whatsoever**. The payload is a target capped by what the store
+holds: it carries `oldest_available` (the oldest bar drawn) and
+`history_truncated` (there is more behind it), and a symbol with 300 stored
+sessions reports 300 and `False`, because there is nothing left to pan to and
+saying otherwise invites the trader to drag at a wall.
+
+`CandleChart.set_data(..., initial_view_sessions=N)` frames the tail while the
+widget holds every bar, so **panning left reveals the older bars with no
+request of any kind**. The y-range is taken from the visible window — a
+four-year scale flattens today's candles into a line — while the log/linear
+decision still asks every bar, because a bar off the left edge is one pan away
+and flipping the scale mid-drag is worse than opening linear. Downsampling
+(`setClipToView` + auto peak) was already in place for exactly this and stops
+being a no-op here. Measured offscreen at 1,000 candles with 14 overlays:
+`set_data` ~24-31 ms, `grab()` ~15-22 ms.
+
+Both hosts are the same widget. The centre Visual Alert Review pane
+(`AlertChartReview` → `SymbolSnapshotWidget(compact=True)`) opens on 90; Chart
+Review keeps its own `CHART_REVIEW_D1_SESSIONS` (520) opening window; both now
+hold 1,000 behind it.
+
+**Levels do not follow the payload.** `chart_levels.build_d1_levels` gained
+`price_range_bars` and `ChartDataService` hands it the INITIAL VISIBLE window,
+so `horizontal_levels`' price filter behaves exactly as it did before the
+history grew: a 2021 store level is not admitted to a chart opened on 2026, and
+the per-bucket clutter budget is not spent on lines nobody can see. **Panning
+left does not recompute levels** — the payload is fixed at build time and the
+paint path reads no caches (Milestone 8 stands).
+
+**The provider request did not grow.** `SymbolSnapshotWidget._start_d1_backfill`
+still sizes its catch-up off the host's `d1_sessions` (260 calendar days
+compact, 754 for Chart Review), not off the history target. That path is a
+repair for a stale symbol, not a history import; the store is filled by the scan
+pipeline. A test caps it at 800 calendar days.
+
+**M5 in bounded chunks.** The intraday chart opens on today's two sessions and a
+**Load older** button on the M5 legend row adds two more, through the same
+in-memory `bot.m5_chart_bars(max_sessions=n)` read the chart already used —
+never a fetch, and the pan handler deliberately has no trigger in it, because a
+pan that fetches is a fetch on the paint path. Ten sessions per symbol per desk
+session is the ceiling. The chunks overlap by construction, so the merge cuts at
+the fresh chunk's first bar rather than unioning: no bar appears twice, and a
+bot whose cache has since shrunk cannot take history off a chart that has it.
+Older bars arrive on the LEFT, so the view is preserved by CANDLE IDENTITY
+(`CandleChart.visible_bar_span` / `restore_bar_span`), never by index range. A
+raising provider costs the older bars and never the chart: the extra sessions
+roll back, the drawn bars stay, and the button reads `older bars unavailable`.
+
+**The oldest date is in the strip, not a popup.** `provenance_state` appends
+`D1 back to <date>`, with `(more behind)` when the store holds more. That is the
+only provenance strip the desk has (Chart Review's); the centre pane has none to
+add to.
+
+**H1/H4 (item 3) was not built, because the desk draws neither.**
+`bounce_bot_lib/legacy.py._closed_h1_bars` aggregates completed H1 bars and
+`master_avwap_lib/legacy.py:28235 resample_intraday_bars_to_4h` resamples H4
+from that H1 history; both feed the HTF study, and neither reaches a chart, a
+widget or a payload — every `set_data` call in `scripts/ui/` passes `"d1"` or
+`"m5"`. The packet's own instruction applies: stop at D1/M5. A 500-bar H1/H4
+target is only meaningful once an H1/H4 chart exists.
+
+**Symbol ownership (CH-SYM, trader-authorized repair 2026-09-14).** Retained
+history belongs to one symbol. Switching names clears the previous D1/M5
+snapshots and chart state before any pending read, capture, quick-fill or
+history merge can use them. A cached snapshot for the new name may render
+immediately. An empty or raising provider for the new name must never borrow
+the previous name's prices; same-symbol refreshes still retain older history.
+This repairs the WS-CH merge seam, not a price-jump filter: real gaps stay real.
+
+Tests: `tests/test_ws_ch_chart_history.py` over a 1,300-session golden fixture;
+`tests/test_chart_symbol_isolation.py` covers symbol switching, pending actions,
+empty/raising data reads and cached-symbol reuse.
+
 ## The two held-back items — resolved 2026-08-18
 
 R4 recorded two items as held under the ask-first rule rather than skipped. The
@@ -311,3 +404,46 @@ ranking or invent a queue the trader never asked for. §2.1's CaptureRail alread
 delivered what §2 was for — capture on every chart-opening surface. Reopening
 this needs a trader statement that they want a queue over the boards, which is a
 workflow decision, not a wiring one.
+
+
+## Chart Review retires as a PAGE, not as a surface (packet WS-WL, 2026-09-13)
+
+WISHLIST 10G puts one Watchlist on the Trading Desk and retires the standalone **Chart
+Review** and **Focus Picks** nav entries. This plan's subject — the capture rail, the
+provenance line, the movers-only filter, the D1 gap honesty, the armed-alert painting —
+is untouched. `ChartReviewPanel` is still constructed by `MainWindow`, still imported by
+`tests/test_chart_review_workspace.py` and `tests/test_r4_capture_surfaces.py`, and is
+still the reference implementation the Alert Center's own rail was built against. What
+went is the left-nav row.
+
+The two things the page could do that nothing else could, and where they live now:
+
+* **Open a symbol that is on a list** → `WatchlistTabPanel.chart_selected()`, which
+  routes through the Alert Center's `chart_symbol` — the desk's ONE door (trader,
+  2026-09-03: every ticker click on the Trading Desk lands on the centre chart). It is a
+  MANUAL look: `MANUAL_CHART_TAG`, no place in the waiting list, never a re-queue and
+  never a skip count.
+* **Open a symbol that is on NO list** (`ChartReviewPanel.open_symbol`, the lookup box —
+  the one thing the page could do that selecting a row cannot) →
+  `WatchlistTabPanel.chart_lookup()`, behind the tab's **Chart only** button and the same
+  `Ctrl+L` box. Read-only exactly as it was: the name goes in the machine-local recents
+  (`ui/services/symbol_lookup.RecentLookups`, the SAME store and file the page used) and
+  onto the chart, and into no watchlist, no Focus list and no CandidateRegistry. The
+  page's recents CHIP STRIP became a completer on the add box — same memory, no second
+  widget row in a height-conscious column.
+* **`Ctrl+L`** (focus the lookup box) → the same sequence, bound ONCE at the Watchlist
+  tab's own scope with `WidgetWithChildrenShortcut`, focusing the tab's add box. It is
+  not bound at window scope, deliberately: two bindings for one sequence fire neither,
+  and a `QShortcut` in a hidden tab never fires at all.
+
+`Alt+E` (the page's setups toggle) is not carried over — the desk has its own always-on
+setups toggle and F9, which is what the trader uses.
+
+**The thing that bit us here, recorded because it will bite the next tab too.** Raising a
+tab does not put the keyboard inside it: after `setCurrentWidget` the focus widget is the
+tab BAR, which is a child of the `QTabWidget` and NOT of the page. `correctWidgetContext`
+then refuses a `WidgetWithChildrenShortcut` bound on the page, and the shortcut silently
+does nothing. Measured in this worktree with offscreen Qt: with focus on the tab bar the
+binding never fires; with focus on any widget INSIDE the page it fires every time. So
+raising the Watchlist tab both reveals its column (a tab in a hidden column cannot be
+read, and a hidden widget's shortcut never matches) and moves focus into the panel.

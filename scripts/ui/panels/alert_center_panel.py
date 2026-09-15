@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
+import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -40,6 +43,7 @@ from chart_watch import (
     BAND_BOUNCE_PRIME_BUCKETS,
     BAND_BOUNCE_TRACKER_TYPES,
     ChartWatch,
+    ChartWatchTrigger,
     D1EventWatch,
     D1LevelWatch,
     D1_EVENT_KINDS,
@@ -53,6 +57,9 @@ from chart_watch import (
     evaluate_chart_watch,
     evaluate_d1_event_watch,
     evaluate_d1_level_watch,
+    evaluate_h1_bars,
+    h1_bars_for_watch,
+    h1_bounce_message,
     completed_session_bars,
     load_any_bounce_watches,
     load_chart_watches,
@@ -63,6 +70,17 @@ from chart_watch import (
     save_d1_event_watches,
     save_d1_level_watches,
     watch_is_stale,
+    H1_SOURCE_YFINANCE,
+    PERSISTENT_WATCH_KINDS,
+    PULLBACK_KIND,
+    PULLBACK_TRIGGERS,
+    TRIGGER_H1_EMA15_BOUNCE,
+    TRIGGER_SMA_RETEST,
+)
+from intraday_history import (
+    H1_MINUTES as H1_INTERVAL_MINUTES,
+    bucket_end as _intraday_bucket_end,
+    last_completed_bucket as _intraday_last_bucket,
 )
 import focus_adoption_gate
 import regime_pause_hold
@@ -81,7 +99,9 @@ from project_paths import (
     ALERT_REVIEW_EVENTS_FILE,
     ALERT_REVIEW_PARKED_SYMBOLS_FILE,
     AUTO_POPULATE_PENDING_FILE,
+    CLAIMED_PICKS_FILE,
     FOCUS_D1_FLAGS_FILE,
+    MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
     ANY_BOUNCE_WATCHES_FILE,
     D1_EVENT_WATCHES_FILE,
     D1_LEVEL_WATCHES_FILE,
@@ -144,6 +164,21 @@ MIN_TIER_CHOICES = (
 )
 _TIER_RANK = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 0}
 MAX_FEED_ITEMS = 250
+
+
+def intraday_last_bucket_end(moment: datetime, interval_minutes: int):
+    """When this timeframe's most recent COMPLETED bucket finished, or None.
+
+    The armed poll's "is there anything new to judge?" question, asked once
+    per interval per tick rather than once per watch: a completed bar is the
+    only thing that can change a pullback verdict, and resolving the session
+    window is the expensive part (PCT-1 review blocker 3b). Pure bucket math
+    on the desk's market-local clock, so a stubbed cache cannot change it.
+    """
+    bucket = _intraday_last_bucket(moment, interval_minutes)
+    if bucket is None:
+        return None
+    return _intraday_bucket_end(bucket, interval_minutes)
 MAX_D1_FEED_ITEMS = 100
 
 ALERT_SPLIT_KEY = "qt_alert_center_split_sizes_v2"
@@ -435,6 +470,10 @@ class _ClickableItem(QFrame):
 #: was never the same thing as "once per session".
 _HELD_RUN_INDEX_MEMO: dict | None = None
 
+#: Packet D1C-A: "the claims file has never been read", which is a different
+#: answer from "there is no claims file" (a real, cacheable stamp of None).
+_CLAIM_KEYS_UNREAD = object()
+
 
 class AlertCenterPanel(QFrame):
     """The sit-back-and-wait surface, split into two stacked feeds.
@@ -457,6 +496,10 @@ class AlertCenterPanel(QFrame):
     statusChanged = Signal(str)
     setupRequested = Signal(dict)  # show_setup kwargs, when the embedded pane is off
     armedWatchesChanged = Signal()  # any arm/disarm, so the inventory can redraw
+    #: The Pullback alert's off-thread SMA evaluation, coming home. Emitted
+    #: FROM the worker, so the connection is auto/QUEUED and the slot runs on
+    #: the Qt thread - the only thread that may record, push or draw.
+    pullbackFiresReady = Signal(object)
     #: Emitted after the 60-second D1 poll re-measures every Focus name
     #: against yesterday's range, so surfaces showing the "moving" flag
     #: repaint on the cadence that already exists rather than polling
@@ -476,6 +519,14 @@ class AlertCenterPanel(QFrame):
     #: already fires - this exists so a surface that only shows the FADED
     #: count does not have to listen to every Focus mutation.
     focusFadedChanged = Signal()
+    #: Packet D1C-A: a claim was placed or dropped, so the surfaces that read
+    #: `claimed_picks.jsonl` re-read it. The setups table is the one that shows
+    #: the pick; this panel's own queue gate listens too, because a drop has to
+    #: take effect on the very next alert.
+    claimsChanged = Signal()
+    #: Trader, 2026-09-15: a veto or a claim on the centre chart is a decision
+    #: the setups table must see at once (its hide filter and its ✕ mark).
+    reviewDecisionRecorded = Signal()
     #: R4 A10: `held_run_score`'s segment index, built once per session on a
     #: worker. `object` because the payload is a plain dict Qt must not marshal.
     _heldRunIndexLoaded = Signal(object)
@@ -494,6 +545,7 @@ class AlertCenterPanel(QFrame):
         review_guide=None,
         auto_pick_pending_path=None,
         focus_d1_flags_path=None,
+        claimed_picks_path=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -687,6 +739,35 @@ class AlertCenterPanel(QFrame):
             if self._focus_d1_flags_path is not None
             else set()
         )
+        # PCT-1. The Pullback alert's SMA legs are evaluated on a worker and
+        # come back here; the connection is made once, in the constructor, so
+        # a fire can never arrive before there is a slot to take it.
+        self._pullback_eval_busy = False
+        self._pullback_episodes: dict = {}
+        self._pullback_judged: dict = {}
+        self.pullbackFiresReady.connect(self._on_pullback_fires)
+        # Packet D1C-A. The trader's claimed D1 picks. Gated exactly like the
+        # stores above - a bare test panel neither reads nor writes the live
+        # file - and this panel is only ever a READER of it plus the writer of
+        # the claim the chart in front of it produces.
+        self._claimed_picks_path = (
+            Path(claimed_picks_path)
+            if claimed_picks_path is not None
+            else (CLAIMED_PICKS_FILE if persist_ignored else None)
+        )
+        #: mtime+size+day keyed cache of the ACTIVE `(symbol, side)` keys. The
+        #: gate below runs on every alert and an alert burst is exactly where a
+        #: per-alert file read would be paid for, so the file is read once when
+        #: it changed and not again (nothing expensive on the Qt thread).
+        self._claim_keys_cache: set[tuple[str, str]] = set()
+        self._claim_keys_stamp: object = _CLAIM_KEYS_UNREAD
+        self._claim_keys_day: str = ""
+        #: How many repeat D1 charts the claim gate skipped, per symbol. A
+        #: COUNT, the way the movers-only filter's hidden count is: it hides
+        #: and states a number, it deletes nothing, mutes nothing and writes
+        #: nothing to `review_policy.json`.
+        self._claimed_d1_skipped: dict[str, int] = defaultdict(int)
+        self.claimsChanged.connect(self._on_claims_changed)
         # Previous-day extreme gate on Focus flagging (trader rule 2026-08-05:
         # "I don't want focus picks to flag if they are below the previous day
         # high for longs, or above the previous day low for shorts - otherwise
@@ -734,18 +815,21 @@ class AlertCenterPanel(QFrame):
             # so every alert for that name immediately shows the gold flag.
             #
             # COALESCED (2026-08-31, trader-approved under the file-scoped
-            # ask-first rule). `_rebuild_feed` destroys and reconstructs every
-            # row widget in both feeds - up to MAX_FEED_ITEMS + MAX_D1_FEED_ITEMS
+            # ask-first rule), and since SN4 (2026-09-12) a DIFF rather than a
+            # rebuild. `_rebuild_feed` destroys and reconstructs every row
+            # widget in both feeds - up to MAX_FEED_ITEMS + MAX_D1_FEED_ITEMS
             # = 350 widget trees, each with its own stylesheet - and the DESK
-            # drain that morning fired it 45 times in 13 seconds. Only the
-            # TRIGGER is coalesced: which alerts pass the feed gate, their
-            # order, the repetition fold and the digest are all decided inside
-            # `_rebuild_feed` and are untouched. Nothing is withheld - the
-            # rebuild still happens, once, within 200 ms of the last change.
-            # Late-bound so the coalescer calls whatever `_rebuild_feed` is at
-            # fire time - the seam a test spies on is the one that runs.
+            # drain that morning fired it 45 times in 13 seconds; one coalesced
+            # change still cost 24.2 s on 2026-09-08. `_sync_feed` restyles the
+            # star on the rows the change touches and leaves the rest alone.
+            # Only the TRIGGER is coalesced: which alerts pass the feed gate,
+            # their order, the repetition fold and the digest are all decided
+            # by `_feed_target_rows` and are untouched. Nothing is withheld -
+            # the refresh still happens, once, within 200 ms of the last
+            # change. Late-bound so the coalescer calls whatever `_sync_feed`
+            # is at fire time - the seam a test spies on is the one that runs.
             self._focus_feed_coalescer = SignalCoalescer(
-                lambda: self._rebuild_feed(), parent=self
+                lambda: self._sync_feed(), parent=self
             )
             self.focus_service.focusChanged.connect(
                 self._focus_feed_coalescer.request
@@ -816,7 +900,19 @@ class AlertCenterPanel(QFrame):
         # the visual chart... I also need the ability to input a ticker
         # manually as well", same day). It stays welded under the chart.
         self.chart_review = AlertChartReview(
-            self, dock_arm_bar=True, dock_capture_rail=False
+            self,
+            dock_arm_bar=True,
+            dock_capture_rail=False,
+            # Packet D1C-A. The pane owns the ROUTE; this panel owns the STORE,
+            # exactly as it owns the review-events and parked-symbols files, so
+            # the writer is bound to the panel's path here rather than resolved
+            # inside the widget. A panel with NO claims path - a bare test
+            # panel - hands over NOTHING, and the pane keeps its pre-packet
+            # route: it cannot place a pick, and a desk that was never given a
+            # store has lost nothing by not writing one.
+            claim_writer=(
+                self._write_claim if self._claimed_picks_path is not None else None
+            ),
         )
         self.chart_review.removeTodayRequested.connect(
             self._remove_review_alert_for_today
@@ -824,6 +920,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.vetoRetireRequested.connect(self._retire_after_veto)
         self.chart_review.likeRecorded.connect(self._after_like)
         self.chart_review.likeAdvanceRequested.connect(self._advance_after_like)
+        self.chart_review.claimPlaced.connect(self._place_claimed_d1)
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
@@ -1279,6 +1376,12 @@ class AlertCenterPanel(QFrame):
         ledger.set_market_date(market_date, session_open=session_open)
         if ledger.session_open is None and session_open is not None:
             ledger.session_open = session_open
+        if getattr(self, "_digest_market_date", None) != ledger.market_date:
+            # The ledger just rolled to a new market day and cleared its own
+            # digest; the feed's registry of digested rows rolls with it, or
+            # yesterday's burst would keep those names off today's feed.
+            self._digest_market_date = ledger.market_date
+            self._digested_keys().clear()
         return ledger
 
     @staticmethod
@@ -1329,10 +1432,46 @@ class AlertCenterPanel(QFrame):
 
         Nothing is discarded: every digested alert is in the backing list, in
         History, in the chart review queue, and named on the digest row itself.
+
+        The key is registered BEFORE the row is drawn and taken back off if
+        the row could not be drawn, so a failure here falls through to an
+        ordinary row (fail-open) rather than leaving a name with no row and
+        nothing standing in for it.
         """
+        key = self._feed_row_key(alert)
+        self._digested_keys().add(key)
+        if self._refresh_open_digest_row():
+            return True
+        self._digested_keys().discard(key)
+        return False
+
+    def _refresh_open_digest_row(self) -> bool:
+        """Create, update or retire the ONE open-burst row. True if on screen.
+
+        SN4 made this a function of the digested-key registry rather than a
+        side effect of one alert arriving, so a veto or a Focus change redraws
+        the row in place instead of exploding the burst into forty rows.
+        """
+        keys = self._digested_keys()
         row = getattr(self, "_digest_row", None)
         try:
-            if row is None or row.parent() is None:
+            if row is not None and row.parent() is None:
+                row = None
+                self._digest_row = None
+            if not keys:
+                if row is not None:
+                    self.feed_layout.removeWidget(row)
+                    row.setParent(None)
+                    row.deleteLater()
+                    self._digest_row = None
+                return False
+            live = {symbol for symbol, _side in keys}
+            symbols = [
+                symbol
+                for symbol in self._repetition_ledger().digest_symbols()
+                if symbol in live
+            ] or sorted(live)
+            if row is None:
                 row = QLabel()
                 row.setObjectName("Panel")
                 row.setWordWrap(True)
@@ -1342,7 +1481,6 @@ class AlertCenterPanel(QFrame):
                 )
                 self.feed_layout.insertWidget(0, row)
                 self._digest_row = row
-            symbols = self._repetition_ledger().digest_symbols()
             row.setText(
                 f"Open burst · {len(symbols)} name(s) grouped: "
                 + ", ".join(symbols)
@@ -1488,6 +1626,7 @@ class AlertCenterPanel(QFrame):
         self._save_chart_watches()
         # Persistent D1 level alerts survive a feed clear by design.
         self._current_review_alert = None
+        self._manual_next_pick = None
         self.chart_review.clear()
         self._rebuild_feed()
         suffix = f" {armed} armed chart watch(es) disarmed." if armed else ""
@@ -1910,9 +2049,124 @@ class AlertCenterPanel(QFrame):
         self._ignore_alert_symbol(alert.symbol)
         self.statusChanged.emit(message)
 
-    def _insert_item_into(
-        self, layout, alert: BounceAlert, max_items: int, *, repeat=None
-    ) -> None:
+    # ------------------------------------------------ the feed's own rows
+    #
+    # SN4 (WISHLIST item 4, trader 2026-09-08). Measured live at 13:16 that
+    # day: a veto cost 4.0-4.1 s and one coalesced `focusChanged` cost 24.2 s,
+    # because both called `_rebuild_feed`, which destroys and reconstructs up
+    # to MAX_FEED_ITEMS + MAX_D1_FEED_ITEMS = 350 row widget trees on the Qt
+    # thread. Removing one row and restyling one star are both O(1) jobs.
+    #
+    # The shape of the fix: `_feed_target_rows` says what the feed SHOULD look
+    # like, and both paths read it - `_rebuild_feed` builds every row from it,
+    # `_sync_feed` reconciles the rows already on screen against it. One
+    # definition, so a diffed feed and a rebuilt feed cannot disagree; that
+    # equality is what `tests/test_ws_sn4_feed_diff.py` asserts.
+    #
+    # Nothing here gates, scores, folds or records anything. The backing
+    # lists, the repetition ledger, the review queue, History and every
+    # evidence stream are written before any of this and are untouched by it.
+
+    @staticmethod
+    def _feed_row_key(alert: BounceAlert) -> tuple[str, str]:
+        """One live row per symbol + side - the feed's own row identity."""
+        return (str(alert.symbol or "").upper(), str(alert.side or "").upper())
+
+    def _feed_row_registry(self) -> dict:
+        rows = getattr(self, "_feed_rows", None)
+        if rows is None:
+            rows = {}
+            self._feed_rows = rows
+        return rows
+
+    def _digested_keys(self) -> set:
+        """The (symbol, side) keys the open-burst digest row stands in for.
+
+        A digested alert deliberately has NO row of its own, so the target
+        below has to know which keys those are - otherwise a veto would
+        redraw the burst as forty rows, which is what the digest exists to
+        prevent. Day-scoped with the ledger (see `_repetition_ledger`).
+        """
+        keys = getattr(self, "_digest_keys", None)
+        if keys is None:
+            keys = set()
+            self._digest_keys = keys
+        return keys
+
+    def _feed_repeat_counts(self) -> dict:
+        """Today's ×N counts, read from the ledger and never re-decided.
+
+        `RepetitionLedger.consider` is a DECISION and counts the alert it is
+        handed; a row being redrawn is not a new alert, so it re-stamps its
+        badge from this snapshot instead of asking again.
+        """
+        try:
+            return self._repetition_ledger().repeat_counts()
+        except Exception:
+            logging.debug("Repeat counts unavailable.", exc_info=True)
+            return {}
+
+    def _feed_target_rows(self) -> list:
+        """`(key, alert, repeat_count)` per M5 row, top row first.
+
+        Three rules, in order:
+
+        * the ignore list and the minimum-tier gate decide what QUALIFIES -
+          the same two filters the feed has always applied;
+        * one row per (symbol, side): a name that has alerted three times has
+          three entries in `self._alerts` and ONE row, and that row sits where
+          the OLDEST of them put it, because a fold keeps the row's
+          first-seen time and its place - which is what the trader is looking
+          at when they veto the row above it;
+        * the ×N badge comes from the ledger, so a redrawn row carries the
+          count it had.
+        """
+        mode = self._min_tier_mode()
+        qualifying = [
+            alert
+            for alert in self._alerts
+            if alert.symbol not in self._ignored_symbols
+            and alert_passes_feed_gate(
+                alert, mode, is_focus=self._alert_has_focus_privilege(alert)
+            )
+        ]
+        digested = self._digested_keys()
+        if digested:
+            # A digested name that has since been vetoed, gated out or aged
+            # off the backing list is no longer being stood in for.
+            digested &= {self._feed_row_key(alert) for alert in qualifying}
+        rows: list = []
+        seen: set = set()
+        for alert in reversed(qualifying):  # oldest first
+            key = self._feed_row_key(alert)
+            if key in seen:
+                continue
+            seen.add(key)
+            if key in digested:
+                continue
+            rows.append((key, alert))
+        rows.reverse()  # newest row first - the order the layout draws
+        del rows[MAX_FEED_ITEMS:]
+        counts = self._feed_repeat_counts()
+        return [(key, alert, int(counts.get(key, 1) or 1)) for key, alert in rows]
+
+    def _d1_target_rows(self) -> list:
+        """The D1 Focus feed's rows, top first, keyed on the alert itself.
+
+        No fold and no tier gate here: the D1 feed shows one row per ready
+        transition or pin, and two of them on one symbol are two events.
+        """
+        return [
+            (id(alert), alert, 1)
+            for alert in [
+                alert
+                for alert in self._d1_alerts
+                if alert.symbol not in self._ignored_symbols
+            ][:MAX_D1_FEED_ITEMS]
+        ]
+
+    def _build_feed_row(self, alert: BounceAlert, *, repeat_count: int = 1):
+        """One row widget, wired. The only place a feed row is constructed."""
         focus_category = ""
         if self.focus_service and alert.symbol:
             focus_category = self.focus_service.focus_category(alert.symbol) or ""
@@ -1930,18 +2184,59 @@ class AlertCenterPanel(QFrame):
         # R4 section 6.3: an escalation re-floats the row and carries the count
         # with it, so "third time, now S-tier" reads as one story rather than
         # as an unrelated new alert.
-        if repeat is not None and getattr(repeat, "repeat_count", 1) > 1:
-            try:
-                item.set_repeat_count(repeat.repeat_count)
-            except Exception:
-                logging.debug("Repeat badge failed.", exc_info=True)
-        layout.insertWidget(0, item)
+        if repeat_count > 1:
+            self._stamp_repeat_count(item, repeat_count)
+        return item
+
+    @staticmethod
+    def _place_feed_row(layout, index: int, item) -> None:
+        """Put one row into a feed layout at `index`, shown.
+
+        Qt shows a widget added to a visible layout when that layout next
+        activates, which is one trip through the event loop away; saying it
+        here costs nothing, makes the row visible the moment it is placed,
+        and means a row's own state answers "is this on screen" without
+        waiting for a paint.
+        """
+        layout.insertWidget(index, item)
+        item.show()
+
+    @staticmethod
+    def _stamp_repeat_count(item, count: int) -> None:
+        try:
+            item.set_repeat_count(int(count))
+        except Exception:
+            logging.debug("Repeat badge failed.", exc_info=True)
+
+    def _restyle_feed_row(self, item) -> None:
+        """Re-dress one surviving row for the current Focus lists.
+
+        SN4's Focus half: the star's `focusOn` property, the gold frame and
+        the ★ badge are set on the rows that changed and nowhere else. A row
+        whose category is unchanged does nothing at all, so this is cheap to
+        call for every visible row.
+        """
+        if self.focus_service is None:
+            return
+        symbol = str(getattr(item.alert, "symbol", "") or "")
+        try:
+            category = (self.focus_service.focus_category(symbol) or "") if symbol else ""
+            item.feed_item.apply_focus_state(category)
+        except Exception:
+            logging.debug("Feed row restyle failed.", exc_info=True)
+
+    def _insert_item_into(
+        self, layout, alert: BounceAlert, max_items: int, *, repeat=None
+    ) -> None:
+        count = int(getattr(repeat, "repeat_count", 1) or 1) if repeat is not None else 1
+        item = self._build_feed_row(alert, repeat_count=count)
+        self._place_feed_row(layout, 0, item)
         if layout is self.feed_layout and alert.symbol:
-            rows = getattr(self, "_feed_rows", None)
-            if rows is None:
-                rows = {}
-                self._feed_rows = rows
-            rows[(str(alert.symbol).upper(), str(alert.side or "").upper())] = item
+            key = self._feed_row_key(alert)
+            self._feed_row_registry()[key] = item
+            # This name has a row of its own again, so the open-burst digest
+            # is no longer standing in for it.
+            self._digested_keys().discard(key)
         while layout.count() > max_items + 1:
             taken = layout.takeAt(layout.count() - 2)
             widget = taken.widget()
@@ -1972,38 +2267,97 @@ class AlertCenterPanel(QFrame):
                 widget.deleteLater()
 
     def flush_pending_focus_refresh(self) -> None:
-        """Run an owed coalesced feed rebuild now. The seam the tests drive."""
+        """Run an owed coalesced feed refresh now. The seam the tests drive."""
         coalescer = getattr(self, "_focus_feed_coalescer", None)
         if coalescer is not None:
             coalescer.flush()
 
+    def _sync_layout_rows(self, layout, targets: list, *, key_of, track_rows: bool) -> None:
+        """Reconcile one layout's row widgets against its target list.
+
+        Take every row out of the layout (cheap: no widget is constructed and
+        none is reparented), destroy the ones the target no longer wants, then
+        put the survivors back in target order and build only what is missing.
+        The layout OBJECT is never replaced, so the scroll area, the trailing
+        stretch and the open-burst digest row all stay where they are.
+
+        A duplicate key keeps the BOTTOM row - the oldest, which is the one
+        already sitting at the target's position.
+        """
+        wanted = {key: (alert, count) for key, alert, count in targets}
+        kept: dict = {}
+        taken_items: list = []
+        for index in range(layout.count() - 1, -1, -1):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if not isinstance(widget, _ClickableItem):
+                continue
+            taken_items.append(layout.takeAt(index))
+            key = key_of(widget)
+            if key in wanted and key not in kept:
+                kept[key] = widget
+            else:
+                widget.setParent(None)
+                widget.deleteLater()
+        if track_rows:
+            self._feed_rows = {}
+        offset = 0
+        digest_row = getattr(self, "_digest_row", None)
+        if digest_row is not None and layout.indexOf(digest_row) == 0:
+            offset = 1
+        for position, (key, alert, count) in enumerate(targets):
+            item = kept.get(key)
+            if item is None:
+                item = self._build_feed_row(alert, repeat_count=count)
+            else:
+                self._stamp_repeat_count(item, count)
+                self._restyle_feed_row(item)
+            self._place_feed_row(layout, offset + position, item)
+            if track_rows:
+                self._feed_rows[key] = item
+        taken_items.clear()
+
+    def _sync_feed(self) -> None:
+        """Bring both feeds to the target state by DIFF, not by rebuild.
+
+        What a veto and a Focus change call. The rows the trader did not
+        touch are the same widgets afterwards, at the same positions, with
+        their ×N badges intact.
+        """
+        targets = self._feed_target_rows()
+        self._refresh_open_digest_row()
+        self._sync_layout_rows(
+            self.feed_layout,
+            targets,
+            key_of=lambda item: self._feed_row_key(item.alert),
+            track_rows=True,
+        )
+        self._sync_layout_rows(
+            self.d1_feed_layout,
+            self._d1_target_rows(),
+            key_of=lambda item: id(item.alert),
+            track_rows=False,
+        )
+
     def _rebuild_feed(self) -> None:
-        # Every row widget is about to be destroyed, so the fold registry and
-        # the digest row must go with them - a registry pointing at deleted
-        # widgets would make the next repeat of each name silently fail over
-        # to a new row instead of folding.
+        """Destroy every row and draw both feeds again - the whole-feed repaint.
+
+        Kept for the decisions that are about EVERY row at once: the
+        minimum-tier switch, the day's Clear, and unpinning a D1 Focus name.
+        Everything else goes through `_sync_feed`.
+
+        Every row widget is about to be destroyed, so the fold registry and
+        the digest row go with them - a registry pointing at deleted widgets
+        would make the next repeat of each name silently fail over to a new
+        row instead of folding. It then draws from the SAME target the diff
+        reads, so "the feed after a veto" and "the feed after a rebuild" are
+        the same feed.
+        """
         self._feed_rows = {}
         self._digest_row = None
         self._clear_feed_layout(self.feed_layout)
-        mode = self._min_tier_mode()
-        for alert in reversed(
-            [
-                a
-                for a in self._alerts
-                if a.symbol not in self._ignored_symbols
-                and alert_passes_feed_gate(a, mode, is_focus=self._alert_has_focus_privilege(a))
-            ][:MAX_FEED_ITEMS]
-        ):
-            self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
         self._clear_feed_layout(self.d1_feed_layout)
-        for alert in reversed(
-            [
-                alert
-                for alert in self._d1_alerts
-                if alert.symbol not in self._ignored_symbols
-            ][:MAX_D1_FEED_ITEMS]
-        ):
-            self._insert_item_into(self.d1_feed_layout, alert, MAX_D1_FEED_ITEMS)
+        self._sync_feed()
 
     def _note_away_recap_alert(self, alert: BounceAlert) -> None:
         """Count an alert diverted from the queue into the AWAY recap.
@@ -2071,6 +2425,30 @@ class AlertCenterPanel(QFrame):
             and not is_chart_watch_alert(alert)
             and not self._alert_is_focus(alert)
         ):
+            return
+        # Packet D1C-A (trader, 2026-09-14): *"Once claimed, keep that same D1
+        # setup out of repeat review while the claim remains active. ...
+        # Preserve M5 entry review for that symbol. This is a D1 review-queue
+        # change, not symbol-wide alert suppression."*
+        #
+        # So it sits HERE: after the parked check, and BEFORE the M5 routing
+        # below, which means every M5 alert still reaches the M5 bar exactly as
+        # it does today. It keys on (symbol, SIDE) - a claimed LONG says
+        # nothing about a SHORT thesis - and on D1 SCAN alerts only: a
+        # chart-watch hit is a condition the trader armed and is waiting on.
+        # Everything upstream of this line is untouched: the feed, History, the
+        # D1 badge, the evidence streams, the AWAY recap and the phone push are
+        # all written before it. Detection, the alert row and the outcome
+        # record are not this line's business at all.
+        if (
+            alert.is_d1
+            and not is_chart_watch_alert(alert)
+            and (alert.symbol, alert.side) in self._active_claim_keys()
+        ):
+            self._claimed_d1_skipped[alert.symbol] += 1
+            self.chart_review.set_claimed_skipped_count(
+                sum(self._claimed_d1_skipped.values())
+            )
             return
         # Trader rule 2026-08-27: an intraday alert is a LINE in the M5 alert
         # bar, never a chart in the waiting list - "purge M5 alerts from the
@@ -2372,6 +2750,9 @@ class AlertCenterPanel(QFrame):
         """
         if not alert.symbol or alert.symbol in self._ignored_symbols:
             return
+        if not self._is_manual_chart_look(alert):
+            # Any other chart taking the pane ends the setups-table walk.
+            self._manual_next_pick = None
         current = self._current_review_alert
         if current is not None and current.symbol != alert.symbol:
             self._review_queue = [
@@ -2464,6 +2845,17 @@ class AlertCenterPanel(QFrame):
         chart-watch hit always show, and once the trader has revealed the
         hidden names for the session nothing is re-checked.
         """
+        # Trader, 2026-09-15: a chart opened FROM the setups table advances to
+        # that table's next row, not to the waiting list. The callback is
+        # consumed here; the row it charts brings its own.
+        advance = getattr(self, "_manual_next_pick", None)
+        self._manual_next_pick = None
+        if advance is not None:
+            try:
+                if advance():
+                    return
+            except Exception:
+                logging.warning("Setups-table advance failed; falling back to the waiting list.", exc_info=True)
         hidden_before = len(self._hidden_inside_range)
         next_alert = None
         while self._review_queue:
@@ -2655,6 +3047,23 @@ class AlertCenterPanel(QFrame):
         except Exception:
             pass
 
+    def _record_review_events(self, entries) -> None:
+        """Many rows, ONE kernel lock and ONE open (PCT-1 review blocker 3a).
+
+        The Pullback alert's auto-arm can produce dozens of machine rows in
+        one tick - 95 on its first one against the live stores - and the
+        per-row writer takes the lock each time, on the Qt thread. Same
+        best-effort contract: a failure loses the rows, never the arm.
+        """
+        if self._review_events_path is None or not entries:
+            return
+        try:
+            from review_events import record_review_events
+
+            record_review_events(entries, path=self._review_events_path)
+        except Exception:
+            pass
+
     def _review_dwell_ms(self, symbol: str) -> int | None:
         """How long the review pane showed this symbol before the action."""
         if self._review_shown_at is None or self._review_shown_symbol != symbol:
@@ -2780,6 +3189,10 @@ class AlertCenterPanel(QFrame):
             guidance_text=guidance.summary_text(),
             in_focus=self._alert_is_focus(alert),
             auto_adopted=self._alert_is_auto_adopted(alert),
+            # Packet D1C-A item 2: the horizon of a claim made on this chart.
+            # The panel owns `_is_m5_review_alert`; the pane never imports the
+            # panel, so the answer travels with the alert.
+            is_m5_review=self._is_m5_review_alert(alert),
         )
 
     def _alert_is_auto_adopted(self, alert: BounceAlert) -> bool:
@@ -2831,6 +3244,142 @@ class AlertCenterPanel(QFrame):
             self.statusChanged.emit(
                 f"Skipped {alert.symbol} for now; its feed item remains available."
             )
+        self._advance_review_queue()
+
+    # ------------------------------------------------------------------
+    # Packet D1C-A: a claimed D1 like is a pick, and the chart is done
+    # ------------------------------------------------------------------
+    def _active_claim_keys(self) -> set[tuple[str, str]]:
+        """`(symbol, side)` for every active claim, from an mtime-keyed cache.
+
+        One small read when the claims file CHANGED, never one per alert. The
+        day is part of the key because the fade is a session clock: a desk left
+        running past midnight has to ask again.
+        """
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return set()
+        try:
+            stat = Path(path).stat()
+            stamp: object = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        today = self._ignored_market_date
+        if stamp == self._claim_keys_stamp and today == self._claim_keys_day:
+            return self._claim_keys_cache
+        keys: set[tuple[str, str]] = set()
+        if stamp is not None:
+            try:
+                import claimed_picks
+
+                keys = claimed_picks.active_keys(Path(path))
+            except Exception:  # noqa: BLE001 - an unreadable store gates nothing
+                keys = set()
+        self._claim_keys_cache = keys
+        self._claim_keys_stamp = stamp
+        self._claim_keys_day = today
+        return keys
+
+    def _write_claim(self, **fields) -> dict | None:
+        """Write one claim into THIS panel's store. None when nothing was written.
+
+        The seam between the pane (which knows a claim was made) and the store
+        (which knows where the desk's claims live). It never raises: a failed
+        placement is an answer the caller acts on, not an exception on a click.
+        """
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return None
+        try:
+            import claimed_picks
+
+            row = claimed_picks.record_claim(path=Path(path), **fields)
+        except Exception:  # noqa: BLE001 - a failed placement keeps the chart
+            return None
+        if row is not None:
+            self._claim_keys_stamp = _CLAIM_KEYS_UNREAD
+        return row
+
+    def _on_claims_changed(self) -> None:
+        """A claim was placed or dropped: the gate re-reads on the next alert."""
+        self._claim_keys_stamp = _CLAIM_KEYS_UNREAD
+
+    def _sweep_expired_claims(self) -> None:
+        """The day roll's half of the lifecycle: one `expire` row per fade.
+
+        Here and nowhere else. The fade can only change when the session does,
+        so a timer asking more often would buy nothing and cost a file read; a
+        calendar that cannot answer expires nothing.
+        """
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return
+        try:
+            import claimed_picks
+
+            claimed_picks.sweep_expired(Path(path))
+        except Exception:  # noqa: BLE001 - a sweep never costs the day roll
+            pass
+        self._claim_keys_stamp = _CLAIM_KEYS_UNREAD
+
+    def _place_claimed_d1(self, alert: BounceAlert, claim_row: object) -> None:
+        """The pick was SAVED: record the like, say so, and finish the chart.
+
+        Trader, 2026-09-14: *"Save and confirm the pick before removing its D1
+        item from Visual Chart Review."* The save already happened - the pane
+        only emits `claimPlaced` with a row in hand - so this is the confirm
+        and the retire, in that order.
+
+        `_record_like_advance` is the UNCHANGED writer, so the review
+        scoreboard's take side sees exactly what it saw before: one
+        `like_advance` row, under the historical name `review_learning` keys
+        on. No second verdict is written (P5), and the retirement is
+        `_retire_claimed_review`, never the parking verb.
+        """
+        if not self._record_like_advance(alert):
+            return
+        setup = ""
+        if isinstance(claim_row, dict):
+            setup = str(claim_row.get("claimed_setup_id") or "").strip()
+        self.statusChanged.emit(
+            f"♥ {alert.symbol}: claimed {setup} - placed in Setups."
+            if setup
+            else f"♥ {alert.symbol}: claimed - placed in Setups."
+        )
+        self._retire_claimed_review(alert)
+        self.claimsChanged.emit()
+        self.reviewDecisionRecorded.emit()
+
+    def _retire_claimed_review(self, alert: BounceAlert) -> None:
+        """Take a claimed chart out of today's review, and do NOTHING else.
+
+        Deliberately a separate method from `_retire_review_alert`, not a flag
+        on it. That body is the PARKING verb: it writes a `remove_today` review
+        event, adds the symbol to `_parked_symbols`, drops an auto-adopted
+        Focus pick and runs three early-return branches for auto picks, faded
+        picks and Focus reviews. A claim is none of those things - the trader
+        said YES to this name - and a flag threaded through that ladder would
+        be one edit away from parking a name they just claimed.
+
+        So: the alert leaves the current slot, the waiting list and the hidden
+        set, and the next chart comes up. The symbol keeps alerting, keeps its
+        place in the feed and the phone push, and its M5 alerts are untouched.
+        The repeat-D1 gate in `_enqueue_review_alert` is what stops the same
+        chart coming back, and only while the claim is active.
+        """
+        symbol = getattr(alert, "symbol", "")
+        side = getattr(alert, "side", "")
+        if not symbol:
+            return
+        self._review_queue = [
+            queued
+            for queued in self._review_queue
+            if not (queued.symbol == symbol and queued.side == side)
+        ]
+        self._hidden_inside_range.pop(symbol, None)
+        current = self._current_review_alert
+        if current is not None and current.symbol == symbol:
+            self._current_review_alert = None
         self._advance_review_queue()
 
     def _record_like_advance(self, alert: BounceAlert) -> bool:
@@ -4207,8 +4756,20 @@ class AlertCenterPanel(QFrame):
     # a snapshot popup passing this panel as its watch_host); a hit fires a
     # red Alert Center alert (tier-gate bypass + sound) and retires itself.
     def armed_watch_kinds(self, symbol: str) -> set[str]:
+        """Which kinds are ARMED on this symbol - what the buttons read.
+
+        A DECLINED row is remembered, not armed (PCT-1 item 5), so it is not
+        in here: the button must read "not armed" or the trader is looking at
+        a pressed toggle beside an empty Armed board and has no way back
+        (review blocker 6). The row itself still exists, and
+        `arm_chart_watch_for` is what clears it.
+        """
         symbol = str(symbol or "").strip().upper()
-        return {watch.kind for watch in self._chart_watches if watch.symbol == symbol}
+        return {
+            watch.kind
+            for watch in self._chart_watches
+            if watch.symbol == symbol and not bool(getattr(watch, "declined", False))
+        }
 
     @staticmethod
     def _m5_source_bars(bot, symbol: str) -> list:
@@ -4283,7 +4844,15 @@ class AlertCenterPanel(QFrame):
     def arm_chart_watch_for(
         self, symbol: str, side: str, kind: str, *, source_text: str = ""
     ) -> bool:
-        """Public arming surface for any visual chart. Returns True on arm."""
+        """Public arming surface for any visual chart. Returns True on arm.
+
+        A DECLINED row for this (symbol, kind) is DROPPED first (review
+        blocker 6): the trader turned an auto-armed watch off and is now
+        turning it back on from the chart, which has to work. What comes back
+        is a HAND-armed watch - this call's own `source_text`, a fresh
+        `watch_id`, nothing fired - so it is a new episode and the auto-arm
+        sweep no longer owns it.
+        """
         symbol = str(symbol or "").strip().upper()
         if not symbol or kind not in WATCH_KINDS:
             return False
@@ -4291,6 +4860,11 @@ class AlertCenterPanel(QFrame):
         if kind in self.armed_watch_kinds(symbol):
             self.statusChanged.emit(f"{symbol}: {label} watch already armed.")
             return False
+        self._chart_watches = [
+            existing
+            for existing in self._chart_watches
+            if not (existing.symbol == symbol and existing.kind == kind)
+        ]
         watch = arm_chart_watch(
             kind,
             symbol,
@@ -4311,6 +4885,12 @@ class AlertCenterPanel(QFrame):
             dwell_ms=self._review_dwell_ms(symbol),
             detail={"kind": kind, "baseline": watch.baseline},
         )
+        if kind == PULLBACK_KIND:
+            self.statusChanged.emit(
+                f"{symbol}: {label} armed - {watch.reason}. "
+                f"{self._h1_warmup_note(watch)}"
+            )
+            return True
         level = f" against {watch.baseline:.2f}" if watch.baseline is not None else ""
         self.statusChanged.emit(
             f"{symbol}: {label} watch armed{level} - the first completed "
@@ -4318,16 +4898,314 @@ class AlertCenterPanel(QFrame):
         )
         return True
 
+    def _h1_history_cache(self):
+        """The H1 fallback cache, built on first use. None if unavailable.
+
+        Lead decision 2026-09-13 (the trader may overrule): the desk's cached
+        M5 window aggregates to ~35 completed H1 bars against a 45-bar warm-up,
+        so an armed watch would never fire. The missing history is fetched for
+        ARMED SYMBOLS ONLY, through yfinance, on the cache's own worker thread -
+        the group RS/RW tape precedent: zero IB traffic, no engine change. The
+        desk's own cache stays primary and a full one never touches the network.
+        """
+        cache = getattr(self, "_h1_history", None)
+        if cache is None:
+            try:
+                from h1_history import H1HistoryCache
+
+                cache = H1HistoryCache()
+            except Exception:  # pragma: no cover - yfinance/env unavailable
+                logging.debug("H1 history fallback unavailable", exc_info=True)
+                cache = False
+            self._h1_history = cache
+        return cache or None
+
+    def _h1_bars_for_watch(self, watch, *, now: datetime | None = None):
+        """(the H1 series this watch is judged on, which source it came from).
+
+        Reads only what is already in memory. When the cached window is short
+        of the warm-up it ASKS the fallback for a refresh and returns whatever
+        it has right now - the first cycle after arming simply reports "not
+        measured", and the answer lands before the next completed bucket.
+
+        **The need is measured on the PRIMARY series, never on the chosen one**
+        (repair RV-H1-HISTORY, review blocker B1, 2026-09-13). Asking only when
+        the CHOSEN series was short meant that once the fallback held 45 bars
+        nothing ever asked again, while the desk's own window stayed at ~35 for
+        ever - so the watch was judged on ageing bars until the rule's 24 h
+        staleness answered "not measured" for good. `h1_bars_for_watch` hands
+        back the yfinance series only when the primary is short of the warm-up,
+        so that source IS the short answer; otherwise `bars` is the primary and
+        its own length is the test. No second aggregation pass.
+        """
+        m5_bars = self._m5_bars_for(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS)
+        cache = self._h1_history_cache()
+        fallback = cache.bars_for(watch.symbol) if cache is not None else None
+        bars, source = h1_bars_for_watch(m5_bars, fallback_h1_bars=fallback)
+        if cache is not None:
+            primary_is_short = (
+                source == H1_SOURCE_YFINANCE or len(bars) < self._h1_warmup_bars()
+            )
+            if primary_is_short:
+                cache.request(watch.symbol, now=now or datetime.now())
+        return bars, source
+
+    @staticmethod
+    def _h1_warmup_bars() -> int:
+        try:
+            from indicators.h1_ema_bounce import WARMUP_BARS
+
+            return int(WARMUP_BARS)
+        except Exception:  # pragma: no cover - the module is first-party
+            return 45
+
+    #: The Pullback alert's two SMA timeframes and the SMA each one is read
+    #: with, in the trader's own words (2026-09-15): *"on the M15 we use the
+    #: 150 moving average on the M30 we use the 75"*.
+    PULLBACK_TIMEFRAMES: tuple[tuple[int, int], ...] = ((15, 150), (30, 75))
+
+    #: The three triggers `indicators.pullback_sma_reclaim` owns. The fourth,
+    #: `h1_ema15_bounce`, is the WISHLIST 10C rule and keeps its own path.
+    PULLBACK_SMA_TRIGGERS = tuple(
+        name for name in PULLBACK_TRIGGERS if name != TRIGGER_H1_EMA15_BOUNCE
+    )
+
+    def _intraday_history_cache(self, interval_minutes: int):
+        """One `IntradayHistoryCache` per interval, built on first use.
+
+        The desk has no cached M15 or M30 series at all - the M5 window is
+        BounceBot's and the durable intraday store has never been written on
+        this desk - so unlike the H1 leg these two have no primary to fall
+        back FROM. The cache is therefore the only source, and it refreshes
+        once per completed bucket on its OWN worker thread: nothing here ever
+        fetches on the Qt thread, and zero IB traffic (the group RS/RW tape
+        precedent). None when the module cannot be built at all, and then the
+        timeframe simply reports "not measured" for ever rather than raising
+        inside a 60-second poll.
+        """
+        caches = getattr(self, "_intraday_history", None)
+        if caches is None:
+            caches = {}
+            self._intraday_history = caches
+        minutes = int(interval_minutes)
+        cache = caches.get(minutes)
+        if cache is None:
+            try:
+                from intraday_history import IntradayHistoryCache
+
+                cache = IntradayHistoryCache(minutes)
+            except Exception:  # pragma: no cover - yfinance/env unavailable
+                logging.debug(
+                    "Intraday history unavailable (%sm)", minutes, exc_info=True
+                )
+                cache = False
+            caches[minutes] = cache
+        return cache or None
+
+    @staticmethod
+    def _pullback_warmup_bars(sma_length: int) -> int:
+        try:
+            from indicators.pullback_sma_reclaim import warmup_bars
+
+            return int(warmup_bars(sma_length))
+        except Exception:  # pragma: no cover - the module is first-party
+            return int(sma_length) + 10
+
+    def _pullback_triggers(self, watch) -> tuple[str, ...]:
+        """What THIS watch waits for. A row with no list waits for all four.
+
+        A watch stored before PCT-1 carries only `h1_ema15_bounce` (see
+        `chart_watch.chart_watch_from_dict`), so the SMA legs are never run
+        for it and its health cell never mentions a timeframe it was not
+        armed for.
+        """
+        return tuple(getattr(watch, "triggers", ()) or PULLBACK_TRIGGERS)
+
+    def _pullback_bars_for_watch(self, watch, interval_minutes: int, *, now=None):
+        """This watch's M15 or M30 series, and an ASK for the next refresh.
+
+        Reads only what is already in memory and returns at once; the request
+        is what keeps the series current, and the cache itself refuses more
+        than one fetch per completed bucket. The first cycle after arming
+        simply reports "not measured" until the answer lands.
+        """
+        cache = self._intraday_history_cache(interval_minutes)
+        if cache is None:
+            return []
+        bars = cache.bars_for(watch.symbol)
+        try:
+            cache.request(watch.symbol, now=now or datetime.now())
+        except Exception:  # pragma: no cover - a refresh never costs the poll
+            logging.debug(
+                "Intraday history request failed for %s", watch.symbol, exc_info=True
+            )
+        return bars
+
+    def _pullback_timeframe_note(self, watch, interval_minutes: int, sma_length: int) -> str:
+        """One timeframe's half of the health cell. READS, never fetches.
+
+        The poll is what asks for a refresh (`_pullback_bars_for_watch`); a
+        health cell that fetched would put the network on the Qt thread's
+        critical path for a cosmetic string.
+        """
+        label = f"M{int(interval_minutes)}"
+        needed = self._pullback_warmup_bars(sma_length)
+        cache = self._intraday_history_cache(interval_minutes)
+        if cache is None:
+            return f"not measured (no {label} history)"
+        try:
+            have = len(cache.bars_for(watch.symbol))
+            unavailable = bool(cache.unavailable(watch.symbol))
+            stale = bool(cache.last_refresh_failed(watch.symbol))
+        except Exception:  # pragma: no cover - a note never costs a row
+            return ""
+        if have >= needed:
+            if stale:
+                return f"{label} from yfinance (stale - last refresh failed)"
+            return f"{label} from yfinance"
+        if unavailable:
+            return f"not measured ({have} of {needed} {label} bars, yfinance unavailable)"
+        return f"not measured ({have} of {needed} {label} bars)"
+
+    def _armed_watch_note(self, watch) -> str:
+        """Why an armed watch is not answering yet, in the inventory's health cell.
+
+        Today this is the H1 retester's warm-up: the rule needs
+        `WARMUP_BARS` completed H1 bars and the desk's cached M5 window
+        supplies fewer, so the honest state is `not measured (N of 45 H1
+        bars)` rather than `ok`. An armed surface whose job is to say "these
+        are the exact conditions I am waiting on" must not report a watch as
+        healthy when it cannot evaluate at all.
+
+        Since the RV-H1-HISTORY repair (2026-09-13) there is a third honest
+        state: bars that are GOOD but STOPPED. A refresh that fails after a
+        success keeps the bars it already has - they are still the best answer
+        - and the cell says so, because an ageing verdict must not read exactly
+        like a live one. `unavailable` keeps its own meaning: nothing was ever
+        fetched at all.
+
+        PCT-1 widened the cell to ONE STATE PER TIMEFRAME, joined with `;` -
+        `H1 from cache; not measured (0 of 160 M15 bars); M30 from yfinance` -
+        because one button now waits for four phenomena on three series and a
+        single verdict would hide which of them can actually answer. Each H1
+        state is the exact string it has always been; only the joining is new.
+        A watch stored before the rename waits for the H1 leg alone and its
+        cell still says exactly what it always did.
+        """
+        if str(getattr(watch, "kind", "") or "") not in PERSISTENT_WATCH_KINDS:
+            return ""
+        triggers = self._pullback_triggers(watch)
+        parts: list[str] = []
+        if TRIGGER_H1_EMA15_BOUNCE in triggers:
+            parts.append(self._h1_watch_note(watch))
+        if any(name in triggers for name in self.PULLBACK_SMA_TRIGGERS):
+            for interval_minutes, sma_length in self.PULLBACK_TIMEFRAMES:
+                parts.append(
+                    self._pullback_timeframe_note(watch, interval_minutes, sma_length)
+                )
+        return "; ".join(part for part in parts if part)
+
+    def _h1_watch_note(self, watch) -> str:
+        """The H1 leg's half of the health cell - the WS-10C string, unchanged."""
+        have, needed, source = self._h1_warmup_counts(watch)
+        if have is None:
+            return ""
+        if have >= needed:
+            # It can answer - and the trader can see WHICH history answered it.
+            if source != H1_SOURCE_YFINANCE:
+                return "H1 from cache"
+            if self._h1_refresh_failed(watch.symbol):
+                return "H1 from yfinance (stale - last refresh failed)"
+            return "H1 from yfinance"
+        cache = self._h1_history_cache()
+        if cache is not None and cache.unavailable(watch.symbol):
+            return f"not measured ({have} of {needed} H1 bars, yfinance unavailable)"
+        return f"not measured ({have} of {needed} H1 bars)"
+
+    def _h1_refresh_failed(self, symbol) -> bool:
+        """True when the fallback's LAST refresh for this symbol failed.
+
+        A note never costs its caller, and a cache stand-in without the reader
+        simply answers "not stale" rather than raising in the health cell.
+        """
+        cache = self._h1_history_cache()
+        reader = getattr(cache, "last_refresh_failed", None)
+        if reader is None:
+            return False
+        try:
+            return bool(reader(symbol))
+        except Exception:  # pragma: no cover - a health cell never raises
+            return False
+
+    def _h1_warmup_counts(self, watch) -> tuple[int | None, int, str]:
+        """(H1 bars available, bars the rule needs, source). One O(bars) pass."""
+        try:
+            bars, source = self._h1_bars_for_watch(watch)
+        except Exception:  # pragma: no cover - a note never costs the caller
+            return (None, 0, "")
+        return (len(bars), self._h1_warmup_bars(), source)
+
+    def _h1_warmup_note(self, watch) -> str:
+        """What the H1 rule can see for this watch RIGHT NOW, measured.
+
+        The rule needs `WARMUP_BARS` completed H1 bars before it will answer at
+        all, and the desk's cached M5 window is five sessions (SN2), which
+        aggregates to about 35. Saying so at the click - from the bars actually
+        in hand, never from a remembered number - is the difference between a
+        watch that is waiting and a watch the trader thinks is watching.
+        """
+        have, needed, source = self._h1_warmup_counts(watch)
+        if have is None:
+            return "It evaluates on every completed H1 bar."
+        if have >= needed:
+            where = "from yfinance" if source == H1_SOURCE_YFINANCE else "cached"
+            return f"{have} completed H1 bars {where} - it evaluates on every new one."
+        return (
+            f"Only {have} completed H1 bars are available and the rule needs "
+            f"{needed}; the missing history is being fetched, so it reports "
+            "NOT MEASURED until it lands."
+        )
+
     def disarm_chart_watch_for(self, symbol: str, kind: str) -> bool:
-        """Public disarm surface (the toggles' off-click). True if removed."""
+        """Public disarm surface (the toggles' off-click). True if removed.
+
+        A watch the trader armed BY HAND is deleted, exactly as it always was.
+        A `pullback` watch the desk armed for them off a claimed D1 pick or a
+        swing Focus name is instead kept as `declined` (PCT-1 item 5, lead
+        ruling 3): the auto-arm sweep runs every 60 seconds, so deleting it
+        would simply put it back on the next tick and the trader could never
+        turn one off. A declined row is hidden from the Armed board, never
+        evaluated and never pushed, and it goes when its claim or pick does.
+        """
         symbol = str(symbol or "").strip().upper()
         if kind not in self.armed_watch_kinds(symbol):
             return False
-        self._chart_watches = [
-            watch
-            for watch in self._chart_watches
-            if not (watch.symbol == symbol and watch.kind == kind)
-        ]
+        kept: list = []
+        declined: list = []
+        for watch in self._chart_watches:
+            if not (watch.symbol == symbol and watch.kind == kind):
+                kept.append(watch)
+                continue
+            if self._is_auto_pullback_watch(watch):
+                remembered = replace(watch, declined=True)
+                declined.append(remembered)
+                kept.append(remembered)
+            # else: a hand-armed watch is simply dropped, as it always was.
+        self._chart_watches = kept
+        if declined:
+            self._save_chart_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+            self._record_review_event(
+                "disarm_watch",
+                symbol=symbol,
+                detail={"kind": kind, "declined": True},
+            )
+            self.statusChanged.emit(
+                f"{symbol}: {WATCH_KINDS.get(kind, kind)} disarmed - it stays "
+                "off until the pick that armed it is dropped."
+            )
+            return True
         self._save_chart_watches()
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
@@ -4411,20 +5289,40 @@ class AlertCenterPanel(QFrame):
         note = self._tracker_note_for(watch, hit, moment)
         if note:
             trigger = f"{trigger} | {note}"
+        payload = {
+            "chart_watch_kind": kind,
+            "armed_at": watch.armed_at.isoformat(),
+            "source_text": getattr(watch, "source_text", "")
+            or getattr(watch, "candle_date", ""),
+        }
+        watch_id = str(getattr(watch, "watch_id", "") or "")
+        if watch_id:
+            payload["watch_id"] = watch_id
+        # Everything the evaluation measured, for the kinds that measure more
+        # than their own message says (the H1 retester's two bar times and its
+        # full reason list). Never allowed to overwrite the keys above.
+        for key, value in dict(getattr(hit, "details", None) or {}).items():
+            payload.setdefault(str(key), value)
         return BounceAlert(
             time_text=moment.strftime("%H:%M:%S"),
             symbol=watch.symbol,
             side=side,
             trigger=trigger,
-            timeframe="D1" if (kind in D1_LEVEL_KINDS or kind in D1_EVENT_KINDS) else "M5",
+            timeframe=(
+                "D1"
+                if (
+                    kind in D1_LEVEL_KINDS
+                    or kind in D1_EVENT_KINDS
+                    # A persistent watch is a multi-day arm and belongs beside
+                    # the other armed events on the D1 feed, never on the
+                    # session M5 list (which is today's intraday tape).
+                    or kind in PERSISTENT_WATCH_KINDS
+                )
+                else "M5"
+            ),
             tag=CHART_WATCH_TAG,
             raw_text=f"CHART WATCH {watch.symbol} ({side}): {trigger}",
-            payload={
-                "chart_watch_kind": kind,
-                "armed_at": watch.armed_at.isoformat(),
-                "source_text": getattr(watch, "source_text", "")
-                or getattr(watch, "candle_date", ""),
-            },
+            payload=payload,
         )
 
     def _tracker_note_for(self, watch, hit, moment: datetime) -> str:
@@ -4545,7 +5443,7 @@ class AlertCenterPanel(QFrame):
         )
         return True
 
-    def chart_symbol(self, symbol: str, *, side: str = "", origin: str = "") -> bool:
+    def chart_symbol(self, symbol: str, *, side: str = "", origin: str = "", next_pick=None) -> bool:
         """Put any symbol on the big chart on demand.
 
         The review pane previously only ever showed what the alert queue handed
@@ -4564,6 +5462,13 @@ class AlertCenterPanel(QFrame):
         so it is muted rather than red (nothing fired - the trader was
         looking), it never enters the alert feed, and it is not an alert of any
         kind. Defaults reproduce the lookup box exactly.
+
+        `next_pick` (trader, 2026-09-15) is a caller's own "what comes after
+        this chart": a callable returning True when it charted something. It
+        is consulted INSTEAD of the waiting list when this chart is vetoed,
+        claimed or stepped past, and it is dropped the moment any other chart
+        takes the pane. The setups table passes one so a veto or a claim on a
+        row it charted cycles to its next row; the lookup box passes none.
         """
         symbol = str(symbol or "").strip().upper()
         if not symbol or not SYMBOL_RE.fullmatch(symbol):
@@ -4585,6 +5490,7 @@ class AlertCenterPanel(QFrame):
         )
         # Straight to the review pane; never into the alert feed, which is a
         # record of what the scanner said, not of what was looked at.
+        self._manual_next_pick = next_pick if callable(next_pick) else None
         self._select_review_alert(alert)
         self.statusChanged.emit(
             f"{symbol}: charted from {source}." if source
@@ -4838,11 +5744,20 @@ class AlertCenterPanel(QFrame):
             logging.exception("Market journal chart capture could not be started.")
 
     def _refresh_armed_list(self) -> None:
+        # A DECLINED row is remembered, not armed: the trader turned it off and
+        # the auto-arm sweep is keeping the memory so it does not come back
+        # (PCT-1 item 5). It has no place on a board headed "what am I waiting
+        # on", and it is never evaluated or pushed either.
         self.armed_list.set_watches(
-            self._chart_watches,
+            [
+                watch
+                for watch in self._chart_watches
+                if not bool(getattr(watch, "declined", False))
+            ],
             self._d1_level_watches,
             d1_events=self._d1_event_watches,
             has_m5_bars=lambda symbol: bool(self._m5_bars_for(symbol)),
+            watch_note=self._armed_watch_note,
         )
         current = self._current_review_alert
         if current is not None:
@@ -5070,9 +5985,56 @@ class AlertCenterPanel(QFrame):
         if kind in self.armed_d1_event_kinds(alert.symbol):
             self.disarm_d1_event_watch(alert.symbol, kind)
         else:
-            self.arm_d1_event_watch(alert.symbol, kind)
+            self.arm_d1_event_watch(alert.symbol, kind, side=alert.side)
 
-    def arm_d1_event_watch(self, symbol: str, kind: str) -> bool:
+    def _current_trendline_candidate(self, symbol: str, side: str = "") -> dict | None:
+        evidence = self._current_trendline_report_evidence(symbol, side)
+        return evidence[0] if evidence is not None else None
+
+    def _current_trendline_report_evidence(
+        self, symbol: str, side: str = ""
+    ) -> tuple[dict, datetime] | None:
+        """The compact saved scan report is the arm-time source of the line.
+
+        This is a small report read on the explicit arm click, not the 38 MB
+        ai-state file and never part of the timer poll. A read failure is
+        uncertainty: the button refuses rather than re-deriving a line. Its
+        ``generated_at`` is the only honest time at which the scan knew the
+        frozen geometry; an arm-click timestamp must never replace it.
+        """
+        symbol = str(symbol or "").strip().upper()
+        requested_side = str(side or "").strip().upper()
+        try:
+            payload = json.loads(
+                Path(MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE).read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError):
+            return None
+        try:
+            knowledge_at = datetime.fromisoformat(str(payload.get("generated_at") or ""))
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if knowledge_at.tzinfo is None or knowledge_at.utcoffset() is None:
+            return None
+        events = payload.get("alerts") if isinstance(payload, dict) else []
+        for event in events or []:
+            if not isinstance(event, dict):
+                continue
+            if str(event.get("event_type") or "").strip().lower() != "trendline_break":
+                continue
+            if str(event.get("symbol") or "").strip().upper() != symbol:
+                continue
+            event_side = str(event.get("side") or "").strip().upper()
+            if requested_side and event_side and event_side != requested_side:
+                continue
+            candidate = event.get("trendline_candidate")
+            if isinstance(candidate, dict):
+                frozen = dict(candidate)
+                frozen.setdefault("side", event_side)
+                return frozen, knowledge_at
+        return None
+
+    def arm_d1_event_watch(self, symbol: str, kind: str, side: str = "") -> bool:
         symbol = str(symbol or "").strip().upper()
         if not symbol or kind not in D1_EVENT_KINDS:
             return False
@@ -5080,9 +6042,32 @@ class AlertCenterPanel(QFrame):
         if kind in self.armed_d1_event_kinds(symbol):
             self.statusChanged.emit(f"{symbol}: {label} alert already armed.")
             return False
-        self._d1_event_watches.append(
-            D1EventWatch(symbol=symbol, kind=kind, armed_at=datetime.now())
-        )
+        moment = datetime.now()
+        if kind == "trendline_break":
+            evidence = self._current_trendline_report_evidence(symbol, side)
+            candidate, knowledge_at = evidence if evidence is not None else (None, None)
+            resolved_side = str(side or "").strip().upper()
+            if not resolved_side and isinstance(candidate, dict):
+                resolved_side = str(candidate.get("side") or "").strip().upper()
+            if not isinstance(candidate, dict) or resolved_side not in {"LONG", "SHORT"}:
+                self.statusChanged.emit(
+                    f"{symbol}: Trendline break needs the saved scan line before it can arm."
+                )
+                return False
+            self._d1_event_watches.append(
+                D1EventWatch(
+                    symbol=symbol,
+                    kind=kind,
+                    armed_at=moment,
+                    side=resolved_side,
+                    trendline_candidate=candidate,
+                    trendline_knowledge_at=knowledge_at,
+                )
+            )
+        else:
+            self._d1_event_watches.append(
+                D1EventWatch(symbol=symbol, kind=kind, armed_at=moment)
+            )
         self._save_d1_event_watches()
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
@@ -5121,7 +6106,834 @@ class AlertCenterPanel(QFrame):
         )
         return True
 
+    #: How many sessions of cached M5 bars an H1 retester asks for. The desk's
+    #: own window is five (SN2) and `_m5_bars_for` never fetches, so this is a
+    #: ceiling rather than a request: ask for what the rule's warm-up wants and
+    #: take what is cached.
+    H1_WATCH_M5_SESSIONS = 10
+
+    def _poll_pullback_watches(self, now: datetime | None = None) -> None:
+        """The armed Pullback alerts, evaluated once per tick (PCT-1).
+
+        Was `_poll_h1_bounce_watches` (WISHLIST 10C). Same timer, same expiry
+        call first, and the H1 leg below is the code that shipped - what is
+        new is the auto-arm sweep in front of it and the three SMA triggers
+        after it.
+
+        Rides the D1 EVENT poll rather than the 30 s chart-watch one because a
+        Pullback alert is a multi-day arm: it needs that poll's trading-day
+        expiry pass, and re-reading its bars four times an hour would answer
+        the same question four times - a completed H1 bar arrives once an hour
+        and a completed M15 bar four times, and this returns the same verdict
+        until one does.
+
+        **Cost on the Qt thread, after the review** (blocker 3, 2026-09-15 -
+        the first tick against the live stores armed 95 watches and spent
+        1.92 s here, then ~0.7 s every minute after):
+
+        * a timeframe is judged only when a NEW completed bucket has closed
+          for it since this watch was last judged on it. A completed bar is
+          the only thing that can change any of these answers, so a tick with
+          warm caches and no new bucket does nothing at all;
+        * the SMA/LRSI/ATR passes run OFF this thread, on the chart-data
+          worker pool, over bars the cache hands out under its own lock; the
+          fires come back through a QUEUED signal and the Qt thread only
+          records, pushes and draws;
+        * the H1 leg stays here because it reads BounceBot's M5 cache, which
+          is not thread-safe - but it is bucket-gated like the rest and paced
+          at `PULLBACK_H1_BATCH_LIMIT` watches a tick, oldest-waiting first.
+          Pacing only: nothing is withheld and no watch is skipped, it is
+          simply judged on the next tick instead.
+
+        Nothing is fetched HERE either: the M15/M30 refresh is a request the
+        cache answers on its own worker, batched, and it refuses more than one
+        fetch per completed bucket.
+
+        `None` from a rule is NOT MEASURED - too little history, or bars that
+        stopped arriving - and a watch in that state simply waits. Uncertainty
+        never deletes.
+
+        **A new arm never fires on an old bounce** (repair RV-H1-ARM-TIME,
+        2026-09-13, and the same fence inside `pullback_sma_reclaim`):
+        `evaluate_h1_bars` returns `pre_arm` - neither fired nor
+        `invalidated` - for a confirmation or invalidation whose event bar had
+        already closed when the watch was armed, so this loop leaves that watch
+        armed and writes no row, sends no push and draws no alert, exactly as
+        it does for `awaiting_reclaim`.
+        """
+        moment = now or datetime.now()
+
+        def _key(watch) -> tuple:
+            return (watch.symbol, watch.kind, watch.watch_id, watch.armed_at)
+
+        # The expiry pass runs over DECLINED rows too (review advisory 4): a
+        # remembered row is still a ten-trading-day arm and must not outlive
+        # one just because the trader turned it off.
+        persistent = [
+            watch
+            for watch in self._chart_watches
+            if watch.kind in PERSISTENT_WATCH_KINDS
+        ]
+        if persistent:
+            kept, expired = self._expire_armed_watches(
+                "chart_watches", persistent, now=moment
+            )
+            if expired:
+                gone = {_key(watch) for watch in persistent} - {
+                    _key(watch) for watch in kept
+                }
+                self._chart_watches = [
+                    watch for watch in self._chart_watches if _key(watch) not in gone
+                ]
+                self._save_chart_watches()
+                self._refresh_review_armed_kinds()
+                self.armedWatchesChanged.emit()
+
+        # The trader's own picks arm themselves, BEFORE anything is evaluated,
+        # so a pick claimed a minute ago is judged on this very tick.
+        self._sweep_auto_pullback_watches(moment)
+        armed = [
+            watch
+            for watch in self._chart_watches
+            if watch.kind in PERSISTENT_WATCH_KINDS
+            and not bool(getattr(watch, "declined", False))
+        ]
+        if not armed:
+            return
+
+        # The SMA legs first, off this thread; their fires come back through
+        # `pullbackFiresReady`. Nothing below waits for them.
+        self._dispatch_pullback_sma_evaluation(armed, moment)
+
+        finished: set[tuple] = set()
+        triggered: list[ChartWatchTrigger] = []
+        for watch in self._h1_watches_due(armed, moment):
+            try:
+                h1_bars, _source = self._h1_bars_for_watch(watch, now=moment)
+                result = evaluate_h1_bars(watch, h1_bars, now=moment)
+            except Exception:
+                logging.debug(
+                    "H1 retester evaluation failed for %s", watch.symbol, exc_info=True
+                )
+                continue
+            if result is None:
+                continue
+            if result.fired:
+                finished.add(_key(watch))
+                triggered.append(
+                    ChartWatchTrigger(
+                        watch=watch,
+                        price=float(result.confirm_close or 0.0),
+                        bar_dt=result.confirm_bar_dt or moment,
+                        message=h1_bounce_message(watch, result),
+                        resolved_side=result.side,
+                        details={
+                            "watch_id": watch.watch_id,
+                            "reason": watch.reason,
+                            "rule_version": result.rule_version,
+                            "touch_bar_dt": (
+                                result.touch_bar_dt.isoformat()
+                                if result.touch_bar_dt is not None
+                                else ""
+                            ),
+                            "confirm_bar_dt": (
+                                result.confirm_bar_dt.isoformat()
+                                if result.confirm_bar_dt is not None
+                                else ""
+                            ),
+                            "ema": result.ema,
+                            "atr": result.atr,
+                            "distance_atr": result.distance_atr,
+                            "skipped_bars": result.skipped_bars,
+                            # One event per watch recording ALL the measured
+                            # reasons - the packet's own rule.
+                            "reasons": list(result.reasons),
+                        },
+                    )
+                )
+            elif result.reason == "invalidated":
+                # The level did not hold. The arm is over and the trader is
+                # told, but this is not an event worth a phone buzz: nothing
+                # to do about it, and the chart says the same thing.
+                finished.add(_key(watch))
+                self._record_review_event(
+                    "watch_invalidated",
+                    symbol=watch.symbol,
+                    side=watch.side,
+                    detail={
+                        "kind": watch.kind,
+                        "watch_id": watch.watch_id,
+                        "reasons": list(result.reasons),
+                        "rule_version": result.rule_version,
+                    },
+                )
+                self.statusChanged.emit(
+                    f"{watch.symbol}: Pullback alert disarmed - price closed "
+                    "through the H1 15-EMA against the setup."
+                )
+
+        if finished:
+            self._chart_watches = [
+                watch for watch in self._chart_watches if _key(watch) not in finished
+            ]
+            self._save_chart_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+        self._record_pullback_fires(triggered, moment)
+
+    def _record_pullback_fires(self, triggered, moment: datetime) -> None:
+        """One review row, one push and one feed row per fire. Qt thread only.
+
+        The single place a fire becomes visible, whichever leg produced it, so
+        the order the phone and the display see never depends on which rule
+        spoke: the phone FIRST (a broken display path must never be able to
+        suppress the buzz the trader armed this for), then the row.
+        """
+        for hit in triggered or ():
+            measured = dict(hit.details or {})
+            detail = {
+                "kind": hit.watch.kind,
+                "watch_id": hit.watch.watch_id,
+                "message": str(hit.message or ""),
+                "reasons": list(measured.get("reasons") or ()),
+            }
+            # What PCT-1 added, when the fire carries it: the trigger that
+            # spoke, the series it spoke on, the rule sheet that decided and
+            # the trader's "ideally it was below 50" label.
+            for key in ("trigger", "timeframe", "rule_version", "lrsi_from_below_50"):
+                if key in measured:
+                    detail[key] = measured[key]
+            self._record_review_event(
+                "watch_fired",
+                symbol=hit.watch.symbol,
+                side=str(getattr(hit, "resolved_side", "") or hit.watch.side).upper(),
+                detail=detail,
+            )
+            self._push_armed_watch(hit)
+            self.add_alert(self._chart_watch_alert(hit, moment))
+
+    #: The source text an auto-armed Pullback alert carries, per source. The
+    #: absence of one of these is how the sweep knows a watch is the trader's
+    #: own click and leaves it alone - the same "absence of a marker means the
+    #: trader owns it" rule Focus provenance holds.
+    PULLBACK_AUTO_SOURCES = {
+        "claim": "auto: claimed pick",
+        "focus": "auto: swing Focus",
+    }
+
+    def _is_auto_pullback_watch(self, watch) -> bool:
+        return (
+            str(getattr(watch, "kind", "") or "") == PULLBACK_KIND
+            and str(getattr(watch, "source_text", "") or "")
+            in set(self.PULLBACK_AUTO_SOURCES.values())
+        )
+
+    #: How many watches the Qt-thread H1 leg judges per tick. Pacing only,
+    #: the `AUTO_ADOPT_BATCH_LIMIT` precedent: nothing is withheld and no
+    #: watch is skipped, one simply waits for the next 60-second tick. A
+    #: completed H1 bar arrives once an hour, so the whole armed set is
+    #: covered many times over before the next one can change any answer.
+    PULLBACK_H1_BATCH_LIMIT = 12
+
+    def _pullback_judged_marks(self) -> dict:
+        marks = getattr(self, "_pullback_judged", None)
+        if marks is None:
+            marks = {}
+            self._pullback_judged = marks
+        return marks
+
+    def _pullback_due(self, watch, interval_minutes: int, moment: datetime):
+        """(is this timeframe worth judging, the bucket end that made it so).
+
+        A completed bar is the only thing that can change any of these
+        answers, so a watch judged on the bucket that is still the latest one
+        is not judged again (review blocker 3b). A watch never judged is
+        always due - the first tick after arming has to answer.
+        """
+        try:
+            end = intraday_last_bucket_end(moment, interval_minutes)
+        except Exception:  # pragma: no cover - a calendar refusal judges anyway
+            return True, None
+        if end is None:
+            return True, None
+        key = (str(getattr(watch, "watch_id", "") or watch.symbol), int(interval_minutes))
+        return self._pullback_judged_marks().get(key) != end, end
+
+    def _mark_pullback_judged(self, watch, interval_minutes: int, end) -> None:
+        if end is None:
+            return
+        key = (str(getattr(watch, "watch_id", "") or watch.symbol), int(interval_minutes))
+        self._pullback_judged_marks()[key] = end
+
+    def _h1_watches_due(self, armed, moment: datetime) -> list:
+        """Which watches get their H1 leg read on THIS tick.
+
+        Gated on a new completed H1 bucket and then paced, oldest-waiting
+        first so nothing starves. The mark is written here rather than after
+        the evaluation because an evaluation that raises has still asked the
+        question this bucket poses.
+        """
+        due = []
+        for watch in armed:
+            if TRIGGER_H1_EMA15_BOUNCE not in self._pullback_triggers(watch):
+                continue
+            wanted, end = self._pullback_due(watch, H1_INTERVAL_MINUTES, moment)
+            if wanted:
+                due.append((watch, end))
+        due.sort(key=lambda pair: str(getattr(pair[0], "symbol", "")))
+        taken = due[: max(1, int(self.PULLBACK_H1_BATCH_LIMIT))]
+        for watch, end in taken:
+            self._mark_pullback_judged(watch, H1_INTERVAL_MINUTES, end)
+        return [watch for watch, _end in taken]
+
+    @staticmethod
+    def pullback_fire_key(trigger: str, timeframe: str) -> str:
+        """The `ChartWatch.fired` key: trigger AND timeframe (review advisory 1).
+
+        `sma_reclaim_lrsi` can fire on the M15 and the M30 of one watch, and a
+        map keyed on the trigger alone kept only whichever wrote last - so a
+        desk restart re-announced the other one.
+        """
+        return f"{trigger}@{timeframe}"
+
+    def _pullback_should_push(self, watch, trigger: str) -> bool:
+        """Does THIS fire earn a phone buzz? (review advisory 5, lead decision)
+
+        The reviewer measured ~85 fires a session at 108 armed watches, 70 %
+        of them `sma_retest` - a phone that buzzes eighty-five times is a
+        phone the trader turns off, and then the two triggers that matter are
+        lost with the rest. So a watch the DESK armed pushes the two entry
+        triggers and writes the retest as a feed row and a review row without
+        a push; a watch the TRADER armed by hand pushes all three, because
+        they asked for that exact name by pressing the button. The trader may
+        overrule this split; nothing is withheld either way - every fire is on
+        the feed and in the evidence.
+        """
+        if not self._is_auto_pullback_watch(watch):
+            return True
+        return str(trigger or "") != TRIGGER_SMA_RETEST
+
+    def _dispatch_pullback_sma_evaluation(self, armed, moment: datetime) -> bool:
+        """Queue the M15/M30 legs that have something new to say. OFF-thread.
+
+        Everything expensive - the SMA, the ATR and the LRSI over ~600 M15
+        bars per watch - happens on a worker; this builds the job list, asks
+        the caches to refresh, and returns. One job at a time: a second tick
+        while one is running dispatches nothing and marks nothing, so the
+        bucket it would have judged is simply judged on the next tick.
+        """
+        if getattr(self, "_pullback_eval_busy", False):
+            return False
+        ends = {
+            interval_minutes: intraday_last_bucket_end(moment, interval_minutes)
+            for interval_minutes, _sma_length in self.PULLBACK_TIMEFRAMES
+        }
+        marks = self._pullback_judged_marks()
+        jobs: list[dict] = []
+        for watch in armed:
+            triggers = self._pullback_triggers(watch)
+            if not any(name in triggers for name in self.PULLBACK_SMA_TRIGGERS):
+                continue
+            identity = str(getattr(watch, "watch_id", "") or watch.symbol)
+            due = [
+                (interval_minutes, sma_length, ends.get(interval_minutes))
+                for interval_minutes, sma_length in self.PULLBACK_TIMEFRAMES
+                if ends.get(interval_minutes) is None
+                or marks.get((identity, int(interval_minutes)))
+                != ends.get(interval_minutes)
+            ]
+            if not due:
+                continue
+            caches = {}
+            for interval_minutes, _sma_length in self.PULLBACK_TIMEFRAMES:
+                cache = self._intraday_history_cache(interval_minutes)
+                if cache is None:
+                    continue
+                caches[interval_minutes] = cache
+            for interval_minutes, _sma_length, end in due:
+                cache = caches.get(interval_minutes)
+                if cache is not None:
+                    try:
+                        cache.request(watch.symbol, now=moment)
+                    except Exception:  # pragma: no cover - never costs the poll
+                        logging.debug(
+                            "Intraday history request failed for %s",
+                            watch.symbol,
+                            exc_info=True,
+                        )
+                self._mark_pullback_judged(watch, interval_minutes, end)
+            jobs.append(
+                {
+                    "watch": watch,
+                    "identity": identity,
+                    "triggers": triggers,
+                    "due": due,
+                    "caches": caches,
+                    "marks": dict(getattr(watch, "fired", None) or {}),
+                    "states": {
+                        key: value
+                        for key, value in self._pullback_episode_states().items()
+                        if key[0] == identity
+                    },
+                }
+            )
+        if not jobs:
+            return False
+        self._pullback_eval_busy = True
+        threading.Thread(
+            target=self._run_pullback_sma_evaluation,
+            args=(jobs, moment),
+            name="pullback-eval",
+            daemon=True,
+        ).start()
+        return True
+
+    def _pullback_episode_states(self) -> dict:
+        states = getattr(self, "_pullback_episodes", None)
+        if states is None:
+            states = {}
+            self._pullback_episodes = states
+        return states
+
+    def _run_pullback_sma_evaluation(self, jobs, moment: datetime) -> None:
+        """The worker. Pure computation over bars the caches hand out.
+
+        Touches no widget and no panel state: it reads each cache under that
+        cache's own lock, runs the frozen rule, and emits what it found. The
+        Qt thread does the recording, the pushing and the drawing.
+        """
+        results: list[dict] = []
+        try:
+            for job in jobs:
+                try:
+                    results.append(self._evaluate_one_pullback_job(job, moment))
+                except Exception:
+                    logging.debug(
+                        "Pullback SMA evaluation failed for %s",
+                        getattr(job.get("watch"), "symbol", "?"),
+                        exc_info=True,
+                    )
+        finally:
+            try:
+                self.pullbackFiresReady.emit((results, moment))
+            except Exception:  # pragma: no cover - a dead panel loses the fires
+                logging.debug("Pullback fires could not be delivered", exc_info=True)
+            self._pullback_eval_busy = False
+
+    def _evaluate_one_pullback_job(self, job, moment: datetime) -> dict:
+        """One watch's due timeframes. Returns fires, new states and marks.
+
+        One episode clock per (watch, timeframe, side) is carried between
+        polls so a trigger speaks once per episode; the `fired` map on the
+        watch is the PERSISTED backstop, so a desk restart does not
+        re-announce a move the trader was already told about. A watch with no
+        side of its own is asked both ways, exactly as the H1 leg is.
+        """
+        from indicators import pullback_sma_reclaim as rule
+
+        watch = job["watch"]
+        identity = job["identity"]
+        triggers = job["triggers"]
+        caches = job["caches"]
+        marks = dict(job["marks"])
+        states = dict(job["states"])
+        sides = (
+            (watch.side,) if watch.side in ("LONG", "SHORT") else ("LONG", "SHORT")
+        )
+        series = {
+            interval_minutes: (
+                caches[interval_minutes].bars_for(watch.symbol)
+                if interval_minutes in caches
+                else []
+            )
+            for interval_minutes, _sma_length in self.PULLBACK_TIMEFRAMES
+        }
+        fires: list[dict] = []
+        for interval_minutes, sma_length, _end in job["due"]:
+            for side in sides:
+                state_key = (identity, interval_minutes, side)
+                # The trader's M30 leg may be answered by an M15 reversal, so
+                # the companion series rides along - it never moves the SMA.
+                companion_minutes = (
+                    15 if interval_minutes == rule.RECLAIM_THEN_LRSI_MINUTES else None
+                )
+                result = rule.evaluate(
+                    series.get(interval_minutes) or [],
+                    side=side.lower(),
+                    sma_length=sma_length,
+                    bar_minutes=interval_minutes,
+                    armed_at=watch.armed_at,
+                    now=moment,
+                    episode_state=states.get(state_key),
+                    companion_bars=(
+                        series.get(companion_minutes) if companion_minutes else None
+                    ),
+                    companion_minutes=companion_minutes,
+                )
+                if result is None:
+                    continue  # NOT MEASURED - the watch simply waits
+                states[state_key] = result.episode_state
+                for fire in result.fired:
+                    if fire.trigger not in triggers:
+                        continue
+                    stamp = fire.bar_dt.isoformat()
+                    mark_key = self.pullback_fire_key(fire.trigger, fire.timeframe)
+                    if marks.get(mark_key) == stamp:
+                        continue  # already announced, before this restart
+                    marks[mark_key] = stamp
+                    fires.append(
+                        {
+                            "side": side,
+                            "price": float(fire.close),
+                            "bar_dt": fire.bar_dt,
+                            "message": (
+                                f"{watch.symbol} {side}: Pullback - {fire.message}"
+                            ),
+                            "details": {
+                                "watch_id": watch.watch_id,
+                                "reason": watch.reason,
+                                "trigger": fire.trigger,
+                                "timeframe": fire.timeframe,
+                                "rule_version": result.rule_version,
+                                "lrsi_from_below_50": bool(fire.lrsi_from_below_50),
+                                "bar_dt": stamp,
+                                "sma": fire.sma,
+                                "close": fire.close,
+                                "lrsi": fire.lrsi,
+                                "atr": fire.atr,
+                            },
+                        }
+                    )
+        return {
+            "identity": identity,
+            "watch_id": str(getattr(watch, "watch_id", "") or ""),
+            "symbol": watch.symbol,
+            "fires": fires,
+            "states": states,
+            "marks": marks,
+        }
+
+    def _on_pullback_fires(self, payload) -> None:
+        """The worker's answer, back on the Qt thread. Records, pushes, draws.
+
+        A watch disarmed, declined or retired while the worker ran is dropped
+        here: its fire is about an arm that no longer exists.
+        """
+        self._pullback_eval_busy = False
+        try:
+            results, moment = payload
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            return
+        if not results:
+            return
+        states = self._pullback_episode_states()
+        live = {
+            str(getattr(watch, "watch_id", "") or watch.symbol): watch
+            for watch in self._chart_watches
+            if watch.kind == PULLBACK_KIND
+            and not bool(getattr(watch, "declined", False))
+        }
+        updated: dict[str, dict] = {}
+        triggered: list[ChartWatchTrigger] = []
+        for result in results:
+            identity = str(result.get("identity") or "")
+            watch = live.get(identity)
+            if watch is None:
+                continue  # disarmed while the worker ran
+            states.update(result.get("states") or {})
+            fires = result.get("fires") or []
+            if not fires:
+                continue
+            updated[identity] = dict(result.get("marks") or {})
+            for fire in fires:
+                details = dict(fire.get("details") or {})
+                details["push"] = self._pullback_should_push(
+                    watch, str(details.get("trigger") or "")
+                )
+                triggered.append(
+                    ChartWatchTrigger(
+                        watch=watch,
+                        price=float(fire.get("price") or 0.0),
+                        bar_dt=fire.get("bar_dt") or moment,
+                        message=str(fire.get("message") or ""),
+                        resolved_side=str(fire.get("side") or ""),
+                        details=details,
+                    )
+                )
+        if updated:
+            # A Pullback alert is a STANDING arm: a trigger firing records the
+            # bar it fired on and the watch stays armed for the next one, up
+            # to expiry or a disarm. Only the H1 leg retires the watch,
+            # because a completed retest is the pattern finishing.
+            self._chart_watches = [
+                replace(
+                    watch,
+                    fired=updated[
+                        str(getattr(watch, "watch_id", "") or watch.symbol)
+                    ],
+                )
+                if str(getattr(watch, "watch_id", "") or watch.symbol) in updated
+                and watch.kind == PULLBACK_KIND
+                else watch
+                for watch in self._chart_watches
+            ]
+            self._save_chart_watches()
+        self._record_pullback_fires(triggered, moment)
+
+    def _active_d1_claims(self, path: Path, moment: datetime):
+        """Today's active claims, from an mtime-keyed cache. None if unreadable.
+
+        The sweep runs every 60 seconds on the Qt thread and the claims file
+        only changes when the trader claims or drops something, so re-parsing
+        it every minute is a file read and a JSON pass bought for nothing
+        (PCT-1 review advisory 3). Keyed on (mtime, size) AND the session date,
+        because the fade is a session clock - the same key
+        `_active_claim_keys` already uses beside it.
+        """
+        try:
+            stat = path.stat()
+            stamp: object = (stat.st_mtime_ns, stat.st_size, moment.date())
+        except OSError:
+            # No file yet is "no claims", not "unreadable": a desk that has
+            # never claimed anything must still be able to sweep.
+            return []
+        cached = getattr(self, "_auto_claim_cache", None)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        try:
+            import claimed_picks
+
+            rows = [
+                dict(row)
+                for row in claimed_picks.active_claims(path, as_of=moment.date())
+            ]
+        except Exception:  # noqa: BLE001 - an unreadable store arms nothing
+            logging.debug("Pullback auto-arm: claims unreadable", exc_info=True)
+            return None
+        self._auto_claim_cache = (stamp, rows)
+        return rows
+
+    def _auto_pullback_sources(self, moment: datetime):
+        """`(symbol, side) -> source text` for every pick that arms itself.
+
+        The trader's answer to "which names does this watch?" (2026-09-15) was
+        *"Chart arm + my picks"*: every ACTIVE claimed D1 pick and every swing
+        Focus name. A claim outranks a Focus entry on the same name because it
+        is the more specific statement. ``None`` when a store could not be
+        read at all - and then the sweep does nothing, because uncertainty
+        never retires a watch.
+        """
+        wanted: dict[tuple[str, str], str] = {}
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is not None:
+            rows = self._active_d1_claims(Path(path), moment)
+            if rows is None:
+                return None
+            for row in rows:
+                if str(row.get("horizon") or "").strip().lower() != "d1":
+                    continue  # an M5 claim is not a multi-day thesis
+                symbol = str(row.get("symbol") or "").strip().upper()
+                side = str(row.get("side") or "").strip().upper()
+                if symbol and side in ("LONG", "SHORT"):
+                    wanted[(symbol, side)] = self.PULLBACK_AUTO_SOURCES["claim"]
+        service = getattr(self, "focus_service", None)
+        if service is not None:
+            try:
+                swing = service.all_focus(category="swing") or {}
+            except Exception:  # noqa: BLE001 - as above
+                logging.debug("Pullback auto-arm: Focus unreadable", exc_info=True)
+                return None
+            for side_key, symbols in swing.items():
+                side = str(side_key or "").strip().upper()
+                if side not in ("LONG", "SHORT"):
+                    continue
+                for name in symbols or ():
+                    symbol = str(name or "").strip().upper()
+                    if symbol:
+                        wanted.setdefault(
+                            (symbol, side), self.PULLBACK_AUTO_SOURCES["focus"]
+                        )
+        return wanted
+
+    def _sweep_auto_pullback_watches(self, moment: datetime) -> bool:
+        """Arm the trader's own picks, retire the ones whose pick is gone.
+
+        Runs inside the armed poll, BEFORE evaluation, in every Auto mode -
+        these are the trader's own picks and they ride the armed-alert
+        exception that pushes in DESK, AWAY, EVENING and OFF alike
+        (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`). Returns True when the
+        armed set changed.
+
+        Four rules the tests pin:
+
+        * one watch per (symbol, side), never a second on the next tick;
+        * a watch the trader DISARMED is remembered as `declined` and is not
+          armed again while that claim or pick lives;
+        * the sweep owns only what it armed - a watch with no `auto:` source
+          is the trader's own click and is never retired by it;
+        * **it writes `auto_arm_watch`, never `arm_watch`** (review blocker 2).
+          `review_learning.TAKE_ACTIONS` holds `arm_watch` because a trader
+          pressing that button IS a take; this sweep armed 95 watches on its
+          first tick against the live stores, and scoring those as takes would
+          have said the trader took ninety-five setups in a minute.
+
+        **One save, one event batch, one emit** (review blocker 3a). Arming 95
+        watches through the public button - a file write, a kernel-locked
+        append and a widget rebuild EACH - is most of what that first tick
+        cost on the Qt thread.
+        """
+        wanted = self._auto_pullback_sources(moment)
+        if wanted is None:
+            return False
+        # Existence is per SYMBOL, not per (symbol, side): the arm surface
+        # itself is per (symbol, kind), so a second side of the same name
+        # cannot be armed and asking every minute would only emit "already
+        # armed" sixty times an hour. A DECLINED row counts as existing -
+        # that is the whole point of remembering it.
+        existing = {
+            watch.symbol
+            for watch in self._chart_watches
+            if watch.kind == PULLBACK_KIND
+        }
+        events: list[dict] = []
+        retired = [
+            watch
+            for watch in self._chart_watches
+            if self._is_auto_pullback_watch(watch)
+            and (watch.symbol, watch.side) not in wanted
+        ]
+        if retired:
+            gone = {(watch.symbol, watch.side) for watch in retired}
+            self._chart_watches = [
+                watch
+                for watch in self._chart_watches
+                if not (
+                    self._is_auto_pullback_watch(watch)
+                    and (watch.symbol, watch.side) in gone
+                )
+            ]
+            for watch in retired:
+                existing.discard(watch.symbol)
+                events.append(
+                    {
+                        "action": "watch_retired_source_gone",
+                        "symbol": watch.symbol,
+                        "side": watch.side,
+                        "detail": {
+                            "kind": watch.kind,
+                            "watch_id": watch.watch_id,
+                            "source_text": watch.source_text,
+                            "declined": bool(getattr(watch, "declined", False)),
+                            "auto": True,
+                        },
+                    }
+                )
+        armed_now: list = []
+        for (symbol, side), source_text in sorted(wanted.items()):
+            if symbol in existing:
+                continue
+            watch = arm_chart_watch(
+                PULLBACK_KIND,
+                symbol,
+                side,
+                (),  # a pullback watch takes no M5 baseline
+                now=moment,
+                source_text=source_text,
+            )
+            armed_now.append(watch)
+            existing.add(symbol)
+            events.append(
+                {
+                    "action": "auto_arm_watch",
+                    "symbol": symbol,
+                    "side": side,
+                    "detail": {
+                        "kind": PULLBACK_KIND,
+                        "watch_id": watch.watch_id,
+                        "source_text": source_text,
+                        "auto": True,
+                    },
+                }
+            )
+        if armed_now:
+            self._chart_watches = list(self._chart_watches) + armed_now
+        if not events:
+            return False
+        self._save_chart_watches()
+        self._record_review_events(events)
+        self._refresh_review_armed_kinds()
+        self.armedWatchesChanged.emit()
+        return True
+
+    def _push_armed_watch(self, hit) -> None:
+        """One phone event per armed-watch fire, through the ONE armed sender.
+
+        AWAY is the only mode that pushes routine output; the armed
+        Research/Focus price alerts are the recorded exception that pushes in
+        every mode, and a watch the trader armed from the chart is the same
+        request made from a different surface - so it rides that sender rather
+        than opening a second door. De-duplication is by watch id, inside the
+        service. Delivery is best-effort: an unconfigured topic or a dead
+        network must never cost the alert behind it.
+
+        This call DISPATCHES and returns at once (RV-H1-PHONE-WORKER,
+        2026-09-13): `notify_armed_watch` makes the cheap decisions - the
+        engine check and the watch-id de-duplication - on this thread and
+        hands the send to a worker the service owns, so the `add_alert` right
+        after it draws the row while the phone is still answering. ``ok``
+        there means "accepted for delivery", and the outcome comes back on
+        the service's `statusChanged`, never here.
+        """
+        service = getattr(self, "price_alert_service", None)
+        if service is None:
+            return
+        watch = hit.watch
+        label = WATCH_KINDS.get(watch.kind, watch.kind)
+        measured = dict(getattr(hit, "details", None) or {})
+        if "push" in measured and not measured.get("push"):
+            # A retest on a watch the DESK armed: on the feed and in the
+            # evidence, but not on the phone (review advisory 5). Nothing is
+            # withheld - the row is written either way.
+            return
+        watch_id = str(getattr(watch, "watch_id", "") or "")
+        # A STANDING arm speaks more than once, so the de-duplication key is
+        # this EVENT, not the arm (review blocker 1). A one-shot watch passes
+        # nothing and keeps the old watch-id behaviour.
+        event_key = None
+        trigger = str(measured.get("trigger") or "")
+        if trigger:
+            event_key = "%s:%s:%s:%s" % (
+                watch_id,
+                trigger,
+                str(measured.get("timeframe") or ""),
+                str(measured.get("bar_dt") or ""),
+            )
+        try:
+            service.notify_armed_watch(
+                watch_id=watch_id,
+                title=f"{label}: {watch.symbol}",
+                message=str(hit.message or ""),
+                **({"event_key": event_key} if event_key else {}),
+            )
+        except TypeError:
+            # A stand-in service written before PCT-1 takes three keywords.
+            service.notify_armed_watch(
+                watch_id=watch_id,
+                title=f"{label}: {watch.symbol}",
+                message=str(hit.message or ""),
+            )
+        except Exception:
+            logging.debug(
+                "Armed-watch push failed for %s", watch.symbol, exc_info=True
+            )
+
     def _poll_d1_event_watches(self, now: datetime | None = None) -> None:
+        # The Pullback alerts live in the chart-watch store but keep this
+        # poll's clock, so they are evaluated BEFORE the early return below -
+        # which asks only whether any D1 EVENT watch is armed. Their auto-arm
+        # sweep rides the same call, so a pick claimed a minute ago is armed
+        # even when nothing else on this desk is.
+        self._poll_pullback_watches(now=now)
         if not self._d1_event_watches:
             return
         moment = now or datetime.now()
@@ -5137,6 +6949,7 @@ class AlertCenterPanel(QFrame):
                 return
         remaining: list[D1EventWatch] = []
         triggered = []
+        fired_trendline_breaks: set[tuple[str, str, str]] = set()
         # One reference-level build per symbol per tick, shared across every
         # watch on it (item 1b). Scoped to this tick and discarded with it.
         levels_caches: dict[str, dict] = {}
@@ -5172,6 +6985,16 @@ class AlertCenterPanel(QFrame):
             if hit is None:
                 remaining.append(watch)
             else:
+                if watch.kind == "trendline_break":
+                    candidate = watch.trendline_candidate or {}
+                    key = (
+                        watch.symbol,
+                        str(watch.side or "").strip().upper(),
+                        str(candidate.get("break_date") or "").strip(),
+                    )
+                    if key in fired_trendline_breaks:
+                        continue
+                    fired_trendline_breaks.add(key)
                 triggered.append(hit)
         self._d1_event_watches = remaining
         if triggered:
@@ -5403,6 +7226,7 @@ class AlertCenterPanel(QFrame):
         that verb ends here too, after its Focus placement.
         """
         self._retire_review_alert(alert, write_not_today_annotation=False)
+        self.reviewDecisionRecorded.emit()
 
     def _retire_review_alert(
         self, alert: BounceAlert, *, write_not_today_annotation: bool
@@ -5637,7 +7461,10 @@ class AlertCenterPanel(QFrame):
             and self._current_review_alert.symbol == symbol
         ):
             self._current_review_alert = None
-        self._rebuild_feed()
+        # SN4: a veto removes THAT row. Every other row keeps its widget, its
+        # position and its ×N badge - measured 4.0-4.1 s per veto on
+        # 2026-09-08 when this was a 350-widget rebuild.
+        self._sync_feed()
         self._refresh_ignored_button()
         if self._current_review_alert is None:
             self._advance_review_queue()
@@ -5732,6 +7559,13 @@ class AlertCenterPanel(QFrame):
         # A3: the fade clock is measured in sessions, so the day roll is
         # exactly when a pick can come due.
         self.run_focus_fade_check()
+        # Packet D1C-A: a claim's fade is the SAME clock, so it comes due here
+        # and only here. The skip counts are day-scoped like the queue - a
+        # count of yesterday's skipped charts says nothing about today.
+        self._claimed_d1_skipped.clear()
+        self.chart_review.set_claimed_skipped_count(0)
+        self._sweep_expired_claims()
+        self.claimsChanged.emit()
 
     def _park_review_symbol(self, symbol: str) -> None:
         """Keep a symbol's chart out of the review queue for the day."""
@@ -5935,6 +7769,20 @@ class AlertCenterPanel(QFrame):
     #: join can ever match it, and no scanner alert had to be invented for it.
     STRENGTH_BOARD_EVENT_SYMBOL = "M5_STRENGTH_BOARD"
 
+    #: The `Scan` column's vocabulary (packet WS-10B, WISHLIST 10B). The
+    #: trader reads the TC2000 board beside their own screen and the one
+    #: question it could not answer was "this name is on the list - why is it
+    #: not being scanned?". Every verdict here is written at the moment this
+    #: method decides, from the numbers it decided on, and rendered verbatim by
+    #: `strength_board_panel`; a refusal carries the ADOPTION GATE's own words
+    #: rather than a paraphrase, because a second wording of one rule is a
+    #: second rule.
+    ADOPTION_ADOPTED = "adopted"
+    ADOPTION_ALREADY = "already_in_focus"
+    ADOPTION_STAGED = "staged (AWAY)"
+    ADOPTION_NOT_TODAY = "not today"
+    ADOPTION_DECLINED = "declined today"
+
     def _auto_adopt_strength_board(self, board: dict) -> None:
         """Place the TC2000 board's parity rows on M5 Focus (packet T1.4).
 
@@ -5958,8 +7806,6 @@ class AlertCenterPanel(QFrame):
           remove without parking, and every one of them was being undone by the
           next fifteen-minute refresh. The record is kept in the STORE, so a
           fifth removal door counts for free;
-        * DESK only. AWAY stages nothing here and EVENING/OFF do nothing - the
-          auto-mode matrix is unchanged;
         * the write goes through the STORE plus an auto-pick marker, NEVER
           ``FocusService.add``, which would forge a trader "like" into
           ``pick_feedback.jsonl``. An existing entry is COUNTED, never
@@ -5968,45 +7814,95 @@ class AlertCenterPanel(QFrame):
         It NEVER removes. A name that drops off the board stays on Focus - the
         ten-session fade and "Not today" own removal.
 
+        **WS-10B (2026-09-12) changed two things and neither is the gate.**
+
+        1. **AWAY STAGES.** DESK adopting and AWAY doing nothing at all was
+           half the auto-mode matrix: AWAY is meant to STAGE and let the return
+           to the desk adopt. The eligible rows now go into the EXISTING
+           auto-populate queue (`autopilot_core.stage_auto_populate_candidates`,
+           one owner, one lock, one file) rather than into Focus, so
+           `_poll_auto_pick_queue`'s drain - which re-measures on the flip back
+           to DESK before it adopts anything - is still the only door an
+           unattended pick can come through. Nothing new polls: this rides
+           `boardChanged` exactly as the adoption already did. EVENING and OFF
+           still do nothing.
+        2. **EVERY ROW SAYS WHY.** The verdicts above are collected per side
+           and pushed to the board's own table, where they render as the last
+           column, `Scan`. Computed HERE, at the moment of the decision, and
+           never recomputed by the view - a display that re-ran the gate on
+           slightly older numbers would disagree with the machine about the
+           trader's own list. One INFO line per refresh carries the same
+           counts to `trading_bot.log`.
+
+        **Scanner inclusion and Focus adoption stay DISTINCT contracts.** A row
+        the gate refuses is not scanned as a consolation prize; if the trader
+        ever wants every board row in the scan set regardless, that is a
+        separate selection and a separate decision.
+
         Cheap enough for the Qt thread by construction: a walk over the board's
-        own rows, a pure-Python gate per row, and the store writes the store
-        already batches. No fetch, no re-measurement, no timer.
+        own rows, a pure-Python gate per row, the store writes the store
+        already batches, and - only when AWAY - one JSON read/write of the
+        staging queue, the same file this panel's drain already reads on its
+        own poll. No fetch, no re-measurement, no timer.
         """
         if not isinstance(board, dict):
             return
         try:
-            if self._auto_mode_now() != "DESK":
-                return
+            mode = self._auto_mode_now()
         except Exception:
             return
+        rows_by_side: dict[str, list[dict]] = {
+            side: [row for row in (board.get(side) or []) if isinstance(row, dict)]
+            for side in ("long", "short")
+        }
+        total_rows = sum(len(rows) for rows in rows_by_side.values())
+        verdicts: dict[str, dict[str, str]] = {"long": {}, "short": {}}
+
+        if mode not in ("DESK", "AWAY"):
+            # EVENING runs its own early slot and OFF does nothing automatic.
+            # The board still says so, per row: "nothing happened" was the
+            # answer this packet exists to replace.
+            for side, rows in rows_by_side.items():
+                for row in rows:
+                    symbol = str(row.get("symbol") or "").strip().upper()
+                    if symbol:
+                        verdicts[side][symbol] = f"mode {mode}"
+            self._publish_strength_board_adoption(verdicts, total_rows)
+            return
+
         focus_service = (
             getattr(self, "_strength_focus_service", None) or self.focus_service
         )
         store = getattr(focus_service, "store", None)
         if store is None:
+            # Nothing was decided, so nothing is claimed: the column stays
+            # blank rather than reading "not adopted", which would name a
+            # refusal that never happened.
             return
         import focus_adoption_gate
 
         as_of = str(board.get("as_of") or "")
         declined_today = getattr(store, "declined_today", None)
-        adopted: list[str] = []
+        wanted_by_side: dict[str, list[str]] = {"long": [], "short": []}
+        strengths: dict[tuple[str, str], object] = {}
         refused: list[str] = []
-        side_counts = {"long": 0, "short": 0}
-        already_auto = 0
-        already_trader_owned = 0
+
+        # ------------------------------------------------------ phase 1: judge
+        # Both sides judged before anything is written, so the verdict a row
+        # carries is the verdict that decided it - not a second opinion formed
+        # after the store moved underneath it.
         for side in ("long", "short"):
-            strengths: dict[str, object] = {}
-            wanted: list[str] = []
-            for row in board.get(side) or []:
-                if not isinstance(row, dict):
-                    continue
-                if row.get("failed_floors"):
-                    # Greyed near-miss: it is not on the trader's TC2000 list.
-                    continue
+            for row in rows_by_side[side]:
                 symbol = str(row.get("symbol") or "").strip().upper()
                 if not symbol or not SYMBOL_RE.fullmatch(symbol):
                     continue
+                missed = [str(text) for text in (row.get("failed_floors") or ())]
+                if missed:
+                    # Greyed near-miss: it is not on the trader's TC2000 list.
+                    verdicts[side][symbol] = "not adopted: floor " + "; ".join(missed)
+                    continue
                 if symbol in self._ignored_symbols:
+                    verdicts[side][symbol] = self.ADOPTION_NOT_TODAY
                     refused.append(f"{symbol} (you said not today)")
                     continue
                 if callable(declined_today):
@@ -6015,6 +7911,7 @@ class AlertCenterPanel(QFrame):
                     except Exception:
                         taken_off = False
                     if taken_off:
+                        verdicts[side][symbol] = self.ADOPTION_DECLINED
                         refused.append(f"{symbol} (you took it off today)")
                         continue
                 passes, reason = focus_adoption_gate.passes_focus_adoption_gate(
@@ -6026,79 +7923,105 @@ class AlertCenterPanel(QFrame):
                 )
                 if not passes:
                     # Named, not counted - the same way `_add_all` names one.
+                    verdicts[side][symbol] = f"not adopted: {reason}"
                     refused.append(f"{symbol} ({reason})")
                     continue
-                strengths[symbol] = row.get("strength")
-                wanted.append(symbol)
-            if not wanted:
-                continue
-            # ONE write per side, not one per name. `add_many` rewrites the
-            # focus file, the membership file and the pick clocks once for the
-            # batch; sixty names through `add` measured 781 ms on the Qt thread
-            # and the board's row count is not bounded by anything this panel
-            # controls. The MARKER stays per name - it carries that row's own
-            # strength, and `mark_auto_adopted` is a dict write plus a save.
-            try:
-                added = list(store.add_many(wanted, side, "m5"))
-            except Exception:
-                logging.warning(
-                    "Strength board could not place %s on M5 Focus.",
-                    ", ".join(wanted),
-                    exc_info=True,
-                )
-                refused.extend(f"{symbol} (add failed)" for symbol in wanted)
-                continue
-            marker_writer = getattr(store, "mark_auto_adopted", None)
-            for symbol in added:
-                if callable(marker_writer):
-                    try:
-                        marker_writer(
-                            symbol,
-                            side,
-                            "m5",
-                            staged_at=as_of,
-                            reason=(
-                                f"M5 Strength Board (TC2000) {side} row, "
-                                f"strength {strengths.get(symbol)}"
-                            ),
-                        )
-                    except Exception:
-                        # An evidence store never costs the event it records:
-                        # a lost marker reads as the trader's own name, which
-                        # is the safe direction (packet R2).
-                        logging.warning(
-                            "Strength board could not mark %s as auto-adopted.",
-                            symbol,
-                            exc_info=True,
-                        )
-                adopted.append(symbol)
-                side_counts[side] += 1
-            # Everything asked for and not added was already there. Which KIND
-            # of "already there" is the interesting number - the regime-pause
-            # auto-join distinguishes them the same way - and it is a COUNT
-            # only: no marker is ever written over a name the trader typed.
-            reader = getattr(store, "is_auto_adopted", None)
-            for symbol in wanted:
-                if symbol in added:
+                strengths[(side, symbol)] = row.get("strength")
+                wanted_by_side[side].append(symbol)
+
+        # -------------------------------------------------------- phase 2: act
+        adopted: list[str] = []
+        staged: list[str] = []
+        side_counts = {"long": 0, "short": 0}
+        already_auto = 0
+        already_trader_owned = 0
+
+        if mode == "AWAY":
+            self._stage_strength_board_picks(
+                store, wanted_by_side, strengths, verdicts, staged
+            )
+        else:
+            for side in ("long", "short"):
+                wanted = wanted_by_side[side]
+                if not wanted:
                     continue
-                ours = False
-                if callable(reader):
-                    try:
-                        ours = bool(reader(symbol, side, "m5"))
-                    except Exception:
-                        ours = False
-                if ours:
-                    already_auto += 1
-                else:
-                    already_trader_owned += 1
-        if not adopted and not refused:
+                # ONE write per side, not one per name. `add_many` rewrites the
+                # focus file, the membership file and the pick clocks once for
+                # the batch; sixty names through `add` measured 781 ms on the Qt
+                # thread and the board's row count is not bounded by anything
+                # this panel controls. The MARKER stays per name - it carries
+                # that row's own strength, and `mark_auto_adopted` is a dict
+                # write plus a save.
+                try:
+                    added = list(store.add_many(wanted, side, "m5"))
+                except Exception:
+                    logging.warning(
+                        "Strength board could not place %s on M5 Focus.",
+                        ", ".join(wanted),
+                        exc_info=True,
+                    )
+                    for symbol in wanted:
+                        verdicts[side][symbol] = "not adopted: add failed"
+                        refused.append(f"{symbol} (add failed)")
+                    continue
+                marker_writer = getattr(store, "mark_auto_adopted", None)
+                for symbol in added:
+                    if callable(marker_writer):
+                        try:
+                            marker_writer(
+                                symbol,
+                                side,
+                                "m5",
+                                staged_at=as_of,
+                                reason=(
+                                    f"M5 Strength Board (TC2000) {side} row, "
+                                    f"strength {strengths.get((side, symbol))}"
+                                ),
+                            )
+                        except Exception:
+                            # An evidence store never costs the event it
+                            # records: a lost marker reads as the trader's own
+                            # name, which is the safe direction (packet R2).
+                            logging.warning(
+                                "Strength board could not mark %s as auto-adopted.",
+                                symbol,
+                                exc_info=True,
+                            )
+                    verdicts[side][symbol] = self.ADOPTION_ADOPTED
+                    adopted.append(symbol)
+                    side_counts[side] += 1
+                # Everything asked for and not added was already there. Which
+                # KIND of "already there" is the interesting number - the
+                # regime-pause auto-join distinguishes them the same way - and
+                # it is a COUNT only: no marker is ever written over a name the
+                # trader typed.
+                reader = getattr(store, "is_auto_adopted", None)
+                for symbol in wanted:
+                    if symbol in added:
+                        continue
+                    verdicts[side][symbol] = self.ADOPTION_ALREADY
+                    ours = False
+                    if callable(reader):
+                        try:
+                            ours = bool(reader(symbol, side, "m5"))
+                        except Exception:
+                            ours = False
+                    if ours:
+                        already_auto += 1
+                    else:
+                        already_trader_owned += 1
+
+        self._publish_strength_board_adoption(verdicts, total_rows)
+        if not adopted and not staged and not refused:
             return
         self._record_review_event(
             "strength_board_auto_focus",
             symbol=self.STRENGTH_BOARD_EVENT_SYMBOL,
             detail={
+                "mode": mode,
                 "side_counts": side_counts,
                 "adopted": adopted,
+                "staged": staged,
                 "refused": refused,
                 "already_auto": already_auto,
                 "already_trader_owned": already_trader_owned,
@@ -6110,6 +8033,150 @@ class AlertCenterPanel(QFrame):
                 f"★ {side_counts['long']} long, {side_counts['short']} short "
                 "added to M5 Focus from the TC2000 board."
             )
+        elif staged:
+            self.statusChanged.emit(
+                f"{len(staged)} TC2000 board name(s) staged for your return "
+                "(AWAY stages, it never adopts)."
+            )
+
+    def _stage_strength_board_picks(
+        self,
+        store,
+        wanted_by_side: dict[str, list[str]],
+        strengths: dict[tuple[str, str], object],
+        verdicts: dict[str, dict[str, str]],
+        staged: list[str],
+    ) -> None:
+        """AWAY: put the eligible rows in the EXISTING staging queue (WS-10B).
+
+        The trader is not at the desk, so nothing may be adopted - but a board
+        that discovers a name at 11:00 and forgets it by the time they sit down
+        is the discovery thrown away. `stage_auto_populate_candidates` is the
+        one owner of that queue: it holds the lock, it applies the per-side
+        cap, it refuses a name already on a watchlist or already decided today,
+        and the desk's own drain re-measures every queued pick on the flip back
+        before adopting it. Passing the STORE's shared paths rather than the
+        module defaults keeps a test store inside its sandbox.
+
+        `gate_bar_end` is deliberately left as the staging function writes it
+        (empty, with no profile to read one from). An empty measured-bar stamp
+        REFUSES at adoption (`pending_pick_gate_ok`), so a board pick can only
+        be adopted after the flip's re-verification has measured it against the
+        live tape - which is exactly the guarantee AWAY staging is for.
+        """
+        pending_path = getattr(self, "_auto_pick_pending_path", None)
+        wanted = [
+            (side, symbol)
+            for side in ("long", "short")
+            for symbol in wanted_by_side[side]
+        ]
+        if not wanted:
+            return
+        if pending_path is None:
+            for side, symbol in wanted:
+                verdicts[side][symbol] = "not adopted: no staging queue on this desk"
+            return
+        try:
+            from autopilot_core import (
+                load_auto_populate_pending_picks,
+                stage_auto_populate_candidates,
+            )
+
+            candidates: dict[str, list[dict]] = {"longs": [], "shorts": []}
+            for side, symbol in wanted:
+                try:
+                    score = float(strengths.get((side, symbol)))
+                except (TypeError, ValueError):
+                    score = 0.0
+                candidates[f"{side}s"].append(
+                    {
+                        "symbol": symbol,
+                        "reason": f"M5 Strength Board (TC2000) {side} row",
+                        "score": score,
+                    }
+                )
+            stage_auto_populate_candidates(
+                candidates,
+                "strength_board",
+                pending_path=pending_path,
+                longs_path=store.shared_watchlist_path("long", "m5"),
+                shorts_path=store.shared_watchlist_path("short", "m5"),
+            )
+            queued = load_auto_populate_pending_picks(pending_path)
+        except Exception:
+            logging.warning(
+                "Strength board could not stage %d TC2000 name(s) for the return "
+                "to the desk.",
+                len(wanted),
+                exc_info=True,
+            )
+            for side, symbol in wanted:
+                verdicts[side][symbol] = "not adopted: staging failed"
+            return
+        for side, symbol in wanted:
+            if symbol in (queued.get("pending", {}).get(side) or {}):
+                # Staged now, or staged by an earlier refresh - either way the
+                # name is waiting in the queue the drain reads.
+                verdicts[side][symbol] = self.ADOPTION_STAGED
+                staged.append(symbol)
+                continue
+            try:
+                on_focus = symbol in store.focus_symbols(side, "m5")
+            except Exception:
+                on_focus = False
+            verdicts[side][symbol] = (
+                self.ADOPTION_ALREADY
+                if on_focus
+                else "not adopted: the staging queue is full or this name was "
+                "already decided today"
+            )
+
+    def _publish_strength_board_adoption(
+        self, verdicts: dict[str, dict[str, str]], total_rows: int
+    ) -> None:
+        """The `Scan` column and the one log line per refresh (WS-10B items 2-3).
+
+        Presentation and evidence only: it writes no store, reaches no
+        detector, and a failure here can never cost an adoption - the decisions
+        are already made and persisted by the time this runs.
+        """
+        panel = getattr(self, "strength_board", None)
+        setter = getattr(panel, "set_adoption", None)
+        if callable(setter):
+            try:
+                setter(verdicts)
+            except Exception:
+                logging.warning(
+                    "Strength board could not show its Scan column.", exc_info=True
+                )
+        if not total_rows:
+            return
+        counts: dict[str, int] = {}
+        adopted = staged = other = 0
+        for side_map in verdicts.values():
+            for text in side_map.values():
+                if text == self.ADOPTION_ADOPTED:
+                    adopted += 1
+                    continue
+                if text == self.ADOPTION_STAGED:
+                    staged += 1
+                    continue
+                other += 1
+                reason = text[len("not adopted: "):] if text.startswith("not adopted: ") else text
+                counts[reason] = counts.get(reason, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        reasons = "; ".join(f"{reason} x{count}" for reason, count in ranked[:6])
+        if len(ranked) > 6:
+            reasons += "; ..."
+        logging.info(
+            "Strength board: %d rows, %d adopted, %d staged, %d not adopted "
+            "(reasons: %s)",
+            total_rows,
+            adopted,
+            staged,
+            other,
+            reasons or "none",
+        )
 
     def _show_board_symbol_snapshot(self, symbol: str, side: str = "") -> None:
         """RS/RW-board ticker click: use the same cache-only quick look."""

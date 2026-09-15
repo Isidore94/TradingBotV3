@@ -503,8 +503,13 @@ def test_the_capture_rail_is_off_the_pane_and_the_arm_bar_is_not(panel):
     # The chart slot is the snapshot and its placeholder - mutually exclusive,
     # so they count as one row of the stack.
     slot_end = max(widgets.index(review.snapshot), widgets.index(review.empty_state))
-    # Under it: the arm bar, then the verb row. Nothing else.
+    # Under it: the arm bar, then the one slim verb row. The Mentor is an
+    # independent modeless popup now, so it cannot borrow chart height.
     assert widgets[slot_end + 1] is review.arm_bar
+    assert review.mentor_popup.isWindow()
+    assert layout.indexOf(review.mentor_popup) == -1
+    assert layout.indexOf(review.mentor_card) == -1
+    assert review.mentor_popup.isAncestorOf(review.mentor_card)
     assert slot_end + 2 == layout.count() - 1, "something is stacked under the charts"
     assert rows[-1].layout() is not None, "the verb row must stay a layout row"
 

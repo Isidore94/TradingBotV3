@@ -50,6 +50,7 @@ from gui_text_highlighter import (
     tree_tags_for_values,
 )
 from .setup_tagging import derive_setup_tag_payload
+from . import daily_bar_cache  # WS-FC1: the daily-bar cache's write guard
 from . import selection_policy as selection_policy_lib
 
 from project_paths import (
@@ -425,6 +426,17 @@ SETUP_BAND_VARIANT_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_band_va
 CONTROL_DISCOVERY_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.csv")
 STUDY_DISCOVERY_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_study_discovery.csv")
 EXIT_FRAMEWORK_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_exit_framework_stats.csv")
+# Packet EF1 (trader, 2026-09-08). The SAME comparison at one finer grain, in a
+# SECOND file beside the pooled one - never inside it. "Full at band 3 loses" is
+# a whole-population answer; a 1st-dev breakout starts one band from its target
+# and an AVWAPE bounce starts two, so the right exit is probably per setup.
+# A second file rather than a `setup_family` column in the first because the
+# pooled file's 24 rows are a shipped table with a 300-row cap, and splitting it
+# by family would both blow the cap and change the grain of what the Exit
+# frameworks tab has always rendered.
+EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE = SETUP_STATS_FILE.with_name(
+    "master_avwap_exit_framework_by_family.csv"
+)
 CONTROL_DISCOVERY_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
 # Study namespace (B4): new setup ideas (1h/4h trend, HV-level break, compression
 # break, ...) are measured here for hit-rate / realized R BEFORE they touch scoring.
@@ -1063,6 +1075,20 @@ PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_EXTREME = 22
 PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_VWAP = 8
 PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_FIRST_DEV = 6
 PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_SECOND_DEV = 4
+#: PCT-3 item 1. The name of the rule `summarize_anchor_compression` implements.
+#: The score and the three ATR ratios it computes are now published beside the
+#: flag, so a chip, a CSV and a calibration report can all say WHICH rule
+#: produced the number they show. Re-tuning the thresholds above is a NEW
+#: version beside this one, never a silent re-reading of history.
+ANCHOR_COMPRESSION_RULE_VERSION = "anchor_compression_v1"
+#: PCT-3 item 4. `compression_break_v1` = the Phase-6 break context
+#: (`assess_compression_break_context`: the previous completed session's
+#: anchored slice reads compressed, and today's completed close leaves that box
+#: in the setup's direction past the 0.10-ATR buffer) AND today's own bar range
+#: is at least this many ATR-20. Labelled, so the trader can re-tune it by name
+#: once the calibration report is read.
+COMPRESSION_BREAK_RULE_VERSION = "compression_break_v1"
+COMPRESSION_BREAK_MIN_BAR_RANGE_ATR = 1.0
 PRIORITY_DIRECTIONAL_REJECTION_MIN_RANGE_RATIO = 0.35
 PRIORITY_DIRECTIONAL_REJECTION_MIN_ATR_RATIO = 0.22
 PRIORITY_DIRECTIONAL_REJECTION_MIN_BODY_RATIO = 1.20
@@ -3167,7 +3193,12 @@ def _seed_daily_bar_cache_from_durable(symbol: str, cache_path: Path) -> pd.Data
         _DAILY_BAR_FRAME_CACHE[symbol] = durable
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            durable.to_csv(cache_path, index=False)
+            # WS-FC1: the seed is the other writer of this CSV, so it obeys the
+            # same refusal. Only the FILE is filtered - the frame handed back to
+            # the caller is the durable store's own answer, unchanged.
+            writable, _seed_counts = daily_bar_cache.filter_writable_rows(durable, symbol=symbol)
+            if not writable.empty:
+                writable.to_csv(cache_path, index=False)
             _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = _daily_bar_cache_file_mtime(symbol) or datetime.now()
         except Exception:
             _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.now()
@@ -3234,6 +3265,17 @@ def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
 def _write_cached_daily_bar_frame(symbol: str, df: pd.DataFrame) -> None:
     symbol = str(symbol or "").strip().upper()
     normalized = _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_CACHE)
+    # WS-FC1: a forming session bar and an impossible candle never reach the
+    # cache. The rule, the counters and the repair live in daily_bar_cache so
+    # this ask-first file's diff stays at the writer seam.
+    offered = normalized
+    normalized, _drop_counts = daily_bar_cache.filter_writable_rows(normalized, symbol=symbol)
+    if normalized.empty and not offered.empty:
+        # Every row was refused: keep the last verified file rather than
+        # replacing it with an empty one (missing data is uncertainty).
+        logging.debug("%s: no writable daily bars in this refresh; cache left as it was.", symbol)
+        return
+    normalized = _set_daily_bar_source(normalized, DAILY_BAR_SOURCE_CACHE)
     cache_path = _daily_bar_cache_file(symbol)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     normalized.to_csv(cache_path, index=False)
@@ -4998,6 +5040,171 @@ def evaluate_anchor_compression(
     return summarize_anchor_compression(price_slice, anchor_stdev, atr20)
 
 
+def compression_copy_through(compression_summary: dict | None) -> dict:
+    """PCT-3 item 1: the measure's own numbers, ready to publish on a carrier.
+
+    `summarize_anchor_compression` has always computed a 0-3 `compression_score`
+    and three ATR ratios and then thrown all four away inside the function - the
+    priority row, the `ai_state` symbol entry and the tracker record only ever
+    saw `compression_flag / compression_penalty / compression_note`. The trader
+    vetoes "compressed" more often than anything else, so before a threshold
+    moves the numbers have to be visible. This is a COPY, never a computation:
+    nothing here reads a bar, decides anything or touches a score.
+    """
+    summary = compression_summary if isinstance(compression_summary, dict) else {}
+    ratios = {
+        field: _coerce_float(summary.get(field)) for field in COMPRESSION_MEASURE_FIELDS[1:]
+    }
+    if any(value is None for value in ratios.values()):
+        # `summarize_anchor_compression` returns its default dict - score 0,
+        # three `None` ratios - whenever the slice is empty, the ATR-20 is
+        # missing or the anchor has no sigma. Publishing that 0 under
+        # `anchor_compression_v1` would say "the rule looked and found nothing
+        # tight", which is a measurement that never happened and exactly the
+        # number a calibration report would average. Not measured is `None`,
+        # and an unmeasured row carries no rule version at all.
+        return {"compression_score": None, **ratios}
+    return {
+        "compression_score": int(summary.get("compression_score", 0) or 0),
+        **ratios,
+        "compression_rule_version": ANCHOR_COMPRESSION_RULE_VERSION,
+    }
+
+
+#: The four fields a carrier holds only if the measure was actually taken. A
+#: carrier holding NONE of them was written before PCT-3 landed.
+COMPRESSION_MEASURE_FIELDS = (
+    "compression_score",
+    "compression_stdev_atr_ratio",
+    "compression_range_atr_ratio",
+    "compression_close_range_atr_ratio",
+)
+
+
+def compression_copy_through_from_row(row: dict | None) -> dict:
+    """The measure as a ROW carries it - or, honestly, as an ABSENCE.
+
+    Every row the scan writes from today on carries the four numbers, so the
+    copy is exact. A row written BEFORE PCT-3 landed carries none of them, and
+    the only right answer for such a row is **not measured**: `None` for the
+    score and the three ratios, and NO `compression_rule_version` at all.
+
+    A `compression_score` of 0 stamped `anchor_compression_v1` would say "this
+    rule looked and found nothing tight", which is a measurement that never
+    happened - and it is exactly the reading a calibration report would average.
+    """
+    source = row if isinstance(row, dict) else {}
+    measured = any(source.get(field) is not None for field in COMPRESSION_MEASURE_FIELDS)
+    if not measured:
+        return {field: None for field in COMPRESSION_MEASURE_FIELDS}
+    copied: dict = {
+        field: _coerce_float(source.get(field)) for field in COMPRESSION_MEASURE_FIELDS[1:]
+    }
+    score = source.get("compression_score")
+    copied["compression_score"] = None if score is None else int(score)
+    copied["compression_rule_version"] = str(
+        source.get("compression_rule_version") or ANCHOR_COMPRESSION_RULE_VERSION
+    )
+    return copied
+
+
+def _compression_break_copy_through(row: dict | None, symbol_entry: dict | None = None) -> dict:
+    """`compression_break_v1`'s verdict as a carrier holds it, or nothing.
+
+    The flag, its note and its rule version are one reading. A record built
+    from a row the rule never evaluated (an old row, a study clone) carries
+    none of the three rather than `False` under a version stamp - which would
+    say "v1 looked and said no".
+    """
+    source = row if isinstance(row, dict) else {}
+    entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+    if "compression_break_recent" not in source and "compression_break_recent" not in entry:
+        return {}
+    evaluated = source if "compression_break_recent" in source else entry
+    return {
+        "compression_break_recent": bool(evaluated.get("compression_break_recent")),
+        "compression_break_v1_note": str(evaluated.get("compression_break_v1_note") or ""),
+        "compression_break_rule_version": str(
+            evaluated.get("compression_break_rule_version") or COMPRESSION_BREAK_RULE_VERSION
+        ),
+    }
+
+
+def evaluate_compression_break_v1(
+    df: pd.DataFrame | None,
+    *,
+    anchor_date_iso: str | None,
+    anchor_stdev: float | None,
+    atr20: float | None,
+    side: str = "",
+    last_trade_date: str | date | None = None,
+    last_bar=None,
+) -> dict:
+    """PCT-3 item 4: `compression_break_v1` on the last COMPLETED session.
+
+    Two clauses, in this order, and the first one is the Phase-6 context
+    function already in this file - there is exactly one place that decides
+    "yesterday's box was compressed and today's close left it":
+
+    1. :func:`assess_compression_break_context` says the break happened in this
+       setup's direction (it refuses an upward break for a SHORT and a downward
+       one for a LONG, and it requires the prior slice to read `is_compressed`);
+    2. today's own bar range is at least
+       ``COMPRESSION_BREAK_MIN_BAR_RANGE_ATR`` ATR-20 - a drift out of a quiet
+       box on a quiet bar is not a break.
+
+    Returns the three labelled names only. It sets no score, no penalty and no
+    Phase-6 study field; `enrich_priority_rows_with_phase6_studies` still owns
+    `compression_break_today` and the study row.
+    """
+    result = {
+        "compression_break_recent": False,
+        # v1 keeps its OWN note field. `compression_break_note` is Phase 6's -
+        # `enrich_priority_rows_with_phase6_studies` does `row.update(context)`
+        # and would silently replace anything written here, and on a narrow-bar
+        # break Phase 6's note is non-empty while v1 refused. Both are written,
+        # but only `compression_break_v1_note` is v1's answer.
+        "compression_break_v1_note": "",
+        "compression_break_note": "",
+        "compression_break_rule_version": COMPRESSION_BREAK_RULE_VERSION,
+    }
+    atr_value = _coerce_float(atr20)
+    if atr_value is None or atr_value <= 0:
+        return result
+
+    context = assess_compression_break_context(
+        df,
+        anchor_date_iso=anchor_date_iso,
+        anchor_stdev=anchor_stdev,
+        atr20=atr_value,
+        side=side,
+        last_trade_date=last_trade_date,
+    )
+    if not context.get("compression_break_today"):
+        return result
+
+    # `last_bar` is the scan's own `last_row` dict (a `pd.Series` also answers
+    # `.get`); `bool()` on a Series raises, so it is never truth-tested here.
+    bar = last_bar if hasattr(last_bar, "get") else {}
+    high = _coerce_float(bar.get("high"))
+    low = _coerce_float(bar.get("low"))
+    if high is None or low is None:
+        # Missing data is uncertainty, never confirmation (plan.md sec 5).
+        return result
+    bar_range_atr = (float(high) - float(low)) / float(atr_value)
+    if bar_range_atr < COMPRESSION_BREAK_MIN_BAR_RANGE_ATR:
+        return result
+
+    result["compression_break_recent"] = True
+    note = (
+        f"{context.get('compression_break_note') or 'Compression break'}"
+        f"; bar range {bar_range_atr:.2f} ATR"
+    )
+    result["compression_break_v1_note"] = note
+    result["compression_break_note"] = note
+    return result
+
+
 def _directional_distance_atr(side: str, raw_distance_atr: float | None) -> float | None:
     if raw_distance_atr is None:
         return None
@@ -6259,6 +6466,13 @@ def build_tracker_setup_record(
         "is_compressed": bool(row.get("compression_flag")),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "compression_note": row.get("compression_note", ""),
+        # PCT-3 item 1: the measure's own score and ratios travel with the
+        # record, so the calibration CLI can read a per-(symbol, session) anchor
+        # measurement out of the tracker instead of recomputing an anchor it
+        # cannot know. `build_tracker_feature_snapshot` reads only the three
+        # fields above, so these are carried and never acted on. A row that
+        # carries no measure reads as NOT MEASURED - never a stamped zero.
+        **compression_copy_through_from_row(row),
     }
     entry_snapshot = symbol_entry.get("entry_feature_snapshot")
     if isinstance(entry_snapshot, dict) and entry_snapshot:
@@ -6413,6 +6627,13 @@ def build_tracker_setup_record(
         "compression_flag": bool(row.get("compression_flag")),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "compression_note": row.get("compression_note") or "",
+        # PCT-3 item 1: the whole reading, in one place, with its rule named.
+        "compression_summary": dict(compression_summary),
+        **compression_copy_through_from_row(row),
+        # PCT-3 item 4. The flag and its rule version travel TOGETHER or not at
+        # all: a record built from a row v1 never evaluated carries neither,
+        # because a version stamp beside no verdict claims a rule ran.
+        **_compression_break_copy_through(row, symbol_entry),
         "compression_break_today": bool(row.get("compression_break_today") or symbol_entry.get("compression_break_today")),
         "compression_break_direction": row.get("compression_break_direction") or symbol_entry.get("compression_break_direction") or "",
         "compression_break_level": _coerce_float(row.get("compression_break_level") or symbol_entry.get("compression_break_level")),
@@ -13279,8 +13500,46 @@ EXIT_FRAMEWORK_STATS_COLUMNS = (
     "n_filtered_by_experiment",
 )
 
+#: Packet EF1. The same columns one grain finer: `setup_family` FIRST, because
+#: it is the question the row answers, and `population` beside it so a study or
+#: control family can never be read as the champion's own record. Derived from
+#: the pooled tuple rather than restated, so the two files can never disagree on
+#: a column - the test pins `columns - {setup_family, population}` == the pooled
+#: tuple, in order.
+EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS = (
+    "setup_family",
+    "population",
+    *EXIT_FRAMEWORK_STATS_COLUMNS,
+)
 
-def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
+#: What a tracker record with no `setup_family` is grouped as. It is COUNTED,
+#: never dropped: a dropped row would make the pooled row bigger than the sum of
+#: its families and nothing on the page would say so.
+EXIT_FRAMEWORK_UNLABELLED_FAMILY = "unlabelled"
+
+
+def _tracker_setup_population(setup: dict) -> str:
+    """`champion` / `study` / `control`, from the RECORD's own flag.
+
+    Never from the family NAME. `record_setup_tracker_snapshot` stamps
+    `is_study` / `is_control` when it files a record into its isolated
+    namespace, and that stamp is the only thing that says which population a row
+    belongs to: a champion setup whose family is literally called
+    `study_1stdev_breakout_probe` is still a champion, and a study record whose
+    family carries no such word is still a study.
+    """
+    if not isinstance(setup, dict):
+        return "champion"
+    if setup.get("is_study"):
+        return "study"
+    if setup.get("is_control"):
+        return "control"
+    return "champion"
+
+
+def build_exit_framework_stats_rows(
+    setups: dict[str, dict], by_family: bool = False
+) -> list[dict]:
     """The reader `comparison_apr2026` has lacked since April.
 
     Two experimental exit templates (`exp_full_band2_hard_stop_125r` and
@@ -13309,9 +13568,31 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
     `n + n_filtered_by_experiment` reconciles to the baseline's `n`. Without
     that column a smaller denominator reads as a worse result, which is the
     opposite of what it means.
+
+    **Packet EF1: `by_family` is the GROUPING KEY, not a second builder.** With
+    it the key gains `setup_family` (blank or missing is `unlabelled`, counted
+    never dropped) and `population`, and the rows carry those two columns in
+    front. One builder means the pooled file and the by-family file can never
+    disagree on a rate, and one scenario walker means the band-variant fence in
+    `_flatten_tracker_scenarios` still applies - a second walk of
+    `setup["scenarios"]` written here would be exactly the eighth unfenced
+    reader `test_band_variant_fence_guard.py` exists to prevent.
+
+    `population` is JOINED on `setup_id` against the setups mapping rather than
+    added to the flattened row: the flattener feeds every champion export and a
+    new column there would move files this packet must leave byte-identical.
     """
 
-    groups: dict[tuple[str, str, str, str], dict] = {}
+    population_by_setup_id: dict[str, str] = {}
+    if by_family:
+        for setup_id, setup in (setups or {}).items():
+            if not isinstance(setup, dict):
+                continue
+            population_by_setup_id[str(setup.get("setup_id") or setup_id)] = (
+                _tracker_setup_population(setup)
+            )
+
+    groups: dict[tuple[str, ...], dict] = {}
     for row in _flatten_tracker_scenarios(setups or {}):
         key = (
             str(row.get("framework_family") or ""),
@@ -13319,6 +13600,12 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
             str(row.get("side") or ""),
             str(row.get("priority_bucket") or ""),
         )
+        if by_family:
+            key = (
+                str(row.get("setup_family") or "").strip() or EXIT_FRAMEWORK_UNLABELLED_FAMILY,
+                population_by_setup_id.get(str(row.get("setup_id")), "champion"),
+                *key,
+            )
         group = groups.setdefault(
             key,
             {
@@ -13360,7 +13647,15 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
         group["rows"].append(row)
 
     stats_rows: list[dict] = []
-    for (family, template, side, bucket), group in sorted(groups.items()):
+    columns = (
+        EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS if by_family else EXIT_FRAMEWORK_STATS_COLUMNS
+    )
+    for key, group in sorted(groups.items()):
+        if by_family:
+            setup_family, population, family, template, side, bucket = key
+        else:
+            setup_family = population = ""
+            family, template, side, bucket = key
         tradeable = group["rows"]
         closed = [row for row in tradeable if _scenario_is_closed(row.get("status"))]
         closed_rs = [
@@ -13405,7 +13700,10 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
         # Wilson, but its `n` is the denominator of the RATE - here that is the
         # closed count, while this row's `n` is the tracked count.
         row["n"] = len(tradeable)
-        stats_rows.append({column: row[column] for column in EXIT_FRAMEWORK_STATS_COLUMNS})
+        if by_family:
+            row["setup_family"] = setup_family
+            row["population"] = population
+        stats_rows.append({column: row[column] for column in columns})
     return stats_rows
 
 
@@ -13518,13 +13816,26 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
     #
     # `saved_at` / `saved_by` are stamped on all three so the page can answer
     # "as of when?" from the export rather than from a file mtime (M3.2).
-    for label, builder, argument, columns, path in (
+    #
+    # Packet EF1 adds the FOURTH: the same exit-framework comparison one grain
+    # finer. It reads all three namespaces, because the study and control
+    # records carry the same exit scenarios and the by-family file is the first
+    # surface that reads them back - labelled by `population`, so nothing here
+    # lets a study row into a champion aggregate. The pooled export above is
+    # untouched and stays the champion's population alone.
+    exit_framework_by_family_setups = dict(setups) if isinstance(setups, dict) else {}
+    for namespace in ("control_setups", "study_setups"):
+        extra = payload.get(namespace) if isinstance(payload, dict) else None
+        if isinstance(extra, dict):
+            exit_framework_by_family_setups.update(extra)
+    for label, builder, argument, columns, path, builder_kwargs in (
         (
             "control discovery",
             build_control_discovery_stats_rows,
             payload,
             DISCOVERY_STATS_COLUMNS,
             CONTROL_DISCOVERY_STATS_FILE,
+            {},
         ),
         (
             "study discovery",
@@ -13532,6 +13843,7 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
             payload,
             DISCOVERY_STATS_COLUMNS,
             STUDY_DISCOVERY_STATS_FILE,
+            {},
         ),
         (
             "exit framework",
@@ -13539,11 +13851,22 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
             setups,
             EXIT_FRAMEWORK_STATS_COLUMNS,
             EXIT_FRAMEWORK_STATS_FILE,
+            {},
+        ),
+        # EF1. Its own guard, after the pooled one: a bug in the new grouping
+        # must cost neither the tracker save nor the pooled file.
+        (
+            "exit framework by family",
+            build_exit_framework_stats_rows,
+            exit_framework_by_family_setups,
+            EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS,
+            EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE,
+            {"by_family": True},
         ),
     ):
         try:
             pd.DataFrame(
-                _stamp_tracker_clock(builder(argument), saved_at, saved_by),
+                _stamp_tracker_clock(builder(argument, **builder_kwargs), saved_at, saved_by),
                 columns=[*columns, TRACKER_SAVED_AT_COLUMN, TRACKER_SAVED_BY_COLUMN],
             ).to_csv(path, index=False)
         except Exception as exc:
@@ -20773,9 +21096,15 @@ def find_directional_trendline_candidate(
                     continue
 
                 candidate = {
+                    "line_id": (
+                        f"d1_trendline:{'H-break' if side == 'LONG' else 'L-break'}:"
+                        f"{pivot_a['date']}_{pivot_b['date']}"
+                    ),
                     "type": "H-break" if side == "LONG" else "L-break",
                     "start_date": pivot_a["date"],
                     "end_date": pivot_b["date"],
+                    "start_price": float(price_a),
+                    "end_price": float(price_b),
                     "break_date": datetimes.iloc[break_idx].date().isoformat(),
                     "bars_since_break": int(bars_since_break),
                     "start_idx": x1,
@@ -20822,9 +21151,15 @@ def find_directional_trendline_candidate(
                 atr_distance = (float(last_close) - current_line_price) / float(atr20)
 
             candidate = {
+                "line_id": (
+                    f"d1_trendline:{'H-' if side == 'LONG' else 'L+'}:"
+                    f"{pivot_a['date']}_{pivot_b['date']}"
+                ),
                 "type": "H-" if side == "LONG" else "L+",
                 "start_date": pivot_a["date"],
                 "end_date": pivot_b["date"],
+                "start_price": float(price_a),
+                "end_price": float(price_b),
                 "start_idx": x1,
                 "end_idx": x2,
                 "current_line_price": float(current_line_price),
@@ -24338,6 +24673,54 @@ def _append_scan_context_upgrade_target(
     )
 
 
+def _append_trendline_break_upgrade_target(
+    trigger_levels: list[dict],
+    *,
+    side: str,
+    candidate: dict,
+    reason: str,
+    today_iso: str,
+    priority_bucket: str,
+    setup_family: str,
+) -> None:
+    """Append the scan's already-observed break without changing old targets.
+
+    Unlike a future level watch this is an observation, so it deliberately
+    does not ask whether the current price is still on the pre-break side.
+    Its identity is the frozen scan break date, not a rounded line price.
+    """
+    break_date = str(candidate.get("break_date") or "").strip()
+    line = _coerce_float(candidate.get("current_line_price"))
+    normalized_side = normalize_side(side)
+    if not break_date or line is None or normalized_side not in {"LONG", "SHORT"}:
+        return
+    reason_text = str(reason or "Trendline break detected by the daily scan.").strip()
+    reason_text = f"{reason_text} (break {break_date})"
+    trigger_levels.append(
+        {
+            "schema_version": 1,
+            "trigger_id": f"trendline_break:{normalized_side}:{break_date}",
+            "side": normalized_side,
+            "action": _d1_trigger_action_for_side(normalized_side),
+            "event_type": "trendline_break",
+            "label": "Trendline break",
+            "alert_label": "Trendline break",
+            "level": round(float(line), 4),
+            "reason": reason_text,
+            "source": "trendline_break_scan",
+            "armed_at": today_iso,
+            "anchor_type": "TRENDLINE",
+            "anchor_date": str(candidate.get("end_date") or "").strip(),
+            "break_date": break_date,
+            "trendline_candidate": dict(candidate),
+            "priority_bucket": str(priority_bucket or "").strip(),
+            "setup_family": str(setup_family or "").strip(),
+            "target_tier": "A/S",
+            "upgrade_only": True,
+        }
+    )
+
+
 def _append_scan_context_upgrade_targets(
     trigger_levels: list[dict],
     seen: set[tuple[str, str, float]],
@@ -24623,6 +25006,27 @@ def _append_scan_context_upgrade_targets(
             armed_price=last_close,
             anchor_type="TRENDLINE",
             anchor_date=str(trendline_candidate.get("end_date") or ""),
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+        )
+
+    trendline_break_candidate = (
+        row.get("trendline_break_candidate")
+        or state.get("priority_trendline_break_candidate")
+    )
+    if bool(row.get("trendline_break_recent") or state.get("priority_trendline_break_recent")) and isinstance(
+        trendline_break_candidate, dict
+    ):
+        _append_trendline_break_upgrade_target(
+            trigger_levels,
+            side=side,
+            candidate=trendline_break_candidate,
+            reason=(
+                row.get("trendline_break_note")
+                or state.get("priority_trendline_break_note")
+                or "Trendline break detected by the daily scan."
+            ),
+            today_iso=today_iso,
             priority_bucket=priority_bucket,
             setup_family=setup_family,
         )
@@ -25088,6 +25492,64 @@ def _build_master_avwap_bucket_upgrade_alert_payload(
         }
         symbol_map[symbol] = entry
         alert_rows.append(dict(event))
+
+    # Bucket upgrades are the champion saved-report mode. A trendline break is
+    # an additive scan observation, not a bucket change, so it joins this
+    # output without changing how any champion row is selected or shaped.
+    trendline_seen: set[tuple[str, str, str]] = set()
+    for row in priority_rows or []:
+        if not isinstance(row, dict) or not bool(row.get("trendline_break_recent")):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side_raw = str(row.get("side") or "").strip().upper()
+        candidate = row.get("trendline_break_candidate")
+        if not symbol or side_raw not in {"LONG", "SHORT"} or not isinstance(candidate, dict):
+            continue
+        break_date = str(candidate.get("break_date") or "").strip()
+        identity = (symbol, side_raw, break_date)
+        if not break_date or identity in trendline_seen:
+            continue
+        target: list[dict] = []
+        _append_trendline_break_upgrade_target(
+            target,
+            side=side_raw,
+            candidate=candidate,
+            reason=str(row.get("trendline_break_note") or ""),
+            today_iso=today_iso,
+            priority_bucket=str(row.get("priority_bucket") or ""),
+            setup_family=str(row.get("setup_family") or ""),
+        )
+        if not target:
+            continue
+        trendline_seen.add(identity)
+        event = {
+            "symbol": symbol,
+            "priority_score": _coerce_float(row.get("score") or row.get("priority_score")),
+            "priority_bucket": str(row.get("priority_bucket") or ""),
+            "setup_family": str(row.get("setup_family") or ""),
+            "last_trade_date": row.get("last_trade_date") or today_iso,
+            "trade_date": row.get("last_trade_date") or today_iso,
+            **target[0],
+        }
+        alert_rows.append(event)
+        existing_entry = symbol_map.get(symbol)
+        if isinstance(existing_entry, dict):
+            existing_entry["bucket_upgrade_events"] = list(
+                existing_entry.get("bucket_upgrade_events") or []
+            ) + [dict(event)]
+        else:
+            symbol_map[symbol] = {
+                "symbol": symbol,
+                "side": side_raw,
+                "run_date": today_iso,
+                "last_trade_date": event["last_trade_date"],
+                "priority_bucket": event["priority_bucket"],
+                "priority_score": event["priority_score"],
+                "setup_family": event["setup_family"],
+                "upgrade_summary": event["reason"],
+                "bucket_upgrade_events": [dict(event)],
+                "upgrade_targets": [],
+            }
 
     ranked_symbols = dict(
         sorted(
@@ -26691,6 +27153,11 @@ def _evaluate_priority_snapshot_for_date(
         "compression_flag": bool(compression_summary.get("is_compressed")),
         "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
         "compression_note": compression_summary.get("compression_note", ""),
+        # PCT-3 item 1: the score and the three ratios the measure already
+        # computed. `master_avwap_ai_state.json` is what the desk's setups table
+        # merges from, so a field that stops at the priority row never reaches a
+        # chip.
+        **compression_copy_through(compression_summary),
         "latest_release_earnings_date": latest_release_context.get("earnings_date", "")
         or latest_known_earnings_context.get("earnings_date", ""),
         "latest_release_gap_date": latest_release_context.get("gap_date", ""),
@@ -26867,8 +27334,25 @@ def _evaluate_priority_snapshot_for_date(
     priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
     priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
     priority_summary["compression_note"] = effective_compression_note
+    # PCT-3 item 1: the same four numbers on the row the desk and the tracker
+    # read. The penalty above is the EFFECTIVE one (breakout relief applied);
+    # the ratios and the score are the measure's own and are never relieved.
+    priority_summary.update(compression_copy_through(compression_summary))
     symbol_entry["compression_penalty"] = int(effective_compression_penalty or 0)
     symbol_entry["compression_note"] = effective_compression_note
+    # PCT-3 item 4: `compression_break_v1`, labelled and side-aware. Additive -
+    # it changes no score, sets no Phase-6 study field and gates nothing.
+    compression_break = evaluate_compression_break_v1(
+        df,
+        anchor_date_iso=current_anchor_meta.get("date") if current_anchor_meta else None,
+        anchor_stdev=current_anchor_meta.get("stdev") if current_anchor_meta else None,
+        atr20=atr20,
+        side=side,
+        last_trade_date=last_trade_date,
+        last_bar=last_row,
+    )
+    priority_summary.update(compression_break)
+    symbol_entry.update(compression_break)
     if isinstance(entry_feature_snapshot, dict):
         entry_feature_snapshot["compression_penalty"] = int(effective_compression_penalty or 0)
         entry_feature_snapshot["compression_note"] = effective_compression_note

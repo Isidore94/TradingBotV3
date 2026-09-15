@@ -152,6 +152,16 @@ FORWARD_HORIZONS = (3, 5)
 # `armed_alert_expired`, `hold_expired`, `watch_expired` - none is a decision
 # the trader made, and `disarm_*` is a later change of mind about an arm rather
 # than a verdict on the chart that was shown.
+#
+# Also deliberately NOT added, and the reason this comment says so out loud:
+# `auto_arm_watch` and `watch_retired_source_gone` (PCT-1, 2026-09-15). An
+# action joins these sets on what its WRITER does, never on what it is called,
+# and both of those are written by the Pullback alert's auto-arm sweep rather
+# than by a trader's click - the sweep arms one watch per claimed D1 pick and
+# swing Focus name, which was 95 rows on its first tick. Scoring those as
+# takes would have said the trader took ninety-five setups in one minute. The
+# HAND-armed button still writes `arm_watch` and is still a take.
+AUTO_MACHINE_ACTIONS = frozenset({"auto_arm_watch", "watch_retired_source_gone"})
 TAKE_ACTIONS = {
     "add_focus",
     "arm_watch",

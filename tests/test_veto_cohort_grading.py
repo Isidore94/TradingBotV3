@@ -380,8 +380,11 @@ def test_the_nightly_slate_never_grows_by_accident():
 
     Pinned as the exact tuple so a scope can only join the slate deliberately.
     `market_journal` joined on 2026-08-27 - the trader reversed R10.I's opt-in
-    in as many words - and `trader_judgement` did not, which is what this
-    guards."""
+    in as many words - `preference_to_trade` joined on 2026-09-12 (WS-AI1, lead
+    decision on WISHLIST 5C, the trader able to overrule: the bounded summary is
+    fed "into the existing AI package", and the package that reaches the trader
+    is the unattended nightly one), and `trader_judgement` has not, which is
+    what this guards."""
     from ai_jobs import briefs
 
     assert briefs.DEFAULT_SCOPES == (
@@ -390,6 +393,7 @@ def test_the_nightly_slate_never_grows_by_accident():
         "setup_trackers",
         "journal_review",
         "market_journal",
+        "preference_to_trade",
     )
     assert "trader_judgement" not in briefs.DEFAULT_SCOPES
 
@@ -575,6 +579,19 @@ def test_the_scope_can_be_selected_on_demand():
         "preference_trade_outcomes",
         "evidence_report",
         "daily_digest",
+        # WS-TH (2026-09-12) appended the theta grade at the END of the
+        # deterministic stage: it reads `theta_picks.jsonl` and the daily bars,
+        # feeds nothing above it, and sits after the digest so it can never
+        # delay the fact pack. Appended inside the stage, never reordered across
+        # stages - the same rule every line above it follows.
+        "theta_pick_grading",
+        # WS-10D (2026-09-12) appended the Market Journal's story rollups after
+        # it, closing the deterministic stage: they read the journal's own
+        # entries and the exchange calendar, feed nothing above them, and are
+        # deterministic - the narration of those packs is a later packet and
+        # belongs to stage 2. Appended inside the stage, never reordered across
+        # stages.
+        "market_story_rollups",
         # Stage 2: the narration pair, moved here as a unit by decision 0018.
         "ai_summary",
         "ticker_briefs",

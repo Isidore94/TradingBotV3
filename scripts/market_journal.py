@@ -54,6 +54,19 @@ ORIGIN_AWAY_RECAP = "away_recap"
 #: count a row nobody thought.
 ORIGIN_AUTO_MODE_FLIP = "auto_mode_flip"
 MACHINE_ORIGINS = (ORIGIN_AUTO_MODE_FLIP,)
+#: WISHLIST 10J. A read the Trade Mentor ASKED for. The trader wrote every word
+#: of it, so it is not a machine origin - what the origin records is that the
+#: desk chose the moment, which is exactly what a later reader needs to tell a
+#: prompted read from a volunteered one.
+ORIGIN_TRADE_MENTOR = "trade_mentor"
+#: WISHLIST 10K / packet WS-10D. Someone ELSE's words, pasted in whole - the
+#: weekly forecast the trader asks a chat model for. It is stored in this
+#: journal because it is part of the week's record, and it carries its own
+#: origin because it is the one kind of entry the trader did not write: outside
+#: commentary, never their adopted view. A story shows it under its own
+#: heading, `market_thesis` files it as `kind=forecast`, and nothing turns it
+#: into a thesis unless the trader writes an entry of their own adopting it.
+ORIGIN_EXTERNAL_FORECAST = "external_forecast"
 
 #: The journal-only RVOL floor. It is an OVERLAY on this page's charts and
 #: never touches the canonical D1 level store (trader decision, plan.md L1118).
@@ -84,6 +97,8 @@ def build_entry(
     origin: str = ORIGIN_DESK_TAB,
     now: datetime | None = None,
     supersedes: str = "",
+    mentor: Mapping[str, Any] | None = None,
+    reaffirms: str = "",
 ) -> dict[str, Any]:
     """One journal entry.
 
@@ -91,6 +106,17 @@ def build_entry(
     written. They are separate fields precisely so an evening write-up of an
     AWAY day can be honest about both - and `written_after_the_session` is
     computed rather than asserted, so it cannot be set wrongly by a caller.
+
+    `mentor` and `reaffirms` are WISHLIST 10J's two additions, and they are
+    fields on THIS row rather than a second store, because a read and the
+    prompt it answers are one fact (packet WS-TM). `mentor` carries the slot
+    that asked (`slot_id`, `prompt_kind`, `scheduled_at`) and, separately, the
+    moment the trader actually replied (`responded_at`) - a reply typed at 09:12
+    cannot claim to describe the market at 09:00, and `created_at` alone cannot
+    say which hour was being asked about. `reaffirms` names the earlier entry a
+    "Read unchanged" restates. It is deliberately NOT `supersedes`: superseding
+    would hide the read it reaffirms, and "I still think what I thought at 09:00"
+    is a new observation at 11:00, not a correction of the old one.
     """
     moment = _now(now)
     created_at = moment.astimezone(timezone.utc).isoformat(timespec="seconds")
@@ -119,6 +145,11 @@ def build_entry(
         "origin": str(origin or ""),
         "text": body,
         "supersedes": str(supersedes or ""),
+        # Present and empty on every other entry, never absent: a reader that
+        # has to tell "no prompt asked for this" from "this key did not exist
+        # yet" is reading two different absences as one.
+        "mentor": dict(mentor or {}),
+        "reaffirms": str(reaffirms or ""),
     }
 
 
@@ -194,6 +225,36 @@ def session_date_for(now: datetime | None = None) -> str:
     except Exception:  # noqa: BLE001 - never the reason a thought is lost
         pass
     return local.date().isoformat()
+
+
+def session_of_entry(entry: Mapping[str, Any]) -> str:
+    """Which session a STORED entry is about - the one selection rule (WS-10D).
+
+    `EvidenceLedger.append` applies its own fields last, so the `session_date`
+    on a stored row is the market-local date of the WRITE, not the date
+    `build_entry` computed. Measured 2026-09-12: a note typed at 21:00 Pacific
+    on the 11th is 00:00 New York on the 12th, so the row says `2026-09-12`
+    while `session_date_for` on the same moment correctly answers
+    `2026-09-11`. A reader that groups by the stored field loses the evening
+    review - the single entry a day's story most wants.
+
+    So the session is recomputed from `created_at`, which the ledger does not
+    touch, through the same function the writing surfaces use. Every reader
+    that needs "the entries about day X" calls THIS, so the desk's Story pane
+    and the overnight rollup can never disagree.
+
+    The limit, stated rather than hidden: an entry deliberately filed against an
+    OLDER session - written Tuesday about Friday - cannot be recovered either
+    way, because its intended `session_date` never reached disk. Repairing the
+    ledger stamp is its own packet.
+    """
+    raw = str(entry.get("created_at") or "").strip()
+    if raw:
+        try:
+            return session_date_for(datetime.fromisoformat(raw))
+        except Exception:  # noqa: BLE001 - never lose an entry to a calendar
+            pass
+    return str(entry.get("session_date") or "")
 
 
 def _normalize_timeframe(value: Any) -> str:

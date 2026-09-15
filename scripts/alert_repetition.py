@@ -114,6 +114,16 @@ class RepetitionLedger:
         if session_open is not None:
             self.session_open = session_open
 
+    def repeat_counts(self) -> dict[tuple[str, str], int]:
+        """How many times each (symbol, side) has alerted today.
+
+        A read-only snapshot for the feed's own bookkeeping (SN4): a row that
+        is redrawn - by a rebuild or by the diff - re-stamps its ×N badge from
+        here instead of asking `consider` again, because `consider` is a
+        DECISION and calling it twice for one alert would count it twice.
+        """
+        return {key: row.count for key, row in self._rows.items()}
+
     def digest_symbols(self) -> list[str]:
         """What the open-burst digest row currently holds, in arrival order."""
         return list(self._digest)

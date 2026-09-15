@@ -250,6 +250,51 @@ def test_both_surfaces_write_through_the_same_service(service):
     assert len(service.entries_for("2026-08-21")) == 2
 
 
+def test_an_entry_written_with_an_explicit_clock_is_stamped_by_that_clock(tmp_path):
+    """The ledger's stamp and the entry's `created_at` describe ONE moment.
+
+    Found by WISHLIST 10J's injected clock. `write_entry` built the entry from
+    the caller's `now` and then appended WITHOUT it, so `EvidenceLedger.append`
+    - which applies its own fields last, precisely so a caller cannot lie about
+    them - stamped `event_at` and its own `session_date` from `datetime.now()`.
+    An entry written with an explicit `now` was therefore filed under one date
+    and stamped with another, and `entries_for(<the session it says it is
+    about>)` could not find it at all.
+
+    A real ledger in tmp_path, not the fake stream: the defect lived in the
+    argument that never reached `append`, and a fake that ignores `now` cannot
+    see it.
+    """
+    import market_journal
+    from evidence_ledger import EvidenceLedger
+    from ui.services.market_journal_service import MarketJournalService
+
+    written = datetime(2026, 9, 14, 16, 12, 41, tzinfo=timezone.utc)
+    instance = MarketJournalService()
+    instance._ledger = EvidenceLedger(
+        stream=market_journal.STREAM,
+        schema=market_journal.SCHEMA_MARKET_JOURNAL_ENTRY,
+        directory=tmp_path / "ledger",
+    )
+
+    result = instance.write_entry(
+        text="SPY holding the opening range.",
+        session_date="2026-09-14",
+        now=written,
+    )
+
+    assert result["ok"] is True
+    row = result["entry"]
+    assert row["created_at"].startswith("2026-09-14T16:12:41")
+    assert row["event_at"].startswith("2026-09-14T16:12:41")
+    # 16:12 UTC is 12:12 in New York, so the ledger's market-local session is
+    # the same day the entry says it is about.
+    assert row["session_date"] == "2026-09-14"
+    assert [entry["text"] for entry in instance.entries_for("2026-09-14")] == [
+        "SPY holding the opening range."
+    ]
+
+
 def test_reading_filters_by_session(service):
     service.write_entry(text="a", session_date="2026-08-20")
     service.write_entry(text="b", session_date="2026-08-21")

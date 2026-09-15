@@ -4,12 +4,13 @@ import csv
 import hashlib
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -30,10 +31,13 @@ from project_paths import (
     MASTER_AVWAP_SETUP_STATS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
     MASTER_AVWAP_TIER_CATCH_RATE_FILE,
+    MASTER_AVWAP_THETA_OUTCOMES_FILE,
     MASTER_AVWAP_TIER_LIST_FILE,
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
 )
+import claimed_pick_evidence
 from research_explanations import build_plain_english_whats_working
+from theta_pick_tracker import THETA_NO_EXPORT_SENTENCE, theta_readout
 from ui import theme
 from ui.read_worker import ReadWorker, join_worker
 from ui.timer_utils import SignalCoalescer
@@ -76,6 +80,15 @@ STUDY_DISCOVERY_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
 EXIT_FRAMEWORK_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
     "master_avwap_exit_framework_stats.csv"
 )
+# Packet EF1 (trader, 2026-09-08): the same comparison split by SETUP FAMILY, in
+# its own file. The pooled table above answers "does band 3 beat band 2" for the
+# whole population; this one answers it for the 1st-dev breakout. It is a second
+# FILE and a second READ, never a second grain inside the shipped table.
+EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
+    "master_avwap_exit_framework_by_family.csv"
+)
+#: The picker's first entry: today's table, unchanged.
+EXIT_FRAMEWORK_POOLED_LABEL = "All setups (pooled)"
 
 #: The ten-row floor Weekend Prep's tables use (R4 A18), applied to the three
 #: tabs this packet adds. 260 px is ten rows plus a header. A separate constant
@@ -277,6 +290,23 @@ DISCOVERY_COLUMNS = (
     ("flag", "Flag"),
 )
 
+#: Packet WS-TH (2026-09-12). The theta plays' own cells. HOLD RATE LEADS with
+#: its `n` and the ONE Wilson lower bound, and the sort is the BOUND - the same
+#: rule the Controls and Studies tabs follow. `Repeat days` sits beside `n` and
+#: is never added to it: a name the scan finds eight days running is ONE
+#: observation of the outcome and eight days of interest.
+THETA_COLUMNS = (
+    ("support_combo", "Support combo"),
+    ("play_type", "Play"),
+    ("hold_rate", "Held 20s"),
+    ("hold_rate_lb", "Held 20s (low)"),
+    ("n", "n"),
+    ("repeat_days", "Repeat days"),
+    ("n_unmeasured", "Unmeasured"),
+    ("expiry_hold_rate", "Held at expiry"),
+    ("n_expiry_graded", "Expiry n"),
+)
+
 #: Packet M5.3. `framework_family` and `experimental` lead, because the first
 #: question about a row here is which framework it belongs to and whether it
 #: ever happened.
@@ -340,6 +370,83 @@ HUMAN_PICK_COLUMNS = (
     ("avg_side_return_delta_pct", "Delta %"),
 )
 
+#: Packet D1C-B. The `My claims` tab's two blocks.
+#:
+#: WIN RATE LEADS (decision 0016), with its `n` and the ONE Wilson lower bound
+#: beside it, and the sort is the BOUND - the same rule the Controls, Studies
+#: and Theta tabs follow. The lately window uses the packet's own column names
+#: and `_all` sits beside it, so ONE row carries both windows and neither is
+#: hidden behind a picker.
+#:
+#: `also FAV` is the OVERLAP, NAMED: a liked pick that was also a FAV scan row
+#: that day is counted once in each population and once here. It is never added
+#: to anything - the two populations are measured on different clocks (exchange
+#: sessions from the claim close against the symbol's own later scan rows) and
+#: their union is not a sample.
+CLAIM_POPULATION_COLUMNS = (
+    ("population", "Population"),
+    ("win_rate", "Win %"),
+    ("bound", "Win % (low)"),
+    ("n", "n"),
+    ("wins", "Wins"),
+    ("pending", "Pending"),
+    ("unmeasured", "Unmeasured"),
+    ("also_fav", "also FAV"),
+    ("also_near", "also Near"),
+    ("also_hc", "also HC"),
+    ("win_rate_all", "Win % (all)"),
+    ("bound_all", "Win % low (all)"),
+    ("n_all", "n (all)"),
+    ("clock", "Clock"),
+    ("note", "Note"),
+)
+
+#: `setup` is the DISPLAY label the CLI prints (`avwap_breakout`); `source` is
+#: the cohort id it joins back on (`like_avwap_breakout`) and rides at the end,
+#: so the tab and `python -m claimed_pick_evidence` name a setup the same way.
+CLAIM_SETUP_COLUMNS = (
+    ("setup", "Claimed setup"),
+    ("win_rate", "Win %"),
+    ("bound", "Win % (low)"),
+    ("n", "n"),
+    ("wins", "Wins"),
+    ("pending", "Pending"),
+    ("unmeasured", "Unmeasured"),
+    ("n_all", "n (all)"),
+    ("source", "Cohort id"),
+)
+
+CLAIM_TAB_TITLE = "My claims"
+
+#: What a row IS, and what this tab is NOT. Both clocks are named because the
+#: two n's are not comparable as counts, only as records.
+CLAIM_EXPLANATION = (
+    "MY CLAIMS, packet D1C-B. A row in the top block is one POPULATION of "
+    "opportunities graded forward, and the two of them run on DIFFERENT CLOCKS: "
+    "My liked trades is the like cohort - one claimed like per symbol, side and "
+    "session, measured over 5 EXCHANGE SESSIONS from the claim day's close, so a "
+    "repeated click on one chart is still one trade. FAV, HC and Near are the "
+    "tracker's own populations from master_avwap_tier_outcomes.csv, measured over "
+    "5 SCAN ROWS - the symbol's own fifth later scan row. THE TWO ARE SHOWN SIDE "
+    "BY SIDE AND NEVER POOLED: where a liked pick was also a FAV or Near scan row "
+    "that day the OVERLAP IS NAMED in its own column and added to nothing - and "
+    "'that day' means ANY tracker row for the name and side on the claim's own "
+    "session, at any horizon and whatever its eligibility, because the question "
+    "is what the scan SAW and not what has since matured (a claim made this "
+    "week has no fifth later scan row yet). HC "
+    "reads unmeasured in words until the tracker ever stamps high_conviction on "
+    "an outcome row - it is an overlay computed at feed-write time, and an "
+    "unmeasured population is never 0%. Win rate leads with its n and the ONE "
+    "Wilson lower bound, and the sort is the BOUND. Pending means the horizon "
+    "has not arrived; unmeasured means it never will. NOTHING ON THIS TAB "
+    "SCORES, RANKS, GATES, ALERTS OR PROMOTES, and nothing here is written back. "
+    "These are OPPORTUNITIES, not trades: what the trader actually traded lives "
+    "in the Journal and in the said-vs-did preference report, and the two are "
+    "never merged."
+)
+
+CLAIM_NO_DATA_SENTENCE = "No claimed picks have been read yet."
+
 PERCENT_KEYS = {
     "win_rate",
     "win_rate_closed",
@@ -358,6 +465,16 @@ PERCENT_KEYS = {
     # here and covers all three.
     "win_rate_lb",
     "stop_out_rate",
+    # D1C-B: the My claims tab. `bound` is the ONE Wilson lower bound and the
+    # `_all` pair is the same two numbers over the wide window.
+    "bound",
+    "win_rate_all",
+    "bound_all",
+    # WS-TH: the Theta tab's three rates. Fractions in the cell, percents on
+    # the screen, through the one formatter every other rate here uses.
+    "hold_rate",
+    "hold_rate_lb",
+    "expiry_hold_rate",
 }
 SIGNED_KEYS = {
     "avg_total_r_champion",
@@ -425,6 +542,20 @@ class SetupTrackerPanel(QFrame):
         self.catch_rate_rows: list[dict[str, Any]] = []
         self.human_pick_rows: list[dict[str, Any]] = []
         self.band_variant_rows: list[dict[str, Any]] = []
+        # EF1. `exit_framework_rows` is what the table currently SHOWS - the
+        # pooled export, or one family's slice of the by-family one.
+        self.exit_framework_rows: list[dict[str, Any]] = []
+        self.exit_framework_by_family_rows: list[dict[str, Any]] = []
+        # WS-TH: the Theta tab's cells, as `theta_readout` ranked them.
+        self.theta_rows: list[dict[str, Any]] = []
+        # D1C-B: the My claims tab's two blocks, built on the worker from ONE
+        # `claimed_pick_evidence.build_comparison` so the two can never disagree.
+        self.claim_population_rows: list[dict[str, Any]] = []
+        self.claim_setup_rows: list[dict[str, Any]] = []
+        self._ranked_exports: dict[str, Any] = {}
+        self._export_signatures: dict[str, Any] = {}
+        self._pooled_exit_framework_sentence = EXIT_FRAMEWORK_NO_EXPORT_SENTENCE
+        self._exit_framework_rendered_from: tuple | None = None
         # ST6.4. The SHARED Working-lately snapshot, handed over by the desk's
         # service. Empty means this page renders its own read and LABELS it
         # `panel read`, which is the difference between "the desk's answer" and
@@ -496,6 +627,44 @@ class SetupTrackerPanel(QFrame):
         self.exit_framework_status_label = QLabel(EXIT_FRAMEWORK_NO_EXPORT_SENTENCE)
         self.exit_framework_status_label.setObjectName("MutedLabel")
         self.exit_framework_status_label.setWordWrap(True)
+        # WS-TH: the Theta tab's two lines. The population sentence sits ABOVE
+        # the table for the same reason every other population sentence on this
+        # page does - a theta cell and a pick look identical in a table - and
+        # the grade line sits BELOW it, because it is a verdict on the numbers
+        # the table just showed, not a description of them.
+        self.theta_status_label = QLabel(THETA_NO_EXPORT_SENTENCE)
+        self.theta_status_label.setObjectName("MutedLabel")
+        self.theta_status_label.setWordWrap(True)
+        self.theta_grade_label = QLabel("")
+        self.theta_grade_label.setObjectName("MutedLabel")
+        self.theta_grade_label.setWordWrap(True)
+        # D1C-B: the My claims tab's three lines. The LEADER sentence sits above
+        # the tables (it is the verdict the trader came for, and it names no
+        # setup below the reportable floor); the caption separates the two
+        # blocks; the footnotes sit below, because a quick-like exclusion and a
+        # tracker read exclusion describe the rows that were just shown.
+        self.claim_status_label = QLabel(CLAIM_NO_DATA_SENTENCE)
+        self.claim_status_label.setObjectName("MutedLabel")
+        self.claim_status_label.setWordWrap(True)
+        self.claim_setup_caption_label = QLabel(
+            "By claimed setup - one row per setup the trader NAMED, sorted by the "
+            "Wilson lower bound."
+        )
+        self.claim_setup_caption_label.setObjectName("MutedLabel")
+        self.claim_setup_caption_label.setWordWrap(True)
+        self.claim_footnote_label = QLabel("")
+        self.claim_footnote_label.setObjectName("MutedLabel")
+        self.claim_footnote_label.setWordWrap(True)
+        # EF1: the ONE control the Exit frameworks tab gains. The first entry is
+        # today's table and nothing else on the tab changes; a family view is a
+        # PRESENTATION filter over a second export, never a second reading and
+        # never a re-ranking - `_rank_exit_frameworks` orders both files.
+        self.exit_framework_family_combo = QComboBox()
+        self.exit_framework_family_combo.setObjectName("ExitFrameworkFamilyPicker")
+        self.exit_framework_family_combo.addItem(EXIT_FRAMEWORK_POOLED_LABEL)
+        self.exit_framework_family_combo.currentIndexChanged.connect(
+            self._on_exit_framework_family_changed
+        )
 
         self.tabs = QTabWidget()
         # G2b.2: every tab NAMES the column that takes the slack and the
@@ -551,10 +720,24 @@ class SetupTrackerPanel(QFrame):
             text_key="framework_family",
             elide_keys=("exit_template_id",),
         )
+        # WS-TH: `Support combo` takes the slack - it is the only free-text
+        # identifier here and the rates must never take it.
+        self.theta_table, self.theta_model = self._make_table(
+            THETA_COLUMNS, text_key="support_combo", elide_keys=("play_type",)
+        )
+        # D1C-B: `Note` takes the slack on the populations block - it carries the
+        # HC unmeasured sentence, and a rate column must never take it.
+        self.claim_population_table, self.claim_population_model = self._make_table(
+            CLAIM_POPULATION_COLUMNS, text_key="note", elide_keys=("clock",)
+        )
+        self.claim_setup_table, self.claim_setup_model = self._make_table(
+            CLAIM_SETUP_COLUMNS, text_key="source"
+        )
         for table in (
             self.control_discovery_table,
             self.study_discovery_table,
             self.exit_framework_table,
+            self.theta_table,
         ):
             table.setMinimumHeight(TABLE_TEN_ROWS_PX)
         self.attribute_table, self.attribute_model = self._make_table(
@@ -668,12 +851,46 @@ class SetupTrackerPanel(QFrame):
                 "scenarios by definition has a smaller n, and Filtered carries the difference so "
                 "n + Filtered equals the baseline's n - a smaller denominator here is the "
                 "experiment working, not a worse result. Rows are grouped by side and bucket with "
-                "the baseline above its twin. Nothing here scores, ranks, gates or alerts, and "
+                "the baseline above its twin. EF1: the picker above this table splits the "
+                "SAME comparison by SETUP FAMILY - `All setups (pooled)` is this whole "
+                "population, a family is that setup's own answer to 'does band 3 beat band "
+                "2', and a family's rows are shown even when they are under the reportable "
+                "floor. Nothing here scores, ranks, gates or alerts, and "
                 "nothing here retires evidence.",
                 self.exit_framework_table,
                 status=self.exit_framework_status_label,
+                control=("Setup family:", self.exit_framework_family_combo),
             ),
             "Exit frameworks",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "SHADOW EVIDENCE, packet WS-TH. The theta plays the D1 scan already "
+                "prints to master_avwap_theta_puts.txt, recorded once per symbol per "
+                "scan date and graded forward: did the close hold above the SOLD "
+                "strike at the exact 5th, 10th and 20th exchange session, and at the "
+                "option's own expiry. Cells are cut by SUPPORT COMBO and play type. "
+                "Hold rate leads with its n and its Wilson lower bound, and the sort "
+                "is the BOUND - a 100% on two picks is not better than a 60% on "
+                "forty. n counts FIRST APPEARANCES; Repeat days counts the later ones "
+                "and is never added to n. A blank cell is not measured, never zero. "
+                "Nothing on this tab scores, ranks, gates or alerts, and nothing here "
+                "changes a theta score, a support or the report.",
+                self.theta_table,
+                status=self.theta_status_label,
+                footer=self.theta_grade_label,
+            ),
+            "Theta",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                CLAIM_EXPLANATION,
+                self.claim_population_table,
+                status=self.claim_status_label,
+                extra=(self.claim_setup_caption_label, self.claim_setup_table),
+                footer=self.claim_footnote_label,
+            ),
+            CLAIM_TAB_TITLE,
         )
         self.tabs.addTab(
             self._make_explained_tab(
@@ -867,7 +1084,14 @@ class SetupTrackerPanel(QFrame):
         return table, model
 
     def _make_explained_tab(
-        self, description: str, table: DataTable, *, footer=None, status=None
+        self,
+        description: str,
+        table: DataTable,
+        *,
+        footer=None,
+        status=None,
+        control=None,
+        extra: tuple = (),
     ) -> QWidget:
         tab = QWidget()
         label = QLabel(description)
@@ -877,11 +1101,31 @@ class SetupTrackerPanel(QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         layout.addWidget(label)
+        # EF1: `control` is the ONE picker a tab may carry, and it sits ABOVE the
+        # status sentence, because the sentence describes whatever the control
+        # currently selects. `(caption, widget)`; at most one per tab.
+        if control is not None:
+            caption, widget = control
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            prompt = QLabel(caption)
+            prompt.setObjectName("MutedLabel")
+            row.addWidget(prompt)
+            row.addWidget(widget, 1)
+            row.addStretch(2)
+            layout.addLayout(row)
         # `status` is what the table currently says about itself and belongs
         # ABOVE it; `footer` is how the read went and belongs below.
         if status is not None:
             layout.addWidget(status)
         layout.addWidget(table, 1)
+        # D1C-B: `extra` is how a tab carries a SECOND block. The two blocks on
+        # `My claims` answer two different questions off ONE build - which
+        # population, and which claimed setup - and splitting them across two
+        # tabs would hide the one the trader did not click.
+        for widget in extra or ():
+            layout.addWidget(widget, 1 if isinstance(widget, DataTable) else 0)
         if footer is not None:
             layout.addWidget(footer)
         return tab
@@ -1045,6 +1289,87 @@ class SetupTrackerPanel(QFrame):
                     return payload
                 self._refresh_pending = False
 
+    # ------------------------------------------------------------------
+    # EF1: the Exit frameworks family picker
+    # ------------------------------------------------------------------
+
+    def selected_exit_framework_family(self) -> str:
+        """The picker's current selection, or the pooled label when there is none."""
+        combo = getattr(self, "exit_framework_family_combo", None)
+        if combo is None:
+            return EXIT_FRAMEWORK_POOLED_LABEL
+        return str(combo.currentText() or EXIT_FRAMEWORK_POOLED_LABEL)
+
+    def _refill_exit_framework_families(self) -> None:
+        """Rebuild the picker from the by-family export, KEEPING the selection.
+
+        A refresh that reset the picker to the pooled view would undo the
+        trader's choice every time a scan rewrote the file, which on a scan day
+        is several times an hour. The selection survives while the family is
+        still in the export; a family that has gone falls back to pooled.
+
+        Signals are blocked while the list is rebuilt: `clear()` and `addItems`
+        each emit `currentIndexChanged`, and re-rendering the table twice for a
+        list that has not changed is the sort of thing that ends up on the Qt
+        thread's bill.
+        """
+        combo = self.exit_framework_family_combo
+        families = exit_framework_families(self.exit_framework_by_family_rows)
+        wanted = [EXIT_FRAMEWORK_POOLED_LABEL, *families]
+        current = [combo.itemText(index) for index in range(combo.count())]
+        if current == wanted:
+            return
+        selected = self.selected_exit_framework_family()
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItems(wanted)
+            combo.setCurrentIndex(wanted.index(selected) if selected in wanted else 0)
+        finally:
+            combo.blockSignals(blocked)
+
+    def _apply_exit_framework_view(self) -> None:
+        """Render the Exit frameworks table for the current selection. Qt thread.
+
+        Same memo rule as every other table on this page: the rows are re-set
+        and the columns re-fitted only when what they were BUILT from changed -
+        here the two export signatures and the selected family.
+        """
+        family = self.selected_exit_framework_family()
+        rows = exit_framework_view(self._ranked_exports, family)[:300]
+        self.exit_framework_rows = rows
+        if family == EXIT_FRAMEWORK_POOLED_LABEL:
+            self.exit_framework_status_label.setText(
+                self._pooled_exit_framework_sentence
+            )
+        else:
+            self.exit_framework_status_label.setText(
+                exit_framework_family_sentence(family, rows)
+            )
+        memo = (
+            self._export_signatures.get("exit_framework"),
+            self._export_signatures.get("exit_framework_by_family"),
+            family,
+        )
+        # Its OWN memo, not an entry in `_rendered_from`: that dict is REPLACED
+        # wholesale at the end of every render pass, so a key written into it
+        # here would be dropped on the next refresh and this table would re-fit
+        # on every pass - which is the defect G7.2 measured and fixed.
+        if self._exit_framework_rendered_from == memo:
+            return
+        self._exit_framework_rendered_from = memo
+        self.exit_framework_model.set_rows(rows)
+        self.exit_framework_table.fit_columns()
+
+    def _on_exit_framework_family_changed(self, _index: int) -> None:
+        """A picker click re-renders ONE table from rows already in memory.
+
+        It never reads a file and never refreshes the page: the export behind
+        both views was parsed on the worker, and a presentation filter that went
+        back to disk would put a CSV parse on the Qt thread.
+        """
+        self._apply_exit_framework_view()
+
     def _on_exports_failed(self, message: str) -> None:
         """A read that could not run leaves the page showing what it had.
 
@@ -1091,6 +1416,14 @@ class SetupTrackerPanel(QFrame):
         self.control_discovery_rows = ranked.get("control_discovery") or []
         self.study_discovery_rows = ranked.get("study_discovery") or []
         self.exit_framework_rows = ranked.get("exit_framework") or []
+        self.exit_framework_by_family_rows = ranked.get("exit_framework_by_family") or []
+        self.theta_rows = ranked.get("theta") or []
+        self.claim_population_rows = ranked.get("claim_population") or []
+        self.claim_setup_rows = ranked.get("claim_setup") or []
+        # EF1: what the picker's re-render needs, so a selection change costs no
+        # file read and never touches the Qt thread with a parse.
+        self._ranked_exports = ranked
+        self._export_signatures = signatures
 
         self.band_variant_status_label.setText(
             band_variant_coverage_sentence(band_variant_export_rows)
@@ -1101,9 +1434,23 @@ class SetupTrackerPanel(QFrame):
         self.study_discovery_status_label.setText(
             discovery_population_sentence(study_discovery_export_rows, kind="study")
         )
-        self.exit_framework_status_label.setText(
-            exit_framework_population_sentence(exit_framework_export_rows)
+        self._pooled_exit_framework_sentence = exit_framework_population_sentence(
+            exit_framework_export_rows
         )
+        # WS-TH: both lines come off the worker's own readout - the Qt thread
+        # renders them and computes neither.
+        self.theta_status_label.setText(
+            str(data.get("theta_population_sentence") or THETA_NO_EXPORT_SENTENCE)
+        )
+        self.theta_grade_label.setText(str(data.get("theta_grade_sentence") or ""))
+        # D1C-B: both lines were computed on the worker off the SAME comparison
+        # the two tables came from. The Qt thread renders them and computes
+        # neither - a leader line recomputed here could name a different setup
+        # than the rows below it.
+        self.claim_status_label.setText(
+            str(data.get("claim_leader") or CLAIM_NO_DATA_SENTENCE)
+        )
+        self.claim_footnote_label.setText(str(data.get("claim_footnote") or ""))
 
         rendered: dict[str, tuple] = {}
         for table_name, model_name, rows, memo in _table_render_plan(
@@ -1115,6 +1462,10 @@ class SetupTrackerPanel(QFrame):
             getattr(self, model_name).set_rows(rows)
             getattr(self, table_name).fit_columns()
         self._rendered_from = rendered
+        # EF1: after `_rendered_from` is replaced; this table keeps its own memo
+        # because its rows depend on the picker as well as on two files.
+        self._refill_exit_framework_families()
+        self._apply_exit_framework_view()
 
         # The attribute leaderboard is read on its own worker (19.7 MB live);
         # the table fills when it arrives. Left exactly as it was.
@@ -1292,16 +1643,16 @@ def _detail_row_identity(row: dict[str, Any], kind: str) -> tuple:
     )
 
 
-#: The twelve exports `refresh()` reads, by the short name the payload, the
-#: signatures and the per-table memo all use (G7.2). The attribute leaderboard
-#: is deliberately absent: it is 19.7 MB and has had its own worker since
-#: Phase 0.9, and the packet leaves it exactly where it is.
+#: The thirteen exports `refresh()` reads, by the short name the payload, the
+#: signatures and the per-table memo all use (G7.2; EF1 added the thirteenth).
+#: The attribute leaderboard is deliberately absent: it is 19.7 MB and has had
+#: its own worker since Phase 0.9, and the packet leaves it exactly where it is.
 def tracker_export_files() -> tuple[tuple[str, Any], ...]:
     """Resolved at CALL time, never bound into a module constant.
 
-    These twelve names are patched on this module by the tests that point a
-    panel at a temporary home folder, so a tuple built at import would read the
-    paths the live desk uses no matter what a test said.
+    These names are patched on this module by the tests that point a panel at a
+    temporary home folder, so a tuple built at import would read the paths the
+    live desk uses no matter what a test said.
     """
     return (
         ("setup_type", SETUP_TYPE_STATS_FILE),
@@ -1316,13 +1667,142 @@ def tracker_export_files() -> tuple[tuple[str, Any], ...]:
         ("control_discovery", CONTROL_DISCOVERY_STATS_FILE),
         ("study_discovery", STUDY_DISCOVERY_STATS_FILE),
         ("exit_framework", EXIT_FRAMEWORK_STATS_FILE),
+        # EF1: the thirteenth. Same shape, one grain finer, read the same way.
+        ("exit_framework_by_family", EXIT_FRAMEWORK_BY_FAMILY_STATS_FILE),
+        # WS-TH: the fourteenth. One row per graded theta pick; the cells the
+        # tab shows are built from it on the worker, never on the Qt thread.
+        ("theta", MASTER_AVWAP_THETA_OUTCOMES_FILE),
     )
+
+
+def _claim_count_cell(value: Any) -> Any:
+    """`-` where the question does not apply to this population.
+
+    Lead ruling 1 (2026-09-14): a tracker row has no per-bucket `unmeasured`
+    and no overlap of its own - an unmeasurable scan row is an EXCLUSION the
+    read reports ONCE, in the footnote. A dash says "not asked here"; a zero
+    would say "asked, and the answer was none", which is a different claim.
+    """
+    return "-" if value is None else int(value)
+
+
+def _claim_pending_cell(population: Any) -> Any:
+    """The tracker side is mature BY CONSTRUCTION and says so.
+
+    `swing_evidence.POLICY_SCANROW_V1.immature_value` is empty, so
+    `read_eligible_rows` never yields a pending row for it: a v1 outcome row
+    cannot exist until the symbol's own later scan row does. My liked trades
+    keeps a real pending count, because its fifth session genuinely has not
+    closed yet for this week's claims.
+    """
+    count = int(getattr(population, "pending", 0) or 0)
+    if getattr(population, "key", "") == "liked":
+        return count
+    return f"{count} (mature by construction)"
+
+
+def claim_population_table_rows(comparison: Any) -> list[dict[str, Any]]:
+    """The populations block - ONE row per population, two window groups.
+
+    The lately window is in the packet's own column names and `_all` sits
+    beside it. NO CELL IS THE SUM OF TWO POPULATIONS: they are measured on
+    different clocks and their union is not a sample.
+    """
+    wide = comparison.by_window.get(claimed_pick_evidence.WINDOW_ALL)
+    rows: list[dict[str, Any]] = []
+    for key in claimed_pick_evidence.POPULATION_KEYS:
+        cell = comparison.populations.get(key)
+        if cell is None:
+            continue
+        other = wide.populations.get(key) if wide is not None else None
+        rows.append(
+            {
+                "population": cell.label,
+                "win_rate": cell.win_rate,
+                "bound": cell.bound,
+                "n": int(cell.n),
+                "wins": int(cell.wins),
+                "pending": _claim_pending_cell(cell),
+                "unmeasured": _claim_count_cell(cell.unmeasured),
+                "also_fav": _claim_count_cell(cell.also_fav),
+                "also_near": _claim_count_cell(cell.also_near),
+                "also_hc": _claim_count_cell(cell.also_hc),
+                "win_rate_all": other.win_rate if other is not None else None,
+                "bound_all": other.bound if other is not None else None,
+                "n_all": int(other.n) if other is not None else None,
+                "clock": cell.clock,
+                "note": cell.note,
+            }
+        )
+    return rows
+
+
+def claim_setup_table_rows(comparison: Any) -> list[dict[str, Any]]:
+    """The by-claimed-setup block, in the reader's own order (the BOUND)."""
+    wide = comparison.by_window.get(claimed_pick_evidence.WINDOW_ALL)
+    wide_by_source = {row.source: row for row in (wide.by_setup if wide is not None else ())}
+    rows: list[dict[str, Any]] = []
+    for row in comparison.by_setup:
+        other = wide_by_source.get(row.source)
+        rows.append(
+            {
+                "setup": row.label,
+                "source": row.source,
+                "win_rate": row.win_rate,
+                "bound": row.bound,
+                "n": int(row.n),
+                "wins": int(row.wins),
+                "pending": int(row.pending),
+                "unmeasured": int(row.unmeasured),
+                "n_all": int(other.n) if other is not None else None,
+            }
+        )
+    return rows
+
+
+def _read_claim_evidence() -> dict[str, Any]:
+    """The My claims tab's four stores, read WHERE THE OTHER FOURTEEN ARE.
+
+    `claimed_pick_evidence.load_inputs` is a four-file read and
+    `build_comparison` is pure arithmetic over what it returned, so both belong
+    on this worker and neither ever runs on the Qt thread.
+
+    A failure degrades to a sentence: a tab is never worth the panel, and a
+    page that blanked itself to announce a failed read would destroy the only
+    copy of what it knew.
+    """
+    payload: dict[str, Any] = {
+        "signature": None,
+        "populations": [],
+        "setups": [],
+        "leader": CLAIM_NO_DATA_SENTENCE,
+        "footnote": "",
+    }
+    try:
+        paths = claimed_pick_evidence.store_paths()
+        payload["signature"] = tuple(_csv_signature(path) for path in paths.values())
+        # The three CSVs go through the page's OWN memo - the same
+        # `_csv_signature` the other fourteen exports use - so the 11 MB tier
+        # export is parsed once per file version rather than once per refresh
+        # (measured 0.33 s per refresh before this). The JSONL claim store is
+        # small and keeps the reader's own read.
+        inputs = claimed_pick_evidence.load_inputs(read_csv=_load_csv_rows_cached)
+        comparison = claimed_pick_evidence.build_comparison(
+            **inputs, as_of=date.today(), window=claimed_pick_evidence.WINDOW_RECENT
+        )
+        payload["populations"] = claim_population_table_rows(comparison)
+        payload["setups"] = claim_setup_table_rows(comparison)
+        payload["leader"] = comparison.leader
+        payload["footnote"] = " | ".join(comparison.footnotes)
+    except Exception as exc:  # noqa: BLE001 - a tab is never worth the panel
+        payload["leader"] = f"My claims could not be read: {exc}"
+    return payload
 
 
 def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     """The whole of the Setup Tracker's read, on a worker thread. G7.2.
 
-    Twelve cached CSV reads, the human-focus read and the pure ranking of what
+    Thirteen cached CSV reads, the human-focus read and the pure ranking of what
     they returned - none of it touches a widget, and it is the same code in the
     same order the Qt thread used to run inline. Each file's `(mtime_ns, size)`
     is taken BEFORE its read: a file rewritten mid-pass then has a signature the
@@ -1360,13 +1840,31 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "control_discovery": _rank_discovery_rows(raw["control_discovery"]),
         "study_discovery": _rank_discovery_rows(raw["study_discovery"]),
         "exit_framework": _rank_exit_frameworks(raw["exit_framework"]),
+        # EF1: ONE ranking function for both files, so a family view can never
+        # be ordered by a different rule than the pooled table it came from.
+        "exit_framework_by_family": _rank_exit_frameworks(raw["exit_framework_by_family"]),
     }
+    # WS-TH: the readout ranks the cells AND writes the tab's two sentences, so
+    # it is built once here on the worker. Building it twice - once for the rows
+    # and once for the text - is two answers to one question.
+    theta = theta_readout(raw["theta"])
+    ranked["theta"] = theta.cells
+    # D1C-B: the fifteenth read. Four stores, one comparison, two blocks of
+    # rows - all of it here, beside the other exports, never on the Qt thread.
+    claims = _read_claim_evidence()
+    signatures["claims"] = claims["signature"]
+    ranked["claim_population"] = claims["populations"]
+    ranked["claim_setup"] = claims["setups"]
     return {
         "min_closed": int(min_closed),
         "signatures": signatures,
+        "claim_leader": claims["leader"],
+        "claim_footnote": claims["footnote"],
         "human_focus_digest": digest,
         "raw": raw,
         "ranked": ranked,
+        "theta_population_sentence": theta.population_sentence(),
+        "theta_grade_sentence": theta.grade_sentence(),
         "scan_factor_mtime_text": _latest_mtime_text(
             [MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE]
         ),
@@ -1414,15 +1912,27 @@ def _table_render_plan(
         ("study_discovery_table", "study_discovery_model",
          (ranked.get("study_discovery") or [])[:300],
          (signatures.get("study_discovery"),)),
-        ("exit_framework_table", "exit_framework_model",
-         (ranked.get("exit_framework") or [])[:300],
-         (signatures.get("exit_framework"),)),
+        ("theta_table", "theta_model", (ranked.get("theta") or [])[:300],
+         (signatures.get("theta"),)),
+        # D1C-B: both blocks come off ONE build, so both memo on the same
+        # four-store signature - a rewrite of any of them re-fits both.
+        ("claim_population_table", "claim_population_model",
+         ranked.get("claim_population") or [], (signatures.get("claims"),)),
+        ("claim_setup_table", "claim_setup_model",
+         (ranked.get("claim_setup") or [])[:300], (signatures.get("claims"),)),
+        # EF1: `exit_framework_table` is deliberately ABSENT. Its rows depend on
+        # the family picker as well as on two files, so it is rendered by
+        # `_apply_exit_framework_view` - which owns the same memo rule, so a
+        # refresh over unchanged files and an unchanged selection still re-fits
+        # nothing.
     )
 
 
 #: Parsed export rows, keyed by path, with the (mtime_ns, size) they came from.
-#: Bounded to one entry per export file - fourteen since packet M5, and they are
-#: rewritten by the scan, not by this page.
+#: Bounded to one entry per export file - fourteen since packet M5, plus D1C-B's
+#: three claim-evidence CSVs (the like cohort's picks and outcomes and the tier
+#: outcomes), and they are rewritten by the scan and the nightly run, not by
+#: this page.
 _CSV_ROW_CACHE: dict[str, tuple[tuple[int, int], list[dict]]] = {}
 
 
@@ -1722,6 +2232,71 @@ def _rank_exit_frameworks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
 
     return sorted(rows, key=_key)
+
+
+def exit_framework_view(
+    ranked: dict[str, Any], family: str
+) -> list[dict[str, Any]]:
+    """The Exit frameworks rows for one picker selection. EF1, presentation only.
+
+    The pooled selection is the pooled export, untouched. A family selection is
+    the by-family export FILTERED - and filtered BEFORE the table's 300-row cap,
+    which is the whole reason this is a function and not a slice at the render
+    site: sixty families of six rows is 360, and a view capped before it filtered
+    would show a late family nothing at all.
+
+    Neither branch re-ranks: `_rank_exit_frameworks` has already ordered both
+    files by the same Wilson lower bound, and filtering a sorted list keeps its
+    order. Nothing here sorts by mean R.
+    """
+    if not family or family == EXIT_FRAMEWORK_POOLED_LABEL:
+        return list(ranked.get("exit_framework") or [])
+    return [
+        row
+        for row in (ranked.get("exit_framework_by_family") or [])
+        if str(row.get("setup_family") or "") == family
+    ]
+
+
+def exit_framework_families(rows: list[dict[str, Any]]) -> list[str]:
+    """Every family in the by-family export, sorted by NAME - never by a result.
+
+    A picker ordered by the best bound would make the choice for the reader and
+    would move under them between scans; a name sort is where they left it.
+    """
+    return sorted({str(row.get("setup_family") or "").strip() for row in rows} - {""})
+
+
+def exit_framework_family_sentence(family: str, rows: list[dict[str, Any]]) -> str:
+    """What ONE family's view is, in one line. EF1.
+
+    The `n_closed` it prints is the LARGEST among the family's rows, never the
+    sum: the four templates are simulated on the SAME setups, so adding their
+    closes is a claim about four times as many setups as exist.
+
+    Below the floor the rows are still SHOWN and the sentence says they are not
+    yet reportable. Hiding a study's rows is how a study never gets looked at,
+    and a study is exactly what this split was built to read.
+    """
+    if not rows:
+        return (
+            f"No exit-framework rows for {family} yet. A family appears here once its "
+            "records carry exit scenarios; nothing here is a pick."
+        )
+    populations = sorted({str(row.get("population") or "").strip() for row in rows} - {""})
+    closes = [int(_float(row.get("n_closed"), 0.0)) for row in rows]
+    largest = max(closes) if closes else 0
+    floor = _attribute_floor()
+    below = " Every row is BELOW FLOOR (under %d closed): shown, not yet reportable." % floor
+    return (
+        f"{family} ({'/'.join(populations) or 'champion'} population): "
+        f"{len(rows)} exit-template group(s), largest n closed {largest}. "
+        "The templates are simulated on the SAME setups, so their closes are never "
+        "summed."
+        f"{below if largest < floor else ''}"
+        " Win rate leads, sorted by its Wilson lower bound; Avg R is beside it, never "
+        "the sort. Nothing here scores, ranks or alerts."
+    )
 
 
 def _graded_episodes(rows: list[dict[str, Any]]) -> int:

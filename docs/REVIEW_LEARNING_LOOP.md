@@ -56,6 +56,42 @@ to surface the best alerts.
   the queue front). Rank and annotate only - never auto-suppress an alert
   (house rule: mute -> CAUTION, focus picks always surface), and the
   policy format deliberately has no suppression field - do not add one.
+- **Watchlist membership is INTEREST, not a claim** (WS-5D, 2026-09-12):
+  `<shared home>/watchlist_intent_events.jsonl` (`watchlist_intent_events.py`,
+  schema `watchlist_intent_event_v1`) records one append-only row per symbol
+  that joined or left `longs.txt` / `shorts.txt` / `swinglongs.txt` /
+  `shortswings.txt`, with the observation time (aware, market-local), the list,
+  side and horizon, and a `source` that keeps the trader's own typing
+  (`trader_edit` / `trader_paste`) apart from the Focus store's injection
+  (`machine_inject` / `machine_uninject`) and from a difference merely SEEN when
+  the page loaded after an edit outside the app (`observed_external`, stamped at
+  the load, never back-dated). Read it as interest and nothing more: a name on a
+  list is not a setup claim, not a position and not a prediction, and **a
+  `remove` is not a dislike** - the dislike lives in `pick_feedback.jsonl` with
+  the trader's own reason. Nothing in the loop consumes this stream yet; it
+  ranks, annotates and gates nothing. Tail it with `python -m
+  watchlist_intent_events tail --list longs` from `scripts/`. The long form is
+  `docs/DESK_INTERNALS.md` "5D - a watchlist edit is a dated event, never a
+  verdict".
+- **The said-vs-did report reads BOTH families of verdict** (WS-5B, 2026-09-13).
+  `preference_trade_outcomes.csv` (schema `preference_trade_outcomes_v2`) now
+  carries every explicit verdict this loop records, not only the endorsements:
+  `annotation:veto`, `annotation:pass`, `pick_feedback:dislike`,
+  `pick_feedback:not_today` and the `review_event:m5_click_away` skip join the
+  four like/favorite channels, each in its OWN channel with its own reason (a
+  veto's `<code> (v<vocab_version>)`, the pair the cohorts pool on). Every row
+  says which family it is in (`verdict_family`), which mode a rail like was made
+  in (`like_mode`, absence reading `claimed` through
+  `ui.annotations.store.like_mode_of`) and which kind of answer the trade half
+  is (`match_state`: `matched` / `window_open` / `no_match_after_window` /
+  `journal_unavailable`; `matching_unavailable` is reserved in the vocabulary
+  and no path emits it today). **`unfavorite` is still not a verdict** and is
+  in neither family. This is a REPORT and it stays one: it ranks nothing,
+  annotates nothing, and reaches no detector, score, alert, watchlist, Focus
+  list, review queue or `review_policy.json`. Weekend Prep shows the refusals in
+  their own "Said no" view beside the endorsements, never pooled. Long form:
+  `docs/DESK_INTERNALS.md` "The personal-evidence reader rules" (the 5B
+  paragraph).
 - Capture only starts once the GUI restarts onto a build >= c45d965; expect
   ~2-3 weeks of sessions before segment samples clear the n>=8 gates.
 - **Ordering is gated to annotation-only** (`GUI_TRADE_DISCOVERY_LEARNING_PLAN.md`

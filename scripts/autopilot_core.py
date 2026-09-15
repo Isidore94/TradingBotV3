@@ -35,8 +35,9 @@ import tempfile
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, MutableMapping
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
+import avwape_side
 import focus_adoption_gate
 import prev_day_gate
 from evidence_stats import SWING_HORIZON_SESSIONS
@@ -3624,6 +3625,135 @@ def swing_pick_rank(pick: Mapping[str, Any], records: Mapping[str, Any] | None) 
     )
 
 
+# WS-PT4 (WISHLIST item 4, block 4). The trader: *"rank the AWAY digest's swing
+# picks by points too (today it ranks by the family's Wilson bound)"*. The
+# digest ranks by points ONLY when the EXISTING Points switch is on
+# (`setup_points.rank_enabled`, local setting `rank_setups_by_points`, default
+# OFF, read AT SORT TIME), and the digest SAYS which order it used - the same
+# contract the setups table has carried since 2026-09-08. Off is today's order,
+# unchanged.
+SWING_ORDER_WILSON = "order: Wilson bound"
+SWING_ORDER_POINTS = "order: points (switch on)"
+
+
+def swing_pick_projection(row: Any) -> dict[str, Any]:
+    """One digest pick from one display row - the ONE projection.
+
+    WS-PT4 item 1: the digest's pick rows used to carry six display fields, and
+    the point system reads the SCAN ROW (`hv_level_*`, the RS scores,
+    `has_bounce_event_today`, ...) plus the two group-context readings the
+    display enrichment attaches. So the projection carries `raw`,
+    `d1_vs_sector` and `d1_vs_industry` as well - never a re-derivation from a
+    different source than the desk's setups table uses, because the digest and
+    the table must not be two readings of one row.
+
+    `bucket` stays the DISPLAY label the phone prints; `bucket_key` is the
+    row's own bucket, which is what `setup_points.RANKED_BUCKETS` matches on.
+    """
+    raw = getattr(row, "raw", None)
+    raw = dict(raw) if isinstance(raw, Mapping) else {}
+    return {
+        "symbol": getattr(row, "symbol", ""),
+        "side": getattr(row, "side", ""),
+        "bucket": getattr(row, "bucket_label", "") or getattr(row, "bucket", ""),
+        "bucket_key": str(getattr(row, "bucket", "") or ""),
+        "expected_r": getattr(row, "expected_r", None),
+        "family": str(raw.get("setup_family") or ""),
+        "key_level": str(getattr(row, "key_level", "") or ""),
+        "raw": raw,
+        "d1_vs_sector": getattr(row, "d1_vs_sector", None),
+        "d1_vs_industry": getattr(row, "d1_vs_industry", None),
+    }
+
+
+def swing_family_points_record(
+    records: Mapping[str, Any] | None, family: Any
+) -> dict[str, Any]:
+    """The family record in the shape `setup_points.score_row` reads.
+
+    The desk panel injects `setup_docs.family_headline_rows()`, whose
+    `win_rate_lb` is `swing_headline.wilson_lower_bound(wins, n)` over
+    `swing_evidence.read_eligible_rows` under `POLICY_SCANROW_V1` inside the
+    lately window. :func:`swing_family_read` is that same read, so the bound
+    built here is the SAME number the setups table scores on and the same one
+    :func:`swing_pick_rank` orders on - one reading, two surfaces, never a
+    second derivation.
+    """
+    from swing_headline import wilson_lower_bound
+
+    key = normalize_family_key(family)
+    entry = (records or {}).get(key) or {}
+    wins = int(entry.get("wins") or 0)
+    losses = int(entry.get("losses") or 0)
+    total = wins + losses
+    return {"name": key, "win_rate_lb": wilson_lower_bound(wins, total), "n": total}
+
+
+def swing_pick_points(
+    pick: Mapping[str, Any],
+    records: Mapping[str, Any] | None,
+    *,
+    weights: Mapping[str, float] | None = None,
+):
+    """The point system's reading for ONE digest pick. One scorer, two callers.
+
+    `setup_points.score_row` is the desk's scorer, called here over the SAME
+    fields the setups table hands it (`row.raw`, the row's side, the family
+    record, the two group-context readings). A pick missing an input scores
+    that part 0 and says so in its notes - the row is never dropped for it
+    (WS-PT4 item 3), which is the same rule the table follows.
+    """
+    import setup_points
+
+    raw = pick.get("raw")
+    return setup_points.score_row(
+        raw if isinstance(raw, Mapping) else {},
+        side=str(pick.get("side") or ""),
+        family_record=swing_family_points_record(records, pick.get("family")),
+        d1_vs_sector=pick.get("d1_vs_sector"),
+        d1_vs_industry=pick.get("d1_vs_industry"),
+        weights=weights,
+    )
+
+
+def order_swing_picks(
+    indexed_picks: Sequence[tuple[int, Mapping[str, Any]]],
+    records: Mapping[str, Any] | None,
+) -> tuple[list[tuple[int, Mapping[str, Any]]], str]:
+    """Today's order, re-ordered by points when the switch is on.
+
+    `indexed_picks` arrives in the digest's CURRENT order (the Wilson one), so
+    that order is the tiebreak and the order every unranked row keeps - the
+    same shape as the setups table, where the point ranking is applied after
+    the Working-lately order. `setup_points.rank_order` puts the favourite /
+    near-favourite / high-conviction rows first by total and every other pick
+    after them; nothing is dropped, added or hidden, and the near cap is still
+    applied afterwards by the renderer.
+
+    A failure anywhere here falls back to today's order: a digest that lost its
+    swing block because a preference file moved would be worse than one ranked
+    by the bound.
+    """
+    ordered = list(indexed_picks)
+    try:
+        import setup_points
+
+        if not setup_points.rank_enabled():
+            return ordered, SWING_ORDER_WILSON
+        weights = setup_points.active_weights()
+        items = [
+            (
+                str(pick.get("bucket_key") or pick.get("bucket") or ""),
+                swing_pick_points(pick, records, weights=weights).total,
+            )
+            for _index, pick in ordered
+        ]
+        order = setup_points.rank_order(items)
+    except Exception:  # noqa: BLE001 - a display preference never costs the digest
+        return ordered, SWING_ORDER_WILSON
+    return [ordered[index] for index in order], SWING_ORDER_POINTS
+
+
 # The swing PUSH starts later than the report it rides on. The digest keeps
 # publishing hourly from AUTOPILOT_AWAY_REPORT_START_HOUR (07:00); the phone
 # just stays quiet until the setups behind it are worth reading. Trader call
@@ -3884,11 +4014,16 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         if isinstance(pick, Mapping)
     ]
     indexed_picks.sort(key=lambda item: (swing_pick_rank(item[1], records), item[0]))
+    # WS-PT4: and then, ONLY when the trader's Points switch is on, the ranked
+    # buckets are re-ordered by the point system with that order as the
+    # tiebreak. Off, this is the identity and the digest is unchanged.
+    indexed_picks, swing_order_label = order_swing_picks(indexed_picks, records)
 
     picks_lines = []
     picks_symbols: list[str] = []
     near_rows_shown = 0
     near_rows_suppressed = 0
+    wrong_side_rows = 0
     for _index, pick in indexed_picks:
         symbol = str(pick.get("symbol") or "").strip().upper()
         if not symbol:
@@ -3908,9 +4043,23 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         family_text = f" | {family}" if family else ""
         key_level = str(pick.get("key_level") or "").strip()
         level_text = f" @ {key_level}" if key_level else ""
+        # WS-WS (WISHLIST 9): a LONG under its current AVWAPE, or a SHORT over
+        # it, says so right after its name. The tag is the ONLY thing it
+        # changes - the pick is in the same place in the same list with the same
+        # numbers, because hiding one is a detector decision nobody has taken.
+        wrong_text = ""
+        if avwape_side.is_wrong_side_row(pick.get("raw")):
+            wrong_side_rows += 1
+            wrong_text = f" {avwape_side.WRONG_SIDE_TAG}"
         picks_symbols.append(symbol)
         picks_lines.append(
-            f"{len(picks_symbols)}. {symbol} ({side}){bucket_text}{expected_text}{family_text}{level_text}"
+            f"{len(picks_symbols)}. {symbol}{wrong_text} ({side})"
+            f"{bucket_text}{expected_text}{family_text}{level_text}"
+        )
+    if wrong_side_rows:
+        picks_lines.append(
+            f"{wrong_side_rows} wrong side of the anchor "
+            "(shown, never hidden - a LONG under its AVWAPE or a SHORT over it)"
         )
     if near_rows_suppressed:
         picks_lines.append(
@@ -3936,8 +4085,17 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         swing_lines = ["No qualified current-session swing opportunity."]
     if swing_data_line:
         swing_lines = [*swing_lines, swing_data_line]
-    if record_line and picks_lines:
-        swing_lines = [*swing_lines, f"Ranked on: {record_line}"]
+    # WS-PT4: the same line NAMES the order it used, so a phone reader can tell
+    # a Wilson-bound list from a points list without opening the desk. It is
+    # written whenever picks were ranked, with or without a record line - a
+    # points ranking that never says so is the same defect ST1 item 3 fixed.
+    if picks_lines:
+        swing_lines = [
+            *swing_lines,
+            f"Ranked on: {record_line} | {swing_order_label}"
+            if record_line
+            else f"Ranked on: {swing_order_label}",
+        ]
 
     def _tv_line(items: Iterable[str]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]

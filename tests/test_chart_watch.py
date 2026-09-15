@@ -165,6 +165,10 @@ def test_watch_kind_labels_cover_all_buttons():
         "lod_avwap",
         "vwap_bounce",
         "band_bounce",
+        # WISHLIST 10C, renamed and widened by PCT-1: the one kind on this
+        # surface that is NOT session-scoped. The H1 retester is now the
+        # `h1_ema15_bounce` TRIGGER inside it.
+        "pullback",
     ]
     assert WATCH_KINDS["new_hod"] == "New HOD"
     assert WATCH_KINDS["new_lod"] == "New LOD"
@@ -172,6 +176,7 @@ def test_watch_kind_labels_cover_all_buttons():
     assert WATCH_KINDS["lod_avwap"] == "LOD AVWAP"
     assert WATCH_KINDS["vwap_bounce"] == "VWAP bounce"
     assert WATCH_KINDS["band_bounce"] == "σ-band bounce"
+    assert WATCH_KINDS["pullback"] == "Pullback alert"
     assert set(D1_LEVEL_KINDS) == {"d1_level_above", "d1_level_below"}
 
 
@@ -418,6 +423,7 @@ def test_d1_event_kind_labels_cover_all_buttons():
         "avwape_break",
         "avwape_dev1_bounce",
         "avwape_dev1_break",
+        "trendline_break",
     }
     assert all(label for label in D1_EVENT_KINDS.values())
     # Kind namespaces never collide - the feed badge resolves across all three.

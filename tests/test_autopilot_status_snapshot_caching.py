@@ -186,7 +186,8 @@ def test_the_tick_calls_status_snapshot_exactly_once(monkeypatch, tmp_path):
     service._last_report_write = None
 
     for name in (
-        "_roll_day_state", "_apply_scan_window", "_apply_quiet_hours",
+        "_roll_day_state", "_maybe_reset_daytrade_watchlists",
+        "_apply_scan_window", "_apply_quiet_hours",
         "_maybe_auto_arm", "_maybe_clear_stale_auto_lists",
         "_maybe_add_near_extreme_names", "_maybe_score_picks_daily",
         "_ensure_bot_running", "_ensure_universe_fresh",

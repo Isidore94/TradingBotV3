@@ -143,6 +143,11 @@ def test_master_workspace_no_longer_tabs_focus_picks(tmp_path):
 
 
 def test_focus_picks_is_top_level_app_page():
+    """WS-WL (WISHLIST 10G, 2026-09-13): it is NOT a page any more, and neither
+    is Chart Review. One Watchlist tab on the Trading Desk carries every action
+    both pages had; the panels themselves are still built (the Focus board
+    still takes BounceBot alerts and the RRS snapshot) and the Trading Desk is
+    still page 0, which `_select_page(0)` and F9 both depend on."""
     from ui.app import MainWindow
     from ui.state import UiState
 
@@ -151,8 +156,6 @@ def test_focus_picks_is_top_level_app_page():
 
     assert labels == [
         "Trading Desk",
-        "Chart Review",
-        "Focus Picks",
         # The M5 strength board used to sit here. Since 2026-08-31 it is a
         # section under the Desk's Strength window instead of a page of its
         # own (trader request), so it has no nav button at all.
@@ -163,8 +166,11 @@ def test_focus_picks_is_top_level_app_page():
         # into a diary.
         "Market Journal",
         # R1 amendment 2026-08-24: the AWAY day's return surface, which
-        # replaced a 317-item chart review queue.
-        "AWAY Recap",
+        # replaced a 317-item chart review queue. WS-DR (WISHLIST 10F,
+        # 2026-09-13) took the slot for EVERY Auto mode and renamed it: the
+        # page now reads the day from the durable stores rather than from this
+        # process's alert list.
+        "Daily Recap",
         # R8 registered Weekend Prep next to Journal: the weekend routine reads
         # the journal the walk-away and auto-tag steps depend on.
         "Weekend Prep",
@@ -175,12 +181,14 @@ def test_focus_picks_is_top_level_app_page():
         "System Health",
         "Settings",
     ]
-    # Chart Review (plan.md 13d) was inserted after Trading Desk, so Focus
-    # Picks is page 2. Trading Desk stays page 0 - F9's setups expand and
-    # _select_page(0) both depend on that.
+    # Trading Desk stays page 0 - F9's setups expand and _select_page(0) both
+    # depend on that. The two retired panels are still CONSTRUCTED, just not
+    # reachable as pages: the Watchlist tab is where their actions live now.
     assert window.pages.widget(0) is window.trading_panel
-    assert window.pages.widget(1) is window.chart_review_panel
-    assert window.pages.widget(2) is window.trading_panel.focus_picks_panel
+    assert window.pages.widget(1) is window.journal_panel
+    assert window.chart_review_panel is not None
+    assert window.trading_panel.focus_picks_panel is not None
+    assert window.trading_panel.watchlist_tab is not None
     assert window.market_regime_status.text().startswith("Auto regime:")
     assert window.technical_integrity_status.text().startswith("Technicals:")
     window._set_auto_regime({"env_key": "bearish_strong", "label": "Bearish Strong"})

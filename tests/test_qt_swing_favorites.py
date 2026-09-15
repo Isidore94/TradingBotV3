@@ -6,6 +6,13 @@ picks. They will usually become focus picks too but these ones get special
 standing because I picked them by hand... put it at the very bottom of the M5
 alerts tab, the tab is so long and I never use all of it."*
 
+That PLACEMENT was superseded by the trader on 2026-09-14 (packet D1C-L):
+*"Keep M5 trades and entries on the left. Put D1 picks and their management on
+the right. Inspect the existing swing-favorites strip, which currently sits
+below the left M5 list, and reconcile it with this layout without losing its
+actions."* `TestWhereItLives` below now pins the RIGHT column; nothing else in
+this file changed, and the strip's own behaviour is untouched.
+
 What these defend: an add writes ONE evidence row and a swing Focus entry with
 NO auto-adoption marker (absence of a marker is what keeps automatic removal
 off the trader's own names); a removal appends a retraction and drops the Focus
@@ -432,27 +439,29 @@ class TestTheStripIsStyledByTheTheme:
 
 
 class TestWhereItLives:
-    def test_the_strip_is_the_bottom_of_the_m5_column_in_both_modes(self):
-        """Trader: "the very bottom of the M5 alerts tab". The M5 surface is a
-        tab in tabs mode and the left column in workspace mode; the strip is
-        the bottom of it either way, and the alert bar is always above it."""
+    def test_the_strip_is_the_bottom_of_the_d1_column_in_both_modes(self):
+        """D1C-L, trader 2026-09-14: "Keep M5 trades and entries on the left.
+        Put D1 picks and their management on the right." The strip is D1
+        management, so it is the bottom of the D1 surface - a tab in tabs mode
+        and the right column in workspace mode - with the setups always above
+        it. This supersedes the 2026-08-31 placement under the M5 list."""
         from PySide6.QtWidgets import QTabWidget
         from ui.panels.trading_desk import TradingDeskPanel
 
         desk = TradingDeskPanel(workspace_mode="workspace")
         try:
-            assert desk.m5_column.count() == 2
-            assert desk.m5_column.widget(0) is desk.m5_alert_bar
-            assert desk.m5_column.widget(1) is desk.swing_favorites_bar
-            assert desk.desk_splitter.widget(0) is desk.m5_column
+            assert desk.d1_column.count() == 2
+            assert desk.d1_column.widget(0) is desk.master_workspace
+            assert desk.d1_column.widget(1) is desk.swing_favorites_bar
+            assert desk.desk_splitter.widget(2) is desk.d1_column
 
             desk.set_mode("tabs")
             tabs = desk._mode_widget
             assert isinstance(tabs, QTabWidget)
-            index = tabs.indexOf(desk.m5_column)
-            assert index >= 0 and tabs.tabText(index) == "M5 alerts"
-            assert desk.m5_alert_bar.parent() is desk.m5_column
-            assert desk.swing_favorites_bar.parent() is desk.m5_column
+            index = tabs.indexOf(desk.d1_column)
+            assert index >= 0 and tabs.tabText(index) == "Master AVWAP"
+            assert desk.master_workspace.parent() is desk.d1_column
+            assert desk.swing_favorites_bar.parent() is desk.d1_column
         finally:
             desk.shutdown()
             desk.close()
@@ -487,19 +496,20 @@ class TestWhereItLives:
 
     def test_the_two_share_a_draggable_split_that_neither_can_collapse(self):
         """Trader, 2026-08-31: "the tab needs to be resizable relative to the M5
-        alerts tab, I should be able to drag it up to see more"."""
+        alerts tab, I should be able to drag it up to see more". D1C-L moved the
+        pairing: the strip is now draggable against the SETUPS above it."""
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QSplitter
         from ui.panels.trading_desk import TradingDeskPanel
 
         desk = TradingDeskPanel(workspace_mode="workspace")
         try:
-            assert isinstance(desk.m5_column, QSplitter)
-            assert desk.m5_column.orientation() == Qt.Orientation.Vertical
-            assert desk.m5_column.childrenCollapsible() is False
-            desk.m5_column.resize(240, 800)
-            desk.m5_column.setSizes([400, 400])
-            assert min(desk.m5_column.sizes()) > 0
+            assert isinstance(desk.d1_column, QSplitter)
+            assert desk.d1_column.orientation() == Qt.Orientation.Vertical
+            assert desk.d1_column.childrenCollapsible() is False
+            desk.d1_column.resize(600, 800)
+            desk.d1_column.setSizes([400, 400])
+            assert min(desk.d1_column.sizes()) > 0
         finally:
             desk.shutdown()
             desk.close()
@@ -508,8 +518,8 @@ class TestWhereItLives:
         """Dragging the strip must never overwrite the desk's column split."""
         from ui.panels import trading_desk
 
-        assert trading_desk.M5_COLUMN_SPLIT_KEY != trading_desk.DESK_SPLIT_KEY
-        assert trading_desk.M5_COLUMN_SPLIT_KEY == "qt_m5_column_split_sizes_v1"
+        assert trading_desk.D1_COLUMN_SPLIT_KEY != trading_desk.DESK_SPLIT_KEY
+        assert trading_desk.D1_COLUMN_SPLIT_KEY == "qt_d1_column_split_sizes_v1"
 
     def test_the_chip_area_has_a_floor_and_no_ceiling(self):
         """A ceiling would make "drag it up to see more" do nothing."""

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from journal_analytics import format_note_lane_line
 from journal_store import (
     TAG_STATUS_NEEDS_REVIEW,
     TAG_STATUS_PROVISIONAL,
@@ -397,6 +399,14 @@ class TradesTab(QFrame):
             self.tag_filter.addItem(label, value)
         self.tag_filter.currentIndexChanged.connect(self._on_tag_filter_changed)
         self.tag_filter_note = QLabel("")
+        # WS-J1: an empty QLabel keeps Qt's default (Preferred, Preferred) size
+        # policy, which CAN GROW - and because nothing else in this row could,
+        # the row itself became the tab's one "expanding" item and ate almost
+        # half the window (958 px of a 2160 px tab, measured offscreen) above
+        # an otherwise-empty table. Pinning it Fixed makes the row report its
+        # own text height as its height, same as the label and combobox beside
+        # it, so the splitter below is the only widget left that grows.
+        self.tag_filter_note.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Tag review"))
         filter_row.addWidget(self.tag_filter)
@@ -404,16 +414,50 @@ class TradesTab(QFrame):
         filter_row.addStretch(1)
 
         self.detail = self._build_detail()
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.table)
-        splitter.addWidget(self.detail)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.table)
+        self.splitter.addWidget(self.detail)
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 2)
+        # WS-J1: `setStretchFactor` only governs how EXTRA space is divided on
+        # a later resize - it says nothing about the sizes the splitter opens
+        # with, which Qt derives from the children's size hints instead (the
+        # trader saw 39/61, measured offscreen as [1347, 2105] on a 3,456 px
+        # tab). `_apply_splitter_ratio` sets the declared 3:2 explicitly, once
+        # per show/resize, until the trader's own drag takes over for the rest
+        # of the desk session (`_splitter_user_sized`, never persisted to disk).
+        self._splitter_user_sized = False
+        self.splitter.splitterMoved.connect(self._on_splitter_moved)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(filter_row)
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
+
+    # -- splitter ratio ------------------------------------------------------
+
+    def _on_splitter_moved(self, _pos: int, _index: int) -> None:
+        """The trader dragged the handle - stop re-asserting 3:2 for this tab
+        instance. `setSizes()` does not emit this signal, only an interactive
+        drag does, so a programmatic reset never trips this itself."""
+        self._splitter_user_sized = True
+
+    def _apply_splitter_ratio(self) -> None:
+        if self._splitter_user_sized:
+            return
+        width = self.splitter.width()
+        if width <= 0:
+            return
+        table_width = width * 3 // 5
+        self.splitter.setSizes([table_width, width - table_width])
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        self._apply_splitter_ratio()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._apply_splitter_ratio()
 
     # -- detail pane -------------------------------------------------------
 
@@ -487,6 +531,33 @@ class TradesTab(QFrame):
         self.confirm_tags_button.clicked.connect(self._confirm_tags)
         self.confirm_tags_button.setVisible(False)
 
+        # WS-AI1 item 5. The advisory enrichment, where the trade is. One label,
+        # hidden when there is nothing to say, and every word in it says whose
+        # opinion it is: the tags here are a SUGGESTION and carry no privilege -
+        # `journal_bulk_tag.py` is the only machine writer of a real tag, and
+        # this pane has no button that accepts one.
+        self.ai_enrichment_note = QLabel("")
+        self.ai_enrichment_note.setObjectName("AiEnrichmentNote")
+        self.ai_enrichment_note.setWordWrap(True)
+        self.ai_enrichment_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.ai_enrichment_note.setVisible(False)
+
+        # WS-10E item 3. What the trader's OWN journal notes made of this trade,
+        # beside the model's advisory row and above it on purpose: one is
+        # deterministic and cites a sentence the trader wrote, the other is a
+        # model's opinion. Read from the stored verdict, never re-derived here -
+        # the Market Journal ledger is not opened on the Qt thread.
+        self.note_lane_note = QLabel("")
+        self.note_lane_note.setObjectName("NoteLaneNote")
+        self.note_lane_note.setWordWrap(True)
+        self.note_lane_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.note_lane_note.setToolTip(
+            "The deterministic note lane: a setup you NAMED in the Market "
+            "Journal inside this trade's own window. A suggestion, never a tag "
+            "- only you confirm a tag."
+        )
+        self.note_lane_note.setVisible(False)
+
         self.review_outcome = QComboBox()
         self.review_outcome.addItems(
             [
@@ -526,6 +597,9 @@ class TradesTab(QFrame):
         layout.addWidget(self.notes_input)
         layout.addWidget(self.save_notes_button)
         layout.addWidget(self.confirm_tags_button)
+        layout.addWidget(self.note_lane_note)
+        layout.addWidget(QLabel("Overnight AI note (advisory)"))
+        layout.addWidget(self.ai_enrichment_note)
         review_form = QFormLayout()
         review_form.addRow("Review outcome", self.review_outcome)
         review_form.addRow("Decision reason", self.decision_reason)
@@ -727,6 +801,8 @@ class TradesTab(QFrame):
         self.tags_input.setText(str(raw.get("setup_tags") or ""))
         self.notes_input.setPlainText(str(raw.get("notes") or ""))
         self._show_tag_status(raw)
+        self._show_note_lane(raw)
+        self._show_ai_enrichment(trade.trade_id)
         self.review_outcome.setCurrentIndex(0)
         latest_review = journal_feed.latest_trade_review(trade.trade_id) or {}
         review_payload = latest_review.get("payload") or {}
@@ -757,6 +833,59 @@ class TradesTab(QFrame):
             self.adjustments_list.addItem(
                 f"{record.get('created_at')} {record.get('action')}{superseded} - {record.get('reason')}"
             )
+
+    def _show_note_lane(self, raw: dict) -> None:
+        """Print the note lane's verdict for this trade (WS-10E item 3).
+
+        Three sentences and no fourth, formatted by `journal_analytics` so this
+        pane and every other reader say the same words. The value is the one the
+        last `refresh_auto_tags` stored on the trade, so showing it costs a
+        dictionary lookup - the ledger read happened on the tagger's own pass.
+
+        A trade whose verdict was never computed (an old row, or one added since
+        the last refresh) says nothing rather than guessing a blank window.
+        """
+        line = format_note_lane_line(raw.get("note_lane_json"))
+        self.note_lane_note.setText(line)
+        self.note_lane_note.setVisible(bool(line))
+
+    def _show_ai_enrichment(self, trade_id: str) -> None:
+        """Show the latest non-superseded advisory row for this trade (WS-AI1).
+
+        On the existing detail read path, beside every other `journal_feed`
+        read `_show_trade` already does - one indexed query against a table with
+        a handful of rows per trade, never on the paint path.
+
+        An `abstained` or `failed` row is SHOWN, not hidden. "The model looked
+        at this trade and declined, and here is why" is information; a pane that
+        showed only the successes would make the enrichment look more complete
+        than it is, which is the defect this packet exists to end.
+        """
+        row = journal_feed.latest_ai_enrichment(trade_id) or {}
+        if not row:
+            self.ai_enrichment_note.setText("")
+            self.ai_enrichment_note.setVisible(False)
+            return
+        status = str(row.get("status") or "").strip() or "unlabelled (written before 2026-09-12)"
+        summary = str(row.get("summary") or "").strip()
+        tags = str(row.get("tags") or "").strip()
+        confidence = str(row.get("confidence") or "").strip()
+        reason = str(row.get("reason") or "").strip()
+        written_at = str(row.get("generated_at") or "").strip()
+        lines = [summary or "(no summary - the model wrote none)"]
+        if tags:
+            lines.append(f"Suggested setups (advisory, not your tags): {tags}")
+        if reason:
+            lines.append(f"Why: {reason}")
+        lines.append(
+            f"status {status}"
+            + (f" - confidence {confidence}" if confidence else "")
+            + (f" - written {written_at}" if written_at else "")
+            + f" - model {row.get('model') or 'unrecorded'}. Advisory only; it changes"
+            " nothing and accepts no tag."
+        )
+        self.ai_enrichment_note.setText("\n".join(lines))
+        self.ai_enrichment_note.setVisible(True)
 
     def _show_tag_status(self, raw: dict) -> None:
         """Say whose tags these are, and offer the one-click confirmation (P6a)."""

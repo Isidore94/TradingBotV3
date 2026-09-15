@@ -1,5 +1,12 @@
 # Wishlist
 
+**SWEEP IN PROGRESS (trader, 2026-09-12 afternoon): every item below is being built as one feature
+dump on branch `claude/wishlist-sweep-2026-09-12`.** The per-item status (packet, branch, MERGED tip,
+lead decisions, deferrals) is the `CURRENT_CHECKPOINT.md` entry "2026-09-12 - WISHLIST SWEEP"; a new
+session checks that table against this file and continues from the first row not MERGED. The item
+texts below are the specs and stay as written; a `SWEEP:` line under an item's heading is the only
+edit made here as it lands.
+
 **Start here, Fable (2026-09-12): read 10K, then its linked items.**
 10K is the trader's clarified integration plan: one measured daily review, faithful
 market-thesis summaries, and a compact handoff for a frontier model. It connects
@@ -10,6 +17,8 @@ Recheck the checkpoint and code before acting on them; do not run their old clea
 merge or restart commands. Only trader-approved selections move into `plan.md`.
 
 1. Finish up the GUI work
+
+SWEEP: item 1 leftovers BUILT - packet WS-J1 on `claude/ws-j1-journal-splitter`, merged into the sweep branch at 9ae8d6d0, gate #105 (Trades splitter 3:2, no blank band); the CLAUDE.md trim landed in the docs pass (f63167b0, 44.7 KB); the Day-trade Tracker first-click read stays as G7's accepted cost.
 
 Resume Phase 0.22 (the desk reshape, G lane) as the lead session. Follow AGENTS.md and docs/AGENT_TEAM.md
 (tester -> builder -> reviewer, own worktrees, scratch-script rule, chat to me in ten short lines).
@@ -59,6 +68,8 @@ review, and whether a restart is owed.
 
 
 2. Fixing some daily bare cache issues. the prompt is below
+
+SWEEP: BUILT - packet WS-FC1 on `claude/ws-fc1-forming-candles`, merged at 0134ff12, gate #98 (writer guard, manifest counts, `python -m master_avwap_lib.daily_bar_cache repair`, dry run by default). The trader's: `--apply` on the live cache; ask-first seams left open: the Parquet mirror filter and `fetch_daily_bars`' forming-bar return.
 
 Fix the forming candles in the daily-bar cache (packet FC1).
 
@@ -148,6 +159,8 @@ a restart is owed.
 
 
 3. Exit frameworks split by setup (packet EF1). the prompt is below
+
+SWEEP: BUILT - packet WS-EF1 on `claude/ws-ef1-exit-by-family`, merged at a55cf320, gate #97 (`master_avwap_exit_framework_by_family.csv` + the family picker on the Exit frameworks tab).
 
 Split the Setup Tracker's exit-framework comparison by setup family (packet EF1).
 
@@ -253,6 +266,8 @@ restart is owed.
 
 
 4. Keep the desk snappy all day (packets SN1-SN6). the prompt is below
+
+SWEEP: SN4 BUILT (`claude/ws-sn4-feed-diff`, a26f877a, gate #103); SN3 BUILT (`claude/ws-sn3-one-rrs-pass`, ca1c1a6e, gate #104; the duplicate fourth `_record_environment_focus_history` call stays, ask-first); SN2 BUILT (`claude/ws-sn2-incremental-bars`, dddcd9b4, gate #113; `SN2_FORMING_TAIL_FORCES_REFETCH = False` by lead ruling); SN5/SN6 were built 2026-09-08 on `main` (gate #92); SN1 DEFERRED until SN2-SN6 prove themselves on a live day, per this prompt's own order.
 
 Cut the M5 scanner's hold on the interpreter so the desk stays snappy at the
 close, without losing any scan, alert, board or evidence row (packets SN1-SN6).
@@ -400,6 +415,8 @@ a restart is owed.
 
 4. Rank the Master AVWAP setups by a POINT system (trader, 2026-09-08) - IN BUILD
 
+SWEEP: block 4 BUILT - packet WS-PT4 on `claude/ws-pt4-digest-points`, merged at c2215b19, gate #95: the AWAY digest ranks by points ONLY when the Points switch is ON; OFF keeps the Wilson order; weight tuning stays the trader's.
+
 Approved 2026-09-08 ("put it in wishlist.md then start working on it block by block").
 Presentation only, the ST6 pattern: a switch that REORDERS the setups table and never
 hides a row; legacy.py untouched. Favourite + near (+ high conviction) buckets are ranked,
@@ -417,6 +434,8 @@ every other row keeps its order after them. Blocks are removed here as they land
 
 
 5. Close the preference-learning loop - Fable 5.1 decision queue (2026-09-09)
+
+SWEEP: 5A BUILT (`claude/ws-5a-weekend-verdict`, df475e45, gate #96, floor 5 by builder ruling); 5B BUILT (`claude/ws-5b-preference-symmetric`, a0a29f04, gate #112); 5C folded into WS-AI1 (`claude/ws-ai1-enrichment-status`, e0683a31, gate #100); 5D BUILT (`claude/ws-5d-watchlist-intent`, e8770233, gate #94); 5E DEFERRED (investigation; identity repair belongs to plan.md Phase 4); 5F folded into WS-DR (views 3 and 4 of the Daily Recap).
 
 STATUS: PROPOSED ONLY. The trader asked Codex to place this assessment and suggested
 fixes here so Fable 5.1 can decide what to do. This is NOT permission to implement
@@ -596,6 +615,8 @@ wishlist entries and the trader's pre-existing edits intact.
 
 6. Theta pick tracker - a Setup Tracker for the theta plays (trader, 2026-09-10)
 
+SWEEP: BUILT - packet WS-TH on `claude/ws-th-theta-tracker`, merged at ee676ae5, gate #106: one row per (symbol, scan_date) in `theta_picks.jsonl`, graded at the sold put's expiry and marked at 5/10/20 sessions, `master_avwap_theta_outcomes.csv` + a Theta tab; written from the runner after the scan, never legacy.py's save pass.
+
 STATUS: CANDIDATE. Brief only; plan and build later when the trader points Claude here.
 
 Goal: know which theta picks work, which support combos and relative-strength reads
@@ -621,6 +642,8 @@ predict it, and whether the current theta scoring is any good.
 
 
 7. D1 market environments, tracked like the M5 ones (trader, 2026-09-10)
+
+SWEEP: BUILT - packet WS-ENV on `claude/ws-env-d1-environment`, merged at bb4b8dc0, gate #102: `scripts/indicators/d1_environment.py` (versioned), the append-only `d1_environment.jsonl`, the runner hook, the reader join by SCAN DATE, "By environment" on Research > Results; the backfill CLI is the trader's `--apply`. The legacy.py stamp on the tracker outcome row is NOT built (ask-first owed).
 
 STATUS: CANDIDATE. Brief only.
 
@@ -651,6 +674,8 @@ already carry `market_environment` into `held_run_score`.
 
 8. Setups table star and X reflect the day's decisions (trader, 2026-09-10)
 
+SWEEP: BUILT - packet WS-SX on `claude/ws-sx-star-x`, merged at d81bc929, gate #99: both marks when both facts hold; presentation only.
+
 STATUS: CANDIDATE. Brief only. Presentation only - hides nothing, writes nothing new.
 
 - Star (★): today it is filled only for Focus picks (`setup_delegate.set_focus_lookup`).
@@ -672,6 +697,8 @@ STATUS: CANDIDATE. Brief only. Presentation only - hides nothing, writes nothing
 
 9. Stop putting up longs below AVWAPE and shorts above it (trader, 2026-09-11)
 
+SWEEP: BUILT as display only - packet WS-WS on `claude/ws-ws-wrong-side`, merged at 7b8628d5, gate #108: a `wrong side` chip on the setups table and a `[wrong side]` tag in the AWAY digest, current anchor only, read from the band zone (scan rows carry no AVWAPE price). STILL the trader's: hide vs mark, the previous anchor, other surfaces.
+
 STATUS: CANDIDATE. Brief only; plan and build later when the trader points Claude here.
 
 Trader's words: "stop putting up longs below avwape and shorts above it."
@@ -687,6 +714,8 @@ Trader's words: "stop putting up longs below avwape and shorts above it."
 
 
 10. Better daily discovery, entry watches, journals and review — Fable 5.1 queue (2026-09-11)
+
+SWEEP: 10A, 10B, 10C step 1, 10D, 10E, 10F, 10G, 10H, 10I, 10J steps 1-2 and 10K step 1 BUILT (each sub-item carries its own SWEEP line); 10K steps 2 and 5 (WS-RP) land last.
 
 STATUS: PLANNED CANDIDATES. The trader asked for plans in this file, not implementation.
 No new product phase is authorized by this entry. Fable can investigate and prepare a
@@ -704,6 +733,8 @@ The existing item 9 was already uncommitted and is preserved. No live-session di
 or new runtime baseline is claimed by this planning pass.
 
 ### 10A. Find useful D1 candidates before the final hour (request 1)
+
+SWEEP: BUILT - packet WS-10A on `claude/ws-10a-scan-freshness`, merged at c258f7a8, gate #109 (three clocks on the scan, the manifest, `scan_replay`).
 
 Trader observation: the strongest Master AVWAP updates seem to arrive in the final hour
 or at EOD, even when the app says it updated earlier. Treat this as an unresolved report
@@ -747,6 +778,8 @@ trader's late discoveries. Keep the date/mtime check separate from bar-content f
 
 ### 10B. TC2000 picks reach the M5 watchlist automatically (request 2)
 
+SWEEP: BUILT - packet WS-10B on `claude/ws-10b-board-to-scan`, merged at a1b9fccd, gate #101 (AWAY staging was the broken link; the `Scan` column says adopted / staged / not adopted because).
+
 This is a verify/repair candidate first: the inventory already records TC2000-parity board
 rows joining M5 Focus (T2, 2026-09-04). Distinguish the bot's TC2000-style Strength Board
 from an external TC2000 export/paste; do not promise a direct TC2000 connection that has
@@ -773,6 +806,8 @@ and proof that accepted names actually enter a scan. AWAY must still stage, not 
 Read M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN and AUTO_MODES_AND_QUIET_HOURS_PLAN.
 
 ### 10C. One opt-in H1/H4 retester with named triggers (requests 3, 4, 5)
+
+SWEEP: step 1 BUILT - packet WS-10C on `claude/ws-10c-h1-retester`, merged at adcaeb19, gate #116 (`h1_ema_bounce_v1`, the H1 retester button, one fire then disarm, every-mode push through the armed sender; a yfinance H1 fallback for armed names by lead ruling because the desk caches ~35 of the 45 warm-up bars - the trader may overrule); steps 2-3 (H4 / LRSI options, trendline break-then-retest) not in this sweep.
 
 Trader intent: on selected “TOP weekly pattern” names, wait for a better entry instead
 of jumping in. Add a quick **H1/H4 retester** arm button below the chart, using the shared
@@ -826,6 +861,8 @@ and existing expiry/price-alert contracts. Reuse the owners cited above.
 
 ### 10D. Market Journal tells the market story and challenges my thesis (request 6)
 
+SWEEP: steps 1-2 BUILT, step 3 through the existing runner slot - packet WS-10D on `claude/ws-10d-market-story`, merged at f38823b7, gate #114; the narration of step 3 deferred. FOLLOW-UP OWED (found, not fixed): `EvidenceLedger.append` files an evening Pacific note under the next New-York session; 10D routes around it.
+
 Existing foundation: `market_journal.py:78` keeps text, symbols, session and actual write
 time; `ui/services/market_journal_service.py:77` owns writes, `:200` reads captures and
 `:249` reads recorded market context. `ui/panels/market_journal_panel.py:219` is the
@@ -876,6 +913,8 @@ D1 environment labels if built, but qualitative synthesis does not depend on tha
 
 ### 10E. Journal uses my setup notes to tag the trades I actually took (request 7)
 
+SWEEP: BUILT - packet WS-10E on `claude/ws-10e-note-tags`, merged at f5fabaa3, gate #111 (the `trader_note` lane; CLAUDE.md now names four lanes).
+
 Already built: `journal_analytics.py:173` AutoTagger and its trader-capture lane,
 `journal_bulk_tag.py:184` / `:290` plan/apply provisional tags, and the nightly
 `journal_auto_tag` slot. `ai_jobs/enrichment.py:151` provides gated advisory enrichment;
@@ -906,6 +945,8 @@ Live gate: a closed trade with a known note reaches a traceable suggestion; conf
 remains the trader's. Read JOURNAL_RELIABILITY_AND_UX_PLAN §2/auto-tagging and LOCAL_AI.
 
 ### 10F. Replace AWAY Recap with a visual Daily Recap (request 8)
+
+SWEEP: BUILT - packet WS-DR on `claude/ws-dr-daily-recap`, merged at f9b07df4, gate #115 (a session reader over twelve durable stores, four tabs, credit from the decision's own timestamp, the phone digest untouched); 5F's four questions are views 3 and 4.
 
 Verified gap: `ui/app.py:711` hands the recap a capped process-scoped alert list, so a
 restart or midnight crossing is not a complete session record. `_RecapWorker` in
@@ -960,6 +1001,8 @@ the current outcome-semantics contracts. This is descriptive learning, not a new
 
 ### 10G. One Trading Desk Watchlist for Focus and positions (requests 9, 10)
 
+SWEEP: BUILT - packet WS-WL on `claude/ws-wl-watchlist-tab`, merged at 21e8038f, gate #117 (five views over one pure row set, positions read-only, every verb to its owner, Chart Review and Focus Picks pages retired with their actions inventoried). OPEN for the trader: rename the old Watchlists tab; open the desk with the setups column shown.
+
 Resolve the placement overlap in favor of the trader's final instruction: the main
 **Watchlist tab belongs on Trading Desk**. Journal can link to the Positions view of that
 same component; do not create two independent lists. Retire the standalone Chart Review
@@ -1001,6 +1044,8 @@ restart. Read M5_FOCUS_GATING, DESK_CHART_UNIFICATION and JOURNAL_RELIABILITY_AN
 
 ### 10H. More chart history without making the desk slow (request 11)
 
+SWEEP: BUILT - packet WS-CH on `claude/ws-ch-chart-history`, merged at 91bc7480, gate #107 (`_LAST_SNAPSHOT_CAP` lowered 60 -> 12 by the lead).
+
 Treat “200 candles is not enough” as the requested outcome, not a verified universal cap.
 Inventory each chart's provider request, cache retention, payload truncation and visible
 viewport. Separate how many bars exist from how many are initially visible. Reuse
@@ -1031,6 +1076,8 @@ check oldest dates and freshness and compare GUI responsiveness to the existing 
 Read BROKER_ADAPTERS, DESK_CHART_UNIFICATION and GUI_FLUIDITY_MEASUREMENT_RUNBOOK.
 
 ### 10I. Connect thesis, actual trades and setup evidence by market environment (2026-09-11 follow-up)
+
+SWEEP: BUILT - packet WS-10I on `claude/ws-10i-context-join`, merged at 054d501f, gate #118 (`context_join`, `setup_environment_evidence`, the Results By environment control, the backfill CLI dry-run by default; the Daily Recap row keeps both the session label and the observation context by lead decision).
 
 Trader asks: can the Market Journal, Journal and Setup Tracker together answer “what
 works in what market environment?”, and are we using the local AI well? This is the
@@ -1157,6 +1204,8 @@ joins, evidence summaries, AI packaging and Daily Recap/Research readers. Define
 shared contract early; ship the deterministic join before asking the AI to explain it.
 
 ### 10J. Trade Mentor — a steady, low-friction stream of trader context (2026-09-11)
+
+SWEEP: steps 1-2 BUILT - packet WS-TM on `claude/ws-tm-trade-mentor`, merged at 6e17add1, gate #110 (scheduler/presence, raw reads, the missing-field questionnaire; Settings checkbox ships OFF); steps 3-4 (AI form filling, coaching) deferred.
 
 Trader request: a Settings checkbox named **Trade Mentor**. While enabled, ask hourly
 for an M5 market read, at 08:00 and 12:00 Pacific for a D1 read, and around 10:00 for
@@ -1299,6 +1348,8 @@ one AI field, and trace both saved records into the next grounded AI package. No
 change, API call or runtime test is part of this planning update.
 
 ### 10K. One measured review for the trader, local AI and frontier model (2026-09-12)
+
+SWEEP: step 1 BUILT - packet WS-AI1 on `claude/ws-ai1-enrichment-status`, merged at e0683a31, gate #100 (the enrichment defect, honest completion status, the `preference_to_trade` section joins the nightly slate by lead decision); steps 2 and 5 are packet WS-RP, landing last.
 
 STATUS: TRADER-REQUESTED INTEGRATION PLAN, NOT IMPLEMENTED. This conversation authorizes
 planning in WISHLIST, not app changes, live repairs, a model/provider change or automatic
@@ -1602,6 +1653,8 @@ planning pass changes no runtime contract, so plan.md and the app baseline remai
 
 
 11. Bring JumpStarter's workspace memory changes here (trader, 2026-09-11)
+
+SWEEP: built on `main` 8baf643b before the sweep (Phase 0.25); gate #93 still owed; the sweep's docs pass moved 62 CLAUDE.md bullets to DESK_INTERNALS to get under the 45 KB rule.
 
 STATUS: BUILT 2026-09-12 on `main` (trader: "integrate the memory changes"; plan.md Phase
 0.25, gate #93 owed). Written 2026-09-11 as CANDIDATE: trader explicitly asked to add the memory changes from their

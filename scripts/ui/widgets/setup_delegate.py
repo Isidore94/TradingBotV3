@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate
+from datetime import datetime
 
+from PySide6.QtCore import QEvent, QRect, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QToolTip
+
+import avwape_side
+import compression_chip
 from ui import theme
 from ui.models.setup import SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupTableModel
@@ -13,6 +17,45 @@ _COLUMN_KEYS = [key for key, _label in SetupTableModel.COLUMNS]
 _ROW_HEIGHT = 40
 _CHIP_HEIGHT = 22
 _PAD = 10
+#: Gap between two chips sharing one cell (WS-WS).
+_CHIP_GAP = 6
+#: Narrower than this and the second chip is not drawn at all: a 12px sliver of
+#: colour is not a badge, and the tooltip still says the whole thing.
+_MIN_CHIP_WIDTH = 22
+
+#: WS-SX tooltip wording. The MARK says that a decision exists; the tooltip says
+#: WHICH and WHEN. The kinds are `pick_feedback.LIKE_KINDS` / `REJECT_KINDS`; a
+#: kind with no entry here is printed as itself rather than swallowed, so a new
+#: verdict shows up as text instead of disappearing.
+_LIKE_LABELS = {"quick": "quick", "claimed": "claimed", "like": "star"}
+_REJECT_LABELS = {
+    "veto": "Vetoed today",
+    "dislike": "Disliked today",
+    "not_today": "Not today",
+    "pass": "Passed today",
+    "m5_click_away": "Passed today",
+    "remove_today": "Removed from today",
+}
+_REJECT_SUFFIXES = {"m5_click_away": "(M5 click-away)"}
+
+
+def _clock_text(stamp: object) -> str:
+    """`HH:MM` as the row was written - the stamp's own wall clock, unconverted.
+
+    The three ledgers spell time differently (`ts` with seconds, `created_at`
+    with microseconds and an explicit offset). Nothing here re-zones a stamp:
+    the trader wants to know when THEY clicked, which is what the row already
+    says.
+    """
+    text = str(stamp or "").strip()
+    if not text:
+        return ""
+    try:
+        return datetime.fromisoformat(text).strftime("%H:%M")
+    except ValueError:
+        pass
+    marker = text.find("T")
+    return text[marker + 1 : marker + 6] if marker != -1 else ""
 
 
 def _resized(font: QFont, delta: float, *, minimum: float = 1.0) -> QFont:
@@ -57,10 +100,20 @@ class SetupTableDelegate(QStyledItemDelegate):
     """
 
     _focus_lookup = None
+    _decision_lookup = None
 
     def set_focus_lookup(self, lookup) -> None:
         """`lookup(symbol) -> bool` flags Focus Picks with a star in the Symbol cell."""
         self._focus_lookup = lookup
+
+    def set_decision_lookup(self, lookup) -> None:
+        """`lookup(symbol) -> SymbolDecisions` - today's likes and rejects (WS-SX).
+
+        Presentation only, and NEVER a file read: the panel hands in a lookup
+        over one already-parsed, mtime-keyed snapshot, because `paint` runs once
+        per visible cell per repaint.
+        """
+        self._decision_lookup = lookup
 
     def _is_focus(self, row) -> bool:
         if self._focus_lookup is None or not isinstance(row, SetupRow) or not row.symbol:
@@ -70,9 +123,151 @@ class SetupTableDelegate(QStyledItemDelegate):
         except Exception:
             return False
 
+    def _decisions(self, row):
+        """Today's decisions for this row's symbol, or None when unknown.
+
+        A lookup that raises is the same as no lookup: the table is never worth
+        an exception, and an unanswered column is simply today's plain mark.
+        """
+        if self._decision_lookup is None or not isinstance(row, SetupRow) or not row.symbol:
+            return None
+        try:
+            return self._decision_lookup(row.symbol)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _liked_today(decisions) -> tuple:
+        return tuple(getattr(decisions, "liked", ()) or ())
+
+    @staticmethod
+    def _rejected_today(decisions) -> tuple:
+        return tuple(getattr(decisions, "rejected", ()) or ())
+
+    def helpEvent(self, event, view, option, index):  # noqa: N802 (Qt override)
+        """The ★/✕ tooltips say which decision and when (WS-SX item 3).
+
+        The delegate owns them rather than the model's `ToolTipRole`, because
+        the answer is the same already-parsed decision snapshot `paint` reads -
+        putting it in the model would mean the lookup living in two places and
+        the model re-emitting `dataChanged` for a hover.
+        """
+        if event is not None and event.type() == QEvent.Type.ToolTip:
+            text = self._decision_tooltip(index) or self._bucket_tooltip(index)
+            if text:
+                QToolTip.showText(event.globalPos(), text, view)
+                return True
+        return super().helpEvent(event, view, option, index)
+
+    @staticmethod
+    def _wrong_side_read(row):
+        """This row's side-of-the-anchor reading, or None. Never raises.
+
+        `paint` and `sizeHint` both ask, so it stays what `avwape_side` is: a
+        dict lookup and one short string split, no I/O and no clock.
+        """
+        if not isinstance(row, SetupRow):
+            return None
+        try:
+            return avwape_side.read_row(row.raw)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _compression_read(row):
+        """This row's compression reading, or None. Never raises (PCT-3).
+
+        `paint` and `sizeHint` both ask, so it stays what `compression_chip` is:
+        a handful of dict lookups, no I/O and no clock. The numbers arrive on
+        `row.raw` from the `ai_state` merge in `data_feed`, off the Qt thread.
+        """
+        if not isinstance(row, SetupRow):
+            return None
+        try:
+            return compression_chip.read_row(row.raw)
+        except Exception:
+            return None
+
+    def _wrong_side_tooltip(self, index) -> str:
+        """The bucket cell's extra line when the row is on the wrong side.
+
+        ADDED to the tooltip the cell already has (its bucket label), never
+        instead of it - WS-WS hides nothing, and that includes text.
+        """
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key != "bucket":
+            return ""
+        return avwape_side.tooltip_text(self._wrong_side_read(index.data(ROW_ROLE)))
+
+    def _compression_tooltip(self, index) -> str:
+        """The bucket cell's extra line when the scan flagged the row compressed.
+
+        The same shape as the wrong-side line: an ADDITION, never a replacement.
+        """
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key != "bucket":
+            return ""
+        return compression_chip.tooltip_text(self._compression_read(index.data(ROW_ROLE)))
+
+    def _bucket_tooltip(self, index) -> str:
+        """Everything the bucket cell has to say, its own label first.
+
+        Its bucket label, then WS-WS's wrong-side line, then PCT-3's compression
+        line - each one only when it has something to say. `""` when neither
+        badge applies, so a plain cell still falls through to Qt's own tooltip
+        handling exactly as it did before either packet existed.
+        """
+        extra = [
+            text
+            for text in (self._wrong_side_tooltip(index), self._compression_tooltip(index))
+            if text
+        ]
+        if not extra:
+            return ""
+        existing = str(index.data(Qt.ItemDataRole.ToolTipRole) or "").strip()
+        return "\n".join([existing, *extra] if existing else extra)
+
+    def _decision_tooltip(self, index) -> str:
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key not in {"favorite", "dislike"}:
+            return ""
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, SetupRow):
+            return ""
+        decisions = self._decisions(row)
+        lines: list[str] = []
+        if key == "favorite":
+            if self._is_focus(row):
+                lines.append("In Focus")
+            for kind, stamp in self._liked_today(decisions):
+                label = _LIKE_LABELS.get(str(kind), str(kind))
+                when = _clock_text(stamp)
+                lines.append(f"Liked today ({label}, {when})" if when else f"Liked today ({label})")
+        else:
+            for kind, stamp in self._rejected_today(decisions):
+                label = _REJECT_LABELS.get(str(kind), str(kind))
+                when = _clock_text(stamp)
+                suffix = _REJECT_SUFFIXES.get(str(kind), "")
+                lines.append(" ".join(part for part in (label, when, suffix) if part))
+        return "\n".join(lines)
+
     def sizeHint(self, option, index):  # noqa: N802 (Qt override)
         size = super().sizeHint(option, index)
-        return QSize(size.width(), max(size.height(), _ROW_HEIGHT))
+        width = size.width()
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key == "bucket":
+            read = self._wrong_side_read(index.data(ROW_ROLE))
+            if read is not None and read.wrong:
+                # `fit_columns` sizes a column by asking this, so a column that
+                # never asks for the second chip never gets the room to paint
+                # it. Width only: the row height is the setups height either way
+                # (G2b pins that).
+                width += _chip_width(option.font, avwape_side.WRONG_SIDE_LABEL) + _CHIP_GAP
+            compression = self._compression_read(index.data(ROW_ROLE))
+            if compression is not None and compression.flag:
+                # PCT-3: the same reasoning for the third chip.
+                width += _chip_width(option.font, compression_chip.COMPRESSED_LABEL) + _CHIP_GAP
+        return QSize(width, max(size.height(), _ROW_HEIGHT))
 
     def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
         row = index.data(ROW_ROLE)
@@ -106,13 +301,52 @@ class SetupTableDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(QRect(rect.left() + 2, rect.top() + 6, 3, rect.height() - 12), 1.5, 1.5)
 
         if key == "favorite" and is_setup:
-            self._favorite_star(painter, option, rect, self._is_focus(row))
+            # WS-SX: in Focus OR liked today - one boolean, one filled star.
+            liked = bool(self._liked_today(self._decisions(row)))
+            self._favorite_star(painter, option, rect, self._is_focus(row) or liked)
         elif key == "dislike" and is_setup:
-            self._dislike_mark(painter, option, rect)
+            rejected = bool(self._rejected_today(self._decisions(row)))
+            self._dislike_mark(painter, option, rect, rejected)
         elif key == "side" and is_setup and row.side in {"LONG", "SHORT"}:
             self._chip(painter, option, rect, row.side, "long" if row.side == "LONG" else "short")
         elif key == "bucket" and is_setup and row.bucket:
-            self._chip(painter, option, rect, row.bucket_label, _bucket_token(bucket), study=is_study)
+            bucket_chip = self._chip(
+                painter, option, rect, row.bucket_label, _bucket_token(bucket), study=is_study
+            )
+            # WS-WS (WISHLIST 9): a LONG whose close sits under its AVWAPE, or a
+            # SHORT whose close sits over it, is BADGED - after the bucket chip,
+            # never over it. Display only: the row is still here, still in the
+            # same place, still with the same score.
+            last_chip = bucket_chip
+            read = self._wrong_side_read(row)
+            if read is not None and read.wrong:
+                last_chip = (
+                    self._chip(
+                        painter,
+                        option,
+                        rect,
+                        avwape_side.WRONG_SIDE_LABEL,
+                        "caution",
+                        study=is_study,
+                        after=bucket_chip,
+                    )
+                    or last_chip
+                )
+            # PCT-3 (trader 2026-09-15): the scan has always docked a compressed
+            # row's score in silence. The chip says so - AFTER the bucket and
+            # wrong-side chips, never over them. Display only: nothing is
+            # hidden, nothing is re-ordered, no score moves.
+            compression = self._compression_read(row)
+            if compression is not None and compression.flag:
+                self._chip(
+                    painter,
+                    option,
+                    rect,
+                    compression_chip.COMPRESSED_LABEL,
+                    compression_chip.COMPRESSED_TOKEN,
+                    study=is_study,
+                    after=last_chip,
+                )
         elif key == "score" and is_setup and row.score is not None:
             self._score(painter, option, rect, row.score, selected)
         else:
@@ -126,10 +360,15 @@ class SetupTableDelegate(QStyledItemDelegate):
         painter.setPen(QColor(theme.color("favorite")) if focused else _alpha("text_secondary", 150))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "★" if focused else "☆")
 
-    def _dislike_mark(self, painter, option, rect) -> None:
-        """Clickable dislike column: ✕ prompts for a why and logs it for AI review."""
+    def _dislike_mark(self, painter, option, rect, rejected: bool = False) -> None:
+        """Clickable dislike column: ✕ prompts for a why and logs it for AI review.
+
+        WS-SX: BRIGHT RED (`reject_today`, solid) once the trader has rejected
+        this name today - vetoed, disliked, passed, or clicked away from its M5
+        alert. Otherwise the same dimmed mark it has always been.
+        """
         painter.setFont(_resized(option.font, 1.0))
-        painter.setPen(_alpha("short", 140))
+        painter.setPen(QColor(theme.color("reject_today")) if rejected else _alpha("short", 140))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "✕")
 
     def _text(self, painter, option, rect, index, key, is_study, selected) -> None:
@@ -156,14 +395,29 @@ class SetupTableDelegate(QStyledItemDelegate):
         painter.setPen(color)
         painter.drawText(text_rect, align, elided)
 
-    def _chip(self, painter, option, rect, text, token, study=False) -> None:
+    def _chip(self, painter, option, rect, text, token, study=False, after=None):
+        """One pill. Returns the rect it took, or None when it did not fit.
+
+        `after` is another chip's rect in the same cell: the pill starts a gap
+        past its right edge instead of at the cell's padding (WS-WS). A second
+        chip with no room left is not drawn - a coloured sliver says nothing,
+        and the tooltip still carries the whole sentence.
+        """
         color = QColor(theme.color(token))
         font = _resized(option.font, -1.0, minimum=7.5)
         font.setBold(True)
         metrics = QFontMetrics(font)
         chip_h = min(_CHIP_HEIGHT, rect.height() - 8)
-        chip_w = min(metrics.horizontalAdvance(text) + 20, rect.width() - _PAD - 4)
-        chip_rect = QRect(rect.left() + _PAD, rect.top() + (rect.height() - chip_h) // 2, chip_w, chip_h)
+        left = rect.left() + _PAD
+        if after is not None:
+            left = after.right() + _CHIP_GAP
+        # Unchanged for the first chip: with `left == rect.left() + _PAD` this is
+        # exactly the `rect.width() - _PAD - 4` it has always been.
+        available = rect.width() - 4 - (left - rect.left())
+        chip_w = min(metrics.horizontalAdvance(text) + 20, available)
+        if after is not None and chip_w < _MIN_CHIP_WIDTH:
+            return None
+        chip_rect = QRect(left, rect.top() + (rect.height() - chip_h) // 2, chip_w, chip_h)
 
         painter.setBrush(_alpha(token, 36))
         painter.setPen(QPen(_alpha(token, 130), 1))
@@ -175,6 +429,7 @@ class SetupTableDelegate(QStyledItemDelegate):
         painter.setOpacity(0.85 if study else 1.0)
         painter.drawText(chip_rect, int(Qt.AlignmentFlag.AlignCenter), elided)
         painter.setOpacity(1.0)
+        return chip_rect
 
     def _score(self, painter, option, rect, score, selected) -> None:
         token = _score_token(score)
@@ -196,6 +451,13 @@ class SetupTableDelegate(QStyledItemDelegate):
         if fill_w > 0:
             painter.setBrush(_alpha(token, 210))
             painter.drawRoundedRect(QRect(track.left(), track.top(), fill_w, track.height()), 2, 2)
+
+
+def _chip_width(font: QFont, text: str) -> int:
+    """What one pill of this text costs, in the chip's own font (WS-WS)."""
+    chip_font = _resized(font, -1.0, minimum=7.5)
+    chip_font.setBold(True)
+    return QFontMetrics(chip_font).horizontalAdvance(text) + 20
 
 
 def _bucket_token(bucket: str) -> str:

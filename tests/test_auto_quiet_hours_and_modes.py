@@ -259,7 +259,8 @@ def test_the_tick_cannot_undo_the_boot_refusal(monkeypatch):
     # Everything the tick does apart from the bot start is out of scope here;
     # `_ensure_bot_running` is deliberately left real.
     for name in (
-        "_roll_day_state", "_apply_scan_window", "_apply_quiet_hours",
+        "_roll_day_state", "_maybe_reset_daytrade_watchlists",
+        "_apply_scan_window", "_apply_quiet_hours",
         "_maybe_auto_arm", "_maybe_clear_stale_auto_lists",
         "_maybe_add_near_extreme_names", "_maybe_score_picks_daily",
         "_ensure_universe_fresh", "_maybe_build_watchlists",

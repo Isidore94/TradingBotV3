@@ -19,6 +19,11 @@ from typing import Any, Iterable
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+def _forecast_origin() -> str:
+    import market_journal
+
+    return market_journal.ORIGIN_EXTERNAL_FORECAST
+
 
 class _CaptureWorker(QThread):
     """Builds and stores one chart capture off the GUI thread.
@@ -84,12 +89,25 @@ class MarketJournalService(QObject):
         origin: str = "",
         now: datetime | None = None,
         supersedes: str = "",
+        mentor: Any = None,
+        reaffirms: str = "",
     ) -> dict[str, Any]:
         """Write one entry. Returns the row, or a refusal that says why.
 
         A refusal is returned rather than raised: both hosts show it in a
         status line, and an exception here would turn "you typed nothing" into
         a traceback.
+
+        `mentor` / `reaffirms` are WISHLIST 10J's Trade Mentor fields, passed
+        straight through to `build_entry`. The card writes its RAW text through
+        HERE and nowhere else: there is one owner of this store (ground rule 8),
+        and a prompt-answering surface with its own writer would be a second one.
+
+        A caveat the caller must know: `EvidenceLedger.append` stamps its own
+        `session_date` from the WRITE moment's market-local date, last, so a
+        caller cannot overwrite it. That is right for the ledger and wrong for
+        the question "which hour was this read about?", which is why the slot's
+        `scheduled_at` and the trader's `responded_at` both live in `mentor`.
         """
         import market_journal
 
@@ -101,13 +119,23 @@ class MarketJournalService(QObject):
             origin=origin or market_journal.ORIGIN_DESK_TAB,
             now=now,
             supersedes=supersedes,
+            mentor=mentor,
+            reaffirms=reaffirms,
         )
         ok, reason = market_journal.is_publishable(entry)
         if not ok:
             self.statusChanged.emit(reason)
             return {"ok": False, "reason": reason}
         try:
-            row = self._stream().append(entry)
+            # The SAME moment the entry was built from. Without this the ledger
+            # stamped `event_at` and its own `session_date` from `datetime.now()`
+            # while `created_at` said something else, so an entry written with an
+            # explicit `now` was filed under one date and stamped with another -
+            # and a reader narrowing the ledger by session would miss it
+            # entirely. No production caller passed `now` before WISHLIST 10J,
+            # which is why it never showed; the Trade Mentor's injected clock is
+            # what found it.
+            row = self._stream().append(entry, now=now)
         except Exception as exc:  # noqa: BLE001
             logging.warning("Market journal entry not written: %s", exc)
             self.statusChanged.emit(f"entry NOT saved: {exc}")
@@ -137,6 +165,209 @@ class MarketJournalService(QObject):
         if session_date:
             rows = [row for row in rows if str(row.get("session_date") or "") == session_date]
         return rows
+
+    def entries_about(self, session_date: str) -> list[dict[str, Any]]:
+        """The entries ABOUT one session - WS-10D, and not a `session_date` read.
+
+        `EvidenceLedger.append` applies its own fields LAST, so it overwrites
+        the `session_date` `build_entry` computed with the market-local date of
+        the WRITE moment. Measured 2026-09-12: a note typed at 21:00 Pacific on
+        the 11th is 00:00 New York on the 12th, so the stored row says
+        `2026-09-12` while the note is about the 11th - and the evening review,
+        the one entry a story most wants, is exactly the entry a
+        `session_date` filter loses.
+
+        `market_journal.session_date_for` answers the question the field's name
+        claims (which session is a note typed at this moment about) and answers
+        it from the exchange's own open, so it is what selects here. Repairing
+        the ledger stamp is a separate packet; surviving it is this one's job.
+
+        The known limit, stated rather than hidden: an entry deliberately filed
+        against an OLDER session - written on Tuesday about Friday - cannot be
+        recovered by either route, because the intended `session_date` never
+        reached disk. It lands on the day it was written.
+        """
+        import market_journal
+
+        wanted = str(session_date or "").strip()
+        if not wanted:
+            return []
+        rows = [
+            row
+            for row in self.entries_for()
+            if market_journal.session_of_entry(row) == wanted
+        ]
+        rows.sort(key=lambda row: str(row.get("created_at") or ""))
+        return rows
+
+    def daily_story(self, session_date: str, *, index_bars=None):
+        """WS-10D item 1: the session's story. Worker-thread call - it reads files.
+
+        The measured part comes from the DURABLE daily bars already on disk;
+        nothing here fetches, and a benchmark with no cached file is reported
+        unmeasured rather than filled in.
+        """
+        import market_story
+
+        entries = self.entries_about(session_date)
+        try:
+            digests = self.chart_digests()
+        except Exception:  # noqa: BLE001 - a missing capture store is a quieter story
+            digests = {}
+        context = self.day_context(session_date)
+        row = context.get("row") if context.get("measured") else None
+        bars = index_bars if index_bars is not None else self._index_bars(market_story.BENCHMARKS)
+        return market_story.build_daily_story(
+            session_date,
+            entries=entries,
+            captures=digests,
+            context_row=row,
+            index_bars=bars,
+        )
+
+    def _index_bars(self, symbols) -> dict[str, list[dict[str, Any]]]:
+        """Completed daily OHLC for the benchmarks. ONE reader, shared.
+
+        `market_story_rollups.load_index_bars` is the same reader the overnight
+        rollup uses, so the desk's Story pane and the weekly pack measure the
+        same bars. It lives there because `market_story` is pure by contract
+        and the nightly slot must not import Qt.
+        """
+        try:
+            from market_story_rollups import load_index_bars
+
+            return load_index_bars(symbols)
+        except Exception:  # noqa: BLE001 - no bars is an unmeasured cell, never a broken story
+            logging.debug("Benchmark daily bars unreadable.", exc_info=True)
+            return {}
+
+    # -- theses -----------------------------------------------------------
+    def theses_for(self, session_date: str = "") -> list[dict[str, Any]]:
+        """WS-10D item 2: one row per entry of that session, trader edits on top.
+
+        A stored row WINS over a fresh extraction: once the trader has written
+        their own interpretation, the machine's reading is history and must not
+        quietly replace it on the next refresh. Nothing is written here - a
+        read that writes is how a store grows rows nobody asked for.
+        """
+        import market_thesis
+
+        entries = self.entries_about(session_date) if session_date else self.entries_for()
+        try:
+            stored = market_thesis.current_theses(market_thesis.read_rows())
+        except Exception:  # noqa: BLE001
+            logging.debug("Market theses unreadable.", exc_info=True)
+            stored = []
+        by_entry = {str(row.get("entry_id") or ""): row for row in stored}
+        out: list[dict[str, Any]] = []
+        for entry in entries:
+            entry_id = str(entry.get("entry_id") or "")
+            if str(entry.get("origin") or "") == _forecast_origin():
+                continue
+            existing = by_entry.get(entry_id)
+            if existing is not None:
+                out.append(dict(existing))
+                continue
+            out.append(market_thesis.draft_row(market_thesis.extract_thesis(entry)))
+        return out
+
+    def save_interpretation(
+        self, *, entry_id: str, supersedes: str, text: str
+    ) -> dict[str, Any]:
+        """The trader's own reading, as a superseding row. Never an edit.
+
+        The draft is recorded first when it has never been written, so the row
+        this one SUPERSEDES is really on disk: a superseding row naming
+        nothing would hide the machine's reading instead of correcting it.
+        """
+        import market_thesis
+
+        body = str(text or "").strip()
+        if not body:
+            return {"ok": False, "reason": "an empty interpretation is not a correction"}
+        try:
+            known = {
+                str(row.get("thesis_id") or "") for row in market_thesis.read_rows()
+            }
+            if supersedes and supersedes not in known:
+                entry = next(
+                    (
+                        row
+                        for row in self.entries_for()
+                        if str(row.get("entry_id") or "") == str(entry_id)
+                    ),
+                    None,
+                )
+                if entry is not None:
+                    market_thesis.record_draft(market_thesis.extract_thesis(entry))
+            row = market_thesis.record_interpretation(
+                entry_id=str(entry_id), supersedes=str(supersedes), text=body
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Thesis interpretation not saved: %s", exc)
+            self.statusChanged.emit(f"interpretation NOT saved: {exc}")
+            return {"ok": False, "reason": str(exc)}
+        self.statusChanged.emit("interpretation saved; the original draft is untouched")
+        return {"ok": True, "row": row}
+
+    # -- the imported weekly forecast (WISHLIST 10K) -----------------------
+    def import_weekly_forecast(
+        self,
+        *,
+        text: str,
+        source_model: str = "",
+        created_at_claimed: str = "",
+        target_week: str = "",
+        scenarios: Iterable[str] = (),
+        links: Iterable[str] = (),
+        session_date: str = "",
+        now: datetime | None = None,
+        theses_path=None,
+    ) -> dict[str, Any]:
+        """Paste someone else's weekly forecast in, whole.
+
+        Two writes and one order: the ENTRY first (the text is the thing worth
+        keeping), then the sidecar that records where it came from. A sidecar
+        failure is reported and never costs the import - the evidence store may
+        not cost the event it records.
+
+        `created_at_claimed` stays `unknown` when nobody supplied it. Filling it
+        from `imported_at` would turn "a forecast written at some unknown time"
+        into "a forecast written at the moment it was pasted", which is a claim
+        about what was knowable when, and it would be false.
+        """
+        import market_journal
+        import market_thesis
+
+        written = self.write_entry(
+            text=text,
+            session_date=session_date or market_journal.session_date_for(now),
+            timeframe=market_journal.TIMEFRAME_D1,
+            origin=market_journal.ORIGIN_EXTERNAL_FORECAST,
+            now=now,
+        )
+        if not written.get("ok"):
+            return written
+        entry = written["entry"]
+        try:
+            sidecar = market_thesis.record_forecast(
+                entry_id=str(entry.get("entry_id") or ""),
+                text=str(entry.get("text") or ""),
+                source_model=source_model,
+                created_at_claimed=created_at_claimed,
+                target_week=target_week,
+                scenarios=scenarios,
+                links=links,
+                session_date=str(session_date or entry.get("session_date") or ""),
+                path=theses_path,
+                now=now,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Forecast sidecar not written: %s", exc)
+            self.statusChanged.emit(f"forecast saved; its source row was NOT: {exc}")
+            return {"ok": True, "entry": entry, "forecast": None, "sidecar_error": str(exc)}
+        self.statusChanged.emit("weekly forecast imported as outside commentary")
+        return {"ok": True, "entry": entry, "forecast": sidecar}
 
     # -- chart captures ---------------------------------------------------
     def capture_charts(

@@ -161,9 +161,30 @@ def _ensure_classification_badge(row: SetupRow) -> None:
         badges.append(label)
 
 
+def _record_bucket_key(row: SetupRow, bucket: str) -> None:
+    """Remember that this row belongs to `bucket` as well (packet D1C-A).
+
+    The fold below merged display LABELS only, so an HC row that was also a FAV
+    carried both words and no key - and the chip filter, which asks in raw
+    bucket keys, could never see the second membership. One line here is what
+    makes "FAV + Liked shows the HC+FAV+claimed row" answerable.
+    """
+    key = str(bucket or "").strip().lower()
+    if not key:
+        return
+    keys = row.raw.setdefault("bucket_keys", [])
+    if not isinstance(keys, list):
+        keys = []
+        row.raw["bucket_keys"] = keys
+    if key not in keys:
+        keys.append(key)
+
+
 def _merge_classification_badges(existing: SetupRow, duplicate: SetupRow) -> None:
     _ensure_classification_badge(existing)
     _ensure_classification_badge(duplicate)
+    _record_bucket_key(existing, existing.bucket)
+    _record_bucket_key(existing, duplicate.bucket)
     badges = existing.raw["classification_badges"]
     for label in duplicate.raw.get("classification_badges") or []:
         if label and label not in badges:
@@ -342,6 +363,7 @@ def enrich_setup_rows_for_display(
     """Best-effort local display enrichment; setup ranking stays untouched."""
     if not rows:
         return rows
+    merge_compression_from_ai_state(rows)
     try:
         from ui.services.setup_group_context import (
             enrich_setup_group_context,
@@ -353,6 +375,62 @@ def enrich_setup_rows_for_display(
     except Exception as exc:
         logging.warning("Could not enrich Master AVWAP group context: %s", exc)
     return rows
+
+
+def merge_compression_from_ai_state(rows: Iterable[SetupRow], *, allow_read: bool = False) -> int:
+    """Fill each row's compression fields from the scan's `ai_state` (PCT-3).
+
+    The setups table is built from `master_avwap_priority_setups.txt`, whose
+    ranked lines carry the symbol, side, score, family and bucket and nothing
+    about compression. `master_avwap_ai_state.json` carries the whole reading
+    per symbol, so the two are joined HERE - in the load path - and never in
+    `paint`, which runs once per visible cell per repaint.
+
+    **`allow_read` defaults to False and that is the load-bearing part.**
+    `enrich_setup_rows_for_display` is reached from
+    `master_avwap_panel.refresh_from_reports`, which runs on the Qt thread on
+    every watched-file change, and one parse of the live 36 MB ai_state was
+    measured at 281-292 ms on the desk (`CLAUDE.md`: nothing expensive belongs
+    on the Qt thread). So the default path reads only the map already in
+    memory; `ai_state_levels.warm_cache()` does the parse on a worker and the
+    panel then asks for one more refresh. `allow_read=True` is for a worker, a
+    CLI or a test - never the Qt thread.
+
+    The join is by SYMBOL: the anchored compression box is a property of the
+    symbol's current earnings anchor, not of the side being traded, and the
+    `ai_state` file holds one entry per symbol. A row that already carries a
+    reading (the focus feed's rows do) keeps its own - the merge only fills.
+
+    Returns how many rows were filled. A cold cache, a missing file or an
+    unreadable one fills nothing and costs nothing: an evidence read never costs
+    the rows it annotates.
+    """
+    filled = 0
+    try:
+        from ui.services import ai_state_levels
+
+        by_symbol = (
+            ai_state_levels.load_symbol_compression()
+            if allow_read
+            else ai_state_levels.cached_symbol_compression()
+        )
+    except Exception as exc:  # noqa: BLE001 - a chip never costs the table
+        logging.warning("Could not read ai_state compression fields: %s", exc)
+        return 0
+    if not by_symbol:
+        return 0
+    for row in rows or ():
+        raw = getattr(row, "raw", None)
+        if not isinstance(raw, dict):
+            continue
+        entry = by_symbol.get(str(getattr(row, "symbol", "")).strip().upper())
+        if not entry:
+            continue
+        added = {key: value for key, value in entry.items() if key not in raw}
+        if added:
+            raw.update(added)
+            filled += 1
+    return filled
 
 
 def setup_row_from_mapping(

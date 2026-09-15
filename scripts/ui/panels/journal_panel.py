@@ -14,7 +14,7 @@ Everything reads through ``ui.services.journal_feed``. No tab holds a
 
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QTabWidget, QVBoxLayout
 
 from ui.read_worker import join_worker
@@ -40,10 +40,23 @@ class _JournalInitWorker(QThread):
 
 class JournalPanel(QFrame):
     statusChanged = Signal(str)
+    #: WS-WL item 4. "Positions on the Watchlist" - a NAV call, never a second
+    #: list. The window routes it to the Trading Desk's Watchlist tab on its
+    #: Positions view; this panel neither reads nor builds that list.
+    positionsOnWatchlistRequested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
+
+        self.positions_on_watchlist_button = QPushButton("Positions on the Watchlist")
+        self.positions_on_watchlist_button.setToolTip(
+            "Open the Trading Desk's Watchlist on its Positions view - the same "
+            "list, with the account, quantity and last sync beside every name."
+        )
+        self.positions_on_watchlist_button.clicked.connect(
+            self.positionsOnWatchlistRequested.emit
+        )
 
         self._migration_worker: _JournalInitWorker | None = None
         self.migration_status = QLabel("")
@@ -82,6 +95,7 @@ class JournalPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addWidget(self.migration_status)
         layout.addWidget(self.prepare_button)
+        layout.addWidget(self.positions_on_watchlist_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.header)
         layout.addWidget(self.tabs)
 

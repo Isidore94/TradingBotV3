@@ -79,6 +79,9 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "outcome_path",
     "setup_tracker_ledger",
     "focus_membership_events",
+    # WS-5D: the Watchlists page and the Focus store both import it at call
+    # time, so a bundle missing it dies at the first watchlist edit.
+    "watchlist_intent_events",
     "market_context_ledger",
     "market_journal",
     # Imported at call time by both journal surfaces and by the auto-mode flip
@@ -91,6 +94,25 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # R1 amendment: the AWAY day's return surface.
     "away_recap",
     "ui.panels.away_recap_panel",
+    # WS-DR: the Daily Recap that took the nav slot. `ui.panels.daily_recap_panel`
+    # is a top-level import in `ui.app` and needs no entry; the READER is
+    # imported by name inside `_RecapReadWorker.run`, which is the same lazy
+    # shape `away_recap` is listed for - a bundle missing it would launch and
+    # then fail the first time the trader opened the page.
+    "daily_recap_reader",
+    # WISHLIST 10J: the Trade Mentor. Every one of these is reached through a
+    # FUNCTION-LEVEL import - `ui.app` imports the service inside `__init__`,
+    # the service imports `user_presence` inside its own, and both the window
+    # and the card import `trade_mentor_trade_check` at 10:00. PyInstaller can
+    # follow that chain and a refactor can quietly break it, which is the exact
+    # shape of the journal-chain problem two entries down. A bundle missing one
+    # would not fail at launch: it would fail at the top of the hour the trader
+    # turned the feature on for.
+    "trade_mentor_schedule",
+    "trade_mentor_trade_check",
+    "user_presence",
+    "ui.services.trade_mentor_service",
+    "ui.widgets.trade_mentor_card",
     # NOT ai_jobs: the local AI batch layer is deliberately out of the bundle
     # (PACKAGES_NOT_IN_THE_BUNDLE in tests/test_packaging_spec_drift.py). Its
     # only entry point is scripts/run_ai_jobs.py, a scheduled CLI run from the
@@ -144,6 +166,14 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "indicators.efficiency_lrsi",
     "indicators.smi",
     "indicators.heikin_ashi",
+    # PCT-1 (2026-09-15): the Pullback alert's rule sheet and the intraday
+    # history cache behind its M15/M30 legs. Both are imported inside a method
+    # of the Alert Center poll, so nothing proves they are bundled until a
+    # trader arms a watch on a frozen desk. `indicators` and the top-level
+    # scripts tree are both collected, so this adds no packaging trigger - it
+    # moves the discovery to the build gate.
+    "indicators.pullback_sma_reclaim",
+    "intraday_history",
     "journal_store",
     "journal_identity",
     "journal_migrate",

@@ -36,7 +36,11 @@ from typing import Any, Iterable, Mapping, Sequence
 import evidence_stats
 import journal_analytics
 import journal_trade_shape
+import swing_headline
 import working_lately
+from d1_environment_join import ENVIRONMENT_FIELD
+from indicators.d1_environment import LABELS as D1_ENVIRONMENT_LABELS
+from indicators.d1_environment import RULE_VERSION as D1_ENVIRONMENT_RULE_VERSION
 from working_lately import EvidenceCell
 
 
@@ -64,6 +68,21 @@ NO_SOURCES = "the snapshot did not record its sources"
 #: and it never appears as a row under a "Confirmed tag" heading - coverage is
 #: the section sentence's business (`confirmed / total`).
 UNTAGGED_BUCKET = "untagged"
+
+#: The By environment control's "no cut" value (packet WS-10I). The DEFAULT, so
+#: a page nobody touched is the page that was there before this control existed.
+ENVIRONMENT_ALL = "all"
+
+#: What the control may be set to: the rule's whole vocabulary, `unknown`
+#: included, because a session nobody labelled is its own answer and choosing it
+#: is a real question. Never derived from the rows on screen - a choice list
+#: that shrank with the data would hide the labels that stopped appearing.
+ENVIRONMENT_CHOICES = (ENVIRONMENT_ALL,) + tuple(D1_ENVIRONMENT_LABELS)
+
+#: The two moments the cut can be about. Bot reads the state known when the
+#: opportunity was OBSERVED; My trades the state known at the ENTRY.
+ENVIRONMENT_BASIS_OBSERVATION = "observation"
+ENVIRONMENT_BASIS_ENTRY = "entry"
 
 #: What a bot row copies out of its cell, verbatim. Every one of these is
 #: handed on as the cell's OWN object, so a reader can prove by identity that
@@ -202,6 +221,20 @@ class ResultsView:
     #: The window sentence this population may honestly print - the chosen
     #: label when it applies, the SNAPSHOT's own window when it does not.
     window_sentence: str = ""
+    # -- the By environment control (packet WS-10I) -------------------------
+    #: Which environment the page is CUT to. `ENVIRONMENT_ALL` is no cut at all
+    #: and every champion number above is byte-identical to what it was.
+    environment_filter: str = ENVIRONMENT_ALL
+    #: WHICH MOMENT the cut is about: `observation` for Bot (the tape the
+    #: opportunity was seen in) and `entry` for My trades (the tape the fill
+    #: happened in). The two are different questions and the page says which
+    #: one it is answering rather than letting the reader assume.
+    environment_basis: str = ""
+    #: The control's own sentence: the benchmark, the rule version and the cut.
+    environment_line: str = ""
+    #: What the control may be set to. The rule's whole vocabulary, so a label
+    #: with no rows this window is still choosable and answers "none".
+    environment_choices: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +514,364 @@ def _bot_section(snapshot: Mapping[str, Any] | None, kind: str) -> ResultsSectio
 def _bot_sections(snapshot: Mapping[str, Any] | None, horizon: str) -> tuple[ResultsSection, ...]:
     kinds = ("daytrade_held_run",) if horizon == "day" else ("swing_trade_r", "swing_favorable")
     return tuple(_bot_section(snapshot, kind) for kind in kinds)
+
+
+# ---------------------------------------------------------------------------
+# the environment cut (WS-ENV)
+# ---------------------------------------------------------------------------
+
+
+#: The section's key, named once. A page asks for it by this and never by index.
+ENVIRONMENT_SECTION_KEY = "by_environment"
+
+#: How far back the environment cut reads, IN EXCHANGE SESSIONS, and why it is
+#: not `LATELY_SESSIONS`. "Lately" is 20 sessions - about a month - and a month
+#: of SPY is usually ONE environment, so a cut of it would print one populated
+#: row and four empty ones and answer nothing. Six of those windows is about
+#: six months, which on the recorded 2026 series holds all five labels. It is a
+#: declared parameter of THIS readout, not a second definition of "lately": no
+#: other surface reads it, and the section's rows say the number out loud.
+ENVIRONMENT_WINDOW_SESSIONS = 6 * evidence_stats.LATELY_SESSIONS
+
+
+def _environment_key(row: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get(ENVIRONMENT_FIELD) or "unknown").strip() or "unknown",
+        str(row.get("side") or "").strip().upper(),
+    )
+
+
+def _environment_row(
+    environment: str,
+    side: str,
+    headline: swing_headline.Headline,
+    group: Sequence[Mapping[str, Any]] = (),
+    *,
+    date_field: str = "scan_date",
+) -> ResultsRow:
+    """One (environment, side) cell. The numbers are the headline's own."""
+    symbols = {str(row.get("symbol") or "").strip().upper() for row in group}
+    symbols.discard("")
+    sessions_seen = {str(row.get(date_field) or "")[:10] for row in group}
+    sessions_seen.discard("")
+    values: dict[str, Any] = {
+        "environment": environment,
+        "side": side,
+        # The shortlist table reads a bot row by these names; an environment
+        # cell fills them so it renders in the SAME table rather than needing a
+        # second one. `family` is the environment because that is what this
+        # row is about.
+        "family": environment,
+        "kind": ENVIRONMENT_SECTION_KEY,
+        "namespace": "live",
+        "n_symbols": len(symbols),
+        "n_sessions": len(sessions_seen),
+    }
+    values.update(headline.as_row())
+    reason = (
+        ""
+        if headline.meets_floor
+        else (
+            f"below the evidence floor - n={headline.n} against a floor of "
+            f"{evidence_stats.MIN_REPORTABLE_N}, so read it as discovery"
+        )
+    )
+    rate = swing_headline.percent_text(headline.win_rate)
+    bound = swing_headline.percent_text(headline.win_rate_lb)
+    display = {
+        "environment": environment,
+        "side": side,
+        "win_rate": swing_headline.format_win_rate(values),
+        "win_rate_lb": bound if bound == "unmeasured" else f"{bound}%",
+        "n": str(headline.n),
+        "avg_r": "unmeasured" if headline.avg_r is None else f"{headline.avg_r:+.2f}",
+        "avg_unit": str(headline.avg_unit),
+        "meets_floor": "" if headline.meets_floor else f"under n={evidence_stats.MIN_REPORTABLE_N}",
+        "eligibility": reason or "eligible",
+        # The shortlist's own column names, so this section renders in the ONE
+        # bot table. The statistic is a PERCENT here, the way the favorable
+        # section already prints one, and the Measure column says which cut it is.
+        "family": environment,
+        "kind": ENVIRONMENT_SECTION_KEY,
+        "namespace": "live",
+        "sample": f"{headline.n} graded",
+        "statistic": rate,
+        "lower_bound": bound,
+        "n_symbols": str(len(symbols)),
+        "n_sessions": str(len(sessions_seen)),
+        "coverage": f"{len(symbols)} symbol(s) / {len(sessions_seen)} session(s)",
+    }
+    return ResultsRow(
+        cell=None,
+        line=headline.sentence(),
+        reason=reason,
+        eligible=bool(headline.meets_floor),
+        values=values,
+        display=display,
+    )
+
+
+def environment_section(
+    rows: Sequence[Mapping[str, Any]] | None,
+    *,
+    benchmark: str = "SPY",
+    rule_version: str = D1_ENVIRONMENT_RULE_VERSION,
+    date_field: str = "scan_date",
+    sessions: int = ENVIRONMENT_WINDOW_SESSIONS,
+    only: str = ENVIRONMENT_ALL,
+) -> ResultsSection:
+    """Eligible swing observations, cut by the D1 environment of their SCAN date.
+
+    WISHLIST 7 / packet WS-ENV. The rows arrive already filtered by
+    `swing_evidence.read_eligible_rows` and already joined by
+    `d1_environment_join.attach_environment` - this module computes a VIEW and
+    never a new statistic, so the rate, the bound and the floor are all
+    `swing_headline`'s and `evidence_stats`' own.
+
+    **`unknown` is a row, never a bucket folded into the others.** A session the
+    store never labelled is not a quiet session; it is an unread one, and
+    pooling it into a measured cell would make up a reading.
+
+    **Win rate leads, and the SORT is the bound** - a 67%-on-thirty cell sits
+    below a 62%-on-a-hundred, which is the whole reason the bound is on the
+    table. These rows are `favorable_direction` (ST1): the tier file's `win` is
+    the sign of a close-to-close percent move, so the column is headed
+    "Favorable %" and the unit is `%`.
+    """
+    table = [dict(row) for row in (rows or ()) if isinstance(row, Mapping)]
+    # The page-level cut (WS-10I). Applied to the ROWS, so the cell counts, the
+    # coverage and the sentence are all about the same rows the table shows; a
+    # cut applied to the output would leave a sentence describing rows that are
+    # no longer there. `ENVIRONMENT_ALL` filters nothing and the section is
+    # byte-identical to the one WS-ENV shipped.
+    chosen = str(only or ENVIRONMENT_ALL)
+    if chosen != ENVIRONMENT_ALL:
+        table = [
+            row
+            for row in table
+            if (str(row.get(ENVIRONMENT_FIELD) or "unknown").strip() or "unknown") == chosen
+        ]
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in table:
+        groups.setdefault(_environment_key(row), []).append(row)
+
+    headlines: dict[tuple[str, str], swing_headline.Headline] = {
+        key: swing_headline.headline_from_tracker_rows(
+            f"{key[1]} {key[0]}".strip(), group, sessions=sessions
+        )
+        for key, group in groups.items()
+    }
+    ordered_keys = sorted(
+        headlines,
+        key=lambda key: (
+            not headlines[key].meets_floor,
+            headlines[key].win_rate_lb is None,
+            -(headlines[key].win_rate_lb or 0.0),
+            -headlines[key].n,
+            key[0],
+            key[1],
+        ),
+    )
+    section_rows = tuple(
+        _environment_row(
+            key[0], key[1], headlines[key], groups[key], date_field=date_field
+        )
+        for key in ordered_keys
+    )
+
+    covered: set[str] = set()
+    uncovered: set[str] = set()
+    for row in table:
+        session = str(row.get(date_field) or "")[:10]
+        if not session:
+            continue
+        label = str(row.get(ENVIRONMENT_FIELD) or "unknown").strip() or "unknown"
+        (uncovered if label == "unknown" else covered).add(session)
+    uncovered -= covered
+
+    n_unknown = sum(
+        headline.n for key, headline in headlines.items() if key[0] == "unknown"
+    )
+    sentence = (
+        f"Swing observations cut by the D1 environment {benchmark} was in ON THE "
+        f"SCAN DATE ({rule_version}) - the tape the decision was made in, never "
+        f"the one it exited in. {len(covered)} session(s) here carry a stored "
+        f"label and {len(uncovered)} do not; an unlabelled session reads "
+        f"`unknown`, which is its own row and is pooled into nothing. Win rate "
+        f"leads with n and one Wilson lower bound, and the sort is the bound."
+    )
+    if chosen != ENVIRONMENT_ALL:
+        sentence = (
+            f"Cut to `{chosen}` sessions only - {len(table)} row(s) of the read. "
+            + sentence
+        )
+    return ResultsSection(
+        key=ENVIRONMENT_SECTION_KEY,
+        title=(
+            f"By environment ({benchmark}, {rule_version})"
+            if chosen == ENVIRONMENT_ALL
+            else f"By environment - {chosen} ({benchmark}, {rule_version})"
+        ),
+        kind=ENVIRONMENT_SECTION_KEY,
+        sentence=sentence,
+        # **No verdict, deliberately.** `verdict_short` is a KIND's own verdict
+        # state, decided by `working_lately.select_leader` over snapshot cells.
+        # This section has no snapshot and names no leader - it is an
+        # observational cut - so it prints no verdict line rather than inventing
+        # a fourth one. The sentence below carries what it does claim.
+        verdict_line="",
+        verdict_short="",
+        bands=ResultsBands(),
+        rows=section_rows,
+        studies=(),
+        stats={
+            "columns": ("environment", "side") + swing_headline.HEADLINE_COLUMNS,
+            "labels": ("Environment", "Side")
+            + swing_headline.headline_labels(
+                swing_headline.OUTCOME_KIND_FAVORABLE_DIRECTION
+            ),
+            "benchmark": str(benchmark),
+            "rule_version": str(rule_version),
+            "cells": len(section_rows),
+            "eligible_cells": len([row for row in section_rows if row.eligible]),
+            "rows_read": len(table),
+            "n_unknown": n_unknown,
+            "sessions_covered": len(covered),
+            "sessions_uncovered": len(uncovered),
+            "sessions": int(sessions),
+            "environment_filter": chosen,
+        },
+    )
+
+
+#: The day-trade cut's section key. A SECOND key, never the swing one: the two
+#: populations answer different questions with different statistics and a page
+#: that gave them one key would eventually render one inside the other.
+DAY_ENVIRONMENT_SECTION_KEY = "by_environment_day"
+
+
+def _day_environment_row(cell: Mapping[str, Any]) -> ResultsRow:
+    """One day-trade (environment, side) cell, as the shortlist table reads it."""
+    statistic = cell.get("statistic")
+    bound = cell.get("lower_bound")
+    hold_rate = cell.get("hold_rate")
+    values = dict(cell)
+    values["family"] = cell.get("environment")
+    values["kind"] = DAY_ENVIRONMENT_SECTION_KEY
+    values["namespace"] = "live"
+    reason = str(cell.get("lead_refusal") or "")
+    display = {
+        "environment": str(cell.get("environment") or ""),
+        "side": str(cell.get("side") or ""),
+        "family": str(cell.get("environment") or ""),
+        "kind": DAY_ENVIRONMENT_SECTION_KEY,
+        "namespace": "live",
+        "statistic": "unmeasured" if statistic is None else f"{float(statistic):.2f}",
+        "lower_bound": "unmeasured" if bound is None else f"{float(bound):.2f}",
+        "hold_rate": "unmeasured" if hold_rate is None else f"{float(hold_rate) * 100:.0f}%",
+        "n": str(cell.get("n") or 0),
+        "n_held": str(cell.get("n_held") or 0),
+        "sample": f"{cell.get('n_held') or 0} held of {cell.get('n_measured') or 0} measured",
+        "coverage": (
+            f"{cell.get('n_symbols') or 0} symbol(s) / "
+            f"{cell.get('n_sessions') or 0} session(s)"
+        ),
+        "eligibility": reason or "eligible",
+    }
+    line = (
+        f"{cell.get('environment')} / {cell.get('side')}: "
+        f"{'unmeasured' if statistic is None else f'{float(statistic):.2f}'} held x ran "
+        f"over {cell.get('n_held') or 0} held of {cell.get('n_measured') or 0} measured "
+        f"({cell.get('n_unmeasured') or 0} unmeasured)"
+    )
+    return ResultsRow(
+        cell=None,
+        line=line,
+        reason=reason,
+        eligible=bool(cell.get("can_lead")),
+        values=values,
+        display=display,
+    )
+
+
+def day_environment_section(
+    rows: Sequence[Mapping[str, Any]] | None,
+    *,
+    labels_by_session: Mapping[str, str] | None = None,
+    benchmark: str = "SPY",
+    rule_version: str = D1_ENVIRONMENT_RULE_VERSION,
+    date_field: str = "trade_date",
+    only: str = ENVIRONMENT_ALL,
+    as_of: Any = None,
+) -> ResultsSection:
+    """Intraday alerts cut by the D1 environment of their SESSION (WS-10I).
+
+    The day-trade population keeps its own headline - `held_run_score`, P(held
+    in the first 30 minutes) x the trimmed-mean MFE_R of the held ones - and is
+    never pooled with the swing cut above it. **The label is the D1 rule's**;
+    the outcome rows also carry a `market_environment` stamped at alert
+    registration, which is a different vocabulary on a different clock, and
+    printing the two under one heading would be two unrelated words in one
+    column.
+    """
+    import setup_environment_evidence  # noqa: PLC0415 - a Results-only reader
+
+    cells = setup_environment_evidence.opportunity_cells(
+        rows or (),
+        population_kind=setup_environment_evidence.POPULATION_DAY_TRADE,
+        labels_by_session=labels_by_session,
+        date_field=date_field,
+        as_of=as_of,
+    )
+    chosen = str(only or ENVIRONMENT_ALL)
+    if chosen != ENVIRONMENT_ALL:
+        cells = [cell for cell in cells if cell.get("environment") == chosen]
+    # Best first BY THE BOUND, never by the statistic, and a cell that may not
+    # lead still sits on the page with its refusal beside it.
+    cells.sort(
+        key=lambda cell: (
+            not cell.get("can_lead"),
+            -(cell.get("lower_bound") or 0.0),
+            -(cell.get("statistic") or 0.0),
+            str(cell.get("environment")),
+        )
+    )
+    section_rows = tuple(_day_environment_row(cell) for cell in cells)
+    sentence = (
+        f"Intraday alerts cut by the D1 environment {benchmark} was in on the "
+        f"SESSION they fired in ({rule_version}) - not the alert's own "
+        f"registration-time environment, which is a different vocabulary. The "
+        f"headline is held x ran: P(held 30 minutes) x the trimmed-mean MFE_R of "
+        f"the held ones, over MEASURED holds only, with the unmeasured counted "
+        f"and shown. Never pooled with the swing cut."
+    )
+    if chosen != ENVIRONMENT_ALL:
+        sentence = f"Cut to `{chosen}` sessions only. " + sentence
+    return ResultsSection(
+        key=DAY_ENVIRONMENT_SECTION_KEY,
+        title=(
+            f"By environment ({benchmark}, {rule_version})"
+            if chosen == ENVIRONMENT_ALL
+            else f"By environment - {chosen} ({benchmark}, {rule_version})"
+        ),
+        kind=DAY_ENVIRONMENT_SECTION_KEY,
+        sentence=sentence,
+        verdict_line="",
+        verdict_short="",
+        bands=ResultsBands(),
+        rows=section_rows,
+        studies=(),
+        stats={
+            "columns": ("environment", "side", "statistic", "lower_bound", "n", "n_held"),
+            "labels": ("Environment", "Side", "Held x ran", "Held x ran (low)", "n", "held"),
+            "benchmark": str(benchmark),
+            "rule_version": str(rule_version),
+            "cells": len(section_rows),
+            "eligible_cells": len([row for row in section_rows if row.eligible]),
+            "rows_read": len(rows or ()),
+            "environment_filter": chosen,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -896,6 +1287,9 @@ def build_results_view(
     journal_trades: Sequence[Any] | None = None,
     as_of: Any = None,
     currency_mode: Any = None,
+    environment_rows: Sequence[Mapping[str, Any]] | None = None,
+    environment_filter: str = ENVIRONMENT_ALL,
+    environment_labels: Mapping[str, str] | None = None,
 ) -> ResultsView:
     """One selection's whole readout. Pure: nothing here opens a file.
 
@@ -909,7 +1303,12 @@ def build_results_view(
     horizon = "day" if str(horizon) == "day" else "swing"
     trades = list(journal_trades or ())
     name, start, end, label = _window_of(window, as_of)
+    chosen = str(environment_filter or ENVIRONMENT_ALL)
+    basis = (
+        ENVIRONMENT_BASIS_ENTRY if population == "mine" else ENVIRONMENT_BASIS_OBSERVATION
+    )
     if population == "mine":
+        trades = _trades_in_environment(trades, chosen, environment_labels)
         sections = _mine_sections(
             trades, horizon, currency_mode, window_start=start, window_end=end
         )
@@ -918,6 +1317,21 @@ def build_results_view(
         applies, sentence = True, label
     else:
         sections = _bot_sections(snapshot, horizon)
+        # The environment cut is a BOT x SWING readout and belongs nowhere else:
+        # the join is by a swing observation's scan date, and a My-trades page
+        # has no such column. The champion sections above are untouched - this
+        # only ever appends.
+        if horizon == "swing" and environment_rows is not None:
+            sections = sections + (environment_section(environment_rows, only=chosen),)
+        elif horizon == "day" and environment_rows is not None:
+            sections = sections + (
+                day_environment_section(
+                    environment_rows,
+                    labels_by_session=environment_labels,
+                    only=chosen,
+                    as_of=as_of,
+                ),
+            )
         freshness = _bot_freshness(snapshot)
         # The window control does NOT reach the snapshot, so the page says
         # whose window these numbers were measured over instead of repeating a
@@ -934,4 +1348,65 @@ def build_results_view(
         freshness_line=f"{sentence}. {freshness}",
         window_applies=applies,
         window_sentence=sentence,
+        environment_filter=chosen,
+        environment_basis=basis,
+        environment_line=environment_line(chosen, basis),
+        environment_choices=ENVIRONMENT_CHOICES,
     )
+
+
+def environment_line(chosen: str, basis: str, *, benchmark: str = "SPY") -> str:
+    """What the control is claiming, in one sentence the page prints.
+
+    The benchmark and the RULE VERSION are named, because "compressed" is a
+    reading under a versioned rule and not a word about the weather: a reader
+    comparing today's cut with one from a month ago needs to know whether the
+    rule that produced both is the same rule.
+    """
+    when = (
+        "the tape the opportunity was OBSERVED in"
+        if basis == ENVIRONMENT_BASIS_OBSERVATION
+        else "the tape the ENTRY happened in"
+    )
+    if str(chosen or ENVIRONMENT_ALL) == ENVIRONMENT_ALL:
+        return (
+            f"By environment: no cut - every {benchmark} environment "
+            f"({D1_ENVIRONMENT_RULE_VERSION}) is in these numbers. Choosing one cuts "
+            f"by {when}."
+        )
+    return (
+        f"By environment: cut to `{chosen}` - {benchmark} "
+        f"({D1_ENVIRONMENT_RULE_VERSION}), by {when}. `unknown` is its own cut and "
+        f"is pooled into nothing."
+    )
+
+
+def _trades_in_environment(
+    trades: Sequence[Any],
+    chosen: str,
+    labels_by_session: Mapping[str, str] | None,
+) -> list[Any]:
+    """My trades, cut by the environment known AT THE ENTRY (WS-10I).
+
+    `context_join` owns the time rule, so a fill before the close reads the
+    previous session's label and a broker file's date-only fill reads the
+    previous completed session - it may never be handed the midday regime of
+    the session it sits on. With no label table the answer for every trade is
+    `unknown`, which is what an unlabelled desk honestly knows.
+    """
+    if str(chosen or ENVIRONMENT_ALL) == ENVIRONMENT_ALL:
+        return list(trades)
+    import context_join  # noqa: PLC0415 - only the cut pays for it
+
+    kept: list[Any] = []
+    for trade in trades:
+        ref = context_join.build_ref(
+            getattr(trade, "opened_at", None)
+            if not isinstance(trade, Mapping)
+            else trade.get("opened_at"),
+            when=context_join.WHEN_ENTRY,
+            labels_by_session=labels_by_session,
+        )
+        if ref.label == chosen:
+            kept.append(trade)
+    return kept

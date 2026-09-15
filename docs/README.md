@@ -48,8 +48,9 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 | [`AUTO_MODES_AND_QUIET_HOURS_PLAN.md`](AUTO_MODES_AND_QUIET_HOURS_PLAN.md) | Phase 0.5 R1: mode matrix, quiet hours, phone push |
 | [`M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`](M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md) | Phase 0.5 R2: Focus adoption gate, provenance, M5 strength board |
 | [`SWING_QUALITY_AND_FEEDBACK_PLAN.md`](SWING_QUALITY_AND_FEEDBACK_PLAN.md) | Phase 0.5 R3: swing quality classifier, pre-close honesty, dislike reasons |
-| [`DESK_CHART_UNIFICATION_PLAN.md`](DESK_CHART_UNIFICATION_PLAN.md) | Phase 0.5 R4: CaptureRail on every chart, armed-alert paint, repetition control |
+| [`DESK_CHART_UNIFICATION_PLAN.md`](DESK_CHART_UNIFICATION_PLAN.md) | Phase 0.5 R4: CaptureRail on every chart, armed-alert paint, repetition control; plus WS-CH's "History and the viewport" (how many bars exist vs how many are visible) |
 | [`M5_SIGNAL_ENGINES_PLAN.md`](M5_SIGNAL_ENGINES_PLAN.md) | Phase 0.5 R5: pure indicators, completed-bars rule, LRSI/confluence/ORB engines |
+| [`PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`](PULLBACK_COMPRESSION_TRENDLINE_PLAN.md) | Phase 0.29 (trader 2026-09-15): the Pullback alert (M15/M30 SMA reclaim + LRSI, H1 retester folded in), the `compressed` chip and calibration CLI, the trendline-break tag and event; packets PCT-1..3 and the resume brief |
 | [`JOURNAL_RELIABILITY_AND_UX_PLAN.md`](JOURNAL_RELIABILITY_AND_UX_PLAN.md) | Phase 0.5 R7: broker import, reconciliation, the five-tab Journal |
 | [`WEEKEND_PREP_PLAN.md`](WEEKEND_PREP_PLAN.md) | Phase 0.5 R8: guided weekend routine and strength boards |
 | [`AVWAP_BAND_VARIANT_STUDY.md`](AVWAP_BAND_VARIANT_STUDY.md) | Phase 0.10/0.19: the OneOption band challenger and its shadow harnesses |
@@ -64,10 +65,10 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 
 ## Decision records — accepted constraints
 
-[`decisions/`](decisions/) holds 19 short records, 0001 (decision-support only) to
-[`0019`](decisions/0019-tracker-selection-and-execution-defaults.md) (the Setup
-Tracker's three replay defaults become the repaired ones — `first_actionable_v2`,
-`gap_aware_v2`, `prior_session_v2`; the v1 names stay selectable). Read one before
+[`decisions/`](decisions/) holds 20 short records, 0001 (decision-support only) to
+[`0020`](decisions/0020-daytrade-watchlists-reset-after-close.md) (the day-trade
+lists `longs.txt` / `shorts.txt` are emptied whole after each session's close;
+the swing lists keep the never-auto-removed rule). Read one before
 changing a library, storage or architecture choice; **0016** is the trader's vision and
 priorities and breaks every prioritisation tie. Numbering is chronological.
 

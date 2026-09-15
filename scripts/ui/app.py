@@ -41,6 +41,7 @@ from ui.panels.bounce_panel import format_auto_regime_reading
 from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
 from ui.panels.away_recap_panel import AwayRecapPanel
+from ui.panels.daily_recap_panel import DailyRecapPanel
 from ui.panels.market_journal_panel import MarketJournalPanel
 from ui.panels.weekend_prep_panel import WeekendPrepPanel
 from ui.panels.research_panel import ResearchPanel
@@ -80,16 +81,27 @@ class PageSpec:
 
 PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Trading Desk", "mdi.chart-timeline-variant", "trading_panel"),
-    PageSpec("Chart Review", "mdi.chart-line", "chart_review_panel"),
-    PageSpec("Focus Picks", "mdi.star-outline", "trading_panel.focus_picks_panel"),
+    # WS-WL (WISHLIST 10G), 2026-09-13: **Chart Review and Focus Picks are no
+    # longer nav pages.** Every action they had lives on the Trading Desk's
+    # Watchlist tab (`ui/panels/watchlist_tab.py`) - add, paste, copy, clear,
+    # remove, like, "Not today", refresh, Snapshot Today, the price-alert
+    # save/remove/re-arm, the chart, `Ctrl+L` and a faded pick's Restore. Both
+    # PANEL CLASSES stay: `ChartReviewPanel` is still constructed below (other
+    # code imports it and its capture rail is the annotation surface's
+    # reference implementation) and `FocusPicksPanel` is still built by the
+    # desk, where BounceBot alerts and the RRS snapshot still reach it.
     PageSpec("Journal", "mdi.notebook-outline", "journal_panel"),
     # R10.H. The label difference from "Journal" above is deliberate and
     # recorded: that one is the trade and tax record, this one is what the
     # trader thought. Merging them would turn the tax journal into a diary.
     PageSpec("Market Journal", "mdi.book-open-variant", "market_journal_panel"),
-    # R1 amendment 2026-08-24: an AWAY day ends in a recap, not a queue. This
-    # is the return surface that replaced 317 pending review items.
-    PageSpec("AWAY Recap", "mdi.calendar-check-outline", "away_recap_panel"),
+    # R1 amendment 2026-08-24: an AWAY day ends in a recap, not a queue - the
+    # return surface that replaced 317 pending review items. WS-DR (WISHLIST
+    # 10F, 2026-09-13) takes that slot for EVERY Auto mode and reads the day
+    # from the durable stores instead of this process's alert list; the AWAY
+    # page's class stays on disk because the phone digest and the staged-pick
+    # feed still run through it.
+    PageSpec("Daily Recap", "mdi.calendar-check-outline", "daily_recap_panel"),
     PageSpec("Weekend Prep", "mdi.calendar-weekend", "weekend_prep_panel"),
     PageSpec("Universe", "mdi.earth", "universe_panel"),
     PageSpec("Research", "mdi.flask-outline", "research_panel"),
@@ -99,10 +111,15 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Settings", "mdi.cog-outline", "settings_panel"),
 )
 
-#: The one page that must be HANDED its input before it can say anything.
-#: Matched by title rather than index so a reorder cannot silently unwire it -
-#: which is the class of bug `test_qt_page_specs` exists for.
-AWAY_RECAP_PAGE_TITLE = "AWAY Recap"
+#: The recap page, matched by TITLE rather than index so a reorder cannot
+#: silently unwire it - the class of bug `test_qt_page_specs` exists for.
+#: Selecting it refreshes two things: the Daily Recap's own store read, and the
+#: AWAY digest panel that is still handed the Alert Center's backing list.
+DAILY_RECAP_PAGE_TITLE = "Daily Recap"
+
+#: The old name, kept as an alias for one release: it was the title AND the
+#: page, and a caller that still asks for it is asking for this page.
+AWAY_RECAP_PAGE_TITLE = DAILY_RECAP_PAGE_TITLE
 
 
 class MainWindow(QMainWindow):
@@ -129,6 +146,11 @@ class MainWindow(QMainWindow):
             focus_service=self.trading_panel.focus_service,
             journal_service=self.market_journal_panel.service,
         )
+        # WS-DR. The Daily Recap reads the durable stores on its own worker; it
+        # is handed no feed, which is the whole point of it.
+        self.daily_recap_panel = DailyRecapPanel(
+            focus_service=self.trading_panel.focus_service
+        )
         self.weekend_prep_panel = WeekendPrepPanel(
             focus_service=self.trading_panel.focus_service
         )
@@ -136,6 +158,14 @@ class MainWindow(QMainWindow):
         # tab, on that trade. Weekend Prep never writes `planned_risk`; it
         # refers, and the trader types the plan where `save_risk_fields` lives.
         self.weekend_prep_panel.openTradeRequested.connect(self._open_journal_trade)
+        # WS-WL item 4: the Journal LINKS to the one Watchlist's Positions view.
+        self.journal_panel.positionsOnWatchlistRequested.connect(
+            self.show_watchlist_positions
+        )
+        # WS-WL item 2: the desk owns the Watchlist service (it owns the Focus
+        # and price-alert stores it reads through); the window aliases it so
+        # every shutdown path can find it by the name the packet gave it.
+        self.watchlist_tab_service = self.trading_panel.watchlist_tab_service
         self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel(self.trading_panel.price_alert_service)
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
@@ -189,12 +219,47 @@ class MainWindow(QMainWindow):
         self.away_recap_panel.symbolActivated.connect(
             self.trading_panel.alert_center.show_board_symbol
         )
+        # WS-DR. The Daily Recap uses the SAME named door, and it is routed
+        # through a method rather than the bound slot so the call is resolved
+        # when the row is clicked: `show_board_symbol` is a board's door, and a
+        # board chart holds no place in the waiting list - nothing here reaches
+        # `_enqueue_review_alert`.
+        self.daily_recap_panel.chartRequested.connect(self._chart_recap_row)
+        self.daily_recap_panel.focusAddRequested.connect(self._add_staged_pick_to_focus)
         # ST6.3. ONE Working-lately snapshot for the whole desk, owned by the
         # window because four surfaces read it and no one panel is their parent.
         # Everything expensive is on its worker; the slots below only format.
         # Four triggers, one coalesced reaction: the first show, the day roll,
         # a finished scan (which is what rewrites the tracker exports) and its
         # own thirty-minute timer.
+        # WISHLIST 10J. The Trade Mentor's scheduler is owned by the WINDOW for
+        # the same reason the Working-lately service is: it holds one timer and
+        # one state file, and the surface it drives (the reusable Mentor popup)
+        # is built more than once in this process's lifetime. The card is the
+        # Alert Center's; the decision about when to show it is this one's.
+        from ui.services.trade_mentor_context_service import TradeMentorContextService
+        from ui.services.trade_mentor_service import TradeMentorService
+
+        self.trade_mentor_context_service = TradeMentorContextService(
+            self, cache_loader=self._trade_mentor_cached_bars
+        )
+        self.trading_panel.alert_center.chart_review.mentor_card.set_context_service(
+            self.trade_mentor_context_service
+        )
+        self.trade_mentor_service = TradeMentorService(self)
+        self.trade_mentor_service.promptDue.connect(self._show_trade_mentor_prompt)
+        self.trade_mentor_service.promptExpired.connect(
+            lambda _slot_id: self.trading_panel.alert_center.chart_review.hide_mentor_card()
+        )
+        mentor_card = self.trading_panel.alert_center.chart_review.mentor_card
+        mentor_card.answered.connect(self.trade_mentor_service.mark_answered)
+        mentor_card.skipped.connect(
+            lambda record: self.trade_mentor_service.mark_skipped(
+                str(record.get("slot_id") or ""), str(record.get("skipped_reason") or "")
+            )
+        )
+        self.settings_panel.mentorPauseRequested.connect(self._pause_trade_mentor)
+
         self.working_lately_service = WorkingLatelyService(self)
         self.working_lately_service.snapshotChanged.connect(
             self.trading_panel.set_working_lately_snapshot
@@ -635,12 +700,60 @@ class MainWindow(QMainWindow):
             self.workspace_button.setVisible(mode_visible)
             self.tabs_button.setVisible(mode_visible)
             interaction_trace.mark("layout")
-            if PAGE_SPECS[index].title == AWAY_RECAP_PAGE_TITLE:
+            if PAGE_SPECS[index].title == DAILY_RECAP_PAGE_TITLE:
                 self._feed_away_recap()
+                self._reload_daily_recap()
         finally:
             # Closed here rather than left open: a span that outlived its click
             # would attribute every later idle stall to the last page visited.
             interaction_trace.end()
+
+    def _select_page_by_title(self, title: str) -> bool:
+        """Select a page by its TITLE, never by an index a reorder can move."""
+        for index, spec in enumerate(PAGE_SPECS):
+            if spec.title == title:
+                self._select_page(index)
+                return True
+        return False
+
+    def show_watchlist_positions(self) -> bool:
+        """The Journal's "Positions on the Watchlist" (WS-WL item 4).
+
+        A nav call: the Trading Desk page, then its Watchlist tab on the
+        Positions view. No second list is built and nothing is read here.
+        """
+        if not self._select_page_by_title("Trading Desk"):
+            return False
+        import watchlist_views
+
+        return bool(
+            self.trading_panel.show_watchlist(watchlist_views.VIEW_POSITIONS)
+        )
+    def _chart_recap_row(self, symbol: str, side: str = "") -> None:
+        """A Daily Recap row -> the board chart door, resolved at click time.
+
+        Never `_enqueue_review_alert`: a board chart takes no place in the
+        waiting list and is never skip-counted (CLAUDE.md, "Charts and boards").
+        """
+        try:
+            self.trading_panel.alert_center.show_board_symbol(symbol, side)
+        except Exception:  # noqa: BLE001 - a chart request never costs the page
+            logging.exception("The Daily Recap could not chart %s.", symbol)
+
+    def _add_staged_pick_to_focus(self, symbol: str, side: str) -> None:
+        """The staged-pick add, performed by the store's own owner."""
+        try:
+            self.trading_panel.focus_service.add(symbol, side, "swing")
+        except Exception:  # noqa: BLE001
+            logging.exception("The staged pick %s could not be added to Focus.", symbol)
+
+    def _reload_daily_recap(self) -> None:
+        """Kick the Daily Recap's worker. Quiet on failure: a recap that cannot
+        be read must never cost the page switch that asked for it."""
+        try:
+            self.daily_recap_panel.reload()
+        except Exception:
+            logging.exception("The Daily Recap could not be reloaded.")
 
     def _open_journal_trade(self, trade_id: str) -> None:
         """Show the Journal page on one trade (ST5.5). Never a writer.
@@ -797,6 +910,10 @@ class MainWindow(QMainWindow):
         self._apply_scaled_metrics()
         self.trading_panel.set_mode(self.state.workspace_mode)
         self._sync_mode_buttons()
+        # The Trade Mentor checkbox lives on this panel, so the "next prompt"
+        # line beside it has to answer the switch the trader just flipped
+        # rather than whatever it said when the window opened.
+        self._sync_trade_mentor_label()
 
     def _apply_scaled_metrics(self) -> None:
         """Re-apply the pixel budgets that live in Python, not the stylesheet.
@@ -910,6 +1027,104 @@ class MainWindow(QMainWindow):
         # worker, and a thread started during construction runs while a test is
         # still monkeypatching the module globals it reads.
         self.working_lately_service.start()
+        # WISHLIST 10J, for the same reason: the first poll reads the Settings
+        # flag and a state file, and a timer started during construction runs
+        # while a test is still monkeypatching what it reads.
+        self.trade_mentor_service.start()
+        self._sync_trade_mentor_label()
+        # Trader request 2026-09-14: the Daily Recap reads today by itself at
+        # 12:00 Pacific. Same seam, same reason - the tick reads a setting.
+        self.daily_recap_panel.start()
+
+    # -- Trade Mentor (WISHLIST 10J) --------------------------------------
+    def _trade_mentor_cached_bars(self, timeframe, symbols, *, now, timeout_seconds):
+        """Read existing desk caches only; a miss is left for the service batch.
+
+        The M5 call is the BounceBot's documented memory-only chart accessor.
+        Daily CSVs are the scanner's local cache.  Neither request can start
+        IB or alter a detector, and this callback runs on the context worker.
+        """
+        names = tuple(str(symbol or "").strip().upper() for symbol in symbols)
+        if timeframe == "m5":
+            try:
+                bot = self.trading_panel.bounce_panel.service.current_bot()
+            except Exception:
+                bot = None
+            if bot is None:
+                return {}
+            result = {}
+            for symbol in names:
+                try:
+                    bars = bot.m5_chart_bars(symbol, max_sessions=2)
+                except Exception:
+                    bars = []
+                if bars:
+                    result[symbol] = bars
+            return result
+        if timeframe == "d1":
+            try:
+                from d1_environment_store import _cached_daily_bars
+
+                return {symbol: _cached_daily_bars(symbol) for symbol in names}
+            except Exception:
+                logging.debug("Trade Mentor D1 cache unreadable.", exc_info=True)
+        return {}
+
+    def _previous_mentor_read(self, session: str):
+        """The last read the Trade Mentor filed for this session, if any.
+
+        Shown beside the new prompt so "Read unchanged" has something to name.
+        One bounded read of a small JSONL, at most once an hour - not a paint
+        path, and never in the 60-second poll (the service emits, this runs).
+        """
+        try:
+            from ui.services.market_journal_service import shared_journal_service
+
+            rows = [
+                row
+                for row in shared_journal_service().entries_for(session)
+                if str(row.get("origin") or "") == "trade_mentor"
+            ]
+        except Exception:  # noqa: BLE001 - a missing previous read is not an error
+            logging.debug("Previous mentor read unreadable.", exc_info=True)
+            return None
+        return rows[-1] if rows else None
+
+    def _show_trade_mentor_prompt(self, slot) -> None:
+        """Show a due prompt in its reusable popup, with its question."""
+        review = self.trading_panel.alert_center.chart_review
+        try:
+            review.show_mentor_slot(slot, previous=self._previous_mentor_read(str(slot.session)))
+        except Exception:  # noqa: BLE001 - a prompt never costs the desk
+            logging.debug("Trade Mentor prompt could not be shown.", exc_info=True)
+            return
+        # The Settings line says when the NEXT one is, so it moves every time a
+        # prompt lands rather than telling the trader what was true at startup.
+        self._sync_trade_mentor_label()
+        if str(getattr(slot, "kind", "")) != "m5_trades":
+            return
+        # The 10:00 second section. Two small queries against the journal DB,
+        # once a day, on the slot the trader is already being interrupted for.
+        try:
+            import trade_mentor_trade_check as check
+            from journal_store import JournalStore
+
+            store = JournalStore()
+            task = check.build_task(store, slot.scheduled_at.date())
+            review.mentor_card.set_trade_check(task, store=store)
+        except Exception:  # noqa: BLE001 - the read still stands without it
+            logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
+
+    def _pause_trade_mentor(self) -> None:
+        self.trade_mentor_service.pause_today()
+        self.trading_panel.alert_center.chart_review.hide_mentor_card()
+        self._sync_trade_mentor_label()
+
+    def _sync_trade_mentor_label(self) -> None:
+        try:
+            self.settings_panel.set_next_prompt_at(self.trade_mentor_service.next_prompt_at())
+        except Exception:  # noqa: BLE001 - a label never breaks the window
+            logging.debug("Trade Mentor label could not be refreshed.", exc_info=True)
 
     def _show_setup_tracker_page(self) -> None:
         """The Working-lately strip's click-through (ST6.4).
@@ -940,6 +1155,9 @@ class MainWindow(QMainWindow):
             # while it owned one, which cost nothing then and would cost a
             # half-written capture now.
             self.market_journal_panel,
+            # WS-DR: it owns a read worker of its own, so it joins the list the
+            # day it gains one rather than the day someone notices.
+            self.daily_recap_panel,
             self.weekend_prep_panel,
             self.universe_panel,
             self.research_panel,
@@ -965,6 +1183,15 @@ class MainWindow(QMainWindow):
         # reader. ST6.3.
         try:
             self.working_lately_service.shutdown()
+        except Exception:
+            pass
+        # Same list, same reason (WISHLIST 10J): one timer, owned here.
+        try:
+            self.trade_mentor_service.shutdown()
+        except Exception:
+            pass
+        try:
+            self.trade_mentor_context_service.shutdown(timeout_ms=250)
         except Exception:
             pass
         # Backstop for the shared writer lease: AutopilotService.shutdown

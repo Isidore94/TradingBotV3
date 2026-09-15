@@ -337,12 +337,51 @@ def record_review_event(
     Best-effort like pick_feedback: a cloud-synced folder briefly locking the
     file must never surface as a GUI error, so OSError is swallowed.
     """
+    installation_id = get_review_installation_id(installation_id_path)
+    if not installation_id:
+        return None
+    row = _build_review_row(
+        action,
+        alert=alert,
+        symbol=symbol,
+        side=side,
+        detail=detail,
+        context_fields=context_fields,
+        dwell_ms=dwell_ms,
+        queue_len=queue_len,
+        now=now,
+        installation_id=installation_id,
+    )
+    if row is None:
+        return None
+    if not _append_review_rows(
+        [row],
+        path=path,
+        shards_dir=shards_dir,
+        installation_id=installation_id,
+        partitioned=partitioned,
+    ):
+        return None
+    return row
+
+
+def _build_review_row(
+    action: str,
+    *,
+    alert=None,
+    symbol: object = "",
+    side: object = "",
+    detail: dict[str, Any] | None = None,
+    context_fields: dict[str, Any] | None = None,
+    dwell_ms: int | None = None,
+    queue_len: int | None = None,
+    now: datetime | None = None,
+    installation_id: str,
+) -> dict[str, Any] | None:
+    """One decision row, or None when it could not be identified at all."""
     action_text = str(action or "").strip().lower()
     sym = str(symbol or getattr(alert, "symbol", "") or "").strip().upper()
     if not action_text or not sym:
-        return None
-    installation_id = get_review_installation_id(installation_id_path)
-    if not installation_id:
         return None
     side_text = str(side or getattr(alert, "side", "") or "").strip().upper()
     timestamp = now or datetime.now()
@@ -370,6 +409,20 @@ def record_review_event(
         row["queue_len"] = max(0, int(queue_len))
     if detail:
         row["detail"] = detail
+    return row
+
+
+def _append_review_rows(
+    rows: list[dict[str, Any]],
+    *,
+    path: Path,
+    shards_dir: Path | None,
+    installation_id: str,
+    partitioned: bool | None,
+) -> bool:
+    """Write these rows, ONE lock and ONE open. True when they landed."""
+    if not rows:
+        return False
     try:
         legacy = Path(path)
         canonical = legacy == Path(ALERT_REVIEW_EVENTS_FILE)
@@ -382,7 +435,7 @@ def record_review_event(
             )
             target = review_event_shard_path(installation_id, shards_dir=directory)
             if target is None:
-                return None
+                return False
         else:
             target = legacy
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -391,10 +444,54 @@ def record_review_event(
         # intentionally share one shard.
         with local_writer_lock(lock_key_for_path(target), timeout_seconds=1.0):
             with target.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+                for row in rows:
+                    handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
     except (OSError, LocalLockUnavailable):
-        return None
-    return row
+        return False
+    return True
+
+
+def record_review_events(
+    entries,
+    *,
+    now: datetime | None = None,
+    path: Path = ALERT_REVIEW_EVENTS_FILE,
+    shards_dir: Path | None = None,
+    installation_id_path: Path = REVIEW_INSTALLATION_ID_FILE,
+    partitioned: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Append MANY rows with one lock and one open. Returns what was written.
+
+    Same contract as :func:`record_review_event`, once per entry: an entry is
+    the keyword mapping that call takes. It exists because one sweep can
+    produce dozens of machine rows at once (PCT-1's auto-arm armed 95 watches
+    on its first tick) and taking the kernel lock ninety-five times on the Qt
+    thread is most of what that tick cost. Best-effort in exactly the same
+    way: a failure loses the rows, never the thing they record.
+    """
+    installation_id = get_review_installation_id(installation_id_path)
+    if not installation_id:
+        return []
+    timestamp = now or datetime.now()
+    rows: list[dict[str, Any]] = []
+    for entry in entries or ():
+        fields = dict(entry or {})
+        action = fields.pop("action", "")
+        fields.setdefault("now", timestamp)
+        row = _build_review_row(action, installation_id=installation_id, **fields)
+        if row is not None:
+            rows.append(row)
+    if not rows:
+        return []
+    if not _append_review_rows(
+        rows,
+        path=path,
+        shards_dir=shards_dir,
+        installation_id=installation_id,
+        partitioned=partitioned,
+    ):
+        return []
+    return rows
 
 
 #: (sources, mtime, size) -> parsed rows for the last store read. The store is

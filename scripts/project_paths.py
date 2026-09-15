@@ -342,6 +342,13 @@ UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
 # See plan.md, Milestone 8 (Human focus lists).
 FOCUS_LONGS_FILE = PERSISTENT_DATA_DIR / "focus_longs.txt"
 FOCUS_SHORTS_FILE = PERSISTENT_DATA_DIR / "focus_shorts.txt"
+# The SWING half of the same store. `FocusPickStore` still DERIVES its swing
+# paths from whatever `focus_longs_path` it was handed - a sandbox store must
+# keep its swing files inside its own sandbox - so these are the names of the
+# production pair, for callers that need to address them (WS-WL, 2026-09-13:
+# a desk test blanked the two m5 files and left a swing Focus pick behind).
+FOCUS_SWING_LONGS_FILE = FOCUS_LONGS_FILE.with_name("focus_swing_longs.txt")
+FOCUS_SWING_SHORTS_FILE = FOCUS_SHORTS_FILE.with_name("focus_swing_shorts.txt")
 FOCUS_PICK_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "focus_pick_membership.json"
 # Which longs.txt/shorts.txt entries the universe auto-populator owns (so
 # rotation/cuts never delete a name the trader typed), plus the day's
@@ -393,6 +400,77 @@ TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
 # never in front of it, and nothing in the running system reads this file to
 # detect, score, rank, gate or alert (plan.md sec 5).
 SWING_FAVORITES_FILE = PERSISTENT_DATA_DIR / "swing_favorites.jsonl"
+# Packet D1C-A (2026-09-14, trader). Append-only JSONL of the D1 setups the
+# trader LIKED AND CLAIMED on a review chart: one row per action (`claim`,
+# `drop`, `expire`), identity `(symbol, side, claimed_setup_id)`, replayed in
+# file order so the last action per key wins. It sits beside
+# `swing_favorites.jsonl` because it is the same storage class - small,
+# trader-authored, shared home - and it is read by exactly two surfaces: the
+# Master AVWAP setups table (the claimed row) and the chart-review queue gate
+# (this D1 chart has been answered). It places nothing on Focus, injects
+# nothing into a watchlist and carries no suppression field: nothing here
+# detects, scores, ranks, gates or alerts (plan.md sec 5).
+CLAIMED_PICKS_FILE = PERSISTENT_DATA_DIR / "claimed_picks.jsonl"
+# Packet WS-TH (2026-09-12, WISHLIST item 6). Append-only JSONL of the theta
+# picks the D1 scan already printed to `master_avwap_theta_puts.txt`: one row per
+# (symbol, scan_date, play_type), written from the RUNNER right after the report,
+# carrying the support set the scan built, the score and rank it showed, and the
+# strike/expiry/premium it recommended. Same storage class as the logs above -
+# small, trader-relevant, shared home. SHADOW EVIDENCE ONLY: nothing in the
+# running system reads this file to detect, score, rank, gate or alert, and a
+# failed append loses the row, never the scan (plan.md sec 5).
+THETA_PICKS_FILE = PERSISTENT_DATA_DIR / "theta_picks.jsonl"
+
+# WISHLIST 10J / packet WS-TM. The Trade Mentor's two small state files, in
+# the SHARED home rather than the machine cache: a prompt the trader already
+# answered on the desk must not be asked again by a desk started from anywhere
+# else, and a half-typed read is the trader's own words. `trade_mentor_slots`
+# keys one record per `slot_id` (delivered / answered / skipped and why), so a
+# restart, a drifted timer or a clock correction can never turn one hour into
+# two records. `trade_mentor_drafts` keeps text that was typed and never
+# submitted; it is NEVER read as an observation (an unanswered prompt is no
+# observation) and nothing in the running system detects, scores, ranks, gates
+# or alerts off either file (plan.md sec 5).
+# WISHLIST 10D / packet WS-10D. The Market Journal's thesis sidecar: one
+# append-only row per (`entry_id`, `extractor_version`) holding what the
+# deterministic vocabulary read out of a note, plus the trader's own
+# superseding interpretation and any imported weekly forecast
+# (`kind=forecast`). It sits BESIDE the journal and never inside it - the
+# journal entry is the trader's words and is never rewritten, and a machine
+# reading of those words is a second statement, not an edit of the first.
+# SHADOW EVIDENCE ONLY: nothing in the running system detects, scores, ranks,
+# gates or alerts off this file (plan.md sec 5).
+MARKET_THESES_FILE = PERSISTENT_DATA_DIR / "market_theses.jsonl"
+# The weekly / monthly / quarterly story rollups, one JSON per period under
+# `weekly/`, `monthly/` and `quarterly/`. Derived and rebuildable: every pack
+# is recomputed from the daily stories whenever its inputs' hash changes, so
+# losing the directory costs one overnight slot and nothing else.
+MARKET_STORY_ROLLUPS_DIR = RUNTIME_DATA_DIR / "market_story_rollups"
+
+TRADE_MENTOR_SLOTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_slots.json"
+TRADE_MENTOR_DRAFTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_drafts.json"
+# Append-only JSONL of every add and remove on the four plain watchlists
+# (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`), written by
+# `scripts/watchlist_intent_events.py`. Membership on those lists means
+# INTEREST - never a setup claim, a position or a verdict - so a removal is not
+# a dislike. Each row carries the observation time (aware, market-local), the
+# list, side and horizon, and a source that keeps the trader's own typing
+# (`trader_edit` / `trader_paste`) distinct from the desk's Focus injection
+# (`machine_inject` / `machine_uninject`) and from a difference merely SEEN at
+# load time after an edit outside the app (`observed_external`). Same storage
+# class as the two logs above: small, trader-relevant, shared home. Evidence
+# only - nothing in the running system reads this file to detect, score, rank,
+# gate or alert (plan.md sec 5).
+WATCHLIST_INTENT_EVENTS_FILE = PERSISTENT_DATA_DIR / "watchlist_intent_events.jsonl"
+# Append-only daily record of what KIND of day the market had, one row per
+# (session, benchmark, rule_version), written by scripts/d1_environment_store.py
+# from the pure rule in scripts/indicators/d1_environment.py (WISHLIST 7). The
+# label is joined to swing outcomes by SCAN DATE so a readout can be cut by the
+# tape the decision was made in. Shared home because it is small, dated and
+# trader-relevant - and deliberately NOT the research warehouse, which is a
+# different store with a different contract. Shadow evidence: nothing detects,
+# scores, ranks, gates or alerts on it (plan.md sec 5).
+D1_ENVIRONMENT_FILE = PERSISTENT_DATA_DIR / "d1_environment.jsonl"
 # Aggregated revealed-preference state derived from the review-events log by
 # scripts/review_learning.py: per-segment take rates, taken-vs-passed
 # outcomes, blind spots / leaks, watch conversion. Rebuilt when stale.
@@ -518,6 +596,18 @@ ANCHOR_AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "master_anchor_avwap_signals.csv"
 MASTER_AVWAP_FOCUS_FILE = RUNTIME_DATA_DIR / "master_avwap_focus.json"
 MASTER_AVWAP_D1_WATCHLIST_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_watchlist.json"
 MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_upgrade_alerts.json"
+# WS-10A (2026-09-12): the scan's own record of its three clocks - when it ran,
+# how fresh its INPUT bars were, and what it published. Written by
+# `master_avwap_lib.scan_manifest.record_scan` at the end of EVERY scan (ok,
+# partial or failed) and read by the Setups strip, System Health and the replay
+# CLI. Shared home rather than a machine-local diagnostic: the desk and the
+# away scanner both publish the same reports, so both must be able to say how
+# fresh they are.
+MASTER_AVWAP_SCAN_MANIFEST_FILE = RUNTIME_DATA_DIR / "master_avwap_scan_manifest.json"
+#: One append-only line per scan, the same payload. The replay walks this.
+MASTER_AVWAP_SCAN_MANIFEST_HISTORY_FILE = (
+    RUNTIME_DATA_DIR / "master_avwap_scan_manifest_history.jsonl"
+)
 # Per-symbol D1 band-zone "arms" for every scanned symbol: the M5 bounce/break
 # rubric levels the bounce bot watches to fire D1 Focus alerts (decision-support).
 MASTER_AVWAP_D1_ZONE_ARMS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_zone_arms.json"
@@ -546,6 +636,15 @@ MASTER_AVWAP_TIER_OUTCOMES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_ti
 # with no production reader until a decision moves one.
 MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
     PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_session_horizon_outcomes.csv"
+)
+# Packet WS-TH (2026-09-12). The theta picks graded forward: held above the sold
+# strike at the exact 5/10/20-session endpoints and at the option's own expiry,
+# maximum adverse excursion in ATR, and which support broke first. Written
+# BESIDE the tier outcomes by the overnight `theta_pick_grading` slot from
+# `theta_picks.jsonl`; shadow only, with no production reader outside the Setup
+# Tracker's Theta tab.
+MASTER_AVWAP_THETA_OUTCOMES_FILE = (
+    PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_theta_outcomes.csv"
 )
 MASTER_AVWAP_TIER_PERFORMANCE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tier_performance.csv"
 MASTER_AVWAP_TIER_CATCH_RATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tier_catch_rate.csv"

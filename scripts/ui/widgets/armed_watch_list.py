@@ -24,7 +24,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from chart_watch import D1_EVENT_KINDS, D1_LEVEL_KINDS, WATCH_KINDS
+from chart_watch import (
+    D1_EVENT_KINDS,
+    D1_LEVEL_KINDS,
+    PERSISTENT_WATCH_KINDS,
+    WATCH_KINDS,
+)
 from ui import theme
 
 COLUMNS = ("Symbol", "Kind", "Level", "Armed", "Age", "Health", "")
@@ -42,11 +47,14 @@ def watch_health(kind: str, has_m5_bars: bool, armed_at: datetime, now: datetime
     bars is only WAITING: arming folds the name into BounceBot's M5 scan set,
     so its bars land within a scan cycle and the watch starts evaluating.
     Persistent level alerts have neither constraint - they also read the
-    daily store - so they are always reported healthy.
+    daily store - so they are always reported healthy. A PERSISTENT chart
+    watch (the H1 retester) is half way between: it still needs cached M5
+    bars, but it is armed for ten TRADING days, so yesterday's date is not
+    stale for it.
     """
     if kind in D1_LEVEL_KINDS or kind in D1_EVENT_KINDS:
         return HEALTH_OK
-    if armed_at.date() != now.date():
+    if kind not in PERSISTENT_WATCH_KINDS and armed_at.date() != now.date():
         return HEALTH_STALE
     if not has_m5_bars:
         return HEALTH_NO_BARS
@@ -101,28 +109,63 @@ class ArmedWatchList(QFrame):
         layout.addWidget(self.empty_label)
         layout.addWidget(self.table, 1)
         self._rows: list[tuple] = []
+        self._row_reasons: list[str] = []
         self.set_watches([], [], has_m5_bars=lambda _symbol: True)
 
     def set_watches(
-        self, watches, levels, *, has_m5_bars, d1_events=(), now: datetime | None = None
+        self,
+        watches,
+        levels,
+        *,
+        has_m5_bars,
+        d1_events=(),
+        now: datetime | None = None,
+        watch_note=None,
     ) -> None:
-        """Render armed session watches and persistent level/event alerts together."""
+        """Render armed session watches and persistent level/event alerts together.
+
+        ``watch_note(watch) -> str`` is the host's chance to say something the
+        widget cannot work out for itself about why a watch is not answering
+        yet - the H1 retester's warm-up shortfall, for instance. A non-empty
+        note REPLACES the health cell, because "ok" next to a watch that
+        cannot evaluate is the one thing this table must never say.
+        """
         moment = now or datetime.now()
         self._rows = []
+        #: Row index -> the trader's own words for what they are waiting on.
+        #: Kept beside the rows rather than inside them because the disarm
+        #: handler reads the row's LAST element as its key.
+        self._row_reasons: list[str] = []
         for watch in watches or []:
+            self._row_reasons.append(str(getattr(watch, "reason", "") or ""))
+            health = watch_health(
+                watch.kind, bool(has_m5_bars(watch.symbol)), watch.armed_at, moment
+            )
+            if watch_note is not None:
+                try:
+                    note = str(watch_note(watch) or "")
+                except Exception:  # pragma: no cover - a note never costs a row
+                    note = ""
+                if note:
+                    health = note
             self._rows.append(
                 (
                     watch.symbol,
                     WATCH_KINDS.get(watch.kind, watch.kind),
                     f"{watch.baseline:.2f}" if watch.baseline is not None else "—",
-                    watch.armed_at.strftime("%H:%M"),
+                    # A multi-day arm needs its DATE; a session watch's time is
+                    # enough because it cannot outlive today.
+                    watch.armed_at.strftime(
+                        "%m/%d" if watch.kind in PERSISTENT_WATCH_KINDS else "%H:%M"
+                    ),
                     format_age(watch.armed_at, moment),
-                    watch_health(watch.kind, bool(has_m5_bars(watch.symbol)), watch.armed_at, moment),
+                    health,
                     ("watch", watch.symbol, watch.kind, 0.0),
                 )
             )
         for watch in levels or []:
             kind = f"d1_level_{watch.direction}"
+            self._row_reasons.append("")
             self._rows.append(
                 (
                     watch.symbol,
@@ -135,6 +178,7 @@ class ArmedWatchList(QFrame):
                 )
             )
         for watch in d1_events or []:
+            self._row_reasons.append("")
             self._rows.append(
                 (
                     watch.symbol,
@@ -160,6 +204,9 @@ class ArmedWatchList(QFrame):
                         "A session watch needs cached M5 bars to evaluate, and "
                         "never survives into the next session."
                     )
+                reason = self._row_reasons[index] if index < len(self._row_reasons) else ""
+                if column == 1 and reason:
+                    item.setToolTip(reason)
                 self.table.setItem(index, column, item)
             disarm = QTableWidgetItem("✕")
             disarm.setTextAlignment(Qt.AlignmentFlag.AlignCenter)

@@ -30,7 +30,9 @@ first edit. Current-state facts below were verified by read-only recon on
 ## 1. The trader's mode semantics (2026-08-14, restated as a matrix)
 
 Price alerts (Research/Focus `PriceAlertService`) remain the standing always-on push
-exception in **every** mode, unchanged.
+exception in **every** mode, unchanged. Since 2026-09-13 that exception is stated as
+what it always meant - **a TRADER-ARMED condition pushes in every mode** - and it
+carries a second caller through the same sender (see the 10C amendment at the end).
 
 | Behavior | OFF | DESK | AWAY | EVENING |
 |---|---|---|---|---|
@@ -370,3 +372,217 @@ invent a sentence about evidence nobody read.
 The 2026-08-15 §1 matrix rows for AWAY remain accurate for what is BUILT
 today; this amendment governed the recap packet's build and the queue-routing
 change that landed with it.
+
+## Amendment 2026-09-12 — the Trade Mentor is a narrow fixed-time exception (WISHLIST 10J, packet WS-TM)
+
+Every **automatic starter** on this desk is gated on `autopilot_core.auto_scanning_due`,
+fail-open, and manual buttons are never gated. The Trade Mentor does not start a
+scanner or push output. It asks a **present human**
+for a sentence at fixed Pacific wall-clock hours — hourly M5 reads from 07:00 until
+before the session's actual close, D1 reads at 08:00 and 12:00, and the previous
+session's missing trade fields at 10:00 — and files what they type in the Market
+Journal. So it is recorded here as an exception to the quiet-hours rule rather than a
+new starter under it, and the exception is bounded four ways.
+
+**It is opt-in.** A Settings checkbox, default OFF and persisted per machine, and
+independent of the scanner's Auto setting in both directions: Auto OFF still prompts,
+and the Mentor checkbox OFF prompts nothing whatever Auto says. Turning the scanner off
+must not be how the trader stops the prompts.
+
+**It runs in DESK, EVENING and OFF, and never in AWAY.** AWAY means nobody is at the
+desk, which is precisely the state in which an interruption becomes an unanswered
+prompt — and an unanswered prompt is no observation, so it would leave a hole in the
+record that reads exactly like "the trader had no view". AWAY is recorded as the skip
+reason `away` and the hour is never asked again.
+
+**There is no phone push, and it does not become one.** The two standing exceptions to
+"AWAY is the only Auto mode that pushes routine output" (Research/Focus price alerts and
+EVENING's SPY ±1% wake alarm) are unchanged, and this is not a third: the surface is a
+modeless pop-up on the machine the trader is sitting at (placement amended by the
+trader on 2026-09-14).
+
+**2026-09-14 hidden context amendment:** opening an eligible prompt may request a
+bounded background snapshot of the trader's 17 named market ETFs. Existing usable
+caches are preferred, with bounded Yahoo batches for missing coverage, at most
+hourly M5 and once per completed session for D1. This is part of the same present-
+trader prompt exception, not a new periodic scanner: no separate timer, no IB, no
+per-symbol request loop, no model call and no waiting on Submit. Repeated failures
+respect the throttle. AWAY never opens an automatic prompt and therefore never
+starts this automatic context work. The manual Give a read door remains available.
+
+**Absence skips; it never queues.** Away, paused for the day, a locked workstation, or
+more than `IDLE_GRACE_MINUTES` (20) since the last keystroke or mouse move, each recorded
+as its own reason. A missed hour stays missed — no backlog, no catch-up burst on return —
+and an unanswered prompt expires one hour after it was scheduled, which on a normal
+session is exactly when the next one arrives.
+
+`scripts/trade_mentor_schedule.py` owns the instants (and reads
+`market_early_close.session_close`, not `market_calendar.session_close`, so a half day
+ends the hourly window when the tape actually stops);
+`scripts/ui/services/trade_mentor_service.py` owns the one timer and the one state file.
+
+## Amendment 2026-09-13 — the return surface is the **Daily Recap**, in every mode (WISHLIST 10F, packet WS-DR)
+
+The 2026-08-24 amendment above made an AWAY day end in a recap rather than a
+queue. It is still true, and the page it named has been replaced.
+
+**What changed.** The nav entry `AWAY Recap` is now **Daily Recap**
+(`scripts/ui/panels/daily_recap_panel.py`, `PAGE_SPECS` slot unchanged — still
+directly after Market Journal), it is offered in **every** Auto mode rather than
+being an AWAY artefact, and it is selectable by exchange session: the last
+COMPLETED session by default, Today offered and marked provisional in the entry
+itself, and a 1/2/3 prior-session lookback that selects the swing window and the
+horizon reported together. Four tabs — what worked today, swings that followed
+through, my decisions, rejected and it worked — each with its cohort, window, n
+and pending count said out loud, and a sort control limited to the measures the
+reader declared.
+
+**Why it had to change.** The old page was handed `center._alerts` +
+`center._d1_alerts` by `_feed_away_recap`: a process-scoped list capped at 250 /
+100 items. A desk restarted mid-session, or left running across midnight,
+reported what the PROCESS saw rather than what the SESSION produced — which is
+precisely the record an AWAY day exists to leave behind.
+`scripts/daily_recap_reader.py` takes a session, a lookback, a clock and a set of
+PATHS, so the same session reads the same after a restart, a week later, or in
+another interpreter.
+
+**What deliberately did not change.** Discovery is identical in every mode.
+AWAY still STAGES and never adopts, and the staged-pick block moved onto the new
+page with its behaviour intact — the R2 gate is shown at click time, never
+enforced, and the page only ASKS the Focus store's own owner. AWAY still
+accumulates no return queue. The two push exceptions (Focus/Research price
+alerts in every mode, EVENING's SPY ±1% alarm) are untouched, and **the Daily
+Recap adds no push at all**: it is a page on the desk, so DESK, EVENING and OFF
+gain no routine output from it. `away_recap.build_recap` and
+`autopilot_today.txt` — including the `== WORKING LATELY ==` section ST6.6 added
+— are untouched, and the AWAY digest panel is still handed the Alert Center's
+backing list when the recap page is selected, so the phone's text digest is the
+same digest it was yesterday.
+
+---
+
+## Amendment 2026-09-13 - an armed chart watch pushes in every mode (WISHLIST 10C, packet WS-10C)
+
+**The exception is unchanged; its statement is widened by one caller.** "AWAY is the
+only Auto mode that pushes routine output" has two standing exceptions: the
+Research/Focus price alerts and EVENING's SPY +/-1% wake alarm. The first of those has
+never really been about *price alerts* - it is about a condition **the trader armed by
+hand and is waiting on**. A price alert armed on the Focus board and an H1 retester
+armed under the chart are the same request made from two surfaces, and it would be
+indefensible for the desk to buzz for one and stay silent for the other because of
+where the button was.
+
+So the armed H1 retester (`chart_watch.PERSISTENT_WATCH_KINDS`) pushes **in every
+mode**, through the SAME sender, as
+`PriceAlertService.notify_armed_watch(*, watch_id, title, message)`:
+
+- **One door.** It calls `push_notify.send_push` exactly where `_notify` does, at the
+  same `urgent` priority. No new sender, no new gate, no new kill switch, and
+  `_push_swing_picks` / `_maybe_push_d1_events` stay AWAY-gated and untouched.
+- **One buzz per episode.** De-duplicated by `watch_id`; `ok` means the push was
+  accepted for delivery by the one armed sender (since the 2026-09-13 repair below) and
+  a repeat returns `deduplicated`. Re-arming is a new id, so the trader can
+  deliberately ask for the same condition again.
+- **Only a FIRE.** An invalidation or an expiry disarms the watch and is recorded, but
+  never wakes anybody: there is nothing to act on.
+- **Delivery never costs the event.** The panel pushes BEFORE it draws the alert (a
+  broken display path must not be able to suppress the phone), and a failed push is
+  logged, never raised. **Dispatch is synchronous and delivery is ASYNCHRONOUS** (repair
+  2026-09-13): `notify_armed_watch` decides on the Qt thread and sends on a daemon
+  worker the service owns, so the ten-second HTTP timeout is never spent on the GUI
+  thread; `shutdown()` waits up to `ARMED_PUSH_SHUTDOWN_WAIT_SECONDS` (2.0) for what is
+  in flight.
+
+This does not add a routine push: nothing automatic arms one of these watches. The
+count of always-on push exceptions stays at two, and this is a caller inside the first.
+
+**Amendment 2026-09-15 (packet PCT-1): a Pullback alert the DESK armed for the trader
+pushes in every mode too.** The H1 retester is now one trigger of the `pullback` watch,
+and PCT-1 gives that watch an auto-arm: every active claimed D1 pick and every swing
+Focus name is armed automatically (trader, 2026-09-15: *"Chart arm + my picks"*). So the
+sentence above - "nothing automatic arms one of these watches" - is no longer true, and
+the exception is stated once more rather than widened: **these are the trader's own
+picks**, named by their own claim or their own Focus list, and a watch armed off one of
+them is the same request as the button under the chart. It rides the SAME
+`notify_armed_watch` door, one buzz per fire, in DESK, AWAY, EVENING and OFF alike. The
+auto-arm sweep itself scans nothing, discovers nothing and adopts nothing: it reads two
+stores the trader wrote and arms one watch per name. The count of always-on push
+exceptions stays at two, and the M15/M30 fetch that rides with it
+(`scripts/intraday_history.py`) is the same one-interval, own-thread read as the H1 one
+below - batched into one multi-ticker request per 50 names since the PCT-1 review -
+outside quiet hours for the same reason.
+
+**What an auto-armed watch does NOT push** (lead decision 2026-09-15 after the PCT-1
+review measured ~85 fires a session at 108 armed watches, 70 % of them retests; the
+trader may overrule). A watch the DESK armed pushes the two ENTRY triggers -
+`sma_reclaim_lrsi` and `reclaim_then_lrsi` - and writes `sma_retest` as a feed row and a
+`watch_fired` review row **without** a phone buzz. A watch the TRADER armed by hand
+pushes all three, because they asked for that exact name by pressing the button.
+Nothing is withheld either way: every fire is on the feed and in the evidence, and this
+is a volume decision about the phone, not a suppression rule. A standing arm also
+de-duplicates its pushes on the EVENT (`watch_id:trigger:timeframe:bar`) rather than on
+the arm, or only its first fire of a ten-day watch would ever leave the desk.
+
+**One outbound fetch rides with it, and it is not a scan.** When an armed H1 retester's
+cached M5 window is short of the rule's warm-up, `scripts/intraday_history.py` (was
+`h1_history.py`; PCT-1 generalised it by `interval_minutes` and the hourly class is the
+same code) reads THAT SYMBOL's hourly bars through `yfinance`, at most once per
+completed H1 bar - and since PCT-1 its M15 and M30 bars the same way - on its own
+daemon thread. It is not gated on quiet hours or on the Auto mode for the same reason
+the push is not: the trader armed the condition by hand and is waiting on it. It scans
+nothing, discovers nothing, adopts nothing and writes nothing - one symbol, one
+interval, in memory - and it is the same shape as the group RS/RW tape's own clock.
+
+---
+
+## Amendment 2026-09-14 - the Daily Recap fills itself in at 12:00 Pacific (trader-directed, WS-DR follow-up)
+
+Trader, 2026-09-14: *"I want it to auto populate at 12pm PST each day so at end of day I
+can review it."* Until this amendment the Daily Recap read a session only when the page
+was opened or Refresh was pressed, and it opened on the last COMPLETED session, so a
+visit at the end of the day showed yesterday until the picker was moved by hand.
+
+**What it does.** One `QTimer` on `DailyRecapPanel`, started by the window in
+`showEvent` beside the Trade Mentor's and never in a constructor, asks
+`scripts/daily_recap_schedule.due_session` once a minute. At the configured Pacific
+wall-clock time on an exchange session it refills the session list, selects TODAY and
+reads it, once per session per process. The time is the `local_settings.json` key
+`daily_recap_auto_time` (default `"12:00"`; `""` / `"off"` disables; a mistyped value
+disables rather than guesses). Pacific is `America/Los_Angeles`, DST-aware, exactly as
+the Mentor's slots are. A desk started after the hour reads today on its first tick; a
+weekend or holiday noon reads nothing; a calendar refusal reads nothing.
+
+**What the noon read IS.** 12:00 Pacific is 15:00 ET, one hour before the regular
+close, so the automatic read is labelled provisional by the reader's own
+`_is_provisional` and the page says so. Every later read of the same session - the
+page opened at the end of the day (page select still reloads), or Refresh - is the
+closed-and-measured one, and the session list is now refilled at the head of every
+read so today is relabelled from "provisional" to a plain completed entry after the
+close instead of keeping its start-of-day label until a restart.
+
+**Why it is not a starter under the quiet-hours rule.** It starts no scanner, fetches
+no bars, pushes nothing to the phone and writes no store: it is a store read on the
+page's own worker, the same read a click performs. It therefore runs in every Auto
+mode - AWAY included, so the page is ready when the trader returns - and stays outside
+`autopilot_core.auto_scanning_due`, for the same reason the Trade Mentor's fixed hours
+and the armed-watch H1 fetch above are outside it. The push-exception count stays at
+two; the AWAY digest and `autopilot_today.txt` are untouched.
+
+## Amendment 2026-09-15 - Daily Recap repair (DR-REPAIR)
+
+The recap streams the append-only M5 outcome log and retains its latest state per
+nonblank event id; blank ids remain separate facts. `What worked today` then shows one
+whole best measured event per symbol/side (latest when none measured), never columns
+combined across events. The factual reader-owned summary names the SELECTED session's
+raw updates and latest events (while source coverage remains full-file), stock/sides,
+measured states, declared top rows, decisions by M5/D1, swings and measured refusals
+that later worked; the panel only formats it. Timeframe is part of each decision's
+identity, so an otherwise identical M5 and D1 verdict remain separate rows.
+
+Annotation `timeframe` is preserved. M5 decisions read the reduced M5 state; D1
+decisions read only their matching `session_horizon_outcomes` row at the selected
+horizon, with missing as unavailable and immature as pending. Pending swings are
+visible with dashes, never zero. The page performs the configured noon read and one
+additional read after `market_early_close.session_close` (including early closes), on
+its existing worker. No scan, fetch, push, write, detector, score, alert, queue,
+Focus, watchlist or review-policy behavior changes.

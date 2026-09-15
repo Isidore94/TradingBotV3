@@ -799,6 +799,7 @@ def build_d1_levels(
     price_alerts_path: Path | None = None,
     d1_level_watches_path: Path | None = None,
     avwap_anchor: date | str | None = None,
+    price_range_bars: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Every paint-line for ``symbol``'s D1 chart. Worker threads only.
 
@@ -816,6 +817,16 @@ def build_d1_levels(
     challenger's centre must be anchored on exactly the bar the champion's is,
     or the two lines on the chart would differ for two reasons at once. Omitted
     (or not a session in ``bars``), the challenger group is simply absent.
+
+    ``price_range_bars`` is the window ``horizontal_levels`` takes its price
+    filter from, defaulting to ``bars``. Since packet WS-CH the payload reaches
+    back about four years while the chart OPENS on its tail, and the two are not
+    the same question: a store level from 2021 is inside the payload's range and
+    nowhere near the trader's screen, and admitting it would spend the clutter
+    budget on lines nobody can see. So the host passes the INITIAL VISIBLE
+    window and the filter behaves exactly as it did before the history grew.
+    Panning left does NOT recompute levels - the payload is fixed at build time
+    and the paint path reads no caches (plan.md Milestone 8).
     """
     symbol = str(symbol or "").strip().upper()
     bars = list(bars or ())
@@ -823,8 +834,13 @@ def build_d1_levels(
         return []
 
     levels: list[dict[str, Any]] = []
-    lows = [value for value in (_coerce_float(bar.get("low")) for bar in bars) if value]
-    highs = [value for value in (_coerce_float(bar.get("high")) for bar in bars) if value]
+    range_bars = list(price_range_bars) if price_range_bars else bars
+    lows = [
+        value for value in (_coerce_float(bar.get("low")) for bar in range_bars) if value
+    ]
+    highs = [
+        value for value in (_coerce_float(bar.get("high")) for bar in range_bars) if value
+    ]
     price_range = (min(lows), max(highs)) if lows and highs else None
     as_of = _bar_date(bars[-1])
 

@@ -511,3 +511,53 @@ and Skip are untouched. Tests: `tests/test_g1_weekend_focus_review.py` (nine,
 all proven red first), and
 `test_every_weekend_prep_table_shows_ten_rows` now EXCLUDES this page rather
 than being deleted.
+
+
+## Packet WS-5A (2026-09-12) — the verdict card's two cohort lines
+
+**Both cohort lines of the verdict card had never printed a cohort.**
+`weekend_verdict.best_cohort_line` built its column name out of its horizon —
+`avg_r_h3`, `n_h3` — and the two readers that feed it (`_read_veto_cohort`,
+`_read_like_cohort`) published `cohort / side / horizon / n / avg_return`, where
+`avg_return` was already the table's formatted `+1.23%` string. Nothing on
+either side of that seam has ever written an `avg_r_*` column, so every cell was
+skipped and both lines said "nothing with enough behind it yet" against 115
+graded veto rows and 129 graded like rows on the live desk (30 and 33 of them at
+the three-session horizon). The first row that had matched would have printed a
+PERCENT return with an `R` after it.
+
+The contract is typed at the reader now. `_cohort_numeric_fields` gives both
+cohort rows `horizon_sessions: int`, `n: int` and `avg_side_return_pct:
+float | None` — the CSV's fraction times 100, with the unit in the field name,
+because the bug was a unit bug — and a blank cell stays `None`, never a
+substituted zero. The trader's two tables read exactly as before (`21`,
+`+1.90%`); that text is built at the display edge by `_cohort_cell_text` inside
+`_fill_cohort_table`, and `_cohort_view` compares the horizon as an int in the
+one place the selector meets the rows, because `"3" == 3` is False and that is
+the class of mistake this repairs.
+
+In the card, `CARD_HORIZON` is the integer **3 sessions**; the pooled side
+(`ALL`, which is what the rollup writes, and `BOTH`) is excluded from a ranking
+of reasons because it is both sides added together; and **both lines rank by the
+HIGHEST side-adjusted return** — "Likes that work: `<cohort> <side>` +x.xx% over
+3 sessions (n=..)" and "Rejections worth another look: `<reason> <side>` +x.xx%
+side-adjusted (n=..)". The veto line used `min()`, which named the rejection
+that was RIGHT: the one reading a trader never has to act on. A separate
+"Rejections that were right" line is NOT printed — these are lines five and six
+of the eight the trader capped the card at. THREE absences get three sentences,
+because printing one of them for another is the class of false statement this
+repairs: under the floor, "nothing with enough behind it yet (best n was N
+against a floor of F)"; graded only at other horizons, "nothing has matured to 3
+sessions yet (K row(s) at other horizons)"; no rows at all, "no like|veto
+cohorts measured yet". The
+floor stays the card's own `MIN_COHORT_N` (5) rather than
+`evidence_stats.MIN_REPORTABLE_N` (30), because the card points at a table row
+the trader then opens, and 30 would silence the like line outright — 2 of the 21
+three-session side rows clear 30, against 8 that clear 5. Moving it is a trader
+decision about what the card may say, not a repair.
+
+Tests: `tests/test_ws_5a_weekend_verdict.py` — the live CSV header, both sides
+plus the pooled one, mature and thin cells, positive and negative returns on both
+sides, an empty `avg_side_return`, driven through the ACTUAL readers into
+`build_verdict`; ten proven red on the un-fixed files, plus one characterization
+guard that pins the table cell text unchanged.

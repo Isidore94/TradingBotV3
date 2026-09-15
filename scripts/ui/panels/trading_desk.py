@@ -23,11 +23,14 @@ from ui.widgets.m5_alert_bar import M5AlertBar
 from ui.widgets.swing_favorites_bar import SwingFavoritesBar
 from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
+from ui.panels.watchlist_tab import WatchlistTabPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
 from ui.services.group_tape_service import GroupTapeService
 from ui.services.swing_favorites_service import SwingFavoritesService
+from ui.services.watchlist_tab_service import WatchlistTabService
+from ui.timer_utils import SignalCoalescer
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
 from ui.widgets.working_lately_strip import WorkingLatelyStrip
@@ -36,12 +39,25 @@ from ui.widgets.working_lately_strip import WorkingLatelyStrip
 # v2 split saved with the bar in the middle must not be replayed onto it.
 DESK_SPLIT_KEY = "qt_desk_split_sizes_v3"
 
-# The bar/strip split inside the M5 alerts column. Its own key, so dragging it
-# never disturbs the three-column desk split above.
+# RETIRED by D1C-L (trader, 2026-09-14: "Keep M5 trades and entries on the
+# left. Put D1 picks and their management on the right."). The left column is
+# the M5 alert bar alone, so there is no bar/strip split to save there any
+# more. The constant is kept for one release as the name of the value already
+# sitting in `local_settings.json`: the desk neither applies nor writes it, and
+# the trader's old drag is left alone rather than deleted.
 M5_COLUMN_SPLIT_KEY = "qt_m5_column_split_sizes_v1"
-#: Opening weights for that split: the alert list leads, the strip takes the
-#: bottom quarter, and the trader's drag replaces both from then on.
-M5_COLUMN_WEIGHTS = (3, 1)
+
+# The setups/strip split inside the D1 column (D1C-L). Its own key, so the
+# retired M5 drag is never replayed onto a layout it was not dragged for, and
+# dragging this one never disturbs the three-column desk split above.
+D1_COLUMN_SPLIT_KEY = "qt_d1_column_split_sizes_v1"
+#: Opening weights for that split: the setups lead and the swing picks strip
+#: takes the bottom seventh, then the trader's drag replaces both. 6:1 rather
+#: than 4:1 because the strip's content is about 150 px tall - at the trader's
+#: own 3456 x 2160 the 4:1 opening handed it 399 px of mostly empty chip area
+#: (reviewer, 2026-09-14). It is a floor with no ceiling either way: the drag
+#: is what decides from the first time the trader uses it.
+D1_COLUMN_WEIGHTS = (6, 1)
 
 
 class TradingDeskPanel(QWidget):
@@ -78,13 +94,43 @@ class TradingDeskPanel(QWidget):
         )
         self.bounce_panel = BouncePanel(self.focus_service)
         self.rs_window_panel = RsWindowPanel(self.bounce_panel.service)
+        # WS-WL (WISHLIST 10G). ONE Watchlist tab, and ONE service behind it -
+        # the StrengthBoardService precedent: the desk owns the service because
+        # the desk owns the two stores it reads through (Focus and the price
+        # alerts), and the desk is what shuts it down. `MainWindow` aliases it
+        # so the window's own shutdown path can find it too.
+        self.watchlist_tab_service = WatchlistTabService(
+            self,
+            focus_service=self.focus_service,
+            price_alert_service=self.price_alert_service,
+        )
+        self.watchlist_tab = WatchlistTabPanel(
+            service=self.watchlist_tab_service,
+            focus_service=self.focus_service,
+            price_alert_service=self.price_alert_service,
+            watchlists_panel=self.watchlists_panel,
+        )
+        self.watchlist_tab.statusChanged.connect(self.statusChanged)
+        # A burst of Focus edits is ONE re-read (`SignalCoalescer`, 200 ms
+        # leading edge): the DESK drain adopts up to ten staged picks per
+        # cycle and each one notifies.
+        self._watchlist_focus_coalescer = SignalCoalescer(
+            self.watchlist_tab_service.refresh_now, parent=self
+        )
+        self.focus_service.focusChanged.connect(self._watchlist_focus_coalescer.request)
         self.master_workspace = MasterAvwapWorkspace(
             self.master_panel,
             self.theta_panel,
             self.watchlists_panel,
             self.industry_panel,
             rs_window_panel=self.rs_window_panel,
+            watchlist_tab=self.watchlist_tab,
         )
+        # Raising the tab reveals the column it lives in and moves the keyboard
+        # inside the panel: a `QShortcut` in a hidden tab never fires, and the
+        # widget that holds focus after a tab switch is the tab BAR, which is
+        # not a child of the panel the shortcut is bound to.
+        self.master_workspace.watchlistRaised.connect(self._reveal_watchlist_tab)
         self.alert_center = AlertCenterPanel(self.focus_service)
         self.alert_center.attach_service(self.bounce_panel.service)
         # A5: the Alert Center arms phone price alerts off painted D1 levels.
@@ -93,6 +139,14 @@ class TradingDeskPanel(QWidget):
         # poller (plan.md sec 5). Injected rather than constructed there on
         # purpose: the panel uses the store, the desk owns it.
         self.alert_center.price_alert_service = self.price_alert_service
+        # Packet D1C-A (trader, 2026-09-14). The left side of the desk claims a
+        # D1 setup; the right side is where the pick has to appear "within a
+        # second". One signal, one re-read of one small file - the setups table
+        # re-merges rows it already holds and nothing is re-scanned.
+        self.alert_center.claimsChanged.connect(self.master_panel.refresh_claims)
+        # Trader, 2026-09-15: a veto or a claim on the centre chart hides / marks
+        # its setups row at once, not on the next report poll.
+        self.alert_center.reviewDecisionRecorded.connect(self.master_panel.refresh_decisions)
         self.watchlists_panel.set_bounce_service(self.bounce_panel.service)
         self.master_panel.set_bounce_service(self.bounce_panel.service)
         self.industry_panel.set_bounce_service(self.bounce_panel.service)
@@ -151,12 +205,13 @@ class TradingDeskPanel(QWidget):
 
         # Trader, 2026-08-31: "at the end of the day I have a list of my top
         # swing targets... put it at the very bottom of the M5 alerts tab, the
-        # tab is so long and I never use all of it." The M5 alerts surface is a
-        # TAB in tabs mode and the tall left COLUMN in workspace mode - the
-        # trader runs workspace - so the bar and the strip share one host that
-        # both modes mount, and the strip is always the bottom of it. The bar
-        # keeps every pixel it wants: it takes the stretch, the strip takes
-        # none. Nothing here touches the bar or any alert routing.
+        # tab is so long and I never use all of it." That PLACEMENT was
+        # superseded by the same trader on 2026-09-14 (D1C-L): "Keep M5 trades
+        # and entries on the left. Put D1 picks and their management on the
+        # right." The strip is D1 management, so it is now the bottom of the D1
+        # column (`self.d1_column` below) - the right COLUMN in workspace mode
+        # and the "Master AVWAP" TAB in tabs mode. The strip itself, its two
+        # writes and every action on it are unchanged by the move.
         self.swing_favorites_bar = SwingFavoritesBar()
         self.swing_favorites_service = SwingFavoritesService(self.focus_service, parent=self)
         self.swing_favorites_bar.addRequested.connect(self._add_swing_favorites)
@@ -173,27 +228,44 @@ class TradingDeskPanel(QWidget):
         self.focus_service.picksFaded.connect(
             self.swing_favorites_service.retract_faded_picks
         )
-        # A SPLITTER, not a fixed stack (trader, 2026-08-31: "the tab needs to
-        # be resizable relative to the M5 alerts tab, I should be able to drag
-        # it up to see more"). Its own settings key, so this drag and the desk's
-        # three-column drag never overwrite each other. Neither pane collapses:
-        # a strip dragged to nothing is one the trader cannot find again.
+        # The LEFT column is M5 only (D1C-L). It stays a one-child vertical
+        # splitter rather than becoming the bar itself so every mount, rescue
+        # and floor in this file keeps the seam it already had: `m5_column` is
+        # what the desk splitter and the "M5 alerts" tab hold, and the bar is
+        # still `m5_column.widget(0)`. One child means there is no split to
+        # save - `M5_COLUMN_SPLIT_KEY` is no longer applied, tracked or
+        # written, and the value it named is left untouched in
+        # `local_settings.json`.
         self.m5_column = QSplitter(Qt.Orientation.Vertical)
         self.m5_column.addWidget(self.m5_alert_bar)
-        self.m5_column.addWidget(self.swing_favorites_bar)
         self.m5_column.setChildrenCollapsible(False)
         self.m5_column.setStretchFactor(0, 1)
-        self.m5_column.setStretchFactor(1, 0)
+
+        # The RIGHT column is D1: the setups workspace on top, the swing picks
+        # strip under it. A SPLITTER, not a fixed stack, for the trader's own
+        # 2026-08-31 reason ("I should be able to drag it up to see more") -
+        # only now the strip is draggable against the setups above it. Its own
+        # NEW settings key, so the retired M5 drag is never replayed onto a
+        # layout it was not dragged for, and this drag and the desk's
+        # three-column drag never overwrite each other. Neither pane
+        # collapses: a strip dragged to nothing is one the trader cannot find
+        # again. The setups take the stretch; the strip takes none.
+        self.d1_column = QSplitter(Qt.Orientation.Vertical)
+        self.d1_column.addWidget(self.master_workspace)
+        self.d1_column.addWidget(self.swing_favorites_bar)
+        self.d1_column.setChildrenCollapsible(False)
+        self.d1_column.setStretchFactor(0, 1)
+        self.d1_column.setStretchFactor(1, 0)
         desk_layout.apply_saved_sizes(
-            self.m5_column, M5_COLUMN_SPLIT_KEY, M5_COLUMN_WEIGHTS
+            self.d1_column, D1_COLUMN_SPLIT_KEY, D1_COLUMN_WEIGHTS
         )
         # Held at the preset until the trader drags it, then saved. Built once
         # here rather than per mode, so the drag survives a workspace<->tabs
         # switch the same way the column itself does.
         desk_layout.track_preset(
-            self, self.m5_column, M5_COLUMN_SPLIT_KEY, lambda _extent: M5_COLUMN_WEIGHTS
+            self, self.d1_column, D1_COLUMN_SPLIT_KEY, lambda _extent: D1_COLUMN_WEIGHTS
         )
-        desk_layout.persist_sizes(self, self.m5_column, M5_COLUMN_SPLIT_KEY)
+        desk_layout.persist_sizes(self, self.d1_column, D1_COLUMN_SPLIT_KEY)
         self._refresh_swing_favorites()
         # A day roll starts a new session, so the strip re-derives from the
         # store and comes back empty. Read-only: the rows themselves stay.
@@ -278,12 +350,22 @@ class TradingDeskPanel(QWidget):
             # column never competes with the charts for width, and a tab that
             # refused to show itself would just look broken.
             self.setups_toggle.setVisible(False)
-            self.master_workspace.setVisible(True)
             tabs = QTabWidget()
-            tabs.addTab(self.master_workspace, "Master AVWAP")
+            tabs.addTab(self.d1_column, "Master AVWAP")
             tabs.addTab(self.alert_center, "Alert Center")
             tabs.addTab(self.m5_column, "M5 alerts")
             tabs.addTab(self.bounce_panel, "BounceBot")
+            # AFTER the tab takes it, never before: `_detach_mode_panels` has
+            # just left the column parentless, so showing it there would show
+            # it as a top-level WINDOW - and every child would get a real
+            # showEvent, which is how the swing strip's one-shot `firstShown`
+            # fired (and re-derived its chips from an empty store) on a mode
+            # switch. Both are set: workspace mode hides the COLUMN and never
+            # the workspace itself, so the column is what has to be shown
+            # again, and the workspace is shown explicitly so a tab can never
+            # inherit a hidden flag from an earlier state.
+            self.d1_column.setVisible(True)
+            self.master_workspace.setVisible(True)
             self._mode_widget = tabs
             self.center_layout.addWidget(tabs)
             return
@@ -306,7 +388,9 @@ class TradingDeskPanel(QWidget):
         # setups.
         splitter.addWidget(self.m5_column)
         splitter.addWidget(self.alert_center)
-        splitter.addWidget(self.master_workspace)
+        # D1C-L: the right column is the D1 column - setups over the swing
+        # picks strip - where the setups workspace alone used to sit.
+        splitter.addWidget(self.d1_column)
         # The chart column leads. The old 1:2 stretch meant every pixel
         # added to the window went 2:1 to the setups table, so the charts got
         # relatively SMALLER on a bigger monitor.
@@ -340,7 +424,9 @@ class TradingDeskPanel(QWidget):
         # Applied after the split so the saved drag is what gets restored when
         # the column is shown again, not a width measured while it was hidden.
         self.setups_toggle.setVisible(True)
-        self.master_workspace.setVisible(self._setups_visible)
+        # The whole D1 column comes and goes, so the strip is out of sight
+        # while the setups are - the trader opens this column to look at D1.
+        self.d1_column.setVisible(self._setups_visible)
 
     def _set_chart_sink(self, sink) -> None:
         """Point every setups-column panel's ticker click at `sink` (or back
@@ -350,8 +436,36 @@ class TradingDeskPanel(QWidget):
             self.rs_window_panel,
             self.industry_panel,
             self.watchlists_panel,
+            self.watchlist_tab,
         ):
             panel.set_chart_sink(sink)
+
+    # ------------------------------------------------------- the Watchlist tab
+    def _reveal_watchlist_tab(self) -> None:
+        """Make the column visible and put the keyboard inside the panel."""
+        if self.workspace_mode == "workspace" and not self._setups_visible:
+            self.set_setups_visible(True)
+        self.watchlist_tab.take_focus()
+
+    def show_watchlist(self, view: str = "") -> bool:
+        """Raise the Watchlist tab, optionally on one view (WS-WL item 4).
+
+        The Journal's "Positions on the Watchlist" button is a NAV call: it
+        asks for this list on its Positions view, never a second list of its
+        own.
+        """
+        raised = self.master_workspace.show_watchlist()
+        if not raised:
+            return False
+        if self.workspace_mode == "tabs" and isinstance(self._mode_widget, QTabWidget):
+            # The tab holds the D1 COLUMN since D1C-L; asking for the workspace
+            # itself would find no tab and silently leave the door shut.
+            self._mode_widget.setCurrentWidget(self.d1_column)
+        self._reveal_watchlist_tab()
+        if view:
+            self.watchlist_tab.set_view(view)
+        self.watchlist_tab.refresh_now()
+        return True
 
     # ------------------------------------------------------- swing picks
     def _add_swing_favorites(self, text: str, side: str) -> None:
@@ -431,6 +545,9 @@ class TradingDeskPanel(QWidget):
         group_tape_service = getattr(self, "group_tape_service", None)
         if group_tape_service is not None:
             components.append(("group tape", group_tape_service.shutdown))
+        watchlist_tab_service = getattr(self, "watchlist_tab_service", None)
+        if watchlist_tab_service is not None:
+            components.append(("watchlist tab", watchlist_tab_service.shutdown))
         for label, close in components:
             try:
                 close()
@@ -444,8 +561,11 @@ class TradingDeskPanel(QWidget):
         # _clear_layout deletes whatever it still owns, so every long-lived
         # child must be reparented out first - including the tape host, which
         # a later mode switch would otherwise destroy under the tape.
+        # The D1 COLUMN is rescued, never the workspace inside it: detaching
+        # `master_workspace` would pull it out of `d1_column` and leave the
+        # column holding the strip alone.
         rescued = (
-            self.master_workspace,
+            self.d1_column,
             self.alert_center,
             self.m5_column,
             self.bounce_panel,
@@ -478,7 +598,9 @@ class TradingDeskPanel(QWidget):
         self.alert_center.setMinimumWidth(theme.px(360))
         # Wide enough for "07:09  ▲ SYMBOL  VWAP reclaim" and the two buttons.
         self.m5_column.setMinimumWidth(theme.px(150))
-        self.master_workspace.setMinimumWidth(theme.px(420))
+        # The floor belongs to the COLUMN the desk splitter holds (D1C-L), so
+        # it is the D1 column and not the workspace inside it.
+        self.d1_column.setMinimumWidth(theme.px(420))
 
     def apply_scaled_metrics(self) -> None:
         """Re-apply scale-dependent pixel budgets after a UI scale change."""
@@ -521,7 +643,7 @@ class TradingDeskPanel(QWidget):
         if self.workspace_mode != "workspace" or splitter is None:
             return
         if visible:
-            self.master_workspace.setVisible(True)
+            self.d1_column.setVisible(True)
             saved = self._setups_restore_sizes
             if saved and sum(saved) > 0 and len(saved) == splitter.count():
                 splitter.setSizes(saved)
@@ -542,7 +664,9 @@ class TradingDeskPanel(QWidget):
                 # without undoing that leaves BOTH columns invisible.
                 self.toggle_setups_expanded()
             self._setups_restore_sizes = splitter.sizes()
-            self.master_workspace.setVisible(False)
+            # The column, so the swing picks strip goes with the setups: it is
+            # D1 management and the trader opens this column to see D1.
+            self.d1_column.setVisible(False)
 
     def setups_visible(self) -> bool:
         return self._setups_visible
@@ -581,6 +705,11 @@ class TradingDeskPanel(QWidget):
 
 
 class MasterAvwapWorkspace(QFrame):
+    #: The Watchlist tab became the current one. The desk listens: the column
+    #: this workspace lives in opens hidden, and a tab nobody can see cannot
+    #: take the keyboard (WS-WL item 5).
+    watchlistRaised = Signal()
+
     def __init__(
         self,
         master_panel: MasterAvwapPanel,
@@ -589,6 +718,8 @@ class MasterAvwapWorkspace(QFrame):
         industry_panel: IndustryPanel | None = None,
         rs_window_panel: RsWindowPanel | None = None,
         parent=None,
+        *,
+        watchlist_tab: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -597,8 +728,13 @@ class MasterAvwapWorkspace(QFrame):
         self.watchlists_panel = watchlists_panel
         self.industry_panel = industry_panel
         self.rs_window_panel = rs_window_panel
+        self.watchlist_tab = watchlist_tab
         self.tabs = QTabWidget()
         self.tabs.addTab(self.master_panel, "Setups")
+        # WS-WL: second, directly after the setups - it is the list the trader
+        # works from, and the pages it replaced were nav entries 1 and 2.
+        if self.watchlist_tab is not None:
+            self.tabs.addTab(self.watchlist_tab, "Watchlist")
         self.tabs.addTab(self.theta_panel, "Theta Plays")
         self.tabs.addTab(self.watchlists_panel, "Watchlists")
         if self.industry_panel is not None:
@@ -606,13 +742,25 @@ class MasterAvwapWorkspace(QFrame):
         if self.rs_window_panel is not None:
             self.tabs.addTab(self.rs_window_panel, "RS Window")
         self.master_panel.scan_service.finished.connect(lambda *_args: self.theta_panel.refresh())
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.tabs)
 
+    def _on_tab_changed(self, index: int) -> None:
+        if self.watchlist_tab is not None and self.tabs.widget(index) is self.watchlist_tab:
+            self.watchlistRaised.emit()
+
     def show_setups(self) -> None:
         self.tabs.setCurrentWidget(self.master_panel)
+
+    def show_watchlist(self) -> bool:
+        """Raise the Watchlist tab. False when this workspace has none."""
+        if self.watchlist_tab is None:
+            return False
+        self.tabs.setCurrentWidget(self.watchlist_tab)
+        return True
 
     def show_theta(self) -> None:
         self.theta_panel.refresh()

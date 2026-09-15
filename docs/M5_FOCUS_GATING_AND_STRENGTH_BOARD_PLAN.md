@@ -764,3 +764,74 @@ scan input.
 The **click-to-add path is unchanged**: a click on a row IS the trader liking the
 name, so `_add_symbols` still goes through the service and still writes the
 pick-feedback row. Live gate #58.
+
+## Addendum — 2026-09-12: the `Scan` column, and AWAY stages (packet WS-10B)
+
+WISHLIST 10B asked for a verification before a feature: trace a board row from
+publication to the universe BounceBot actually scans. The DESK link was intact
+and is now pinned end to end (`tests/test_ws_10b_board_to_scan.py`) — board →
+empty `failed_floors` → the ONE adoption gate → `store.add_many` → the auto-pick
+marker → `_inject_into_shared` → `longs.txt` / `shorts.txt` →
+`get_scan_symbol_set`, which the scan cycle rebuilds from those files every
+pass, so an adopted name is scanned on the next cycle with no restart, each name
+is appended exactly once, and a trader-typed line survives every refresh. What
+was missing was AWAY: the mode check returned and the discovery was discarded.
+AWAY now STAGES the eligible rows through
+`autopilot_core.stage_auto_populate_candidates` — the existing owner of the
+approval queue, with its lock, its per-side cap and its refusal of names already
+listed or already decided today — so the desk's own drain, which re-measures
+every queued pick on the flip back to DESK, remains the only door an unattended
+pick comes through. EVENING and OFF still do nothing.
+
+**The `Scan` column.** Each board row carries an `adoption` verdict written at
+the moment the auto-join decides, from that row's own numbers: `adopted`,
+`already_in_focus`, `staged (AWAY)`, `not today`, `declined today`,
+`mode EVENING` / `mode OFF`, `not adopted: floor <what it missed>`, or
+`not adopted: <the adoption gate's reason verbatim>` (so an unmeasurable row
+reads `not adopted: cannot verify session VWAP`). It is the LAST column of both
+side tables — text only, no colour vote, and deliberately not sortable, because
+a scan list re-ordered by how the machine answered is not the trader's ranking.
+The view computes none of it and a row with no verdict stays blank. One INFO
+line per refresh carries the same counts to `trading_bot.log`:
+`Strength board: N rows, A adopted, S staged, R not adopted (reasons: ...)`.
+
+Scanner inclusion and Focus adoption remain DISTINCT contracts: nothing here
+scans a row the gate refused, and "scan every board row regardless" would be a
+separate selection the trader has not asked for.
+
+
+## Addendum — 2026-09-13: the Focus board's actions move to the Watchlist tab (packet WS-WL)
+
+WISHLIST 10G asked for ONE watchlist on the Trading Desk. The Focus Picks PAGE is retired
+with it — not the board, and not one behaviour this plan specifies.
+
+What is unchanged: the adoption gate (`scripts/focus_adoption_gate.py`), `FocusPickStore`
+and every write it owns, the strength board's auto-adoption (`_auto_adopt_strength_board`,
+DESK only, the one gate re-run per row), the injection into `longs.txt` / `shorts.txt`,
+the fade clock, the auto-pick markers and "absence of a marker means the trader owns it".
+`FocusPicksPanel` is still CONSTRUCTED by the desk and still receives BounceBot alerts,
+the RRS snapshot and the mover flags; what it lost is its left-nav row.
+
+What moved, one line each, to `scripts/ui/panels/watchlist_tab.py`:
+
+| Focus Picks page | Watchlist tab |
+|---|---|
+| Add / Paste / Copy / Clear All | `add_symbol` / `paste_many` / `copy_visible` / `clear_view` |
+| chip ✕ (remove) | `remove_selected`, routed to the owner of each badge |
+| "Like this pick" | `like_selected` — `verdicts.record_like`, `SURFACE_FOCUS_PANEL`, zero privileges |
+| "Not today" | `not_today_selected` — the row is written FIRST, then `remove_if_auto_adopted` |
+| Refresh | `refresh_now` |
+| Snapshot Today | `snapshot_today` — the same `snapshot_human_focus_picks` call, still refused for a custom store |
+| price-alert Save / Remove / Re-arm | `arm_selected` / `disarm_selected` / `rearm_selected` through `PriceAlertService.save_entries` |
+| (no page ever had it) | `restore_selected` — a faded pick, through `FocusPickStore.restore_faded` |
+
+Two notes for whoever reads this next. **"Not today" still refuses a name the trader
+typed** — the tab calls the same `remove_if_auto_adopted` seam and the same absence-of-a-
+marker rule decides, so the hard invariant (a user-entered name is never auto-removed)
+is where it always was. And **Disarm is not Remove**: the board's Remove deleted the price
+alert entry, the tab's Disarm clears both armed flags and keeps the levels (A2 — a price
+alert is disarmed, never deleted).
+
+The board's own `adoption` verdict (WS-10B's `Scan` column) rides onto the row as a label
+and touches nothing: rows sort by symbol, then side, and never by source, strength or
+result.

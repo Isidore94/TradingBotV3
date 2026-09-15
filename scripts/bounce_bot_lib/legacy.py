@@ -95,6 +95,7 @@ from focus_picks import load_auto_pick_symbols, load_focus_map
 # the writer here and every reader of the outcome CSV cannot drift apart.
 import outcome_semantics
 from market_internals import format_internals_line, internals_context_fields
+from completed_bars import is_completed_bar as _is_completed_bar
 from durability_retry import fetch_with_bounded_retry
 from vold_recorder import (
     CONTRACT_CANDIDATES as VOLD_CONTRACT_CANDIDATES,
@@ -350,6 +351,10 @@ RRS_TIMEFRAMES = {
     "30m": {"label": "30 min", "bar_size": "30 mins", "duration": "5 D", "minutes": 30},
     "1h": {"label": "1 hour", "bar_size": "1 hour", "duration": "5 D", "minutes": 60},
 }
+# SN3 (WISHLIST item 4, 2026-09-12): the timeframes one scan cycle always
+# measures. The GUI's selected timeframe is added to the walk when it is not
+# one of these, so a cycle is still ONE walk of the universe.
+RRS_CYCLE_TIMEFRAME_KEYS = ("5m", "15m", "1h")
 SCAN_EXTREME_COUNT = 5
 GROUP_STRENGTH_TIMEFRAMES = {
     "D1": {"bar_size": "1 day", "duration": "6 M"},
@@ -2149,6 +2154,21 @@ def _bars_to_ib(bars):
     return ib_bars
 
 
+def _sn2_same_bar(cached_row, served_row):
+    """Whether a served bar is the SAME print the kept window already holds.
+
+    SN2's identity check (WISHLIST item 4): the overlap bar's dt AND close must
+    match, or the delta and the kept window are not one series - a revision, a
+    corporate action, a halt - and the window is refetched whole rather than
+    spliced. An unreadable close is a mismatch: missing data is uncertainty,
+    never confirmation.
+    """
+    try:
+        return float(cached_row.get("close")) == float(served_row.get("close"))
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
 def _dedupe_bars(bars):
     by_dt = {}
     for bar in bars:
@@ -2965,6 +2985,10 @@ class BounceBot(EWrapper, EClient):
         self._confluence_state = None
         self._orb_first_candle_state = None
         self.latest_rrs_payload = None
+        # SN3: this cycle's payload per timeframe key; ``latest_rrs_payload``
+        # is the entry the GUI's selected timeframe produced, not a copy.
+        self._rrs_payloads = {}
+        self._intraday_rrs_profile_cache = {}
         self.earnings_reaction_filter_cache = {}
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
@@ -6104,10 +6128,31 @@ class BounceBot(EWrapper, EClient):
         every = max(1, int(BACKGROUND_SYMBOL_REFRESH_EVERY_CYCLES))
         return int(getattr(self, "_scan_cycle_index", 0)) % every == 0
 
-    def _prune_latest_bars_for_cycle(self, refresh_background, background_symbols):
+    def _prune_latest_bars_for_cycle(self, refresh_background, background_symbols, *, scanned_symbols=None):
         """Cycle-start bar-cache policy: priority symbols, SPY and the sector/
         industry ETFs always refetch; background symbols keep their cached bars
-        through off-cycles so the RRS scan costs them nothing."""
+        through off-cycles so the RRS scan costs them nothing.
+
+        It is also where SN2's kept M5 windows are bounded by the scanned set
+        and the per-cycle fetch counters are reset - one cycle-start hook, so a
+        symbol that leaves the scan cannot keep a window alive. `scanned_symbols`
+        is every name this cycle will scan (priority AND background); a caller
+        that does not name it is taken to have named the keep set in
+        `background_symbols`.
+        """
+        frame_keep = scanned_symbols
+        if frame_keep is None and not refresh_background:
+            frame_keep = background_symbols
+        # Looked up rather than called outright: this hook is also driven
+        # UNBOUND on a bare stub (`tests/test_bounce_learning.py` passes a
+        # SimpleNamespace that owns `latest_bars` and nothing else), and an
+        # object with no SN2 cache has no window to bound.
+        prune_windows = getattr(self, "_sn2_prune_windows", None)
+        if frame_keep is not None and callable(prune_windows):
+            prune_windows(frame_keep)
+        reset_counts = getattr(self, "_sn2_reset_cycle_counts", None)
+        if callable(reset_counts):
+            reset_counts()
         if refresh_background or not self.latest_bars:
             self.latest_bars = {}
             return
@@ -10813,19 +10858,86 @@ class BounceBot(EWrapper, EClient):
     def get_cached_5m_bars(self, symbol):
         return self._get_cached_bars(symbol, "5 D", "5 mins")
 
+    def rrs_payload_for(self, timeframe_key):
+        """The payload THIS cycle produced for ``timeframe_key`` (SN3).
+
+        ``latest_rrs_payload`` is the SAME object as the entry for the GUI's
+        selected timeframe: the GUI no longer gets its own walk of the
+        universe, it gets the one the cycle already measured.
+        """
+        payloads = getattr(self, "_rrs_payloads", None)
+        if not isinstance(payloads, dict):
+            return None
+        return payloads.get(timeframe_key)
+
+    def _intraday_rrs_profile_for_cycle(self, symbol, symbol_bars, spy_bars, length, current_date):
+        """Today's intraday RRS profile for one symbol, built once per new bar.
+
+        ``_build_intraday_rrs_profile`` is the expensive thing in the cycle: it
+        re-runs ``real_relative_strength`` over a growing slice for every bar
+        of the session, and the four RRS passes each rebuilt it for every
+        symbol from the same 5-minute bars.  The result depends only on the
+        symbol's own bars intersected with SPY's (``_align_bars_with_map``
+        drops any SPY bar the symbol did not print), so the cache key is the
+        symbol's last bar dt - plus its bar count, and the session date the
+        rows are filtered to, so a trimmed history or a day roll rebuilds even
+        when the last dt has not moved.
+        """
+        cache = getattr(self, "_intraday_rrs_profile_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._intraday_rrs_profile_cache = cache
+        cache_key = (symbol_bars[-1].dt, len(symbol_bars), length, current_date)
+        cached = cache.get(symbol)
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+        intraday_profile = self._build_intraday_rrs_profile(symbol_bars, spy_bars, length=length)
+        today_profile = []
+        if intraday_profile:
+            today_profile = [
+                item for item in intraday_profile
+                if item.get("dt") and item["dt"].date() == current_date
+            ]
+        cache[symbol] = (cache_key, today_profile)
+        return today_profile
+
     def run_rrs_scan(self, timeframe_key_override=None, emit_gui=True):
+        """ONE walk of the universe per cycle, every intraday RRS timeframe.
+
+        Until 2026-09-12 the scan cycle entered this four times - 5m, 15m, 1h
+        and then again for whichever of them the GUI had selected - and every
+        entry re-walked the universe, re-bucketed the same 5-minute bars and
+        rebuilt each symbol's intraday RRS profile from scratch: 275 s of pure
+        CPU per cycle measured on 2026-09-08, on the interpreter lock the GUI
+        needs.  Everything that does not depend on the timeframe (the bars,
+        the profile, the SPY context windows, the environment summary, the
+        group-strength and internals snapshots) is now measured ONCE, and the
+        timeframe-dependent work (aggregation, alignment, RRS) runs inside the
+        same walk.  The GUI pass reuses its timeframe's result.
+
+        No formula, threshold, universe or ETF alignment changed: every
+        payload is byte-identical to what the four passes produced from the
+        same bars, pinned in ``tests/test_ws_sn3_one_rrs_pass.py`` against a
+        recording made on the pre-SN3 code.  ``timeframe_key_override`` still
+        names the timeframe the GUI pass publishes; the walk measures them all
+        either way.
+        """
         self.load_master_avwap_focus()
         self.load_master_avwap_d1_watchlist()
         self.load_master_avwap_d1_upgrade_alerts()
         self.load_master_avwap_d1_zone_arms()
-        threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
+        threshold, _bar_size, _duration, length, gui_timeframe_key = self.get_rrs_settings()
         if timeframe_key_override in RRS_TIMEFRAMES:
-            timeframe_key = timeframe_key_override
-            bar_size = RRS_TIMEFRAMES[timeframe_key]["bar_size"]
-            duration = RRS_TIMEFRAMES[timeframe_key]["duration"]
-        timeframe_minutes = RRS_TIMEFRAMES[timeframe_key]["minutes"]
+            gui_timeframe_key = timeframe_key_override
+        timeframe_keys = list(RRS_CYCLE_TIMEFRAME_KEYS)
+        if gui_timeframe_key not in timeframe_keys:
+            timeframe_keys.append(gui_timeframe_key)
+        timeframe_minutes = {key: RRS_TIMEFRAMES[key]["minutes"] for key in timeframe_keys}
         if emit_gui and self.gui_callback:
-            self.gui_callback(f"RRS scan running ({RRS_TIMEFRAMES[timeframe_key]['label']})...", "rrs_status")
+            self.gui_callback(
+                f"RRS scan running ({RRS_TIMEFRAMES[gui_timeframe_key]['label']})...",
+                "rrs_status",
+            )
 
         spy_5m = self.get_cached_5m_bars("SPY")
         if not spy_5m:
@@ -10833,21 +10945,25 @@ class BounceBot(EWrapper, EClient):
                 self.gui_callback("RRS scan: SPY data unavailable.", "rrs_status")
             return
 
-        spy_bars = spy_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(spy_5m, timeframe_minutes)
-        spy_by_dt = {bar.dt: bar for bar in spy_bars}
-        spy_move_ratio = self._calc_move_ratio(spy_bars, length)
+        spy_by_dt = {}
+        spy_move_ratio = {}
+        for timeframe_key in timeframe_keys:
+            minutes = timeframe_minutes[timeframe_key]
+            spy_bars = spy_5m if minutes == 5 else _aggregate_bars_timeframe(spy_5m, minutes)
+            spy_by_dt[timeframe_key] = {bar.dt: bar for bar in spy_bars}
+            spy_move_ratio[timeframe_key] = self._calc_move_ratio(spy_bars, length)
 
-        results = []
-        sector_results = []
-        industry_results = []
-        symbol_context = []
-        all_scores = []
+        results = {key: [] for key in timeframe_keys}
+        sector_results = {key: [] for key in timeframe_keys}
+        industry_results = {key: [] for key in timeframe_keys}
+        symbol_context = {key: [] for key in timeframe_keys}
+        all_scores = {key: [] for key in timeframe_keys}
         # Full-universe sector/industry RRS, keyed by symbol. ``*_results``
         # above only collect threshold-crossers, which biased every recorded
         # rrs_sector / rrs_industry toward extremes (median +2.6 vs -0.07 for
         # the SPY scope) and left them blank on ~75% of alerts.
-        sector_all = {}
-        industry_all = {}
+        sector_all = {key: {} for key in timeframe_keys}
+        industry_all = {key: {} for key in timeframe_keys}
         intraday_profiles = {}
         current_market_date = spy_5m[-1].dt.date()
         previous_market_date = self._previous_market_date_from_bars(spy_5m, current_market_date)
@@ -10868,57 +10984,87 @@ class BounceBot(EWrapper, EClient):
             spy_5m[-1].dt if spy_5m else None
         )
         spy_context_windows = self._build_spy_context_windows(spy_5m, length) if environment_scan_active else []
+
+        # One aggregation per reference ETF per timeframe per CYCLE. The four
+        # passes re-bucketed the same sector/industry ETF bars once for every
+        # scanned symbol, for an identical answer every time.
+        reference_bars_by_dt = {}
+
+        def _reference_by_dt(reference_symbol, timeframe_key, reference_5m):
+            cache_key = (reference_symbol, timeframe_key)
+            cached = reference_bars_by_dt.get(cache_key)
+            if cached is None:
+                minutes = timeframe_minutes[timeframe_key]
+                reference_bars = (
+                    reference_5m if minutes == 5
+                    else _aggregate_bars_timeframe(reference_5m, minutes)
+                )
+                cached = {bar.dt: bar for bar in reference_bars}
+                reference_bars_by_dt[cache_key] = cached
+            return cached
+
         for symbol in all_symbols:
             sym_5m = self.get_cached_5m_bars(symbol)
             if not sym_5m:
                 continue
-            intraday_profile = self._build_intraday_rrs_profile(sym_5m, spy_5m, length=length)
-            if intraday_profile:
-                current_date = spy_5m[-1].dt.date()
-                today_profile = [item for item in intraday_profile if item.get("dt") and item["dt"].date() == current_date]
-                if today_profile:
-                    intraday_profiles[symbol] = today_profile
-            sym_bars = sym_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sym_5m, timeframe_minutes)
-            aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt)
-            rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
-            if rrs_value is None:
+            today_profile = self._intraday_rrs_profile_for_cycle(
+                symbol, sym_5m, spy_5m, length, current_market_date
+            )
+            if today_profile:
+                intraday_profiles[symbol] = today_profile
+
+            sym_bars_by_timeframe = {}
+            measured_timeframes = []
+            symbol_direction = None
+            for timeframe_key in timeframe_keys:
+                minutes = timeframe_minutes[timeframe_key]
+                sym_bars = sym_5m if minutes == 5 else _aggregate_bars_timeframe(sym_5m, minutes)
+                aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt[timeframe_key])
+                rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
+                if rrs_value is None:
+                    continue
+                sym_bars_by_timeframe[timeframe_key] = sym_bars
+                measured_timeframes.append(timeframe_key)
+                symbol_move_ratio = self._calc_move_ratio(sym_bars, length)
+                excess_move_ratio = None
+                if symbol_move_ratio is not None and spy_move_ratio[timeframe_key] is not None:
+                    excess_move_ratio = symbol_move_ratio - spy_move_ratio[timeframe_key]
+                all_scores[timeframe_key].append((symbol, rrs_value, power_index))
+                environment_signal = None
+                if rrs_value >= threshold:
+                    environment_signal = "RS"
+                elif rrs_value <= -threshold:
+                    environment_signal = "RW"
+
+                symbol_direction = self.get_symbol_direction(symbol)
+                if environment_signal:
+                    symbol_context[timeframe_key].append(
+                        {
+                            "symbol": symbol,
+                            "signal": environment_signal,
+                            "rrs": rrs_value,
+                            "move_ratio": symbol_move_ratio,
+                            "excess_move_ratio": excess_move_ratio,
+                            "power_index": power_index,
+                            "watchlist_bias": symbol_direction,
+                        }
+                    )
+
+                if symbol_direction == "long" and rrs_value >= threshold:
+                    results[timeframe_key].append(("RS", symbol, rrs_value, power_index))
+                elif symbol_direction == "short" and rrs_value <= -threshold:
+                    results[timeframe_key].append(("RW", symbol, rrs_value, power_index))
+
+            if not measured_timeframes:
                 continue
-            symbol_move_ratio = self._calc_move_ratio(sym_bars, length)
-            excess_move_ratio = None
-            if symbol_move_ratio is not None and spy_move_ratio is not None:
-                excess_move_ratio = symbol_move_ratio - spy_move_ratio
-            all_scores.append((symbol, rrs_value, power_index))
-            environment_signal = None
-            if rrs_value >= threshold:
-                environment_signal = "RS"
-            elif rrs_value <= -threshold:
-                environment_signal = "RW"
-
-            symbol_direction = self.get_symbol_direction(symbol)
-            if environment_signal:
-                symbol_context.append(
-                    {
-                        "symbol": symbol,
-                        "signal": environment_signal,
-                        "rrs": rrs_value,
-                        "move_ratio": symbol_move_ratio,
-                        "excess_move_ratio": excess_move_ratio,
-                        "power_index": power_index,
-                        "watchlist_bias": symbol_direction,
-                    }
-                )
-
-            if symbol_direction == "long" and rrs_value >= threshold:
-                results.append(("RS", symbol, rrs_value, power_index))
-            elif symbol_direction == "short" and rrs_value <= -threshold:
-                results.append(("RW", symbol, rrs_value, power_index))
-
             classification = self.get_symbol_classification(symbol)
             if not classification:
                 continue
             sector_key = classification.get("sectorKey", "")
             industry_key = classification.get("industryKey", "")
             if industry_key:
+                # One map update per symbol per CYCLE: every call rewrites the
+                # JSON file, and the four passes each rewrote it per symbol.
                 self.industry_map_data = load_and_update_industry_etf_map(
                     industry_key,
                     sector_key,
@@ -10929,95 +11075,137 @@ class BounceBot(EWrapper, EClient):
             sector_etf = resolve_sector_etf(sector_key, self.sector_etf_map)
             sec_5m = self.get_cached_5m_bars(sector_etf)
             if sec_5m:
-                sec_bars = sec_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sec_5m, timeframe_minutes)
-                aligned_sym_sec, aligned_sec = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in sec_bars})
-                sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
-                if sec_rrs is not None:
-                    # Every scanned symbol, not just threshold-crossers (see
-                    # rrs_sector_all below): the alert-time snapshot must be
-                    # able to record a symbol's real sector RRS whatever its
-                    # value, or the learning rows only ever see extremes.
-                    sector_all[symbol] = (sec_rrs, sec_power, sector_etf)
-                    if symbol_direction == "long" and sec_rrs >= threshold:
-                        sector_results.append(("RS", symbol, sec_rrs, sec_power))
-                    elif symbol_direction == "short" and sec_rrs <= -threshold:
-                        sector_results.append(("RW", symbol, sec_rrs, sec_power))
+                for timeframe_key in measured_timeframes:
+                    sec_by_dt = _reference_by_dt(sector_etf, timeframe_key, sec_5m)
+                    aligned_sym_sec, aligned_sec = _align_bars_with_map(
+                        sym_bars_by_timeframe[timeframe_key], sec_by_dt
+                    )
+                    sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
+                    if sec_rrs is not None:
+                        # Every scanned symbol, not just threshold-crossers (see
+                        # rrs_sector_all below): the alert-time snapshot must be
+                        # able to record a symbol's real sector RRS whatever its
+                        # value, or the learning rows only ever see extremes.
+                        sector_all[timeframe_key][symbol] = (sec_rrs, sec_power, sector_etf)
+                        if symbol_direction == "long" and sec_rrs >= threshold:
+                            sector_results[timeframe_key].append(("RS", symbol, sec_rrs, sec_power))
+                        elif symbol_direction == "short" and sec_rrs <= -threshold:
+                            sector_results[timeframe_key].append(("RW", symbol, sec_rrs, sec_power))
 
-            industry_ref = resolve_industry_ref_etf(industry_key, sector_key)
+            # ``self.industry_map_data`` was just refreshed from the same file
+            # this call would re-read, once per symbol per pass.
+            industry_ref = resolve_industry_ref_etf(
+                industry_key, sector_key, industry_map_data=self.industry_map_data
+            )
             ind_5m = self.get_cached_5m_bars(industry_ref)
             if ind_5m:
-                ind_bars = ind_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(ind_5m, timeframe_minutes)
-                aligned_sym_ind, aligned_ind = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in ind_bars})
-                ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
-                if ind_rrs is not None:
-                    industry_all[symbol] = (ind_rrs, ind_power, industry_ref)
-                    if symbol_direction == "long" and ind_rrs >= threshold:
-                        industry_results.append(("RS", symbol, ind_rrs, ind_power))
-                    elif symbol_direction == "short" and ind_rrs <= -threshold:
-                        industry_results.append(("RW", symbol, ind_rrs, ind_power))
+                for timeframe_key in measured_timeframes:
+                    ind_by_dt = _reference_by_dt(industry_ref, timeframe_key, ind_5m)
+                    aligned_sym_ind, aligned_ind = _align_bars_with_map(
+                        sym_bars_by_timeframe[timeframe_key], ind_by_dt
+                    )
+                    ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
+                    if ind_rrs is not None:
+                        industry_all[timeframe_key][symbol] = (ind_rrs, ind_power, industry_ref)
+                        if symbol_direction == "long" and ind_rrs >= threshold:
+                            industry_results[timeframe_key].append(("RS", symbol, ind_rrs, ind_power))
+                        elif symbol_direction == "short" and ind_rrs <= -threshold:
+                            industry_results[timeframe_key].append(("RW", symbol, ind_rrs, ind_power))
 
-        strongest = sorted(all_scores, key=lambda row: row[1], reverse=True)[:SCAN_EXTREME_COUNT]
-        weakest = sorted(all_scores, key=lambda row: row[1])[:SCAN_EXTREME_COUNT]
-        self.latest_scan_extremes[timeframe_key] = strongest + weakest
-        if strongest or weakest:
-            self._log_scan_extremes(timeframe_key, strongest, weakest)
-
-        rs_results = sorted([r for r in results if r[0] == "RS"], key=lambda r: -r[2])
-        rw_results = sorted([r for r in results if r[0] == "RW"], key=lambda r: r[2])
-        ordered_results = rs_results + rw_results
+        profile_cache = getattr(self, "_intraday_rrs_profile_cache", None)
+        if isinstance(profile_cache, dict):
+            scanned = set(all_symbols)
+            for cached_symbol in [key for key in profile_cache if key not in scanned]:
+                profile_cache.pop(cached_symbol, None)
 
         def _ordered(rows):
             rs = sorted([r for r in rows if r[0] == "RS"], key=lambda r: -r[2])
             rw = sorted([r for r in rows if r[0] == "RW"], key=lambda r: r[2])
             return rs + rw
 
-        sector_payload = _ordered(sector_results)
-        industry_payload = _ordered(industry_results)
+        # Timeframe-independent, so measured once for the whole cycle instead
+        # of once per pass: the profiles, the SPY windows and the threshold are
+        # the same three inputs every pass handed it.
         environment_scan = (
             self._summarize_environment_scan(intraday_profiles, spy_context_windows, threshold)
             if environment_scan_active else None
         )
-        if environment_scan:
-            self._record_environment_focus_history(environment_scan, timeframe_key)
-        snapshot_payload = {
-            "timestamp": datetime.now(),
-            "threshold": threshold,
-            "timeframe_key": timeframe_key,
-            "results": ordered_results,
-            "results_sector": sector_payload,
-            "results_industry": industry_payload,
-            "group_strength": self.compute_group_strengths(),
-            "market_internals": self.compute_market_internals(),
-            "symbol_context": symbol_context,
-            "spy_move_ratio": spy_move_ratio,
-            "environment_scan": environment_scan,
-            "excluded_earnings_reaction_symbols": earnings_reaction_symbols,
-            # Every scanned symbol's SPY RRS, not just threshold-crossers.
-            # ``results`` only holds alert candidates, which left the learning
-            # rows' rrs fields blank for ~85% of bounces ("unknown" alignment).
-            "rrs_all": {
-                str(symbol).strip().upper(): (rrs_value, power_index)
-                for symbol, rrs_value, power_index in all_scores
-            },
-            # Same full-universe treatment for the group scopes, so alert rows
-            # record what a symbol's sector/industry RRS actually was instead
-            # of only the extremes that cleared the alert threshold.
-            "rrs_sector_all": {
-                str(symbol).strip().upper(): value for symbol, value in sector_all.items()
-            },
-            "rrs_industry_all": {
-                str(symbol).strip().upper(): value for symbol, value in industry_all.items()
-            },
-        }
+        group_strength = self.compute_group_strengths()
+        market_internals = self.compute_market_internals()
+        snapshot_timestamp = datetime.now()
+
+        payloads = {}
+        for timeframe_key in timeframe_keys:
+            scores = all_scores[timeframe_key]
+            strongest = sorted(scores, key=lambda row: row[1], reverse=True)[:SCAN_EXTREME_COUNT]
+            weakest = sorted(scores, key=lambda row: row[1])[:SCAN_EXTREME_COUNT]
+            self.latest_scan_extremes[timeframe_key] = strongest + weakest
+            if strongest or weakest:
+                self._log_scan_extremes(timeframe_key, strongest, weakest)
+
+            rs_results = sorted([r for r in results[timeframe_key] if r[0] == "RS"], key=lambda r: -r[2])
+            rw_results = sorted([r for r in results[timeframe_key] if r[0] == "RW"], key=lambda r: r[2])
+            ordered_results = rs_results + rw_results
+            sector_payload = _ordered(sector_results[timeframe_key])
+            industry_payload = _ordered(industry_results[timeframe_key])
+            if environment_scan:
+                self._record_environment_focus_history(environment_scan, timeframe_key)
+            payloads[timeframe_key] = {
+                "timestamp": snapshot_timestamp,
+                "threshold": threshold,
+                "timeframe_key": timeframe_key,
+                "results": ordered_results,
+                "results_sector": sector_payload,
+                "results_industry": industry_payload,
+                "group_strength": group_strength,
+                "market_internals": market_internals,
+                "symbol_context": symbol_context[timeframe_key],
+                "spy_move_ratio": spy_move_ratio[timeframe_key],
+                "environment_scan": environment_scan,
+                "excluded_earnings_reaction_symbols": earnings_reaction_symbols,
+                # Every scanned symbol's SPY RRS, not just threshold-crossers.
+                # ``results`` only holds alert candidates, which left the learning
+                # rows' rrs fields blank for ~85% of bounces ("unknown" alignment).
+                "rrs_all": {
+                    str(symbol).strip().upper(): (rrs_value, power_index)
+                    for symbol, rrs_value, power_index in scores
+                },
+                # Same full-universe treatment for the group scopes, so alert rows
+                # record what a symbol's sector/industry RRS actually was instead
+                # of only the extremes that cleared the alert threshold.
+                "rrs_sector_all": {
+                    str(symbol).strip().upper(): value
+                    for symbol, value in sector_all[timeframe_key].items()
+                },
+                "rrs_industry_all": {
+                    str(symbol).strip().upper(): value
+                    for symbol, value in industry_all[timeframe_key].items()
+                },
+            }
+
+        # The fourth pass recorded the environment focus history a second time
+        # under the GUI's own timeframe key.  It no longer walks the universe,
+        # but that recording's ``hit_count`` reaches the D1 attribute rows as
+        # ``bouncebot.*_hit_count``, so the recording itself is kept exactly as
+        # it was - a scoring input is not something a pass-structure change may
+        # move (plan.md sec 5).
+        if environment_scan and gui_timeframe_key in RRS_CYCLE_TIMEFRAME_KEYS:
+            self._record_environment_focus_history(environment_scan, gui_timeframe_key)
+
+        self._rrs_payloads = payloads
+        snapshot_payload = payloads.get(gui_timeframe_key)
         if emit_gui:
-            self._emit_master_avwap_focus_rrs_alerts(symbol_context, threshold, timeframe_key)
+            self._emit_master_avwap_focus_rrs_alerts(
+                symbol_context[gui_timeframe_key], threshold, gui_timeframe_key
+            )
         self.latest_rrs_payload = snapshot_payload
-        if emit_gui and self.gui_callback:
+        if emit_gui and self.gui_callback and snapshot_payload:
             decorated_snapshot = self._decorate_snapshot(snapshot_payload)
             self.gui_callback(decorated_snapshot, "rrs_snapshot")
             status_msg = (
-                f"RRS scan complete ({len(ordered_results)} SPY, {len(sector_payload)} sector, "
-                f"{len(industry_payload)} industry refs)"
+                f"RRS scan complete ({len(snapshot_payload['results'])} SPY, "
+                f"{len(snapshot_payload['results_sector'])} sector, "
+                f"{len(snapshot_payload['results_industry'])} industry refs)"
             )
             internals_line = format_internals_line(snapshot_payload.get("market_internals"))
             if internals_line and "unavailable" not in internals_line:
@@ -12598,6 +12786,265 @@ class BounceBot(EWrapper, EClient):
 
 
 
+    # ------------------------------------------------------------------
+    # SN2 - the M5 window is fetched WHOLE once a day, then extended
+    # ------------------------------------------------------------------
+    # WISHLIST item 4 (trader, 2026-09-08): this path asked IB for "5 D" of
+    # 5-minute bars for every symbol on every cycle - ~390 bars a symbol, 586
+    # symbol scans a cycle, ~120 MB off the wire and ~230,000 rows appended by
+    # the `historicalData` callback every 25 minutes, all of it on the
+    # interpreter lock the GUI needs. SN2 keeps the window and asks only for
+    # the bars since the last COMPLETED one. Nothing a detector reads changes:
+    # the merged list is the list a fresh "5 D" fetch would have produced, and
+    # `tests/test_ws_sn2_incremental_bars.py` pins that against a golden
+    # fixture recorded from the pre-SN2 code.
+
+    #: The bar size this path works in.
+    SN2_BAR_MINUTES = 5
+    #: The whole window, spelled exactly as it was before SN2.
+    SN2_FULL_WINDOW_DURATION = "5 D"
+    #: Every delta reaches one bar further back than the gap, so the kept
+    #: window's last bar comes back with it - without that overlap bar there is
+    #: nothing to check the series identity against.
+    SN2_DELTA_MARGIN_SECONDS = 300
+    #: A delta never spans a day: past this the window is refetched whole (IB
+    #: does not serve a seconds duration longer than a day either).
+    SN2_MAX_DELTA_SECONDS = 86_400
+    #: What to do with a window whose last SERVED bar was still forming.
+    #: False (the default) keeps the completed rows only - the forming bar
+    #: never enters the kept window at all, and the next delta re-reads it once
+    #: it has closed. True throws the whole window away and refetches it.
+    #: False by design: IB's historical cache has no complete/forming marker
+    #: and an `endDateTime=""` request's last row is ALWAYS the bar still
+    #: forming (`_rows_after_bounce_entry_for_session`), so True would refetch
+    #: the whole window on every cycle of the session and SN2 would save
+    #: nothing. Either way a forming bar is never merged into a later frame as
+    #: if it were final (plan.md sec 5).
+    SN2_FORMING_TAIL_FORCES_REFETCH = False
+
+    def _sn2_windows(self):
+        cache = getattr(self, "_sn2_bar_windows", None)
+        if cache is None:
+            cache = {}
+            self._sn2_bar_windows = cache
+        return cache
+
+    def cached_bounce_frame(self, symbol):
+        """The M5 window SN2 is holding for ``symbol``, or None.
+
+        The rows are the raw dicts `historicalData` appended, which is exactly
+        what the frame is rebuilt from, so a caller sees what the next cycle
+        would merge its delta onto.
+        """
+        entry = self._sn2_windows().get(str(symbol or "").strip().upper())
+        if not entry:
+            return None
+        return entry.get("rows") or None
+
+    def _sn2_forget(self, symbol):
+        self._sn2_windows().pop(str(symbol or "").strip().upper(), None)
+
+    def _sn2_prune_windows(self, keep_symbols):
+        """Drop the window of every symbol that left the scanned set.
+
+        ~600 symbols x ~390 rows is a bounded cache only while it is bounded BY
+        the scanned set; a name the trader removes must not keep paying rent.
+        """
+        keep = {str(item or "").strip().upper() for item in keep_symbols or ()}
+        cache = self._sn2_windows()
+        for key in [key for key in cache if key not in keep]:
+            cache.pop(key, None)
+
+    def _sn2_reset_cycle_counts(self):
+        self._sn2_cycle_counts = {
+            "full": 0, "full_bars": 0, "delta": 0, "delta_bars": 0,
+        }
+
+    def _sn2_count_fetch(self, kind, bars):
+        counts = getattr(self, "_sn2_cycle_counts", None)
+        if not isinstance(counts, dict):
+            self._sn2_reset_cycle_counts()
+            counts = self._sn2_cycle_counts
+        counts[kind] = counts.get(kind, 0) + 1
+        counts[f"{kind}_bars"] = counts.get(f"{kind}_bars", 0) + int(bars or 0)
+
+    def _sn2_log_cycle_fetch(self):
+        """One line per cycle naming what the M5 windows cost, full vs delta.
+
+        This is the line gate #<SN2> reads on the next live day: after the
+        first cycle of the session the full-window count should be a handful
+        of new names, not the whole scanned set.
+        """
+        counts = getattr(self, "_sn2_cycle_counts", None)
+        if not isinstance(counts, dict):
+            return
+        logging.info(
+            "SN2 M5 window fetch, cycle %s: %s full window(s) = %s bar(s), "
+            "%s delta(s) = %s bar(s); %s bar(s) fetched in total.",
+            getattr(self, "_scan_cycle_index", "?"),
+            counts.get("full", 0),
+            counts.get("full_bars", 0),
+            counts.get("delta", 0),
+            counts.get("delta_bars", 0),
+            counts.get("full_bars", 0) + counts.get("delta_bars", 0),
+        )
+
+    def _sn2_request_bars(self, symbol, contract, duration):
+        """One historical request; its raw rows, or None when it timed out."""
+        req_id = self.getReqId()
+        self.data[req_id] = []
+        self.data_ready_events[req_id] = threading.Event()
+
+        # Request historical data from IB
+        self.reqHistoricalData(
+            reqId=req_id,
+            contract=contract,
+            endDateTime="",  # up to now
+            durationStr=duration,
+            barSizeSetting="5 mins",
+            whatToShow="TRADES",
+            useRTH=1,
+            formatDate=1,
+            keepUpToDate=False,
+            chartOptions=[]
+        )
+
+        # Wait for data with timeout
+        if not self.data_ready_events[req_id].wait(timeout=15):
+            logging.warning(f"{symbol}: Timeout waiting for historical data.")
+            del self.data_ready_events[req_id]
+            self.data.pop(req_id, None)
+            return None
+
+        # `pop`, not `get`: this is the only reader of this buffer, and the
+        # hottest request path in the bot (one per symbol per scan cycle).
+        # Popping here frees it on every path, and it is the same list object
+        # `get` returned, so nothing downstream reads differently.
+        rows = self.data.pop(req_id, [])
+        del self.data_ready_events[req_id]
+        return rows
+
+    def _sn2_delta_seconds(self, entry, now_naive):
+        """How far back the next delta must reach, or None to refetch whole."""
+        if not entry:
+            return None
+        if entry.get("fetch_date") != now_naive.date():
+            return None  # the day roll: a "5 D" window slides and drops a session
+        if entry.get("forming_tail") and self.SN2_FORMING_TAIL_FORCES_REFETCH:
+            return None
+        last_dt = entry.get("last_dt")
+        if not isinstance(last_dt, datetime):
+            return None
+        gap = (now_naive - last_dt).total_seconds()
+        if gap <= 0:
+            return None
+        bar_seconds = 60 * int(self.SN2_BAR_MINUTES)
+        seconds = max(int(gap) + int(self.SN2_DELTA_MARGIN_SECONDS), 2 * bar_seconds)
+        if seconds >= int(self.SN2_MAX_DELTA_SECONDS):
+            return None
+        return seconds
+
+    def _sn2_merge(self, entry, delta_rows):
+        """The kept rows plus the delta, or None when they are not one series.
+
+        None is never an error worth raising: it means "refetch the window",
+        which is what the caller does.
+        """
+        if not delta_rows:
+            return None
+        parsed = []
+        for row in delta_rows:
+            dt = _parse_ib_bar_datetime(row.get("time"))
+            if dt is None:
+                return None
+            parsed.append((dt, row))
+
+        kept_rows = entry.get("rows") or []
+        kept_dts = entry.get("dts") or []
+        if not kept_rows or len(kept_rows) != len(kept_dts):
+            return None
+        last_dt = kept_dts[-1]
+        cached_by_dt = dict(zip(kept_dts, kept_rows))
+
+        overlap = [(dt, row) for dt, row in parsed if dt <= last_dt]
+        if not any(dt == last_dt for dt, _row in overlap):
+            return None  # the delta never reached the kept window's last bar
+        for dt, row in overlap:
+            cached = cached_by_dt.get(dt)
+            if cached is None or not _sn2_same_bar(cached, row):
+                return None  # a revised print: not the same series
+
+        new_pairs = [(dt, row) for dt, row in parsed if dt > last_dt]
+        sessions = entry.get("dates") or set()
+        if any(dt.date() not in sessions for dt, _row in new_pairs):
+            # A session the kept window does not have: a fresh "5 D" would have
+            # dropped its oldest one, so the window slid under us.
+            return None
+        return list(kept_rows) + [row for _dt, row in new_pairs]
+
+    def _sn2_keep_window(self, symbol, rows, *, now_naive):
+        """Keep the bars that were COMPLETE when they were served.
+
+        A forming bar is preview (plan.md sec 5), so it never enters the window
+        the next cycle merges onto: a preview price cannot be written into a
+        later frame as if it were final. The next delta re-reads that bar once
+        it has closed. Rows that are unreadable or out of order mean no window
+        is kept at all - the symbol simply pays for a whole one next cycle.
+        """
+        key = str(symbol or "").strip().upper()
+        cache = self._sn2_windows()
+        kept_rows = []
+        kept_dts = []
+        forming_tail = False
+        for row in rows or ():
+            dt = _parse_ib_bar_datetime(row.get("time"))
+            if dt is None or (kept_dts and dt <= kept_dts[-1]):
+                cache.pop(key, None)
+                return
+            if not _is_completed_bar({"dt": dt}, self.SN2_BAR_MINUTES, now=now_naive):
+                forming_tail = True
+                break
+            kept_rows.append(row)
+            kept_dts.append(dt)
+        if len(kept_rows) < 10:
+            cache.pop(key, None)
+            return
+        cache[key] = {
+            "rows": kept_rows,
+            "dts": kept_dts,
+            "dates": {dt.date() for dt in kept_dts},
+            "last_dt": kept_dts[-1],
+            "fetch_date": now_naive.date(),
+            "forming_tail": forming_tail,
+        }
+
+    def _sn2_window_bars(self, symbol, contract, now_naive):
+        """The five-day M5 window: the delta when it lines up, else the lot.
+
+        Returns the raw rows the frame is built from, or None when a request
+        timed out - the same early return this path had before SN2.
+        """
+        entry = self._sn2_windows().get(symbol)
+        seconds = self._sn2_delta_seconds(entry, now_naive)
+        if seconds is not None:
+            delta_rows = self._sn2_request_bars(symbol, contract, f"{seconds} S")
+            if delta_rows is None:
+                return None
+            self._sn2_count_fetch("delta", len(delta_rows))
+            merged = self._sn2_merge(entry, delta_rows)
+            if merged is not None:
+                return merged
+            logging.debug(
+                f"{symbol}: SN2 delta did not line up with the kept window; "
+                f"refetching {self.SN2_FULL_WINDOW_DURATION}"
+            )
+            self._sn2_forget(symbol)
+        rows = self._sn2_request_bars(symbol, contract, self.SN2_FULL_WINDOW_DURATION)
+        if rows is None:
+            return None
+        self._sn2_count_fetch("full", len(rows))
+        return rows
+
     def request_and_detect_bounce(self, symbol, allowed_bounce_types=None, *, scan_for_new_bounces=True):
         symbol = str(symbol or "").strip().upper()
         direction = self.get_symbol_direction(symbol)
@@ -12613,46 +13060,27 @@ class BounceBot(EWrapper, EClient):
                 logging.debug(f"{symbol}: Not within market hours for bounce detection.")
                 return
 
-        # Request 5 days of data to ensure we get enough market days
-        five_day_reqId = self.getReqId()
-        self.data[five_day_reqId] = []
-        self.data_ready_events[five_day_reqId] = threading.Event()
+        # Five days of 5-minute bars, so there are enough market days behind
+        # today. SN2: fetched WHOLE once per symbol per market-local day, then
+        # extended by a delta that asks only for the bars since the last
+        # completed one. `all_bars` below is the same list of raw rows a fresh
+        # "5 D" request would have produced, either way.
         contract = self.create_stock_contract(symbol)
-
-        # Request historical data from IB
-        self.reqHistoricalData(
-            reqId=five_day_reqId,
-            contract=contract,
-            endDateTime="",  # up to now
-            durationStr="5 D",  # Increased to 5 days to account for weekends/holidays
-            barSizeSetting="5 mins",
-            whatToShow="TRADES",
-            useRTH=1,
-            formatDate=1,
-            keepUpToDate=False,
-            chartOptions=[]
-        )
-
-        # Wait for data with timeout
-        if not self.data_ready_events[five_day_reqId].wait(timeout=15):
-            logging.warning(f"{symbol}: Timeout waiting for historical data.")
-            del self.data_ready_events[five_day_reqId]
-            self.data.pop(five_day_reqId, None)
+        now_naive = self._naive_market_local(get_market_local_now())
+        all_bars = self._sn2_window_bars(symbol, contract, now_naive)
+        if all_bars is None:
             return
 
-        # `pop`, not `get`: this is the only reader of this buffer, and the
-        # hottest request path in the bot (one per symbol per scan cycle,
-        # ~206 KB each). Popping here frees it on the short-data return below
-        # AND on the success path, and it is the same list object `get`
-        # returned, so nothing downstream reads differently.
-        all_bars = self.data.pop(five_day_reqId, [])
+        # The short-data guard is about the WHOLE window, so it reads the
+        # MERGED result: a 25-minute cycle's delta is about five bars and would
+        # trip a ten-bar guard that ran on the delta alone.
         if len(all_bars) < 10:
             logging.warning(f"{symbol}: Insufficient historical data, only {len(all_bars)} bars received")
-            del self.data_ready_events[five_day_reqId]
+            self._sn2_forget(symbol)
             return
 
-        # Clean up
-        del self.data_ready_events[five_day_reqId]
+        # Keep what the next cycle's delta will be merged onto.
+        self._sn2_keep_window(symbol, all_bars, now_naive=now_naive)
 
         # Cache 5-minute bars for RRS reuse
         self.latest_bars[symbol] = _dedupe_bars(_bars_to_ib(all_bars))
@@ -13717,7 +14145,9 @@ class BounceBot(EWrapper, EClient):
                 priority_symbols = self.get_priority_scan_symbols() & all_symbols
                 background_symbols = all_symbols - priority_symbols
                 refresh_background = self._is_background_refresh_cycle()
-                self._prune_latest_bars_for_cycle(refresh_background, background_symbols)
+                self._prune_latest_bars_for_cycle(
+                    refresh_background, background_symbols, scanned_symbols=all_symbols
+                )
                 self.build_atr_cache()
                 cycle_clock.mark("atr_cache")
 
@@ -13739,16 +14169,16 @@ class BounceBot(EWrapper, EClient):
                     logging.exception("M5 Focus fast-lane scan failed.")
                 cycle_clock.mark("focus_fast_lane")
 
-                # Log strongest/weakest names for key intraday timeframes each cycle.
-                # Each run is timed on its own (S2 instrumentation, 2026-09-03):
-                # the preamble line used to say "rrs_scan 272s" for four runs and
-                # could not say which of them, or whether the GUI one, was slow.
-                for timeframe_key in ("5m", "15m", "1h"):
-                    self.run_rrs_scan(timeframe_key_override=timeframe_key, emit_gui=False)
-                    cycle_clock.mark(f"rrs_scan_{timeframe_key}")
-                # Keep the GUI view synced with user-selected RRS timeframe.
+                # Strongest/weakest names for every intraday RRS timeframe, in
+                # ONE entry per cycle (SN3, 2026-09-12): run_rrs_scan measures
+                # 5m, 15m and 1h in a single walk of the universe and hands the
+                # GUI's selected timeframe the payload that walk already built.
+                # The four separate entries this replaces were timed one by one
+                # (S2 instrumentation, 2026-09-03) and cost 275 s of CPU per
+                # cycle on 2026-09-08, on the interpreter lock the GUI needs, so
+                # the stage is timed as the single thing it now is.
                 self.run_rrs_scan()
-                cycle_clock.mark("rrs_scan_gui")
+                cycle_clock.mark("rrs_scan")
 
                 # Regime-pause bangers: SPY paused against the tape -> flag the
                 # longs/shorts.txt names that refuse to participate.
@@ -13890,6 +14320,10 @@ class BounceBot(EWrapper, EClient):
                 # windows. Fetch only those orphaned names; active names were
                 # already refreshed by the normal scan above.
                 self._refresh_orphaned_technical_followups(all_symbols)
+
+                # SN2's measurement, once per cycle: what the M5 windows cost
+                # in bars, full windows against deltas.
+                self._sn2_log_cycle_fetch()
 
                 if not self.is_scanning_enabled():
                     continue

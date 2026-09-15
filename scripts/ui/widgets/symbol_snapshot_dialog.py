@@ -28,6 +28,7 @@ import threading
 from datetime import datetime, timedelta
 
 import chart_levels
+import chart_snapshot
 from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
 from ui.timer_utils import start_staggered
@@ -53,6 +54,18 @@ _D1_BACKFILL_COOLDOWN = timedelta(minutes=10)
 _FORMING_BARS: dict[str, tuple[datetime, dict]] = {}
 _FORMING_ATTEMPTS: dict[str, datetime] = {}
 _FORMING_REFRESH = timedelta(minutes=2)
+
+#: WS-CH item 2. The intraday chart opens on the same two sessions it always
+#: has; "Load older" asks the SAME in-memory BounceBot cache read for two more.
+M5_DEFAULT_SESSIONS = 2
+M5_LOAD_OLDER_STEP = 2
+#: Per symbol, per desk session. The cache the bars come from is the bot's, so
+#: the ceiling is what keeps a long session of clicking from making a chart
+#: widget hold an unbounded intraday history for every name the trader visits.
+M5_MAX_SESSIONS = 10
+_LOAD_OLDER_TEXT = "Load older"
+_LOAD_OLDER_CAPPED_TEXT = f"Load older · {M5_MAX_SESSIONS}-session max"
+_LOAD_OLDER_FAILED_TEXT = "older bars unavailable"
 
 #: R4 section 3: how long after the open a Yahoo daily "today" row is refused.
 #:
@@ -307,6 +320,26 @@ class SymbolSnapshotWidget(QWidget):
         self._d1_sessions = (
             max(1, int(d1_sessions)) if d1_sessions is not None else None
         )
+        # WS-CH: how many daily bars this widget OPENS on. The payload reaches
+        # back D1_HISTORY_SESSIONS either way; a host that asked for a wider
+        # view (Chart Review's 520) keeps exactly the view it had and gains the
+        # history behind it.
+        self._d1_view_sessions = self._d1_sessions or chart_snapshot.D1_DEFAULT_SESSIONS
+        #: How far back the payload REACHES. Capped by what the durable store
+        #: holds; it never widens a provider request - ``_start_d1_backfill``
+        #: still sizes its catch-up off ``_d1_sessions``, deliberately.
+        self._d1_payload_sessions = max(
+            chart_snapshot.D1_HISTORY_SESSIONS, self._d1_view_sessions
+        )
+        #: How many intraday sessions are currently ASKED for, and how many the
+        #: drawn chart actually reached. They differ only while a "Load older"
+        #: that the bot could not serve is being rolled back.
+        self._m5_sessions = M5_DEFAULT_SESSIONS
+        self._m5_older_failed = False
+        #: Set by a Load older click, consumed by the next render: the candles
+        #: that were on screen before the merge, so the older bars arriving on
+        #: the left do not slide the trader back through their own chart.
+        self._m5_view_restore: tuple | None = None
         # Chart Review is a judgement-capture surface and passes False. The
         # shared charts and painted-level selection remain identical; only
         # candle-click alert menus and alert emission are disabled there.
@@ -383,6 +416,32 @@ class SymbolSnapshotWidget(QWidget):
         self.m5_legend.setTextFormat(Qt.TextFormat.RichText)
         self.m5_legend.setWordWrap(not self._compact)
         self.m5_legend.setSizePolicy(QSizePolicy.Policy.Expanding, legend_v)
+        # WS-CH item 2: two more sessions from the bot's own cache, on the
+        # legend row so it costs no chart height. It is the only intraday
+        # history control - the pan handler deliberately has no fetch in it,
+        # because a pan that fetches is a fetch on the paint path.
+        self.m5_older_button = QPushButton(_LOAD_OLDER_TEXT)
+        if self._compact:
+            # Same discipline as PaintLinesButton: the desk's embedded pane is
+            # height-starved, and the theme's rowChrome property drops the
+            # button padding and border so this rides the legend row without
+            # taking pixels back off the candles. Variants live in theme.qss.
+            self.m5_older_button.setFlat(True)
+            self.m5_older_button.setProperty("rowChrome", True)
+        self.m5_older_button.setToolTip(
+            "Add two more intraday sessions from the scan cache. "
+            f"Up to {M5_MAX_SESSIONS} sessions per symbol; never fetches."
+        )
+        self.m5_older_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self.m5_older_button.clicked.connect(self._on_load_older_m5)
+        self.m5_header = QWidget()
+        m5_header_layout = QHBoxLayout(self.m5_header)
+        m5_header_layout.setContentsMargins(0, 0, 0, 0)
+        m5_header_layout.setSpacing(6)
+        m5_header_layout.addWidget(self.m5_legend, 1)
+        m5_header_layout.addWidget(self.m5_older_button, 0)
         self.m5_chart = CandleChart()
         # M5 candle clicks used to be inert: only the D1 chart was wired, so an
         # opening-range high, a premarket high, or any intraday level could not
@@ -405,7 +464,7 @@ class SymbolSnapshotWidget(QWidget):
         layout.addWidget(self.d1_header)
         layout.addWidget(self.d1_chart, 1)
         layout.addWidget(self.d1_note)
-        layout.addWidget(self.m5_legend)
+        layout.addWidget(self.m5_header)
         layout.addWidget(self.m5_chart, 1)
         layout.addWidget(self.m5_note)
 
@@ -421,17 +480,48 @@ class SymbolSnapshotWidget(QWidget):
         if not symbol:
             return
         switched = symbol != self._symbol
+        if switched:
+            # A chart is reused as the trader walks through names.  Its drawn
+            # snapshots are also the source for capture, quick-fill, painted
+            # level alerts, and the retained-M5-history merge, so no trace of
+            # the old name may survive while this name is pending.
+            self._clear_symbol_snapshot()
+            # A new name starts at today's two sessions, and any older-bar
+            # request still in flight for the old one is now stale: the render
+            # path drops it on the symbol check, and this makes sure its
+            # session count does not follow the trader to the new chart.
+            self._m5_sessions = M5_DEFAULT_SESSIONS
+            self._m5_older_failed = False
+            self._m5_view_restore = None
         self._symbol = symbol
         # Retained so refresh() can re-pull the M5 cache on a timer tick. The
         # hosting panel passes a fresh bot on its own ticks; this reference
         # only carries the popup between clicks.
         self._bot = bot
+        # After both, never between: the button's enabled state is a fact about
+        # the symbol and bot this widget is now showing.
+        if switched:
+            self._sync_older_button()
         known = self._data.last_snapshot(symbol)
         if known is not None:
             self._render_snapshots(known[0], known[1])
         elif switched:
             self._show_pending(symbol)
         self._request_snapshots()
+
+    def _clear_symbol_snapshot(self) -> None:
+        """Drop the rendered state that belongs only to the previous symbol."""
+        self._d1 = {}
+        self._m5 = {}
+        # Clearing levels first also clears a selected painted level.  Clear
+        # the earnings payload explicitly because its markers are retained by
+        # CandleChart independently of the D1 bars.
+        self.d1_chart.set_levels([])
+        self.d1_chart.set_earnings(None)
+        self.d1_chart.set_data([], [], timeframe="d1")
+        self.m5_chart.set_data([], [], timeframe="m5")
+        self.d1_chart.setVisible(False)
+        self.m5_chart.setVisible(False)
 
     def _request_snapshots(self) -> bool:
         """Queue an off-thread rebuild of both charts for the current symbol.
@@ -443,12 +533,7 @@ class SymbolSnapshotWidget(QWidget):
         """
         if not self._symbol:
             return False
-        m5_bars = []
-        if self._bot is not None:
-            try:
-                m5_bars = self._bot.m5_chart_bars(self._symbol, max_sessions=2)
-            except Exception:
-                m5_bars = []
+        m5_bars = self._read_m5_bars()
         # The bot's cache is only rewritten when the scan loop reaches this
         # symbol (~28 min), so an alert reached late charts its scan-time bars.
         # Prefer a display-only refetch when one reaches further forward; it
@@ -484,11 +569,97 @@ class SymbolSnapshotWidget(QWidget):
         self._data.request(
             self._symbol,
             m5_bars,
-            sessions=self._d1_sessions,
+            sessions=self._d1_payload_sessions,
             d1_preview_bars=[forming] if forming else [],
             source=source,
+            view_sessions=self._d1_view_sessions,
         )
         return True
+
+    # -- intraday history (WS-CH item 2) ---------------------------------
+    def _drawn_m5_sessions(self) -> int:
+        """How many session dates the chart is actually holding right now."""
+        return len({bar["dt"].date() for bar in self.cached_m5_bars() if bar.get("dt")})
+
+    def _read_m5_bars(self) -> list:
+        """The bot's cached intraday bars for the current symbol.
+
+        ``m5_chart_bars`` is documented as an in-memory read of the scan
+        loop's cache that never triggers a fetch, which is why it is safe on
+        the GUI thread and why the worker is handed the result instead of the
+        bot. A RAISE here must cost the older bars and never the chart the
+        trader already has: the extra sessions are rolled back, the button
+        says so, and whatever is drawn stays drawn.
+        """
+        if self._bot is None:
+            return []
+        try:
+            fresh = list(
+                self._bot.m5_chart_bars(self._symbol, max_sessions=self._m5_sessions)
+                or []
+            )
+        except Exception:
+            logging.debug(
+                "M5 chart-bar read failed for %s.", self._symbol, exc_info=True
+            )
+            drawn = self.cached_m5_bars()
+            reached = self._drawn_m5_sessions()
+            if drawn and self._m5_sessions > reached:
+                self._m5_sessions = max(M5_DEFAULT_SESSIONS, reached)
+                self._m5_older_failed = True
+                self._m5_view_restore = None
+                self._sync_older_button()
+                return drawn
+            return []
+        return self._merge_older_m5(self.cached_m5_bars(), fresh)
+
+    @staticmethod
+    def _merge_older_m5(existing: list, fresh: list) -> list:
+        """``fresh`` plus whatever the chart already held BEFORE it.
+
+        The two chunks overlap by construction (a 4-session read contains the
+        2-session one), so the merge is a cut at the fresh chunk's first bar
+        rather than a set union: no bar can appear twice, the order is the
+        order it was already in, and a bot whose cache has since shrunk cannot
+        take history off a chart that has it.
+        """
+        if not fresh:
+            return list(existing)
+        if not existing:
+            return list(fresh)
+        cutoff = fresh[0].get("dt")
+        if cutoff is None:
+            return list(fresh)
+        older = [bar for bar in existing if bar.get("dt") is not None and bar["dt"] < cutoff]
+        return older + list(fresh)
+
+    def _on_load_older_m5(self) -> None:
+        """Ask for two more intraday sessions, keeping the view where it is."""
+        if not self._symbol or self._bot is None:
+            self._sync_older_button()
+            return
+        wanted = min(self._m5_sessions + M5_LOAD_OLDER_STEP, M5_MAX_SESSIONS)
+        if wanted <= self._m5_sessions:
+            self._sync_older_button()
+            return
+        self._m5_sessions = wanted
+        self._m5_older_failed = False
+        self._m5_view_restore = self.m5_chart.visible_bar_span()
+        self._sync_older_button()
+        self._request_snapshots()
+
+    def _sync_older_button(self) -> None:
+        """What the button says: the ask, the ceiling, or the refusal."""
+        button = getattr(self, "m5_older_button", None)
+        if button is None:
+            return
+        if self._m5_older_failed:
+            button.setText(_LOAD_OLDER_FAILED_TEXT)
+            button.setEnabled(True)
+            return
+        capped = self._m5_sessions >= M5_MAX_SESSIONS
+        button.setText(_LOAD_OLDER_CAPPED_TEXT if capped else _LOAD_OLDER_TEXT)
+        button.setEnabled(not capped and bool(self._symbol) and self._bot is not None)
 
     def _show_pending(self, symbol: str) -> None:
         """Skeleton state for a symbol with nothing cached to show yet."""
@@ -748,7 +919,14 @@ class SymbolSnapshotWidget(QWidget):
         symbol = self._symbol
         self._d1 = d1
         overlays, levels = self._visible_d1_lines(d1)
-        self.d1_chart.set_data(d1["bars"], overlays, timeframe="d1")
+        # The payload reaches back years; the chart opens on the tail and holds
+        # the rest, so panning left costs nothing (WS-CH item 1).
+        self.d1_chart.set_data(
+            d1["bars"],
+            overlays,
+            timeframe="d1",
+            initial_view_sessions=self._d1_view_sessions,
+        )
         self.d1_chart.set_levels(levels)
         self.d1_chart.set_earnings(d1.get("earnings"))
         self.d1_chart.setVisible(bool(d1["bars"]))
@@ -769,6 +947,13 @@ class SymbolSnapshotWidget(QWidget):
             )
         )
         self.m5_chart.set_data(m5["bars"], m5["overlays"], timeframe="m5")
+        # Older bars arrive on the LEFT, so restoring the index range would
+        # slide the trader a session back through their own chart; the CANDLES
+        # they were looking at are what goes back where they were.
+        restore, self._m5_view_restore = self._m5_view_restore, None
+        if restore is not None:
+            self.m5_chart.restore_bar_span(restore)
+        self._sync_older_button()
         self.m5_chart.setVisible(bool(m5["bars"]))
         self.m5_note.setVisible(not m5["bars"])
         if not m5["bars"]:

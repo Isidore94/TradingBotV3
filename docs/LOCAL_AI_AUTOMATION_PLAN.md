@@ -620,6 +620,131 @@ That redesign has **not been done**. Concretely, for the next agent:
 > `docs/SETUPS_MAJOR.md` / `SETUPS_TEST.md`; anything outside that vocabulary is
 > DROPPED and counted, because an invented family name is a bucket nobody can
 > compare against anything. The weekly retro named below is NOT built.
+>
+> **WS-AI1, 2026-09-12 — the enrichment has its OWN schema, and an empty row is
+> never a silent one.** Until this packet the pass reused
+> `ai_summary.AI_SUMMARY_JSON_SCHEMA`, which is `additionalProperties: False`
+> over `executive_summary` plus the five `MODEL_SUMMARY_SECTIONS`. None of the
+> keys the extraction seam read could exist in a response that schema validated,
+> so **every row the job wrote was blank while the ledger said `ok`** — six
+> trades over 2026-09-09..11 — and `_trades_for_session` then read each blank
+> row as "already done" forever. Four rules now hold:
+>
+> 1. **One contract.** `enrichment.ENRICHMENT_JSON_SCHEMA` is `summary`, `tags`,
+>    `confidence` (`low|medium|high`), `sources`, `unknowns`, closed. It travels
+>    down the SAME provider path: `ai_summary.request_ai_summary` takes `schema`,
+>    `schema_name` and `prompt_version` and validates a caller-supplied contract
+>    through `ai_summary.validate_structured_output`. The default is unchanged,
+>    so every existing caller's request payload is byte-identical. There is no
+>    second provider function, because a second one is a second place for the
+>    timeout, retry, truncation and length-stop rules to drift.
+>    `_proposed_tags` / `_summary_text` stay the one extraction seam and read
+>    exactly this schema's keys.
+> 2. **A row says what it is.** `status` is `enriched`, `abstained` or `failed`;
+>    `reason` carries the model's own `unknowns` on an abstention and the error
+>    class on a failure; `confidence` is the model's own. The slot's ledger line
+>    is `enriched A, abstained B, failed C of N`, and `STATUS_OK` needs
+>    `A + B == N` with `C == 0`. **An absent status is the LEGACY blank** written
+>    before this packet.
+> 3. **A blank row is not a finished trade.** `enrichment.is_legacy_blank` is
+>    blank `summary` AND blank `tags` AND no `status` — all three, because an
+>    `abstained` row is also blank in the first two and is a real answer. The
+>    repair APPENDS a row naming the one it replaces in `supersedes_row_id`;
+>    nothing is ever rewritten. A settled row (`enriched` / `abstained`) ends the
+>    trade's attempt for that session; a `failed` row does not, so a second
+>    firing inside the same window retries it and the slot's own attempt cap in
+>    `ai_jobs.ledger` is what bounds that.
+> 4. **A tag suggestion still carries zero privilege.** The vocabulary decides,
+>    the pass writes only `ai_trade_enrichment`, and
+>    `scripts/journal_bulk_tag.py` remains the one machine writer of a real tag.
+>
+> The reader is `ui/services/journal_feed.latest_ai_enrichment` (newest row that
+> nothing supersedes) rendered by `TradesTab._show_trade` on the existing detail
+> read path, marked advisory. An `abstained` or `failed` row is SHOWN, not
+> hidden: a pane that showed only the successes would make the layer look more
+> complete than it is, which is the defect this packet ended.
+
+#### The completion vocabulary (WS-AI1 item 4)
+
+**Every published nightly summary names how complete it is, in one word at the
+top level of the result.** `map_reduce.completion_word` decides it and
+`map_reduce.COMPLETION_WORDS` is the closed set:
+
+| word | what happened |
+|---|---|
+| `synthesized` | every slice read and the reduce pass answered |
+| `partial` | the reduce pass answered, over fewer slices than planned |
+| `unsynthesized_fallback` | the reduce pass did not answer; the document is the code's assembly of the surviving findings |
+| `failed` | this path produced no model document at all |
+
+A lost synthesis outranks a lost slice, because a fallback document is assembled
+by code and a partial one is still the model's own synthesis of less.
+
+`briefs.run_daily_summary` publishes `ledger.STATUS_OK` **only** for
+`synthesized`; anything else is `STATUS_DEGRADED`, the document is still
+published (losing the findings would be worse), and the reason names the
+completion and the synthesis error verbatim. Before this, the chunked branch
+returned `STATUS_OK` unconditionally with `; NOT synthesized` appended to the end
+of a sentence nobody reads to the end — which is how the 900 s synthesis timeouts
+of 2026-09-10 and -11 were ledgered as clean nights. **The timeout was not raised
+and the model was not changed.**
+
+The word reaches the ledger row through the runner's `extra` (`ledger.record`
+only ever `setdefault`s, so a slot cannot overwrite a ledger field) and the
+System Health strip's AI row prints it. Two defects in that same reader were
+fixed with it: `operations_audit._ai_jobs_check` counted
+`statuses.get("degraded")` while the ledger constant is `degraded_no_narrative`,
+so a degraded night read as healthy; and it read `ts`/`timestamp` while
+`ledger.record` writes `started_at`/`finished_at`, so every AI row read as
+undated.
+
+#### `preference_to_trade` in the nightly package (WS-AI1 item 6 / WISHLIST 5C)
+
+A DERIVED, bounded section over ST5's `preference_trade_outcomes.csv`, built by
+`ai_summary.preference_to_trade_section` and registered as the scope
+`preference_to_trade`. It is not the raw CSV: the report is one row per
+statement and its interesting number is the coverage, and asking a model to
+count 500 rows is asking it to do the one thing the data-quality rule already
+forbids.
+
+Three grains, never merged: `n_statements` (rows), `n_trades_matched` (DISTINCT
+`trade_id` — ST5.2's rule that two statements about one trade are two statements
+and ONE trade), `n_trades_unmatched`. Coverage is derived from the report's own
+`match_basis` vocabulary plus `preference_trade_outcomes.statement_window_end`:
+`journal_unavailable` (no `match_basis` at all — routinely 0, and a MEASURED 0 is
+worth more than an omitted bucket), `window_open` (the 10-SESSION window has not
+closed), `no_match_after_window`. The three sum to `n_trades_unmatched` by
+construction. Examples are capped at `PREFERENCE_EXAMPLE_LIMIT` (20) and selected
+by `(session_date, the report's own row order)` **descending — no `journal_r`,
+P&L, match confidence or any other result column may enter that key**, the same
+refusal N3 made for the research narration. `REPORT_FILE` is resolved at CALL
+time inside `_source_specs`, never bound at import.
+
+**It is on the nightly slate** (`briefs.DEFAULT_SCOPES`, lead decision
+2026-09-12 on WISHLIST 5C, the trader able to overrule): the summary is fed
+"into the existing AI package", and the package that reaches the trader is the
+unattended nightly one — a scope nobody selects is fed into nothing. Both
+existing slate pins (`tests/test_opt_in_evidence_scopes.py`,
+`tests/test_veto_cohort_grading.py`) now pin SIX and name the decision, so a
+seventh still cannot join by accident.
+
+**The budget, measured rather than assumed.** On a read-only copy of the live
+report (838 statement rows, 136,720 bytes on disk, 2026-09-11) the section
+encodes to **7,668 characters** — 48% of the package's per-source cap
+(`MAX_SOURCE_CHARS`, 16,000) and 9.6% of `MAX_TOTAL_EVIDENCE_CHARS` (80,000). A
+17.8x reduction on the file it reads, and one that does not decay as the report
+grows: the counts are fixed-size and the examples are capped at 20 with each
+`statement` bounded at `PREFERENCE_STATEMENT_CHARS`. The scope carries budget
+weight **2**, which costs the other five nothing — `_allocate_scope_budgets`
+caps a scope's allocation at what it NEEDS and returns the surplus — and exists
+because weight 1 would have given it a base share of 6,666 against a measured
+7,668, leaving it dependent on a surplus that is handed to the heaviest scopes
+first. `PREFERENCE_SECTION_MAX_CHARS` is the backstop for a pathological report
+and gives way by dropping the OLDEST examples, never a count and never the
+coverage.
+
+The runner's stage order is unchanged and `weekly_synthesis` stays optional and
+unscheduled.
 
 
 - Nightly pass over new journal rows: summarize, tag with setup names from
@@ -1992,3 +2117,143 @@ process is killed) and carry `INCOMPLETE_RUN_NOTE` exactly as before.
 carries position language, and the dropped-row log names any position or numeric
 drop with its detail.
 
+## 10 The Trade Mentor writes the corpus; the model reads it LATER (WISHLIST 10J, packet WS-TM)
+
+**2026-09-14 context follow-up:** the trader authorized a pop-up and hidden market
+measurements for 17 named ETFs. The existing `journal.entries` source receives the
+compact snapshot in the entry's `mentor` metadata beside the trader's original
+words. Preserve its capture time separately from scheduled and response times;
+these measurements describe the captured bars, not everything visible on a chart
+and not a verdict on the trader's thesis. Missing/stale fields remain unknown.
+The snapshot carries no candles or images, adds no source budget or hourly model
+call, and must survive the existing evidence reader's nesting and size bounds.
+The stored snapshot uses shallow named fields; only the `journal.entries` AI
+projection replaces repeated field names with one column header and compact value
+rows. The symbol, rule, source, capture time, stale/missing reason and numeric
+meaning survive that projection. Other entries and evidence scopes keep their
+existing representation. This keeps the attachment from spending the note's
+budget on seventeen copies of each field name.
+The dedicated structured interpretation and coaching steps below remain deferred.
+
+WISHLIST 10J has four steps. Steps 1 and 2 are built (packet WS-TM, 2026-09-12): a
+scheduler that asks a present trader for a market read on Pacific wall-clock hours, and
+a card that files the **raw text** in the Market Journal through that store's one
+writer, stamped with the slot that asked and the moment the trader actually replied.
+Step 3 — a local model reading those rows and proposing a structured form (symbols,
+bias, levels, the setup named) — and step 4 (coaching from the accumulated reads) are
+**deferred and unbuilt**.
+
+The order is the point, and it is the same order §1 argues for everywhere else here. A
+model that summarises as it captures destroys the thing it is summarising: what the
+trader actually wrote at 09:00, in their own words, unsmoothed. So the text is stored
+verbatim first and interpreted never-or-later. When step 3 is built it reads
+`market_journal` rows with `origin = trade_mentor` — which already carry the prompt kind,
+the scheduled hour and the response time — proposes into a separate field, and is
+overridable; it does not rewrite the row, and nothing it produces may reach a detector, a
+score, a gate, an alert, Focus or the review queue.
+
+One bound worth stating now, because it is the constraint step 3 will push against: a
+read filed against the 09:00 slot at 09:12 describes 09:12. `mentor.scheduled_at` and
+`mentor.responded_at` are stored separately so no later reader has to guess which, and a
+model that averages them would be inventing a minute nobody observed.
+
+
+## 11 The market story and the thesis: code computes, the model explains (WISHLIST 10D/10K, packet WS-10D)
+
+Steps 1-3 of WISHLIST 10D are built deterministically, and the narration of them is
+deliberately NOT in this packet. The reason is Â§1's reason: a model that writes the
+story also decides what the story is, and the trader asked for the sequence — what I
+expected, what the market did, what changed, what remains open — not for a summary of
+it.
+
+**Three source kinds, never blurred.** `scripts/market_story.py` builds one session's
+`DailyStory` out of exactly three labelled parts. `trader_said` is the trader's own
+entries, verbatim, in `created_at` order, each carrying `written_after_the_session` and
+`predicts_this_session` — the same sentence typed at 11:00 and at 21:00 is a prediction
+and a description, and the story says which. `measured` is arithmetic over COMPLETED
+daily bars for the six benchmarks (`SPY QQQ IWM VXX TLT USO`), each cell carrying
+`bars_through`, `bars_used` and the named rule version behind every number; a benchmark
+with no bars is `unmeasured` with every field `None` and a reason naming it. `ai_said`
+is the third kind and is **always empty in this packet**; it exists as a field so the
+surface rendering a story never has to guess whether a sentence came from a person or a
+model. A session with no note has an EMPTY `trader_said` and a sentence saying so: no
+note, no invented thesis.
+
+**Which session an entry belongs to is one rule.** `EvidenceLedger.append` applies its
+own fields last and overwrites the `session_date` `build_entry` computed with the
+market-local date of the WRITE, so a note typed at 21:00 Pacific is stored under the
+next session. `market_journal.session_of_entry` recomputes it from `created_at` (which
+the ledger does not touch) and is the ONE selector; the desk's Story pane and the
+overnight rollup both call it. Repairing the ledger stamp is a separate packet. An entry
+deliberately filed against an older session cannot be recovered by either route, because
+its intended date never reached disk — stated rather than hidden.
+
+**The thesis is extracted, quoted, and never graded by the outcome.**
+`scripts/market_thesis.py` reads a note with a small versioned vocabulary into `claim`,
+`horizon` (counted in exchange SESSIONS), `stance`, `condition`, `invalidation` and
+`benchmarks`. Every field carries a span that reproduces it exactly, so a paraphrase
+cannot pass. `unstated` is a real answer and carries no span. The invalidation and the
+condition are found first and blanked out of the text the stance is read from, because an
+invalidation states the opposite of the claim by construction. A later note is linked only
+inside the horizon and only on the same benchmark: same stance SUPPORTS, a reversal
+CONTRADICTS, a stance-less mention only MENTIONS. Rows live in `market_theses.jsonl`,
+append-only, keyed on `entry_id` + `extractor_version`; a trader edit is a NEW row that
+supersedes the draft, and the journal entry is never touched.
+
+**An imported forecast is outside commentary** (WISHLIST 10K). It is a journal entry with
+`origin = external_forecast` plus a `kind=forecast` sidecar carrying `source_model`,
+`created_at_claimed`, `imported_at`, `target_week` and the scenarios as pasted. An unknown
+creation time stays the literal `unknown` and is never filled from the import moment — a
+later import is not information known earlier. `active_theses` never returns a forecast;
+it becomes the trader's view only when they write an entry adopting it.
+
+**The rollups count and never narrate.** `market_story_rollups` is the last deterministic
+nightly slot (decision 0018: appended inside its stage, never reordered across stages). A
+month is not the sum of its weeks — the five ISO weeks touching September 2026 hold 24
+sessions while September has 21 — so each week belongs to the month of its Thursday, a
+month pack exists only for a month that owns a week, and the month adds its uncovered days
+afterwards. Every pack names its covered, expected and missing sessions, carries the open
+theses forward, and is rebuilt only when its `inputs_hash` changed. Narrating these packs
+joins the existing narration stage in a later packet; nothing here calls a model, and
+nothing here reaches a detector, score, gate, alert, watchlist, Focus, the review queue or
+`review_policy.json`.
+
+**Thesis, context, opportunity and trade share ONE identity and time contract** (WISHLIST
+10I, plus 10K's "measure environment, then connect it"; `scripts/context_join.py`,
+`scripts/setup_environment_evidence.py`). The measured state and the trader's expectation
+are attached SEPARATELY and never merged. `attach_context` writes an `observation_context`
+and an `entry_context` side by side, each a frozen `ContextRef` carrying the context id
+(benchmark + rule version + the session the label is ABOUT), `observed_at`, `available_at`
+and a named CERTAINTY. The time rule is one sentence: a D1 label is published at its
+session's CLOSE, so a clock before that close reads the PREVIOUS EXCHANGE session
+(`prior_session`), a clock at or after it reads its own session (`session`), an
+observation dated by session alone reads that session, a clock with no time of day - a
+bare date on an entry, or the midnight market-local stamp a broker file writes - reads the
+previous completed session as `date_only` and is FLAGGED, and a session nobody labelled is
+`unknown` and is pooled into nothing. The walk back is `market_calendar.previous_session`,
+never a calendar day, and both naive and aware stamps land in market-local through
+`journal_trade_shape`'s own coercion. **A date-only fill may never select a midday
+regime.**
+
+`link_theses` links a thesis by SCOPE (the benchmark the row's own ContextRef was measured
+against - `attach_context` runs first because the outcome rows carry no benchmark column)
+and by VALIDITY WINDOW (`created_at` to the horizon's last session close, counted in
+sessions, or `invalidated_at`, whichever is first). Several live theses all link, newest
+first, and none is chosen. `setup_environment_evidence` then answers the one question in
+three populations that are never added up: `opportunity_cells` (every recorded eligible
+example, swing by the favorable-direction rate and day trades by `held_run_score`, cut by
+the D1 label of the session and never by the alert's own `market_environment`),
+`personal_cells` (confirmed-tag trades by the ENTRY context, money once per trade, theta
+and day trades and unconfirmed tags excluded by name) and `thesis_review` (three separate
+verdicts - `market_call`, `setup_held`, `trade_profitable` - never merged into one grade).
+Every cell carries n, distinct sessions, distinct symbols, coverage, the ONE Wilson bound,
+the floor and the family's own baseline, and refuses to LEAD when it is under the floor or
+over `working_lately.CONCENTRATION_LIMIT`.
+
+The backfill (`python -m context_join backfill --since`) is DRY BY DEFAULT and labels only
+what the contemporaneous store establishes; a reconstructed ref is
+`certainty=reconstructed`, flagged, and excluded from every forward claim. Shadow only:
+nothing in this chain reaches a detector, score, alert, watchlist, Focus, the review queue
+or `review_policy.json`. The long form - the three joins that would have been wrong, the
+table of certainties and the day-trade vocabulary trap - is `docs/DESK_INTERNALS.md`
+"10I - two contexts per row, three verdicts per thesis".

@@ -11,6 +11,8 @@ surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
 checkout on 2026-08-26; see `CURRENT_CHECKPOINT.md`).
 
+**2026-09-14 local test preparation:** the trader authorized advancing the local sweep checkout to the independently accepted repair integration 6753f9fd plus status documentation. Repair behavior is unchanged from the reviewed build; the independent full suite passed 7968 tests with five skipped (exit 0), ruff was clean, smoke 7/7 and selftest 81/81. Live gates and the main-merge decision remain open; no restart or data repair was performed.
+
 Authoritative for: **what exists and the historical sequence of revisions**
 
 Remaining work: [`plan.md`](plan.md)
@@ -36,13 +38,16 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+**Daily Recap (WISHLIST 10F + 5F, packet WS-DR, 2026-09-13).** The nav entry `AWAY Recap` is now **Daily Recap** and is offered in EVERY Auto mode. `scripts/daily_recap_reader.py` reads one session from the DURABLE stores - its whole input is a session, a lookback, a clock and a set of PATHS (`RecapSources`, twelve stores), never `center._alerts`, so a restart or a midnight roll cannot lose the record and the same session reads the same in another interpreter. It declares per-source coverage (`rows` / `oldest` / `newest` / `unavailable_reason`) and four frozen views: `worked_today` (the session's M5 outcome rows; `mfe_pct` / `eod_move_pct` are read ALREADY side-adjusted from a store whose side column is `direction`), `recent_swings` (the 1/2/3 lookback is one control - the window is counted on the exchange calendar and the horizon reported is the same number; next-session close, first next-session favorable move and the selected end are three columns and an immature horizon is `pending`, never zero), `my_decisions` (likes quick and claimed, swing favorites, passes, vetoes, not-today and the M5 click-away as separate facts at the `(trade_date, symbol, side, category slot)` grain plus the verdict; repeated clicks link with an occurrence count and credit from the first; `unfavorite` never graded; a retraction removes a favorite; one pass with two codes is ONE decision; WS-5B's report supplies journal R and P&L joined on the CHANNEL) and `rejected_that_worked` (refusals whose side-adjusted later path was favorable, with the trader's own reason and the ADVERSE move beside it). A decision's credit starts at its own timestamp - measured forward from the last completed bar where a pass sidecar makes the timing knowable, `unavailable` where nothing recorded WHEN, never the day's number and never 0.0; `pick_feedback` / `alert_review_events` timestamps are NAIVE on the desk and the reader ATTACHES the desk zone, never strips an aware side. `scripts/ui/panels/daily_recap_panel.py` draws it as four TABS (stacked, the fourth runs past the bottom at 1640x980), each with its cohort/window/n/pending sentence and a sort control limited to the declared measures; the read is on a worker and the page is usable before it returns; a row click goes through `show_board_symbol`, so a recap row is a board look and takes no place in the waiting list (`alert_center_panel.py` untouched; the decision time travels in the row's Time column and tooltip because the chart has no marker seam). The AWAY staged-pick block moved onto the page unchanged (stage, never adopt; the R2 gate shown at click time, never enforced). `away_recap.build_recap`, `away_recap_panel.py` (still constructed and still fed on page select) and `autopilot_today.txt` are untouched, so the phone digest is unchanged; no push was added; `AWAY_RECAP_PAGE_TITLE` is kept as an alias of `DAILY_RECAP_PAGE_TITLE`. `scripts/selftest.py` lists `daily_recap_reader` (imported by name on the worker), selftest 80 -> 81. Tests: `tests/test_ws_dr_daily_recap.py` (the tester's board-door test records only symbol-bearing alerts by lead fix - the scanner's own symbol-less `Scanning paused.` row reaches that door and is discarded on its first line; the builder's added test measures the waiting list itself). Follow-up noted, not built: `desk_bench.py` benches `away_recap` only. **Automatic read at 12:00 Pacific (trader-directed, 2026-09-14):** `scripts/daily_recap_schedule.py` is the PURE decision (`due_session(now, auto_time, last_fired_session)` -> today's ISO date or `None`; due from the configured wall-clock time until midnight on an exchange session, once per session; `parse_auto_time` / `auto_time_from_settings` read `local_settings.json` `daily_recap_auto_time`, default `"12:00"`, `""`/`"off"` disabling and a mistyped value disabling rather than guessing; `next_fire_at` is a label only; Pacific is `America/Los_Angeles`, DST-aware). `DailyRecapPanel` owns one `QTimer` (`AUTO_POLL_INTERVAL_MS` 60 s) started by `MainWindow.showEvent` beside the Mentor's, never in the constructor; `poll_auto_read` -> `show_session(today)` refills the picker, selects today and calls `reload`; a desk started after the hour reads today on its first tick. The noon read is PROVISIONAL by the reader's own labelling (the close is 13:00 Pacific) and the next read of the session - page select or Refresh - is the closed one; `reload` now calls `_refresh_session_picker`, which rebuilds the list only when the newest completed session moved, keeping the selection by DATE, so today loses its "provisional" label after the close without a restart. No scan, fetch, push or write, so it runs in every Auto mode and is outside `auto_scanning_due` (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` amendment 2026-09-14). `clock` and `auto_time_reader` are injectable. Tests: `tests/test_daily_recap_auto_populate.py` (both DST regimes, weekend/holiday, late start, once-per-session, the relabel after the close, the `showEvent` seam); the WS-DR picker test is now clock-aware (it only passed before 13:00 Pacific).
+- **Daily Recap repair (DR-REPAIR, 2026-09-15).** `daily_recap_reader` streams the append-only M5 log (coverage still counts every update), retains the latest nonblank event state while keeping blank ids distinct, and displays one whole best measured event per stock/side. Annotation timeframe is preserved: M5 decisions read the reduced M5 state and D1 decisions read their matching session-horizon result, with missing unavailable and immature pending; `Rejected, and it worked` uses the same source split. Pending swings now render with an explicit state and dashes. The reader supplies the compact factual summary; the panel only formats it. `daily_recap_schedule.post_close_due_session` schedules exactly one additional worker read after the exchange-owned regular or early close. No store write, detector, score, alert, queue, Focus, watchlist, or policy behavior changed. Tests: `test_daily_recap_repair.py` plus the reconciled existing Daily Recap contracts. Live gate #132 owed.
 - **Workspace memory (2026-09-12, WISHLIST 11):** root `MEMORY.md` is a routing index
   only; `memory/` holds provenance-tagged detail (`people/`, `projects/`, `decisions/`,
   dated notes, prunable `context/`); rules in `CLAUDE.md` "Workspace memory", role
   paragraphs in `.claude/agents/*.md` and `.codex/agents/*.toml`. Recall only, never
   authority; adapted from JumpStarter M1 (`664e083`). Verification gate #93 owed.
-- **Codex agent operations (2026-09-09):** project defaults select Astra as lead and
-  Luna for unspecified helpers; recon uses Luna, builder/tester/reviewer use Terra.
+- **Codex agent operations (amended 2026-09-15):** removed the project Astra model pin
+  at the trader's request; session selection and user defaults choose the lead model.
+  Luna remains the default for unspecified helpers; recon uses Luna, builder/tester/reviewer use Terra.
   `docs/AGENT_TEAM.md` owns routing, escalation, isolation and final lead acceptance.
 
 - **Win rate leads every trader-facing SWING surface** (V3, decision 0016 answer
@@ -702,6 +707,239 @@ They are evidence and must not be loaded as context.
 
 ### Scanning, candidates, and decision support
 
+- **Compression is measured, shown and calibrated before it is tuned (packet PCT-3, trader
+  2026-09-15, `claude/pullback-compression-2026-09-15`).** `summarize_anchor_compression` has
+  always computed a 0-3 `compression_score` and three ATR ratios and discarded them;
+  `legacy.compression_copy_through` now publishes all four plus `compression_rule_version =
+  "anchor_compression_v1"` on the priority row, the `ai_state` symbol entry, the feature row and
+  `build_tracker_setup_record` - at BOTH row builders, because the live desk scan runs
+  `runner._run_master_impl`'s loop and not `legacy._evaluate_priority_snapshot_for_date` (the
+  first build missed that; `tests/test_pct3_runner_publishes_compression.py` drives the real
+  runner in a child process with its own data dir and reads the ai_state and the feature CSV off
+  disk). The eight new fields join `runner`'s `feature_columns` allowlist (the first scan on this
+  build widens the 667 MB `d1_features_history.csv` once, about two minutes). Nothing is stamped
+  as measured when it was not: both copy-through helpers answer `None` and omit the rule version
+  when a ratio is missing, and `compression_break_recent` travels with its rule version or not at
+  all. Pure `scripts/compression_chip.py` is the reader (string-safe against `bool("False")`);
+  `SetupTableDelegate` paints an amber `caution` `compressed` pill after the bucket and wrong-side
+  chips with one tooltip line - display only, hiding and re-ordering nothing, moving no score. The
+  36 MB `ai_state` parse runs on `master_avwap_panel._AiStateCompressionWorker` through
+  `ai_state_levels.warm_cache()` behind an mtime+size key (one parse, one coalesced refresh, the
+  worker freed on `finished`); the Qt-thread `data_feed.merge_compression_from_ai_state` fills from
+  `cached_symbol_compression()` and never opens a file. New read-only
+  `scripts/compression_calibration.py` (`cd scripts && python -m compression_calibration --since
+  YYYY-MM-DD [--out DIR] [--live]`) counts every compression veto as `joined` / `untracked` /
+  `pending`, reads each session's ACTIVE tracker population (entry date to
+  `last_replayed_session`, a blank one collapsing to the entry day and saying so), recomputes a
+  missing anchor measure through `summarize_anchor_compression` itself, prints per measure `n =
+  vetoed / rest`, both medians and a rank-sum AUC over seven measures plus today's
+  `compression_flag` hit rate, writes one CSV, refuses the live stores without `--live`, never
+  reads a bar after the session, and streams the 1.26 GB tracker at 0.14 GB peak (the SQLite
+  mirror is not read, decision 0017). `legacy.evaluate_compression_break_v1` reuses
+  `assess_compression_break_context` plus a >= 1.0 ATR-20 bar-range clause
+  (`compression_break_recent` / `compression_break_v1_note` / `compression_break_v1`), and
+  `setup_tagging` adds `COMPRESSION_BREAK` LAST under the six-tag cap. First live-copy reading:
+  213 vetoes (140 joined / 50 untracked / 23 pending), flag hit rate 0.18 with 2,631 false
+  positives, every measure's AUC 0.34-0.49. Tests: `tests/test_pct3_compression.py`,
+  `_merge.py`, `_runner_publishes_compression.py`, `_calibration_accounting.py`; long form
+  DESK_INTERNALS "PCT-3 - compression is measured before it is tuned".
+- **A trendline break is a frozen tag and event (packet PCT-2, trader 2026-09-15).** The existing
+  `TRENDLINE_BREAK` tag is pinned, not rebuilt. `find_directional_trendline_candidate` now carries
+  a stable line id plus both endpoint dates/prices. The saved D1 upgrade report appends exactly one
+  `Trendline break` row per `(symbol, side, break_date)` while its champion rows remain byte-identical.
+  `trendline_break` is an explicit D1 extension kind, never a Focus pullback: arming reads the compact
+  saved report once and persists the complete line plus its offset-aware `generated_at`; incomplete,
+  stale-format or timezone-less evidence refuses. Evaluation uses completed D1 closes only, never a
+  wick or forming bar, never substitutes a redraw, and collapses duplicate persisted watches to one
+  save and one fire. Tests: `tests/test_pct2_trendline_break.py` with a nonempty pre-change golden;
+  long form DESK_INTERNALS "PCT-2 - a trendline break is a tag and an event".
+- **The M5 window is fetched whole once a day, then extended (WS-SN2, WISHLIST item 4,
+  2026-09-13, sweep branch).** `BounceBot.request_and_detect_bounce`
+  (`scripts/bounce_bot_lib/legacy.py`) asked IB for `durationStr="5 D"` of 5-minute bars for
+  every symbol on every cycle - ~390 bars a symbol, ~120 MB and ~230,000 rows a 25-minute cycle
+  on the interpreter lock the GUI needs. It now fetches the whole window ONCE per symbol per
+  market-local day, keeps the raw rows (`_sn2_bar_windows`), and every later cycle asks only for
+  the bars since the last completed one (`"<n> S"` reaching `SN2_DELTA_MARGIN_SECONDS` past the
+  gap so the overlap bar returns) and merges them: measured 342 bars on the first cycle and 7
+  per cycle after (49x fewer). The frame the detectors read is the frame a fresh `5 D` fetch
+  would have produced - same rows, order, dtypes and index (the merged raw rows go through the
+  unchanged `pd.DataFrame(all_bars)`; the `len(all_bars) < 10` guard judges the MERGED result) -
+  pinned by `tests/fixtures/ws_sn2_fresh_frames.json`, recorded on the pre-SN2 code at
+  b8bdec24. The window is refetched WHOLE on the market-local day roll, on an overlap bar whose
+  dt or close moved (`_sn2_same_bar`), on a delta that never reached the kept last bar or that
+  carries a session the window does not have, on a gap of a day or more, and on unreadable or
+  out-of-order rows. **A bar that was still forming when served never enters the kept window**
+  (`completed_bars.is_completed_bar`), so a preview price can never be merged into a later frame
+  as final; the packet's literal alternative - refetch the whole window on a forming tail - is
+  one constant away (`SN2_FORMING_TAIL_FORCES_REFETCH`, False by lead decision because IB's
+  `endDateTime=""` ALWAYS serves a forming last bar, so that rule would refetch every cycle and
+  SN2 would save nothing; the tester's assertion was corrected to the shipped invariant).
+  `_prune_latest_bars_for_cycle(scanned_symbols=...)` bounds the cache by the scanned set and
+  `_sn2_log_cycle_fetch` writes one line per cycle naming full windows against deltas. Steady
+  cost ~90-100 MB of kept rows in place of the same amount churned every cycle. Nothing below
+  the fetch changed. Tests: `tests/test_ws_sn2_incremental_bars.py`,
+  `tests/test_ws_sn2_incremental_bars_builder.py`.
+- **Last scan, latest input bar and shown report are three clocks (WS-10A, WISHLIST 10A,
+  2026-09-13, sweep branch).** Every Master AVWAP scan writes `master_avwap_scan_manifest.json`
+  and one append-only line to `master_avwap_scan_manifest_history.jsonl`
+  (`scripts/master_avwap_lib/scan_manifest.py`, `project_paths` constants, temp + rename, shared
+  home), called by `runner.run_master` on BOTH the success and the failure branch (the
+  `legacy.py` diff is ZERO). It records when the scan ran (`started_at` / `finished_at`, aware
+  market-local), how fresh its INPUTS were (`latest_input_bar_session` + `preview_bar_used`,
+  asked ONCE of WS-FC1's `daily_bar_cache.last_completed_session`, so a forming bar is a
+  labelled preview and never moves the session), and what it published (`outputs`:
+  `priority_setups` rows, `theta_puts` = put + PCS rows, `d1_watchlist` symbols), plus
+  `universe_size` / `symbols_fetched`, per-source counts and WS-FC1's two drop counters.
+  `status` is `ok` only when the scan reached its whole universe, `partial` when it RETURNED
+  having fetched fewer, `failed` when it raised - and a failed scan touches no output file, so
+  the last good report keeps its bytes and its mtime. `scan_manifest.freshness_line` builds one
+  sentence (`Scan ok 12:31 - inputs through Thu 09-10 (D1 complete) - shown: 12:31 report`,
+  `Scan FAILED 13:02 - showing 12:31 report (stale)`, `Scan partial 12:31 (940 of 1097
+  symbols) - ...`, `... inputs: today preview ...`, `Scan: not recorded yet - no report`,
+  `inputs: no completed session recorded`), rendering each stamp in the offset it CARRIES; the
+  Setups status row shows it via `_ScanFreshnessWorker` off the Qt thread on the existing
+  `refresh_from_reports` path (two `stat` calls decide whether either file moved; nothing parsed
+  on paint), and System Health prints the same string as check `master_scan_freshness` (failed
+  = unhealthy, partial = degraded, no manifest = unknown, never green; its two paths are named
+  parameters of `build_operations_audit` so a sandbox audit resolves nothing to the shared
+  home). One dated copy per publishing scan lands in
+  `%LOCALAPPDATA%\TradingBotV3\diagnostics\scan_reports\<YYYY-MM-DD>_<HHMM>.json` with
+  `{symbol, side, bucket}` rows, capped at `REPORT_COPY_RETENTION_SESSIONS` (30) counted as the
+  30 most recent DISTINCT dates; a failed scan gets no copy. `cd scripts && python -m
+  master_avwap_lib.scan_replay --symbol X --session YYYY-MM-DD` replays one session read-only,
+  prints `DATA_DIR` first, one line per checkpoint (open `<11:00`, midday `[11:00, 15:00)`,
+  final hour `[15:00, 16:00)`, close `>= 16:00`, in EXCHANGE time - the Pacific desk's stamps
+  are converted so a 09:58 PT snapshot files under midday, the builder's reading), and names
+  first eligibility, first publication and the delay in minutes - `no recorded snapshot` /
+  `delay unmeasured` where nothing was kept, never a reconstruction. Tests:
+  `tests/test_ws_10a_scan_freshness.py` (20), `tests/test_ws_10a_scan_freshness_builder.py`
+  (7). Rules: DESK_INTERNALS "10A - last scan, latest bar and shown report are three clocks";
+  fields: `docs/BROKER_ADAPTERS.md`.
+- **The theta picks are recorded and graded (WS-TH, WISHLIST item 6, 2026-09-13, sweep
+  branch).** `scripts/theta_pick_tracker.py` records one row per `(symbol, scan_date,
+  play_type)` in `theta_picks.jsonl` (`project_paths.THETA_PICKS_FILE`) from the RUNNER right
+  after `write_theta_put_report` - the scan's own output pass, never `legacy.py`'s tracker save
+  (`legacy.py` READ, zero bytes changed). A key already present is not rewritten; a repeat
+  appearance is its own row and keeps `first_seen_scan_date`; a failed append or a malformed
+  row loses the row, never the scan. The row carries the support set as the scan built it
+  (SMA_50/100/200, never SMA_20, which `_is_valid_theta_support_entry` drops) with `held` read
+  off the LEVEL (`level <= close`) and never off `distance_atr` (clamped to 0.0 for a level up
+  to 0.05 ATR overhead); the report's own rank; both scores (`score` = the option's
+  `rank_score`, `base_score` = the support score); and the sold strike either way (`strike` for
+  a sold put, `short_strike` / `long_strike` for a PCS, never a NULL strike on a spread).
+  `grade_theta_picks` writes `master_avwap_theta_outcomes.csv`
+  (`MASTER_AVWAP_THETA_OUTCOMES_FILE`) beside the tier outcomes through temp-and-rename: held
+  above the sold strike at the EXACT 5th / 10th / 20th exchange session, `held_at_expiry` only
+  once the expiry session is complete, `mae_atr` and `first_support_broken` from the session
+  LOWS (which is why `closes_for` hands back `{date: {close, low, high}}`), only a support
+  HOLDING on the scan date can break; a session the calendar has not reached is `pending`
+  (`target_session_not_complete`), never a break; a pick with no option quote is `unmeasured`,
+  never a loss; `rs_flag` is `not_measured` (the theta score has no RS term). The overnight
+  `theta_pick_grading` slot (`scripts/ai_jobs/theta_grading.py`) is deterministic, calls no
+  model, is idempotent, and is APPENDED at the END of the deterministic stage directly after
+  `daily_digest` - both slot-order pins gained the one name in that position, nothing crossed a
+  stage. `theta_readout` builds support-combo x play-type cells with the hold rate FIRST, `n`
+  (first appearances; `repeat_days` beside it, never summed in) and the ONE Wilson bound,
+  sorted by the bound, floored on `MIN_REPORTABLE_N`; the tercile grade line reuses
+  `setup_points_evidence.Cell`'s wording and refuses under 30 per third. The Setup Tracker gains
+  a **Theta** tab (sentence above, grade line below, built once on the read worker). Shadow
+  only: nothing reaches the theta scan, score or report, a detector, an alert, a watchlist,
+  Focus, the review queue or `review_policy.json`. Tests: `tests/test_ws_th_theta_tracker.py`
+  (27), `tests/test_ws_th_theta_grading_slot.py` (5). Long form: DESK_INTERNALS "TH - the theta
+  picks are graded, never changed".
+- **One RRS pass per cycle (WS-SN3, WISHLIST item 4, 2026-09-13, sweep branch).**
+  `BounceBot.run_rrs_scan` walks the universe ONCE per scan cycle and produces the 5m, 15m and
+  1h payloads together, where it used to be entered four times - once per timeframe and once
+  more for whichever the GUI had selected - each entry re-walking the universe and rebuilding
+  every symbol's O(n^2) `_build_intraday_rrs_profile` from the same 5-minute bars (275 s of CPU
+  per cycle on 2026-09-08, on the interpreter lock the GUI needs). Everything
+  timeframe-independent is measured once; aggregation, alignment and RRS run per timeframe
+  inside the walk. `RRS_CYCLE_TIMEFRAME_KEYS` is `("5m", "15m", "1h")` and a 30m GUI selection
+  joins the same walk. `rrs_payload_for(timeframe_key)` is the new seam and `latest_rrs_payload`
+  IS the GUI timeframe's entry (the same object), so one `rrs_snapshot` reaches
+  `rrsSnapshotChanged` per cycle; `_intraday_rrs_profile_for_cycle` caches the profile on the
+  SYMBOL's last bar dt (SPY gaining a bar the symbol did not print cannot move it), today's rows
+  only, pruned to the scanned universe. Reference-ETF bars are bucketed once per (ETF, timeframe)
+  per cycle and the industry map is read from memory instead of re-read per symbol per pass. No
+  formula, threshold, universe, ETF alignment or output field changed: the payloads are
+  BYTE-IDENTICAL to the four-pass recording `tests/fixtures/ws_sn3_rrs_four_pass.json` made on
+  the pre-SN3 code at 204f4640 (never regenerate it; its contract metadata was added without
+  touching the recording). Deliberately kept: `_record_environment_focus_history` still runs
+  four times a cycle because its `hit_count` feeds `bouncebot.*_hit_count`, a scoring input;
+  dropping the now-duplicate fourth call is an ask-first for the trader with golden fixtures
+  first. Write-only diagnostics (`rrs_strength_scan.csv`, `rrs_group_strength.csv`, the industry
+  map's `seen_count`) lose their duplicate blocks. Tests: `tests/test_ws_sn3_one_rrs_pass.py`,
+  `tests/test_ws_sn3_fixture_contract.py`.
+- **A forming bar never reaches the daily-bar cache (WS-FC1, WISHLIST item 2, 2026-09-12, sweep
+  branch).** `scripts/master_avwap_lib/daily_bar_cache.py` holds the rule both CSV writers now
+  route through (`legacy._write_cached_daily_bar_frame` and
+  `_seed_daily_bar_cache_from_durable`; the `legacy.py` diff is 19 lines at the writer seam the
+  trader's FC1 prompt authorized): a row whose session is not complete in EXCHANGE time
+  (`astimezone`, inclusive of the 16:00 ET close - `market_calendar` models no early closes, so a
+  half day waits until 16:00, safe never early) is `forming_dropped`, a completed row breaking
+  `low <= open, close <= high` is `invalid_dropped`, forming wins over invalid so
+  `kept + forming + invalid == fetched`; the filter is vectorised and an internal failure refuses
+  NOTHING (WARNING) because a cache that stops updating is worse than one counted row. The run
+  manifest ALWAYS carries `daily_bars_forming_dropped` / `daily_bars_invalid_dropped` (even at
+  zero, on the failure path too); one INFO line per scan names both, one DEBUG line per dropped
+  row. The in-process frame cache holds the FILTERED frame; `fetch_daily_bars`' RETURN value is
+  unchanged, so the scan's D1 indicators see what they saw. Repair: `cd scripts && python -m
+  master_avwap_lib.daily_bar_cache repair [--apply] [--cache-dir]`, dry run by default, prints
+  `DATA_DIR` then the cache dir, refuses a target under `C:\TradingBotData`, removes only an
+  invalid or forming LAST row, refetches that session through `fetch_daily_bars_from_yahoo`
+  (window widened to reach an old session), temp + rename. Dry run on a COPY of the live cache
+  (2026-09-12): 1,988 files, 66 end in an impossible candle (2026-09-11 x55 - an ONGOING defect,
+  not the trader's older 100), 64 get a completed replacement, MCW and TERN return no Yahoo data
+  and lose the row; **`--apply` on the live cache is the trader's action and was never run**.
+  What the bad rows touched (copy of the tracker mirror): 443 records had the bad date inside
+  their replay window (270 setups / 169 studies / 4 controls), 443 had band levels recomputed
+  from it, 441 were marked on it, ZERO had a fill booked on it (`gap_aware_v2` refuses an
+  invalid bar); the next persisted tracker write rebuilds every record, so no tracker repair is
+  owed. Two seams reported, NOT edited (ask-first, outside the yes):
+  `legacy._persist_durable_daily_bars` still writes the UNFILTERED frame to the durable Parquet
+  mirror, and `fetch_daily_bars`' return still carries today's forming bar to the D1 indicators.
+  Tests: `tests/test_ws_fc1_daily_bar_cache.py` (tester, 17), `tests/test_ws_fc1_daily_bar_cache_builder.py`.
+- **A watchlist edit is a dated event, never a verdict (WS-5D, 2026-09-12, sweep branch).**
+  `scripts/watchlist_intent_events.py` (schema `watchlist_intent_event_v1`,
+  `WATCHLIST_INTENT_EVENTS_FILE` in the shared home) appends one row per symbol that joins or
+  leaves `longs.txt` / `shorts.txt` / `swinglongs.txt` / `shortswings.txt`, carrying the
+  OBSERVATION time (aware, market-local), the list, side and horizon, an optional reason that
+  is never prompted for, and a `source` that keeps the trader's typing (`trader_edit` /
+  `trader_paste`) distinct from the Focus store's injection (`machine_inject` /
+  `machine_uninject`) and from a difference merely SEEN at load time after an edit outside
+  the app (`observed_external`, stamped at the load, never back-dated).
+  `WatchlistEditorPanel._write_symbols` writes the FILE first and appends after, so a failed
+  append shows `(intent not recorded)` and costs nothing; a sort and an unchanged save append
+  nothing; a re-add is a new `add`. A list the stream cannot reconstruct gets ONE small
+  `baseline_recorded` row (comma-joined symbols, count, digest) and no invented adds.
+  Membership means interest - never a setup claim, a position or a prediction - and a
+  `remove` is not a dislike. Known gap: `autopilot_core`'s auto-populate is a third machine
+  writer and is unlabelled (its adds surface as `observed_external`). Read with
+  `read_events()` or `python -m watchlist_intent_events tail --list longs`; nothing consumes
+  it yet and it reaches no detector, score, alert, Focus list, scanner or
+  `review_policy.json`. Tests: `tests/test_ws_5d_watchlist_intent.py`.
+- **The day-trade watchlists are wiped after the close (trader 2026-09-15, decision 0020).**
+  `scripts/daytrade_watchlist_reset.py`: `longs.txt` / `shorts.txt` are the intraday (M5) lists
+  and nothing on them outlives its session. The rule is stateless - `reset_due(now, written_at)`
+  names the last completed exchange session (`market_calendar.last_completed_session`) when the
+  file holds names and its mtime is at or before that session's 16:00 ET close, and `None` when
+  the file was written after it (a name typed in the evening is tomorrow's and survives to
+  tomorrow's close). `apply_reset` empties a due list through `autopilot_core.write_watchlist_file`
+  (atomic, designated-writer gated) FIRST and then appends one WS-5D `remove` row per name with
+  the new source `session_reset` (`watchlist_intent_events.SOURCE_SESSION_RESET`, writer
+  `daytrade_watchlist_reset`), so the Watchlist tab's next load reconciles to an empty list and
+  invents no `observed_external` removals; a refused write records nothing; a failed append
+  costs the evidence, never the wipe; an emptied file's mtime is after the close, so a session is
+  never wiped twice. `AutopilotService._maybe_reset_daytrade_watchlists` runs on every 30-second
+  tick in every Auto mode, right after `_roll_day_state` - before the weekend short-circuit (a
+  Saturday start owes Friday's wipe) and before the open scan - and after a wipe forgets
+  `autopilot_written` and logs one line naming each list, its count and its session. The
+  `local_settings` switch `daytrade_watchlists_reset` (default ON) turns it off; the CLI
+  `python -m daytrade_watchlist_reset` is a dry run unless `--apply`. The swing lists, the
+  auto lists (their own day-roll clear), the Focus store and its injection membership are
+  untouched (a Focus pick is still scanned through the fast lane; its later un-injection finds
+  the name gone and records nothing); BounceBot re-reads the files every cycle and is untouched.
+  Tests: `tests/test_daytrade_watchlist_reset.py` (26). Long form: `docs/DESK_INTERNALS.md` "DTR".
 - **The M5 scanner breathes and scans the trader's picks first (SN5/SN6, 2026-09-08).**
   `BounceBot._breathe` waits `SYMBOL_BREATH_SECONDS` (0.02 s) on the stop event after each
   symbol in the fast lane and both sweep loops - pacing only, never `time.sleep`, nothing
@@ -816,6 +1054,184 @@ They are evidence and must not be loaded as context.
 
 ### Charts, review, alerts, and phone surfaces
 
+- **A claimed D1 like is a pick, and the chart is done (packet D1C-A, trader 2026-09-14, branch `claude/d1c-claimed-picks-build`, reviewed GO).** A CLAIMED like whose horizon resolves to `d1` writes one row into the append-only `claimed_picks.jsonl` (`scripts/claimed_picks.py`, `project_paths.CLAIMED_PICKS_FILE`, identity `(symbol, side, claimed_setup_id)`, a duplicate appending nothing, the fade `focus_picks.FADE_TRADING_DAYS` trading days on `market_calendar.trading_days_between` - due on the ELEVENTH session by the packet's "more than" rule, one later than the Focus fade - with a raising calendar expiring nothing) and that row appears once in the Master AVWAP setups table through the pure `ui/services/claimed_setup_rows.merge_claims`: labelling a matching scan row in place with `My liked trade`, or becoming a new row with a blank Score, its `known_at_claim` measurements and the Points notes naming what was not measured. The horizon is resolved once by `claimed_picks.claim_horizon` from the alert (`is_d1` -> d1; the panel's M5-review flag -> m5; else the setup's registry group, which today has no day-trade group, so d1 or unknown) and never from the capture rail; the rail's stale timeframe is fixed at its own seam - `AlertChartReview.set_alert` passes `bounce.capture_timeframe(alert.timeframe)` ("5m"/"M5"/"5" -> M5, anything else including blank -> D1), so a typed D1 look after an M5 chart no longer stamps M5 and a real `"5m"` alert now gets its M5 sidecar. The pick is SAVED before the chart is retired: `claimPlaced` -> `AlertCenterPanel._place_claimed_d1` -> `_retire_claimed_review` (a separate method from the parking verb: no `remove_today`, no `_parked_symbols`, no Focus drop; one `like_advance` as before), and a failed write keeps the chart, fires `likeRecorded`, and the rail shows `NOT PLACED - claimed_picks.jsonl could not be written; chart kept` through `CaptureRail.set_capture_status` (a listener's line outranks the verb's own for that commit). While a claim is active the same `(symbol, side)` `is_d1` scan alert stays out of the review queue at the one door (`_enqueue_review_alert`, after the parked check, before the M5 branch, chart-watch exempt, an mtime-keyed `_active_claim_keys` cache, the skip counted and stated on the pane); M5 alerts, chart-watches, detection, the feed, the evidence streams and the phone push are untouched and nothing reaches `review_policy.json`. `SetupRow.bucket_keys` and the focus feed's fold make a row answerable to every bucket it belongs to; the setups strip is five independently checkable chips FAV / HC / Near / Liked / All (`qt_setups_bucket_chips`, a one-time migration of `qt_setups_bucket_filter`; the proxy tests `row.bucket_keys & selected`); `setup_points.RANKED_BUCKETS` gains `claimed_like`; a claimed row's context menu offers `Drop my claim` (`DataTable.add_row_action(visible=)`, shown only where `bucket_keys` carries `claimed_like`). A claim writes nothing to Focus or a watchlist (lead decision; the trader may overrule); `docs/CHART_REVIEW_WORKSPACE_PLAN.md` section 7 records the narrow supersession. Tests: `tests/test_d1c_claimed_picks_store.py`, `_route.py`, `_queue.py`, `_panel.py` (73 red from the tester, ten added by the builder). Long form: `docs/DESK_INTERNALS.md` "D1C".
+- **M5 on the left, D1 on the right (packet D1C-L, trader 2026-09-14, branch `claude/d1c-desk-sides-build`, reviewed GO).** The Trading Desk's left column is the M5 alert bar ALONE (`m5_column` stays a one-child vertical splitter so every mount, rescue and floor keeps its seam; the ST6.4 Working-lately line is still the first thing inside the bar) and a new `d1_column` vertical splitter holds the Master AVWAP workspace over the swing favorites strip, non-collapsible, the setups taking the stretch and opening at 6:1 (`D1_COLUMN_SPLIT_KEY = "qt_d1_column_split_sizes_v1"`; `M5_COLUMN_SPLIT_KEY` retired in place, never written, the old value untouched). The strip's 2026-08-31 place at the bottom of the M5 list is SUPERSEDED by the same trader; both writes, the `vetted` like-origin, the retraction row, the "took" badge, the day-roll re-derive and every action and signal are untouched. Workspace mode mounts `d1_column` as the third column and tabs mode's "Master AVWAP" tab holds it, so `set_setups_visible`, the open-hidden state, F9, `_setups_restore_sizes`, `_apply_column_floors` and the `_detach_mode_panels` rescue act on the COLUMN, and the strip hides and shows with the setups. Two consequences of the move were repaired in the same change (both builder-added tests pass on the base; they guard the move, not prior bugs): `show_watchlist`'s tabs-mode branch now raises `d1_column`, and the tabs-mode visibility calls come after `addTab` so a parentless column is never shown as a top-level window whose `showEvent` fired the strip's one-shot `firstShown` and emptied the chips. Files: `scripts/ui/panels/trading_desk.py`; tests `tests/test_d1c_desk_sides.py` plus one re-pointed assertion each in `tests/test_st6_service_and_surfaces.py`, `tests/test_qt_m5_alert_bar.py`, `tests/test_qt_desk_layout.py` and the re-pointed `TestWhereItLives` in `tests/test_qt_swing_favorites.py`. Long form: `docs/DESK_INTERNALS.md` "D1C-L".
+- **Claimed D1 picks are graded beside the tracker's own populations without a second pipeline (packet D1C-B, trader 2026-09-14, branch `claude/d1c-claim-grading-build`, reviewed GO at ba234f1a).** `scripts/claimed_pick_evidence.py` is one pure reader over four existing stores - the like cohort's picks and outcomes (`ui/annotations/like_cohort.py` -> `human_focus_tracking`, graded nightly by `ai_jobs.cohorts.run_like_cohort_grading`), `master_avwap_tier_outcomes.csv` through the ONE reader `swing_evidence.read_eligible_rows(..., POLICY_SCANROW_V1)` (the `all` window passes an explicit wide `window=`; `end=` alone only moves the right edge), and `claimed_picks.jsonl` - and writes none of them; `load_inputs` is the only file read, `build_comparison` is pure, `render_text` is the ONE renderer printed by `python -m claimed_pick_evidence [--window lately|all] [--as-of]` and rendered as the `My claims` tab on Research > Setup Tracker (`CLAIM_POPULATION_COLUMNS`, `CLAIM_SETUP_COLUMNS`, read on the panel's existing ReadWorker, never on the Qt thread). THE TWO CLOCKS ARE NEVER POOLED: the like cohort measures 5 exchange sessions from the claim day's close, the tracker 5 scan rows; an overlap is NAMED (`of which N also FAV that day`, `tracker_sightings` over the RAW tier rows - the scan's own fact on the claim's session, any horizon, any eligibility - because the graded sample has no horizon-5 row for the newest sessions) and never summed; the tier CSV is parsed once per version through the panel's `_load_csv_rows_cached` (`load_inputs(read_csv=)`); a quick like is excluded and counted once; repeated clicks are one trade (`dropped_duplicates`); HC with no `high_conviction` outcome rows reads `unmeasured: the tracker records favorite_setup / near_favorite_zone only (0 HC rows)` and never 0%; tracker-side pending reads `0 (mature by construction)` and unmeasured `-`, the read-level exclusions printed once. Every statistic is a count or `swing_headline.wilson_lower_bound`, the sort is the bound, the leader names no setup below `evidence_stats.MIN_REPORTABLE_N`; `WINDOW_RECENT` rather than a `*LATELY*` name because `tests/test_r4b_one_lately_window.py` reserves that for `evidence_stats`. Nothing scores, ranks, gates, alerts or promotes; nothing is imported from the journal. Tests: `tests/test_d1c_claim_grading_reader.py`, `_tab.py`, `_cli.py` (41 red from the tester), `_render.py` (6 from the builder). Long form: `docs/DESK_INTERNALS.md` "D1C-B".
+
+**One Watchlist on the Trading Desk, and the two pages it replaced (WISHLIST 10G, packet WS-WL, 2026-09-13).** `scripts/watchlist_views.py` is the one PURE reading - `build_watchlist_rows` takes the four plain lists, the Focus store, today's swing favorites, the journal's open trades, the WS-5D intent stream, the M5 board, today's decisions, the armed alerts and the per-broker last sync and returns `WatchRow`s keyed `(symbol, side)`; it opens no store, writes nothing and reads no clock it was not handed, and `filter_rows` gives the five views (`My watchlist | M5/TC2000 | Swing favorites | Open positions | All`) as FILTERS over that one row set. **Presence on a shared list is not authorship**: `FocusPickStore.add` injects into `longs.txt` / `shorts.txt`, so `manual` is the WS-5D stream's answer (the newest `add` names its writer; `machine_inject` is not the trader) and, where the stream never saw the pair, whether a LIVE Focus pick explains the injection; `first_seen` is the earliest add the stream can VOUCH for and an `observed_external` add leaves it blank. Rows sort by symbol then side, never by source - WS-10B's `adoption` rides along as a label. `positions` is a TUPLE (four accounts; folding two would hide one or invent a sum), `horizons` a frozenset, an option's `exposure` NULL ("not measured"), and a seventh source `alert` exists so an armed price alert on a name that is on no list still has a row. A position is a **read-only projection**: stale when the last VERIFIED import run (`import_runs.status='OK'`) is older than the previous session's close - shown greyed, never removed - a CLOSED position leaves only after a verified refresh, and nothing here arms an alert. `ui/services/watchlist_tab_service.py` is the one owner (the StrengthBoardService pattern, owned by `TradingDeskPanel`, aliased on `MainWindow`): the Qt thread freezes the Focus store into a `FocusSnapshot` (it is a WRITER) and gathers the cheap stores, the worker named `watchlist-tab` publishes those rows and only then reads the Journal - and it **never creates or migrates** the journal, refusing while `store_needs_preparation()` is true (found by the full suite: `JournalStore` builds the schema on construction). `ui/panels/watchlist_tab.py` routes every verb to the owner it already had (`WatchlistEditorPanel` for a manual add/paste/removal, `FocusService.remove_everywhere`, a swing-favorite RETRACTION row, `FocusPickStore.restore_faded`, `PriceAlertService.save_entries`); a position row has no Remove, a paste reports duplicates and never doubles a name, Disarm keeps the entry (A2), and removing the trader's own name leaves a Focus injection on the same list to ITS owner. The **Chart Review** and **Focus Picks** nav pages are retired - both panel classes stay and are still constructed, every old action is inventoried in the WL DESK_INTERNALS entry (Chart Review's Alt+E setups drawer is the desk's own Setups tab) - with `Ctrl+L` rebound once at the tab's scope (a tab raised with `setCurrentWidget` leaves focus on the tab BAR, so raising also moves focus into the page), and the Journal's "Positions on the Watchlist" button is a nav call to the Positions view. `project_paths` gained `FOCUS_SWING_LONGS_FILE` / `FOCUS_SWING_SHORTS_FILE`. Open for the trader: the tab strip now reads **Watchlist** (this) beside **Watchlists** (the raw file editors), and the desk still opens with the setups column hidden. Tests: `tests/test_ws_wl_watchlist_tab.py` (the manual-removal test expects the Focus injection to remain, by lead fix).
+**H1 retester watch (WISHLIST 10C step 1, packet WS-10C, 2026-09-13).** The arm bar carries an **H1 retester** button (`chart_watch.WATCH_KINDS["h1_ema_bounce"]`), the one watch kind on that surface that is NOT session-scoped. The rule is frozen and versioned as `h1_ema_bounce_v1` in `scripts/indicators/h1_ema_bounce.py`: completed, session-aligned H1 bars aggregated from the desk's cached M5 dicts by a pure COPY of the intraday engine's `_closed_h1_bars` (no `bounce_bot_lib` import - it drags ibapi and ~1,050 modules, and its own takes IbBar objects), a touch within 0.25 ATR of the 15-EMA, a reclaim on the LAST completed bar by 0.10 ATR inside three bars with the EMA sloping the trade's way over five, invalidation on a close 1 ATR through the line, `ambiguous` for a same-candle touch-and-reclaim, a 45-bar warm-up and 24 h staleness both answering "not measured", an invalid candle skipped and counted. `ChartWatch` gained persisted `watch_id` and `reason` (absent reads blank); `PERSISTENT_WATCH_KINDS` is the one name for "not session-scoped", read by `load_chart_watches` AND `watch_is_stale` (the 30 s M5 poll would otherwise delete the watch a minute after the restart it must survive), with a 10-TRADING-day life through `armed_alert_expiry`; `armed_at` stays naive in the store (its convention) and the rows that leave it are aware. `_poll_d1_event_watches` evaluates the kind at its head (before its empty-list return), fires ONE event carrying every measured reason and both bar times, then disarms; the event is an ARMED event on the D1 feed (`CHART_WATCH_TAG`, timeframe D1), never a detector alert and never on the M5 list, and it reaches the phone through `PriceAlertService.notify_armed_watch(*, watch_id, title, message)` - the existing armed price-alert sender, in every mode (the recorded push exception, `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`), de-duplicated by watch id, pushed BEFORE the alert is drawn. When the cached M5 window is short of the warm-up (the desk's `m5_chart_bars` is one 5-session RTH window, ~35 completed H1 bars; `MASTER_AVWAP_INTRADAY_BARS_DIR` has never been written), `scripts/h1_history.py` fetches that ARMED symbol's hourly bars through yfinance on its own daemon thread - LEAD RULING 2026-09-13, the trader may overrule; the alternative is a wider M5 window for armed symbols in `bounce_bot_lib` (ask-first) or a `v2` rule on less history - zero IB traffic, the cache primary, at most one fetch per completed H1 bar, completed bars only, `astimezone` never a stripped offset; the Armed inventory names the source (`H1 from cache` / `H1 from yfinance`) or says `not measured (N of 45 H1 bars[, yfinance unavailable])` through a new optional `watch_note` hook on `ArmedWatchList.set_watches`. A watch is entry timing, never a claim: it grades nothing and reaches no detector, score, tier, watchlist, Focus list, review queue or `review_policy.json`; `H1_ALERTS_RETIRED` keeps its four mentions; `chart_watch.ANY_BOUNCE_KINDS["h1_ema15"]` is older prior art with a different rule, untouched. Rule sheet: `docs/M5_SIGNAL_ENGINES_PLAN.md` section 10. Tests: `tests/test_ws_10c_h1_retester.py` (26; the arm-bar test enables the bar for a symbol first, by lead fix) and `tests/test_ws_10c_h1_retester_builder.py` (18).
+
+**H1 backup history stays FRESH (repair RV-H1-HISTORY, review blocker B1, 2026-09-13).** Three corrections to the WS-10C yfinance H1 fallback, none touching the frozen rule sheet `h1_ema_bounce_v1`. (1) The need is measured on the PRIMARY series, never on the one that was chosen: `alert_center_panel._h1_bars_for_watch` asked for a refresh only when the CHOSEN series was short of the 45-bar warm-up, so once the fallback held 45 bars nothing asked again while the desk's own window stayed at ~35 - the watch was judged on ageing bars until the rule's 24 h `STALE_AFTER` answered "not measured" for good; `chart_watch.h1_bars_for_watch` returns the yfinance series only when the primary is short, so that source IS the short answer and the panel asks on it (`source == H1_SOURCE_YFINANCE or len(bars) < WARMUP_BARS`), no second aggregation pass on the Qt thread. (2) The refresh cadence is a completed SESSION-ALIGNED bucket, not the wall-clock hour: `H1HistoryCache.request` keys its refusal on `h1_history.last_completed_h1_bucket` (open-relative buckets 06:30, 07:30 ... 12:30 market-local, the last 30 minutes long and closed at the bell, through `market_session`'s open/close helpers); the clock-hour key refetched twice inside one bucket and every hour all evening. A fetched bar is admitted through `h1_history.h1_bucket_end`, still via the ONE `completed_bars.is_completed_bar` but over the bucket's own span, so the two series agree at the close; zones stay CONVERTED with `astimezone`, an aware `now` included. Known limit (reviewer advisory): `market_session` is not calendar-aware, so a weekend day still allows ~7 refetch attempts for a short-primary armed symbol (old code: 24 a day, every day); no surface number is wrong. (3) A refresh that fails after a success keeps the bars and says they STOPPED: the armed health cell reads `H1 from yfinance (stale - last refresh failed)` through `H1HistoryCache.last_refresh_failed`, retried at the next completed bucket; `unavailable` keeps its meaning (nothing was EVER fetched) and its `not measured (N of 45 H1 bars, yfinance unavailable)` string. Tests: `tests/test_rv_h1_history_refresh.py`, `tests/test_rv_h1_history_staleness.py` (six written red by the tester, proven red again on the restored files by the builder and the reviewer); one corrected FIXTURE in `tests/test_ws_10c_h1_retester_builder.py` (`test_the_fallback_fetches_at_most_once_per_completed_hour` crosses a bucket at +46 min instead of +30; its intra-bucket property now lives in `test_two_asks_inside_one_session_bucket_are_one_request_not_two`).
+
+**A new arm never fires on an old bounce (repair RV-H1-ARM-TIME, review blocker B2, 2026-09-13).** `h1_ema_bounce_v1` anchors its verdict at the LAST completed bar and knows nothing about arm times, so a series that already held a finished reclaim fired the instant the trader armed (the review's reproduction: confirm bar 11:30-12:30, `armed_at` 13:30, `new_alerts 1 watches_left 0`). `chart_watch` now fences the EVENT, not the series: warm-up keeps every bar, and the rule's `confirm_bar_dt` (the reclaim bar for a confirmation, the closing-through bar for an invalidation) is eligible only when its END is strictly after `armed_at` - the existing armed-watch convention (`_evaluate_extreme`: `_bar_end(bar) <= armed_at` is pre-arm), inclusive on the pre-arm side, the bar end from `h1_history.h1_bucket_end` so the short 12:30 bucket ends at the bell; a candle FORMING when the button was pressed is post-arm once it completes. A pre-arm confirmation or invalidation comes back from `evaluate_h1_bars` as `H1_PRE_ARM_REASON = "pre_arm"` (a `chart_watch`-level verdict, never an indicator reason), so `_poll_h1_bounce_watches` leaves the watch armed and writes no `watch_fired` / `watch_invalidated` row, no push, no alert; while a pre-arm closing-through bar sits inside the rule's age window the rule keeps saying `invalidated` and the watch simply waits. The comparison ATTACHES the desk's market-local zone to a naive stamp and keeps an aware one as the instant it is (`_comparable_moments`, the `autopilot_core._gate_moment` pattern; never `chart_watch._naive`, which strips - an arm written three hours west would otherwise read three hours EARLIER and turn a pre-arm arm into a post-arm one). `armed_at` round-trips through `chart_watches.json` unchanged, so a restart is not a second chance; a disarm + re-arm is a new `watch_id` with a new `armed_at`. **The fence fails CLOSED** (lead ruling on the reviewer's advisory): an event whose bar or arm cannot be dated is not the trader's (`h1_event_is_post_arm` returns False; unreachable today, pinned by `tests/test_rv_h1_arm_time_fails_closed.py`). Tests: `tests/test_rv_h1_arm_time_fence.py` (14); six WS-10C tests had their `armed_at` FIXTURE pinned before the golden bounce through `pin_armed_before_the_golden_bounce`, no assertion changed, and the reviewer proved the pins neutral (the old code still passes 72/72 with them).
+
+**The armed-watch phone push leaves the Qt thread (repair RV-H1-PHONE-WORKER, review blocker B3, 2026-09-13).** `PriceAlertService.notify_armed_watch` called `push_notify.send_push` inline while its caller was the GUI poll, and `push_notify`'s HTTP timeout is 10 s, so a slow ntfy endpoint held the desk for up to ten seconds per fire (the review's reproduction: `send_push_on_qt_thread [True] call_seconds 0.202`). Dispatch is now synchronous and delivery is not: on the Qt thread the method makes only the cheap decisions - the engine check and the watch-id de-duplication, where the id joins `_announced_watch_ids` BEFORE the dispatch (under a lock shared with the thread list) so a repeat in the same tick is refused without waiting for the first send - hands the send to a one-shot daemon thread the service OWNS and tracks (`armed-watch-push`, the `check_now` pattern; an armed watch fires once and disarms, so a standing consumer would idle for days), and returns `{"ok": True, "queued": True, "watch_id": ...}`. `ok` now means "accepted for delivery by the one armed sender"; the refusals are unchanged. The outcome comes back the way `_notify` already reports one (`_last_push_error`, the `ARMED WATCH ...` log line, `statusChanged`); a transport that raises is logged on the worker, never lost. `shutdown()` joins what is in flight against ONE budget, `ARMED_PUSH_SHUTDOWN_WAIT_SECONDS = 2.0`, then returns; the threads are daemons; and because a worker's `statusChanged` is QUEUED to the GUI thread by Qt, the joining thread emits the final snapshot itself when something was pending. The feed row is drawn while the phone is still answering; no `auto_mode` gate is added - DESK, AWAY, EVENING and OFF all deliver through the one armed sender (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` amendment corrected in place). Tests: `tests/test_rv_h1_phone_worker_delivery.py` (10; nine written red by the tester, proven red again by the builder and the reviewer; no test can reach ntfy).
+- **The wrong side of the AVWAPE is shown and never hidden (WS-WS, WISHLIST item 9,
+  2026-09-13, sweep branch).** `scripts/avwape_side.py` is the one rule, pure and shared:
+  `wrong_side(side, close, avwape)` is True for a LONG under the current anchor or a SHORT over
+  it, with a tolerance of 0 (a close exactly on the line is the right side) and `None` whenever
+  the side or a number is missing, because an unknown is never "wrong". The scan rows the desk
+  reads carry neither price (`current_close` / `current_avwape` are tracker `feature_snapshot`
+  fields, `legacy.py:5132-5133`; 0 of 435 live feed rows carry them), so `read_row` prefers the
+  two numbers when a caller has them and otherwise reads `current_band_zone` (top level or
+  `setup_candidate.trigger`, never `favorite_zone`), and `tooltip_text` never prints a price it
+  did not read (`LONG below AVWAPE 412.50 (close 409.10)` when priced, `LONG below AVWAPE (band
+  zone LOWER_1 to VWAP)` from a zone). `ui/widgets/setup_delegate.py` paints a `wrong side` chip
+  in the `caution` token after the bucket chip (`_chip` returns its rect and takes `after=`;
+  `sizeHint` asks for the width because `fit_columns` measures the delegate; below
+  `_MIN_CHIP_WIDTH` - the compact profile's 96 px bucket cell - the chip is not drawn and the
+  tooltip still carries it), and `autopilot_core.render_away_report` appends ` [wrong side]`
+  after the symbol and counts them under the list (`N wrong side of the anchor (shown, never
+  hidden ...)`); a raising reader costs the tag, never the digest. On a copy of the 2026-09-11
+  feed: 342 right, 93 wrong, 0 unreadable. Display only: no detector, score, gate, alert,
+  watchlist, Focus or `review_policy.json` change, nothing re-ordered or filtered - hiding a
+  wrong-side row, the previous anchor, and the other surfaces (M5 list, chart review, Focus)
+  stay the trader's open questions. Tests: `tests/test_ws_ws_wrong_side.py` (58).
+- **CH-SYM symbol ownership repair (2026-09-14; loaded into the local sweep checkout).** A chart switch clears the previous
+  symbol's retained D1/M5 snapshots and chart state before reading the next symbol.
+  The WS-CH history merge therefore keeps older bars only for the same symbol;
+  missing new-symbol M5 data cannot become a foreign D1 preview or an old quick-fill
+  price. Cached snapshots for the selected symbol still render immediately.
+  Tests: `tests/test_chart_symbol_isolation.py`; acceptance and delivery state are
+  recorded in `CURRENT_CHECKPOINT.md`. No detector, score or provider change.
+- **The chart's bars and the chart's view are two different numbers (WS-CH, WISHLIST 10H,
+  2026-09-13, sweep branch).** `chart_snapshot.D1_HISTORY_SESSIONS` (1,000, about four NYSE
+  years) is how far back a daily payload REACHES and `D1_DEFAULT_SESSIONS` (90) is how many bars
+  it OPENS on; the durable parquet store always held the years and `build_d1_snapshot` always
+  computed indicators over the full history before slicing, so this costs one longer slice of
+  bars already in memory and NO provider request. The payload carries `oldest_available` (the
+  oldest bar drawn) and `history_truncated` (the store holds more), capped by what the store has.
+  `CandleChart.set_data(..., initial_view_sessions=N)` holds every bar and frames the tail, so
+  panning left reveals the older ones with no request; the y-range comes from the VISIBLE window
+  while the log/linear decision still asks every bar. `chart_levels.build_d1_levels` gained
+  `price_range_bars` and `ChartDataService` passes the INITIAL VISIBLE window, so
+  `horizontal_levels`' price filter and clutter budget behave exactly as before and panning does
+  not recompute levels (lead ruling). `SymbolSnapshotWidget._start_d1_backfill` is untouched by
+  design - it still sizes its stale-store catch-up off the host's `d1_sessions` (260 / 754
+  calendar days), so one chart click never asks a provider for four years. On M5 a **Load
+  older** button on the legend row adds two sessions through the same in-memory
+  `bot.m5_chart_bars(max_sessions=n)` read, capped at ten per symbol per desk session; the
+  chunks overlap so the merge CUTS at the fresh chunk's first bar, the view is preserved by
+  CANDLE identity (`visible_bar_span` / `restore_bar_span`) because older bars arrive on the
+  left, a stale symbol's result is dropped, and a raising provider costs the older bars and never
+  the chart (`older bars unavailable`). The pan-left trigger was deliberately not wired: a pan
+  that fetches is a fetch on the paint path. `provenance_state` prints `D1 back to <date>` with
+  `(more behind)`. H1/H4 were NOT built - the desk draws neither (the H4 resampler is
+  `resample_intraday_bars_to_4h` at `legacy.py:28235`, read only). A consequence: the shadow
+  AVWAP band challenger lines now draw for anchors older than 90 sessions, correctly anchored
+  (display only). Measured: 1,000 candles + 14 overlays cost `set_data` 24-31 ms and a paint
+  15-22 ms; one built snapshot is 701 KB against 75 KB at 90 sessions, so
+  `chart_data_service._LAST_SNAPSHOT_CAP` (60) means ~41 MB per chart service - documented, cap
+  unchanged, the trader may lower it. Tests: `tests/test_ws_ch_chart_history.py` over the
+  1,300-session golden `tests/fixtures/ws_ch_chart_history_v1.json`.
+- **The alert feed diffs itself instead of rebuilding (WS-SN4, WISHLIST item 4, 2026-09-13,
+  sweep branch).** `ui/panels/alert_center_panel.py` states what the feed should look like ONCE,
+  in `_feed_target_rows`, and both paths read it: `_sync_feed` reconciles the rows on screen
+  against that target - destroying what is gone, inserting what is missing, restyling what
+  changed and leaving every other row the SAME widget at the same position - and
+  `_rebuild_feed` builds every row from it. A veto (`_ignore_alert_symbol`) and the coalesced
+  `focusChanged` refresh call the diff; the rebuild is kept for the whole-feed decisions (the
+  minimum-tier switch, the day's Clear, `_unpin_d1_focus` - the obvious fourth diff case for a
+  follow-up). Measured offscreen on 250 M5 + 100 D1 rows: a veto 220.1 ms -> 8.5 ms, a
+  coalesced focus flush 223.7 ms -> 6.2 ms, neither constructing a row widget (live 2026-09-08:
+  4.0-4.1 s and 24.2 s). The parity exposed two rebuild defects, both fixed: it was not
+  fold-aware (a repeated name drew one row per entry at the newest position; the target keeps
+  ONE row per (symbol, side) at the OLDEST qualifying entry's position) and it dropped every ×N
+  badge (re-stamped from the read-only `RepetitionLedger.repeat_counts()` - `consider` is a
+  DECISION and is never re-called for a redraw). The open-burst digest is a day-scoped registry
+  (`_digested_keys` + `_refresh_open_digest_row`) so a veto inside the burst redraws that one
+  row. `AlertFeedItem.apply_focus_state` re-dresses a single row for a Focus change (star
+  `focusOn`, gold frame, ★ badge; unpolish/polish on that widget alone; no-op when unchanged).
+  Nothing is gated, scored, folded or withheld; the backing lists, the ledger, the review queue
+  and every evidence stream are written before it. The tester's parity assertion counted the
+  test's own explicit rebuild; the lead moved the read before it (intent kept). Tests:
+  `tests/test_ws_sn4_feed_diff.py`, `tests/test_ws_sn4_feed_diff_builder.py`;
+  `test_focus_refresh_coalescing` now pins "one reaction, not a rebuild".
+- **The board's picks reach the scan, and every row says why not (WS-10B, WISHLIST 10B,
+  2026-09-12, sweep branch).** The DESK chain was traced and is PINNED end to end by
+  `tests/test_ws_10b_board_to_scan.py`: board publication -> rows with an empty `failed_floors`
+  -> the ONE adoption gate -> `FocusPickStore.add_many` -> the `focus_auto_picks.json` marker ->
+  `_inject_into_shared` (appends only when absent, so a refresh appends nothing and a
+  trader-typed line is never touched) -> `longs.txt` / `shorts.txt` -> `BounceBot.get_scan_symbol_set`,
+  rebuilt from those files every cycle, so an adopted name is scanned on the NEXT cycle without
+  a restart. **AWAY was the broken link** - it neither adopted nor staged - and now STAGES the
+  eligible rows through the queue's existing owner (`autopilot_core.stage_auto_populate_candidates`:
+  one lock, one file, the per-side cap, a name already listed or decided today skipped) with
+  `gate_bar_end` left EMPTY so `pending_pick_gate_ok` refuses until the DESK flip's
+  re-verification measures it; EVENING and OFF do nothing and nothing new polls. Every board row
+  carries an `adoption` verdict written where `_auto_adopt_strength_board` decides - `adopted` /
+  `already_in_focus` / `staged (AWAY)` / `not today` / `declined today` / `mode EVENING` /
+  `mode OFF` / `not adopted: floor <what it missed>` / `not adopted: <the gate's reason
+  verbatim>` - rendered as the LAST column of both side tables, `Scan`: text only, no colour
+  vote, NOT sortable (a scan list re-ordered by how the machine answered is not the trader's
+  ranking); a row with no verdict is BLANK. One INFO line per refresh: `Strength board: N rows,
+  A adopted, S staged, R not adopted (reasons: ...)`. Scanner inclusion and Focus adoption stay
+  DISTINCT: nothing scans a row the gate refused. `FocusPickStore.shared_watchlist_path()` is
+  the accessor the staging call uses. Two private helpers (`_stage_strength_board_picks`,
+  `_publish_strength_board_adoption`) serve only that one function in the alert file.
+- **A chart opened from the setups table cycles through the table, and a veto for the day
+  hides the row (SC, trader 2026-09-15).** `AlertCenterPanel.chart_symbol` gained
+  `next_pick=`: a caller's own "what comes after this chart" (a callable returning True when it
+  charted something), stored as `_manual_next_pick`, CONSUMED by `_advance_review_queue`
+  instead of the waiting list - so a veto (`_retire_after_veto` -> `_ignore_alert_symbol`), a
+  claimed like (`_retire_claimed_review`) or the Next verb on a chart that came from the
+  setups table charts that table's next row - and dropped in `_select_review_alert` the
+  moment any non-manual chart takes the pane (a lookup-box chart passes none and clears it);
+  a callback that raises logs and falls back to the queue; the waiting list is never touched by
+  the walk. `MasterAvwapPanel._chart_row_on_desk` passes one for every row it charts
+  (`SETUPS_CHART_ORIGIN`), and `_chart_next_pick` finds the row after `(symbol, side)` in the
+  proxy's VISIBLE order (by identity first; a row the hide filter already removed is answered
+  by the row that took its place), skips the same symbol and any symbol rejected today,
+  moves the table's selection with it, and says `End of the setups list - nothing after X`
+  when it runs out. The Alert Center emits `reviewDecisionRecorded` after a rail veto and a
+  placed claim; the desk connects it to `MasterAvwapPanel.refresh_decisions` (the WS-SX
+  coalesced refresh), so the ✕ mark and the hide filter follow the chart's verdict at once.
+  **The hide:** `pick_feedback.HIDDEN_REJECT_KINDS` (`veto`, `dislike`, `not_today`,
+  `remove_today` - the swing-side verdicts; a day-trade `pass` and an M5 click-away are
+  verdicts on another population and hide nothing), `DayDecisions.rejected_symbols()`,
+  `SetupFilterProxyModel.set_filters(rejected_symbols=, show_rejected=)` +
+  `hidden_rejected()`, fed from the same `_on_day_decisions_ready` snapshot that paints the
+  ✕; the strip's `Show vetoed (N)` box (`qt_setups_show_vetoed`, default OFF) restores the
+  rows in their original order. Per SYMBOL, like the ✕ mark. Presentation only: nothing is
+  deleted, re-ordered or written; the scan, the Setup Tracker's save pass and every evidence
+  row never read the filter, so a vetoed name is still tracked. WS-SX's "a decision moves
+  nothing" clause is superseded for these kinds; `tests/test_ws_sx_star_x.py`'s moves-nothing
+  test became `test_a_veto_hides_its_row_and_show_vetoed_brings_it_back`. Tests:
+  `tests/test_setups_cycle_and_veto_hide.py` (16). Long form: `docs/DESK_INTERNALS.md` "SC".
+- **The setups table's two mark columns state the day's decisions (WS-SX, WISHLIST item 8,
+  2026-09-12, sweep branch).** `scripts/pick_feedback.py` `decisions_today` / `DayDecisions`,
+  `scripts/ui/widgets/setup_delegate.py` `set_decision_lookup`,
+  `scripts/ui/panels/master_avwap_panel.py`, `scripts/ui/theme.py` token `reject_today` (both
+  themes). The star is filled for a name in Focus OR liked today (quick or claimed; an absent
+  `like_mode` reads claimed), and the X is painted bright red for a name vetoed, disliked,
+  passed on, removed-for-today or clicked away from its M5 alert today, each with a tooltip
+  (`helpEvent`) naming the decision and its time; a name both liked and vetoed shows both
+  marks. The decision snapshot is a WIDER read than `reviewed_symbols_today` - the day-trade
+  pass annotation and the M5 click-away `skip` row (`clicked_away_from_m5_alert`) are in it and
+  are not in that badge, whose answer is unchanged - and both come from one cached, mtime-keyed
+  parse; `unfavorite` is in neither. It is rebuilt on a worker thread on every capture verb,
+  `set_rows`, `showEvent` and the day roll, repainted through the panel's existing 200 ms
+  `SignalCoalescer` (now created unconditionally), never read inside `paint`, and it hides,
+  re-orders, mutes and writes nothing. Test environment: `tests/conftest.py` registers one
+  symbol font (seguisym.ttf) ONLY for `_PIXEL_GLYPH_MODULES`, because an offscreen process's
+  font database is empty until qtawesome's icon fonts load and then U+2605/U+2606 draw nothing.
+  Known, out of scope: `test_qt_desk_layout.py`'s compact-profile test overflows at 1400 px
+  when run after a MainWindow with real fonts. Tests: `tests/test_ws_sx_star_x.py` (14).
+- **The AWAY digest ranks swing picks by points when the trader's Points switch is on
+  (WS-PT4, 2026-09-12, sweep branch).** `autopilot_core.swing_pick_projection` is the ONE
+  projection of a digest pick (`AutopilotService._write_report_locked` calls it) and now
+  carries the scan row, `d1_vs_sector`, `d1_vs_industry` and `bucket_key` beside the display
+  fields; `autopilot_core.order_swing_picks` reads `setup_points.rank_enabled()` AT SORT TIME
+  and, when on, orders the favourite / near / high-conviction rows by `setup_points.rank_order`
+  over `swing_pick_points(...)` totals (the same `setup_points.score_row` the setups table
+  uses - one scorer, two callers), every other row after them in arrival order; off is the
+  identity. `RANKED_BUCKETS` is matched on the bucket KEY, never the display label. The
+  `Ranked on:` line ends `| order: Wilson bound` or `| order: points (switch on)`; the near
+  cap is applied after ranking as before; the bucket is printed, never ranked on; an ungraded
+  family scores its setup part 0 with the note and is never dropped. Known, not built: the
+  hourly phone push `build_swing_push` iterates the picks in arrival order and never followed
+  either order. Tests: `tests/test_ws_pt4_digest_points.py` (golden
+  `tests/fixtures/ws_pt4_away_digest_switch_off.txt` pinned by the pre-change code).
 - Chart-first review flow, current forming D1 preview, D1/M5 shared snapshot widget,
   log scale, crosshair/OHLCV readout, source/age strip, fallback warning, cache
   invalidation, background loading, prewarming, and stall watchdog. **The
@@ -1074,6 +1490,165 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **The Market Journal tells the session's story and challenges the thesis in it (WS-10D,
+  WISHLIST 10D / 10K, 2026-09-13, sweep branch).** `scripts/market_story.py` builds a
+  `DailyStory` in three kinds that never blur: `trader_said` (the day's entries verbatim in
+  `created_at` order, each carrying `written_after_the_session` and `predicts_this_session`, so
+  the same sentence typed at 11:00 and at 21:00 Pacific is a prediction and a description),
+  `measured` (completed daily bars for SPY / QQQ / IWM / VXX / TLT / USO, each cell carrying
+  `bars_through`, `bars_used` and a named rule version, an absent series reading `unmeasured`
+  with a reason), and `ai_said`, ALWAYS EMPTY here - code computes, the model explains in a
+  later packet. No note means an empty `trader_said` and a sentence saying so. Which session an
+  entry belongs to is ONE function, `market_journal.session_of_entry`, recomputed from
+  `created_at`, because `EvidenceLedger.append` overwrites the entry's own `session_date` with
+  the market-local date of the WRITE (a 21:00 Pacific note is stored under the next session -
+  the ledger defect stays outside this packet, written down in DESK_INTERNALS).
+  `scripts/market_thesis.py` reads a note with a versioned vocabulary into claim / horizon (in
+  exchange SESSIONS) / stance / condition / invalidation / benchmarks, every field carrying a
+  span that reproduces it exactly, `unstated` carrying none; a later note links only inside the
+  horizon and only on the same benchmark (same stance SUPPORTS, a reversal CONTRADICTS, a
+  stance-less mention MENTIONS). Rows live in `market_theses.jsonl`
+  (`project_paths.MARKET_THESES_FILE`), append-only, keyed on `entry_id` + `extractor_version`;
+  a trader edit is a NEW superseding row and the journal entry is never touched. An imported
+  weekly forecast is `origin=external_forecast` plus a `kind=forecast` sidecar whose unsupplied
+  creation time stays `unknown`; `active_theses` never returns one. The Market Journal page
+  gains the Story pane ("You said" / "External forecast" / "The market did" / "Sources", the
+  sources clickable), the Active theses list with one or two grounded questions and an
+  interpretation box, and "Paste weekly forecast..." - all on the panel's existing worker.
+  `scripts/market_story_rollups.py` is the LAST deterministic nightly slot: each week belongs
+  to the month of its Thursday, a month adds its uncovered days, every pack names covered /
+  expected / missing sessions, carries open theses forward, and is rebuilt only when its
+  `inputs_hash` changed; both slot-order pins gained the name in that position. Shadow only.
+  Advisory: a panel refresh reads the journal ledger three times on the worker (cheap today).
+  Tests: `tests/test_ws_10d_market_story.py` (one contradictory ordering assertion corrected by
+  the lead), `tests/test_ws_10d_story_links.py`.
+- **The said-vs-did report has both halves (WS-5B, WISHLIST 5B, 2026-09-13, sweep branch).**
+  `scripts/preference_trade_outcomes.py` now collects every explicit REFUSAL beside the
+  endorsements: `annotation:veto` (detail `<code> (v<vocab_version>)`, an uncoded veto reads
+  `uncoded`), `annotation:pass` (unchanged detail), `pick_feedback:dislike`,
+  `pick_feedback:not_today` and `review_event:m5_click_away` (a new `events_path` kwarg);
+  `unfavorite` is absent by decision. Three columns at the END of `COLUMNS` - `like_mode`
+  (`quick` / `claimed` for `annotation:like_claim` rows, an absent field reading `claimed`;
+  empty for the pick-feedback and favorite likes, which were neither the key nor the dialog),
+  `verdict_family` (`endorse` / `reject`), `match_state` (`matched` / `window_open` /
+  `no_match_after_window` / `journal_unavailable`; `matching_unavailable` reserved, no path
+  emits it) - and `schema` bumps to `preference_trade_outcomes_v2`; the first 19 columns stay
+  byte-identical (golden). `trade_level_summary` gains `n_statements_by_family` and still keys
+  money by `trade_id`; `match_trade`'s side logic is untouched (P6's opposite-side match at
+  0.35 stands, the verdicts stay separate rows, the money counts once); a sideless coincidence
+  is `symbol+window_side_unknown` 0.50; `match_state` agrees with
+  `ai_summary.preference_to_trade_section` by construction (same empty-`match_basis` rule, same
+  `statement_window_end`); an unreadable journal publishes the statements with empty
+  `match_basis`, `journal_unavailable` and a `degraded` slot status instead of `skipped` with no
+  file. Weekend Prep's Focus Review gains a TENTH view, "Said no" (`preference_rejection_table`
+  / `preference_rejection_note`), filled by the same read pass, `Match state` visible, counts
+  never pooled across families. Two ST5 tests widened their fixture to name the fourth store
+  (a test naming three leaks the fourth from the shared pytest home). No free text reaches a
+  model (`statement_detail` is not a `PREFERENCE_EXAMPLE_COLUMNS`). Tests:
+  `tests/test_ws_5b_preference_symmetric.py` (17).
+- **A fourth auto-tagging lane: the trader's own Market Journal notes (WS-10E, WISHLIST 10E,
+  2026-09-13, sweep branch).** `AutoTagger` now reads the Market Journal. For a CLOSED trade,
+  entries whose `symbols` carry the trade's symbol and whose ACTUAL write time (`created_at` -
+  the ledger overwrites `session_date` with the session of the append) fall inside the trade's
+  own window - open to close, widened by one trading session before the open - are candidates;
+  a date-only broker fill has no intraday window and is `unmeasured`. A tag is emitted only for
+  an explicit claim: `setup_docs.SETUP_DOCS` compiled to whole-token phrase patterns from each
+  family's key and label, single-token phrases dropped so `general` cannot tag a trade. The
+  candidate carries `match_basis = note:<entry_id>` and the span quoted verbatim
+  (`auto_tag_candidates.match_basis` / `match_span`, additive in `NEW_COLUMNS_V3`). A note whose
+  own words state the opposite side never matches; a side-silent note matches either. Order
+  stays by LANE - capture, note, scanner, shape (`journal_analytics._lane_rank` and the mirrored
+  SQL in `JournalStore.list_auto_tag_candidates`) - with confidence 0.88 / 0.84 placing the note
+  between the two, so `journal_bulk_tag` writes it under the same 0.70 threshold and
+  `apply_provisional_tags`' refusal to overwrite a confirmed tag is untouched. The lane's
+  verdict is stored per trade in the new `note_lane_verdicts` table (its own table, LEFT JOINed
+  into `list_trades`; never a column on the golden-pinned `trades`) and printed by
+  `journal_analytics.format_note_lane_line` in three shapes: the claim, `no explicit claim in N
+  candidate note(s)`, `unmeasured (date-only fill)`. The Journal's Trades detail shows it above
+  the overnight AI row; Weekend Prep's Tag Week gains a `From` column marking rows whose waiting
+  tag came from a note. The advisory enrichment package carries `trader_notes` and
+  `deterministic_note_lane` so the model cites `note:<id>`. Nothing in this chain reads an
+  outcome field (grep-guard). Tests: `tests/test_ws_10e_note_tags.py` (13). Docs: DESK_INTERNALS
+  "The four auto-tagging lanes"; `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`. The CLAUDE.md /
+  AGENTS.md "three lanes" rule line is rewritten in the sweep's docs pass.
+- **Trade Mentor pop-up and hidden market context (WS-TM follow-up, trader 2026-09-14).**
+  On `codex/mentor-popup-context`, the chart host owns one reusable modeless pop-up,
+  with Submit, Read unchanged, Skip and draft preservation. It takes no chart height;
+  the arm bar stays in place. `scripts/trade_mentor_context.py` builds shallow,
+  completed-bar measurements for the trader's exact 17 symbols: 30-minute M5 change,
+  position against session VWAP, five-session D1 change and position against SMA20.
+  Unknown and stale readings carry reasons rather than zero. The context service
+  owns bounded background collection on prompt opening, uses available local caches
+  and batches missing coverage through Yahoo, with hourly M5 and completed-session
+  D1 reuse. Submit never waits for data. The snapshot stays under `mentor.context`
+  beside the original text, including on Read unchanged; a late worker cannot
+  change a saved note. `ai_summary` compacts only this attachment in `journal.entries`
+  for the existing AI budget; there are no new model calls or raw candle arrays.
+  Independent review is GO; 130 focused tests and the 7980-test full suite passed, with natural exit 0. Checkpoint gate #110 remains a live check.
+- **Trade Mentor: a prompt is a slot, an answer is a dated row (WS-TM, WISHLIST 10J steps 1-2,
+  2026-09-13, sweep branch).** `scripts/trade_mentor_schedule.py` (pure) builds the day's
+  `MentorSlot`s - whole hours from `FIRST_HOUR` 7 Pacific (`America/Los_Angeles`, DST-aware)
+  to before the close, `D1_HOURS` (8, 12) and `TRADES_HOUR` 10 combined into one slot each,
+  `post_close` when the slot sits past an early close read from `market_early_close.session_close`
+  (`market_calendar.session_close` is 16:00 ET even on a half day), `expires_at = scheduled_at
+  + 1 h`, nothing on a weekend or holiday; `slot_id` = session + wall time + kind.
+  `ui/services/trade_mentor_service.py` is the ONE scheduler (one 60 s `QTimer`, owned by
+  `MainWindow`, started in `showEvent`): slot records in `trade_mentor_slots.json` (delivered /
+  answered / skipped with `away` / `paused` / `locked` / `idle` / `expired` / `not_present`),
+  expiry at the head of the poll, `promptDue` once per service instance per slot, a restart
+  re-shows an unanswered unexpired card without moving `delivered_at`, a missed hour is
+  recorded and never re-asked, AWAY / paused / idle beyond `IDLE_GRACE_MINUTES` (20) skip
+  (`scripts/user_presence.py`: `GetLastInputInfo`, None off Windows reads PRESENT;
+  `session_locked` is an injected callable, no lock hook yet). `ui/widgets/trade_mentor_card.py`
+  initially docked under the chart; the 2026-09-14 follow-up moves it to a pop-up,
+  `WA_ShowWithoutActivating`, Ctrl+Enter scoped to its boxes; Submit writes the RAW text first
+  through `market_journal_service.write_entry(origin="trade_mentor", mentor=..., reaffirms=...)`
+  - `build_entry` / `write_entry` grew those two kwargs (present and empty on every other entry)
+  because no metadata field existed; "Read unchanged" writes a NEW row referencing the previous
+  read; drafts live in `trade_mentor_drafts.json`, never a read. The 10:00 check
+  (`scripts/trade_mentor_trade_check.py`) reads the previous exchange session's trades from
+  `journal_store.JournalStore` + `journal_coverage` (NOT the market journal), asks only the
+  missing material fields with the four answer states distinct (`not supplied` / `no fixed
+  target` / `not remembered` / `not applicable`; no stop is never 0), stores the answers as
+  RECALLED `opportunity_events` annotation rows stamped with the actual write time (no schema
+  migration, `planned_stop` never written), capped at three trades / five minutes with the rest
+  counted; missing broker coverage says `journal not ready`. Settings: the checkbox (default
+  OFF, `qt_trade_mentor_enabled`), the DST sentence, `next prompt hh:mm`, `Pause today`; "Give a
+  read" on the chart host at all times. Independent of the scanner's Auto setting; no phone
+  push; nothing in AWAY. Defect fixed alongside: `market_journal_service.write_entry` built the
+  entry from the caller's `now` but appended without it, so an entry written with an explicit
+  clock was filed under one date and stamped with another (no production caller passed `now`
+  before). Steps 3 (AI form filling) and 4 (coaching) are NOT built. Tests:
+  `tests/test_ws_tm_trade_mentor.py` (36 + 3), one added in `tests/test_market_journal.py`;
+  `test_qt_alert_capture`'s "nothing under the charts" pin now names the hidden card after the
+  arm bar. Selftest 75 -> 80 (five reach checks).
+- **The Journal's Trades splitter opens at its declared 3:2 and the tag-review row no longer
+  eats the tab (WS-J1, WISHLIST item 1 leftover, 2026-09-13, sweep branch).** Two layout defects
+  in `scripts/ui/panels/journal/trades_tab.py`: the `QSplitter` declared `setStretchFactor` 3:2
+  but never `setSizes`, so the opening split came from the children's size hints (measured
+  1347 / 2105, the trader's 39/61) - `showEvent` / `resizeEvent` now call `_apply_splitter_ratio`
+  until the trader's own drag (`splitterMoved`) sets `_splitter_user_sized` and the tab stands
+  down for the desk session, nothing persisted; and `tag_filter_note` (an empty label) kept Qt's
+  default `Preferred` vertical policy as the row's only growable item, so the ROW absorbed ~960 px
+  of a 2,160 px tab above an empty table (the blank band) - pinned `(Preferred, Fixed)`. Layout
+  only: no number, sort, read or write moved (golden headers/row-count pinned). Tests:
+  `tests/test_ws_j1_journal_splitter.py` (6).
+- **The Weekend Prep verdict card's two cohort lines read NUMBERS** (WS-5A,
+  2026-09-12; `scripts/weekend_verdict.py` + `scripts/ui/panels/weekend_prep_panel.py`).
+  Neither line had ever printed a cohort: `best_cohort_line` read `avg_r_h3` /
+  `n_h3`, columns nothing writes, off rows whose return was already the table's
+  formatted `+1.23%` - so both said "nothing with enough behind it yet" against
+  115 graded veto and 129 graded like rows, and a percent was about to be printed
+  as R. `_cohort_numeric_fields` types the row (`horizon_sessions: int`, `n: int`,
+  `avg_side_return_pct: float | None`, a blank staying `None`), `_cohort_cell_text`
+  formats at the display edge so the two tables read exactly as before, and
+  `_cohort_view` compares the horizon as an int. The card's `CARD_HORIZON` is the
+  integer 3 SESSIONS, the pooled `ALL` side never leads a ranking of reasons, and
+  BOTH lines take the HIGHEST side-adjusted return: "Likes that work: ... over 3
+  sessions (n=..)" and "Rejections worth another look: ... side-adjusted (n=..)" -
+  `min()` named the rejection that was right. Thin says "(best n was N against a
+  floor of F)" and empty says "no like|veto cohorts measured yet"; the floor stays
+  the card's own `MIN_COHORT_N` (5). Tests: `tests/test_ws_5a_weekend_verdict.py`.
 - **`unresolved` means UNMEASURED** (M2, 2026-09-05). `scripts/outcome_semantics.py`
   gained a second half beside `claim_kind`: `terminal_kind(row)` returns
   `measured_eod` / `measured_swept` / `unmeasured` / `open` from the outcome row's
@@ -1473,6 +2048,44 @@ They are evidence and must not be loaded as context.
 
 ### AI and automation
 
+- **Trustworthy overnight output (WS-AI1, WISHLIST 10K step 1 + 5C, 2026-09-12, sweep
+  branch).** The per-trade journal enrichment has its OWN validated contract,
+  `ai_jobs.enrichment.ENRICHMENT_JSON_SCHEMA` (`summary`, `tags`, `confidence`, `sources`,
+  `unknowns`, closed), sent down the SAME provider path: `ai_summary.request_ai_summary` takes
+  `schema` / `schema_name` / `prompt_version` with the session summary's schema as the default
+  (every existing caller's payload byte-identical), and `ai_summary.validate_structured_output`
+  validates a caller-supplied contract. `_proposed_tags` / `_summary_text` are the ONE
+  extraction seam and read exactly that schema's keys - the previous reuse of
+  `AI_SUMMARY_JSON_SCHEMA` forbade every key they read, so six trades over 2026-09-09..11
+  carried a blank `ai_trade_enrichment` row while the ledger said `ok`. A row now says what it
+  is: `ai_trade_enrichment` gains `status` (`enriched` / `abstained` / `failed`), `reason` (the
+  model's own `unknowns`, or the error class), `confidence` and `supersedes_row_id`
+  (`NEW_COLUMNS_V3`, additive, idempotent), and the slot reports `enriched A, abstained B,
+  failed C of N` with `STATUS_OK` only for `A + B == N, C == 0`. `enrichment.is_legacy_blank`
+  (blank summary AND blank tags AND no status) is what `_trades_for_session` refuses to read as
+  done, so the blank rows are repairable; the repair APPENDS a row naming the one it replaces
+  and never rewrites. Every published nightly summary names its completion in one top-level
+  word - `map_reduce.completion_word`: `synthesized` / `partial` / `unsynthesized_fallback` /
+  `failed` - and `briefs.run_daily_summary` publishes `STATUS_OK` only for `synthesized`, still
+  publishing the document and naming the synthesis error verbatim; the word reaches the ledger
+  row through the runner's `extra` and the System Health AI row prints it. Two defects in that
+  reader were fixed with it: `operations_audit._ai_jobs_check` counted `degraded` where the
+  ledger constant is `degraded_no_narrative` (no AI job could ever show as degraded), and read
+  `ts` / `timestamp` where `ledger.record` writes `started_at` / `finished_at` (every AI row read
+  as undated). The advice has a reader: `ui/services/journal_feed.latest_ai_enrichment` (newest
+  row nothing supersedes) rendered by `TradesTab._show_trade`, marked advisory, an abstained or
+  failed row shown rather than hidden. A new package scope `preference_to_trade` carries a
+  derived, bounded section over ST5's `preference_trade_outcomes.csv`
+  (`ai_summary.preference_to_trade_section`): three grains kept apart, coverage derived from the
+  report's own `match_basis` plus the 10-SESSION window (`journal_unavailable` / `window_open` /
+  `no_match_after_window`, summing to the unmatched count), at most 20 examples selected by
+  `(session_date, report row order)` descending - no result column enters that key;
+  `REPORT_FILE` resolved at call time. **Lead decision 2026-09-12 (trader may overrule):** the
+  scope joins `briefs.DEFAULT_SCOPES` (the nightly slate is six), because 5C says the summary
+  is fed "into the existing AI package". No timeout was raised and no model changed; the
+  runner's stage order is unchanged and `weekly_synthesis` stays optional. Tests:
+  `tests/test_ws_ai1_enrichment_status.py`. Rule: DESK_INTERNALS "AI1 - an enrichment row is
+  never blank on success"; contract: `docs/LOCAL_AI_AUTOMATION_PLAN.md` Phase 3.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
@@ -1874,6 +2487,58 @@ They are evidence and must not be loaded as context.
 
 ### Shadow challengers
 
+**Two contexts per row, three verdicts per thesis (WISHLIST 10I, packet WS-10I, 2026-09-13).** `scripts/context_join.py` owns the ONE identity/time contract: `ContextRef(context_id, rule_version, benchmark, label, observed_at, available_at, certainty)` and `attach_context(rows, when="observation" | "entry", ...)` - a D1 environment label is published at its session's CLOSE, so a same-day M5 decision gets the PREVIOUS session's label (`certainty=prior_session`, walked on `market_calendar.previous_session`, never a calendar day), a swing scan row its scan date's (`session`), a journal fill the label available at its timestamp, a date-only fill the previous completed session's flagged `date_only`; a missing label is `unknown`, never pooled, and a backfilled ref is `reconstructed` and excluded from every forward claim. Both refs ride side by side on a row and the tier-outcome row has no benchmark column, so `attach_context` runs BEFORE `link_theses`, which links a thesis by the ref's benchmark scope and the thesis's validity window (created_at .. horizon end or invalidation), all matches linked newest first, none chosen, opposite scope never linked. `scripts/setup_environment_evidence.py` cuts three populations that are never pooled: `opportunity_cells` (swing through `swing_evidence.read_eligible_rows` inside `lately_window()`, day trades from the M5 outcome rows cut by the D1 label of `trade_date` - never by the alert's own `context_json.market_environment`, a different vocabulary) with win rate / held-run first, `n`, distinct sessions and symbols, the ONE Wilson bound, floors, `unknown` its own cell and the family's overall baseline beside each cell; `personal_cells` from the journal's confirmed-tag trades with money once per `trade_id`, ST5's status partitions and `MIN_REPORTABLE_N` before any "best" word; `thesis_review` with three SEPARATE verdicts per thesis (`market call` right/wrong/open by the benchmark's later path, `setup held` from the opportunity cells, `trade profitable` from personal money) never merged into one grade; `HELD_RUN_STATISTIC_NAME` now lives in `held_run_score` (the module that computes it) with `working_lately` importing it. Research > Results gained the page-level **By environment** CONTROL over the section WS-ENV already built (`environment_filter` / `environment_basis` / `environment_line` / `environment_choices`; Bot x Day under its own key `by_environment_day` with its own statistic; My trades cut at the ENTRY; computed on the Results worker; the setting `research_results_environment`; the existing goldens unchanged when no environment is chosen). The Daily Recap row keeps WS-DR's `d1_environment` (the session's own label) AND carries 10I's observation context and, for a matched fill, the entry context beside it - on an intraday row the two differ by one session on purpose and the tooltip prints both (lead decision 2026-09-13: two readable facts, not reconciled). `python -m context_join backfill --since` is dry-run by default, names the data dir and `--apply`, and labels only what contemporaneous stores establish. Zero detector, score, alert or promotion influence. Contract: `docs/LOCAL_AI_AUTOMATION_PLAN.md`. Tests: `tests/test_ws_10i_context_join.py` (24) and `tests/test_ws_10i_context_join_build.py` (11).
+- **D1 market environments, labelled per session and cut in the readouts (WS-ENV, WISHLIST item
+  7, 2026-09-12, sweep branch).** One label per session per benchmark, decided ONCE by the pure,
+  versioned rule `d1_environment_v1` in `scripts/indicators/d1_environment.py`
+  (`classify_environment`): fewer than 34 completed daily bars is `unknown/warmup`; an
+  unmeasurable ATR14 is `unknown/unmeasurable`; `range_atr <= 3.0` is `compressed` - tested
+  FIRST, so a quiet uptrend inside a three-ATR box is compressed, not trending; then `slope_atr`
+  beyond +/-0.5 ATR with the close on the same side of SMA20 is `trending_up` / `trending_down`;
+  else `mixed`. ATR14 is Wilder at the last bar over the WHOLE supplied series
+  (`indicators.atr.wilder_atr`), pinned by a hand-computed golden over 184 recorded SPY
+  sessions. `scripts/d1_environment_store.py` appends one JSONL row per `(session, benchmark,
+  rule_version)` to `project_paths.D1_ENVIRONMENT_FILE`: never rewritten, a new rule version
+  written BESIDE the old one, each benchmark its own row, `written_at` aware and market-local,
+  `labels_by_session` one mtime-cached read, every failure swallowed.
+  `runner.record_d1_environment` runs as a sibling of `bridge_earnings_anchor_caches_to_csv`,
+  fetches SPY/QQQ/IWM through the SAME pinned `fetch_daily_bars`, drops the forming bar through
+  `completed_bars`, and logs `D1 environment: SPY=.. QQQ=.. IWM=.. (d1_environment_v1, bars
+  through <session>)`; a failure never fails the scan. `scripts/d1_environment_join.py`
+  `attach_environment` joins on `scan_date` - the tape the decision was made in, never the exit
+  - in place, on one store read. Research > Results gains "By environment (SPY,
+  d1_environment_v1)" under Bot x Swing only: win rate first with `n` and the ONE Wilson bound,
+  sorted by the bound, the `MIN_REPORTABLE_N` floor labelling a row and never hiding it,
+  `unknown` its own row pooled into nothing, no verdict line because it names no leader, and the
+  champion sections byte-identical. The window is `ENVIRONMENT_WINDOW_SESSIONS` (6 x
+  `LATELY_SESSIONS` = 120), declared because 20 sessions of SPY is usually one environment.
+  `python -m d1_environment_store backfill` is dry by default and prints `DATA_DIR` first.
+  Shadow only - nothing reaches a detector, score, alert, watchlist, Focus, the review queue or
+  `review_policy.json`, and no `legacy.py` line changed. Tests:
+  `tests/test_ws_env_d1_environment.py` (35) + `tests/test_ws_env_d1_environment_builder.py`
+  (5); rule in DESK_INTERNALS "ENV - one D1 environment label per session, joined by scan date".
+- **Exit frameworks, split by setup family (WS-EF1, WISHLIST item 3, 2026-09-12, sweep
+  branch).** `master_avwap_exit_framework_by_family.csv` is written beside
+  `master_avwap_exit_framework_stats.csv` in the same guarded tracker save pass, by the SAME
+  builder: `legacy.build_exit_framework_stats_rows(setups, by_family=False)` takes the grouping
+  key as a parameter, so the two files can never disagree on a rate, and there is still one
+  scenario walker (the band-variant fence holds). The by-family key adds `setup_family` (blank
+  or missing is `unlabelled`, counted never dropped) and `population` (`champion` / `study` /
+  `control`, read from the record's own `is_study` / `is_control` joined on `setup_id`, never
+  the family name; part of the key, so a study and a champion sharing a name stay apart), and
+  those two columns lead `EXIT_FRAMEWORK_BY_FAMILY_STATS_COLUMNS`. The by-family export reads all
+  three namespaces; the pooled export still reads `setups` alone and stays byte-identical
+  (golden), and a raising by-family export costs neither the save nor the pooled file. The Exit
+  frameworks tab gains ONE control, `exit_framework_family_combo`: `All setups (pooled)` first,
+  rendering today's table unchanged, then families sorted by name; a family view filters before
+  the 300-row cap, ranks by the same Wilson lower bound, names the family with the LARGEST
+  `n_closed` among its rows (never the sum across templates) and says BELOW FLOOR under
+  `evidence_stats.MIN_REPORTABLE_N` while still showing the rows; the table renders through
+  `_apply_exit_framework_view` with its own memo so a refresh does not re-fit it. On a copy of
+  the 2026-09-11 tracker mirror: 24 pooled cells reconcile to 672 by-family rows over 35
+  families with zero mismatches; the `1stdev_breakout` study's eight cells close 8-26 (under the
+  floor of 30) - band 3 leads on mean R, band 2 on the bound, and nothing here promotes a
+  template. Shadow only. Tests: `tests/test_ws_ef1_exit_by_family.py` (19).
 - Side-symmetric SPY market-state/pullback engine runs beside the legacy pause
   detector, emits replayable evidence, and cannot affect candidates, alerts, or rank.
 - Greatness Monitor persists ordered touch/wick/close/acceptance/retest/failure/re-arm
@@ -1971,6 +2636,176 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-15 (afternoon) - Phase 0.29: Pullback alert, trendline break, compression (trader-directed; packets PCT-1..3 on `claude/pullback-compression-2026-09-15`)
+
+**Trader, 2026-09-15:** a new tracker setup watched for a pullback on M15 (150-SMA) / M30 (75-SMA) with an LRSI reversal or an SMA retest, the H1 retester renamed the Pullback alert and carrying these; claim names for pullback, trendline break and compression break; a compression MEASURE because the compression veto is the most common one ("we need to fine tune this so we stop getting so many compressed picks"). Spec and resume brief: `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. **All three packets are built, reviewed by reproduction and merged into the plan branch.** PCT-3 adds the compression measure, chip, calibration CLI and `compression_break`; PCT-1 adds the Pullback alert, auto-arm and three claim names; PCT-2 adds one frozen completed-close trendline-break watch and one additive saved-report/feed row per `(symbol, side, break_date)`. PCT-2's review caught an empty old-alert golden; the repair pins a non-empty pre-change report byte-for-byte, requires full frozen line provenance with an offset-aware knowledge time, and collapses duplicate persisted watches. Its branch passed 8,362 tests with ruff, smoke and selftest green; independent review round three is GO. Gates #124-#130 are in the checkpoint.
+
+### 2026-09-15 - The day-trade watchlists are wiped after the close (trader-directed, lead on `claude/desk-combined-2026-09-14`)
+
+**Trader, 2026-09-15:** *"i want all names wiped at the end of the day. its a daytrade watchlist not a permanent one."* Built by the lead alone, no packet: `scripts/daytrade_watchlist_reset.py` (the stateless rule on the file's mtime against the last completed session's close, the atomic wipe, one `session_reset` intent row per name, a dry-run CLI), `AutopilotService._maybe_reset_daytrade_watchlists` on every tick before the weekend short-circuit and the open scan, `watchlist_intent_events.SOURCE_SESSION_RESET`, the `daytrade_watchlists_reset` switch (default ON). Decision 0020 amends the plan.md sec 5 invariant narrowly: the two day-trade lists are emptied WHOLE at a session boundary; a machine still never removes one user-entered name by its own judgement, and the swing lists keep the rule as it was. Lead decisions the trader may overrule: the M5 Focus picks are NOT reset with the lists (they fade on their own ten-session clock, and a Focus pick is scanned through the fast lane regardless); a name typed after the close is tomorrow's and survives. The inventory paragraph under "Scanning, candidates, and decision support" is the contract. Tests: `tests/test_daytrade_watchlist_reset.py` (26); the two Auto Pilot tick tests stub the new step. Gate #123.
+
+**Trader, 2026-09-15 (second ask, SC):** *"when i click on master avwap setups tab and then I click the veto or like and claim buttons it should cycle it to the next pick. additionally vetoing it for the day SHOULD remove it from the list (but the stock should still be tracked for setup tracker purposes)"*. Recon (Sonnet) confirmed a chart opened from the setups table never held a place in the waiting list, so a veto or a claim on it advanced to the QUEUE's next alert, and that WS-SX's ✕ mark hid nothing. Built by the lead: `chart_symbol(next_pick=)` consumed by `_advance_review_queue` instead of the waiting list and dropped by any other chart; the setups panel's own walk (`_chart_row_on_desk` / `_chart_next_pick`); `reviewDecisionRecorded` -> `refresh_decisions`; the proxy's reject filter over `pick_feedback.HIDDEN_REJECT_KINDS` with the `Show vetoed (N)` box. Presentation only; the tracker never reads it. Lead decisions the trader may overrule: the table's own ✕ (a coded dislike) hides too; the hide is per symbol; a day-trade pass and an M5 click-away hide nothing. The inventory paragraph under "Charts, review, alerts, and phone surfaces" is the contract. Tests: `tests/test_setups_cycle_and_veto_hide.py` (16); WS-SX's moves-nothing test rewritten. Gate #131. Note: three WS-SX paint tests are order-dependent (they need the theme a desk build loads; they pass after `tests/test_qt_desk_ticker_clicks_chart_center.py` and fail alone) - pre-existing, not fixed here.
+
+### 2026-09-14 - The Daily Recap fills itself in at 12:00 Pacific (trader-directed, WS-DR follow-up)
+
+**Trader, 2026-09-14:** *"I want it to auto populate at 12pm PST each day so at end of day I can review it."*
+New `scripts/daily_recap_schedule.py` (pure: is today's automatic read due?), one `QTimer` on
+`DailyRecapPanel` started in `MainWindow.showEvent`, the time a `local_settings.json` key
+(`daily_recap_auto_time`, default `12:00` Pacific, DST-aware), once per session per process, a late
+start still reads today, a weekend or holiday reads nothing. The noon read is provisional (the close is
+13:00 Pacific); the page's next read after the close is the measured one, and the session list now
+relabels today from "provisional" after the close without a restart. No scan, fetch, push or write:
+every Auto mode, outside quiet hours by the amendment in `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`.
+Inventory paragraph: "Application, runtime, and data ownership", Daily Recap. Built by the lead on the desk's
+combined branch `claude/desk-combined-2026-09-14`; tests `tests/test_daily_recap_auto_populate.py`; live gate #122 (one noon on the desk).
+Verification in `CURRENT_CHECKPOINT.md`.
+
+### 2026-09-14 - Claimed D1 picks: three packets D1C-A / D1C-L / D1C-B (trader-directed; integration `lead/d1c-integration` above the sweep tip b8ebd5a4)
+
+**Trader, 2026-09-14:** *"The left side of the Trading Desk is for M5 trades. The right side is for D1 trades. When I like and claim a D1 setup, it becomes a ranked pick I can follow in Master AVWAP Setups. I should not have to keep reviewing the same D1 chart ... This request intentionally changes the old 'claimed likes place nothing' rule for D1 claims. Update that contract narrowly."* Five numbered asks (placement, filters and ranking, finish the D1 review after claiming, the two sides of the desk, grading over time). Built as three packets off the LOCAL sweep branch (the desk runs it): **D1C-A** (`claude/d1c-claimed-picks-build`; tester d9b2861f, 73 red -> builder -> reviewer NO-GO on one blocker: the stale-timeframe fix left a blank timeframe standing, so a typed D1 look after an M5 chart stamped M5 with a sidecar -> fixed at 270dd839 by `bounce.capture_timeframe` -> reviewer GO), **D1C-L** (`claude/d1c-desk-sides-build`; seven red -> builder -> reviewer GO; fix round efc61a32 for the advisories: 6:1 opening split, a live tabs guard, doc pointers), **D1C-B** (`claude/d1c-claim-grading-build`; 41 red -> builder ceb869a9 -> reviewer NO-GO on one blocker: the overlap joined all liked rows against only the eligible horizon-5 tracker rows, blind to the newest sessions -> fixed at ba234f1a by `tracker_sightings` over the raw tier rows -> reviewer GO, FAV 22 / Near 31 overlaps reproduced on live copies with every other number unchanged). The inventory paragraphs under "Charts, review, alerts, and phone surfaces" are the contract. Lead decisions the trader may overrule: a claim places in the setups table ONLY (no Focus, no watchlist); active until "Drop my claim" or the Focus fade constant's trading days; a veto never retracts a claim; five chips; the grading surface is a Setup Tracker tab plus a CLI, not Research > Results; HC has no tier-outcome rows so it is reported unmeasured. Recon corrections recorded: the like handlers live in `alert_center_panel.py`, not `alert_chart_review.py`; `set_alert` never passed a timeframe, so the rail read "D1" for every pane chart. No desk restart and no merge to `main` (the trader's instruction); the integration branch is the trader's to load. Gates #119-#121.
+- **2026-09-14 — WS-TM pop-up/context follow-up built and reviewed.** The trader requested an
+  independent prompt box and hidden lightweight market trends. The build was isolated on
+  `codex/mentor-popup-context`; the trader then authorized local loading with "load it". Loaded with concurrent M5 left-grade and chart-symbol isolation changes preserved; 195 combined screen/evidence tests pass. No restart or live-store write is included.
+  Red tests proved the popup, independent data failures, partial daily-cache retention and bounded AI handoff before their fixes. The final full suite passed 7980 tests with natural exit 0; detailed verification is in the checkpoint.
+
+### 2026-09-14 — M5 alert grades at the left (trader-directed)
+
+The compact M5 list omitted the champion tier when shortening the trigger.
+The row now leads with `[PROVEN]` or its recorded `[S]` through `[D]` grade;
+`[—]` marks an ungraded alert. It uses the Alert Center's existing readers.
+The time, side, ticker, trigger, repeat count and evidence suffixes follow.
+No score, list ordering, alert emission or evidence contract changes.
+Loaded into the normal desk checkout on 2026-09-14 under the trader's “load it”
+instruction. Reviewed code is unchanged; restart/live proof remains owed.
+Verification and local delivery status: `CURRENT_CHECKPOINT.md`.
+
+### 2026-09-12 - WISHLIST sweep: one feature dump on `claude/wishlist-sweep-2026-09-12` (trader-directed)
+
+Every WISHLIST item built as one feature dump for a week of trader testing; Astra reviews
+after code completion; nothing merges to `main` before that. One bullet per packet as it lands
+(the resume table is `CURRENT_CHECKPOINT.md` "2026-09-12 - WISHLIST SWEEP").
+- **WS-5D (WISHLIST 5D) - watchlist intent events**, branch `claude/ws-5d-watchlist-intent`
+  `e8770233`: `scripts/watchlist_intent_events.py` + the panel's write-first-then-append seam,
+  machine labels on the Focus store's injection, `observed_external` at load time, one
+  baseline row per list, a tail CLI. Suite 7327 green, ruff clean, smoke 7/7, selftest 75/75
+  (+1 lazy module). Gate #94.
+- **WS-PT4 (WISHLIST item 4, block 4) - the AWAY digest ranks by points when the switch is on**,
+  branch `claude/ws-pt4-digest-points` `c2215b19`: one projection (`swing_pick_projection`),
+  `order_swing_picks` reading `setup_points.rank_enabled()` at sort time, `RANKED_BUCKETS`
+  matched on the key, the `order:` clause on the `Ranked on:` line. Suite 7323 green, ruff
+  clean, smoke 7/7, selftest 74/74. Gate #95.
+- **WS-5A (WISHLIST 5A) - the weekend verdict card reads numbers, not strings**, branch
+  `claude/ws-5a-weekend-verdict` `df475e45`: typed cohort rows (`horizon_sessions`, `n`,
+  `avg_side_return_pct`), formatting at the display edge, the pooled `ALL` side excluded, both
+  lines ranked by the HIGHEST side-adjusted return, three explicit absence sentences, the card's
+  floor kept at 5. Six existing test files re-fixtured to the typed shape. Suite 7324 green, ruff
+  clean, smoke 7/7, selftest 74/74. Gate #96.
+- **WS-EF1 (WISHLIST item 3) - exit frameworks split by setup family**, branch `claude/ws-ef1-exit-by-family` `a55cf320`: the by-family export from the SAME builder (`by_family=True`), `population` from the record, the family picker on the Exit frameworks tab, 24 pooled cells reconciled to 672 family rows with zero mismatches. Suite 7331 green, ruff clean, smoke 7/7, selftest 74/74. Gate #97.
+- **WS-FC1 (WISHLIST item 2) - a forming bar never reaches the daily-bar cache**, branch
+  `claude/ws-fc1-forming-candles` `0134ff12`: `master_avwap_lib/daily_bar_cache.py` (the rule,
+  the counters, the repair CLI), a 19-line `legacy.py` writer-seam change, manifest counters
+  always present, one log line per scan; dry run on a copy: 66 of 1,988 files; 443 tracker
+  records touched, zero fills. `--apply` and two ask-first seams are the trader's. Suite 7332
+  green, ruff clean, smoke 7/7, selftest 74/74. Gate #98.
+- **WS-SX (WISHLIST item 8) - the setups star and X reflect the day's decisions**, branch
+  `claude/ws-sx-star-x-build` `d81bc929`: `pick_feedback.decisions_today` off one shared read,
+  `set_decision_lookup` on the delegate, the `reject_today` token, tooltips with the time, a
+  worker-built snapshot repainted through the coalescer; a symbol-font fixture for pixel tests.
+  Suite 7326 green, ruff clean, smoke 7/7, selftest 74/74. Gate #99.
+- **WS-AI1 (WISHLIST 10K step 1 + 5C) - trustworthy overnight output**, branch
+  `claude/ws-ai1-enrichment-status-build` `e0683a31`: the enrichment's own schema down the same
+  provider path, `abstained` / `failed` statuses with an append-only supersession of the six
+  blank rows, `map_reduce.completion_word` reaching the ledger and System Health (two audit
+  reader defects fixed), a Trades-detail reader, the `preference_to_trade` scope (7,668 chars on
+  the live report copy, 48% of its source cap) joining the nightly slate by lead decision. Suite
+  7328 green, ruff clean, smoke 7/7, selftest 74/74. Gate #100.
+- **WS-10B (WISHLIST 10B) - the board's picks reach the scan and every row says why not**,
+  branch `claude/ws-10b-board-to-scan-build` `a1b9fccd`: the DESK chain traced and pinned end to
+  end (it was intact), AWAY staging built at `stage_auto_populate_candidates` (it was the broken
+  link), the per-row `adoption` verdict as the board's `Scan` column, one log line per refresh.
+  Suite 7380 green, ruff clean, smoke 7/7, selftest 75/75. Gate #101.
+- **WS-ENV (WISHLIST item 7) - D1 market environments**, branch `claude/ws-env-d1-environment`
+  `bb4b8dc0`: the pure versioned rule `d1_environment_v1` with a 184-session hand-computed golden,
+  the append-only store, the runner hook beside the anchor bridge, the backfill CLI (dry run: SPY
+  33/69/43/27/12), the scan-date join and the "By environment" section on Research > Results.
+  Suite 7404 green, ruff clean, smoke 7/7, selftest 75/75. Gate #102.
+- **WS-SN4 (WISHLIST item 4) - the alert feed diffs itself**, branch `claude/ws-sn4-feed-diff-build`
+  `a26f877a` (+ a lead test fix): `_feed_target_rows` / `_sync_feed`, the fold-aware rebuild,
+  ×N badges re-stamped from `repeat_counts()`, `AlertFeedItem.apply_focus_state`; a veto 220 ms
+  -> 8.5 ms, a focus flush 224 ms -> 6.2 ms offscreen. Suite 7401 green (one tester assertion
+  corrected by the lead), ruff clean, smoke 7/7, selftest 75/75. Gate #103.
+- **WS-SN3 (WISHLIST item 4) - one RRS pass per cycle**, branch `claude/ws-sn3-one-rrs-pass-build`
+  `ca1c1a6e`: one universe walk producing 5m/15m/1h, `rrs_payload_for`, the per-symbol profile
+  cache keyed on the last bar's dt, ETF bars bucketed once per timeframe, the industry map read from
+  memory; byte-identical to the four-pass golden recorded at 204f4640. Builder's suite 7394 green
+  but for the fixture-contract test it then fixed (the lead re-verified 57 targeted tests). Gate #104.
+- **WS-J1 (WISHLIST item 1 leftover) - the Journal's Trades splitter and the blank band**, branch
+  `claude/ws-j1-journal-splitter` `9ae8d6d0` (sonnet builder): `_apply_splitter_ratio` on
+  show/resize until the trader drags; the tag-review note label pinned vertically Fixed. The
+  lead re-verified its 6 tests. Gate #105.
+- **WS-TH (WISHLIST item 6) - a Setup Tracker for the theta plays**, branch
+  `claude/ws-th-theta-tracker-build` `ee676ae5`: `scripts/theta_pick_tracker.py` (recorder,
+  grader, readout), the runner hook after `write_theta_put_report`,
+  `scripts/ai_jobs/theta_grading.py` at the END of the deterministic stage, a Theta tab on the
+  Setup Tracker, `THETA_PICKS_FILE` / `MASTER_AVWAP_THETA_OUTCOMES_FILE`. `legacy.py` read only.
+  27 tester tests + 5 builder-added. Suite 7421 green, ruff clean, smoke 7/7, selftest 75/75.
+  Gate #106.
+- **WS-CH (WISHLIST 10H) - more chart history without making the desk slow**, branch
+  `claude/ws-ch-chart-history-build` `91bc7480`: `D1_HISTORY_SESSIONS` 1,000 reached with a
+  90-session opening view, `oldest_available` / `history_truncated`, `initial_view_sessions` on
+  the chart, levels computed for the opening window, **Load older** on M5 (+2 sessions, cap 10,
+  view kept by candle identity), the provenance strip's `D1 back to`. H1/H4 not drawn by the
+  desk, so not built. Suite 7410 green, ruff clean, smoke 7/7, selftest 75/75. Gate #107.
+- **WS-WS (WISHLIST item 9) - the wrong side of the AVWAPE is shown, never hidden**, branch
+  `claude/ws-ws-wrong-side` `7b8628d5`: `scripts/avwape_side.py` (one rule, price or band-zone
+  basis - the scan rows carry no `current_avwape`), the amber chip after the bucket chip, the
+  ` [wrong side]` digest tag and count; 93 of 435 live rows on 2026-09-11. Suite 7461 green, ruff
+  clean, smoke 7/7, selftest 75/75. Gate #108.
+- **WS-10A (WISHLIST 10A) - three clocks on the scan**, branch
+  `claude/ws-10a-scan-freshness-build` `c258f7a8`: `master_avwap_lib/scan_manifest.py` (the
+  manifest, its history line, dated report copies capped at 30 dates, `freshness_line`), the
+  Setups status row and System Health check `master_scan_freshness`, and the read-only
+  `scan_replay` CLI with four exchange-time checkpoints; `legacy.py` diff zero. Suite 7430
+  green, ruff clean, smoke 7/7, selftest 75/75. Gate #109.
+- **WS-TM (WISHLIST 10J steps 1-2) - Trade Mentor**, branch `claude/ws-tm-trade-mentor-build`
+  `6e17add1`: the pure slot schedule (Pacific, DST, early closes from `market_early_close`),
+  one scheduler service with persisted slot state and presence skips, the non-modal card under
+  the chart writing raw reads through the Market Journal service (`mentor=` / `reaffirms=`),
+  the 10:00 missing-fields check off the journal store, Settings checkbox + Pause today; a
+  market-journal clock defect fixed alongside. Suite 7443 green, ruff clean, smoke 7/7, selftest
+  80/80. Gate #110.
+- **WS-10E (WISHLIST 10E) - the Journal tags a trade from the trader's own notes**, branch
+  `claude/ws-10e-note-tags-build` `f5fabaa3`: the `trader_note` lane (whole-token setup
+  vocabulary, the trade's own window on `created_at`, `match_basis = note:<id>` + span,
+  opposite-side refused), the `note_lane_verdicts` table joined into `list_trades`, the Trades
+  detail line, Tag Week's `From` column, the notes in the enrichment package. Suite 7483 green,
+  ruff clean, smoke 7/7, selftest 75/75. Gate #111.
+- **WS-5B (WISHLIST 5B) - the said-vs-did report has both halves**, branch
+  `claude/ws-5b-preference-symmetric-build` `a0a29f04`: five refusal channels as statements,
+  `like_mode` / `verdict_family` / `match_state` at the end of the columns (schema v2, first 19
+  byte-identical), `n_statements_by_family`, a degraded-not-skipped unreadable journal, Weekend
+  Prep's tenth view "Said no". Suite 7487 green, ruff clean, smoke 7/7, selftest 75/75. Gate #112.
+- **WS-SN2 (WISHLIST item 4) - the M5 window is fetched once a day, then extended**, branch
+  `claude/ws-sn2-incremental-bars-build` `dddcd9b4`: kept raw windows, `"<n> S"` deltas with an
+  overlap bar, whole-window refetch on the day roll / a moved overlap bar / a gap, forming bars
+  never kept (`SN2_FORMING_TAIL_FORCES_REFETCH = False` by lead decision - IB always serves a
+  forming last bar), one fetch line per cycle; 342 bars then 7 per cycle. The lead corrected one
+  tester assertion to the shipped invariant. Suite 7718 green but for that one, ruff clean,
+  smoke 7/7, selftest 80/80. Gate #113.
+- **WS-10D (WISHLIST 10D) - the Market Journal tells the story and challenges the thesis**,
+  branch `claude/ws-10d-market-story-build` `f38823b7`: `market_story` (three kinds, measured
+  benchmarks), `market_thesis` (versioned extraction with spans, append-only theses, superseding
+  interpretations, forecast import), the Story pane and Active theses on the page,
+  `market_story_rollups` as the last deterministic slot (Thursday-owned weeks), and
+  `market_journal.session_of_entry` routing around the ledger's session stamp. Suite 7733 green
+  but for one contradictory ordering assertion the lead corrected, ruff clean, smoke 7/7,
+  selftest 80/80. Gate #114.
+- **WS-DR - Daily Recap (WISHLIST 10F + 5F), merged 2026-09-13 (gate #115).** The AWAY Recap page becomes Daily Recap in every mode: `scripts/daily_recap_reader.py` reads a session from twelve durable stores (never `center._alerts`), four tabs, a decision's credit from its own timestamp, the phone digest untouched; inventory paragraph under "Application, runtime, and data ownership".
+- **WS-10C - the H1 retester watch (WISHLIST 10C step 1), merged 2026-09-13 (gate #116).** Rule sheet `h1_ema_bounce_v1`, a persistent watch kind armed from the chart, one fire then disarm, the phone through the armed price-alert sender in every mode, a yfinance H1 fallback for armed names (lead ruling); nothing reaches a detector.
+- **WS-WL - one Watchlist tab on the Trading Desk (WISHLIST 10G), merged 2026-09-13 (gate #117).** Five views over one pure row set, positions as read-only projections, every verb to its existing owner, the Chart Review and Focus Picks pages retired with their actions inventoried.
+- **WS-10I - two contexts per row, three verdicts per thesis (WISHLIST 10I), merged 2026-09-13 (gate #118).** `context_join` owns the one time rule (a D1 label is available at its session's close), three populations never pooled, the Results page-level By environment control, the backfill CLI dry-run by default.
+- **RV - Astra's independent sweep review answered (2026-09-13, review NO-GO -> five repair packets, tester -> builder -> reviewer, integration branch `lead/rv-integration`).** The review of the sweep at 85781c8f returned four blockers and one verification packet; every one is repaired on its own branch off the sweep tip c4df3ac8 and independently reviewed GO by reproduction: `claude/rv-h1-history` (B1: the backup H1 history is refreshed on PRIMARY coverage at completed session-aligned buckets, a failed refresh keeps the bars and says `stale`), `claude/rv-h1-arm-time` (B2: a new arm never fires on an old bounce - the event bar's END must be strictly after `armed_at`, attach never strip, the frozen rule untouched), `claude/rv-h1-phone-worker` (B3: the armed phone push is dispatched to an owned daemon worker and the poll returns at once), `claude/rv-live-gate-107` (B4: gate 107 names only doors that exist), `claude/rv-journal-test-order` (the Journal migration-failure test owns its own unprepared database). The lead added one fail-closed guard from the arm-time reviewer's advisory (`h1_event_is_post_arm` returns False for an undatable event). Nothing merges to `main`; Astra's acceptance, the trader's test week and the RP packet remain open. Detail: the inventory paragraphs under "Charts, review, alerts, and phone surfaces" and the checkpoint entry "2026-09-13 - REVIEW REPAIRS".
 
 ### 2026-09-12 - Workspace memory adopted from JumpStarter (trader-directed, docs and agent config only)
 

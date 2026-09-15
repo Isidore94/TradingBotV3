@@ -18,8 +18,10 @@ calibrated to.
 """
 
 import json
+import math
 import os
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -36,7 +38,49 @@ WATCH_KINDS = {
     "lod_avwap": "LOD AVWAP",
     "vwap_bounce": "VWAP bounce",
     "band_bounce": "σ-band bounce",
+    "pullback": "Pullback alert",
 }
+
+#: PCT-1 (trader, 2026-09-15: *"in the same vein as H1 retester we should
+#: rename it to Pullback alert and include any of these phenomena in the alert
+#: pattern"*). ONE button, ONE kind, named TRIGGERS: the hourly 15-EMA
+#: retester WISHLIST 10C shipped is now one of four things this watch waits
+#: for, and the other three are the trader's M15/M30 SMA pullback.
+PULLBACK_KIND = "pullback"
+
+#: The stored kind every watch armed before the rename carries. It is NOT a
+#: button any more and not in `WATCH_KINDS`; `chart_watch_from_dict` loads such
+#: a row as a `pullback` watch whose only trigger is the H1 bounce it was armed
+#: for, so nothing the trader armed is lost and nothing they did not ask for is
+#: added to it.
+H1_EMA_BOUNCE_KIND = "h1_ema_bounce"
+
+#: The four triggers a Pullback alert waits for. `h1_ema15_bounce` is the
+#: WISHLIST 10C rule, unchanged and still `h1_ema_bounce_v1`; the other three
+#: are `indicators.pullback_sma_reclaim`'s, on M15 and M30. Every fire names
+#: its trigger and its timeframe, so one button never hides which phenomenon
+#: spoke.
+TRIGGER_H1_EMA15_BOUNCE = "h1_ema15_bounce"
+TRIGGER_SMA_RECLAIM_LRSI = "sma_reclaim_lrsi"
+TRIGGER_RECLAIM_THEN_LRSI = "reclaim_then_lrsi"
+TRIGGER_SMA_RETEST = "sma_retest"
+PULLBACK_TRIGGERS = (
+    TRIGGER_H1_EMA15_BOUNCE,
+    TRIGGER_SMA_RECLAIM_LRSI,
+    TRIGGER_RECLAIM_THEN_LRSI,
+    TRIGGER_SMA_RETEST,
+)
+
+#: Watch kinds that are NOT session-scoped. Every other kind on this surface
+#: dies at midnight because it is a statement about today's tape ("a new high
+#: for the session"); the Pullback alert is a statement about a multi-day
+#: pattern and is given ten TRADING days by `armed_alert_expiry`, so it
+#: survives a desk restart and tomorrow's date roll. One name, three readers:
+#: `load_chart_watches` (which otherwise drops the whole file on a market-date
+#: mismatch), `watch_is_stale` (which the panel's M5 poll uses to retire), and
+#: the armed inventory's health column. A kind in here also belongs on the D1
+#: armed-event feed rather than the session M5 list.
+PERSISTENT_WATCH_KINDS = frozenset({PULLBACK_KIND})
 
 # The σ-band button mirrors the day-trade tracker's measured M5 winners:
 # long = dynamic_vwap_upper_band (ride above +1σ, dip-tag it, reclaim),
@@ -75,6 +119,10 @@ D1_EVENT_KINDS = {
     "avwape_break": "AVWAPE break",
     "avwape_dev1_bounce": "1σ bounce",
     "avwape_dev1_break": "1σ break",
+    # PCT-2 is deliberately the exception to the derived-level rule below:
+    # its scan line is frozen when the trader arms it, so a redraw cannot move
+    # the alert that was requested.
+    "trendline_break": "Trendline break",
 }
 
 # EXTENSION events say "the move is going": a new range high/low, or a close
@@ -95,6 +143,7 @@ D1_EXTENSION_KINDS = frozenset(
         "sma_break",
         "avwape_break",
         "avwape_dev1_break",
+        "trendline_break",
     }
 )
 D1_PULLBACK_KINDS = frozenset(D1_EVENT_KINDS) - D1_EXTENSION_KINDS
@@ -123,6 +172,28 @@ class ChartWatch:
     side: str = "WATCH"
     baseline: float | None = None
     source_text: str = ""
+    #: Stable identity for this ARM, so a fire can be de-duplicated on the
+    #: phone and a disarm/re-arm is unambiguously a new episode rather than a
+    #: second chance at the old one. Blank on every row written before
+    #: WISHLIST 10C - absent is blank, never an error.
+    watch_id: str = ""
+    #: What the trader is waiting for, in their own words, for the armed
+    #: inventory to print back at them.
+    reason: str = ""
+    #: PCT-1: which phenomena this watch waits for. Empty on every kind but
+    #: `pullback` (whose condition IS its trigger list) and on every row
+    #: written before the rename - absent is empty, never an error.
+    triggers: tuple[str, ...] = ()
+    #: trigger -> the bar time it last fired on, so one event speaks once and
+    #: a NEW episode's event still speaks. Persisted, so a desk restart does
+    #: not re-announce a move the trader was already told about.
+    fired: Mapping[str, str] = field(default_factory=dict)
+    #: The trader disarmed a watch the desk armed for them. The row is KEPT so
+    #: the auto-arm sweep does not simply put it back while that claim or
+    #: Focus pick lives; it is hidden from the Armed board, never evaluated
+    #: and never pushed. A watch the trader armed by hand is deleted on
+    #: disarm, exactly as before.
+    declined: bool = False
 
 
 @dataclass(frozen=True)
@@ -135,6 +206,9 @@ class ChartWatchTrigger:
     # bounce kinds a WATCH-side watch can hit either way; "" when the watch's
     # own side already says it.
     resolved_side: str = ""
+    # Measured facts the hosting panel copies onto the fired alert's payload.
+    # Empty for every kind whose message already says everything it measured.
+    details: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _naive(moment: datetime) -> datetime:
@@ -142,6 +216,13 @@ def _naive(moment: datetime) -> datetime:
     # arm times come from the same clock, so comparisons drop tzinfo rather
     # than convert across zones.
     return moment.replace(tzinfo=None) if moment.tzinfo is not None else moment
+
+
+def _parse_date(value: object) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def _session_bars(bars: Iterable[Mapping[str, Any]] | None, moment: datetime) -> list[dict[str, Any]]:
@@ -213,18 +294,47 @@ def arm_chart_watch(
         baseline = max(float(bar["high"]) for bar in session)
     elif kind == "new_lod" and session:
         baseline = min(float(bar["low"]) for bar in session)
+    resolved_side = side if side in ("LONG", "SHORT") else "WATCH"
     return ChartWatch(
         symbol=str(symbol or "").strip().upper(),
         kind=kind,
         armed_at=moment,
-        side=side if side in ("LONG", "SHORT") else "WATCH",
+        side=resolved_side,
         baseline=baseline,
         source_text=str(source_text or ""),
+        watch_id=uuid.uuid4().hex,
+        reason=watch_reason(kind, resolved_side),
+        triggers=PULLBACK_TRIGGERS if kind == PULLBACK_KIND else (),
     )
 
 
+def watch_reason(kind: str, side: str) -> str:
+    """What the trader is waiting for, for the armed inventory to print back.
+
+    Only the kinds whose condition is not already obvious from their label and
+    baseline carry one; everything else keeps the blank it has always had. The
+    Pullback alert names all three FAMILIES of trigger, because one button now
+    covers four phenomena and a health cell that said only "pullback" would
+    leave the trader guessing which one they are waiting on.
+    """
+    if kind == PULLBACK_KIND:
+        label = side if side in ("LONG", "SHORT") else "EITHER SIDE"
+        return (
+            f"waiting for a pullback entry ({label}): H1 15-EMA bounce, "
+            "M15/M30 SMA reclaim + LRSI, SMA retest"
+        )
+    return ""
+
+
 def watch_is_stale(watch: ChartWatch, *, now: datetime | None = None) -> bool:
-    """A watch never survives into the next session."""
+    """A session watch never survives into the next session.
+
+    A PERSISTENT kind does: it is a statement about a multi-day pattern, not
+    about today's tape, and its life is counted in trading days by
+    `armed_alert_expiry` instead.
+    """
+    if str(getattr(watch, "kind", "") or "") in PERSISTENT_WATCH_KINDS:
+        return False
     moment = _naive(now or datetime.now())
     return _naive(watch.armed_at).date() != moment.date()
 
@@ -250,7 +360,247 @@ def evaluate_chart_watch(
         return _evaluate_vwap_bounce(watch, completed)
     if watch.kind == "band_bounce":
         return _evaluate_band_bounce(watch, completed)
+    # The Pullback alert is deliberately absent: none of its four triggers is
+    # a session-scoped M5 condition. The `h1_ema15_bounce` one is evaluated
+    # once per COMPLETED H1 BAR by `evaluate_h1_bounce_watch` below, from the
+    # same cached M5 bars; the three SMA ones are evaluated on their own M15
+    # and M30 series by `indicators.pullback_sma_reclaim`.
     return None
+
+
+#: The ATR the H1 rule measures its distances in (Wilder, on H1 bars).
+H1_ATR_LENGTH = 14
+
+#: Which history a verdict was measured on, for the armed inventory to print.
+H1_SOURCE_CACHE = "cache"
+H1_SOURCE_YFINANCE = "yfinance"
+
+
+def h1_bars_for_watch(
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    fallback_h1_bars: Iterable[Mapping[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """(completed H1 bars, which source they came from).
+
+    **The desk's own cache is PRIMARY.** The fallback - `h1_history`'s yfinance
+    read for an armed symbol - is consulted only when the cached M5 window
+    cannot reach the rule's warm-up, and then only if it actually carries more
+    bars. A symbol whose cache is long enough never touches the network, which
+    is the property the second test in `tests/test_ws_10c_h1_retester_builder.py`
+    exists to hold.
+    """
+    from indicators.h1_ema_bounce import WARMUP_BARS, closed_h1_bars
+
+    cached = closed_h1_bars(m5_bars)
+    if len(cached) >= WARMUP_BARS or not fallback_h1_bars:
+        return cached, H1_SOURCE_CACHE
+    fallback = [dict(bar) for bar in fallback_h1_bars]
+    fallback.sort(key=lambda bar: _naive(bar["dt"]))
+    if len(fallback) <= len(cached):
+        return cached, H1_SOURCE_CACHE
+    return fallback, H1_SOURCE_YFINANCE
+
+
+def evaluate_h1_bounce_watch(
+    watch: ChartWatch,
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+    fallback_h1_bars: Iterable[Mapping[str, Any]] | None = None,
+):
+    """Run `h1_ema_bounce_v1` against the desk's cached M5 bars.
+
+    Returns the rule's own `H1Bounce` (or `None` when nothing is measurable):
+    the CALLER decides what a verdict costs, because a confirmation and an
+    invalidation both end the watch but only one of them is an event worth a
+    phone buzz.
+
+    Cost, since this runs on the Qt thread inside the 60 s armed poll: one
+    O(bars) pass to bucket ~1,100 cached M5 dicts into H1, one O(bars) ATR and
+    one O(bars) EMA over the ~55 resulting bars, per armed H1 watch. Nothing
+    is fetched and nothing is written; the M5 dicts are already materialised
+    by `_m5_bars_for`.
+
+    A WATCH-side arm (the chart had no side) is evaluated BOTH ways and the
+    first confirmation wins - the same courtesy the VWAP and σ-band kinds
+    already extend. It is never invalidated, because a close a full ATR
+    through the line is the other side's setup, not this one's failure.
+    """
+    h1_bars, _source = h1_bars_for_watch(m5_bars, fallback_h1_bars=fallback_h1_bars)
+    return evaluate_h1_bars(watch, h1_bars, now=now)
+
+
+#: A `chart_watch`-level verdict, NEVER an indicator reason: the frozen rule
+#: measured a real confirmation or invalidation, but its event bar had already
+#: finished printing when this watch was armed. `h1_ema_bounce_v1` is a
+#: statement about a series and knows nothing about arm times; deciding whose
+#: episode an event belongs to is this module's job, exactly as it is for the
+#: M5 kinds (`_evaluate_extreme`).
+H1_PRE_ARM_REASON = "pre_arm"
+
+
+def _market_local_zone():
+    """The desk's market-local zone, or None when there is no zone database."""
+    try:
+        from market_session import get_market_local_timezone
+
+        zone, _name = get_market_local_timezone()
+    except Exception:  # pragma: no cover - settings or tzdata unavailable
+        return None
+    return zone
+
+
+def _comparable_moments(left: datetime, right: datetime) -> tuple[datetime, datetime]:
+    """Two stamps that can be compared as instants - ATTACH, never strip.
+
+    `autopilot_core._gate_moment`'s pattern, and the 2026-08-19 outage's
+    lesson: a naive stamp here is market-local by this store's own convention
+    (`armed_at` stays naive) so the desk's zone is ATTACHED to it, while an
+    aware stamp is already an instant and is kept as the instant it is.
+    Stripping instead would read an arm written three hours west of the desk
+    as three hours EARLIER than it happened, turning a pre-arm arm into a
+    post-arm one - the quiet version of the same bug.
+    """
+    if (left.tzinfo is None) == (right.tzinfo is None):
+        return left, right
+    zone = _market_local_zone()
+    if zone is None:  # pragma: no cover - last resort, no zone to attach
+        return _naive(left), _naive(right)
+    if left.tzinfo is None:
+        left = left.replace(tzinfo=zone)
+    if right.tzinfo is None:
+        right = right.replace(tzinfo=zone)
+    return left, right
+
+
+def h1_bar_end(bar_dt: datetime) -> datetime:
+    """When the session-aligned H1 bar starting at `bar_dt` finished printing.
+
+    `bar_dt + 60 min`, except the day's short closing bucket, which ends at the
+    bell - the one definition, shared with the fetched history
+    (`h1_history.h1_bucket_end`), so the two sources cannot disagree about when
+    a bar became the past.
+    """
+    try:
+        from h1_history import h1_bucket_end
+
+        return h1_bucket_end(bar_dt)
+    except Exception:  # pragma: no cover - market_session unavailable
+        return bar_dt + timedelta(minutes=60)
+
+
+def h1_event_is_post_arm(watch: ChartWatch, event_bar_dt: datetime | None) -> bool:
+    """Is this event bar the armed trader's, rather than yesterday's news?
+
+    Eligible when the bar's END is STRICTLY after `armed_at`, which is the
+    armed-watch convention the M5 kinds already hold (`_evaluate_extreme`:
+    `_bar_end(bar) <= armed_at` is a pre-arm bar), inclusive on the pre-arm
+    side. A bar that was still FORMING when the button was pressed (started
+    before, ends after) is therefore the trader's once it completes - the same
+    courtesy the M5 kinds give.
+    """
+    armed_at = getattr(watch, "armed_at", None)
+    if not isinstance(event_bar_dt, datetime) or not isinstance(armed_at, datetime):
+        # An event that cannot be dated is NOT the trader's (lead ruling on
+        # the arm-time reviewer's advisory, 2026-09-13): missing data is
+        # uncertainty, never confirmation, so the fence fails CLOSED - the
+        # watch stays armed and answers on the next bar it can date.
+        # Unreachable today (`armed_at` is a required field and the frozen
+        # rule stamps `confirm_bar_dt` on every fire and invalidation).
+        return False
+    end, armed = _comparable_moments(h1_bar_end(event_bar_dt), armed_at)
+    return end > armed
+
+
+def _fence_pre_arm(watch: ChartWatch, result):
+    """A confirmation or invalidation that finished before the arm is not an event.
+
+    The frozen rule is NOT asked a different question and the series is NOT
+    trimmed: the EMA and the ATR still warm up over every bar, and while a
+    pre-arm closing-through bar sits inside the rule's age window the rule
+    keeps answering `invalidated` - the watch simply waits, exactly as it waits
+    on `awaiting_reclaim`, until that bar ages out or a post-arm event lands.
+    """
+    from indicators.h1_ema_bounce import REASON_INVALIDATED
+
+    if result is None:
+        return None
+    if not (result.fired or result.reason == REASON_INVALIDATED):
+        return result
+    event_bar_dt = getattr(result, "confirm_bar_dt", None)
+    if h1_event_is_post_arm(watch, event_bar_dt):
+        return result
+    note = "the event bar had already closed when this watch was armed"
+    if isinstance(event_bar_dt, datetime):
+        note = (
+            f"the {event_bar_dt.strftime('%m/%d %H:%M')} bar closed at "
+            f"{h1_bar_end(event_bar_dt).strftime('%H:%M')}, before this watch "
+            "was armed"
+        )
+    return replace(
+        result,
+        fired=False,
+        reason=H1_PRE_ARM_REASON,
+        reasons=tuple(result.reasons) + (note,),
+    )
+
+
+def evaluate_h1_bars(watch: ChartWatch, h1_bars, *, now: datetime | None = None):
+    """The rule against a series the caller has already chosen (see above).
+
+    **Only a POST-ARM event may finish the watch.** The rule anchors its
+    verdict at the LAST completed bar, so a series that already holds a
+    finished bounce would otherwise fire the instant the trader armed - on a
+    move that was over before they pressed the button (review blocker B2,
+    2026-09-13). Every bar is still kept for warm-up; what is fenced is the
+    EVENT, whose bar must END strictly after `armed_at` (`h1_event_is_post_arm`).
+    A pre-arm confirmation or invalidation comes back as `pre_arm`: not fired,
+    not invalidated, so the caller leaves the watch armed and nothing is
+    recorded, pushed or drawn.
+    """
+    from indicators.atr import wilder_atr
+    from indicators.h1_ema_bounce import REASON_INVALIDATED, evaluate
+
+    if not h1_bars:
+        return None
+    atr = wilder_atr(h1_bars, H1_ATR_LENGTH)
+    sides = (
+        (watch.side,) if watch.side in ("LONG", "SHORT") else ("LONG", "SHORT")
+    )
+    results = [
+        fenced
+        for fenced in (
+            _fence_pre_arm(watch, evaluate(h1_bars, side, atr=atr, now=now))
+            for side in sides
+        )
+        if fenced is not None
+    ]
+    if not results:
+        return None
+    for result in results:
+        if result.fired:
+            return result
+    live = [result for result in results if result.reason != REASON_INVALIDATED]
+    return live[0] if live else results[0]
+
+
+def h1_bounce_message(watch: ChartWatch, result) -> str:
+    """The one line the alert, the phone and the decision log all read."""
+    side = str(getattr(result, "side", "") or "").upper() or watch.side
+    touch = getattr(result, "touch_bar_dt", None)
+    confirm = getattr(result, "confirm_bar_dt", None)
+    when = ""
+    if isinstance(touch, datetime) and isinstance(confirm, datetime):
+        when = (
+            f" - tagged {touch.strftime('%m/%d %H:%M')}, "
+            f"reclaimed {confirm.strftime('%m/%d %H:%M')}"
+        )
+    distance = getattr(result, "distance_atr", None)
+    how_close = f" ({distance:.2f} ATR off the line)" if distance is not None else ""
+    return (
+        f"{watch.symbol} {side}: H1 15-EMA retest confirmed{when}{how_close}"
+    )
 
 
 def _evaluate_extreme(
@@ -483,18 +833,51 @@ def chart_watch_to_dict(watch: ChartWatch) -> dict:
         "side": watch.side,
         "baseline": watch.baseline,
         "source_text": watch.source_text,
+        "watch_id": watch.watch_id,
+        "reason": watch.reason,
+        "triggers": list(watch.triggers or ()),
+        "fired": dict(watch.fired or {}),
+        "declined": bool(watch.declined),
     }
 
 
 def chart_watch_from_dict(payload: Mapping[str, Any]) -> ChartWatch | None:
+    """One stored row, or None when it cannot be read at all.
+
+    A row stored as `h1_ema_bounce` before PCT-1 loads as a `pullback` watch
+    whose ONLY trigger is `h1_ema15_bounce`: nothing the trader armed is lost
+    by the rename, and nothing they did not ask for is added to it. A stored
+    `pullback` row with no trigger list is a row written by a build that had
+    only one list, so it gets all four.
+    """
     try:
         armed_at = datetime.fromisoformat(str(payload["armed_at"]))
         kind = str(payload["kind"])
         symbol = str(payload["symbol"] or "").strip().upper()
     except (KeyError, TypeError, ValueError):
         return None
+    stored_triggers = payload.get("triggers")
+    if kind == H1_EMA_BOUNCE_KIND:
+        kind = PULLBACK_KIND
+        if stored_triggers is None:
+            stored_triggers = [TRIGGER_H1_EMA15_BOUNCE]
     if not symbol or kind not in WATCH_KINDS:
         return None
+    if kind == PULLBACK_KIND:
+        triggers = tuple(
+            str(name)
+            for name in (
+                stored_triggers if stored_triggers is not None else PULLBACK_TRIGGERS
+            )
+        )
+    else:
+        triggers = ()
+    fired_payload = payload.get("fired")
+    fired = (
+        {str(key): str(value) for key, value in fired_payload.items()}
+        if isinstance(fired_payload, Mapping)
+        else {}
+    )
     baseline = payload.get("baseline")
     try:
         baseline = float(baseline) if baseline is not None else None
@@ -508,6 +891,12 @@ def chart_watch_from_dict(payload: Mapping[str, Any]) -> ChartWatch | None:
         side=side if side in ("LONG", "SHORT") else "WATCH",
         baseline=baseline,
         source_text=str(payload.get("source_text") or ""),
+        # Absent on every row written before WISHLIST 10C: blank, never a raise.
+        watch_id=str(payload.get("watch_id") or ""),
+        reason=str(payload.get("reason") or ""),
+        triggers=triggers,
+        fired=fired,
+        declined=bool(payload.get("declined") or False),
     )
 
 
@@ -544,13 +933,18 @@ def load_chart_watches(
         return []
     if not isinstance(payload, dict):
         return []
-    if str(payload.get("market_date") or "") != _market_date_text(market_date):
-        return []  # armed watches never survive into a new session
+    # Session watches never survive into a new session. The PERSISTENT kinds
+    # do - an H1 retester is armed for ten TRADING days, so a desk restart (or
+    # simply tomorrow) must not silently retire it while the session-scoped
+    # kinds beside it in the same file still go.
+    same_session = str(payload.get("market_date") or "") == _market_date_text(market_date)
     watches = []
     for item in payload.get("watches") or []:
         if isinstance(item, Mapping):
             watch = chart_watch_from_dict(item)
-            if watch is not None:
+            if watch is None:
+                continue
+            if same_session or watch.kind in PERSISTENT_WATCH_KINDS:
                 watches.append(watch)
     return watches
 
@@ -645,6 +1039,13 @@ class D1EventWatch:
     symbol: str
     kind: str
     armed_at: datetime
+    # The ordinary D1 event kinds derive a moving reference afresh. A
+    # trendline is the opposite: preserve the scan geometry the trader saw at
+    # arm time. Old rows keep their three original fields and therefore load
+    # safely, but a trendline row without this evidence cannot confirm.
+    side: str = ""
+    trendline_candidate: dict[str, Any] | None = None
+    trendline_knowledge_at: datetime | None = None
 
     @property
     def direction(self) -> str:
@@ -653,11 +1054,24 @@ class D1EventWatch:
 
 
 def d1_event_watch_to_dict(watch: D1EventWatch) -> dict:
-    return {
+    payload = {
         "symbol": watch.symbol,
         "kind": watch.kind,
         "armed_at": _naive(watch.armed_at).isoformat(),
     }
+    if watch.kind == "trendline_break":
+        payload.update(
+            {
+                "side": str(watch.side or "").strip().upper(),
+                "trendline_candidate": dict(watch.trendline_candidate or {}),
+                "trendline_knowledge_at": (
+                    watch.trendline_knowledge_at.isoformat()
+                    if watch.trendline_knowledge_at is not None
+                    else ""
+                ),
+            }
+        )
+    return payload
 
 
 def d1_event_watch_from_dict(payload: Mapping[str, Any]) -> D1EventWatch | None:
@@ -669,7 +1083,22 @@ def d1_event_watch_from_dict(payload: Mapping[str, Any]) -> D1EventWatch | None:
         return None
     if not symbol or kind not in D1_EVENT_KINDS:
         return None
-    return D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
+    if kind != "trendline_break":
+        return D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
+    candidate = payload.get("trendline_candidate")
+    knowledge_at = payload.get("trendline_knowledge_at")
+    try:
+        knowledge = datetime.fromisoformat(str(knowledge_at)) if knowledge_at else None
+    except (TypeError, ValueError):
+        knowledge = None
+    return D1EventWatch(
+        symbol=symbol,
+        kind=kind,
+        armed_at=armed_at,
+        side=str(payload.get("side") or "").strip().upper(),
+        trendline_candidate=dict(candidate) if isinstance(candidate, Mapping) else None,
+        trendline_knowledge_at=knowledge,
+    )
 
 
 def save_d1_event_watches(watches: Iterable[D1EventWatch], path: Path) -> None:
@@ -938,6 +1367,146 @@ def _cached_d1_event_levels(
     return levels
 
 
+def _trendline_candidate_is_frozen(candidate: Mapping[str, Any] | None) -> bool:
+    """Whether an armed trendline carries one exact, scan-known line.
+
+    The line id is derived by the chart's stable identity contract, while the
+    dates *and prices* record the two pivots which drew it.  A partial legacy
+    row remains readable, but no missing piece is safe to reconstruct in a
+    later poll.
+    """
+    if not isinstance(candidate, Mapping):
+        return False
+    try:
+        kind = str(candidate.get("type") or "").strip()
+        line_id = str(candidate.get("line_id") or "").strip()
+        start_date = _parse_date(candidate.get("start_date"))
+        end_date = _parse_date(candidate.get("end_date"))
+        lookback_end = _parse_date(candidate.get("lookback_end"))
+        break_date = _parse_date(candidate.get("break_date"))
+        start_price = float(candidate.get("start_price"))
+        end_price = float(candidate.get("end_price"))
+        price = float(candidate.get("current_line_price"))
+        slope = float(candidate.get("slope_log_per_bar"))
+    except (TypeError, ValueError):
+        return False
+    if (
+        not kind
+        or not line_id
+        or start_date is None
+        or end_date is None
+        or lookback_end is None
+        or break_date is None
+        or start_date >= end_date
+        or end_date > lookback_end
+        or break_date < end_date
+        or break_date > lookback_end
+        or line_id != f"d1_trendline:{kind}:{start_date.isoformat()}_{end_date.isoformat()}"
+    ):
+        return False
+    return all(
+        math.isfinite(value) and value > 0
+        for value in (start_price, end_price, price)
+    ) and math.isfinite(slope)
+
+
+def _trendline_anchor_index(daily: list[dict], candidate: Mapping[str, Any]) -> int | None:
+    anchor_date = _parse_date(candidate.get("lookback_end"))
+    if anchor_date is None:
+        return None
+    for index, bar in enumerate(daily):
+        if _naive(bar["dt"]).date() == anchor_date:
+            return index
+    return None
+
+
+def _weekday_offset(anchor: date, target: date) -> int:
+    """Fallback only for a narrow post-arm daily slice without the anchor."""
+    if target == anchor:
+        return 0
+    sign = 1 if target > anchor else -1
+    cursor = anchor
+    steps = 0
+    while cursor != target:
+        cursor += timedelta(days=sign)
+        if cursor.weekday() < 5:
+            steps += sign
+    return steps
+
+
+def _frozen_trendline_price(
+    candidate: Mapping[str, Any], daily: list[dict], index: int
+) -> float | None:
+    """Project the arm-time line onto one completed D1 bar, never a redraw."""
+    try:
+        anchor_price = float(candidate["current_line_price"])
+        slope = float(candidate["slope_log_per_bar"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    anchor_index = _trendline_anchor_index(daily, candidate)
+    if anchor_index is None:
+        anchor_date = _parse_date(candidate.get("lookback_end"))
+        target_date = _naive(daily[index]["dt"]).date()
+        if anchor_date is None:
+            return None
+        offset = _weekday_offset(anchor_date, target_date)
+    else:
+        offset = index - anchor_index
+    exponent = slope * offset
+    if abs(exponent) > 50:
+        return None
+    price = anchor_price * math.exp(exponent)
+    return price if math.isfinite(price) and price > 0 else None
+
+
+def _evaluate_frozen_trendline_break(
+    watch: D1EventWatch, daily: list[dict], moment: datetime
+) -> ChartWatchTrigger | None:
+    """One close-through of the exact D1 line captured when the watch armed."""
+    if not _trendline_candidate_is_frozen(watch.trendline_candidate):
+        return None
+    if not isinstance(watch.trendline_knowledge_at, datetime):
+        return None
+    side = str(watch.side or "").strip().upper()
+    if side not in {"LONG", "SHORT"}:
+        return None
+    armed_at = _naive(watch.armed_at)
+    candidate = watch.trendline_candidate
+    for index, bar in enumerate(daily):
+        stamp = _naive(bar["dt"])
+        if stamp.date() <= armed_at.date() or stamp.date() >= moment.date() or index == 0:
+            continue
+        line = _frozen_trendline_price(candidate, daily, index)
+        prior_line = _frozen_trendline_price(candidate, daily, index - 1)
+        if line is None or prior_line is None:
+            continue
+        try:
+            previous_close = float(daily[index - 1]["close"])
+            close = float(bar["close"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        crossed = (
+            previous_close <= prior_line and close > line
+            if side == "LONG"
+            else previous_close >= prior_line and close < line
+        )
+        if not crossed:
+            continue
+        break_date = stamp.date().isoformat()
+        return ChartWatchTrigger(
+            watch=watch,  # type: ignore[arg-type]
+            price=close,
+            bar_dt=stamp,
+            message=(
+                f"Trendline break ({side.lower()}): closed {close:.2f} through "
+                f"frozen line {line:.2f} (D1 bar {stamp:%m/%d})"
+            ),
+            resolved_side=side.lower(),
+            details={"break_date": break_date, "line_price": line},
+        )
+    return None
+
+
 def evaluate_d1_event_watch(
     watch: D1EventWatch,
     m5_bars: Iterable[Mapping[str, Any]] | None,
@@ -964,6 +1533,17 @@ def evaluate_d1_event_watch(
     """
     moment = _naive(now or datetime.now())
     armed_at = _naive(watch.armed_at)
+
+    daily = []
+    for bar in d1_bars or []:
+        stamp = bar.get("dt")
+        if isinstance(stamp, datetime):
+            daily.append(dict(bar))
+    daily.sort(key=lambda bar: _naive(bar["dt"]))
+    if watch.kind == "trendline_break":
+        # This event has no intraday path: a wick or a forming D1 bar is not
+        # confirmation, and the current scan is never consulted here.
+        return _evaluate_frozen_trendline_break(watch, daily, moment)
 
     session_bars = _session_bars(m5_bars, moment)
     completed = [bar for bar in session_bars if _bar_end(bar) <= moment]
@@ -994,12 +1574,6 @@ def evaluate_d1_event_watch(
                     resolved_side=side,
                 )
 
-    daily = []
-    for bar in d1_bars or []:
-        stamp = bar.get("dt")
-        if isinstance(stamp, datetime):
-            daily.append(bar)
-    daily.sort(key=lambda bar: _naive(bar["dt"]))
     for bar in daily:
         bar_date = _naive(bar["dt"]).date()
         # Completed sessions only, strictly after the arm date (the armed

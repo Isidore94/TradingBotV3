@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -15,7 +15,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -36,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from project_paths import (
     ALERT_REVIEW_EVENTS_FILE,
+    CLAIMED_PICKS_FILE,
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_PRIORITY_SETUPS_FILE,
     get_local_setting,
@@ -66,17 +66,48 @@ from ui.widgets.setup_detail_view import SetupDetailView
 # The segmented bucket selector. Values are sets of RAW bucket keys, so a
 # selection can span several buckets - which the old single-label combo box
 # could not express at all.
-BUCKET_SELECTIONS = {
-    "fav_hc_near": ("Fav + HC + Near", "Favorites, high conviction, and near-zone setups"),
-    "fav_hc": ("Fav + HC", "Favorites and high conviction only"),
-    "all": ("All", "Every bucket, including study and tracking rows"),
+# Packet D1C-A (trader, 2026-09-14): *"Provide independently selectable FAV,
+# HC, and My liked trades filters. Let me select any combination."* The three
+# exclusive selections that lived here could express three views and no others,
+# so "favourites and my liked trades" - the trader's own reading order - was
+# unselectable. These are five CHIPS: any combination of the first four, and
+# `All`, which means no bucket filter at all.
+#: "the claims file has never been read", which is not the same answer as "the
+#: file is not there" (a real, cacheable stamp of None).
+_CLAIMS_UNREAD = object()
+
+CHIP_ALL = "all"
+BUCKET_CHIP_KEYS = (
+    "favorite_setup",
+    "high_conviction",
+    "near_favorite_zone",
+    "claimed_like",
+)
+BUCKET_CHIPS = {
+    "favorite_setup": ("FAV", "Favourite setups"),
+    "high_conviction": ("HC", "High-conviction setups"),
+    "near_favorite_zone": ("Near", "Near the favourite zone"),
+    "claimed_like": ("Liked", "Setups you liked and claimed on a review chart"),
+    CHIP_ALL: ("All", "Every bucket, including study and tracking rows"),
 }
-BUCKET_SELECTION_KEYS = {
-    "fav_hc_near": {"favorite_setup", "high_conviction", "near_favorite_zone"},
-    "fav_hc": {"favorite_setup", "high_conviction"},
+#: No setting yet: the trader's four working buckets. `All` is one click away.
+DEFAULT_BUCKET_CHIPS = frozenset(BUCKET_CHIP_KEYS)
+#: The new persisted key (a sorted list of raw bucket keys).
+SETTING_BUCKET_CHIPS = "qt_setups_bucket_chips"
+#: Trader, 2026-09-15: a row vetoed for the day leaves the setups table. OFF
+#: hides (and counts) the rejected rows; ON shows them with their red ✕.
+SETTING_SHOW_VETOED = "qt_setups_show_vetoed"
+#: Where a setups-table row is charted from; the centre chart quotes it.
+SETUPS_CHART_ORIGIN = "the Master AVWAP setups"
+#: ...and the one it replaces, migrated ONCE on the first read. Each old value
+#: gains `claimed_like`, because a trader looking at their favourites wants the
+#: ones they claimed themselves in the same view.
+SETTING_BUCKET_FILTER_LEGACY = "qt_setups_bucket_filter"
+BUCKET_FILTER_MIGRATION = {
+    "fav_hc_near": {"favorite_setup", "high_conviction", "near_favorite_zone", "claimed_like"},
+    "fav_hc": {"favorite_setup", "high_conviction", "claimed_like"},
     "all": set(),
 }
-DEFAULT_BUCKET_SELECTION = "fav_hc_near"
 _SHADOW_SECTION_TITLE = "Stretched - shadow would demote (NO LIVE CHANGE)"
 _SHADOW_ROW_RE = re.compile(r"^\s{2}(?P<symbol>[A-Z][A-Z0-9._\-]*)\s+(?:LONG|SHORT)\s+")
 
@@ -280,6 +311,75 @@ class _FamilyRecordWorker(QThread):
         self.done.emit((records, coverage))
 
 
+class _ScanFreshnessWorker(QThread):
+    """The scan's three clocks, off the Qt thread - WS-10A item 2.
+
+    It opens two files (the scan manifest and one `stat` of the priority
+    report), which is why it is a worker and not a call inside
+    `refresh_from_reports`: that path runs on the trader's own click and on the
+    report watcher's signal, and a shared-home read there is a stall charged to
+    them. Never raises into Qt - a strip that cannot be built says nothing
+    rather than taking down the swing screen.
+
+    Emits the finished sentence, or "" when nothing could be read.
+    """
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            import project_paths
+            from datetime import datetime as _datetime
+
+            from market_session import get_market_local_timezone
+            from master_avwap_lib import scan_manifest
+
+            manifest = scan_manifest.read_manifest()
+            report_mtime = None
+            try:
+                stamp = Path(project_paths.MASTER_AVWAP_PRIORITY_SETUPS_FILE).stat().st_mtime
+                local_tz, _name = get_market_local_timezone()
+                report_mtime = _datetime.fromtimestamp(stamp, tz=local_tz)
+            except OSError:
+                # No report on disk yet. Missing data is uncertainty: the line
+                # says "no report" rather than inventing a clock.
+                report_mtime = None
+            line = scan_manifest.freshness_line(manifest, report_mtime=report_mtime)
+        except Exception:  # noqa: BLE001 - one strip, never the table
+            line = ""
+        self.done.emit(line)
+
+
+class _AiStateCompressionWorker(QThread):
+    """Parse `master_avwap_ai_state.json` OFF the Qt thread - PCT-3.
+
+    The compression measure the `compressed` chip reads lives per symbol in
+    that file, and the file is 36 MB: one `json.load` of it was measured at
+    281-292 ms on the desk. `refresh_from_reports` runs on the trader's own
+    click AND on the report watcher, several times around a scan, so parsing
+    there is a third of a second of frozen table every time a file moves -
+    exactly the rule `CLAUDE.md` states as "nothing expensive belongs on the Qt
+    thread, and 'expensive' includes a stylesheet".
+
+    So the parse happens here and the Qt thread only ever fills rows from the
+    warm cache. Emits `True` when the cache actually CHANGED, which is the
+    panel's cue to run one more (coalesced) refresh; `False` otherwise, so a
+    warm cache costs no repaint at all. Never raises into Qt.
+    """
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        changed = False
+        try:
+            from ui.services import ai_state_levels
+
+            changed = bool(ai_state_levels.warm_cache())
+        except Exception:  # noqa: BLE001 - one chip, never the table
+            changed = False
+        self.done.emit(changed)
+
+
 class _PointsEvidenceWorker(QThread):
     """Log today's ranked rows, grade the log against the tracker's outcomes,
     write the weight proposal (trader, 2026-09-08). Never raises into Qt.
@@ -316,12 +416,40 @@ class _PointsEvidenceWorker(QThread):
         self.done.emit(sentence)
 
 
+class _DayDecisionsWorker(QThread):
+    """Today's likes and rejects for the ★/✕ columns (WS-SX), off the Qt thread.
+
+    One parse of three JSONL ledgers - the same cached, mtime-keyed read the
+    "Reviewed today" badge uses - so an unchanged day costs a dict lookup and a
+    changed one costs it here rather than in `paint`. It never raises into Qt:
+    an unreadable ledger means the table wears the marks it already had.
+    """
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            from pick_feedback import decisions_today
+
+            payload = decisions_today()
+        except Exception:  # noqa: BLE001 - two glyphs, never the table
+            payload = None
+        self.done.emit(payload)
+
+
 class MasterAvwapPanel(QWidget):
     setupSelected = Signal(object)
     rowsChanged = Signal(int, int, int)
     statusChanged = Signal(str)
 
-    def __init__(self, focus_service=None, parent=None, *, review_events_path=None) -> None:
+    def __init__(
+        self,
+        focus_service=None,
+        parent=None,
+        *,
+        review_events_path=None,
+        claimed_picks_path=None,
+    ) -> None:
         super().__init__(parent)
         self.focus_service = focus_service
         # Swing-side decision log for the review-learning loop: the table's
@@ -340,6 +468,23 @@ class MasterAvwapPanel(QWidget):
             if review_events_path is not None
             else (ALERT_REVIEW_EVENTS_FILE if default_store else None)
         )
+        # Packet D1C-A. The trader's claimed D1 picks, merged into this table
+        # on every refresh. Same gate as the review-events path above: a test
+        # panel writes and reads nothing unless it was handed a path, so the
+        # live store is never touched from a bare `MasterAvwapPanel()`.
+        self._claimed_picks_path = (
+            Path(claimed_picks_path)
+            if claimed_picks_path is not None
+            else (CLAIMED_PICKS_FILE if default_store else None)
+        )
+        #: mtime+size+day keyed cache over the claims file. ONE small read when
+        #: the file changed, never one per refresh and never on the paint path
+        #: (nothing expensive on the Qt thread). The DAY is part of the key
+        #: because the fade is a session clock: a desk left running past
+        #: midnight has to re-ask.
+        self._claims_cache: list[dict] = []
+        self._claims_cache_stamp: object = _CLAIMS_UNREAD
+        self._claims_cache_day: str = ""
         self.scan_service = ScanService(self)
         self.scan_service.started.connect(self._on_scan_started)
         self.scan_service.finished.connect(self._on_scan_finished)
@@ -378,6 +523,16 @@ class MasterAvwapPanel(QWidget):
         self._next_snapshot_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._next_snapshot_shortcut.activated.connect(self._open_next_symbol_snapshot)
         self.table.add_row_action("D1+M5 Snapshot Chart", self._open_symbol_snapshot)
+        # WS-SX. Today's decisions behind the ★ and the ✕, refreshed off the Qt
+        # thread and repainted through the SAME coalescer a Focus change uses:
+        # both answers are "repaint those two columns", and one burst is one
+        # repaint whichever of them arrived.
+        self._day_decisions = None
+        self._day_decisions_date = ""
+        self._decisions_worker = None
+        self._focus_repaint_coalescer = SignalCoalescer(
+            lambda: self._refresh_decision_marks(), parent=self
+        )
         if self.focus_service is not None:
             self.delegate.set_focus_lookup(self.focus_service.is_focus)
             # The ★ column: click to favorite into Swing Focus / click again to remove.
@@ -396,12 +551,18 @@ class MasterAvwapPanel(QWidget):
             # that morning adopted 45 picks one at a time. `setup_delegate.py`
             # paint lines were the single hottest stack in the stall log.
             # One repaint per burst says exactly as much as 45 did.
-            self._focus_repaint_coalescer = SignalCoalescer(
-                lambda: self._repaint_focus_stars(), parent=self
-            )
             self.focus_service.focusChanged.connect(
                 self._focus_repaint_coalescer.request
             )
+        # Packet D1C-A, lead ruling: registered OUTSIDE the `focus_service`
+        # block above, because dropping a claim touches no Focus store. It is
+        # OFFERED only on the rows it can act on (reviewer advisory): on a row
+        # with no claim behind it the verb could only answer "not one of your
+        # claimed picks", which is not a menu entry, it is noise.
+        self.table.add_row_action(
+            "Drop my claim", self._drop_row_claim, visible=self._row_is_claimed
+        )
+        self._request_decision_refresh()
 
         self.empty_state = EmptyState(
             "Run a scan to see setups",
@@ -435,6 +596,16 @@ class MasterAvwapPanel(QWidget):
         self.data_as_of_label.setObjectName("MutedLabel")
         self.last_run_label = QLabel("Last run: never")
         self.last_run_label.setObjectName("MutedLabel")
+        # WS-10A item 2: the scan's OWN record, which `Last run:` is not - that
+        # label is written only by `_on_scan_finished`, so after a failed scan
+        # (or a restart) it says nothing at all about what is on screen.
+        self._scan_freshness_key: object = object()
+        # PCT-3: the ai_state file's `(mtime_ns, size)` the last worker parsed,
+        # so a burst of watcher signals costs ONE 36 MB parse and one refresh.
+        self._ai_state_compression_key: object = object()
+        self._ai_state_compression_worker = None
+        self.scan_freshness_label = QLabel("")
+        self.scan_freshness_label.setObjectName("MutedLabel")
         # ST1 item 3: what the Family favorable % column IS - outcome kind,
         # horizon in its own unit, window, coverage. Filled from the same worker
         # read that fills the column, blank until it lands.
@@ -478,14 +649,12 @@ class MasterAvwapPanel(QWidget):
 
         self._build_bucket_toggle()
         self._build_points_toggle()
+        self._build_show_vetoed_toggle()
         self._build_overflow_menu()
         self._column_profile = ""
         self._build_layout()
         self.set_column_profile("compact")
-        self.set_bucket_selection(
-            str(get_local_setting("qt_setups_bucket_filter", DEFAULT_BUCKET_SELECTION)
-                or DEFAULT_BUCKET_SELECTION)
-        )
+        self.set_bucket_chips(self._load_bucket_chip_keys())
         self._configure_report_watcher()
         self.refresh_from_reports(emit_empty=False)
         # QFileSystemWatcher can miss atomic replacements on synced/network
@@ -494,6 +663,12 @@ class MasterAvwapPanel(QWidget):
         self.report_poll_timer = QTimer(self)
         self.report_poll_timer.setInterval(30_000)
         self.report_poll_timer.timeout.connect(self._poll_report_changes)
+        # WS-SX rides the same 30 s tick rather than owning a timer: the ★/✕ are
+        # about TODAY, so the only thing left to notice is the day rolling under
+        # a desk that was left running. Its own slot, because
+        # `_poll_report_changes` is called unbound by a test with a stand-in
+        # self and must keep answering exactly one question.
+        self.report_poll_timer.timeout.connect(self._check_decision_day_roll)
         start_staggered(self.report_poll_timer, 43_000)
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.setInterval(15_000)
@@ -506,6 +681,9 @@ class MasterAvwapPanel(QWidget):
         # Caught up once on the way back in, so a page that was hidden across a
         # scheduler slot shows the right status immediately.
         self._scheduler_tick()
+        # ...and so does a page that was hidden while the trader vetoed a name
+        # from the chart, or across a day roll (WS-SX).
+        self._request_decision_refresh()
 
     def _build_layout(self) -> None:
         """One control strip over the table.
@@ -524,6 +702,7 @@ class MasterAvwapPanel(QWidget):
             strip.addWidget(button)
         strip.addSpacing(6)
         strip.addWidget(self.points_toggle)
+        strip.addWidget(self.show_vetoed_toggle)
         strip.addWidget(self.search_input, 1)
         strip.addWidget(self.data_as_of_label)
         strip.addWidget(self.overflow_button)
@@ -532,6 +711,7 @@ class MasterAvwapPanel(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.addWidget(self.status_label)
         status_row.addStretch(1)
+        status_row.addWidget(self.scan_freshness_label)
         status_row.addWidget(self.points_grade_label)
         status_row.addWidget(self.family_record_label)
         status_row.addWidget(self.last_run_label)
@@ -545,24 +725,27 @@ class MasterAvwapPanel(QWidget):
 
     # ------------------------------------------------------------------
     def _build_bucket_toggle(self) -> None:
-        """Segmented bucket selector replacing the combo box.
+        """Five independently checkable bucket chips (packet D1C-A).
 
-        The combo could only ever express ONE bucket label, so the desk's
-        headline view - favourites and high-conviction together - was
-        unselectable. These map to sets of raw bucket keys instead.
+        They replace three EXCLUSIVE selections, which is why this is not a
+        `QButtonGroup` any more: that group's whole job was making sure only
+        one could be on, and the trader asked for exactly the opposite. A row
+        passes when ANY of its buckets is checked (`row.bucket_keys &
+        selected`), so a row that is HC and FAV and claimed shows under each of
+        the three rather than under whichever one happened to be primary.
         """
-        self.bucket_buttons: dict[str, QPushButton] = {}
-        self._bucket_group = QButtonGroup(self)
-        self._bucket_group.setExclusive(True)
-        for key, (label, tip) in BUCKET_SELECTIONS.items():
+        self.bucket_chips: dict[str, QPushButton] = {}
+        for key, (label, tip) in BUCKET_CHIPS.items():
             button = QPushButton(label)
             button.setCheckable(True)
             button.setToolTip(tip)
             button.clicked.connect(
-                lambda _checked=False, selection=key: self.set_bucket_selection(selection)
+                lambda _checked=False, chip=key: self._on_bucket_chip_clicked(chip)
             )
-            self._bucket_group.addButton(button)
-            self.bucket_buttons[key] = button
+            self.bucket_chips[key] = button
+        # The old name for the same widgets, now keyed by raw bucket key
+        # instead of by view name.
+        self.bucket_buttons = self.bucket_chips
 
     def _build_points_toggle(self) -> None:
         """The point-system switch (trader, 2026-09-08): reorders, never hides.
@@ -586,6 +769,47 @@ class MasterAvwapPanel(QWidget):
         self.points_grade_label = QLabel("")
         self.points_grade_label.setObjectName("MutedLabel")
         self._refresh_points_tooltip()
+
+    def _build_show_vetoed_toggle(self) -> None:
+        """Trader, 2026-09-15: *"vetoing it for the day SHOULD remove it from the
+        list (but the stock should still be tracked for setup tracker purposes)."*
+
+        The table hides a row whose symbol the trader vetoed, disliked or parked
+        today (`pick_feedback.HIDDEN_REJECT_KINDS`) and says how many it is
+        holding back; the box brings them back with their red ✕. Presentation
+        only - the scan, the tracker and the evidence rows are untouched.
+        """
+        self.show_vetoed_toggle = QCheckBox("Show vetoed")
+        self.show_vetoed_toggle.setToolTip(
+            "A row you vetoed, disliked or parked for the day is hidden from this table "
+            "(the setup tracker keeps tracking it). Tick to show those rows again."
+        )
+        stored = bool(get_local_setting(SETTING_SHOW_VETOED, False))
+        self.show_vetoed_toggle.setChecked(stored)
+        self.proxy.set_filters(show_rejected=stored)
+        self.show_vetoed_toggle.toggled.connect(self._on_show_vetoed_toggled)
+
+    def _on_show_vetoed_toggled(self, checked: bool) -> None:
+        try:
+            save_local_setting(SETTING_SHOW_VETOED, bool(checked))
+        except Exception:  # noqa: BLE001 - a preference never costs the table
+            pass
+        self.proxy.set_filters(show_rejected=bool(checked))
+        self._refresh_show_vetoed_label()
+
+    def _refresh_show_vetoed_label(self) -> None:
+        hidden = self.proxy.hidden_rejected()
+        self.show_vetoed_toggle.setText(f"Show vetoed ({hidden})" if hidden else "Show vetoed")
+
+    def _rejected_today_symbols(self) -> frozenset[str]:
+        """Today's swing-side rejects, from the snapshot the ★/✕ columns read."""
+        decisions = self._day_decisions
+        if decisions is None:
+            return frozenset()
+        try:
+            return frozenset(decisions.rejected_symbols())
+        except Exception:  # noqa: BLE001 - an odd payload hides nothing
+            return frozenset()
 
     def _refresh_points_tooltip(self) -> None:
         """The checkbox tooltip carries the grade and the weights in force."""
@@ -750,19 +974,129 @@ class MasterAvwapPanel(QWidget):
         self.overflow_button.setMenu(menu)
         self._overflow_menu = menu
 
-    def set_bucket_selection(self, selection: str) -> None:
-        """Filter the table to a named group of buckets, and remember it."""
-        selection = selection if selection in BUCKET_SELECTIONS else DEFAULT_BUCKET_SELECTION
-        self._bucket_selection = selection
-        button = self.bucket_buttons.get(selection)
-        if button is not None and not button.isChecked():
-            button.setChecked(True)
-        save_local_setting("qt_setups_bucket_filter", selection)
+    def _load_bucket_chip_keys(self) -> set[str]:
+        """The stored chip selection, migrating the old exclusive value ONCE.
+
+        An empty stored list is a real answer (`All`), so it is the ABSENCE of
+        the new key - never its emptiness - that triggers the migration.
+        """
+        stored = get_local_setting(SETTING_BUCKET_CHIPS, None)
+        if isinstance(stored, (list, tuple, set)):
+            return {
+                str(key).strip().lower() for key in stored if str(key).strip()
+            } & set(BUCKET_CHIP_KEYS)
+        legacy = str(
+            get_local_setting(SETTING_BUCKET_FILTER_LEGACY, "") or ""
+        ).strip().lower()
+        if legacy in BUCKET_FILTER_MIGRATION:
+            return set(BUCKET_FILTER_MIGRATION[legacy])
+        return set(DEFAULT_BUCKET_CHIPS)
+
+    def active_bucket_chip_keys(self) -> set[str]:
+        """The bucket keys the trader has chosen. Empty means `All`."""
+        return set(getattr(self, "_bucket_chip_keys", set()))
+
+    def set_bucket_chips(self, keys) -> None:
+        """Check exactly these chips, remember them, and re-filter.
+
+        Empty means no bucket filter: `All` lights up and every row shows. That
+        is the same answer as "nothing checked", which is why the trader can
+        never end up with a blank strip hiding the whole table.
+        """
+        selected = {
+            str(key).strip().lower() for key in (keys or ()) if str(key).strip()
+        } & set(BUCKET_CHIP_KEYS)
+        self._bucket_chip_keys = selected
+        for key in BUCKET_CHIP_KEYS:
+            chip = self.bucket_chips.get(key)
+            if chip is not None and chip.isChecked() != (key in selected):
+                chip.setChecked(key in selected)
+        all_chip = self.bucket_chips.get(CHIP_ALL)
+        if all_chip is not None and all_chip.isChecked() != (not selected):
+            all_chip.setChecked(not selected)
+        save_local_setting(SETTING_BUCKET_CHIPS, sorted(selected))
         self._apply_filters()
+
+    def _on_bucket_chip_clicked(self, key: str) -> None:
+        """One chip was clicked; the selection is what the chips now say."""
+        if key == CHIP_ALL:
+            self.set_bucket_chips(set())
+            return
+        self.set_bucket_chips(
+            {
+                chip_key
+                for chip_key in BUCKET_CHIP_KEYS
+                if self.bucket_chips[chip_key].isChecked()
+            }
+        )
 
     def _repaint_focus_stars(self) -> None:
         """Repaint the table because Focus membership moved. Presentation only."""
         self.table.viewport().update()
+
+    def refresh_decisions(self) -> None:
+        """Public door for the desk: the trader decided something on the centre
+        chart (a veto, a claim), so the ★/✕ marks and the hide filter are stale."""
+        self._request_decision_refresh()
+
+    def _request_decision_refresh(self) -> None:
+        """Ask for ONE repaint of the ★/✕ columns, at most one per 200 ms.
+
+        Safe to call from any capture verb in a tight loop - that is the whole
+        point of the coalescer (2026-08-31).
+        """
+        coalescer = getattr(self, "_focus_repaint_coalescer", None)
+        if coalescer is not None:
+            coalescer.request()
+
+    def _refresh_decision_marks(self) -> None:
+        """The coalesced reaction: re-ask the ledgers, then repaint.
+
+        The repaint happens immediately because a Focus change needs nothing
+        read; the decision snapshot lands a moment later and repaints again only
+        if it actually changed.
+        """
+        self._start_day_decisions()
+        self._repaint_focus_stars()
+
+    def _start_day_decisions(self) -> None:
+        worker = getattr(self, "_decisions_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _DayDecisionsWorker(self)
+        worker.done.connect(self._on_day_decisions_ready)
+        self._decisions_worker = worker
+        worker.start()
+
+    def _on_day_decisions_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        if payload is None:
+            return
+        if payload == self._day_decisions:
+            return  # nothing the trader can see changed; do not repaint 60 rows
+        self._day_decisions = payload
+        self._day_decisions_date = str(getattr(payload, "trade_date", "") or "")
+        self.delegate.set_decision_lookup(payload.for_symbol)
+        # Trader, 2026-09-15: a veto for the day removes the row. The same
+        # snapshot that paints the red ✕ now also hides the row (and counts it).
+        self.proxy.set_filters(rejected_symbols=self._rejected_today_symbols())
+        self._refresh_show_vetoed_label()
+        self._repaint_focus_stars()
+
+    def _check_decision_day_roll(self) -> None:
+        """The marks reset on the day roll, with the desk left running.
+
+        Rides the report poll rather than owning a timer: the question is
+        "is the snapshot still about today?", and asking it every 30 s costs two
+        timezone conversions.
+        """
+        try:
+            from pick_feedback import _trade_date_text
+
+            today = _trade_date_text()
+        except Exception:  # noqa: BLE001 - a clock never costs the table
+            return
+        if self._day_decisions_date and today != self._day_decisions_date:
+            self._request_decision_refresh()
 
     def flush_pending_refresh(self) -> None:
         """Run an owed coalesced repaint now. The seam the tests drive."""
@@ -777,10 +1111,14 @@ class MasterAvwapPanel(QWidget):
         selected buckets, so a report of unbucketed or study-only rows shows
         them rather than an empty table the trader cannot explain.
         """
-        keys = BUCKET_SELECTION_KEYS.get(getattr(self, "_bucket_selection", ""), set())
+        keys = self.active_bucket_chip_keys()
         if not keys:
             return set()
-        available = {row.bucket.strip().lower() for row in self.model.rows()}
+        # Asked of every bucket a row belongs to, not just its primary one: a
+        # claimed high-conviction row answers to HC and to Liked.
+        available: set[str] = set()
+        for row in self.model.rows():
+            available |= row.bucket_keys
         return keys if (keys & available) else set()
 
     def set_column_profile(self, profile: str) -> None:
@@ -1197,8 +1535,101 @@ class MasterAvwapPanel(QWidget):
             label.setText(self._family_record_coverage)
             label.setToolTip(self._family_record_coverage)
 
+    def _scan_freshness_signature(self) -> tuple:
+        """`(manifest stamp, report stamp)` - two `stat` calls, nothing parsed.
+
+        The read itself is the worker's job; this is only the question "has
+        either file moved since the last time we asked?". Deliberately computed
+        on the Qt thread and BEFORE the worker starts: the report watcher fires
+        `refresh_from_reports` several times around a scan, and a second worker
+        racing the first is how a "never on paint" guarantee quietly becomes a
+        "usually not on paint" one.
+        """
+        import project_paths as _paths
+
+        stamps = []
+        for path in (
+            _paths.MASTER_AVWAP_SCAN_MANIFEST_FILE,
+            _paths.MASTER_AVWAP_PRIORITY_SETUPS_FILE,
+        ):
+            try:
+                stat = Path(path).stat()
+                stamps.append((stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                stamps.append(None)
+        return tuple(stamps)
+
+    def _start_scan_freshness_read(self) -> None:
+        signature = self._scan_freshness_signature()
+        if signature == self._scan_freshness_key:
+            return
+        self._scan_freshness_key = signature
+        worker = _ScanFreshnessWorker(self)
+        worker.done.connect(self._on_scan_freshness_ready)
+        self._scan_freshness_worker = worker
+        worker.start()
+
+    def _on_scan_freshness_ready(self, line: object) -> None:  # pragma: no cover - signal seam
+        text = str(line or "")
+        if not text:
+            # Nothing could be read, so nothing is claimed - and the signature
+            # is released so the next refresh tries again.
+            self._scan_freshness_key = object()
+        label = getattr(self, "scan_freshness_label", None)
+        if label is not None:
+            label.setText(text)
+            label.setToolTip(text)
+
+    def _ai_state_signature(self) -> tuple:
+        """One `stat` of the ai_state file - nothing parsed (PCT-3).
+
+        Asked on the Qt thread and BEFORE the worker starts, for the same
+        reason `_scan_freshness_signature` is: the report watcher fires
+        `refresh_from_reports` several times around a scan, and a second parse
+        racing the first is how "never on the Qt thread" becomes "usually".
+        """
+        import project_paths as _paths
+
+        try:
+            stat = Path(_paths.MASTER_AVWAP_AI_STATE_FILE).stat()
+        except OSError:
+            return ()
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _start_ai_state_compression_read(self) -> None:
+        signature = self._ai_state_signature()
+        if not signature or signature == self._ai_state_compression_key:
+            return
+        self._ai_state_compression_key = signature
+        worker = _AiStateCompressionWorker(self)
+        worker.done.connect(self._on_ai_state_compression_ready)
+        # The worker is parented to the panel, so without this every scan-day's
+        # watcher signals leave a finished QThread alive for the life of the
+        # window - the same leak G7's fix round found on the read worker. Drop
+        # the reference and let Qt free it on the next event loop pass.
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_ai_state_compression_finished)
+        self._ai_state_compression_worker = worker
+        worker.start()
+
+    def _on_ai_state_compression_finished(self) -> None:  # pragma: no cover - signal seam
+        self._ai_state_compression_worker = None
+
+    def _on_ai_state_compression_ready(self, changed: object) -> None:  # pragma: no cover - signal seam
+        """One coalesced refresh, and only when the cache actually moved.
+
+        A warm cache costs nothing here; a changed one costs exactly one more
+        `refresh_from_reports`, which now fills from memory. The signature is
+        already stored, so that refresh cannot start the worker again.
+        """
+        if not bool(changed):
+            return
+        self.refresh_from_reports(emit_empty=False)
+
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
         self._start_family_record_read()
+        self._start_scan_freshness_read()
+        self._start_ai_state_compression_read()
         meta = load_latest_setup_rows_with_meta()
         rows = meta["rows"]
         _apply_swing_quality_shadow_badges(rows)
@@ -1284,8 +1715,15 @@ class MasterAvwapPanel(QWidget):
     def set_rows(self, rows: list[SetupRow]) -> None:
         if self._uses_default_feedback_paths:
             _apply_reviewed_today_badges(rows)
+        self._request_decision_refresh()
+        # The rows AS THEY ARRIVED are the scan's, so the four re-apply paths
+        # (points switch, learned weights, family records, Working-lately
+        # order) hand the scan's rows back here and the claims are merged
+        # afresh - which is also how a dropped claim leaves the table.
         self._working_lately_source_rows = list(rows)
-        rows = self._by_points(self._prioritised(self._working_lately_source_rows))
+        rows = self._by_points(
+            self._prioritised(self._merge_active_claims(self._working_lately_source_rows))
+        )
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
         self._apply_filters()
@@ -1308,6 +1746,127 @@ class MasterAvwapPanel(QWidget):
             sum(1 for row in rows if row.bucket.strip().lower() in {"favorite_setup", "high_conviction"}),
             sum(1 for row in rows if row.bucket.strip().lower() == "near_favorite_zone"),
         )
+
+    # ------------------------------------------------------------------
+    # Packet D1C-A: the trader's claimed D1 picks
+    # ------------------------------------------------------------------
+    def active_claims(self) -> list[dict]:
+        """The live claims, from an mtime-keyed cache over the claims file.
+
+        Trader, 2026-09-14: *"Claimed picks must survive refreshes, rescans and
+        restarts."* The FILE is the persistence - this panel holds no list of
+        its own, so a second panel built on the same store sees the same picks.
+        """
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return []
+        try:
+            stat = Path(path).stat()
+            stamp: object = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        try:
+            today = date.today().isoformat()
+        except Exception:  # noqa: BLE001 - a clock never costs the table
+            today = self._claims_cache_day
+        if stamp == self._claims_cache_stamp and today == self._claims_cache_day:
+            return self._claims_cache
+        rows: list[dict] = []
+        if stamp is not None:
+            try:
+                import claimed_picks
+
+                rows = claimed_picks.active_claims(Path(path))
+            except Exception:  # noqa: BLE001 - an unreadable store costs no row
+                rows = []
+        self._claims_cache = rows
+        self._claims_cache_stamp = stamp
+        self._claims_cache_day = today
+        return rows
+
+    def _merge_active_claims(self, rows: list[SetupRow]) -> list[SetupRow]:
+        """The scan's rows plus the trader's claims. Pure, and never in place."""
+        claims = self.active_claims()
+        if not claims:
+            return list(rows)
+        try:
+            from ui.services.claimed_setup_rows import merge_claims
+
+            return merge_claims(rows, claims)
+        except Exception:  # noqa: BLE001 - a claim never costs the scan's rows
+            return list(rows)
+
+    def refresh_claims(self) -> None:
+        """A claim was made, dropped or expired: re-merge from the scan's rows.
+
+        The slot the Alert Center's `claimsChanged` reaches. It re-reads one
+        small file and re-sorts rows already in memory; nothing is re-scanned.
+        """
+        self._claims_cache_stamp = _CLAIMS_UNREAD
+        source = getattr(self, "_working_lately_source_rows", None)
+        if source is not None:
+            self.set_rows(list(source))
+
+    def _row_is_claimed(self, proxy_index) -> bool:
+        """Does this row carry a claim "Drop my claim" could end?
+
+        The same two facts the verb itself checks - the `claimed_like` bucket
+        key and a setup id to end - so the menu can never offer a verb that
+        would refuse.
+        """
+        if not proxy_index.isValid():
+            return False
+        row = self.model.row_at(self.proxy.mapToSource(proxy_index).row())
+        if row is None or "claimed_like" not in row.bucket_keys:
+            return False
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        return bool(str(raw.get("claimed_setup_id") or "").strip())
+
+    def _drop_row_claim(self, proxy_index) -> None:
+        """"Drop my claim" - end a claim, and only a claim.
+
+        Registered UNCONDITIONALLY, outside the `focus_service` block beside
+        it: a claim writes nothing to Focus (D1C0 decision 1), so dropping one
+        must not need a Focus service to exist. The ★ and the ✕ are untouched -
+        a veto or a dislike never retracts a claim, and only this verb or the
+        ten-session fade ends one (P5).
+        """
+        if not proxy_index.isValid():
+            return
+        row = self.model.row_at(self.proxy.mapToSource(proxy_index).row())
+        if row is None:
+            return
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        setup_id = str(raw.get("claimed_setup_id") or "").strip()
+        if "claimed_like" not in row.bucket_keys or not setup_id:
+            message = f"{row.symbol}: not one of your claimed picks."
+            self.status_label.setText(message)
+            self.statusChanged.emit(message)
+            return
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is None:
+            return
+        written = None
+        try:
+            import claimed_picks
+
+            written = claimed_picks.record_drop(
+                row.symbol, row.side, setup_id, source="setups_table", path=Path(path)
+            )
+        except Exception:  # noqa: BLE001 - never raise out of a menu action
+            written = None
+        if written is None:
+            message = (
+                f"{row.symbol}: the claim could not be dropped - "
+                "claimed_picks.jsonl could not be written."
+            )
+            self.status_label.setText(message)
+            self.statusChanged.emit(message)
+            return
+        self.refresh_claims()
+        message = f"{row.symbol}: claim dropped. Nothing else changed."
+        self.status_label.setText(message)
+        self.statusChanged.emit(message)
 
     def filtered_rows(self) -> list[SetupRow]:
         rows: list[SetupRow] = []
@@ -1422,7 +1981,7 @@ class MasterAvwapPanel(QWidget):
         if self._chart_sink is not None:
             # On the Trading Desk the centre chart is the one chart; the Space
             # / Prev / Next walk lands there too, one row at a time.
-            self._chart_sink(row.symbol, side=side, origin="the Master AVWAP setups")
+            self._chart_row_on_desk(row, proxy_index.row())
             return
         bot = None
         if self._bounce_service is not None:
@@ -1443,6 +2002,73 @@ class MasterAvwapPanel(QWidget):
             # never requires touching the table itself.
             review_host=self,
         )
+
+    def _chart_row_on_desk(self, row: SetupRow, proxy_row: int) -> bool:
+        """Chart one setups row on the centre chart, with the way to the next one.
+
+        Trader, 2026-09-15: *"when i click on master avwap setups tab and then I
+        click the veto or like and claim buttons it should cycle it to the next
+        pick."* The centre chart knows nothing of this table, so the row goes
+        over with a `next_pick` callback that charts the row after it in THIS
+        table's visible order; the Alert Center calls it instead of its own
+        waiting list when a chart opened from here is vetoed, claimed or
+        stepped past. Each charted row carries its own callback, so the walk
+        continues row by row until the table runs out.
+        """
+        if self._chart_sink is None:
+            return False
+        side = row.side if row.side in {"LONG", "SHORT"} else ""
+        symbol, row_side = row.symbol, row.side
+
+        def _next() -> bool:
+            return self._chart_next_pick(symbol, row_side, proxy_row)
+
+        return bool(
+            self._chart_sink(row.symbol, side=side, origin=SETUPS_CHART_ORIGIN, next_pick=_next)
+            is not False
+        )
+
+    def _row_at_proxy(self, proxy_row: int) -> SetupRow | None:
+        source = self.proxy.mapToSource(self.proxy.index(proxy_row, 0))
+        return self.model.row_at(source.row())
+
+    def _chart_next_pick(self, symbol: str, side: str, proxy_row: int) -> bool:
+        """Chart the visible row after `(symbol, side)`; False when there is none.
+
+        The row is looked up by identity first (its position may have moved
+        under a refresh); a row that has already left the table - the hide
+        filter caught up with the veto - is answered by the row that took its
+        place. The vetoed symbol itself and any symbol rejected today are
+        skipped, so the walk never lands on a chart the trader just finished.
+        """
+        if self._chart_sink is None:
+            return False
+        count = self.proxy.rowCount()
+        position = None
+        for candidate in range(count):
+            row = self._row_at_proxy(candidate)
+            if row is not None and row.symbol == symbol and row.side == side:
+                position = candidate
+                break
+        start = position + 1 if position is not None else max(0, int(proxy_row))
+        rejected = self._rejected_today_symbols()
+        for candidate in range(start, count):
+            row = self._row_at_proxy(candidate)
+            if row is None or not row.symbol or row.symbol == symbol or row.symbol in rejected:
+                continue
+            symbol_column = next(
+                column
+                for column, (key, _label) in enumerate(self.model.COLUMNS)
+                if key == "symbol"
+            )
+            index = self.proxy.index(candidate, symbol_column)
+            self.table.setCurrentIndex(index)
+            self.table.scrollTo(index)
+            return self._chart_row_on_desk(row, candidate)
+        message = f"End of the setups list - nothing after {symbol}."
+        self.status_label.setText(message)
+        self.statusChanged.emit(message)
+        return False
 
     def _open_symbol_snapshot_from_double_click(self, proxy_index) -> None:
         """Keep the existing row double-click without reopening symbol clicks."""
@@ -1576,6 +2202,10 @@ class MasterAvwapPanel(QWidget):
 
     def _record_review_event(self, action: str, row: SetupRow, detail: dict) -> None:
         """Swing decision -> alert_review_events.jsonl. Best-effort, never UI-visible."""
+        # WS-SX: the trader just decided something about this name, so the ★/✕
+        # columns are stale. Asked FIRST and unconditionally - the decision
+        # happened whether or not this panel is the one that logs it.
+        self._request_decision_refresh()
         if self._review_events_path is None:
             return
         try:
