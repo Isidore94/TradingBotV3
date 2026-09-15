@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QToolTip
 
 import avwape_side
+import compression_chip
 from ui import theme
 from ui.models.setup import SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupTableModel
@@ -152,7 +153,7 @@ class SetupTableDelegate(QStyledItemDelegate):
         the model re-emitting `dataChanged` for a hover.
         """
         if event is not None and event.type() == QEvent.Type.ToolTip:
-            text = self._decision_tooltip(index) or self._wrong_side_tooltip(index)
+            text = self._decision_tooltip(index) or self._bucket_tooltip(index)
             if text:
                 QToolTip.showText(event.globalPos(), text, view)
                 return True
@@ -172,6 +173,21 @@ class SetupTableDelegate(QStyledItemDelegate):
         except Exception:
             return None
 
+    @staticmethod
+    def _compression_read(row):
+        """This row's compression reading, or None. Never raises (PCT-3).
+
+        `paint` and `sizeHint` both ask, so it stays what `compression_chip` is:
+        a handful of dict lookups, no I/O and no clock. The numbers arrive on
+        `row.raw` from the `ai_state` merge in `data_feed`, off the Qt thread.
+        """
+        if not isinstance(row, SetupRow):
+            return None
+        try:
+            return compression_chip.read_row(row.raw)
+        except Exception:
+            return None
+
     def _wrong_side_tooltip(self, index) -> str:
         """The bucket cell's extra line when the row is on the wrong side.
 
@@ -181,12 +197,35 @@ class SetupTableDelegate(QStyledItemDelegate):
         key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
         if key != "bucket":
             return ""
-        read = self._wrong_side_read(index.data(ROW_ROLE))
-        text = avwape_side.tooltip_text(read)
-        if not text:
+        return avwape_side.tooltip_text(self._wrong_side_read(index.data(ROW_ROLE)))
+
+    def _compression_tooltip(self, index) -> str:
+        """The bucket cell's extra line when the scan flagged the row compressed.
+
+        The same shape as the wrong-side line: an ADDITION, never a replacement.
+        """
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key != "bucket":
+            return ""
+        return compression_chip.tooltip_text(self._compression_read(index.data(ROW_ROLE)))
+
+    def _bucket_tooltip(self, index) -> str:
+        """Everything the bucket cell has to say, its own label first.
+
+        Its bucket label, then WS-WS's wrong-side line, then PCT-3's compression
+        line - each one only when it has something to say. `""` when neither
+        badge applies, so a plain cell still falls through to Qt's own tooltip
+        handling exactly as it did before either packet existed.
+        """
+        extra = [
+            text
+            for text in (self._wrong_side_tooltip(index), self._compression_tooltip(index))
+            if text
+        ]
+        if not extra:
             return ""
         existing = str(index.data(Qt.ItemDataRole.ToolTipRole) or "").strip()
-        return f"{existing}\n{text}" if existing else text
+        return "\n".join([existing, *extra] if existing else extra)
 
     def _decision_tooltip(self, index) -> str:
         key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
@@ -224,6 +263,10 @@ class SetupTableDelegate(QStyledItemDelegate):
                 # it. Width only: the row height is the setups height either way
                 # (G2b pins that).
                 width += _chip_width(option.font, avwape_side.WRONG_SIDE_LABEL) + _CHIP_GAP
+            compression = self._compression_read(index.data(ROW_ROLE))
+            if compression is not None and compression.flag:
+                # PCT-3: the same reasoning for the third chip.
+                width += _chip_width(option.font, compression_chip.COMPRESSED_LABEL) + _CHIP_GAP
         return QSize(width, max(size.height(), _ROW_HEIGHT))
 
     def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
@@ -274,16 +317,35 @@ class SetupTableDelegate(QStyledItemDelegate):
             # SHORT whose close sits over it, is BADGED - after the bucket chip,
             # never over it. Display only: the row is still here, still in the
             # same place, still with the same score.
+            last_chip = bucket_chip
             read = self._wrong_side_read(row)
             if read is not None and read.wrong:
+                last_chip = (
+                    self._chip(
+                        painter,
+                        option,
+                        rect,
+                        avwape_side.WRONG_SIDE_LABEL,
+                        "caution",
+                        study=is_study,
+                        after=bucket_chip,
+                    )
+                    or last_chip
+                )
+            # PCT-3 (trader 2026-09-15): the scan has always docked a compressed
+            # row's score in silence. The chip says so - AFTER the bucket and
+            # wrong-side chips, never over them. Display only: nothing is
+            # hidden, nothing is re-ordered, no score moves.
+            compression = self._compression_read(row)
+            if compression is not None and compression.flag:
                 self._chip(
                     painter,
                     option,
                     rect,
-                    avwape_side.WRONG_SIDE_LABEL,
-                    "caution",
+                    compression_chip.COMPRESSED_LABEL,
+                    compression_chip.COMPRESSED_TOKEN,
                     study=is_study,
-                    after=bucket_chip,
+                    after=last_chip,
                 )
         elif key == "score" and is_setup and row.score is not None:
             self._score(painter, option, rect, row.score, selected)

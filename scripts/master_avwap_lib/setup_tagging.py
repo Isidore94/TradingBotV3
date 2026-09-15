@@ -186,6 +186,14 @@ def derive_setup_tag_payload(
     for tag in source_tags:
         add(tag, "trigger", f"legacy_setup_tags={tag}")
 
+    # PCT-3 item 4. A TRIGGER, not a confirmation: `compression_break_v1` says
+    # the setup's own entry event printed on the last completed session (a
+    # compressed box yesterday, a close out of it in this side's direction on a
+    # bar at least 1.0 ATR-20 wide). The rule lives once, in
+    # `legacy.evaluate_compression_break_v1`; this only reads its flag.
+    if bool(row.get("compression_break_recent")):
+        add("COMPRESSION_BREAK", "trigger", "compression_break_recent=true")
+
     # Confirmations are deliberately side-aware where the underlying metric is
     # directional.  This prevents a strong-looking but backwards RS label.
     if bool(row.get("top_pattern_entry")):

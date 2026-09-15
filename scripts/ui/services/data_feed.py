@@ -363,6 +363,7 @@ def enrich_setup_rows_for_display(
     """Best-effort local display enrichment; setup ranking stays untouched."""
     if not rows:
         return rows
+    merge_compression_from_ai_state(rows)
     try:
         from ui.services.setup_group_context import (
             enrich_setup_group_context,
@@ -374,6 +375,50 @@ def enrich_setup_rows_for_display(
     except Exception as exc:
         logging.warning("Could not enrich Master AVWAP group context: %s", exc)
     return rows
+
+
+def merge_compression_from_ai_state(rows: Iterable[SetupRow]) -> int:
+    """Fill each row's compression fields from the scan's `ai_state` (PCT-3).
+
+    The setups table is built from `master_avwap_priority_setups.txt`, whose
+    ranked lines carry the symbol, side, score, family and bucket and nothing
+    about compression. `master_avwap_ai_state.json` carries the whole reading
+    per symbol, so the two are joined HERE - in the load path, on whichever
+    thread asked for the rows - and never in `paint`, which runs once per
+    visible cell per repaint and may not touch a file (`CLAUDE.md`: nothing
+    expensive belongs on the Qt thread).
+
+    The join is by SYMBOL: the anchored compression box is a property of the
+    symbol's current earnings anchor, not of the side being traded, and the
+    `ai_state` file holds one entry per symbol. A row that already carries a
+    reading (the focus feed's rows do) keeps its own - the merge only fills.
+
+    Returns how many rows were filled. A missing or unreadable file fills
+    nothing and costs nothing: an evidence read never costs the rows it
+    annotates.
+    """
+    filled = 0
+    try:
+        from ui.services.ai_state_levels import load_symbol_compression
+
+        by_symbol = load_symbol_compression()
+    except Exception as exc:  # noqa: BLE001 - a chip never costs the table
+        logging.warning("Could not read ai_state compression fields: %s", exc)
+        return 0
+    if not by_symbol:
+        return 0
+    for row in rows or ():
+        raw = getattr(row, "raw", None)
+        if not isinstance(raw, dict):
+            continue
+        entry = by_symbol.get(str(getattr(row, "symbol", "")).strip().upper())
+        if not entry:
+            continue
+        added = {key: value for key, value in entry.items() if key not in raw}
+        if added:
+            raw.update(added)
+            filled += 1
+    return filled
 
 
 def setup_row_from_mapping(
