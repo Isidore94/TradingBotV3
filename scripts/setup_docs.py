@@ -529,9 +529,11 @@ SETUP_DOCS: dict[str, dict] = {
     # Entry timing and breaks (trader, 2026-09-15, PCT-1/2/3). Three names the
     # trader asked to be able to CLAIM a pick under. They are graded by name
     # through `claimed_pick_evidence._by_setup` and nothing else is needed for
-    # the "My claims" tab; `detection` here is one string rather than the
-    # bullet list the older entries use, because what it has to name is the
-    # trigger VOCABULARY the alert writes, in one sentence.
+    # the "My claims" tab. In the pullback entry each TRIGGER NAME is its own
+    # bullet, heading the rule under it: those three strings are the
+    # vocabulary every fire, feed row and `watch_fired` row writes, so they
+    # have to appear here exactly as the alert spells them rather than buried
+    # inside a sentence.
     # ---------------------------------------------------------------------
     "pullback_sma_reclaim": {
         "label": "Pullback reclaim (M15 150 / M30 75 SMA)",
@@ -544,16 +546,24 @@ SETUP_DOCS: dict[str, dict] = {
             "point is to time an entry into a D1 thesis with a shorter chart, not to find a new "
             "name."
         ),
-        "detection": (
-            "Rule sheet pullback_sma_reclaim_v1, armed as the Pullback alert. sma_reclaim_lrsi: a "
-            "completed close back above the SMA after one below it, with an LRSI cross up "
-            "through 80 on that bar or the two before it (labelled lrsi_from_below_50 when the "
-            "oscillator was under 50 two to four bars before the cross). reclaim_then_lrsi: the "
-            "M30 has reclaimed and every completed close since holds the 75-SMA, and the LRSI "
-            "crosses 80 later on the M30 or the M15. sma_retest: a later completed bar tags the "
-            "SMA within 0.25 ATR-14 (or through it) and still closes on the right side. Completed "
-            "bars only; a close back through the SMA starts a new episode."
-        ),
+        "detection": [
+            "Rule sheet pullback_sma_reclaim_v1, armed under the chart as the Pullback alert and "
+            "automatically on every claimed D1 pick and swing Focus name. Three triggers, each "
+            "named on its own fire:",
+            "sma_reclaim_lrsi",
+            "A completed close back above the SMA after one below it, with an LRSI cross up "
+            "through 80 on that bar or the two before it — labelled lrsi_from_below_50 when the "
+            "oscillator was also under 50 two to four bars before the cross.",
+            "reclaim_then_lrsi",
+            "The M30 has reclaimed and every completed close since holds the 75-SMA, and the "
+            "LRSI crosses 80 later — on the M30 itself or on the M15.",
+            "sma_retest",
+            "A completed bar AFTER the reclaim tags the SMA (low within 0.25 ATR-14 of it, or "
+            "clean through it) and still closes on the right side.",
+            "Completed bars only, 160 M15 / 85 M30 bars of warm-up and 24 h of silence is "
+            "unmeasured; a completed close back through the SMA starts a new episode and every "
+            "trigger may speak again in it.",
+        ],
         "entry": (
             "On the completed bar that fired, or the next open. The trigger and the timeframe are "
             "both on the alert, so the claim records WHICH of the three you took."
@@ -576,10 +586,11 @@ SETUP_DOCS: dict[str, dict] = {
             "setup. The scan already draws and tracks that line; this is the claim for taking the "
             "break of it."
         ),
-        "detection": (
+        "detection": [
             "A completed D1 close through the scan's own frozen trendline for this name and side "
-            "(the line behind priority_trendline_candidate), once per symbol, side and break date."
-        ),
+            "(the line behind priority_trendline_candidate).",
+            "Once per symbol, side and break date.",
+        ],
         "entry": "On the completed daily close through the line, or the next open.",
         "stop": "Back inside the line - a close on the other side of it ends the thesis.",
         "targets": "The measured move of the range the line contained, then the daily band plan.",
@@ -594,12 +605,13 @@ SETUP_DOCS: dict[str, dict] = {
             "that makes a compressed pick unattractive is what makes the break of it worth "
             "taking."
         ),
-        "detection": (
-            "Labelled compression_break_v1: the previous completed session was is_compressed on "
-            "the scan's anchor-compression measure, and the current completed close leaves the "
-            "compression range in the setup's direction on a bar whose range is at least 1.0 "
-            "ATR-20."
-        ),
+        "detection": [
+            "Labelled compression_break_v1.",
+            "The previous completed session was is_compressed on the scan's own "
+            "anchor-compression measure.",
+            "The current completed close leaves the compression range in the setup's direction, "
+            "on a bar whose range is at least 1.0 ATR-20.",
+        ],
         "entry": "On the completed daily close out of the range, or the next open.",
         "stop": "Back inside the compression range; a close back in it says the coil is not done.",
         "targets": "The height of the range projected from the break, then the daily band plan.",
