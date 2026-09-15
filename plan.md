@@ -267,6 +267,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.26** | WISHLIST sweep (trader 2026-09-12) | Every WISHLIST item built as ONE feature dump on the side branch `claude/wishlist-sweep-2026-09-12` for a week of trader testing, Astra review after code completion, then a merge decision. **IN BUILD; the per-item status table is the checkpoint entry "2026-09-12 - WISHLIST SWEEP".** |
 | **0.27** | Claimed D1 picks (trader 2026-09-14) | A CLAIMED like on a D1 chart becomes a ranked pick in Master AVWAP Setups, the D1 chart is done, M5 stays on the left and D1 on the right, and the claims are graded beside FAV/HC. **BUILT 2026-09-14 as packets D1C-A / D1C-L / D1C-B on `lead/d1c-integration` above the sweep tip; live gates #119-#121 owed; nothing merged to `main`.** |
 | **0.28** | Day-trade watchlists reset after the close (trader 2026-09-15) | `longs.txt` / `shorts.txt` are wiped after every session's close by the first Auto Pilot tick that sees a list written at or before that close; a name typed after the close is tomorrow's; swing lists untouched. **BUILT 2026-09-15 on `claude/desk-combined-2026-09-14`; live gate #123 owed.** |
+| **0.29** | Pullback alert, trendline break, compression (trader 2026-09-15) | The H1 retester becomes the Pullback alert with M15 150-SMA / M30 75-SMA reclaim, LRSI 80-cross and SMA-retest triggers, auto-armed on claimed D1 picks and swing Focus; three new claim names; a `compressed` chip and a read-only calibration CLI against the trader's compression vetoes before any penalty change; `trendline_break` and `compression_break` tags with a D1 trendline-break event. **PLANNED 2026-09-15 as packets PCT-1..3 on `claude/pullback-compression-2026-09-15`; spec `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -374,6 +375,21 @@ file applied only under the trader's `Points: learned weights` switch (default O
 Remaining, trader's call: turn the learned weights on once the grade line shows a lift over the
 floor; the AWAY digest's swing order by points (it ranks by the Wilson bound today); the base
 weights - every one is a named constant at the top of `setup_points.py`.
+
+## Phase 0.29 — Pullback alert, trendline break, compression (trader 2026-09-15) — PLANNED, packets PCT-1..3 on `claude/pullback-compression-2026-09-15`
+
+Trader, 2026-09-15: strong names making new highs are watched for a pullback on M15 (150-SMA) and
+M30 (75-SMA): below the SMA, then a reclaim with an LRSI reversal ("cross up through 80, ideally
+below 50 two to four bars before"), or a reclaim then a later M30/M15 LRSI reversal while holding
+the SMA, or a retest of the SMA; the H1 retester is renamed the Pullback alert and carries all of
+these; new claim names for pullback, trendline break and compression break; compression is
+MEASURED and checked against the trader's vetoes (the most common veto, 36 % pooled) before any
+penalty is tuned. Answers recorded: chart arm plus auto-arm on claimed D1 picks and swing Focus;
+measure and chip first; every named ask-first file may be edited additively for this work. The
+spec, verified premises, packet texts, tests and gates: `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`.
+Sections 5-7 bind: no existing detector rule or score changes, completed bars only, missing history
+is `not measured`, nothing hidden, `review_policy.json` untouched. WISHLIST 10C steps 2-3 are
+narrowed into this phase (no H4; a trendline break-then-retest stays in WISHLIST).
 
 ## Phase 0.28 — Day-trade watchlists reset after the close (trader 2026-09-15) — BUILT the same day on `claude/desk-combined-2026-09-14`; live gate #123 owed
 

@@ -50,6 +50,7 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 | [`SWING_QUALITY_AND_FEEDBACK_PLAN.md`](SWING_QUALITY_AND_FEEDBACK_PLAN.md) | Phase 0.5 R3: swing quality classifier, pre-close honesty, dislike reasons |
 | [`DESK_CHART_UNIFICATION_PLAN.md`](DESK_CHART_UNIFICATION_PLAN.md) | Phase 0.5 R4: CaptureRail on every chart, armed-alert paint, repetition control; plus WS-CH's "History and the viewport" (how many bars exist vs how many are visible) |
 | [`M5_SIGNAL_ENGINES_PLAN.md`](M5_SIGNAL_ENGINES_PLAN.md) | Phase 0.5 R5: pure indicators, completed-bars rule, LRSI/confluence/ORB engines |
+| [`PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`](PULLBACK_COMPRESSION_TRENDLINE_PLAN.md) | Phase 0.29 (trader 2026-09-15): the Pullback alert (M15/M30 SMA reclaim + LRSI, H1 retester folded in), the `compressed` chip and calibration CLI, the trendline-break tag and event; packets PCT-1..3 and the resume brief |
 | [`JOURNAL_RELIABILITY_AND_UX_PLAN.md`](JOURNAL_RELIABILITY_AND_UX_PLAN.md) | Phase 0.5 R7: broker import, reconciliation, the five-tab Journal |
 | [`WEEKEND_PREP_PLAN.md`](WEEKEND_PREP_PLAN.md) | Phase 0.5 R8: guided weekend routine and strength boards |
 | [`AVWAP_BAND_VARIANT_STUDY.md`](AVWAP_BAND_VARIANT_STUDY.md) | Phase 0.10/0.19: the OneOption band challenger and its shadow harnesses |
