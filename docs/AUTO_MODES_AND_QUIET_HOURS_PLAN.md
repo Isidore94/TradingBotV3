@@ -508,8 +508,20 @@ them is the same request as the button under the chart. It rides the SAME
 auto-arm sweep itself scans nothing, discovers nothing and adopts nothing: it reads two
 stores the trader wrote and arms one watch per name. The count of always-on push
 exceptions stays at two, and the M15/M30 fetch that rides with it
-(`scripts/intraday_history.py`) is the same one-symbol, one-interval, own-thread read as
-the H1 one below, outside quiet hours for the same reason.
+(`scripts/intraday_history.py`) is the same one-interval, own-thread read as the H1 one
+below - batched into one multi-ticker request per 50 names since the PCT-1 review -
+outside quiet hours for the same reason.
+
+**What an auto-armed watch does NOT push** (lead decision 2026-09-15 after the PCT-1
+review measured ~85 fires a session at 108 armed watches, 70 % of them retests; the
+trader may overrule). A watch the DESK armed pushes the two ENTRY triggers -
+`sma_reclaim_lrsi` and `reclaim_then_lrsi` - and writes `sma_retest` as a feed row and a
+`watch_fired` review row **without** a phone buzz. A watch the TRADER armed by hand
+pushes all three, because they asked for that exact name by pressing the button.
+Nothing is withheld either way: every fire is on the feed and in the evidence, and this
+is a volume decision about the phone, not a suppression rule. A standing arm also
+de-duplicates its pushes on the EVENT (`watch_id:trigger:timeframe:bar`) rather than on
+the arm, or only its first fire of a ten-day watch would ever leave the desk.
 
 **One outbound fetch rides with it, and it is not a scan.** When an armed H1 retester's
 cached M5 window is short of the rule's warm-up, `scripts/intraday_history.py` (was

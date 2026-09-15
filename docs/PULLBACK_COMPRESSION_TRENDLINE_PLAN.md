@@ -17,7 +17,7 @@ checkout, and never a merge to `main` without the trader's word.
 
 | Packet | What | Status |
 |---|---|---|
-| PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | BUILT 2026-09-15 on `claude/pct-1-pullback` - all 8 items, the tester's 40 red tests green plus 4 added; live gate owed (section 5's gate text) |
+| PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | BUILT 2026-09-15 on `claude/pct-1-pullback`, then REVIEWED NO-GO and repaired on the same branch - six blockers (push de-dup key, `arm_watch` scored as a take, 1.92 s on the Qt thread, 285 downloads, the closing bar dropped, a declined watch that could not be re-armed) and five advisories. All 8 items; 40 tester tests + 21 added green; live gate owed (section 5's gate text, plus the phone-volume split) |
 | PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | PLANNED 2026-09-15 - runs in parallel with PCT-1 (disjoint files) |
 | PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | PLANNED - after PCT-1 and PCT-3 land (shares their files) |
 

@@ -5484,17 +5484,17 @@ close is the right moment or the wipe should wait for the evening. Gate #123.
   armed sender (`_push_armed_watch` -> `notify_armed_watch`), which is the recorded exception
   class beside the Research/Focus price alerts; recorded as an amendment in
   `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. One `watch_fired` review row per fire, carrying
-  `trigger`, `timeframe`, `rule_version` and `lrsi_from_below_50`.
+  `trigger`, `timeframe`, `rule_version` and `lrsi_from_below_50` - and, since the review, an
+  auto-armed watch's `sma_retest` is a row and a feed line without a phone buzz (see the review
+  round below).
 - **The M15 and M30 history is fetched, and never on the Qt thread.** The desk has no cached M15
   or M30 series at all, so unlike the H1 leg these two have no primary to fall back FROM:
   `IntradayHistoryCache` (`scripts/intraday_history.py`, the WISHLIST 10C H1 cache generalised by
   `interval_minutes`; `h1_history.H1HistoryCache` is now that class fixed at 60) is the only
   source. One yfinance call per completed session-aligned bucket per symbol, on the cache's own
-  worker, zero IB traffic. PCT-1 added one clause: **once the bell has rung on a session, a symbol
-  already asked for inside it is refused** - on a 15-minute grid four more buckets close between a
-  midday poll and the close, so the old per-bucket rule alone would fetch all evening for bars
-  that cannot move. A symbol never asked still gets its one catch-up fetch, so arming a watch at
-  18:00 is not blind until morning.
+  worker, zero IB traffic, and since the review ONE multi-ticker download per chunk of 50 symbols
+  rather than one per name. The rule is **once per completed session bucket, including the one the
+  bell cuts short, and never outside the session's own buckets**.
 - **The health cell is one state per timeframe, joined with `;`** - `H1 from cache; not measured
   (0 of 160 M15 bars); M30 from yfinance`. Each H1 string is byte-identical to the one WS-10C
   shipped; only the joining is new, and a watch stored before the rename still reads exactly as it
@@ -5509,7 +5509,58 @@ close is the right moment or the wipe should wait for the evening. Gate #123.
   `claimed_pick_evidence._by_setup` and nothing else is needed for the "My claims" tab. WISHLIST
   10C's fence still holds: an armed watch grades nothing, joins no cohort, and reaches no
   detector, score, tier, gate, watchlist, Focus list, review queue or `review_policy.json`.
-- **One related widening in `claimed_picks`.** `record_drop`'s `claimed_setup_id` now defaults to
-  blank, and a retraction that names NO setup ends every claim on that `(symbol, side)` - the
-  whole thesis, which is what a caller that never knew the setup id means by "drop it". Every
-  existing caller still names its setup and is still exact.
+- **`claimed_picks.record_drop` is unchanged**, and that is a decision. PCT-1 briefly gave
+  `claimed_setup_id` a blank default and made a nameless drop end every claim on a `(symbol,
+  side)`; the review sent it back and the lead agreed - a wildcard retraction is a wider
+  production semantic than any caller needed, and the test that wanted it simply names the setup
+  it claimed.
+
+### What the review round changed (2026-09-15, six blockers)
+
+The first build was measured against copies of the live stores - 24 claims and 54/22 swing Focus
+names, so **95 watches on the first tick** - and six things it got wrong are worth keeping
+written down, because each is a rule the next standing-arm feature inherits.
+
+- **A STANDING arm needs an event key, not an arm key.** `notify_armed_watch` de-duplicated on
+  `watch_id` for the life of the process, which was exactly right while an armed watch fired once
+  and disarmed. A Pullback alert does not disarm, so only its FIRST fire ever reached the phone.
+  It now takes keyword-only `event_key` defaulting to `watch_id` - every one-shot caller is
+  byte-identical - and the pullback push passes
+  `f"{watch_id}:{trigger}:{timeframe}:{bar_dt.isoformat()}"`. The tester's push double had hidden
+  this: **a fake that only counts calls cannot see a refusal inside the real service.**
+- **An action joins the scoring sets on what its WRITER does.** The sweep armed through the public
+  button, which writes `arm_watch` - and `review_learning.TAKE_ACTIONS` holds `arm_watch`, so the
+  first tick recorded 95 trader TAKEs. The sweep now writes its own `auto_arm_watch`; the retire
+  keeps `watch_retired_source_gone`; neither is in TAKE_ACTIONS, REJECT_ACTIONS or
+  `watch_conversion`. The hand-armed button still writes `arm_watch` and is still a take.
+- **Nothing expensive on the Qt thread, and "expensive" includes ninety-five of anything.** The
+  first tick cost 1.92 s there and every tick after ~0.7 s. Three changes: the sweep arms in
+  memory and then saves ONCE, appends its review rows in ONE batch
+  (`review_events.record_review_events`, one kernel lock and one open) and emits ONCE; a timeframe
+  is judged only when a new completed bucket has closed for it since that watch was last judged on
+  it (`intraday_last_bucket_end`, the one thing that can change any of these answers); and the
+  SMA/LRSI/ATR passes run on a worker, returning fires through the queued `pullbackFiresReady`
+  signal so the Qt thread only records, pushes and draws. The H1 leg stays on the Qt thread
+  because it reads BounceBot's M5 cache, which is not thread-safe - but it is bucket-gated too and
+  paced at `PULLBACK_H1_BATCH_LIMIT` (12) watches a tick, oldest-waiting first. Measured after:
+  **140 ms for the arming tick, 16 ms for a warm one.**
+- **One worker, batched downloads.** 285 single-ticker `yf.download` calls and 286 threads came
+  out of that tick. `request` now enqueues and the cache's ONE worker issues one multi-ticker
+  download per chunk of 50 - the group RS/RW tape's own shape. 95 symbols is 2 requests.
+- **A bucket the bell cuts short is still a completed bucket.** The first build refused every ask
+  after the close, which silently dropped the CLOSING bar of every session while the health cell
+  still read `from yfinance`. Removed; `h1_history` is behaviourally identical to what shipped.
+- **A remembered refusal the trader cannot undo is a trap.** A declined auto watch left the arm
+  button reading ARMED beside an empty Armed board and no way back. `armed_watch_kinds` now
+  excludes declined rows, and arming from the chart DROPS the declined row and re-arms as a
+  HAND-armed watch (its own `source_text`, a fresh `watch_id`, nothing fired) - so the sweep no
+  longer owns it. The expiry pass runs over declined rows too: a remembered row is still a
+  ten-trading-day arm.
+- **Phone volume is a design decision, not a side effect** (lead, 2026-09-15; the trader may
+  overrule). The reviewer measured ~85 fires a session at 108 watches, 70 % of them `sma_retest`.
+  A watch the DESK armed pushes `sma_reclaim_lrsi` and `reclaim_then_lrsi` and writes `sma_retest`
+  as a feed row and a review row WITHOUT a push; a watch the TRADER armed by hand pushes all
+  three, because they asked for that exact name by pressing the button. Nothing is withheld either
+  way - every fire is on the feed and in the evidence.
+- **`ChartWatch.fired` is keyed `trigger@timeframe`.** Keyed on the trigger alone, one watch's M15
+  and M30 stamps overwrote each other and a restart re-announced whichever lost.

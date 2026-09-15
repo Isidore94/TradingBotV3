@@ -233,6 +233,32 @@ def _pullback_watches(panel, symbol=None):
     ]
 
 
+def settle_pullback(panel, timeout: float = 5.0) -> None:
+    """Wait for the off-thread pullback evaluation and deliver its fires.
+
+    HARNESS ONLY, added by the builder in the review round: blocker 3 moved
+    the SMA / LRSI / ATR passes off the Qt thread (95 armed watches cost
+    1.92 s there), so a fire now arrives on a QUEUED signal a moment after the
+    poll returns instead of inside it. This waits for that worker and spins
+    the event loop, which is exactly what the desk's own loop does a
+    millisecond later. Not one assertion below changes.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        working = [
+            thread
+            for thread in threading.enumerate()
+            if thread.is_alive() and thread.name == "pullback-eval"
+        ]
+        if not working and not getattr(panel, "_pullback_eval_busy", False):
+            break
+        time.sleep(0.005)
+    QApplication.processEvents()
+
+
 def _settle(prefix: str = "", timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -508,6 +534,7 @@ def test_a_m15_reclaim_writes_one_watch_fired_row_and_buzzes_the_phone_once(
     before = len(panel._alerts)
 
     panel._poll_pullback_watches(now=bar_end(M15_RECLAIM_INDEX, 15))
+    settle_pullback(panel)
 
     rows = _events(tmp_path, "watch_fired")
     assert len(rows) == 1, rows
@@ -537,9 +564,11 @@ def test_the_same_reclaim_on_the_next_poll_does_not_fire_twice(
     _arm_before(panel, "NVDA", "LONG", armed_at=bar_dt(M15_RECLAIM_INDEX - 9, 15))
 
     panel._poll_pullback_watches(now=bar_end(M15_RECLAIM_INDEX, 15))
+    settle_pullback(panel)
     panel._poll_pullback_watches(
         now=bar_end(M15_RECLAIM_INDEX, 15) + timedelta(minutes=1)
     )
+    settle_pullback(panel)
 
     assert len(_events(tmp_path, "watch_fired")) == 1
     assert len(panel.price_alert_service.calls) == 1
@@ -655,6 +684,13 @@ def test_dropping_the_claim_retires_its_auto_watch_with_one_row(
     claimed_picks.record_drop(
         symbol="NVDA",
         side="LONG",
+        # A claim is identified by (symbol, side, SETUP) and a drop ends the
+        # one it names. `_claim` above claims `pullback_sma_reclaim`, so this
+        # is that claim's own retraction. (Lead ruling on the PCT-1 review,
+        # 2026-09-15: the call shape here was under-specified, and giving
+        # `record_drop` a blank default instead would have widened a
+        # production semantic for a test's convenience.)
+        claimed_setup_id="pullback_sma_reclaim",
         path=tmp_path / "claimed_picks.jsonl",
         now=datetime.now(),
     )

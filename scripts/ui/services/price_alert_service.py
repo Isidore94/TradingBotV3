@@ -155,7 +155,12 @@ class PriceAlertService(QObject):
         return result
 
     def notify_armed_watch(
-        self, *, watch_id: str, title: str, message: str
+        self,
+        *,
+        watch_id: str,
+        title: str,
+        message: str,
+        event_key: str | None = None,
     ) -> dict[str, Any]:
         """Push one TRADER-ARMED watch hit, once, in every Auto mode.
 
@@ -166,8 +171,19 @@ class PriceAlertService(QObject):
         Focus board, so it rides the SAME sender rather than growing a second
         door to the phone (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`).
 
-        De-duplicated by `watch_id`: an arm is one episode, so a poll that
-        somehow sees the same fire twice buzzes once.
+        De-duplicated by `event_key`, which DEFAULTS to `watch_id`: a one-shot
+        arm is one episode, so a poll that somehow sees the same fire twice
+        buzzes once, and every caller written before PCT-1 keeps exactly that
+        behaviour by saying nothing.
+
+        **A STANDING arm needs a finer key** (PCT-1 review blocker 1,
+        2026-09-15). The Pullback alert does not disarm when it fires: one
+        watch legitimately speaks again on the next trigger, the next
+        timeframe and the next episode, and keying the refusal on `watch_id`
+        meant only the FIRST fire of a multi-day arm ever reached the phone.
+        That caller passes
+        ``f"{watch_id}:{trigger}:{timeframe}:{bar_dt.isoformat()}"``, so the
+        same bar still buzzes once and a new bar buzzes again.
 
         **Dispatch is synchronous, delivery is not.** The caller is the GUI
         poll (`_poll_h1_bounce_watches` -> `_push_armed_watch`) and
@@ -180,25 +196,26 @@ class PriceAlertService(QObject):
         ``ARMED WATCH ...`` log line and `statusChanged`, exactly the way
         `_notify` already reports one.
 
-        The id joins `_announced_watch_ids` BEFORE the dispatch, so a second
+        The key joins `_announced_watch_ids` BEFORE the dispatch, so a second
         call in the same tick is refused without waiting for the first send.
         Refusals are unchanged: engine disabled ``{"ok": False, "error": ...}``,
         duplicate ``{"ok": False, "deduplicated": True, "watch_id": ...}``.
         """
         watch_id = str(watch_id or "").strip()
+        key = str(event_key if event_key is not None else watch_id or "").strip()
         if not self.engine_enabled:
             return {
                 "ok": False,
                 "error": "Phone pushes originate from the main desk only.",
             }
-        if watch_id:
+        if key:
             with self._armed_push_lock:
-                if watch_id in self._announced_watch_ids:
+                if key in self._announced_watch_ids:
                     return {"ok": False, "deduplicated": True, "watch_id": watch_id}
-                self._announced_watch_ids.add(watch_id)
-                # An arm is one episode and a fired watch disarms, so this set
-                # only ever grows by one per fire; the cap is belt and braces
-                # for a desk that stays open for weeks.
+                self._announced_watch_ids.add(key)
+                # A one-shot arm adds one key per fire; a STANDING arm adds one
+                # per (trigger, timeframe, bar), which is still a handful a
+                # day. The cap is belt and braces for a desk open for weeks.
                 while len(self._announced_watch_ids) > _ANNOUNCED_WATCH_ID_LIMIT:
                     self._announced_watch_ids.pop()
         title_text = str(title or "Armed watch")
