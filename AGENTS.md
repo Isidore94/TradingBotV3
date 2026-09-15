@@ -10,7 +10,7 @@ is permanently out of scope (plan.md sec 1).
 ## Agent routing - read before doing work
 
 - **The agent team.** Read [`docs/AGENT_TEAM.md`](docs/AGENT_TEAM.md) before delegating: `.claude/agents/` serves Claude; `.codex/agents/` serves Codex. Tester proves failures, builder fixes, reviewer reproduces; the lead checks handoffs against the diff and alone integrates, with code workers isolated from the desk checkout.
-- **Codex delegation (trader, 2026-09-09).** Astra owns planning, orchestration and final acceptance; explicitly delegate bounded recon and simple work to Luna, and implementation, tests and independent review to Terra wherever useful work can run alongside the lead. Use explicit model selection and narrow context, escalate Luna to Terra before asking Astra for a focused decision, and never silently spend on Astra helpers; `.codex/config.toml` and the runbook own defaults and runtime fallback details. These Codex rules do not change Claude's model choices.
+- **Codex delegation (trader, 2026-09-09).** The trader selects the session model (2026-09-15); never pin the lead model in project config. The selected lead owns planning, orchestration and final acceptance; explicitly delegate bounded recon and simple work to Luna, and implementation, tests and independent review to Terra wherever useful work can run alongside the lead. Use explicit model selection and narrow context, escalate Luna to Terra before asking Astra for a focused decision, and never silently spend on Astra helpers; `.codex/config.toml` and the runbook own defaults and runtime fallback details. These Codex rules do not change Claude's model choices.
 
 ## How to talk to the trader (trader rule 2026-08-26)
 

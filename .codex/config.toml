@@ -1,5 +1,4 @@
-# Project defaults; explicit session or spawn choices can override them.
-model = "gpt-6-astra"
+# The trader selects the session model; do not pin it in project config.
 
 [agents]
 enabled = true

@@ -237,7 +237,8 @@ Their old phase lists do not reorder Section 12.
 ## 12. Remaining work, in execution order
 
 Agent operations, trader-authorized 2026-09-09: Astra lead with Luna/Terra delegation
-is configured in `.codex/` and governed by `docs/AGENT_TEAM.md`. This is repository
+is governed by `docs/AGENT_TEAM.md`. Amended and BUILT 2026-09-15: the trader chooses
+the session model; `.codex/config.toml` no longer pins Astra. Helper defaults remain. This is repository
 setup, not a product phase; build order and all live/promotion gates below are unchanged.
 
 CH-SYM (2026-09-14) is a trader-authorized repair to Phase 0.26's built WS-CH
