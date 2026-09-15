@@ -18,7 +18,7 @@ checkout, and never a merge to `main` without the trader's word.
 | Packet | What | Status |
 |---|---|---|
 | PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | PLANNED 2026-09-15 - tester next |
-| PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | **BUILT 2026-09-15** on `claude/pct-3-compression` (tester's 40 red + 3 green-by-design at `8483a324`, re-proven failing before the fix; builder added 7). All five items landed: `legacy.compression_copy_through` + `compression_rule_version`; pure `scripts/compression_chip.py` and the amber `compressed` chip after the bucket/wrong-side chips; the ai_state merge on the LOAD path (`data_feed.merge_compression_from_ai_state` off `ai_state_levels.load_symbol_compression`, never in `paint`); read-only point-in-time `scripts/compression_calibration.py`; `legacy.evaluate_compression_break_v1` + the `COMPRESSION_BREAK` trigger tag. No threshold, penalty or score moved. Live gate owed (below). |
+| PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | **BUILT 2026-09-15** on `claude/pct-3-compression` (tester's 40 red + 3 green-by-design at `8483a324`, re-proven failing before the fix; builder added 7). All five items landed: `legacy.compression_copy_through` + `compression_rule_version`; pure `scripts/compression_chip.py` and the amber `compressed` chip after the bucket/wrong-side chips; the ai_state merge on the LOAD path (`data_feed.merge_compression_from_ai_state` off `ai_state_levels.load_symbol_compression`, never in `paint`); read-only point-in-time `scripts/compression_calibration.py`; `legacy.evaluate_compression_break_v1` + the `COMPRESSION_BREAK` confirmation tag. No threshold, penalty or score moved. **Review 1 NO-GO, fixed in the same branch 2026-09-15:** the live scan's row builder is `runner._run_master_impl`, not `legacy._evaluate_priority_snapshot_for_date`, so the copy-through now lands at BOTH seams (pinned by a test that drives the runner and reads `ai_state` off disk); the ai_state parse moved to a worker (281-292 ms on the Qt thread); the report counts every veto `joined`/`untracked`/`pending`, reads the ACTIVE population, recomputes a missing anchor measure and streams the 1.26 GB tracker. Live gate owed (below). |
 | PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | PLANNED - after PCT-1 and PCT-3 land (shares their files) |
 
 Trader's order was 1 pullback, 2 compression breaks and trendline breaks, 3 compression measure.
@@ -333,6 +333,18 @@ Items:
    with the `ai_state` symbol entry on the ChartDataService / data-feed worker (the builder finds
    the existing enrichment seam - `enrich_setup_rows_for_display` or the panel's own worker - and
    never reads a file on paint). Hides nothing, moves nothing (identical-visible-rows test).
+> **Amended 2026-09-15 after the first review** (the packet's own wording for item 3 below left
+> the population undefined, and the first build guessed wrong). **A session's population is every
+> tracker record ACTIVE on it** - entered on or before it and still being carried by it, read off
+> the record's own `entry_trade_date` and `last_replayed_session` - **not** the records whose
+> `scan_date` equals it, and not "the rows the scan printed that morning". Joining on the entry
+> date dropped 127 of 213 live vetoes. **Every veto is counted and named** `joined` / `untracked`
+> / `pending`, with the three counts and the excluded sessions printed. **An anchor measure the
+> record does not carry is RECOMPUTED** from the daily-bar cache through
+> `summarize_anchor_compression` (no live record carries the copy-through yet); a row whose anchor
+> cannot be had says `anchor unknown` and still carries the four fixed-window measures. **And the
+> tracker is STREAMED** - `read_text` on the 1.26 GB file peaked at 3.79 GB.
+
 3. **Calibration CLI** `python -m compression_calibration --since 2026-08-20 [--out DIR]`, read-only
    on live stores, run from `scripts/`: joins every coded `compressed` / `support_resistance_
    cluttered` veto in `trader_annotations.jsonl` (symbol, session_date, side) to that session's
