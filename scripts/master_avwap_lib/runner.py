@@ -1683,6 +1683,14 @@ def _run_master_impl(
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
             "compression_note": compression_summary.get("compression_note", ""),
+            # PCT-3 item 1. THIS loop - not
+            # `legacy._evaluate_priority_snapshot_for_date` - is what the live
+            # desk scan runs and what writes `master_avwap_ai_state.json`, so
+            # the copy-through has to be applied at BOTH seams or the desk never
+            # sees a number (measured 2026-09-15: 1003 symbols in the live
+            # ai_state, 35 flagged, 0 with a `compression_score`). The call is
+            # the same one; the rule lives once, in `compression_copy_through`.
+            **compression_copy_through(compression_summary),
             "latest_release_earnings_date": latest_release_context.get("earnings_date", "")
             or latest_known_earnings_context.get("earnings_date", ""),
             "latest_release_gap_date": latest_release_context.get("gap_date", ""),
@@ -1917,6 +1925,23 @@ def _run_master_impl(
         priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
         priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
         priority_summary["compression_note"] = effective_compression_note
+        # PCT-3 item 1: the measure's own score and ratios on the row the desk,
+        # the tracker and the calibration report all read. The penalty stays the
+        # EFFECTIVE one (breakout relief applied); the ratios are never relieved.
+        priority_summary.update(compression_copy_through(compression_summary))
+        # PCT-3 item 4: `compression_break_v1`, labelled and side-aware.
+        # Additive - no score, no Phase-6 study field, no gate.
+        compression_break = evaluate_compression_break_v1(
+            df,
+            anchor_date_iso=current_anchor_meta.get("date") if current_anchor_meta else None,
+            anchor_stdev=current_anchor_meta.get("stdev") if current_anchor_meta else None,
+            atr20=atr20,
+            side=side,
+            last_trade_date=last_trade_date,
+            last_bar=last_row,
+        )
+        priority_summary.update(compression_break)
+        symbol_entry.update(compression_break)
         symbol_entry["compression_penalty"] = int(effective_compression_penalty or 0)
         symbol_entry["compression_note"] = effective_compression_note
         if isinstance(entry_feature_snapshot, dict):
@@ -2031,6 +2056,15 @@ def _run_master_impl(
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(effective_compression_penalty or 0),
             "compression_note": effective_compression_note,
+            # PCT-3: the feature-history CSV is what the graders and the study
+            # readers actually read; a field that stops at the row is a field no
+            # report can ever join. Listed in `feature_columns` below.
+            **compression_copy_through(compression_summary),
+            "compression_break_recent": bool(compression_break.get("compression_break_recent")),
+            "compression_break_rule_version": str(
+                compression_break.get("compression_break_rule_version") or ""
+            ),
+            "compression_break_v1_note": str(compression_break.get("compression_break_v1_note") or ""),
             "setup_family": priority_summary.get("setup_family", ""),
             "setup_tags": ";".join(priority_summary.get("setup_tags") or []),
             "latest_release_earnings_date": (
@@ -2902,6 +2936,18 @@ def _run_master_impl(
         "compression_flag",
         "compression_penalty",
         "compression_note",
+        # PCT-3. `df_features` is built with `columns=feature_columns`, so a key
+        # the row carries and this list does not is silently dropped - the B4
+        # `assigned_tier` defect above, exactly. These are the measure and the
+        # v1 break verdict.
+        "compression_score",
+        "compression_stdev_atr_ratio",
+        "compression_range_atr_ratio",
+        "compression_close_range_atr_ratio",
+        "compression_rule_version",
+        "compression_break_recent",
+        "compression_break_rule_version",
+        "compression_break_v1_note",
         "post_earnings_active",
         "post_earnings_monitor_level",
         "post_earnings_break_intraday",

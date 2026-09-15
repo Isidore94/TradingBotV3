@@ -345,6 +345,36 @@ class _ScanFreshnessWorker(QThread):
         self.done.emit(line)
 
 
+class _AiStateCompressionWorker(QThread):
+    """Parse `master_avwap_ai_state.json` OFF the Qt thread - PCT-3.
+
+    The compression measure the `compressed` chip reads lives per symbol in
+    that file, and the file is 36 MB: one `json.load` of it was measured at
+    281-292 ms on the desk. `refresh_from_reports` runs on the trader's own
+    click AND on the report watcher, several times around a scan, so parsing
+    there is a third of a second of frozen table every time a file moves -
+    exactly the rule `CLAUDE.md` states as "nothing expensive belongs on the Qt
+    thread, and 'expensive' includes a stylesheet".
+
+    So the parse happens here and the Qt thread only ever fills rows from the
+    warm cache. Emits `True` when the cache actually CHANGED, which is the
+    panel's cue to run one more (coalesced) refresh; `False` otherwise, so a
+    warm cache costs no repaint at all. Never raises into Qt.
+    """
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        changed = False
+        try:
+            from ui.services import ai_state_levels
+
+            changed = bool(ai_state_levels.warm_cache())
+        except Exception:  # noqa: BLE001 - one chip, never the table
+            changed = False
+        self.done.emit(changed)
+
+
 class _PointsEvidenceWorker(QThread):
     """Log today's ranked rows, grade the log against the tracker's outcomes,
     write the weight proposal (trader, 2026-09-08). Never raises into Qt.
@@ -565,6 +595,10 @@ class MasterAvwapPanel(QWidget):
         # label is written only by `_on_scan_finished`, so after a failed scan
         # (or a restart) it says nothing at all about what is on screen.
         self._scan_freshness_key: object = object()
+        # PCT-3: the ai_state file's `(mtime_ns, size)` the last worker parsed,
+        # so a burst of watcher signals costs ONE 36 MB parse and one refresh.
+        self._ai_state_compression_key: object = object()
+        self._ai_state_compression_worker = None
         self.scan_freshness_label = QLabel("")
         self.scan_freshness_label.setObjectName("MutedLabel")
         # ST1 item 3: what the Family favorable % column IS - outcome kind,
@@ -1489,9 +1523,56 @@ class MasterAvwapPanel(QWidget):
             label.setText(text)
             label.setToolTip(text)
 
+    def _ai_state_signature(self) -> tuple:
+        """One `stat` of the ai_state file - nothing parsed (PCT-3).
+
+        Asked on the Qt thread and BEFORE the worker starts, for the same
+        reason `_scan_freshness_signature` is: the report watcher fires
+        `refresh_from_reports` several times around a scan, and a second parse
+        racing the first is how "never on the Qt thread" becomes "usually".
+        """
+        import project_paths as _paths
+
+        try:
+            stat = Path(_paths.MASTER_AVWAP_AI_STATE_FILE).stat()
+        except OSError:
+            return ()
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _start_ai_state_compression_read(self) -> None:
+        signature = self._ai_state_signature()
+        if not signature or signature == self._ai_state_compression_key:
+            return
+        self._ai_state_compression_key = signature
+        worker = _AiStateCompressionWorker(self)
+        worker.done.connect(self._on_ai_state_compression_ready)
+        # The worker is parented to the panel, so without this every scan-day's
+        # watcher signals leave a finished QThread alive for the life of the
+        # window - the same leak G7's fix round found on the read worker. Drop
+        # the reference and let Qt free it on the next event loop pass.
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_ai_state_compression_finished)
+        self._ai_state_compression_worker = worker
+        worker.start()
+
+    def _on_ai_state_compression_finished(self) -> None:  # pragma: no cover - signal seam
+        self._ai_state_compression_worker = None
+
+    def _on_ai_state_compression_ready(self, changed: object) -> None:  # pragma: no cover - signal seam
+        """One coalesced refresh, and only when the cache actually moved.
+
+        A warm cache costs nothing here; a changed one costs exactly one more
+        `refresh_from_reports`, which now fills from memory. The signature is
+        already stored, so that refresh cannot start the worker again.
+        """
+        if not bool(changed):
+            return
+        self.refresh_from_reports(emit_empty=False)
+
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
         self._start_family_record_read()
         self._start_scan_freshness_read()
+        self._start_ai_state_compression_read()
         meta = load_latest_setup_rows_with_meta()
         rows = meta["rows"]
         _apply_swing_quality_shadow_badges(rows)

@@ -5421,3 +5421,195 @@ was; no writer may still remove one user-entered name by its own judgement.
 **Open for the trader.** Whether the M5 Focus picks should reset with the lists (today they fade
 on their own ten-session clock, `focus_picks.FADE_TRADING_DAYS`), and whether the 13:00 Pacific
 close is the right moment or the wipe should wait for the evening. Gate #123.
+
+## PCT-3 - compression is measured before it is tuned (2026-09-15, packet PCT-3)
+
+The trader's words, 2026-09-15: *"we need a way to measure for compression as the most COMMON
+veto I have is a compression veto. we need to fine tune this so we stop getting so many
+compressed picks. this will also help us find compression breakouts."* Asked what to build
+first, they answered **"Measure + chip first"** - one measure, a chip, a check against the
+vetoes, and the penalty decision from that evidence. No hiding.
+
+**The thing that was already true, and invisible.** `legacy.summarize_anchor_compression` has
+always computed FOUR numbers over the bars from the current AVWAPE anchor to the last trade date
+- `compression_score` (0-3: how many of the three ratios are tight) plus `stdev / range /
+close_range` as multiples of ATR-20 - and always thrown them away inside the function. Only
+`compression_flag`, `compression_penalty` and `compression_note` reached the priority row, and
+the penalty (10 to 22, and more when the structure penalty lands too) was silently subtracted
+from the score. So the desk has been demoting compressed setups since before the trader ever
+typed the word, and the trader has never seen one of those numbers. That is the whole diagnosis:
+the measure and the eye disagree, and nobody could see by how much.
+
+**There are TWO row builders, and only one of them is the desk's.** This is the defect the first
+review of PCT-3 caught, and it is the thing to know before touching anything in this area:
+`legacy._evaluate_priority_snapshot_for_date` and `runner._run_master_impl`'s per-symbol loop are
+near-duplicates of each other, and **the live desk scan runs the one in `runner.py`** - that loop
+is what writes `master_avwap_ai_state.json` and the priority rows. `legacy`'s copy is reached only
+by `build_completed_bar_priority_rows` (whose ai_state is discarded) and by the tracker catch-up
+backfill. PCT-3's first build applied the copy-through in `legacy.py` alone, and the live file
+proved it: 1003 symbols, 35 flagged, **0** with a `compression_score`. Anything additive that has
+to reach the desk goes in BOTH, and `tests/test_pct3_runner_publishes_compression.py` drives
+`runner._run_master_impl` for real (one synthetic symbol, every outside door closed) and reads the
+ai_state file off disk, so a future build cannot quietly lose one seam again.
+
+**Item 1 - the copy-through.** `compression_copy_through` publishes the four numbers, with
+`compression_rule_version = "anchor_compression_v1"`, on the priority row, the `ai_state` symbol
+entry, the feature row and `build_tracker_setup_record` (flat, and as a `compression_summary`
+mapping) - at both row builders. The feature row's seven columns are also added to `runner`'s
+`feature_columns` allowlist, because `df_features` is built with `columns=feature_columns` and a
+key that list does not name is silently dropped: the `assigned_tier` defect, again. It is a COPY:
+it reads no bar, decides nothing and touches no score. The penalty on the row stays the
+EFFECTIVE one (`_effective_compression_penalty`'s breakout relief applied); the ratios and the
+score are the measure's own and are never relieved, because a report that showed a relieved
+ratio would be measuring the relief. The tester's four synthetic frames still score
+-70.0 / -12.0 / -10.0 / 33.0, and `tests/test_master_avwap_setups.py`'s exact-score assertions
+pass unchanged.
+
+**Items 2 and 3 - the chip.** `scripts/compression_chip.py` is the pure reader
+(`read_row / read_flag / tooltip_text`), and `SetupTableDelegate` paints an amber `caution`
+`compressed` pill AFTER the bucket chip and after WS-WS's `wrong side` chip, with one added
+tooltip line naming the score out of 3, the three ratios and the penalty. Display only: nothing
+is hidden, nothing is re-ordered, no score moves, and an unflagged row is pixel-identical to a
+row that has never heard of compression. The defect class the reader exists for is
+`bool("False") is True` - a flag that has been through a CSV, a JSON round-trip or a report line
+spells itself a dozen ways, and every one of them reads the same here; an unreadable spelling is
+NOT compressed rather than a guess.
+
+**A row that carries no measure reads as NOT MEASURED.** `compression_copy_through_from_row` is
+the reader for a stored row, and it answers `None` for the score and the three ratios and omits
+`compression_rule_version` entirely when the row carries none of them. A `compression_score` of 0
+stamped `anchor_compression_v1` says "this rule looked and found nothing tight" - a measurement
+that never happened, and precisely the number a calibration report would average. The same rule
+governs the break verdict: `_compression_break_copy_through` stamps `compression_break_recent` and
+`compression_break_rule_version` **together or not at all**, because a version beside no verdict
+claims a rule ran.
+
+**Where the numbers join the row, on which thread, and where they may not.** The setups table is
+built from `master_avwap_priority_setups.txt`, whose ranked lines carry symbol, side, score,
+family and bucket and nothing about compression; `master_avwap_ai_state.json` carries the whole
+reading per symbol. That file is 36 MB and one `json.load` of it is **281-292 ms**, and
+`master_avwap_panel.refresh_from_reports` runs on the Qt thread on the trader's own click AND on
+every report-watcher signal - so PCT-3's first build put a third of a second of frozen table
+behind every file change. The seam is therefore split in two:
+
+- `ai_state_levels.warm_cache()` does the parse, and only `_AiStateCompressionWorker` calls it.
+  `refresh_from_reports` starts that worker behind an `(mtime_ns, size)` signature, so a burst of
+  watcher signals costs ONE parse; it returns `True` only when the cache actually MOVED, which is
+  the panel's cue to run exactly one more coalesced refresh.
+- `ai_state_levels.cached_symbol_compression()` is the Qt thread's door and never opens or stats
+  anything. `data_feed.merge_compression_from_ai_state` defaults to `allow_read=False` and reads
+  that; `allow_read=True` is for a worker, a CLI or a test, never the Qt thread.
+
+A cold cache is a row with no chip, never a stall. The join is by SYMBOL, because the anchored box
+is a property of the symbol's current anchor rather than of the side being traded, and it FILLS: a
+row that arrived from the focus feed with its own fresher reading keeps it.
+`tests/test_pct3_compression_merge.py` runs the panel's own `refresh_from_reports` with `open`
+spied and asserts the ai_state file is never opened on that thread, spies `open()` across a whole
+paint pass, and proves that a compression feed which RAISES cannot reach the paint pass at all.
+
+**Item 3's CLI - the report that answers the question.** `scripts/compression_calibration.py`,
+run as `cd scripts && python -m compression_calibration --since 2026-08-20 --live`. It joins
+every coded compression veto in `trader_annotations.jsonl` to the tracker's population for the
+sessions those vetoes fall on, and prints, per measure, `n = vetoed / rest`, the two medians and
+a rank-sum AUC (the probability a randomly chosen vetoed row reads HIGHER than a rest row, ties
+counted as half). Seven measures: the scan's three anchor ratios, `range10_atr14` and
+`range20_atr14` (`d1_environment`'s rule, per symbol), Bollinger(20, 2) relative width as a
+percentile over 120 sessions, and ATR-14 / ATR-50. Then the hit rate of today's
+`compression_flag` on the vetoed set. **A low AUC on every measure is the finding, not a
+failure**; the threshold and penalty change is a SEPARATE ask after the trader reads it.
+
+**Every veto is counted and NAMED, and the population is what was ACTIVE.** The first review ran
+that CLI against copies of the live stores and found it silently discarding most of its own
+evidence: 213 unique compression vetoes over 12 sessions, **86 joined**. Two causes, both worth
+remembering because they are the same mistake in two places.
+
+- It joined a veto to a tracker record whose session equalled the veto's, and a record's session
+  is `scan_date` - the day the setup was ENTERED. A veto on a name the trader had been carrying
+  for a week matched nothing. The population for a session S is now every record **ACTIVE** on it:
+  `record_active_window` reads the record's own `entry_trade_date` and `last_replayed_session` (the
+  replay advances that stamp every session a setup is still open and stops the moment it closes or
+  expires), and S must fall inside. The header prints that definition; the earlier version printed
+  the word "shown", which the report never knew.
+- A session that has not closed was dropped without a word - the whole 2026-09-15 session, 23
+  vetoes, while the header printed "..09-14". Now every veto lands in exactly one of `joined`,
+  `untracked` (no record was active - it still gets the four fixed-window measures and still
+  counts on the vetoed side, labelled `untracked` in the CSV) or `pending` (the session is not
+  complete, so no measure may be taken on it at all), and the line `N vetoes: A joined, B
+  untracked, C pending` is printed above the tables with the excluded sessions named and why.
+
+**What the first full run actually said** (2026-09-15, against copies of the live stores, since
+2026-08-20): `213 vetoes: 140 joined, 50 untracked, 23 pending`; 11 measured sessions
+2026-08-20..09-14 with 2026-09-15 excluded as incomplete; 14,759 population rows, 190 vetoed;
+14,709 anchors recomputed. **Today's `compression_flag` hit rate on the vetoed set is 0.18** - it
+caught 35 of 190 rows the trader vetoed for compression, and it was set on 2,631 of the 14,569
+rows they did not. Every one of the seven measures scores an AUC BELOW 0.5 (0.34 to 0.49): a
+vetoed row does read tighter than the rest on all seven, consistently and weakly, and no candidate
+separates the two populations. That is the finding the threshold conversation starts from, and it
+is a finding, not a failure. 267 s, peak RSS 0.14 GB.
+
+**An anchor measure the record does not carry is RECOMPUTED, never printed as `nan`.** No live
+record carries the copy-through yet, so the three anchor measures came out `n = 0 / nan` - three
+empty tables in a seven-table report. `recompute_anchor_measures` runs the champion's own
+`calc_anchored_vwap_bands` at the record's anchor date and `compute_atr_from_ohlc`'s ATR-20 at the
+session, and hands both to `summarize_anchor_compression` - the same function, never a second
+copy. A row whose anchor cannot be had says `anchor unknown` and still carries the four
+fixed-window measures. Every row's source is a CSV column (`record` / `recomputed` /
+`anchor unknown`), so nobody has to guess which number came from where.
+
+Four more properties of that CLI are load-bearing and each one is a rule:
+
+- **The two veto codes are pooled BY NAME, here.** The plan's premise was that v1's
+  `support_resistance_cluttered` pools with v3's `compressed` in
+  `veto_cohort.canonical_veto_cohort`. Measured on this branch, it does not:
+  `veto_v1_support_resistance_cluttered` stays itself, because `veto_reasons_v2.json` introduced
+  `compressed` as a NEW definition and its own description says so ("That is a NEW code, not a
+  rename"). So the live "189 + 25 = 214" is a sum this report makes for itself. A veto with a
+  blank `reason_code` (136 of the live rows) is a veto and is NOT a compression veto: it counts
+  in "rest".
+- **Read-only, and it says so before it reads.** `project_paths.DATA_DIR` is read at CALL time
+  (the `d1_environment_store._cached_daily_bars` idiom). A path carrying `TradingBotData` - or
+  the DAS's `Trading Bot Data`, since spaces are stripped before the compare - is refused
+  without `--live`, exit 2, nothing written. The message names the folder, names the flag, and
+  names every store the run would read (the veto file, the tracker, and the daily-bar cache under
+  `%LOCALAPPDATA%`) with the word READ-ONLY beside them, because a refusal that hides one of the
+  three stores is a refusal the trader cannot check.
+- **Point-in-time** (plan.md sec 5). The cached daily frame is cut at the session date before a
+  single measure is taken, so no later bar can reach a range, an ATR or a Bollinger percentile.
+  The proof is the same fixture run twice, once with ten wild sessions written AFTER the
+  session, with the two CSVs compared column for column.
+- **It STREAMS the 1.26 GB tracker.** `json.load` on that file is one of the three causes of the
+  10 GB desk on 2026-08-27, and the first build's `read_text` was not enough either: measured at a
+  **3.79 GB** tracemalloc peak. `iter_tracker_records` now feeds a bounded sliding window
+  (`_JsonWindow`) from a buffered reader and lets `json.JSONDecoder.raw_decode` parse ONE record
+  out of that window, discarding it behind; a non-record section is walked past structurally
+  rather than decoded. Peak is a few megabytes above the largest single record, pinned by a test
+  that reads a multi-record fixture through a reader which RAISES if asked for more than 64 KB at
+  once. The SQLite mirror would be cheaper still and is deliberately NOT read: decision 0017
+  fences every reader out of it until gate #57.
+
+**Item 4 - `compression_break_v1`.** `legacy.evaluate_compression_break_v1` REUSES
+`assess_compression_break_context`, which is already the one place that decides "the previous
+completed session's anchored slice reads compressed AND today's completed close leaves that box
+in this side's direction past the 0.10-ATR buffer", and adds exactly one clause: today's own bar
+range must be at least 1.0 ATR-20. A drift out of a quiet box on a quiet bar is not a break. It
+sets three labelled names - `compression_break_recent`, `compression_break_v1_note` and
+`compression_break_rule_version`. It changes no score, gates nothing, and leaves
+`compression_break_today`, the Phase-6 study row and `enrich_priority_rows_with_phase6_studies`
+exactly as they were; the labelled version is what makes the rule re-tunable by name once the
+calibration report is read.
+
+**v1's note has its own field, and the tag is a CONFIRMATION.** Two rules that came out of the
+first review. `enrich_priority_rows_with_phase6_studies` does `row.update(context)` and OWNS
+`compression_break_note` on the finished row - so v1 writing there was writing into a field that
+gets replaced, and on a narrow-bar break Phase 6's note is non-empty while v1 refused. v1 keeps
+`compression_break_v1_note` for its own answer. And `setup_tagging` adds `COMPRESSION_BREAK` in
+**confirmation order**, beside `TRENDLINE_BREAK` rather than ahead of the confirmations: the
+visible tag list is capped at `DEFAULT_MAX_SETUP_TAGS` (6), and a label added in 2026 may not cost
+a row a tag it has carried for a year. A test pins a crowded row's tags byte-identical with and
+without the new flag.
+
+**What is deliberately not here.** No threshold moved. No penalty moved. Nothing hides a
+compressed row, mutes it, re-orders it or keeps it out of a list - the chip is a label and the
+report is a report. Nothing here reaches a detector, a score, an alert, a watchlist, a Focus
+list, the review queue or `review_policy.json`. The trader's own words set that boundary:
+measure first, then tune.

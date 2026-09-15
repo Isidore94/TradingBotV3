@@ -18,7 +18,7 @@ checkout, and never a merge to `main` without the trader's word.
 | Packet | What | Status |
 |---|---|---|
 | PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | BUILT 2026-09-15 (`claude/pct-1-pullback` 508f44cd: `indicators/pullback_sma_reclaim.py`, `intraday_history.py` with `h1_history` a 60-minute subclass, kind `pullback`, `_poll_pullback_watches` + auto-arm + `declined`, three claim names, registry regenerated; builder: full suite 8254 passed, ruff, smoke, selftest 83/83) - REVIEW NO-GO 2026-09-15 (six blockers reproduced on live copies: the phone de-dupes by `watch_id` so a standing watch buzzes once for life; machine `arm_watch` rows graded as trader TAKEs; 1.92 s Qt tick arming 95 watches, 0.7 s every minute after; 285 single-symbol yfinance downloads per tick; the after-the-bell clause drops the closing bar; a declined watch can never be re-armed) - fix round sent to the same builder with rulings: `event_key` on `notify_armed_watch`, `auto_arm_watch` / `auto_retire_watch` event kinds, one save + one emit per sweep, evaluation off the Qt thread only on a new completed bucket, ONE batched multi-ticker download per interval per bucket (chunks of 50), the tester's 13:30 expectation corrected, chart arm clears `declined`, `fired` keyed `trigger@timeframe`, the `record_drop` widening reverted, and AUTO-armed watches push only `sma_reclaim_lrsi` / `reclaim_then_lrsi` (a retest is a feed row) - the trader may overrule; reviewer round 2 next; the earlier rulings: lead rulings: `companion_bars` for the M15 leg of `reclaim_then_lrsi`, `IntradayHistoryCache(interval_minutes=60, ...)`, a declined auto watch is a kept row with `declined=True`, "2-4 bars before" counts from the cross bar, a retest bar is after the reclaim bar, the registry is `scripts/setup_registry_v1.json` |
-| PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | BUILT 2026-09-15 (`claude/pct-3-compression` 0b0ed445: copy-through, `compression_chip.py`, delegate pill, `data_feed.merge_compression_from_ai_state` off `ai_state_levels.load_symbol_compression`, `compression_calibration.py`, `evaluate_compression_break_v1`; builder: full suite 8257 passed, ruff, smoke, selftest 81/81) - REVIEW NO-GO 2026-09-15 (two blockers: the live scan's row seam is `runner.py` `_run_master_impl`, not the legacy snapshot the packet edited, so nothing reached the live ai_state; the calibration CLI joined 86 of 213 vetoes on tracker ENTRY dates and mislabelled its population) - FIX ROUND BUILT 2026-09-15 (tip 2221288e: both seams in `runner.py` + `legacy.py`, `tests/test_pct3_runner_publishes_compression.py` drives the real `_run_master_impl`; the CLI counts every veto joined / untracked / pending over the ACTIVE tracker population and recomputes missing anchor measures; ai_state parse on `_AiStateCompressionWorker`; the tracker streamed at 0.14 GB peak). First live-copy reading: 213 vetoes (140 joined, 50 untracked, 23 pending), flag hit rate 0.18 with 2,631 false positives, every measure's AUC 0.34-0.49 - vetoed rows read tighter on every measure, none separates the populations. Review round 2 (2026-09-15): both round-1 blockers confirmed fixed, every CLI number re-derived; ONE new blocker - the runner test writes ~37 files into conftest's shared data dir and un-skips `test_r4fix_digest_horizon` (so the `1 failed` was this diff, not a flake) - plus the stamped zero surviving in `legacy.compression_copy_through` and `COMPRESSION_BREAK` still displacing `D1_RS` under the tag cap; round-3 fixes sent to the same builder; the first scan on this build widens the 667 MB `d1_features_history.csv` by eight columns once (~2 min) |
+| PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | **BUILT, REVIEWED (3 rounds) and MERGED into the plan branch 2026-09-15** (`claude/pct-3-compression` aaed1b01): both scan seams (`runner.py` + `legacy.py`), `compression_chip.py`, the delegate pill, the ai_state parse on a worker, `compression_calibration.py` (every veto joined / untracked / pending over the ACTIVE tracker population, streamed at 0.14 GB), `evaluate_compression_break_v1` + the `COMPRESSION_BREAK` tag added last under the cap. First live-copy reading: 213 vetoes (140 / 50 / 23), flag hit rate 0.18 with 2,631 false positives, every measure's AUC 0.34-0.49. Full suite on the merged branch: see section 1 note below the table |
 | PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | PLANNED - after PCT-1 and PCT-3 land (shares their files) |
 
 Trader's order was 1 pullback, 2 compression breaks and trendline breaks, 3 compression measure.
@@ -183,10 +183,14 @@ break-then-retest of a trendline stays in WISHLIST).
   session_date, created_at, reason_code, vocab_version, timeframe, side, surface` plus
   `SCAN_CONTEXT_FIELDS` (`scan_date, tracker_setup_id, canonical_setup_id, priority_bucket, score,
   expected_r`, :130-137) when the caller supplied them. Vocabulary v3
-  `ui/annotations/vocabularies/veto_reasons_v3.json:27-33` code `compressed`. **Correction (tester
-  2026-09-15):** v1's `support_resistance_cluttered` does NOT pool with it in
-  `veto_cohort.canonical_veto_cohort` (v2 called the swap "a NEW code, not a rename"); the
-  calibration CLI names both codes itself.
+  `ui/annotations/vocabularies/veto_reasons_v3.json:27-33` code `compressed`. **Premise
+  corrected 2026-09-15 (tester, re-verified by the builder): v1's `support_resistance_cluttered`
+  does NOT pool with `compressed` in `veto_cohort.canonical_veto_cohort`** - `veto_v3_compressed`
+  and `veto_compressed` both canonicalise to `veto_v2_compressed`, while
+  `veto_v1_support_resistance_cluttered` stays itself, because `_canonical_cohort_map` keys on the
+  DEFINITION and `veto_reasons_v2.json` introduced `compressed` as a new code, not a rename. So
+  "189 + 25 = 214" is a sum a reader has to make for itself; `compression_calibration.py` pools
+  the two by name in `COMPRESSION_VETO_CODES`.
   Live counts 2026-08-20..09-15: 598 coded vetoes; `compressed` 189 + v1 25 = 214 (35.8 %), all
   `timeframe D1`, LONG 97 / SHORT 92; 136 rows carry no `reason_code`.
 - Setups table rows: `ui/services/data_feed.py` `load_setup_rows_from_priority_report` (:203-249)
@@ -341,6 +345,18 @@ Items:
    with the `ai_state` symbol entry on the ChartDataService / data-feed worker (the builder finds
    the existing enrichment seam - `enrich_setup_rows_for_display` or the panel's own worker - and
    never reads a file on paint). Hides nothing, moves nothing (identical-visible-rows test).
+> **Amended 2026-09-15 after the first review** (the packet's own wording for item 3 below left
+> the population undefined, and the first build guessed wrong). **A session's population is every
+> tracker record ACTIVE on it** - entered on or before it and still being carried by it, read off
+> the record's own `entry_trade_date` and `last_replayed_session` - **not** the records whose
+> `scan_date` equals it, and not "the rows the scan printed that morning". Joining on the entry
+> date dropped 127 of 213 live vetoes. **Every veto is counted and named** `joined` / `untracked`
+> / `pending`, with the three counts and the excluded sessions printed. **An anchor measure the
+> record does not carry is RECOMPUTED** from the daily-bar cache through
+> `summarize_anchor_compression` (no live record carries the copy-through yet); a row whose anchor
+> cannot be had says `anchor unknown` and still carries the four fixed-window measures. **And the
+> tracker is STREAMED** - `read_text` on the 1.26 GB file peaked at 3.79 GB.
+
 3. **Calibration CLI** `python -m compression_calibration --since 2026-08-20 [--out DIR]`, read-only
    on live stores, run from `scripts/`: joins every coded `compressed` / `support_resistance_
    cluttered` veto in `trader_annotations.jsonl` (symbol, session_date, side) to that session's
@@ -376,13 +392,29 @@ and aborts if `DATA_DIR` resolves under `C:\TradingBotData` without `--live`; th
 frame compressed yesterday and expanding today, not on a frame expanding from no compression, and
 not on a small-range bar.
 
-Gate text: next scan after a restart, `master_avwap_ai_state.json` symbol entries carry
-`compression_score` and the three ratios; the setups table shows an amber `compressed` chip on
-rows the scan flags (hover: score, ratios, penalty) and NOTHING is hidden or reordered; the trader
-runs `cd scripts && python -m compression_calibration --since 2026-08-20 --live` and reads one
-table per measure. PASS on day one: the chip appears on at least one row and the CLI names n = 214
-(or the day's count) vetoed rows joined. NOT a failure: a low AUC on every measure (that is the
-finding); a `compression_break` tag on no row for days.
+Gate text (rewritten 2026-09-15 after review round 2 - the old PASS line named a number the
+report can no longer print, because a veto is now accounted for rather than "joined or dropped"):
+next scan after a restart, `master_avwap_ai_state.json` symbol entries carry `compression_score`,
+the three ratios, `compression_rule_version` and `compression_break_recent` +
+`compression_break_rule_version` - today's live file has 1003 symbols, 35 flagged and ZERO with a
+`compression_score`, so a non-zero count of entries carrying one IS the pass. The setups table
+shows an amber `compressed` chip on rows the scan flags (hover: score out of 3, the three ratios,
+the penalty), NOTHING is hidden or reordered, and the table does not hitch when the report file
+changes (the 36 MB ai_state parse is on a worker). The trader then runs
+`cd scripts && python -m compression_calibration --since 2026-08-20 --live` and reads one block
+per measure.
+
+**PASS on day one:** the chip appears on at least one row; and the report prints the three-bucket
+accounting `N vetoes: A joined, B untracked, C pending` with **A + B + C = N**, names the measured
+window and any excluded session, prints seven blocks each carrying an `n`, prints the
+`compression_flag hit rate` line, and writes one CSV.
+
+**NOT a failure:** a low AUC on every measure - that is the finding (the first live run:
+`213 vetoes: 140 joined, 50 untracked, 23 pending`, hit rate 0.18, every AUC 0.34-0.49); a
+`compression_break` tag on no row for days; no chip on the very first refresh after a scan (the
+cache warms on the worker and the chip lands on the next refresh, within a second); and - **the
+first scan on this build widens `d1_features_history.csv` (667 MB, 256 columns) by eight columns
+once, so expect that ONE scan to take roughly two minutes longer under the writer lock.**
 
 ## 7. Packet PCT-2 - Trendline break
 

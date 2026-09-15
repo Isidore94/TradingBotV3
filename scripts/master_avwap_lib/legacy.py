@@ -1075,6 +1075,20 @@ PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_EXTREME = 22
 PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_VWAP = 8
 PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_FIRST_DEV = 6
 PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_SECOND_DEV = 4
+#: PCT-3 item 1. The name of the rule `summarize_anchor_compression` implements.
+#: The score and the three ATR ratios it computes are now published beside the
+#: flag, so a chip, a CSV and a calibration report can all say WHICH rule
+#: produced the number they show. Re-tuning the thresholds above is a NEW
+#: version beside this one, never a silent re-reading of history.
+ANCHOR_COMPRESSION_RULE_VERSION = "anchor_compression_v1"
+#: PCT-3 item 4. `compression_break_v1` = the Phase-6 break context
+#: (`assess_compression_break_context`: the previous completed session's
+#: anchored slice reads compressed, and today's completed close leaves that box
+#: in the setup's direction past the 0.10-ATR buffer) AND today's own bar range
+#: is at least this many ATR-20. Labelled, so the trader can re-tune it by name
+#: once the calibration report is read.
+COMPRESSION_BREAK_RULE_VERSION = "compression_break_v1"
+COMPRESSION_BREAK_MIN_BAR_RANGE_ATR = 1.0
 PRIORITY_DIRECTIONAL_REJECTION_MIN_RANGE_RATIO = 0.35
 PRIORITY_DIRECTIONAL_REJECTION_MIN_ATR_RATIO = 0.22
 PRIORITY_DIRECTIONAL_REJECTION_MIN_BODY_RATIO = 1.20
@@ -5026,6 +5040,171 @@ def evaluate_anchor_compression(
     return summarize_anchor_compression(price_slice, anchor_stdev, atr20)
 
 
+def compression_copy_through(compression_summary: dict | None) -> dict:
+    """PCT-3 item 1: the measure's own numbers, ready to publish on a carrier.
+
+    `summarize_anchor_compression` has always computed a 0-3 `compression_score`
+    and three ATR ratios and then thrown all four away inside the function - the
+    priority row, the `ai_state` symbol entry and the tracker record only ever
+    saw `compression_flag / compression_penalty / compression_note`. The trader
+    vetoes "compressed" more often than anything else, so before a threshold
+    moves the numbers have to be visible. This is a COPY, never a computation:
+    nothing here reads a bar, decides anything or touches a score.
+    """
+    summary = compression_summary if isinstance(compression_summary, dict) else {}
+    ratios = {
+        field: _coerce_float(summary.get(field)) for field in COMPRESSION_MEASURE_FIELDS[1:]
+    }
+    if any(value is None for value in ratios.values()):
+        # `summarize_anchor_compression` returns its default dict - score 0,
+        # three `None` ratios - whenever the slice is empty, the ATR-20 is
+        # missing or the anchor has no sigma. Publishing that 0 under
+        # `anchor_compression_v1` would say "the rule looked and found nothing
+        # tight", which is a measurement that never happened and exactly the
+        # number a calibration report would average. Not measured is `None`,
+        # and an unmeasured row carries no rule version at all.
+        return {"compression_score": None, **ratios}
+    return {
+        "compression_score": int(summary.get("compression_score", 0) or 0),
+        **ratios,
+        "compression_rule_version": ANCHOR_COMPRESSION_RULE_VERSION,
+    }
+
+
+#: The four fields a carrier holds only if the measure was actually taken. A
+#: carrier holding NONE of them was written before PCT-3 landed.
+COMPRESSION_MEASURE_FIELDS = (
+    "compression_score",
+    "compression_stdev_atr_ratio",
+    "compression_range_atr_ratio",
+    "compression_close_range_atr_ratio",
+)
+
+
+def compression_copy_through_from_row(row: dict | None) -> dict:
+    """The measure as a ROW carries it - or, honestly, as an ABSENCE.
+
+    Every row the scan writes from today on carries the four numbers, so the
+    copy is exact. A row written BEFORE PCT-3 landed carries none of them, and
+    the only right answer for such a row is **not measured**: `None` for the
+    score and the three ratios, and NO `compression_rule_version` at all.
+
+    A `compression_score` of 0 stamped `anchor_compression_v1` would say "this
+    rule looked and found nothing tight", which is a measurement that never
+    happened - and it is exactly the reading a calibration report would average.
+    """
+    source = row if isinstance(row, dict) else {}
+    measured = any(source.get(field) is not None for field in COMPRESSION_MEASURE_FIELDS)
+    if not measured:
+        return {field: None for field in COMPRESSION_MEASURE_FIELDS}
+    copied: dict = {
+        field: _coerce_float(source.get(field)) for field in COMPRESSION_MEASURE_FIELDS[1:]
+    }
+    score = source.get("compression_score")
+    copied["compression_score"] = None if score is None else int(score)
+    copied["compression_rule_version"] = str(
+        source.get("compression_rule_version") or ANCHOR_COMPRESSION_RULE_VERSION
+    )
+    return copied
+
+
+def _compression_break_copy_through(row: dict | None, symbol_entry: dict | None = None) -> dict:
+    """`compression_break_v1`'s verdict as a carrier holds it, or nothing.
+
+    The flag, its note and its rule version are one reading. A record built
+    from a row the rule never evaluated (an old row, a study clone) carries
+    none of the three rather than `False` under a version stamp - which would
+    say "v1 looked and said no".
+    """
+    source = row if isinstance(row, dict) else {}
+    entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+    if "compression_break_recent" not in source and "compression_break_recent" not in entry:
+        return {}
+    evaluated = source if "compression_break_recent" in source else entry
+    return {
+        "compression_break_recent": bool(evaluated.get("compression_break_recent")),
+        "compression_break_v1_note": str(evaluated.get("compression_break_v1_note") or ""),
+        "compression_break_rule_version": str(
+            evaluated.get("compression_break_rule_version") or COMPRESSION_BREAK_RULE_VERSION
+        ),
+    }
+
+
+def evaluate_compression_break_v1(
+    df: pd.DataFrame | None,
+    *,
+    anchor_date_iso: str | None,
+    anchor_stdev: float | None,
+    atr20: float | None,
+    side: str = "",
+    last_trade_date: str | date | None = None,
+    last_bar=None,
+) -> dict:
+    """PCT-3 item 4: `compression_break_v1` on the last COMPLETED session.
+
+    Two clauses, in this order, and the first one is the Phase-6 context
+    function already in this file - there is exactly one place that decides
+    "yesterday's box was compressed and today's close left it":
+
+    1. :func:`assess_compression_break_context` says the break happened in this
+       setup's direction (it refuses an upward break for a SHORT and a downward
+       one for a LONG, and it requires the prior slice to read `is_compressed`);
+    2. today's own bar range is at least
+       ``COMPRESSION_BREAK_MIN_BAR_RANGE_ATR`` ATR-20 - a drift out of a quiet
+       box on a quiet bar is not a break.
+
+    Returns the three labelled names only. It sets no score, no penalty and no
+    Phase-6 study field; `enrich_priority_rows_with_phase6_studies` still owns
+    `compression_break_today` and the study row.
+    """
+    result = {
+        "compression_break_recent": False,
+        # v1 keeps its OWN note field. `compression_break_note` is Phase 6's -
+        # `enrich_priority_rows_with_phase6_studies` does `row.update(context)`
+        # and would silently replace anything written here, and on a narrow-bar
+        # break Phase 6's note is non-empty while v1 refused. Both are written,
+        # but only `compression_break_v1_note` is v1's answer.
+        "compression_break_v1_note": "",
+        "compression_break_note": "",
+        "compression_break_rule_version": COMPRESSION_BREAK_RULE_VERSION,
+    }
+    atr_value = _coerce_float(atr20)
+    if atr_value is None or atr_value <= 0:
+        return result
+
+    context = assess_compression_break_context(
+        df,
+        anchor_date_iso=anchor_date_iso,
+        anchor_stdev=anchor_stdev,
+        atr20=atr_value,
+        side=side,
+        last_trade_date=last_trade_date,
+    )
+    if not context.get("compression_break_today"):
+        return result
+
+    # `last_bar` is the scan's own `last_row` dict (a `pd.Series` also answers
+    # `.get`); `bool()` on a Series raises, so it is never truth-tested here.
+    bar = last_bar if hasattr(last_bar, "get") else {}
+    high = _coerce_float(bar.get("high"))
+    low = _coerce_float(bar.get("low"))
+    if high is None or low is None:
+        # Missing data is uncertainty, never confirmation (plan.md sec 5).
+        return result
+    bar_range_atr = (float(high) - float(low)) / float(atr_value)
+    if bar_range_atr < COMPRESSION_BREAK_MIN_BAR_RANGE_ATR:
+        return result
+
+    result["compression_break_recent"] = True
+    note = (
+        f"{context.get('compression_break_note') or 'Compression break'}"
+        f"; bar range {bar_range_atr:.2f} ATR"
+    )
+    result["compression_break_v1_note"] = note
+    result["compression_break_note"] = note
+    return result
+
+
 def _directional_distance_atr(side: str, raw_distance_atr: float | None) -> float | None:
     if raw_distance_atr is None:
         return None
@@ -6287,6 +6466,13 @@ def build_tracker_setup_record(
         "is_compressed": bool(row.get("compression_flag")),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "compression_note": row.get("compression_note", ""),
+        # PCT-3 item 1: the measure's own score and ratios travel with the
+        # record, so the calibration CLI can read a per-(symbol, session) anchor
+        # measurement out of the tracker instead of recomputing an anchor it
+        # cannot know. `build_tracker_feature_snapshot` reads only the three
+        # fields above, so these are carried and never acted on. A row that
+        # carries no measure reads as NOT MEASURED - never a stamped zero.
+        **compression_copy_through_from_row(row),
     }
     entry_snapshot = symbol_entry.get("entry_feature_snapshot")
     if isinstance(entry_snapshot, dict) and entry_snapshot:
@@ -6441,6 +6627,13 @@ def build_tracker_setup_record(
         "compression_flag": bool(row.get("compression_flag")),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "compression_note": row.get("compression_note") or "",
+        # PCT-3 item 1: the whole reading, in one place, with its rule named.
+        "compression_summary": dict(compression_summary),
+        **compression_copy_through_from_row(row),
+        # PCT-3 item 4. The flag and its rule version travel TOGETHER or not at
+        # all: a record built from a row v1 never evaluated carries neither,
+        # because a version stamp beside no verdict claims a rule ran.
+        **_compression_break_copy_through(row, symbol_entry),
         "compression_break_today": bool(row.get("compression_break_today") or symbol_entry.get("compression_break_today")),
         "compression_break_direction": row.get("compression_break_direction") or symbol_entry.get("compression_break_direction") or "",
         "compression_break_level": _coerce_float(row.get("compression_break_level") or symbol_entry.get("compression_break_level")),
@@ -26821,6 +27014,11 @@ def _evaluate_priority_snapshot_for_date(
         "compression_flag": bool(compression_summary.get("is_compressed")),
         "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
         "compression_note": compression_summary.get("compression_note", ""),
+        # PCT-3 item 1: the score and the three ratios the measure already
+        # computed. `master_avwap_ai_state.json` is what the desk's setups table
+        # merges from, so a field that stops at the priority row never reaches a
+        # chip.
+        **compression_copy_through(compression_summary),
         "latest_release_earnings_date": latest_release_context.get("earnings_date", "")
         or latest_known_earnings_context.get("earnings_date", ""),
         "latest_release_gap_date": latest_release_context.get("gap_date", ""),
@@ -26997,8 +27195,25 @@ def _evaluate_priority_snapshot_for_date(
     priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
     priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
     priority_summary["compression_note"] = effective_compression_note
+    # PCT-3 item 1: the same four numbers on the row the desk and the tracker
+    # read. The penalty above is the EFFECTIVE one (breakout relief applied);
+    # the ratios and the score are the measure's own and are never relieved.
+    priority_summary.update(compression_copy_through(compression_summary))
     symbol_entry["compression_penalty"] = int(effective_compression_penalty or 0)
     symbol_entry["compression_note"] = effective_compression_note
+    # PCT-3 item 4: `compression_break_v1`, labelled and side-aware. Additive -
+    # it changes no score, sets no Phase-6 study field and gates nothing.
+    compression_break = evaluate_compression_break_v1(
+        df,
+        anchor_date_iso=current_anchor_meta.get("date") if current_anchor_meta else None,
+        anchor_stdev=current_anchor_meta.get("stdev") if current_anchor_meta else None,
+        atr20=atr20,
+        side=side,
+        last_trade_date=last_trade_date,
+        last_bar=last_row,
+    )
+    priority_summary.update(compression_break)
+    symbol_entry.update(compression_break)
     if isinstance(entry_feature_snapshot, dict):
         entry_feature_snapshot["compression_penalty"] = int(effective_compression_penalty or 0)
         entry_feature_snapshot["compression_note"] = effective_compression_note
