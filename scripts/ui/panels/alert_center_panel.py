@@ -524,6 +524,9 @@ class AlertCenterPanel(QFrame):
     #: the pick; this panel's own queue gate listens too, because a drop has to
     #: take effect on the very next alert.
     claimsChanged = Signal()
+    #: Trader, 2026-09-15: a veto or a claim on the centre chart is a decision
+    #: the setups table must see at once (its hide filter and its ✕ mark).
+    reviewDecisionRecorded = Signal()
     #: R4 A10: `held_run_score`'s segment index, built once per session on a
     #: worker. `object` because the payload is a plain dict Qt must not marshal.
     _heldRunIndexLoaded = Signal(object)
@@ -1623,6 +1626,7 @@ class AlertCenterPanel(QFrame):
         self._save_chart_watches()
         # Persistent D1 level alerts survive a feed clear by design.
         self._current_review_alert = None
+        self._manual_next_pick = None
         self.chart_review.clear()
         self._rebuild_feed()
         suffix = f" {armed} armed chart watch(es) disarmed." if armed else ""
@@ -2746,6 +2750,9 @@ class AlertCenterPanel(QFrame):
         """
         if not alert.symbol or alert.symbol in self._ignored_symbols:
             return
+        if not self._is_manual_chart_look(alert):
+            # Any other chart taking the pane ends the setups-table walk.
+            self._manual_next_pick = None
         current = self._current_review_alert
         if current is not None and current.symbol != alert.symbol:
             self._review_queue = [
@@ -2838,6 +2845,17 @@ class AlertCenterPanel(QFrame):
         chart-watch hit always show, and once the trader has revealed the
         hidden names for the session nothing is re-checked.
         """
+        # Trader, 2026-09-15: a chart opened FROM the setups table advances to
+        # that table's next row, not to the waiting list. The callback is
+        # consumed here; the row it charts brings its own.
+        advance = getattr(self, "_manual_next_pick", None)
+        self._manual_next_pick = None
+        if advance is not None:
+            try:
+                if advance():
+                    return
+            except Exception:
+                logging.warning("Setups-table advance failed; falling back to the waiting list.", exc_info=True)
         hidden_before = len(self._hidden_inside_range)
         next_alert = None
         while self._review_queue:
@@ -3330,6 +3348,7 @@ class AlertCenterPanel(QFrame):
         )
         self._retire_claimed_review(alert)
         self.claimsChanged.emit()
+        self.reviewDecisionRecorded.emit()
 
     def _retire_claimed_review(self, alert: BounceAlert) -> None:
         """Take a claimed chart out of today's review, and do NOTHING else.
@@ -5424,7 +5443,7 @@ class AlertCenterPanel(QFrame):
         )
         return True
 
-    def chart_symbol(self, symbol: str, *, side: str = "", origin: str = "") -> bool:
+    def chart_symbol(self, symbol: str, *, side: str = "", origin: str = "", next_pick=None) -> bool:
         """Put any symbol on the big chart on demand.
 
         The review pane previously only ever showed what the alert queue handed
@@ -5443,6 +5462,13 @@ class AlertCenterPanel(QFrame):
         so it is muted rather than red (nothing fired - the trader was
         looking), it never enters the alert feed, and it is not an alert of any
         kind. Defaults reproduce the lookup box exactly.
+
+        `next_pick` (trader, 2026-09-15) is a caller's own "what comes after
+        this chart": a callable returning True when it charted something. It
+        is consulted INSTEAD of the waiting list when this chart is vetoed,
+        claimed or stepped past, and it is dropped the moment any other chart
+        takes the pane. The setups table passes one so a veto or a claim on a
+        row it charted cycles to its next row; the lookup box passes none.
         """
         symbol = str(symbol or "").strip().upper()
         if not symbol or not SYMBOL_RE.fullmatch(symbol):
@@ -5464,6 +5490,7 @@ class AlertCenterPanel(QFrame):
         )
         # Straight to the review pane; never into the alert feed, which is a
         # record of what the scanner said, not of what was looked at.
+        self._manual_next_pick = next_pick if callable(next_pick) else None
         self._select_review_alert(alert)
         self.statusChanged.emit(
             f"{symbol}: charted from {source}." if source
@@ -7199,6 +7226,7 @@ class AlertCenterPanel(QFrame):
         that verb ends here too, after its Focus placement.
         """
         self._retire_review_alert(alert, write_not_today_annotation=False)
+        self.reviewDecisionRecorded.emit()
 
     def _retire_review_alert(
         self, alert: BounceAlert, *, write_not_today_annotation: bool

@@ -15,10 +15,11 @@ started after noon, or a clock the OS corrected all resolve the same way.
 Three rules decide the answer.
 
 * **Due from the configured Pacific wall-clock time until midnight, once per
-  session.** A desk started at 15:00 still reads today on its first tick; a
-  desk that already read today does not read it again. Pacific is
-  `America/Los_Angeles` - a clock WITH daylight saving, exactly as the Trade
-  Mentor's slots are (`trade_mentor_schedule.PACIFIC`).
+  session, then once after the exchange-owned close.** A desk started at 15:00
+  still reads today on its first tick; the separate close read follows on the
+  next tick and never repeats. Pacific is `America/Los_Angeles` - a clock WITH
+  daylight saving, exactly as the Trade Mentor's slots are
+  (`trade_mentor_schedule.PACIFIC`).
 * **A day that is not an exchange session is never due.** Saturday at noon
   has no session to read; the page keeps whatever it was showing.
 * **Uncertainty asks nothing.** A date the calendar refuses to answer for, or
@@ -29,11 +30,11 @@ Three rules decide the answer.
   `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` records why.
 
 Note the market's own close: 12:00 Pacific is 15:00 ET, one hour BEFORE the
-regular close. The read the timer performs is therefore PROVISIONAL by the
-reader's own labelling (`daily_recap_reader._is_provisional`), and the page's
-next read of the same session - the trader opening the page after the close,
-or pressing Refresh - is the closed-and-measured one. The time is a setting
-(`SETTING_KEY`) so the trader can move it without a code change.
+regular close. The configured read is therefore PROVISIONAL by the reader's
+own labelling (`daily_recap_reader._is_provisional`); the scheduler then makes
+one closed-and-measured read after `market_early_close.session_close`, including
+an early close. The time is a setting (`SETTING_KEY`) so the trader can move it
+without a code change.
 """
 
 from __future__ import annotations
@@ -137,6 +138,36 @@ def due_session(
     return stamp
 
 
+def post_close_due_session(
+    now: datetime,
+    *,
+    configured_session: str | None,
+    last_post_close_session: str | None,
+) -> str | None:
+    """The one second read due after the exchange-owned close.
+
+    The configured read must already have happened in this process.  On a
+    restart after the close, the configured slot is read first and this helper
+    permits the closed read on the next tick.  That makes restarts safe without
+    persisting timer state or ever looping.
+    """
+    moment = _pacific(now)
+    today = moment.date()
+    stamp = today.isoformat()
+    if configured_session != stamp or last_post_close_session == stamp:
+        return None
+    try:
+        import market_calendar
+        import market_early_close
+
+        if not market_calendar.is_session(today):
+            return None
+        close = market_early_close.session_close(today).astimezone(PACIFIC)
+    except Exception:  # noqa: BLE001 - uncertainty asks nothing
+        return None
+    return stamp if moment >= close else None
+
+
 def next_fire_at(now: datetime, *, auto_time: time | None) -> datetime | None:
     """The next Pacific instant the read would be due, for a label or a log.
 
@@ -170,4 +201,5 @@ __all__ = [
     "due_session",
     "next_fire_at",
     "parse_auto_time",
+    "post_close_due_session",
 ]

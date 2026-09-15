@@ -144,6 +144,9 @@ class TradingDeskPanel(QWidget):
         # second". One signal, one re-read of one small file - the setups table
         # re-merges rows it already holds and nothing is re-scanned.
         self.alert_center.claimsChanged.connect(self.master_panel.refresh_claims)
+        # Trader, 2026-09-15: a veto or a claim on the centre chart hides / marks
+        # its setups row at once, not on the next report poll.
+        self.alert_center.reviewDecisionRecorded.connect(self.master_panel.refresh_decisions)
         self.watchlists_panel.set_bounce_service(self.bounce_panel.service)
         self.master_panel.set_bounce_service(self.bounce_panel.service)
         self.industry_panel.set_bounce_service(self.bounce_panel.service)

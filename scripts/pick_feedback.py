@@ -69,6 +69,12 @@ _ANNOTATION_DECISIONS = {"veto", "like_claim", "note"}
 # Which rows are a LIKE (the ★) and which are a REJECT (the ✕):
 LIKE_KINDS = ("quick", "claimed", "like")
 REJECT_KINDS = ("veto", "dislike", "not_today", "pass", "m5_click_away", "remove_today")
+#: Trader, 2026-09-15: "vetoing it for the day SHOULD remove it from the list". The
+#: setups table HIDES a row whose symbol carries one of THESE rejects today - the
+#: swing-side verdicts. A day-trade `pass` and an M5 click-away are verdicts on a
+#: different population and leave a D1 row where it is. Presentation only: the
+#: scan, the tracker and every evidence row are untouched by the hiding.
+HIDDEN_REJECT_KINDS = frozenset({"veto", "dislike", "not_today", "remove_today"})
 #: `unfavorite` is in NEITHER map. Taking a name out of Focus is not a verdict on
 #: it (CLAUDE.md, P5: "`unfavorite` is never graded").
 _LIKE_PICK_VERDICTS = {"like"}
@@ -136,6 +142,19 @@ class DayDecisions:
 
     def symbols(self) -> set[str]:
         return set(self.liked) | set(self.rejected)
+
+    def rejected_symbols(self, kinds=HIDDEN_REJECT_KINDS) -> frozenset[str]:
+        """Symbols with at least one reject of the given kinds today.
+
+        The setups table's hide filter reads this with the default kinds; a
+        caller that wants every reject passes `REJECT_KINDS`.
+        """
+        wanted = frozenset(str(kind) for kind in kinds)
+        return frozenset(
+            symbol
+            for symbol, entries in self.rejected.items()
+            if any(kind in wanted for kind, _stamp in entries)
+        )
 
 
 @dataclass(frozen=True)

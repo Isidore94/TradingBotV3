@@ -926,19 +926,33 @@ def test_paint_reads_no_ledger_file(panel_with_decisions, monkeypatch, app):
     )
 
 
-def test_a_decision_marks_a_row_and_moves_nothing(panel_with_decisions, app):
-    """Presentation only (item 5): the same rows, in the same order, with the
-    same filter - one of them simply wearing a red X."""
+def test_a_veto_hides_its_row_and_show_vetoed_brings_it_back(panel_with_decisions, app):
+    """WS-SX item 5 said a decision moves nothing. The trader amended that on
+    2026-09-15: *"vetoing it for the day SHOULD remove it from the list"*. So
+    the vetoed row is HIDDEN and counted by default, and `Show vetoed` gives
+    back the same rows in the same order, the vetoed one wearing its red X.
+    Nothing is deleted, re-ordered or written."""
     panel = panel_with_decisions
     proxy = panel.proxy
-    visible = [
-        proxy.index(row, _column("symbol")).data(Qt.ItemDataRole.DisplayRole)
-        for row in range(proxy.rowCount())
-    ]
-    assert visible == ["ALPHAA", "BRAVOO", "CHARLI"], (
-        f"a decision hid or re-ordered a row: {visible}"
+
+    def visible():
+        return [
+            proxy.index(row, _column("symbol")).data(Qt.ItemDataRole.DisplayRole)
+            for row in range(proxy.rowCount())
+        ]
+
+    assert visible() == ["ALPHAA", "BRAVOO"], f"the vetoed row is hidden: {visible()}"
+    assert panel.show_vetoed_toggle.text() == "Show vetoed (1)"
+    assert len(panel.model.rows()) == 3, "hidden, never deleted"
+
+    panel.show_vetoed_toggle.setChecked(True)
+    assert visible() == ["ALPHAA", "BRAVOO", "CHARLI"], (
+        f"showing the vetoed rows re-ordered something: {visible()}"
     )
+    assert panel.show_vetoed_toggle.text() == "Show vetoed"
     cross = _render(panel.delegate, panel.table, panel.model, 2, "dislike")
     assert _has_exact(cross, QColor(theme.color("reject_today"))) > 0, (
-        "the vetoed row is marked, not moved"
+        "the vetoed row is marked when shown"
     )
+    panel.show_vetoed_toggle.setChecked(False)
+    assert visible() == ["ALPHAA", "BRAVOO"]
