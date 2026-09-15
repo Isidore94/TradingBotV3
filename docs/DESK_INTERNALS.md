@@ -5537,6 +5537,16 @@ remembering because they are the same mistake in two places.
   complete, so no measure may be taken on it at all), and the line `N vetoes: A joined, B
   untracked, C pending` is printed above the tables with the excluded sessions named and why.
 
+**What the first full run actually said** (2026-09-15, against copies of the live stores, since
+2026-08-20): `213 vetoes: 140 joined, 50 untracked, 23 pending`; 11 measured sessions
+2026-08-20..09-14 with 2026-09-15 excluded as incomplete; 14,759 population rows, 190 vetoed;
+14,709 anchors recomputed. **Today's `compression_flag` hit rate on the vetoed set is 0.18** - it
+caught 35 of 190 rows the trader vetoed for compression, and it was set on 2,631 of the 14,569
+rows they did not. Every one of the seven measures scores an AUC BELOW 0.5 (0.34 to 0.49): a
+vetoed row does read tighter than the rest on all seven, consistently and weakly, and no candidate
+separates the two populations. That is the finding the threshold conversation starts from, and it
+is a finding, not a failure. 267 s, peak RSS 0.14 GB.
+
 **An anchor measure the record does not carry is RECOMPUTED, never printed as `nan`.** No live
 record carries the copy-through yet, so the three anchor measures came out `n = 0 / nan` - three
 empty tables in a seven-table report. `recompute_anchor_measures` runs the champion's own
