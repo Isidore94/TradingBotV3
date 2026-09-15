@@ -538,3 +538,20 @@ mode - AWAY included, so the page is ready when the trader returns - and stays o
 `autopilot_core.auto_scanning_due`, for the same reason the Trade Mentor's fixed hours
 and the armed-watch H1 fetch above are outside it. The push-exception count stays at
 two; the AWAY digest and `autopilot_today.txt` are untouched.
+
+## Amendment 2026-09-15 - Daily Recap repair (DR-REPAIR)
+
+The recap streams the append-only M5 outcome log and retains its latest state per
+nonblank event id; blank ids remain separate facts. `What worked today` then shows one
+whole best measured event per symbol/side (latest when none measured), never columns
+combined across events. The factual reader-owned summary names raw updates, latest
+events, stock/sides, measured states, declared top rows, decisions by M5/D1, swings
+and measured refusals that later worked; the panel only formats it.
+
+Annotation `timeframe` is preserved. M5 decisions read the reduced M5 state; D1
+decisions read only their matching `session_horizon_outcomes` row at the selected
+horizon, with missing as unavailable and immature as pending. Pending swings are
+visible with dashes, never zero. The page performs the configured noon read and one
+additional read after `market_early_close.session_close` (including early closes), on
+its existing worker. No scan, fetch, push, write, detector, score, alert, queue,
+Focus, watchlist or review-policy behavior changes.

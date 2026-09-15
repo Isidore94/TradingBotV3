@@ -267,6 +267,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.26** | WISHLIST sweep (trader 2026-09-12) | Every WISHLIST item built as ONE feature dump on the side branch `claude/wishlist-sweep-2026-09-12` for a week of trader testing, Astra review after code completion, then a merge decision. **IN BUILD; the per-item status table is the checkpoint entry "2026-09-12 - WISHLIST SWEEP".** |
 | **0.27** | Claimed D1 picks (trader 2026-09-14) | A CLAIMED like on a D1 chart becomes a ranked pick in Master AVWAP Setups, the D1 chart is done, M5 stays on the left and D1 on the right, and the claims are graded beside FAV/HC. **BUILT 2026-09-14 as packets D1C-A / D1C-L / D1C-B on `lead/d1c-integration` above the sweep tip; live gates #119-#121 owed; nothing merged to `main`.** |
 | **0.28** | Trader's 2026-09-15 desk requests: day-trade watchlist reset (DTR) + setups-table cycle and veto-hide (SC) | DTR: `longs.txt` / `shorts.txt` are wiped after every session's close by the first Auto Pilot tick that sees a list written at or before that close; a name typed after the close is tomorrow's; swing lists untouched. SC: a chart opened from the Master AVWAP setups table cycles to the table's next row on veto / claim / Next, and a row vetoed for the day is hidden (counted, `Show vetoed` restores) while the tracker keeps tracking it. **BUILT 2026-09-15 on `claude/desk-combined-2026-09-14`; live gates #123 (DTR) and #124 (SC) owed.** |
+| **0.29** | Daily Recap repair (DR-REPAIR) | Trader-authorized 2026-09-15: stream and reduce M5 event state, show one whole best event per stock/side, use D1 horizons for D1 decisions, show pending swings and a factual summary, then re-read once after the exchange close. **BUILT on `codex/daily-recap-repair`; live gate #125 owed.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -404,6 +405,17 @@ files every cycle and is untouched); the file is written first and the intent ro
 write records nothing; the swing lists, the Focus store and its membership are untouched. What remains
 is the trader's live validation (#123) and the open question whether the M5 Focus picks should reset
 with the lists (they fade on their own ten-session clock today).
+
+## Phase 0.29 — Daily Recap repair (DR-REPAIR) — BUILT 2026-09-15 on `codex/daily-recap-repair`; live gate #125 owed
+
+The recap now streams the append-only M5 log, keeps the latest state per nonblank event,
+and selects one complete best measured event per stock/side. It preserves annotation
+timeframe: M5 decisions use that reduced state while D1 decisions use only the matching
+session-horizon row and explicitly say measured, pending or unavailable. Pending swings
+are visible, the reader supplies a factual summary, and the existing worker reads once at
+the configured time plus once after the exchange-owned close. No detector, score, alert,
+queue, Focus, watchlist, or policy behavior changes. Gate #125 is the trader's next
+session confirmation of the compact rows and noon-plus-close refresh.
 
 ## Phase 0.27 — Claimed D1 picks (trader 2026-09-14) — BUILT the same day on `lead/d1c-integration`; live gates #119-#121 owed
 

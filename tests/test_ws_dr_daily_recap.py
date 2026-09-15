@@ -1089,54 +1089,33 @@ def test_a_decision_is_identified_at_the_opportunity_grain(stores):
 # ---------------------------------------------------------------------------
 
 def test_only_the_rejections_whose_later_path_was_favorable_appear(stores):
-    """STT was vetoed AND disliked and went the trader's way. It stays out."""
+    """An unmeasured D1 refusal is unavailable, not an M5 fallback."""
     session = _read(stores)
     view = session.rejected_that_worked
 
     actual = {(row.symbol, row.detail.get("verdict")) for row in view.rows}
-    assert actual == {
-        ("KBR", "veto"),
-        ("KBR", "not_today"),
-        ("TSLA", "m5_click_away"),
-        ("SHW", "pass"),
-    }
+    assert actual == {("KBR", "not_today"), ("TSLA", "m5_click_away")}
     assert "STT" not in _symbols(view)
+    assert "SHW" not in _symbols(view)
 
 
-def test_a_rejection_that_worked_shows_the_reason_and_the_adverse_move(stores):
-    """A later rise alone does not prove a timing veto wrong.
-
-    KBR ran 4.00% the way the trader refused and 1.50% against it first. Both
-    numbers travel, and the trader's own words travel with them.
-    """
+def test_a_d1_rejection_without_a_matching_horizon_is_unavailable(stores):
+    """A D1 veto never borrows a same-name M5 path."""
     session = _read(stores)
-    row = _by_symbol(session.rejected_that_worked, "KBR", verdict="veto")
+    row = _by_symbol(session.my_decisions, "KBR", verdict="veto")
+    assert row.detail["timeframe"] == "D1"
+    assert row.detail["result_state"] == "unmeasured"
+    assert row.measures["d1_result_pct"] is None
 
-    assert row.detail["reason"] == "timing"
-    assert row.measures["favorable_pct"] == pytest.approx(4.00)
-    assert row.measures["adverse_pct"] == pytest.approx(-1.50)
 
-
-def test_the_credited_move_is_separate_from_the_days_path(stores):
-    """Two different questions, two different columns, never blended.
-
-    The SHW pass's later path over the whole session is 5.00%; the part of it
-    the trader could still have had at 12:30 is 2.00%. The KBR veto at 09:35 has
-    no bar series, so its credited number is unavailable while its day path is
-    still reported.
-    """
+def test_a_d1_pass_keeps_only_the_reachable_post_decision_m5_measure(stores):
+    """The D1 result remains unavailable while its bar-sidecar measure remains honest."""
     session = _read(stores)
-    view = session.rejected_that_worked
-
-    shw = _by_symbol(view, "SHW", verdict="pass")
-    assert shw.measures["favorable_pct"] == pytest.approx(SHW_DAY_MFE_PCT)
-    assert shw.measures["favorable_pct_after_decision"] == pytest.approx(
+    shw = _by_symbol(session.my_decisions, "SHW", verdict="pass")
+    assert shw.measures["d1_result_pct"] is None
+    assert shw.measures["mfe_pct_after_decision"] == pytest.approx(
         SHW_AFTER_DECISION_MFE_PCT
     )
-
-    kbr = _by_symbol(view, "KBR", verdict="veto")
-    assert kbr.measures["favorable_pct_after_decision"] is None
-    assert kbr.unavailable.get("favorable_pct_after_decision", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -1357,9 +1336,11 @@ def test_the_page_draws_every_row_the_reader_produced(stores, make_page, qapp):
     _process(qapp)
 
     assert page.worked_today_table.rowCount() == session.worked_today.n == 8
-    assert page.recent_swings_table.rowCount() == session.recent_swings.n == 2
+    assert page.recent_swings_table.rowCount() == (
+        session.recent_swings.n + len(session.recent_swings.pending)
+    ) == 3
     assert page.my_decisions_table.rowCount() == session.my_decisions.n == 10
-    assert page.rejected_that_worked_table.rowCount() == session.rejected_that_worked.n == 4
+    assert page.rejected_that_worked_table.rowCount() == session.rejected_that_worked.n == 2
 
 
 @pytest.mark.qt

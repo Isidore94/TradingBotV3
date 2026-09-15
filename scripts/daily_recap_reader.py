@@ -93,7 +93,12 @@ _CHANNEL_BY_SOURCE_VERDICT: dict[tuple[str, str], str] = {
 SORT_KEYS: dict[str, tuple[str, ...]] = {
     "worked_today": ("mfe_pct", "eod_move_pct"),
     "recent_swings": ("selected_end_pct", "next_close_pct", "first_favorable_pct"),
-    "my_decisions": ("day_mfe_pct", "mfe_pct_after_decision", "journal_r"),
+    "my_decisions": (
+        "day_mfe_pct",
+        "d1_result_pct",
+        "mfe_pct_after_decision",
+        "journal_r",
+    ),
     "rejected_that_worked": (
         "favorable_pct",
         "favorable_pct_after_decision",
@@ -104,7 +109,7 @@ SORT_KEYS: dict[str, tuple[str, ...]] = {
 #: What each view is a population OF, said in one clause so every table can
 #: print its cohort without inventing a sentence of its own.
 COHORTS: dict[str, str] = {
-    "worked_today": "every intraday M5 outcome row logged for the session",
+    "worked_today": "the best measured M5 alert per stock and side for the session",
     "recent_swings": "every swing observation scanned inside the lookback window",
     "my_decisions": "every verdict the trader recorded in the session",
     "rejected_that_worked": (
@@ -301,11 +306,50 @@ class RecapSession:
     rejected_that_worked: RecapView
     staged_picks: dict[str, tuple[str, ...]]
     working_lately: dict[str, Any]
+    summary: "RecapSummary"
 
     def view(self, name: str) -> RecapView:
         if name not in VIEW_NAMES:
             raise ValueError(f"no such view: {name!r}")
         return getattr(self, name)
+
+
+@dataclass(frozen=True)
+class RecapSummary:
+    """Small factual roll-up supplied by the reader, never the Qt panel."""
+
+    raw_m5_update_rows: int
+    latest_m5_event_count: int
+    m5_stock_side_count: int
+    m5_measured_count: int
+    m5_unmeasured_count: int
+    top_measured_m5: tuple[RecapRow, ...]
+    decision_counts: dict[str, dict[str, int]]
+    swing_counts: dict[str, int]
+    rejected_worked_count: int
+    top_rejected_that_worked: tuple[RecapRow, ...]
+
+    @property
+    def text(self) -> str:
+        top_m5 = ", ".join(row.symbol for row in self.top_measured_m5) or "none"
+        top_rejected = ", ".join(
+            row.symbol for row in self.top_rejected_that_worked
+        ) or "none"
+        decisions = "; ".join(
+            f"{timeframe} {counts['measured']} measured, {counts['pending']} pending, "
+            f"{counts['unmeasured']} unmeasured"
+            for timeframe, counts in self.decision_counts.items()
+        )
+        return (
+            f"M5: {self.raw_m5_update_rows} update rows, "
+            f"{self.latest_m5_event_count} latest events, "
+            f"{self.m5_stock_side_count} stock/sides, "
+            f"{self.m5_measured_count} measured and {self.m5_unmeasured_count} unmeasured; "
+            f"top measured: {top_m5}. Decisions: {decisions}. "
+            f"Swings: {self.swing_counts['measured']} measured, "
+            f"{self.swing_counts['pending']} pending. Rejected and worked: "
+            f"{self.rejected_worked_count}; top: {top_rejected}."
+        )
 
 
 def _observation_only(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -596,6 +640,7 @@ class _Outcome:
     """One M5 outcome row, reduced to what the recap reports."""
 
     event_id: str
+    logged_at: datetime | None
     trade_date: str
     symbol: str
     side: str
@@ -612,6 +657,7 @@ def _outcomes(store: _Store) -> tuple[_Outcome, ...]:
         out.append(
             _Outcome(
                 event_id=str(row.get("event_id") or ""),
+                logged_at=_parse_moment(row.get("logged_at")),
                 trade_date=_session_text(row.get("trade_date")),
                 symbol=_symbol(row.get("symbol")),
                 # The live column is `direction`, not `side`.
@@ -626,6 +672,47 @@ def _outcomes(store: _Store) -> tuple[_Outcome, ...]:
     return tuple(out)
 
 
+def _read_intraday_outcomes(path: Path) -> _Store:
+    """Stream the append-only M5 log and retain only its latest event state.
+
+    The file is large enough that a generic ``read_text`` reader turns a recap
+    refresh into a sizeable allocation.  Coverage still describes every line
+    on disk, while the returned rows contain the last append for each real
+    event id.  Empty ids are deliberately kept as independent rows: they are
+    incomplete identities, not one shared event.
+    """
+    target = Path(path)
+    latest: dict[str, dict[str, Any]] = {}
+    blank_ids: list[dict[str, Any]] = []
+    count = 0
+    oldest: datetime | None = None
+    newest: datetime | None = None
+    try:
+        with target.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                count += 1
+                stamp = _parse_moment(row.get("logged_at"))
+                if stamp is not None:
+                    oldest = stamp if oldest is None or stamp < oldest else oldest
+                    newest = stamp if newest is None or stamp > newest else newest
+                event_id = str(row.get("event_id") or "").strip()
+                if event_id:
+                    # Assignment is deliberately append-order deterministic.
+                    latest[event_id] = dict(row)
+                else:
+                    blank_ids.append(dict(row))
+    except OSError as exc:
+        return _Store((), _unreadable("intraday_outcomes", target, exc))
+    coverage = SourceCoverage(
+        name="intraday_outcomes",
+        path=str(target),
+        rows=count,
+        oldest=oldest,
+        newest=newest,
+    )
+    return _Store(tuple(latest.values()) + tuple(blank_ids), coverage)
+
+
 def _outcome_for(
     outcomes: Sequence[_Outcome], session_date: str, symbol: str, side: str
 ) -> _Outcome | None:
@@ -634,13 +721,30 @@ def _outcome_for(
     Side is part of the key: the same symbol can carry a long and a short row
     on one day, and they are opposite readings of the same tape.
     """
-    for row in outcomes:
-        if row.trade_date != session_date or row.symbol != symbol:
-            continue
-        if side and row.side and row.side != side:
-            continue
-        return row
-    return None
+    candidates = [
+        row
+        for row in outcomes
+        if row.trade_date == session_date
+        and row.symbol == symbol
+        and (not side or not row.side or row.side == side)
+    ]
+    return _best_outcome(candidates)
+
+
+def _best_outcome(outcomes: Sequence[_Outcome]) -> _Outcome | None:
+    """One complete event, never a best MFE joined to another event's EOD."""
+    if not outcomes:
+        return None
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    return max(
+        outcomes,
+        key=lambda row: (
+            row.mfe_pct is not None,
+            row.mfe_pct if row.mfe_pct is not None else float("-inf"),
+            row.entry_time or floor,
+            row.event_id,
+        ),
+    )
 
 
 def _unmeasured_reason(outcome: _Outcome | None, column: str) -> str:
@@ -664,9 +768,14 @@ def _worked_today_view(
     outcomes: Sequence[_Outcome],
     labels: Mapping[str, str],
 ) -> RecapView:
-    rows: list[RecapRow] = []
+    grouped: dict[tuple[str, str], list[_Outcome]] = {}
     for outcome in outcomes:
-        if outcome.trade_date != session_date:
+        if outcome.trade_date == session_date:
+            grouped.setdefault((outcome.symbol, outcome.side), []).append(outcome)
+    rows: list[RecapRow] = []
+    for _key, outcome_rows in sorted(grouped.items()):
+        outcome = _best_outcome(outcome_rows)
+        if outcome is None:
             continue
         measures: dict[str, float | None] = {
             "mfe_pct": outcome.mfe_pct,
@@ -708,8 +817,8 @@ def _worked_today_view(
         sort_key=SORT_KEYS["worked_today"][0],
         sort_keys=SORT_KEYS["worked_today"],
         note=(
-            "Best available movement, already side-adjusted by the store - "
-            "never money earned."
+            "One best measured alert per stock/side (latest alert when none is "
+            "measured), already side-adjusted by the store - never money earned."
         ),
     )
     return _with_rows(view, view.sorted_by(view.sort_key))
@@ -890,6 +999,7 @@ class _Decision:
     observed_at: datetime | None
     reason: str
     detail: dict[str, Any]
+    timeframe: str = "M5"
 
 
 def _like_mode(row: Mapping[str, Any]) -> str:
@@ -919,6 +1029,7 @@ def _decisions(
         moment = _parse_moment(row.get("created_at"))
         symbol = _symbol(row.get("symbol"))
         side = _side(row.get("side"))
+        timeframe = str(row.get("timeframe") or "M5").strip().upper()
         if kind == "like_claim":
             out.append(
                 _Decision(
@@ -931,6 +1042,7 @@ def _decisions(
                     observed_at=moment,
                     reason=str(row.get("note") or ""),
                     detail={"like_mode": _like_mode(row)},
+                    timeframe=timeframe,
                 )
             )
         elif kind == "veto":
@@ -945,6 +1057,7 @@ def _decisions(
                     observed_at=moment,
                     reason=str(row.get("reason_code") or ""),
                     detail={"vocab_version": row.get("vocab_version")},
+                    timeframe=timeframe,
                 )
             )
         elif kind == "pass":
@@ -969,6 +1082,7 @@ def _decisions(
                         "reason_codes": codes,
                         "m5_bars_ref": str(row.get("m5_bars_ref") or ""),
                     },
+                    timeframe=timeframe,
                 )
             )
 
@@ -1055,6 +1169,8 @@ def _decision_rows(
     session_date: str,
     decisions: Sequence[_Decision],
     outcomes: Sequence[_Outcome],
+    horizon_store: _Store,
+    lookback_sessions: int,
     annotations: _Store,
     preference: Mapping[tuple[str, str, str, str], Mapping[str, Any]],
     labels: Mapping[str, str],
@@ -1097,10 +1213,17 @@ def _decision_rows(
             ),
         )
         first = members[0]
+        timeframe = first.timeframe if first.timeframe in {"M5", "D1"} else "M5"
         outcome = _outcome_for(outcomes, session_date, first.symbol, first.side)
-        after, after_reason = _after_decision_favorable_pct(
-            first, outcome, sidecar_bars
+        d1_row = (
+            _d1_horizon_row(
+                horizon_store, session_date, first.symbol, first.side, lookback_sessions
+            )
+            if timeframe == "D1"
+            else None
         )
+        d1_result, result_state, d1_reason = _d1_result(d1_row)
+        after, after_reason = _after_decision_favorable_pct(first, outcome, sidecar_bars)
         joined = preference.get(
             (
                 session_date,
@@ -1111,13 +1234,22 @@ def _decision_rows(
         )
         journal_r = _float_or_none((joined or {}).get("journal_r"))
         measures: dict[str, float | None] = {
-            "day_mfe_pct": outcome.mfe_pct if outcome is not None else None,
+            "day_mfe_pct": outcome.mfe_pct if timeframe == "M5" and outcome is not None else None,
+            "d1_result_pct": d1_result if timeframe == "D1" else None,
             "mfe_pct_after_decision": after,
             "journal_r": journal_r,
         }
         unavailable: dict[str, str] = {}
         if measures["day_mfe_pct"] is None:
-            unavailable["day_mfe_pct"] = _unmeasured_reason(outcome, "mfe_pct")
+            unavailable["day_mfe_pct"] = (
+                "D1 decisions use the declared D1 horizon result, never an M5 day best"
+                if timeframe == "D1"
+                else _unmeasured_reason(outcome, "mfe_pct")
+            )
+        if measures["d1_result_pct"] is None:
+            unavailable["d1_result_pct"] = (
+                d1_reason if timeframe == "D1" else "this is an M5 decision"
+            )
         if after is None:
             unavailable["mfe_pct_after_decision"] = after_reason
         if journal_r is None:
@@ -1137,6 +1269,10 @@ def _decision_rows(
             "match_state": str((joined or {}).get("match_state") or ""),
             "journal_net_pnl": _float_or_none((joined or {}).get("journal_net_pnl")),
             "trade_id": str((joined or {}).get("trade_id") or ""),
+            "timeframe": timeframe,
+            "result_state": result_state if timeframe == "D1" else (
+                "measured" if outcome is not None and outcome.mfe_pct is not None else "unmeasured"
+            ),
             "occurrence_ids": tuple(
                 member.capture_id for member in members if member.capture_id
             ),
@@ -1170,6 +1306,44 @@ def _decision_rows(
             )
         )
     return tuple(rows)
+
+
+def _d1_horizon_row(
+    store: _Store,
+    session_date: str,
+    symbol: str,
+    side: str,
+    lookback_sessions: int,
+) -> Mapping[str, Any] | None:
+    """The D1 row matching the decision's own session and declared horizon."""
+    for row in store.rows:
+        if _session_text(row.get("scan_date")) != session_date:
+            continue
+        if _symbol(row.get("symbol")) != symbol:
+            continue
+        row_side = _side(row.get("side"))
+        if side and row_side and row_side != side:
+            continue
+        try:
+            if int(str(row.get("horizon_sessions") or "")) != lookback_sessions:
+                continue
+        except ValueError:
+            continue
+        return row
+    return None
+
+
+def _d1_result(row: Mapping[str, Any] | None) -> tuple[float | None, str, str]:
+    """D1 result and explicit state; absent and immature are never M5 fallbacks."""
+    if row is None:
+        return None, "unmeasured", "no D1 horizon outcome row exists for this decision"
+    value = _measured_return(row)
+    if value is not None:
+        return value, "measured", ""
+    maturity = str(row.get("maturity") or "").strip().lower()
+    if maturity in {"immature", "pending", "open"}:
+        return None, "pending", "the D1 horizon is pending and has not matured"
+    return None, "unmeasured", "the D1 horizon row is present but has no measured result"
 
 
 # ---------------------------------------------------------------------------
@@ -1295,14 +1469,21 @@ def _rejected_that_worked_view(
     for row in decision_rows:
         if row.detail.get("verdict") not in REJECT_VERDICTS:
             continue
+        timeframe = str(row.detail.get("timeframe") or "M5")
         outcome = _outcome_for(outcomes, session_date, row.symbol, row.side)
-        favorable = outcome.mfe_pct if outcome is not None else None
+        favorable = (
+            row.measures.get("d1_result_pct")
+            if timeframe == "D1"
+            else (outcome.mfe_pct if outcome is not None else None)
+        )
         if favorable is None or favorable <= 0:
             continue
         measures: dict[str, float | None] = {
             "favorable_pct": favorable,
             "favorable_pct_after_decision": row.measures.get("mfe_pct_after_decision"),
-            "adverse_pct": outcome.mae_pct if outcome is not None else None,
+            "adverse_pct": (
+                None if timeframe == "D1" else outcome.mae_pct if outcome is not None else None
+            ),
         }
         unavailable: dict[str, str] = {}
         if measures["favorable_pct_after_decision"] is None:
@@ -1310,7 +1491,11 @@ def _rejected_that_worked_view(
                 "mfe_pct_after_decision", "not measured"
             )
         if measures["adverse_pct"] is None:
-            unavailable["adverse_pct"] = _unmeasured_reason(outcome, "mae_pct")
+            unavailable["adverse_pct"] = (
+                "the D1 horizon reports a result, not an intraday adverse move"
+                if timeframe == "D1"
+                else _unmeasured_reason(outcome, "mae_pct")
+            )
         rows.append(
             RecapRow(
                 symbol=row.symbol,
@@ -1452,7 +1637,7 @@ def read_session(
     now = now or datetime.now()
     sources = sources or RecapSources()
 
-    intraday = _read_csv("intraday_outcomes", sources.intraday_outcomes, "logged_at")
+    intraday = _read_intraday_outcomes(sources.intraday_outcomes)
     tier = _read_csv("tier_outcomes", sources.tier_outcomes, "run_timestamp")
     horizon = _read_csv(
         "session_horizon_outcomes", sources.session_horizon_outcomes, "scan_date"
@@ -1503,6 +1688,8 @@ def read_session(
         session_date,
         _decisions(session_date, annotations, feedback, favorites, events),
         outcomes,
+        horizon,
+        lookback_sessions,
         annotations,
         _preference_index(preference_store),
         labels,
@@ -1524,6 +1711,7 @@ def read_session(
     )
     my_decisions = _with_rows(my_decisions, my_decisions.sorted_by(my_decisions.sort_key))
     rejected = _rejected_that_worked_view(session_date, my_decisions.rows, outcomes)
+    summary = _summary(intraday.coverage, outcomes, worked_today, my_decisions, recent_swings, rejected)
 
     return RecapSession(
         session_date=session_date,
@@ -1537,6 +1725,45 @@ def read_session(
         rejected_that_worked=rejected,
         staged_picks=staged,
         working_lately=snapshot,
+        summary=summary,
+    )
+
+
+def _summary(
+    intraday_coverage: SourceCoverage,
+    outcomes: Sequence[_Outcome],
+    worked_today: RecapView,
+    decisions: RecapView,
+    swings: RecapView,
+    rejected: RecapView,
+) -> RecapSummary:
+    """The declared factual summary; formatting stays in the panel."""
+    measured_m5 = tuple(row for row in worked_today.rows if row.measures.get("mfe_pct") is not None)
+    top_m5 = tuple(sorted(measured_m5, key=lambda row: _sort_key(row, "mfe_pct"))[:3])
+    decision_counts = {
+        timeframe: {"measured": 0, "pending": 0, "unmeasured": 0}
+        for timeframe in ("M5", "D1")
+    }
+    for row in decisions.rows:
+        timeframe = str(row.detail.get("timeframe") or "M5")
+        if timeframe not in decision_counts:
+            timeframe = "M5"
+        state = str(row.detail.get("result_state") or "unmeasured")
+        decision_counts[timeframe][state if state in decision_counts[timeframe] else "unmeasured"] += 1
+    top_rejected = tuple(
+        sorted(rejected.rows, key=lambda row: _sort_key(row, "favorable_pct"))[:3]
+    )
+    return RecapSummary(
+        raw_m5_update_rows=intraday_coverage.rows,
+        latest_m5_event_count=len(outcomes),
+        m5_stock_side_count=len(worked_today.rows),
+        m5_measured_count=len(measured_m5),
+        m5_unmeasured_count=len(worked_today.rows) - len(measured_m5),
+        top_measured_m5=top_m5,
+        decision_counts=decision_counts,
+        swing_counts={"measured": len(swings.rows), "pending": len(swings.pending)},
+        rejected_worked_count=len(rejected.rows),
+        top_rejected_that_worked=top_rejected,
     )
 
 
@@ -1545,6 +1772,7 @@ __all__ = [
     "ENDORSE_VERDICTS",
     "RecapRow",
     "RecapSession",
+    "RecapSummary",
     "RecapSources",
     "RecapView",
     "REJECT_VERDICTS",

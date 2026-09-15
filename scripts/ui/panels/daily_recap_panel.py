@@ -29,14 +29,13 @@ started by the host AFTER the window shows and never in the constructor, asks
 `daily_recap_schedule.due_session` once a minute; at the configured Pacific
 wall-clock time (default 12:00, `local_settings.json`
 `daily_recap_auto_time`) on an exchange session it refills the session list,
-selects TODAY and reads it, once per session per process. A desk started after
-that time reads today on its first tick. Noon Pacific is an hour before the
-regular close, so that read is labelled provisional by the reader itself and
-the next read of the same session - the page opened at the end of the day, or
-Refresh - is the closed one. The read is a store read on a worker: no scan, no
-push, no write, so it runs in every Auto mode and is not a starter under the
-quiet-hours rule (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`, amendment
-2026-09-14).
+selects TODAY and reads it once, then reads exactly once more after the
+exchange-owned close. A desk started after the configured time reads today on
+its first tick. Noon Pacific is an hour before the regular close, so that read
+is labelled provisional by the reader itself; the close read is measured. The
+read is a store read on a worker: no scan, no push, no write, so it runs in
+every Auto mode and is not a starter under the quiet-hours rule
+(`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`, amendment 2026-09-15).
 """
 
 from __future__ import annotations
@@ -107,6 +106,7 @@ VIEW_COLUMNS: dict[str, tuple[str, tuple[tuple[str, str | None], ...]]] = {
             ("Selected end %", "selected_end_pct"),
             ("Next close %", "next_close_pct"),
             ("First favorable %", "first_favorable_pct"),
+            ("State", None),
             ("Environment", None),
         ),
     ),
@@ -120,6 +120,7 @@ VIEW_COLUMNS: dict[str, tuple[str, tuple[tuple[str, str | None], ...]]] = {
             ("Why", None),
             ("Clicks", None),
             ("Day best %", "day_mfe_pct"),
+            ("D1 result %", "d1_result_pct"),
             ("After the decision %", "mfe_pct_after_decision"),
             ("Journal R", "journal_r"),
             ("Journal match", None),
@@ -214,6 +215,7 @@ class DailyRecapPanel(QFrame):
             auto_time_reader or daily_recap_schedule.auto_time_from_settings
         )
         self._auto_fired_session: str | None = None
+        self._auto_post_close_session: str | None = None
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(AUTO_POLL_INTERVAL_MS)
         self._auto_timer.timeout.connect(self._on_auto_tick)
@@ -246,6 +248,10 @@ class DailyRecapPanel(QFrame):
 
         self.provisional_note = QLabel("")
         self.provisional_note.setObjectName("SectionSubtitle")
+        self.summary_note = QLabel("")
+        self.summary_note.setObjectName("SectionSubtitle")
+        self.summary_note.setWordWrap(True)
+        self.summary_note.setMaximumHeight(theme.px(54))
 
         self.tabs = QTabWidget()
         self._tables: dict[str, QTableWidget] = {}
@@ -296,6 +302,7 @@ class DailyRecapPanel(QFrame):
         layout.addWidget(self.subtitle)
         layout.addLayout(header)
         layout.addWidget(self.provisional_note)
+        layout.addWidget(self.summary_note)
         layout.addWidget(self.tabs, 5)
         layout.addWidget(self.staged_heading)
         layout.addWidget(self.staged, 1)
@@ -448,8 +455,16 @@ class DailyRecapPanel(QFrame):
             last_fired_session=self._auto_fired_session,
         )
         if due is None:
-            return None
-        self._auto_fired_session = due
+            due = daily_recap_schedule.post_close_due_session(
+                self._clock(),
+                configured_session=self._auto_fired_session,
+                last_post_close_session=self._auto_post_close_session,
+            )
+            if due is None:
+                return None
+            self._auto_post_close_session = due
+        else:
+            self._auto_fired_session = due
         self.show_session(due)
         return due
 
@@ -503,6 +518,9 @@ class DailyRecapPanel(QFrame):
             self._sync_sort_picker(name, view)
             self._render_view(name, view)
         self._render_staged(session)
+        self.summary_note.setText(
+            str(getattr(getattr(session, "summary", None), "text", ""))
+        )
         self.statusChanged.emit(
             f"Daily Recap: {getattr(session, 'session_date', '')} read from "
             f"{len(getattr(session, 'coverage', {}) or {})} stores"
@@ -543,6 +561,8 @@ class DailyRecapPanel(QFrame):
             rows = view.sorted_by(str(key))
         except Exception:  # noqa: BLE001 - an undeclared key never empties a table
             rows = tuple(getattr(view, "rows", ()) or ())
+        if name == "recent_swings":
+            rows = tuple(rows) + tuple(getattr(view, "pending", ()) or ())
         self._view_rows[name] = tuple(rows)
         table = self._tables[name]
         columns = VIEW_COLUMNS[name][1]
@@ -640,6 +660,8 @@ class DailyRecapPanel(QFrame):
             return text, tip
         if header == "Status":
             return str(detail.get("status") or ""), ""
+        if header == "State":
+            return ("Pending" if getattr(row, "pending", False) else "Measured"), ""
         return "", ""
 
     # -- staged picks ------------------------------------------------------
