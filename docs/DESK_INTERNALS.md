@@ -5614,6 +5614,28 @@ report is a report. Nothing here reaches a detector, a score, an alert, a watchl
 list, the review queue or `review_policy.json`. The trader's own words set that boundary:
 measure first, then tune.
 
+## PCT-2 - a trendline break is a tag and an event (2026-09-15, packet PCT-2)
+
+- **The tag stays a scan fact; the event is an explicit arm.** `TRENDLINE_BREAK` already describes
+  the scan's recent break candidate. The new `trendline_break` D1 event is an extension kind, so
+  Focus auto-interest never constructs it. It is available only when the trader arms the chart.
+- **A line must not move after the arm.** `D1EventWatch` saves the scan candidate's explicit stable
+  line id, type, endpoint dates/prices, lookback anchor, current projected price, log slope and
+  candidate break date, with side and the compact saved D1 report's actual offset-aware parseable
+  `generated_at` as knowledge time. The minute poll reads no report and never consults a redraw; it
+  validates every frozen fact before confirming. An old or partial watch still loads, but is
+  uncertainty and cannot fire; a missing, malformed or timezone-less report time refuses the arm.
+- **Only two completed D1 closes can prove it.** The prior close must be on or inside the frozen
+  line and the next completed close must be through it in the setup direction. M5 bars, wicks,
+  forming daily bars and a prior close already through do not count. The one-shot watch retires on
+  the first hit, and the scan report's identity is `(symbol, side, break_date)` rather than a
+  rounded moving level. Duplicate persisted trendline watches are also collapsed to one save and one
+  emit for that key in a sweep.
+- **The champion report remains untouched except for the new row.** The bucket-upgrade saved-report
+  path appends `Trendline break` from the scan's already observed candidate. Its static pre-change
+  fixture proves the existing D1 rows survive byte-for-byte; the separate partial `Trendline
+  breakthrough` Focus event in `master_avwap_shared.py` is not replaced or altered.
+
 ## PCT-1 - the Pullback alert (2026-09-15, packet PCT-1)
 
 - **What the trader said (2026-09-15, chat).** *"we then monitor them for a pullback on a M15 or

@@ -21096,9 +21096,15 @@ def find_directional_trendline_candidate(
                     continue
 
                 candidate = {
+                    "line_id": (
+                        f"d1_trendline:{'H-break' if side == 'LONG' else 'L-break'}:"
+                        f"{pivot_a['date']}_{pivot_b['date']}"
+                    ),
                     "type": "H-break" if side == "LONG" else "L-break",
                     "start_date": pivot_a["date"],
                     "end_date": pivot_b["date"],
+                    "start_price": float(price_a),
+                    "end_price": float(price_b),
                     "break_date": datetimes.iloc[break_idx].date().isoformat(),
                     "bars_since_break": int(bars_since_break),
                     "start_idx": x1,
@@ -21145,9 +21151,15 @@ def find_directional_trendline_candidate(
                 atr_distance = (float(last_close) - current_line_price) / float(atr20)
 
             candidate = {
+                "line_id": (
+                    f"d1_trendline:{'H-' if side == 'LONG' else 'L+'}:"
+                    f"{pivot_a['date']}_{pivot_b['date']}"
+                ),
                 "type": "H-" if side == "LONG" else "L+",
                 "start_date": pivot_a["date"],
                 "end_date": pivot_b["date"],
+                "start_price": float(price_a),
+                "end_price": float(price_b),
                 "start_idx": x1,
                 "end_idx": x2,
                 "current_line_price": float(current_line_price),
@@ -24661,6 +24673,54 @@ def _append_scan_context_upgrade_target(
     )
 
 
+def _append_trendline_break_upgrade_target(
+    trigger_levels: list[dict],
+    *,
+    side: str,
+    candidate: dict,
+    reason: str,
+    today_iso: str,
+    priority_bucket: str,
+    setup_family: str,
+) -> None:
+    """Append the scan's already-observed break without changing old targets.
+
+    Unlike a future level watch this is an observation, so it deliberately
+    does not ask whether the current price is still on the pre-break side.
+    Its identity is the frozen scan break date, not a rounded line price.
+    """
+    break_date = str(candidate.get("break_date") or "").strip()
+    line = _coerce_float(candidate.get("current_line_price"))
+    normalized_side = normalize_side(side)
+    if not break_date or line is None or normalized_side not in {"LONG", "SHORT"}:
+        return
+    reason_text = str(reason or "Trendline break detected by the daily scan.").strip()
+    reason_text = f"{reason_text} (break {break_date})"
+    trigger_levels.append(
+        {
+            "schema_version": 1,
+            "trigger_id": f"trendline_break:{normalized_side}:{break_date}",
+            "side": normalized_side,
+            "action": _d1_trigger_action_for_side(normalized_side),
+            "event_type": "trendline_break",
+            "label": "Trendline break",
+            "alert_label": "Trendline break",
+            "level": round(float(line), 4),
+            "reason": reason_text,
+            "source": "trendline_break_scan",
+            "armed_at": today_iso,
+            "anchor_type": "TRENDLINE",
+            "anchor_date": str(candidate.get("end_date") or "").strip(),
+            "break_date": break_date,
+            "trendline_candidate": dict(candidate),
+            "priority_bucket": str(priority_bucket or "").strip(),
+            "setup_family": str(setup_family or "").strip(),
+            "target_tier": "A/S",
+            "upgrade_only": True,
+        }
+    )
+
+
 def _append_scan_context_upgrade_targets(
     trigger_levels: list[dict],
     seen: set[tuple[str, str, float]],
@@ -24946,6 +25006,27 @@ def _append_scan_context_upgrade_targets(
             armed_price=last_close,
             anchor_type="TRENDLINE",
             anchor_date=str(trendline_candidate.get("end_date") or ""),
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+        )
+
+    trendline_break_candidate = (
+        row.get("trendline_break_candidate")
+        or state.get("priority_trendline_break_candidate")
+    )
+    if bool(row.get("trendline_break_recent") or state.get("priority_trendline_break_recent")) and isinstance(
+        trendline_break_candidate, dict
+    ):
+        _append_trendline_break_upgrade_target(
+            trigger_levels,
+            side=side,
+            candidate=trendline_break_candidate,
+            reason=(
+                row.get("trendline_break_note")
+                or state.get("priority_trendline_break_note")
+                or "Trendline break detected by the daily scan."
+            ),
+            today_iso=today_iso,
             priority_bucket=priority_bucket,
             setup_family=setup_family,
         )
@@ -25411,6 +25492,64 @@ def _build_master_avwap_bucket_upgrade_alert_payload(
         }
         symbol_map[symbol] = entry
         alert_rows.append(dict(event))
+
+    # Bucket upgrades are the champion saved-report mode. A trendline break is
+    # an additive scan observation, not a bucket change, so it joins this
+    # output without changing how any champion row is selected or shaped.
+    trendline_seen: set[tuple[str, str, str]] = set()
+    for row in priority_rows or []:
+        if not isinstance(row, dict) or not bool(row.get("trendline_break_recent")):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side_raw = str(row.get("side") or "").strip().upper()
+        candidate = row.get("trendline_break_candidate")
+        if not symbol or side_raw not in {"LONG", "SHORT"} or not isinstance(candidate, dict):
+            continue
+        break_date = str(candidate.get("break_date") or "").strip()
+        identity = (symbol, side_raw, break_date)
+        if not break_date or identity in trendline_seen:
+            continue
+        target: list[dict] = []
+        _append_trendline_break_upgrade_target(
+            target,
+            side=side_raw,
+            candidate=candidate,
+            reason=str(row.get("trendline_break_note") or ""),
+            today_iso=today_iso,
+            priority_bucket=str(row.get("priority_bucket") or ""),
+            setup_family=str(row.get("setup_family") or ""),
+        )
+        if not target:
+            continue
+        trendline_seen.add(identity)
+        event = {
+            "symbol": symbol,
+            "priority_score": _coerce_float(row.get("score") or row.get("priority_score")),
+            "priority_bucket": str(row.get("priority_bucket") or ""),
+            "setup_family": str(row.get("setup_family") or ""),
+            "last_trade_date": row.get("last_trade_date") or today_iso,
+            "trade_date": row.get("last_trade_date") or today_iso,
+            **target[0],
+        }
+        alert_rows.append(event)
+        existing_entry = symbol_map.get(symbol)
+        if isinstance(existing_entry, dict):
+            existing_entry["bucket_upgrade_events"] = list(
+                existing_entry.get("bucket_upgrade_events") or []
+            ) + [dict(event)]
+        else:
+            symbol_map[symbol] = {
+                "symbol": symbol,
+                "side": side_raw,
+                "run_date": today_iso,
+                "last_trade_date": event["last_trade_date"],
+                "priority_bucket": event["priority_bucket"],
+                "priority_score": event["priority_score"],
+                "setup_family": event["setup_family"],
+                "upgrade_summary": event["reason"],
+                "bucket_upgrade_events": [dict(event)],
+                "upgrade_targets": [],
+            }
 
     ranked_symbols = dict(
         sorted(
