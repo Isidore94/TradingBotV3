@@ -35,19 +35,23 @@ Six rules this module holds:
   hour. Keying the refusal on the clock hour both refetched twice inside one
   bucket and refetched every hour all evening, when no bucket can complete at
   all. A fetch already in flight is never duplicated.
-* **Once the bell has rung, the day is asked at most once more** (PCT-1). The
-  bucket rule alone is enough for the hourly cache, whose last bucket closes
-  AT the bell; on a 15-minute grid four more buckets close between a late
-  poll and the close, so a desk that already fetched this symbol during the
-  session would go on fetching all evening for bars that cannot move again.
-  So: after the session that owns the last completed bucket has ENDED, a
-  symbol already asked for inside that session is refused. A symbol never
-  asked still gets its one catch-up fetch, which is what makes arming a watch
-  at 18:00 something other than blind until morning.
-* **Never on the Qt thread.** `request` starts a one-shot daemon thread and
-  returns immediately; `bars_for` reads the finished result out of memory.
-  A poll therefore never blocks on the network, and the first cycle after
-  arming simply reports "not measured" until the answer lands.
+* **A bucket the bell cuts short is still a completed bucket.** The rule is
+  "once per completed SESSION bucket, including the closing one, and never
+  outside the session's own buckets" - so a poll after the close still fetches
+  the session's last bar exactly once, and then asks for nothing until the
+  next session's first bucket closes. PCT-1 briefly added an after-the-bell
+  refusal here and its review caught the cost: it dropped the closing bar of
+  every session (the 12:45-13:00 M15 bar was never fetched) while the health
+  cell still read `from yfinance`. Removed 2026-09-15.
+* **One worker, batched downloads, never on the Qt thread.** `request` only
+  ENQUEUES and returns immediately; the cache's single daemon worker drains
+  the queue in chunks of at most `DOWNLOAD_CHUNK_SYMBOLS` (50) and issues ONE
+  multi-ticker download per chunk - the group RS/RW tape's precedent - then
+  exits when the queue is empty. `bars_for` reads the finished result out of
+  memory. A poll therefore never blocks on the network, and the first cycle
+  after arming simply reports "not measured" until the answer lands. Before
+  the batching (PCT-1 review) one tick that armed 95 watches issued 285
+  single-ticker downloads on 286 threads.
 * **Completed bars only, on the SESSION rule.** The forming bucket is dropped
   through the one rule (`completed_bars.is_completed_bar`), but the span it is
   measured over is the bucket's own - the interval, or the walk to the session
@@ -70,6 +74,8 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -97,19 +103,54 @@ def interval_label(interval_minutes: int) -> str:
     return f"{max(1, int(interval_minutes))}m"
 
 
-def _download(symbol: str, *, period: str, interval: str):
-    """One outbound yfinance call. Imported lazily, like every other caller."""
+#: How many symbols ride in one download. The group RS/RW tape's precedent:
+#: ONE batched `yfinance` call rather than a call per name. 50 keeps the URL
+#: and the response inside what the endpoint answers reliably, and 95 armed
+#: watches is then two requests rather than ninety-five.
+DOWNLOAD_CHUNK_SYMBOLS = 50
+
+#: How long the worker waits before its FIRST take, so one poll's asks become
+#: one request. The armed poll enqueues its whole armed set in a single pass
+#: that costs microseconds; without this window the worker would take the
+#: first symbol alone and batch only the remainder. It is a batching window on
+#: a worker thread, never a poll and never on the Qt thread.
+QUEUE_COALESCE_SECONDS = 0.10
+
+
+def _download(symbols, *, period: str, interval: str):
+    """One outbound yfinance call for MANY symbols. Returns symbol -> frame.
+
+    Batched since PCT-1's review: a tick that armed 95 watches issued 285
+    single-ticker downloads and 286 threads. `yfinance` takes a ticker list
+    and answers column-grouped, which is exactly what
+    `scripts/group_rrs.py` already relies on for the RS/RW tape. Imported
+    lazily, like every other caller.
+    """
     import yfinance as yf
 
-    return yf.download(
-        tickers=symbol,
+    tickers = [str(name or "").strip().upper() for name in symbols]
+    tickers = [name for name in tickers if name]
+    if not tickers:
+        return {}
+    frame = yf.download(
+        tickers=tickers if len(tickers) > 1 else tickers[0],
         period=period,
         interval=interval,
         auto_adjust=False,
         progress=False,
         prepost=False,  # regular hours, the same session the rule is written for
         threads=False,
+        group_by="ticker",
     )
+    if len(tickers) == 1:
+        return {tickers[0]: frame}
+    out: dict[str, Any] = {}
+    for ticker in tickers:
+        try:
+            out[ticker] = frame[ticker]
+        except Exception:  # noqa: BLE001 - one absent ticker is not a batch failure
+            out[ticker] = None
+    return out
 
 
 def _market_local(stamp: Any) -> datetime | None:
@@ -312,6 +353,14 @@ class IntradayHistoryCache:
     subclass and every existing caller keep working; one INSTANCE serves one
     interval, because the bucket cadence and the fetched series are both that
     interval's.
+
+    **One worker, batched downloads** (PCT-1 review, 2026-09-15). `request`
+    only ENQUEUES; the cache's single worker drains the queue in chunks of at
+    most `DOWNLOAD_CHUNK_SYMBOLS` and issues ONE multi-ticker download per
+    chunk. Before that, a poll that armed 95 watches produced 285 downloads
+    and 286 threads. A per-symbol failure inside a batch marks only that
+    symbol; the worker exits when the queue is empty rather than idling for
+    days, so a desk that never arms anything carries no thread at all.
     """
 
     def __init__(
@@ -321,19 +370,24 @@ class IntradayHistoryCache:
         downloader: Callable[..., Any] | None = None,
         period: str = DEFAULT_PERIOD,
         interval: str | None = None,
+        batch_window_seconds: float = QUEUE_COALESCE_SECONDS,
     ) -> None:
         self.interval_minutes = max(1, int(interval_minutes))
         self._downloader = downloader or _download
         self._period = period
         self._interval = interval or interval_label(self.interval_minutes)
+        self._batch_window = max(0.0, float(batch_window_seconds))
         self._lock = threading.Lock()
         self._bars: dict[str, list[dict[str, Any]]] = {}
         #: symbol -> the completed session-aligned BUCKET the last ATTEMPT was
         #: made for, so a failure is not retried sixty times before the next
         #: bar prints and the evening poll asks for nothing at all.
         self._attempted_bucket: dict[str, datetime] = {}
+        #: symbol -> the bucket it is QUEUED for, waiting on the worker.
+        self._pending: dict[str, datetime] = {}
         self._in_flight: set[str] = set()
         self._failed: set[str] = set()
+        self._worker: threading.Thread | None = None
 
     # -- reads (Qt thread) ---------------------------------------------
     def bars_for(self, symbol: str) -> list[dict[str, Any]]:
@@ -364,91 +418,173 @@ class IntradayHistoryCache:
         with self._lock:
             return key in self._failed
 
+    def last_completed_bucket_end(self, now: datetime | None = None) -> datetime | None:
+        """When this interval's most recently CLOSED bucket finished.
+
+        The one thing that can change this cache's answer, exposed so a caller
+        can ask "is there anything new to judge?" before spending a pass over
+        the bars. None when the session cannot be resolved.
+        """
+        moment = now or datetime.now()
+        bucket = last_completed_bucket(moment, self.interval_minutes)
+        if bucket is None:
+            return None
+        return bucket_end(bucket, self.interval_minutes)
+
     # -- the fetch (worker thread) -------------------------------------
     def request(self, symbol: str, *, now: datetime | None = None) -> bool:
-        """Ask for this symbol's history. Returns True if a fetch started.
+        """Queue this symbol's history. True when it was newly enqueued.
 
-        Refused - quietly and cheaply - when one is already in flight, when the
-        last COMPLETED SESSION-ALIGNED BUCKET has already been attempted, or
-        when the bell has rung on a session this symbol was already asked for
-        (see the module docstring's third rule). A new bucket is the only thing
-        that can change the answer, so two asks inside one bucket are one
-        question.
+        Refused - quietly and cheaply - when a fetch for it is already queued
+        or in flight, or when the last COMPLETED SESSION-ALIGNED BUCKET has
+        already been attempted. A new bucket is the only thing that can change
+        the answer, so two asks inside one bucket are one question; a bucket
+        the bell cuts short IS a completed bucket, so the last bar of the
+        session is fetched like every other one.
+
+        Nothing is downloaded here: the cache's single worker takes the queue
+        in batches (`DOWNLOAD_CHUNK_SYMBOLS` per request), so ninety-five
+        armed watches are two round trips on one thread rather than
+        ninety-five on ninety-five.
         """
         key = str(symbol or "").strip().upper()
         if not key:
             return False
         moment = now or datetime.now()
         bucket = last_completed_bucket(moment, self.interval_minutes)
-        session_over = False
         if bucket is None:  # the session is unreadable - the clock hour then
             bucket = moment.replace(minute=0, second=0, microsecond=0)
-        else:
-            bounds = _session_bounds(bucket)
-            # The bounds are naive market-local, so an aware caller is
-            # CONVERTED onto that clock before the comparison, never stripped
-            # (N1) - the same rule `last_completed_bucket` holds above.
-            local_moment = _market_local(moment) or moment
-            session_over = (
-                bounds is not None
-                and local_moment.tzinfo is None
-                and local_moment > bounds[1]
-            )
         with self._lock:
             if key in self._in_flight:
                 return False
-            attempted = self._attempted_bucket.get(key)
-            if attempted == bucket:
+            if self._attempted_bucket.get(key) == bucket:
                 return False
-            if (
-                session_over
-                and attempted is not None
-                and attempted.date() == bucket.date()
-            ):
-                # The day is done and this symbol already asked inside it.
-                return False
+            # A symbol already QUEUED whose next bucket closes before the
+            # worker reaches it is not a second question: the queue holds one
+            # entry per symbol and the fetch about to run answers the newer
+            # bucket too, so the ask is accepted and the entry is updated.
             self._attempted_bucket[key] = bucket
-            self._in_flight.add(key)
-        thread = threading.Thread(
-            target=self._fetch,
-            args=(key, moment),
-            name=f"intraday-history-{self.interval_minutes}m-{key}",
-            daemon=True,
-        )
-        thread.start()
+            self._pending[key] = bucket
+            self._start_worker_locked(moment)
         return True
 
+    def _start_worker_locked(self, moment: datetime) -> None:
+        """Start the ONE drain worker, if it is not already running.
+
+        Called with the lock held. The worker exits when the queue is empty
+        and clears this slot under the same lock, so "already running" and
+        "about to exit" can never both be true for one enqueue. The hourly
+        cache keeps the `h1-history-` thread-name prefix the shipped RV-H1
+        tests wait on.
+        """
+        if self._worker is not None and self._worker.is_alive():
+            return
+        label = "h1" if self.interval_minutes == H1_MINUTES else "intraday"
+        worker = threading.Thread(
+            target=self._drain,
+            args=(moment,),
+            name=f"{label}-history-{self.interval_minutes}m",
+            daemon=True,
+        )
+        self._worker = worker
+        worker.start()
+
+    def _drain(self, moment: datetime) -> None:
+        """Take the queue in batches until it is empty, then stop existing."""
+        if self._batch_window:
+            # One poll's asks are one request: the caller enqueues its whole
+            # armed set in a pass that costs microseconds, and taking the
+            # first symbol the instant it lands would split that into a batch
+            # of one and a batch of the rest.
+            time.sleep(self._batch_window)
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._worker = None
+                    return
+                batch = sorted(self._pending)[:DOWNLOAD_CHUNK_SYMBOLS]
+                for key in batch:
+                    self._pending.pop(key, None)
+                self._in_flight.update(batch)
+            try:
+                self._fetch_batch(batch, moment)
+            finally:
+                with self._lock:
+                    self._in_flight.difference_update(batch)
+
     def fetch_now(self, symbol: str, *, now: datetime | None = None) -> list[dict[str, Any]]:
-        """The same fetch, inline. For tests and for a headless caller."""
+        """The same fetch, inline, for ONE symbol. Tests and headless callers."""
         key = str(symbol or "").strip().upper()
-        self._fetch(key, now or datetime.now())
+        self._fetch_batch([key], now or datetime.now())
         return self.bars_for(key)
 
-    def _fetch(self, symbol: str, moment: datetime) -> None:
-        bars: list[dict[str, Any]] = []
+    def _bars_by_symbol(self, payload, symbols, moment: datetime) -> dict[str, list]:
+        """Downloader output -> symbol -> completed bars.
+
+        A batched downloader answers with a mapping. A single-symbol caller -
+        `fetch_now`, and every fake in the shipped tests - may answer with the
+        frame itself, which is also what `yfinance` does for one ticker, so
+        that shape is accepted for a batch of one rather than made an error.
+        """
+        frames: dict[str, Any] = {}
+        if isinstance(payload, Mapping):
+            frames = {
+                str(key or "").strip().upper(): value
+                for key, value in payload.items()
+            }
+        elif len(symbols) == 1:
+            frames = {symbols[0]: payload}
+        out: dict[str, list] = {}
+        for key in symbols:
+            frame = frames.get(key)
+            if frame is None:
+                continue
+            try:
+                bars = frame_to_bars(
+                    frame, now=moment, interval_minutes=self.interval_minutes
+                )
+            except Exception:  # noqa: BLE001 - one bad frame is not a batch failure
+                logging.debug(
+                    "Intraday history frame unreadable for %s (%sm)",
+                    key,
+                    self.interval_minutes,
+                    exc_info=True,
+                )
+                continue
+            if bars:
+                out[key] = bars
+        return out
+
+    def _fetch_batch(self, symbols, moment: datetime) -> None:
+        """ONE download for these symbols. A failure is a refusal, not a value."""
+        keys = [str(name or "").strip().upper() for name in symbols]
+        keys = [key for key in keys if key]
+        if not keys:
+            return
         try:
-            frame = self._downloader(
-                symbol, period=self._period, interval=self._interval
+            payload = self._downloader(
+                keys, period=self._period, interval=self._interval
             )
-            bars = frame_to_bars(
-                frame, now=moment, interval_minutes=self.interval_minutes
-            )
+            fetched = self._bars_by_symbol(payload, keys, moment)
         except Exception:
-            # A download that fails is unavailability, not an empty tape.
+            # A download that fails is unavailability, not an empty tape - and
+            # it fails for the whole batch, so every symbol in it is marked.
             logging.debug(
                 "Intraday history fetch failed for %s (%sm)",
-                symbol,
+                ",".join(keys[:5]),
                 self.interval_minutes,
                 exc_info=True,
             )
-            bars = []
+            fetched = {}
         with self._lock:
-            self._in_flight.discard(symbol)
-            if bars:
-                self._bars[symbol] = bars
-                self._failed.discard(symbol)
-            else:
-                # Whatever was fetched before STAYS - it is still the best
-                # answer available - and the failure is recorded so the armed
-                # inventory can say the bars stopped updating.
-                self._failed.add(symbol)
+            for key in keys:
+                bars = fetched.get(key)
+                if bars:
+                    self._bars[key] = bars
+                    self._failed.discard(key)
+                else:
+                    # Whatever was fetched before STAYS - it is still the best
+                    # answer available - and the failure is recorded so the
+                    # armed inventory can say the bars stopped updating. One
+                    # absent symbol inside a good batch marks only itself.
+                    self._failed.add(key)

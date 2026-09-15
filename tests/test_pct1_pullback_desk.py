@@ -284,7 +284,13 @@ def test_a_fifteen_minute_cache_asks_once_per_completed_quarter_hour():
         (_at(SESSION_DAY, 11, 47), True),   # the 11:30 bucket closed at 11:45
         (_at(SESSION_DAY, 11, 52), False),  # still the same completed bucket
         (_at(SESSION_DAY, 12, 1), True),    # 11:45 closed at 12:00
-        (_at(SESSION_DAY, 13, 30), False),  # nothing new closes after the bell
+        # Lead ruling 2026-09-15, after the PCT-1 review reproduced the cost:
+        # this expectation was WRONG as written. Four more buckets close
+        # between 12:01 and the bell, and the last of them - 12:45-13:00, the
+        # session's closing bar - is new and completed, so the answer here is
+        # True. A cache that refused here never fetched the closing bar of any
+        # session while its health cell still read `from yfinance`.
+        (_at(SESSION_DAY, 13, 30), True),   # the 12:45 bucket closed at the bell
         (_at(NEXT_SESSION_DAY, 6, 40), False),  # 06:30 has not closed yet
         (_at(NEXT_SESSION_DAY, 6, 46), True),   # now it has
     ]
