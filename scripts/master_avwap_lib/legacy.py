@@ -5063,6 +5063,65 @@ def compression_copy_through(compression_summary: dict | None) -> dict:
     }
 
 
+#: The four fields a carrier holds only if the measure was actually taken. A
+#: carrier holding NONE of them was written before PCT-3 landed.
+COMPRESSION_MEASURE_FIELDS = (
+    "compression_score",
+    "compression_stdev_atr_ratio",
+    "compression_range_atr_ratio",
+    "compression_close_range_atr_ratio",
+)
+
+
+def compression_copy_through_from_row(row: dict | None) -> dict:
+    """The measure as a ROW carries it - or, honestly, as an ABSENCE.
+
+    Every row the scan writes from today on carries the four numbers, so the
+    copy is exact. A row written BEFORE PCT-3 landed carries none of them, and
+    the only right answer for such a row is **not measured**: `None` for the
+    score and the three ratios, and NO `compression_rule_version` at all.
+
+    A `compression_score` of 0 stamped `anchor_compression_v1` would say "this
+    rule looked and found nothing tight", which is a measurement that never
+    happened - and it is exactly the reading a calibration report would average.
+    """
+    source = row if isinstance(row, dict) else {}
+    measured = any(source.get(field) is not None for field in COMPRESSION_MEASURE_FIELDS)
+    if not measured:
+        return {field: None for field in COMPRESSION_MEASURE_FIELDS}
+    copied: dict = {
+        field: _coerce_float(source.get(field)) for field in COMPRESSION_MEASURE_FIELDS[1:]
+    }
+    score = source.get("compression_score")
+    copied["compression_score"] = None if score is None else int(score)
+    copied["compression_rule_version"] = str(
+        source.get("compression_rule_version") or ANCHOR_COMPRESSION_RULE_VERSION
+    )
+    return copied
+
+
+def _compression_break_copy_through(row: dict | None, symbol_entry: dict | None = None) -> dict:
+    """`compression_break_v1`'s verdict as a carrier holds it, or nothing.
+
+    The flag, its note and its rule version are one reading. A record built
+    from a row the rule never evaluated (an old row, a study clone) carries
+    none of the three rather than `False` under a version stamp - which would
+    say "v1 looked and said no".
+    """
+    source = row if isinstance(row, dict) else {}
+    entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+    if "compression_break_recent" not in source and "compression_break_recent" not in entry:
+        return {}
+    evaluated = source if "compression_break_recent" in source else entry
+    return {
+        "compression_break_recent": bool(evaluated.get("compression_break_recent")),
+        "compression_break_v1_note": str(evaluated.get("compression_break_v1_note") or ""),
+        "compression_break_rule_version": str(
+            evaluated.get("compression_break_rule_version") or COMPRESSION_BREAK_RULE_VERSION
+        ),
+    }
+
+
 def evaluate_compression_break_v1(
     df: pd.DataFrame | None,
     *,
@@ -5092,6 +5151,12 @@ def evaluate_compression_break_v1(
     """
     result = {
         "compression_break_recent": False,
+        # v1 keeps its OWN note field. `compression_break_note` is Phase 6's -
+        # `enrich_priority_rows_with_phase6_studies` does `row.update(context)`
+        # and would silently replace anything written here, and on a narrow-bar
+        # break Phase 6's note is non-empty while v1 refused. Both are written,
+        # but only `compression_break_v1_note` is v1's answer.
+        "compression_break_v1_note": "",
         "compression_break_note": "",
         "compression_break_rule_version": COMPRESSION_BREAK_RULE_VERSION,
     }
@@ -5123,10 +5188,12 @@ def evaluate_compression_break_v1(
         return result
 
     result["compression_break_recent"] = True
-    result["compression_break_note"] = (
+    note = (
         f"{context.get('compression_break_note') or 'Compression break'}"
         f"; bar range {bar_range_atr:.2f} ATR"
     )
+    result["compression_break_v1_note"] = note
+    result["compression_break_note"] = note
     return result
 
 
@@ -6395,16 +6462,9 @@ def build_tracker_setup_record(
         # record, so the calibration CLI can read a per-(symbol, session) anchor
         # measurement out of the tracker instead of recomputing an anchor it
         # cannot know. `build_tracker_feature_snapshot` reads only the three
-        # fields above, so these are carried and never acted on.
-        "compression_score": int(row.get("compression_score", 0) or 0),
-        "compression_stdev_atr_ratio": _coerce_float(row.get("compression_stdev_atr_ratio")),
-        "compression_range_atr_ratio": _coerce_float(row.get("compression_range_atr_ratio")),
-        "compression_close_range_atr_ratio": _coerce_float(
-            row.get("compression_close_range_atr_ratio")
-        ),
-        "compression_rule_version": str(
-            row.get("compression_rule_version") or ANCHOR_COMPRESSION_RULE_VERSION
-        ),
+        # fields above, so these are carried and never acted on. A row that
+        # carries no measure reads as NOT MEASURED - never a stamped zero.
+        **compression_copy_through_from_row(row),
     }
     entry_snapshot = symbol_entry.get("entry_feature_snapshot")
     if isinstance(entry_snapshot, dict) and entry_snapshot:
@@ -6561,12 +6621,11 @@ def build_tracker_setup_record(
         "compression_note": row.get("compression_note") or "",
         # PCT-3 item 1: the whole reading, in one place, with its rule named.
         "compression_summary": dict(compression_summary),
-        **compression_copy_through(compression_summary),
-        # PCT-3 item 4.
-        "compression_break_recent": bool(row.get("compression_break_recent")),
-        "compression_break_rule_version": str(
-            row.get("compression_break_rule_version") or COMPRESSION_BREAK_RULE_VERSION
-        ),
+        **compression_copy_through_from_row(row),
+        # PCT-3 item 4. The flag and its rule version travel TOGETHER or not at
+        # all: a record built from a row v1 never evaluated carries neither,
+        # because a version stamp beside no verdict claims a rule ran.
+        **_compression_break_copy_through(row, symbol_entry),
         "compression_break_today": bool(row.get("compression_break_today") or symbol_entry.get("compression_break_today")),
         "compression_break_direction": row.get("compression_break_direction") or symbol_entry.get("compression_break_direction") or "",
         "compression_break_level": _coerce_float(row.get("compression_break_level") or symbol_entry.get("compression_break_level")),

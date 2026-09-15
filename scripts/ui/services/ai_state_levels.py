@@ -32,24 +32,29 @@ COMPRESSION_FIELDS = (
 )
 
 
-def _refresh(force: bool) -> bool:
-    """Re-read the ai_state file when its mtime moved. `False` on any miss.
+_UNREADABLE = "unreadable"
 
-    ONE read feeds both maps: the 38 MB parse is the expensive part, and doing
-    it twice for two views of the same file would double the only cost here.
+
+def _refresh(force: bool) -> str:
+    """Re-read the ai_state file when its mtime moved.
+
+    Returns `"warm"` (the cache already matched the file), `"parsed"` (the file
+    was read just now - the expensive case) or `"unreadable"` (no file, or a
+    file that would not parse). ONE read feeds both maps: the 36 MB parse is
+    the only cost here, and doing it twice for two views would double it.
     """
     try:
         mtime = MASTER_AVWAP_AI_STATE_FILE.stat().st_mtime
     except OSError:
-        return False
+        return _UNREADABLE
     if not force and _cache["mtime"] == mtime and _cache["levels"]:
-        return True
+        return "warm"
     try:
         with open(MASTER_AVWAP_AI_STATE_FILE, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, ValueError) as exc:
         logging.warning("Could not load ai_state for level feed: %s", exc)
-        return False
+        return _UNREADABLE
 
     levels: dict[str, dict] = {}
     compression: dict[str, dict] = {}
@@ -75,23 +80,60 @@ def _refresh(force: bool) -> bool:
     _cache["mtime"] = mtime
     _cache["levels"] = levels
     _cache["compression"] = compression
-    return True
+    return "parsed"
 
 
 def load_symbol_levels(force: bool = False) -> dict[str, dict]:
-    """symbol -> {vwap, bands, anchor_date, atr20, last_close, side}."""
-    if not _refresh(force):
-        return _cache["levels"] or {}
+    """symbol -> {vwap, bands, anchor_date, atr20, last_close, side}.
+
+    Unchanged since it shipped, including the `{}` on an unstat-able file: a
+    caller that cannot see the file is told nothing, not told yesterday.
+    """
+    if _refresh(force) == _UNREADABLE:
+        return {}
     return _cache["levels"]
 
 
 def load_symbol_compression(force: bool = False) -> dict[str, dict]:
-    """symbol -> the scan's compression reading for that symbol (PCT-3).
+    """symbol -> the scan's compression reading. **May PARSE the 36 MB file.**
+
+    Call this only where a parse is allowed - a worker thread, a CLI, a test.
+    The Qt thread calls :func:`cached_symbol_compression` instead; measured on
+    the desk, one parse of the live file is 281-292 ms, and
+    `master_avwap_panel.refresh_from_reports` runs on every watched-file change.
 
     Empty for a symbol the scan did not measure, and empty overall until a scan
-    written by a build that carries PCT-3 item 1 has landed - an old file is
-    simply a file with nothing to say, never a row read as "not compressed".
+    from a build carrying PCT-3 item 1 has landed - an old file is a file with
+    nothing to say, never a row read as "not compressed".
     """
-    if not _refresh(force):
-        return _cache["compression"] or {}
+    if _refresh(force) == _UNREADABLE:
+        return {}
     return _cache["compression"]
+
+
+def cached_symbol_compression() -> dict[str, dict]:
+    """The compression map ALREADY in memory. Never opens a file, never stats.
+
+    This is the Qt thread's door. A cold cache answers `{}` - "nothing to say
+    yet" - and the chip simply is not painted until :func:`warm_cache` has run
+    on a worker and the panel has asked for one more refresh.
+    """
+    return _cache["compression"] or {}
+
+
+def cache_signature() -> object:
+    """What a caller can compare to see whether the cache moved."""
+    return _cache["mtime"]
+
+
+def warm_cache(force: bool = False) -> bool:
+    """Parse the ai_state file if it moved. **Never call this on the Qt thread.**
+
+    Returns `True` when the cache CHANGED, which is the panel's cue to run one
+    coalesced refresh. `False` means already warm, or unreadable - and an
+    unreadable file leaves the last good cache in place, because a feed that
+    blinked is not a reason to drop the chips off every row.
+    """
+    before = _cache["mtime"]
+    outcome = _refresh(force)
+    return outcome == "parsed" and _cache["mtime"] != before

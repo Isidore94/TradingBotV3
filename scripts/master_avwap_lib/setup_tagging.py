@@ -186,13 +186,6 @@ def derive_setup_tag_payload(
     for tag in source_tags:
         add(tag, "trigger", f"legacy_setup_tags={tag}")
 
-    # PCT-3 item 4. A TRIGGER, not a confirmation: `compression_break_v1` says
-    # the setup's own entry event printed on the last completed session (a
-    # compressed box yesterday, a close out of it in this side's direction on a
-    # bar at least 1.0 ATR-20 wide). The rule lives once, in
-    # `legacy.evaluate_compression_break_v1`; this only reads its flag.
-    if bool(row.get("compression_break_recent")):
-        add("COMPRESSION_BREAK", "trigger", "compression_break_recent=true")
 
     # Confirmations are deliberately side-aware where the underlying metric is
     # directional.  This prevents a strong-looking but backwards RS label.
@@ -216,6 +209,15 @@ def derive_setup_tag_payload(
         add("VWAP_RANGE_CONFIRMED", "confirmation", "vwap_range_confirmation=true")
     if bool(row.get("trendline_break_recent")):
         add("TRENDLINE_BREAK", "confirmation", "trendline_break_recent=true")
+    # PCT-3 item 4. A CONFIRMATION, in confirmation order, beside the trendline
+    # break it is a sibling of: `compression_break_v1` says the last completed
+    # session left a compressed box in this side's direction on a bar at least
+    # 1.0 ATR-20 wide. Added HERE rather than above the confirmations so it can
+    # never displace an older one under `DEFAULT_MAX_SETUP_TAGS`; a label added
+    # in 2026 may not cost a row a tag it has carried for a year. The rule lives
+    # once, in `legacy.evaluate_compression_break_v1`; this reads a flag.
+    if bool(row.get("compression_break_recent")):
+        add("COMPRESSION_BREAK", "confirmation", "compression_break_recent=true")
     if bool(row.get("sma_breakout_confirmed")):
         label = str(row.get("sma_breakout_sma_label") or "").strip().upper()
         add("SMA_BREAKOUT_CONFIRMED", "confirmation", f"sma_breakout_confirmed=true{label and f'; sma={label}'}")

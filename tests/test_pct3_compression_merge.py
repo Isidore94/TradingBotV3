@@ -1,25 +1,25 @@
-r"""PCT-3: WHERE the compression numbers join the setups table row.
+r"""PCT-3: WHERE the compression numbers join a setups-table row, and on which thread.
 
-Added by the builder beside the tester's `tests/test_pct3_compression.py`, which
-pins the reader, the chip, the CLI and the tag but deliberately leaves the merge
-seam to the builder. The packet's requirement for that seam is one sentence:
-*"rows lack the fields until the report is merged with the `ai_state` symbol
-entry on the ChartDataService / data-feed worker ... and never reads a file on
-paint."*
+Added by the BUILDER beside the tester's `tests/test_pct3_compression.py`, which
+pins the reader, the chip, the CLI and the tag but leaves the merge seam to the
+builder. Rewritten in the fix round after the first review measured what the
+first attempt actually cost:
 
-The seam chosen is `data_feed.merge_compression_from_ai_state`, called from
-`enrich_setup_rows_for_display` - the LOAD path every setups-table source already
-goes through (`load_latest_setup_rows_with_meta`), and the same place the group
-context is filled in. So the two halves of the requirement are:
+> `merge_compression_from_ai_state` runs inside `enrich_setup_rows_for_display`,
+> which `master_avwap_panel.refresh_from_reports` and `_on_scan_finished` call on
+> the Qt thread - a measured 281-292 ms parse of the 36 MB ai_state on every
+> mtime change.
 
-1. it is a plain function over plain rows: no Qt import, no widget, no signal -
-   so it runs wherever the loader runs, including a worker thread, which this
-   file proves by running it on one with no `QApplication` involved;
-2. `SetupTableDelegate.paint` never reaches a file. `paint` runs once per
-   visible cell per repaint (`CLAUDE.md`: *nothing expensive belongs on the Qt
-   thread*), so the test watches every `open()` the paint pass makes and
-   requires that none of them is the 38 MB `ai_state` file - and that a
-   compression lookup that RAISES cannot reach the paint pass at all.
+`CLAUDE.md`: *nothing expensive belongs on the Qt thread, and "expensive"
+includes a stylesheet.* 281 ms per watched-file change is not a chip, it is a
+stall. So the contract these tests pin is now three-sided:
+
+1. the PARSE happens in `ai_state_levels.warm_cache()`, which only a worker
+   calls (`master_avwap_panel._AiStateCompressionWorker`);
+2. the Qt thread's merge reads `cached_symbol_compression()` - memory only, no
+   `open`, no `stat`, no `json.load` - and a cold cache simply has nothing to
+   say, which is a row with no chip rather than a stall;
+3. `paint` never reaches a file at all, and a feed that RAISES cannot reach it.
 
 `tests/conftest.py` points `project_paths` at a test directory; nothing here
 reads or writes a live store.
@@ -127,16 +127,30 @@ def _row(symbol: str = "TEST"):
     )
 
 
-def test_a_report_row_has_no_compression_fields_until_the_merge_runs(ai_state):
-    """The premise, stated as a test so it fails if the report line ever gains
-    the fields and this seam becomes dead code."""
+# ---------------------------------------------------------------------------
+# Which call parses, and which call may not
+# ---------------------------------------------------------------------------
+
+
+def test_a_report_row_has_no_compression_fields_until_the_cache_is_warm(ai_state):
+    """The premise, and the cold-cache answer.
+
+    Before any worker has run, the Qt thread's merge fills NOTHING - it does not
+    reach for the file to make the chip appear sooner. `warm_cache()` is what
+    reads, and the next merge is what fills.
+    """
     import compression_chip
+    from ui.services import ai_state_levels
     from ui.services.data_feed import merge_compression_from_ai_state
 
     row = _row()
     assert compression_chip.read_row(row.raw) is None, "nothing to say before the merge"
+    assert merge_compression_from_ai_state([row]) == 0, "a cold cache fills nothing"
+    assert "compression_flag" not in row.raw
 
+    assert ai_state_levels.warm_cache() is True, "the worker's parse, off the Qt thread"
     assert merge_compression_from_ai_state([row]) == 1
+
     read = compression_chip.read_row(row.raw)
     assert read is not None and read.flag is True
     assert read.score == 3
@@ -145,11 +159,124 @@ def test_a_report_row_has_no_compression_fields_until_the_merge_runs(ai_state):
     assert read.rule_version == "anchor_compression_v1"
 
 
+def test_the_qt_thread_merge_opens_nothing(ai_state):
+    """The rule, as a measurement rather than a promise.
+
+    `merge_compression_from_ai_state()` with its default arguments is what
+    `enrich_setup_rows_for_display` calls, which is what
+    `master_avwap_panel.refresh_from_reports` calls on the Qt thread. It may not
+    `open`, `stat` or `json.load` anything - on the desk that parse is 281-292
+    ms of frozen table per watched-file change.
+    """
+    from ui.services import ai_state_levels
+    from ui.services.data_feed import merge_compression_from_ai_state
+
+    ai_state_levels.warm_cache()
+
+    opened: list[str] = []
+    real_open = builtins.open
+    real_load = json.load
+    loads = {"count": 0}
+
+    def _spy_open(file, *args, **kwargs):  # noqa: ANN001
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    def _spy_load(*args, **kwargs):
+        loads["count"] += 1
+        return real_load(*args, **kwargs)
+
+    row = _row()
+    builtins.open = _spy_open
+    json.load = _spy_load
+    try:
+        filled = merge_compression_from_ai_state([row])
+    finally:
+        builtins.open = real_open
+        json.load = real_load
+
+    assert filled == 1, "the warm cache still fills the row"
+    assert loads["count"] == 0, "the Qt-thread merge parsed JSON"
+    assert not [path for path in opened if "master_avwap_ai_state" in path], opened
+
+
+def test_allow_read_is_the_worker_s_door_and_it_does_parse(ai_state):
+    """The escape hatch exists, is explicit, and is the only way in."""
+    from ui.services.data_feed import merge_compression_from_ai_state
+
+    loads = {"count": 0}
+    real_load = json.load
+
+    def _spy_load(*args, **kwargs):
+        loads["count"] += 1
+        return real_load(*args, **kwargs)
+
+    row = _row()
+    json.load = _spy_load
+    try:
+        filled = merge_compression_from_ai_state([row], allow_read=True)
+    finally:
+        json.load = real_load
+
+    assert filled == 1
+    assert loads["count"] == 1, "allow_read=True is the call that reads"
+
+
+def test_warming_twice_parses_once(ai_state):
+    """`warm_cache` is mtime-keyed, so a burst of watcher signals costs ONE parse."""
+    from ui.services import ai_state_levels
+
+    loads = {"count": 0}
+    real_load = json.load
+
+    def _spy_load(*args, **kwargs):
+        loads["count"] += 1
+        return real_load(*args, **kwargs)
+
+    json.load = _spy_load
+    try:
+        first = ai_state_levels.warm_cache()
+        second = ai_state_levels.warm_cache()
+    finally:
+        json.load = real_load
+
+    assert first is True, "the first warm read the file and the cache moved"
+    assert second is False, "already warm - nothing changed, so no refresh is owed"
+    assert loads["count"] == 1
+
+
+def test_an_unstat_able_file_still_answers_nothing_for_the_level_feed(tmp_path, monkeypatch):
+    """`load_symbol_levels` is older than this packet and keeps its contract.
+
+    It answered `{}` when the file could not be stat-ed, and it still does: a
+    caller that cannot see the file is told nothing, not told yesterday.
+    """
+    from ui.services import ai_state_levels
+
+    path = _ai_state_file(tmp_path)
+    monkeypatch.setattr(ai_state_levels, "MASTER_AVWAP_AI_STATE_FILE", path, raising=False)
+    monkeypatch.setitem(ai_state_levels._cache, "mtime", None)
+    monkeypatch.setitem(ai_state_levels._cache, "levels", {})
+    monkeypatch.setitem(ai_state_levels._cache, "compression", {})
+    assert ai_state_levels.load_symbol_levels()
+
+    monkeypatch.setattr(
+        ai_state_levels, "MASTER_AVWAP_AI_STATE_FILE", tmp_path / "gone.json", raising=False
+    )
+    assert ai_state_levels.load_symbol_levels() == {}
+    assert ai_state_levels.load_symbol_compression() == {}
+    # The cache itself is NOT dropped: a feed that blinked is not a reason to
+    # take the chips off every row on the next warm read.
+    assert ai_state_levels.cached_symbol_compression()
+
+
 def test_the_merge_never_overwrites_a_reading_the_row_already_carries(ai_state):
     """The focus feed's rows come out of the scan with their own numbers; the
     merge FILLS, so a fresher row can never be overwritten by a staler file."""
+    from ui.services import ai_state_levels
     from ui.services.data_feed import merge_compression_from_ai_state
 
+    ai_state_levels.warm_cache()
     row = _row()
     row.raw["compression_flag"] = False
     row.raw["compression_score"] = 0
@@ -176,6 +303,7 @@ def test_an_unreadable_ai_state_file_costs_the_rows_nothing(tmp_path, monkeypatc
     monkeypatch.setattr(
         ai_state_levels, "MASTER_AVWAP_AI_STATE_FILE", tmp_path / "no-such-file.json", raising=False
     )
+    assert ai_state_levels.warm_cache() is False
     row = _row()
     assert merge_compression_from_ai_state([row]) == 0
     assert "compression_flag" not in row.raw
@@ -183,51 +311,56 @@ def test_an_unreadable_ai_state_file_costs_the_rows_nothing(tmp_path, monkeypatc
     broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")
     monkeypatch.setattr(ai_state_levels, "MASTER_AVWAP_AI_STATE_FILE", broken, raising=False)
+    assert ai_state_levels.warm_cache() is False
     assert merge_compression_from_ai_state([_row()]) == 0
 
     def _explode(*_args, **_kwargs):
         raise RuntimeError("the file feed is down")
 
-    monkeypatch.setattr(ai_state_levels, "load_symbol_compression", _explode, raising=False)
+    monkeypatch.setattr(ai_state_levels, "cached_symbol_compression", _explode, raising=False)
     assert merge_compression_from_ai_state([_row()]) == 0
 
 
-def test_the_load_path_is_what_merges(ai_state, monkeypatch):
+def test_the_load_path_is_what_merges(ai_state):
     """`enrich_setup_rows_for_display` is the seam every setups-table source
     already goes through, so no caller has to remember to ask."""
-    from ui.services import data_feed
+    from ui.services import ai_state_levels, data_feed
 
+    ai_state_levels.warm_cache()
     row = _row()
     data_feed.enrich_setup_rows_for_display([row], supplemental_rows=[])
     assert row.raw.get("compression_score") == 3
 
 
-def test_the_merge_runs_off_the_gui_thread(ai_state):
-    """The seam is a plain function over plain rows - it needs no Qt at all.
+def test_the_parse_runs_off_the_gui_thread(ai_state):
+    """The expensive half needs no Qt at all.
 
-    Proven by running it on a worker thread with no `QApplication` touched: if
-    the merge ever grew a widget, a signal or a `QObject` parent, constructing
-    it here would fail or warn about thread affinity.
+    Proven by running `warm_cache` on a worker thread with no `QApplication`
+    touched - which is exactly what `_AiStateCompressionWorker.run` does.
     """
-    from ui.services.data_feed import merge_compression_from_ai_state
+    from ui.services import ai_state_levels
 
-    rows = [_row(), _row("QUIET")]
     result: dict[str, object] = {}
 
     def _work() -> None:
         try:
-            result["filled"] = merge_compression_from_ai_state(rows)
+            result["changed"] = ai_state_levels.warm_cache()
             result["thread"] = threading.current_thread().name
         except Exception as exc:  # pragma: no cover - the failure this guards
             result["error"] = exc
 
-    worker = threading.Thread(target=_work, name="pct3-merge-worker")
+    worker = threading.Thread(target=_work, name="pct3-warm-worker")
     worker.start()
     worker.join(timeout=30)
     assert not worker.is_alive()
     assert "error" not in result, result.get("error")
-    assert result["filled"] == 2
-    assert result["thread"] == "pct3-merge-worker"
+    assert result["changed"] is True
+    assert result["thread"] == "pct3-warm-worker"
+
+    rows = [_row(), _row("QUIET")]
+    from ui.services.data_feed import merge_compression_from_ai_state
+
+    assert merge_compression_from_ai_state(rows) == 2
     assert rows[0].raw["compression_flag"] is True
     assert rows[1].raw["compression_flag"] is False
 
@@ -293,11 +426,12 @@ def test_paint_never_reads_the_ai_state_file(app, ai_state):
     """The chip is painted from `row.raw`, which the LOAD path filled.
 
     If a future change made `paint` ask the file feed instead, this catches it:
-    `paint` and `sizeHint` together may not open the 38 MB `ai_state` JSON - or
-    any file at all under the data directory.
+    `paint` and `sizeHint` together may not open the 36 MB `ai_state` JSON.
     """
+    from ui.services import ai_state_levels
     from ui.services.data_feed import merge_compression_from_ai_state
 
+    ai_state_levels.warm_cache()
     row = _row()
     merge_compression_from_ai_state([row])
     assert row.raw["compression_flag"] is True, "the chip has something to paint"
@@ -313,12 +447,79 @@ def test_a_compression_feed_that_raises_can_never_reach_paint(app, ai_state, mon
     from ui.services import ai_state_levels
     from ui.services.data_feed import merge_compression_from_ai_state
 
+    ai_state_levels.warm_cache()
     row = _row()
     merge_compression_from_ai_state([row])
 
     def _explode(*_args, **_kwargs):
         raise RuntimeError("the file feed is down")
 
+    monkeypatch.setattr(ai_state_levels, "cached_symbol_compression", _explode, raising=False)
     monkeypatch.setattr(ai_state_levels, "load_symbol_compression", _explode, raising=False)
     monkeypatch.setattr(ai_state_levels, "load_symbol_levels", _explode, raising=False)
     _paint_every_cell(row)  # must not raise
+
+
+def test_the_panel_s_own_refresh_parses_nothing_on_the_qt_thread(app, ai_state, tmp_path, monkeypatch):
+    """The whole Qt-thread path, end to end, with the file watched.
+
+    `refresh_from_reports` is what the report watcher, the trader's click and
+    `_on_scan_finished` all reach. It starts the worker (a `stat`, not a parse)
+    and then loads and merges. Nothing on this thread may `json.load` the
+    ai_state file - which is the 281-292 ms the review measured.
+    """
+    import project_paths
+
+    from ui.panels import master_avwap_panel as panel_module
+    from ui.services import ai_state_levels
+
+    # The panel asks `project_paths` where the file is; the fixture only moved
+    # the service's own reference, so point both at the scratch file.
+    monkeypatch.setattr(project_paths, "MASTER_AVWAP_AI_STATE_FILE", ai_state, raising=False)
+
+    started = {"count": 0}
+
+    class _NoWorker:
+        """The worker, not started - this test is about the Qt thread only."""
+
+        def __init__(self, *_args, **_kwargs):
+            started["count"] += 1
+
+        @property
+        def done(self):
+            class _Signal:
+                @staticmethod
+                def connect(_slot):
+                    return None
+
+            return _Signal()
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(panel_module, "_AiStateCompressionWorker", _NoWorker)
+
+    panel = panel_module.MasterAvwapPanel()
+    try:
+        opened: list[str] = []
+        real_open = builtins.open
+
+        def _spy_open(file, *args, **kwargs):  # noqa: ANN001
+            opened.append(str(file))
+            return real_open(file, *args, **kwargs)
+
+        builtins.open = _spy_open
+        try:
+            panel.refresh_from_reports(emit_empty=False)
+        finally:
+            builtins.open = real_open
+
+        assert started["count"] == 1, "the parse was handed to the worker"
+        offenders = [path for path in opened if "master_avwap_ai_state" in path]
+        assert not offenders, (
+            "refresh_from_reports opened the ai_state file on the Qt thread - "
+            f"that is the 281 ms stall: {offenders}"
+        )
+        assert ai_state_levels.cache_signature() is None, "and the cache is still cold"
+    finally:
+        panel.deleteLater()

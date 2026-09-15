@@ -377,31 +377,43 @@ def enrich_setup_rows_for_display(
     return rows
 
 
-def merge_compression_from_ai_state(rows: Iterable[SetupRow]) -> int:
+def merge_compression_from_ai_state(rows: Iterable[SetupRow], *, allow_read: bool = False) -> int:
     """Fill each row's compression fields from the scan's `ai_state` (PCT-3).
 
     The setups table is built from `master_avwap_priority_setups.txt`, whose
     ranked lines carry the symbol, side, score, family and bucket and nothing
     about compression. `master_avwap_ai_state.json` carries the whole reading
-    per symbol, so the two are joined HERE - in the load path, on whichever
-    thread asked for the rows - and never in `paint`, which runs once per
-    visible cell per repaint and may not touch a file (`CLAUDE.md`: nothing
-    expensive belongs on the Qt thread).
+    per symbol, so the two are joined HERE - in the load path - and never in
+    `paint`, which runs once per visible cell per repaint.
+
+    **`allow_read` defaults to False and that is the load-bearing part.**
+    `enrich_setup_rows_for_display` is reached from
+    `master_avwap_panel.refresh_from_reports`, which runs on the Qt thread on
+    every watched-file change, and one parse of the live 36 MB ai_state was
+    measured at 281-292 ms on the desk (`CLAUDE.md`: nothing expensive belongs
+    on the Qt thread). So the default path reads only the map already in
+    memory; `ai_state_levels.warm_cache()` does the parse on a worker and the
+    panel then asks for one more refresh. `allow_read=True` is for a worker, a
+    CLI or a test - never the Qt thread.
 
     The join is by SYMBOL: the anchored compression box is a property of the
     symbol's current earnings anchor, not of the side being traded, and the
     `ai_state` file holds one entry per symbol. A row that already carries a
     reading (the focus feed's rows do) keeps its own - the merge only fills.
 
-    Returns how many rows were filled. A missing or unreadable file fills
-    nothing and costs nothing: an evidence read never costs the rows it
-    annotates.
+    Returns how many rows were filled. A cold cache, a missing file or an
+    unreadable one fills nothing and costs nothing: an evidence read never costs
+    the rows it annotates.
     """
     filled = 0
     try:
-        from ui.services.ai_state_levels import load_symbol_compression
+        from ui.services import ai_state_levels
 
-        by_symbol = load_symbol_compression()
+        by_symbol = (
+            ai_state_levels.load_symbol_compression()
+            if allow_read
+            else ai_state_levels.cached_symbol_compression()
+        )
     except Exception as exc:  # noqa: BLE001 - a chip never costs the table
         logging.warning("Could not read ai_state compression fields: %s", exc)
         return 0
