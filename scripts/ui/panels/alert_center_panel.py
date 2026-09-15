@@ -5961,11 +5961,19 @@ class AlertCenterPanel(QFrame):
             self.arm_d1_event_watch(alert.symbol, kind, side=alert.side)
 
     def _current_trendline_candidate(self, symbol: str, side: str = "") -> dict | None:
+        evidence = self._current_trendline_report_evidence(symbol, side)
+        return evidence[0] if evidence is not None else None
+
+    def _current_trendline_report_evidence(
+        self, symbol: str, side: str = ""
+    ) -> tuple[dict, datetime] | None:
         """The compact saved scan report is the arm-time source of the line.
 
         This is a small report read on the explicit arm click, not the 38 MB
         ai-state file and never part of the timer poll. A read failure is
-        uncertainty: the button refuses rather than re-deriving a line.
+        uncertainty: the button refuses rather than re-deriving a line. Its
+        ``generated_at`` is the only honest time at which the scan knew the
+        frozen geometry; an arm-click timestamp must never replace it.
         """
         symbol = str(symbol or "").strip().upper()
         requested_side = str(side or "").strip().upper()
@@ -5974,6 +5982,10 @@ class AlertCenterPanel(QFrame):
                 Path(MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE).read_text(encoding="utf-8")
             )
         except (OSError, TypeError, ValueError):
+            return None
+        try:
+            knowledge_at = datetime.fromisoformat(str(payload.get("generated_at") or ""))
+        except (AttributeError, TypeError, ValueError):
             return None
         events = payload.get("alerts") if isinstance(payload, dict) else []
         for event in events or []:
@@ -5990,7 +6002,7 @@ class AlertCenterPanel(QFrame):
             if isinstance(candidate, dict):
                 frozen = dict(candidate)
                 frozen.setdefault("side", event_side)
-                return frozen
+                return frozen, knowledge_at
         return None
 
     def arm_d1_event_watch(self, symbol: str, kind: str, side: str = "") -> bool:
@@ -6003,7 +6015,8 @@ class AlertCenterPanel(QFrame):
             return False
         moment = datetime.now()
         if kind == "trendline_break":
-            candidate = self._current_trendline_candidate(symbol, side)
+            evidence = self._current_trendline_report_evidence(symbol, side)
+            candidate, knowledge_at = evidence if evidence is not None else (None, None)
             resolved_side = str(side or "").strip().upper()
             if not resolved_side and isinstance(candidate, dict):
                 resolved_side = str(candidate.get("side") or "").strip().upper()
@@ -6019,7 +6032,7 @@ class AlertCenterPanel(QFrame):
                     armed_at=moment,
                     side=resolved_side,
                     trendline_candidate=candidate,
-                    trendline_knowledge_at=moment,
+                    trendline_knowledge_at=knowledge_at,
                 )
             )
         else:
@@ -6907,6 +6920,7 @@ class AlertCenterPanel(QFrame):
                 return
         remaining: list[D1EventWatch] = []
         triggered = []
+        fired_trendline_breaks: set[tuple[str, str, str]] = set()
         # One reference-level build per symbol per tick, shared across every
         # watch on it (item 1b). Scoped to this tick and discarded with it.
         levels_caches: dict[str, dict] = {}
@@ -6942,6 +6956,16 @@ class AlertCenterPanel(QFrame):
             if hit is None:
                 remaining.append(watch)
             else:
+                if watch.kind == "trendline_break":
+                    candidate = watch.trendline_candidate or {}
+                    key = (
+                        watch.symbol,
+                        str(watch.side or "").strip().upper(),
+                        str(candidate.get("break_date") or "").strip(),
+                    )
+                    if key in fired_trendline_breaks:
+                        continue
+                    fired_trendline_breaks.add(key)
                 triggered.append(hit)
         self._d1_event_watches = remaining
         if triggered:

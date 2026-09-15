@@ -1065,7 +1065,7 @@ def d1_event_watch_to_dict(watch: D1EventWatch) -> dict:
                 "side": str(watch.side or "").strip().upper(),
                 "trendline_candidate": dict(watch.trendline_candidate or {}),
                 "trendline_knowledge_at": (
-                    _naive(watch.trendline_knowledge_at).isoformat()
+                    watch.trendline_knowledge_at.isoformat()
                     if watch.trendline_knowledge_at is not None
                     else ""
                 ),
@@ -1368,20 +1368,46 @@ def _cached_d1_event_levels(
 
 
 def _trendline_candidate_is_frozen(candidate: Mapping[str, Any] | None) -> bool:
-    """Whether an armed trendline contains the irreducible scan evidence."""
+    """Whether an armed trendline carries one exact, scan-known line.
+
+    The line id is derived by the chart's stable identity contract, while the
+    dates *and prices* record the two pivots which drew it.  A partial legacy
+    row remains readable, but no missing piece is safe to reconstruct in a
+    later poll.
+    """
     if not isinstance(candidate, Mapping):
         return False
     try:
+        kind = str(candidate.get("type") or "").strip()
+        line_id = str(candidate.get("line_id") or "").strip()
+        start_date = _parse_date(candidate.get("start_date"))
+        end_date = _parse_date(candidate.get("end_date"))
+        lookback_end = _parse_date(candidate.get("lookback_end"))
+        break_date = _parse_date(candidate.get("break_date"))
+        start_price = float(candidate.get("start_price"))
+        end_price = float(candidate.get("end_price"))
         price = float(candidate.get("current_line_price"))
         slope = float(candidate.get("slope_log_per_bar"))
     except (TypeError, ValueError):
         return False
-    if not math.isfinite(price) or price <= 0 or not math.isfinite(slope):
+    if (
+        not kind
+        or not line_id
+        or start_date is None
+        or end_date is None
+        or lookback_end is None
+        or break_date is None
+        or start_date >= end_date
+        or end_date > lookback_end
+        or break_date < end_date
+        or break_date > lookback_end
+        or line_id != f"d1_trendline:{kind}:{start_date.isoformat()}_{end_date.isoformat()}"
+    ):
         return False
     return all(
-        _parse_date(candidate.get(key)) is not None
-        for key in ("start_date", "end_date", "lookback_end")
-    )
+        math.isfinite(value) and value > 0
+        for value in (start_price, end_price, price)
+    ) and math.isfinite(slope)
 
 
 def _trendline_anchor_index(daily: list[dict], candidate: Mapping[str, Any]) -> int | None:
@@ -1439,7 +1465,7 @@ def _evaluate_frozen_trendline_break(
     """One close-through of the exact D1 line captured when the watch armed."""
     if not _trendline_candidate_is_frozen(watch.trendline_candidate):
         return None
-    if watch.trendline_knowledge_at is None:
+    if not isinstance(watch.trendline_knowledge_at, datetime):
         return None
     side = str(watch.side or "").strip().upper()
     if side not in {"LONG", "SHORT"}:

@@ -21096,6 +21096,10 @@ def find_directional_trendline_candidate(
                     continue
 
                 candidate = {
+                    "line_id": (
+                        f"d1_trendline:{'H-break' if side == 'LONG' else 'L-break'}:"
+                        f"{pivot_a['date']}_{pivot_b['date']}"
+                    ),
                     "type": "H-break" if side == "LONG" else "L-break",
                     "start_date": pivot_a["date"],
                     "end_date": pivot_b["date"],
@@ -21147,6 +21151,10 @@ def find_directional_trendline_candidate(
                 atr_distance = (float(last_close) - current_line_price) / float(atr20)
 
             candidate = {
+                "line_id": (
+                    f"d1_trendline:{'H-' if side == 'LONG' else 'L+'}:"
+                    f"{pivot_a['date']}_{pivot_b['date']}"
+                ),
                 "type": "H-" if side == "LONG" else "L+",
                 "start_date": pivot_a["date"],
                 "end_date": pivot_b["date"],

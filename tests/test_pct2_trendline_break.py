@@ -44,16 +44,23 @@ def _canonical_alert_bytes(alerts: list[dict]) -> bytes:
 
 ARMED_AT = datetime(2026, 9, 10, 10, 0)
 FROZEN_LONG_LINE = {
+    "line_id": "d1_trendline:H-break:2026-09-02_2026-09-08",
     "type": "H-break",
     "start_date": "2026-09-02",
     "end_date": "2026-09-08",
-    "lookback_end": "2026-09-10",
+    "start_price": 98.0,
+    "end_price": 99.0,
+    "lookback_end": "2026-09-12",
     "current_line_price": 100.0,
     "slope_log_per_bar": 0.0,
     "touch_count": 2,
-    "break_date": "",
+    "break_date": "2026-09-11",
 }
-FROZEN_SHORT_LINE = {**FROZEN_LONG_LINE, "type": "L-break"}
+FROZEN_SHORT_LINE = {
+    **FROZEN_LONG_LINE,
+    "line_id": "d1_trendline:L-break:2026-09-02_2026-09-08",
+    "type": "L-break",
+}
 
 
 def _daily(day: int, *, close: float, high: float | None = None, low: float | None = None) -> dict:
@@ -169,7 +176,7 @@ def test_a_redraw_cannot_replace_the_armed_line_and_a_break_fires_once(tmp_path,
     panel._current_trendline_candidate = lambda _symbol: {
         **FROZEN_LONG_LINE,
         "current_line_price": 120.0,
-        "lookback_end": "2026-09-10",
+        "lookback_end": "2026-09-12",
     }
     panel._m5_bars_for = lambda _symbol: []
     panel._d1_bars_for = lambda _symbol: [_daily(11, close=99.0), _daily(12, close=101.0)]
@@ -183,8 +190,8 @@ def test_a_redraw_cannot_replace_the_armed_line_and_a_break_fires_once(tmp_path,
     assert len([alert for alert in panel._alerts if alert.tag == "chart_watch"]) == 1
 
 
-def test_an_old_trendline_watch_loads_but_never_confirms_without_its_frozen_line():
-    """Missing arm-time evidence is uncertainty, never a reconstructed break."""
+def test_an_old_or_incomplete_trendline_watch_loads_but_never_confirms():
+    """Missing arm-time identity is uncertainty, never a reconstructed break."""
     from chart_watch import d1_event_watch_from_dict, evaluate_d1_event_watch
 
     old = d1_event_watch_from_dict(
@@ -203,6 +210,114 @@ def test_an_old_trendline_watch_loads_but_never_confirms_without_its_frozen_line
         [_daily(11, close=99.0), _daily(12, close=101.0)],
         now=datetime(2026, 9, 15),
     ) is None
+    incomplete = d1_event_watch_from_dict(
+        {
+            "symbol": "TLBR",
+            "kind": "trendline_break",
+            "armed_at": ARMED_AT.isoformat(),
+            "side": "LONG",
+            "trendline_knowledge_at": "2026-09-12T16:30:00-07:00",
+            # A historical partial row is still readable, but lacks the
+            # endpoint price, break date and explicit stable line identity
+            # PCT-2 needs before it can confirm.
+            "trendline_candidate": {
+                key: value
+                for key, value in FROZEN_LONG_LINE.items()
+                if key not in {"line_id", "end_price", "break_date"}
+            },
+        }
+    )
+    assert incomplete is not None
+    assert evaluate_d1_event_watch(
+        incomplete,
+        [],
+        [_daily(11, close=99.0), _daily(12, close=101.0)],
+        now=datetime(2026, 9, 15),
+    ) is None
+
+
+def test_trendline_arm_uses_the_saved_report_generated_at_or_refuses(tmp_path, monkeypatch):
+    """The report, never the arm click, owns knowledge of the frozen line."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    import ui.panels.alert_center_panel as panel_module
+    from ui.panels.alert_center_panel import AlertCenterPanel
+    from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None)
+    report = tmp_path / "master_avwap_d1_upgrade_alerts.json"
+    report.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-09-12T16:30:00-07:00",
+                "alerts": [
+                    {
+                        "event_type": "trendline_break",
+                        "symbol": "TLBR",
+                        "side": "LONG",
+                        "trendline_candidate": FROZEN_LONG_LINE,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(panel_module, "MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE", report)
+    watches_path = tmp_path / "watches.json"
+    panel = AlertCenterPanel(d1_event_watches_path=watches_path)
+    assert panel.arm_d1_event_watch("TLBR", "trendline_break", side="LONG")
+    assert panel._d1_event_watches[0].trendline_knowledge_at == datetime.fromisoformat(
+        "2026-09-12T16:30:00-07:00"
+    )
+    from chart_watch import load_d1_event_watches
+
+    assert load_d1_event_watches(watches_path)[0].trendline_knowledge_at == datetime.fromisoformat(
+        "2026-09-12T16:30:00-07:00"
+    )
+
+    report.write_text(
+        json.dumps(
+            {
+                "generated_at": "not-a-time",
+                "alerts": [
+                    {
+                        "event_type": "trendline_break",
+                        "symbol": "TLBR",
+                        "side": "LONG",
+                        "trendline_candidate": FROZEN_LONG_LINE,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    invalid = AlertCenterPanel(d1_event_watches_path=tmp_path / "invalid.json")
+    assert not invalid.arm_d1_event_watch("TLBR", "trendline_break", side="LONG")
+
+
+def test_duplicate_persisted_trendline_watches_emit_once_for_one_break_date(tmp_path, monkeypatch):
+    """One scan break is one alert even when an old store has duplicate rows."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from ui.panels.alert_center_panel import AlertCenterPanel
+    from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None)
+    panel = AlertCenterPanel(d1_event_watches_path=tmp_path / "d1_event_watches.json")
+    panel._d1_event_watches = [_frozen_watch(), _frozen_watch()]
+    panel._m5_bars_for = lambda _symbol: []
+    panel._d1_bars_for = lambda _symbol: [_daily(11, close=99.0), _daily(12, close=101.0)]
+    saves: list[bool] = []
+    panel._save_d1_event_watches = lambda: saves.append(True)
+
+    panel._poll_d1_event_watches(now=datetime(2026, 9, 15))
+    assert len([alert for alert in panel._alerts if alert.tag == "chart_watch"]) == 1
+    assert saves == [True]
+    assert panel._d1_event_watches == []
 
 
 RUNNER_CHILD = r'''
@@ -262,8 +377,10 @@ def inject_frozen_break(rows, state, ib, **kwargs):
     real_refine(rows, state, ib, **kwargs)
     row = next(row for row in rows if row.get("symbol") == symbol)
     candidate = {
+        "line_id": "d1_trendline:H-break:2026-09-02_2026-09-08",
         "type": "H-break", "start_date": "2026-09-02", "end_date": "2026-09-08",
-        "lookback_end": "2026-09-10", "current_line_price": 100.0,
+        "start_price": 98.0, "end_price": 99.0,
+        "lookback_end": "2026-09-12", "current_line_price": 100.0,
         "slope_log_per_bar": 0.0, "touch_count": 2, "break_date": "2026-09-11",
     }
     row.update(trendline_break_recent=True, trendline_break_note="H-break test", trendline_break_candidate=candidate)
@@ -342,3 +459,6 @@ def test_the_real_runner_path_adds_one_trendline_feed_row_in_its_own_data_dir(tm
     assert len(matches) == 1
     assert matches[0]["label"] == "Trendline break"
     assert matches[0]["break_date"] == "2026-09-11"
+    assert matches[0]["trendline_candidate"]["line_id"] == FROZEN_LONG_LINE["line_id"]
+    assert matches[0]["trendline_candidate"]["start_price"] == 98.0
+    assert matches[0]["trendline_candidate"]["end_price"] == 99.0
