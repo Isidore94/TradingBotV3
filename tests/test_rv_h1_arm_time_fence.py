@@ -234,7 +234,9 @@ class _Desk:
         return watch
 
     def poll(self, now) -> None:
-        self.panel._poll_h1_bounce_watches(now=now)
+        # PCT-1 renamed the poll; the H1 leg inside it is unchanged, and so is
+        # every assertion in this file.
+        self.panel._poll_pullback_watches(now=now)
 
     @property
     def armed_ids(self) -> list[str]:

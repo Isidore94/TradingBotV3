@@ -271,6 +271,15 @@ def standing_claims(rows_or_path=CLAIMED_PICKS_FILE) -> list[dict[str, Any]]:
             continue
         action = str(row.get("action") or "").strip().lower()
         if action in (ACTION_DROP, ACTION_EXPIRE):
+            if not key[2]:
+                # A retraction that names no setup ends the whole thesis on
+                # this (symbol, side) - which is what a caller who never knew
+                # the setup id means by "drop it". One that names a setup
+                # still ends only that one.
+                for standing in [
+                    existing for existing in live if existing[:2] == key[:2]
+                ]:
+                    live.pop(standing, None)
             live.pop(key, None)
         elif action == ACTION_CLAIM:
             live.pop(key, None)
@@ -359,7 +368,7 @@ def record_claim(
 def record_drop(
     symbol: object,
     side: object,
-    claimed_setup_id: object,
+    claimed_setup_id: object = "",
     *,
     source: object = "setups_table",
     note: object = "",
@@ -367,7 +376,13 @@ def record_drop(
     now: datetime | None = None,
     path: Path = CLAIMED_PICKS_FILE,
 ) -> dict[str, Any] | None:
-    """The trader ends a claim. One append-only retraction row."""
+    """The trader ends a claim. One append-only retraction row.
+
+    ``claimed_setup_id`` defaults to blank, and a drop that names NO setup
+    ends every claim on that ``(symbol, side)`` - the whole thesis, not one
+    of its names (see :func:`standing_claims`). Every caller that knows which
+    setup it is dropping still says so, and that drop is still exact.
+    """
     row = build_claim_row(
         symbol=symbol,
         side=side,

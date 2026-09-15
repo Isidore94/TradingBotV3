@@ -5,6 +5,7 @@ import re
 import time
 from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -67,9 +68,11 @@ from chart_watch import (
     save_d1_event_watches,
     save_d1_level_watches,
     watch_is_stale,
-    H1_EMA_BOUNCE_KIND,
     H1_SOURCE_YFINANCE,
     PERSISTENT_WATCH_KINDS,
+    PULLBACK_KIND,
+    PULLBACK_TRIGGERS,
+    TRIGGER_H1_EMA15_BOUNCE,
 )
 import focus_adoption_gate
 import regime_pause_hold
@@ -4786,7 +4789,7 @@ class AlertCenterPanel(QFrame):
             dwell_ms=self._review_dwell_ms(symbol),
             detail={"kind": kind, "baseline": watch.baseline},
         )
-        if kind == H1_EMA_BOUNCE_KIND:
+        if kind == PULLBACK_KIND:
             self.statusChanged.emit(
                 f"{symbol}: {label} armed - {watch.reason}. "
                 f"{self._h1_warmup_note(watch)}"
@@ -4860,6 +4863,114 @@ class AlertCenterPanel(QFrame):
         except Exception:  # pragma: no cover - the module is first-party
             return 45
 
+    #: The Pullback alert's two SMA timeframes and the SMA each one is read
+    #: with, in the trader's own words (2026-09-15): *"on the M15 we use the
+    #: 150 moving average on the M30 we use the 75"*.
+    PULLBACK_TIMEFRAMES: tuple[tuple[int, int], ...] = ((15, 150), (30, 75))
+
+    #: The three triggers `indicators.pullback_sma_reclaim` owns. The fourth,
+    #: `h1_ema15_bounce`, is the WISHLIST 10C rule and keeps its own path.
+    PULLBACK_SMA_TRIGGERS = tuple(
+        name for name in PULLBACK_TRIGGERS if name != TRIGGER_H1_EMA15_BOUNCE
+    )
+
+    def _intraday_history_cache(self, interval_minutes: int):
+        """One `IntradayHistoryCache` per interval, built on first use.
+
+        The desk has no cached M15 or M30 series at all - the M5 window is
+        BounceBot's and the durable intraday store has never been written on
+        this desk - so unlike the H1 leg these two have no primary to fall
+        back FROM. The cache is therefore the only source, and it refreshes
+        once per completed bucket on its OWN worker thread: nothing here ever
+        fetches on the Qt thread, and zero IB traffic (the group RS/RW tape
+        precedent). None when the module cannot be built at all, and then the
+        timeframe simply reports "not measured" for ever rather than raising
+        inside a 60-second poll.
+        """
+        caches = getattr(self, "_intraday_history", None)
+        if caches is None:
+            caches = {}
+            self._intraday_history = caches
+        minutes = int(interval_minutes)
+        cache = caches.get(minutes)
+        if cache is None:
+            try:
+                from intraday_history import IntradayHistoryCache
+
+                cache = IntradayHistoryCache(minutes)
+            except Exception:  # pragma: no cover - yfinance/env unavailable
+                logging.debug(
+                    "Intraday history unavailable (%sm)", minutes, exc_info=True
+                )
+                cache = False
+            caches[minutes] = cache
+        return cache or None
+
+    @staticmethod
+    def _pullback_warmup_bars(sma_length: int) -> int:
+        try:
+            from indicators.pullback_sma_reclaim import warmup_bars
+
+            return int(warmup_bars(sma_length))
+        except Exception:  # pragma: no cover - the module is first-party
+            return int(sma_length) + 10
+
+    def _pullback_triggers(self, watch) -> tuple[str, ...]:
+        """What THIS watch waits for. A row with no list waits for all four.
+
+        A watch stored before PCT-1 carries only `h1_ema15_bounce` (see
+        `chart_watch.chart_watch_from_dict`), so the SMA legs are never run
+        for it and its health cell never mentions a timeframe it was not
+        armed for.
+        """
+        return tuple(getattr(watch, "triggers", ()) or PULLBACK_TRIGGERS)
+
+    def _pullback_bars_for_watch(self, watch, interval_minutes: int, *, now=None):
+        """This watch's M15 or M30 series, and an ASK for the next refresh.
+
+        Reads only what is already in memory and returns at once; the request
+        is what keeps the series current, and the cache itself refuses more
+        than one fetch per completed bucket. The first cycle after arming
+        simply reports "not measured" until the answer lands.
+        """
+        cache = self._intraday_history_cache(interval_minutes)
+        if cache is None:
+            return []
+        bars = cache.bars_for(watch.symbol)
+        try:
+            cache.request(watch.symbol, now=now or datetime.now())
+        except Exception:  # pragma: no cover - a refresh never costs the poll
+            logging.debug(
+                "Intraday history request failed for %s", watch.symbol, exc_info=True
+            )
+        return bars
+
+    def _pullback_timeframe_note(self, watch, interval_minutes: int, sma_length: int) -> str:
+        """One timeframe's half of the health cell. READS, never fetches.
+
+        The poll is what asks for a refresh (`_pullback_bars_for_watch`); a
+        health cell that fetched would put the network on the Qt thread's
+        critical path for a cosmetic string.
+        """
+        label = f"M{int(interval_minutes)}"
+        needed = self._pullback_warmup_bars(sma_length)
+        cache = self._intraday_history_cache(interval_minutes)
+        if cache is None:
+            return f"not measured (no {label} history)"
+        try:
+            have = len(cache.bars_for(watch.symbol))
+            unavailable = bool(cache.unavailable(watch.symbol))
+            stale = bool(cache.last_refresh_failed(watch.symbol))
+        except Exception:  # pragma: no cover - a note never costs a row
+            return ""
+        if have >= needed:
+            if stale:
+                return f"{label} from yfinance (stale - last refresh failed)"
+            return f"{label} from yfinance"
+        if unavailable:
+            return f"not measured ({have} of {needed} {label} bars, yfinance unavailable)"
+        return f"not measured ({have} of {needed} {label} bars)"
+
     def _armed_watch_note(self, watch) -> str:
         """Why an armed watch is not answering yet, in the inventory's health cell.
 
@@ -4876,9 +4987,30 @@ class AlertCenterPanel(QFrame):
         - and the cell says so, because an ageing verdict must not read exactly
         like a live one. `unavailable` keeps its own meaning: nothing was ever
         fetched at all.
+
+        PCT-1 widened the cell to ONE STATE PER TIMEFRAME, joined with `;` -
+        `H1 from cache; not measured (0 of 160 M15 bars); M30 from yfinance` -
+        because one button now waits for four phenomena on three series and a
+        single verdict would hide which of them can actually answer. Each H1
+        state is the exact string it has always been; only the joining is new.
+        A watch stored before the rename waits for the H1 leg alone and its
+        cell still says exactly what it always did.
         """
         if str(getattr(watch, "kind", "") or "") not in PERSISTENT_WATCH_KINDS:
             return ""
+        triggers = self._pullback_triggers(watch)
+        parts: list[str] = []
+        if TRIGGER_H1_EMA15_BOUNCE in triggers:
+            parts.append(self._h1_watch_note(watch))
+        if any(name in triggers for name in self.PULLBACK_SMA_TRIGGERS):
+            for interval_minutes, sma_length in self.PULLBACK_TIMEFRAMES:
+                parts.append(
+                    self._pullback_timeframe_note(watch, interval_minutes, sma_length)
+                )
+        return "; ".join(part for part in parts if part)
+
+    def _h1_watch_note(self, watch) -> str:
+        """The H1 leg's half of the health cell - the WS-10C string, unchanged."""
         have, needed, source = self._h1_warmup_counts(watch)
         if have is None:
             return ""
@@ -4939,15 +5071,45 @@ class AlertCenterPanel(QFrame):
         )
 
     def disarm_chart_watch_for(self, symbol: str, kind: str) -> bool:
-        """Public disarm surface (the toggles' off-click). True if removed."""
+        """Public disarm surface (the toggles' off-click). True if removed.
+
+        A watch the trader armed BY HAND is deleted, exactly as it always was.
+        A `pullback` watch the desk armed for them off a claimed D1 pick or a
+        swing Focus name is instead kept as `declined` (PCT-1 item 5, lead
+        ruling 3): the auto-arm sweep runs every 60 seconds, so deleting it
+        would simply put it back on the next tick and the trader could never
+        turn one off. A declined row is hidden from the Armed board, never
+        evaluated and never pushed, and it goes when its claim or pick does.
+        """
         symbol = str(symbol or "").strip().upper()
         if kind not in self.armed_watch_kinds(symbol):
             return False
-        self._chart_watches = [
-            watch
-            for watch in self._chart_watches
-            if not (watch.symbol == symbol and watch.kind == kind)
-        ]
+        kept: list = []
+        declined: list = []
+        for watch in self._chart_watches:
+            if not (watch.symbol == symbol and watch.kind == kind):
+                kept.append(watch)
+                continue
+            if self._is_auto_pullback_watch(watch):
+                remembered = replace(watch, declined=True)
+                declined.append(remembered)
+                kept.append(remembered)
+            # else: a hand-armed watch is simply dropped, as it always was.
+        self._chart_watches = kept
+        if declined:
+            self._save_chart_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+            self._record_review_event(
+                "disarm_watch",
+                symbol=symbol,
+                detail={"kind": kind, "declined": True},
+            )
+            self.statusChanged.emit(
+                f"{symbol}: {WATCH_KINDS.get(kind, kind)} disarmed - it stays "
+                "off until the pick that armed it is dropped."
+            )
+            return True
         self._save_chart_watches()
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
@@ -5478,8 +5640,16 @@ class AlertCenterPanel(QFrame):
             logging.exception("Market journal chart capture could not be started.")
 
     def _refresh_armed_list(self) -> None:
+        # A DECLINED row is remembered, not armed: the trader turned it off and
+        # the auto-arm sweep is keeping the memory so it does not come back
+        # (PCT-1 item 5). It has no place on a board headed "what am I waiting
+        # on", and it is never evaluated or pushed either.
         self.armed_list.set_watches(
-            self._chart_watches,
+            [
+                watch
+                for watch in self._chart_watches
+                if not bool(getattr(watch, "declined", False))
+            ],
             self._d1_level_watches,
             d1_events=self._d1_event_watches,
             has_m5_bars=lambda symbol: bool(self._m5_bars_for(symbol)),
@@ -5768,61 +5938,85 @@ class AlertCenterPanel(QFrame):
     #: take what is cached.
     H1_WATCH_M5_SESSIONS = 10
 
-    def _poll_h1_bounce_watches(self, now: datetime | None = None) -> None:
-        """The armed H1 retesters, evaluated once per tick (WISHLIST 10C).
+    def _poll_pullback_watches(self, now: datetime | None = None) -> None:
+        """The armed Pullback alerts, evaluated once per tick (PCT-1).
 
-        Rides the D1 EVENT poll rather than the 30 s chart-watch one because
-        an H1 retester is a multi-day arm: it needs that poll's trading-day
+        Was `_poll_h1_bounce_watches` (WISHLIST 10C). Same timer, same expiry
+        call first, and the H1 leg below is the code that shipped - what is
+        new is the auto-arm sweep in front of it and the three SMA triggers
+        after it.
+
+        Rides the D1 EVENT poll rather than the 30 s chart-watch one because a
+        Pullback alert is a multi-day arm: it needs that poll's trading-day
         expiry pass, and re-reading its bars four times an hour would answer
-        the same question four times - a completed H1 bar only arrives once an
-        hour, and this returns the same verdict until it does.
+        the same question four times - a completed H1 bar arrives once an hour
+        and a completed M15 bar four times, and this returns the same verdict
+        until one does.
 
-        Cost on the Qt thread: for each ARMED H1 watch (a handful, by hand),
-        one O(bars) bucketing pass over the already-materialised M5 dicts plus
-        an O(bars) ATR and EMA over the ~35 resulting H1 bars. No fetch, no
-        file read, no allocation beyond that list.
+        Cost on the Qt thread: for each ARMED watch (a handful), one O(bars)
+        bucketing pass over the already-materialised M5 dicts plus an O(bars)
+        ATR and EMA over the ~35 resulting H1 bars, then one O(bars) SMA, ATR
+        and LRSI pass over each of the two intraday series already in memory.
+        Nothing is fetched HERE: the M15/M30 refresh is a request the cache
+        answers on its own worker, and it refuses more than one fetch per
+        completed bucket.
 
-        `None` from the rule is NOT MEASURED - too little history, or bars
-        that stopped arriving - and a watch in that state simply waits.
-        Uncertainty never deletes.
+        `None` from a rule is NOT MEASURED - too little history, or bars that
+        stopped arriving - and a watch in that state simply waits. Uncertainty
+        never deletes.
 
         **A new arm never fires on an old bounce** (repair RV-H1-ARM-TIME,
-        2026-09-13): `evaluate_h1_bars` returns `pre_arm` - neither fired nor
+        2026-09-13, and the same fence inside `pullback_sma_reclaim`):
+        `evaluate_h1_bars` returns `pre_arm` - neither fired nor
         `invalidated` - for a confirmation or invalidation whose event bar had
         already closed when the watch was armed, so this loop leaves that watch
         armed and writes no row, sends no push and draws no alert, exactly as
         it does for `awaiting_reclaim`.
         """
+        moment = now or datetime.now()
         armed = [
             watch
             for watch in self._chart_watches
             if watch.kind in PERSISTENT_WATCH_KINDS
+            and not bool(getattr(watch, "declined", False))
         ]
-        if not armed:
-            return
-        moment = now or datetime.now()
 
         def _key(watch) -> tuple:
             return (watch.symbol, watch.kind, watch.watch_id, watch.armed_at)
 
-        kept, expired = self._expire_armed_watches(
-            "chart_watches", armed, now=moment
-        )
-        if expired:
-            gone = {_key(watch) for watch in armed} - {_key(watch) for watch in kept}
-            self._chart_watches = [
-                watch for watch in self._chart_watches if _key(watch) not in gone
+        if armed:
+            kept, expired = self._expire_armed_watches(
+                "chart_watches", armed, now=moment
+            )
+            if expired:
+                gone = {_key(watch) for watch in armed} - {
+                    _key(watch) for watch in kept
+                }
+                self._chart_watches = [
+                    watch for watch in self._chart_watches if _key(watch) not in gone
+                ]
+                self._save_chart_watches()
+                self._refresh_review_armed_kinds()
+                self.armedWatchesChanged.emit()
+                armed = kept
+
+        # The trader's own picks arm themselves, BEFORE anything is evaluated,
+        # so a pick claimed a minute ago is judged on this very tick.
+        if self._sweep_auto_pullback_watches(moment):
+            armed = [
+                watch
+                for watch in self._chart_watches
+                if watch.kind in PERSISTENT_WATCH_KINDS
+                and not bool(getattr(watch, "declined", False))
             ]
-            self._save_chart_watches()
-            self._refresh_review_armed_kinds()
-            self.armedWatchesChanged.emit()
-            armed = kept
-            if not armed:
-                return
+        if not armed:
+            return
 
         finished: set[tuple] = set()
         triggered: list[ChartWatchTrigger] = []
         for watch in armed:
+            if TRIGGER_H1_EMA15_BOUNCE not in self._pullback_triggers(watch):
+                continue
             try:
                 h1_bars, _source = self._h1_bars_for_watch(watch, now=moment)
                 result = evaluate_h1_bars(watch, h1_bars, now=moment)
@@ -5883,9 +6077,49 @@ class AlertCenterPanel(QFrame):
                     },
                 )
                 self.statusChanged.emit(
-                    f"{watch.symbol}: H1 retester disarmed - price closed through "
-                    "the 15-EMA against the setup."
+                    f"{watch.symbol}: Pullback alert disarmed - price closed "
+                    "through the H1 15-EMA against the setup."
                 )
+
+        # The three SMA triggers, on their own M15 and M30 series. A watch the
+        # H1 leg just finished is not asked again on this tick.
+        fired_marks: dict[tuple, dict[str, str]] = {}
+        for watch in armed:
+            if _key(watch) in finished:
+                continue
+            triggers = self._pullback_triggers(watch)
+            if not any(name in triggers for name in self.PULLBACK_SMA_TRIGGERS):
+                continue
+            try:
+                hits = self._evaluate_pullback_sma_triggers(watch, now=moment)
+            except Exception:
+                logging.debug(
+                    "Pullback SMA evaluation failed for %s",
+                    watch.symbol,
+                    exc_info=True,
+                )
+                continue
+            if hits:
+                marks = dict(getattr(watch, "fired", None) or {})
+                for hit in hits:
+                    marks[str((hit.details or {}).get("trigger") or "")] = str(
+                        (hit.details or {}).get("bar_dt") or ""
+                    )
+                fired_marks[_key(watch)] = marks
+                triggered.extend(hits)
+
+        if fired_marks:
+            # A Pullback alert is a STANDING arm: a trigger firing records the
+            # bar it fired on and the watch stays armed for the next one, up to
+            # expiry or a disarm. Only the H1 leg retires the watch, because a
+            # completed retest is the pattern finishing.
+            self._chart_watches = [
+                replace(watch, fired=fired_marks[_key(watch)])
+                if _key(watch) in fired_marks
+                else watch
+                for watch in self._chart_watches
+            ]
+            self._save_chart_watches()
 
         if finished:
             self._chart_watches = [
@@ -5895,21 +6129,248 @@ class AlertCenterPanel(QFrame):
             self._refresh_review_armed_kinds()
             self.armedWatchesChanged.emit()
         for hit in triggered:
+            measured = dict(hit.details or {})
+            detail = {
+                "kind": hit.watch.kind,
+                "watch_id": hit.watch.watch_id,
+                "message": str(hit.message or ""),
+                "reasons": list(measured.get("reasons") or ()),
+            }
+            # What PCT-1 added, when the fire carries it: the trigger that
+            # spoke, the series it spoke on, the rule sheet that decided and
+            # the trader's "ideally it was below 50" label.
+            for key in ("trigger", "timeframe", "rule_version", "lrsi_from_below_50"):
+                if key in measured:
+                    detail[key] = measured[key]
             self._record_review_event(
                 "watch_fired",
                 symbol=hit.watch.symbol,
                 side=str(getattr(hit, "resolved_side", "") or hit.watch.side).upper(),
-                detail={
-                    "kind": hit.watch.kind,
-                    "watch_id": hit.watch.watch_id,
-                    "message": str(hit.message or ""),
-                    "reasons": list((hit.details or {}).get("reasons") or ()),
-                },
+                detail=detail,
             )
             # The phone first: a broken display path must never be able to
             # suppress the buzz the trader armed this for.
             self._push_armed_watch(hit)
             self.add_alert(self._chart_watch_alert(hit, moment))
+
+    #: The source text an auto-armed Pullback alert carries, per source. The
+    #: absence of one of these is how the sweep knows a watch is the trader's
+    #: own click and leaves it alone - the same "absence of a marker means the
+    #: trader owns it" rule Focus provenance holds.
+    PULLBACK_AUTO_SOURCES = {
+        "claim": "auto: claimed pick",
+        "focus": "auto: swing Focus",
+    }
+
+    def _is_auto_pullback_watch(self, watch) -> bool:
+        return (
+            str(getattr(watch, "kind", "") or "") == PULLBACK_KIND
+            and str(getattr(watch, "source_text", "") or "")
+            in set(self.PULLBACK_AUTO_SOURCES.values())
+        )
+
+    def _evaluate_pullback_sma_triggers(self, watch, *, now: datetime):
+        """The M15 and M30 legs of one watch. A list of fires, never a verdict.
+
+        One episode clock per (watch, timeframe, side) is carried in memory
+        between polls so a trigger speaks once per episode; the `fired` map on
+        the watch is the PERSISTED backstop, so a desk restart does not
+        re-announce a move the trader was already told about. A watch with no
+        side of its own is asked both ways, exactly as the H1 leg is.
+        """
+        from indicators import pullback_sma_reclaim as rule
+
+        episodes = getattr(self, "_pullback_episodes", None)
+        if episodes is None:
+            episodes = {}
+            self._pullback_episodes = episodes
+        triggers = self._pullback_triggers(watch)
+        sides = (
+            (watch.side,) if watch.side in ("LONG", "SHORT") else ("LONG", "SHORT")
+        )
+        marks = dict(getattr(watch, "fired", None) or {})
+        series = {
+            minutes: self._pullback_bars_for_watch(watch, minutes, now=now)
+            for minutes, _sma_length in self.PULLBACK_TIMEFRAMES
+        }
+        hits: list[ChartWatchTrigger] = []
+        for interval_minutes, sma_length in self.PULLBACK_TIMEFRAMES:
+            for side in sides:
+                state_key = (
+                    watch.watch_id or watch.symbol,
+                    interval_minutes,
+                    side,
+                )
+                # The trader's M30 leg may be answered by an M15 reversal, so
+                # the companion series rides along - it never moves the SMA.
+                companion_minutes = (
+                    15 if interval_minutes == rule.RECLAIM_THEN_LRSI_MINUTES else None
+                )
+                result = rule.evaluate(
+                    series.get(interval_minutes) or [],
+                    side=side.lower(),
+                    sma_length=sma_length,
+                    bar_minutes=interval_minutes,
+                    armed_at=watch.armed_at,
+                    now=now,
+                    episode_state=episodes.get(state_key),
+                    companion_bars=(
+                        series.get(companion_minutes) if companion_minutes else None
+                    ),
+                    companion_minutes=companion_minutes,
+                )
+                if result is None:
+                    continue  # NOT MEASURED - the watch simply waits
+                episodes[state_key] = result.episode_state
+                for fire in result.fired:
+                    if fire.trigger not in triggers:
+                        continue
+                    stamp = fire.bar_dt.isoformat()
+                    if marks.get(fire.trigger) == stamp:
+                        continue  # already announced, before this restart
+                    marks[fire.trigger] = stamp
+                    hits.append(
+                        ChartWatchTrigger(
+                            watch=watch,
+                            price=float(fire.close),
+                            bar_dt=fire.bar_dt,
+                            message=(
+                                f"{watch.symbol} {side}: Pullback - {fire.message}"
+                            ),
+                            resolved_side=side,
+                            details={
+                                "watch_id": watch.watch_id,
+                                "reason": watch.reason,
+                                "trigger": fire.trigger,
+                                "timeframe": fire.timeframe,
+                                "rule_version": result.rule_version,
+                                "lrsi_from_below_50": bool(fire.lrsi_from_below_50),
+                                "bar_dt": stamp,
+                                "sma": fire.sma,
+                                "close": fire.close,
+                                "lrsi": fire.lrsi,
+                                "atr": fire.atr,
+                            },
+                        )
+                    )
+        return hits
+
+    def _auto_pullback_sources(self, moment: datetime):
+        """`(symbol, side) -> source text` for every pick that arms itself.
+
+        The trader's answer to "which names does this watch?" (2026-09-15) was
+        *"Chart arm + my picks"*: every ACTIVE claimed D1 pick and every swing
+        Focus name. A claim outranks a Focus entry on the same name because it
+        is the more specific statement. ``None`` when a store could not be
+        read at all - and then the sweep does nothing, because uncertainty
+        never retires a watch.
+        """
+        wanted: dict[tuple[str, str], str] = {}
+        path = getattr(self, "_claimed_picks_path", None)
+        if path is not None:
+            try:
+                import claimed_picks
+
+                rows = claimed_picks.active_claims(
+                    Path(path), as_of=moment.date()
+                )
+            except Exception:  # noqa: BLE001 - an unreadable store arms nothing
+                logging.debug("Pullback auto-arm: claims unreadable", exc_info=True)
+                return None
+            for row in rows:
+                if str(row.get("horizon") or "").strip().lower() != "d1":
+                    continue  # an M5 claim is not a multi-day thesis
+                symbol = str(row.get("symbol") or "").strip().upper()
+                side = str(row.get("side") or "").strip().upper()
+                if symbol and side in ("LONG", "SHORT"):
+                    wanted[(symbol, side)] = self.PULLBACK_AUTO_SOURCES["claim"]
+        service = getattr(self, "focus_service", None)
+        if service is not None:
+            try:
+                swing = service.all_focus(category="swing") or {}
+            except Exception:  # noqa: BLE001 - as above
+                logging.debug("Pullback auto-arm: Focus unreadable", exc_info=True)
+                return None
+            for side_key, symbols in swing.items():
+                side = str(side_key or "").strip().upper()
+                if side not in ("LONG", "SHORT"):
+                    continue
+                for name in symbols or ():
+                    symbol = str(name or "").strip().upper()
+                    if symbol:
+                        wanted.setdefault(
+                            (symbol, side), self.PULLBACK_AUTO_SOURCES["focus"]
+                        )
+        return wanted
+
+    def _sweep_auto_pullback_watches(self, moment: datetime) -> bool:
+        """Arm the trader's own picks, retire the ones whose pick is gone.
+
+        Runs inside the armed poll, BEFORE evaluation, in every Auto mode -
+        these are the trader's own picks and they ride the armed-alert
+        exception that pushes in DESK, AWAY, EVENING and OFF alike
+        (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`). Returns True when the
+        armed set changed.
+
+        Three rules the tests pin:
+
+        * one watch per (symbol, side), never a second on the next tick;
+        * a watch the trader DISARMED is remembered as `declined` and is not
+          armed again while that claim or pick lives;
+        * the sweep owns only what it armed - a watch with no `auto:` source
+          is the trader's own click and is never retired by it.
+        """
+        wanted = self._auto_pullback_sources(moment)
+        if wanted is None:
+            return False
+        existing = {
+            (watch.symbol, watch.side)
+            for watch in self._chart_watches
+            if watch.kind == PULLBACK_KIND
+        }
+        changed = False
+        retired = [
+            watch
+            for watch in self._chart_watches
+            if self._is_auto_pullback_watch(watch)
+            and (watch.symbol, watch.side) not in wanted
+        ]
+        if retired:
+            gone = {(watch.symbol, watch.side) for watch in retired}
+            self._chart_watches = [
+                watch
+                for watch in self._chart_watches
+                if not (
+                    self._is_auto_pullback_watch(watch)
+                    and (watch.symbol, watch.side) in gone
+                )
+            ]
+            for watch in retired:
+                self._record_review_event(
+                    "watch_retired_source_gone",
+                    symbol=watch.symbol,
+                    side=watch.side,
+                    detail={
+                        "kind": watch.kind,
+                        "watch_id": watch.watch_id,
+                        "source_text": watch.source_text,
+                        "declined": bool(getattr(watch, "declined", False)),
+                    },
+                )
+            changed = True
+        for (symbol, side), source_text in sorted(wanted.items()):
+            if (symbol, side) in existing:
+                continue
+            if self.arm_chart_watch_for(
+                symbol, side, PULLBACK_KIND, source_text=source_text
+            ):
+                existing.add((symbol, side))
+                changed = True
+        if changed:
+            self._save_chart_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+        return changed
 
     def _push_armed_watch(self, hit) -> None:
         """One phone event per armed-watch fire, through the ONE armed sender.
@@ -5947,10 +6408,12 @@ class AlertCenterPanel(QFrame):
             )
 
     def _poll_d1_event_watches(self, now: datetime | None = None) -> None:
-        # The H1 retesters live in the chart-watch store but keep this poll's
-        # clock, so they are evaluated BEFORE the early return below - which
-        # asks only whether any D1 EVENT watch is armed.
-        self._poll_h1_bounce_watches(now=now)
+        # The Pullback alerts live in the chart-watch store but keep this
+        # poll's clock, so they are evaluated BEFORE the early return below -
+        # which asks only whether any D1 EVENT watch is armed. Their auto-arm
+        # sweep rides the same call, so a pick claimed a minute ago is armed
+        # even when nothing else on this desk is.
+        self._poll_pullback_watches(now=now)
         if not self._d1_event_watches:
             return
         moment = now or datetime.now()

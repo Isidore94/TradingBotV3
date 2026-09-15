@@ -100,6 +100,13 @@ EXTRA_CLAIM_IDS = (
     "post_earnings_candle_break",
     "post_earnings_avwap_bounce",
     "second_dev_breakout",
+    # Trader, 2026-09-15 (PCT-1): "additionally we need to add setups for
+    # compression breaks and trendlike breaks", and the pullback reclaim the
+    # Pullback alert watches for. One "Entry timing and breaks" group, all
+    # three offered by id like the extras above them.
+    "pullback_sma_reclaim",
+    "trendline_break",
+    "compression_break",
 )
 
 

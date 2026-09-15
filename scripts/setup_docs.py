@@ -525,6 +525,86 @@ SETUP_DOCS: dict[str, dict] = {
         "targets": "50% at band 2 when bands are in range; otherwise ride to the 18-session time stop.",
         "evidence": "Forensics lift 1.91x short (n=324) / weaker long — forward study live, no scoring weight yet.",
     },
+    # ---------------------------------------------------------------------
+    # Entry timing and breaks (trader, 2026-09-15, PCT-1/2/3). Three names the
+    # trader asked to be able to CLAIM a pick under. They are graded by name
+    # through `claimed_pick_evidence._by_setup` and nothing else is needed for
+    # the "My claims" tab; `detection` here is one string rather than the
+    # bullet list the older entries use, because what it has to name is the
+    # trigger VOCABULARY the alert writes, in one sentence.
+    # ---------------------------------------------------------------------
+    "pullback_sma_reclaim": {
+        "label": "Pullback reclaim (M15 150 / M30 75 SMA)",
+        "group": "Entry timing and breaks",
+        "what": (
+            "A strong name that has been making new highs pulls back on the shorter timeframes. "
+            "On the M15 you watch the 150 moving average, on the M30 the 75. Price goes BELOW the "
+            "line and then breaks back up through it, and you want an LRSI reversal with the "
+            "break - or a later one while the name holds the line, or a clean retest of it. The "
+            "point is to time an entry into a D1 thesis with a shorter chart, not to find a new "
+            "name."
+        ),
+        "detection": (
+            "Rule sheet pullback_sma_reclaim_v1, armed as the Pullback alert. sma_reclaim_lrsi: a "
+            "completed close back above the SMA after one below it, with an LRSI cross up "
+            "through 80 on that bar or the two before it (labelled lrsi_from_below_50 when the "
+            "oscillator was under 50 two to four bars before the cross). reclaim_then_lrsi: the "
+            "M30 has reclaimed and every completed close since holds the 75-SMA, and the LRSI "
+            "crosses 80 later on the M30 or the M15. sma_retest: a later completed bar tags the "
+            "SMA within 0.25 ATR-14 (or through it) and still closes on the right side. Completed "
+            "bars only; a close back through the SMA starts a new episode."
+        ),
+        "entry": (
+            "On the completed bar that fired, or the next open. The trigger and the timeframe are "
+            "both on the alert, so the claim records WHICH of the three you took."
+        ),
+        "stop": (
+            "Beyond the SMA that was reclaimed - the line the whole thesis is measured against - "
+            "with the swing low of the pullback as the tighter alternative."
+        ),
+        "targets": (
+            "The D1 plan the pick already had; this names an ENTRY, not a new trade. Prior high "
+            "of the pullback leg first when it is close."
+        ),
+        "evidence": "None yet — graded by name in My claims.",
+    },
+    "trendline_break": {
+        "label": "Trendline break",
+        "group": "Entry timing and breaks",
+        "what": (
+            "The name breaks the trendline drawn on its daily chart, in the direction of the "
+            "setup. The scan already draws and tracks that line; this is the claim for taking the "
+            "break of it."
+        ),
+        "detection": (
+            "A completed D1 close through the scan's own frozen trendline for this name and side "
+            "(the line behind priority_trendline_candidate), once per symbol, side and break date."
+        ),
+        "entry": "On the completed daily close through the line, or the next open.",
+        "stop": "Back inside the line - a close on the other side of it ends the thesis.",
+        "targets": "The measured move of the range the line contained, then the daily band plan.",
+        "evidence": "None yet — graded by name in My claims.",
+    },
+    "compression_break": {
+        "label": "Compression break",
+        "group": "Entry timing and breaks",
+        "what": (
+            "The name has been coiling - the single most common thing the trader vetoes a setup "
+            "for - and then leaves that range in the direction of the setup. The same measure "
+            "that makes a compressed pick unattractive is what makes the break of it worth "
+            "taking."
+        ),
+        "detection": (
+            "Labelled compression_break_v1: the previous completed session was is_compressed on "
+            "the scan's anchor-compression measure, and the current completed close leaves the "
+            "compression range in the setup's direction on a bar whose range is at least 1.0 "
+            "ATR-20."
+        ),
+        "entry": "On the completed daily close out of the range, or the next open.",
+        "stop": "Back inside the compression range; a close back in it says the coil is not done.",
+        "targets": "The height of the range projected from the break, then the daily band plan.",
+        "evidence": "None yet — graded by name in My claims.",
+    },
 }
 
 # Legacy/alias family names that should resolve to a documented entry.
@@ -744,7 +824,17 @@ def family_record_sentences(setup_families) -> dict[str, str]:
 
 def all_setup_docs_by_group() -> list[tuple[str, list[tuple[str, dict]]]]:
     """Docs grouped for display, preserving a sensible reading order."""
-    group_order = ["Main swing", "Earnings cycle", "Study (measured only)", "Playbook research"]
+    group_order = [
+        "Main swing",
+        "Earnings cycle",
+        # PCT-1 (trader, 2026-09-15): the pullback reclaim, the trendline break
+        # and the compression break. Named here as well as on the entries,
+        # because a group this function does not list is a group the claim
+        # picklist silently drops.
+        "Entry timing and breaks",
+        "Study (measured only)",
+        "Playbook research",
+    ]
     grouped: dict[str, list[tuple[str, dict]]] = {name: [] for name in group_order}
     for key, doc in SETUP_DOCS.items():
         grouped.setdefault(doc.get("group", "Main swing"), []).append((key, doc))
