@@ -18,7 +18,7 @@ checkout, and never a merge to `main` without the trader's word.
 | Packet | What | Status |
 |---|---|---|
 | PCT-1 | Pullback alert (M15 150-SMA / M30 75-SMA reclaim + LRSI, retest; the H1 retester folded in) + the three new claim names | PLANNED 2026-09-15 - tester next |
-| PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | PLANNED 2026-09-15 - runs in parallel with PCT-1 (disjoint files) |
+| PCT-3 | Compression: copy the measure through, chip in the setups table, calibration CLI against the `compressed` vetoes, `compression_break` family tag | **BUILT 2026-09-15** on `claude/pct-3-compression` (tester's 40 red + 3 green-by-design at `8483a324`, re-proven failing before the fix; builder added 7). All five items landed: `legacy.compression_copy_through` + `compression_rule_version`; pure `scripts/compression_chip.py` and the amber `compressed` chip after the bucket/wrong-side chips; the ai_state merge on the LOAD path (`data_feed.merge_compression_from_ai_state` off `ai_state_levels.load_symbol_compression`, never in `paint`); read-only point-in-time `scripts/compression_calibration.py`; `legacy.evaluate_compression_break_v1` + the `COMPRESSION_BREAK` trigger tag. No threshold, penalty or score moved. Live gate owed (below). |
 | PCT-2 | Trendline break: `trendline_break` family tag + D1 event kind + feed alert | PLANNED - after PCT-1 and PCT-3 land (shares their files) |
 
 Trader's order was 1 pullback, 2 compression breaks and trendline breaks, 3 compression measure.
@@ -183,8 +183,14 @@ break-then-retest of a trendline stays in WISHLIST).
   session_date, created_at, reason_code, vocab_version, timeframe, side, surface` plus
   `SCAN_CONTEXT_FIELDS` (`scan_date, tracker_setup_id, canonical_setup_id, priority_bucket, score,
   expected_r`, :130-137) when the caller supplied them. Vocabulary v3
-  `ui/annotations/vocabularies/veto_reasons_v3.json:27-33` code `compressed` (v1's
-  `support_resistance_cluttered` pools with it in `veto_cohort.canonical_veto_cohort`).
+  `ui/annotations/vocabularies/veto_reasons_v3.json:27-33` code `compressed`. **Premise
+  corrected 2026-09-15 (tester, re-verified by the builder): v1's `support_resistance_cluttered`
+  does NOT pool with `compressed` in `veto_cohort.canonical_veto_cohort`** - `veto_v3_compressed`
+  and `veto_compressed` both canonicalise to `veto_v2_compressed`, while
+  `veto_v1_support_resistance_cluttered` stays itself, because `_canonical_cohort_map` keys on the
+  DEFINITION and `veto_reasons_v2.json` introduced `compressed` as a new code, not a rename. So
+  "189 + 25 = 214" is a sum a reader has to make for itself; `compression_calibration.py` pools
+  the two by name in `COMPRESSION_VETO_CODES`.
   Live counts 2026-08-20..09-15: 598 coded vetoes; `compressed` 189 + v1 25 = 214 (35.8 %), all
   `timeframe D1`, LONG 97 / SHORT 92; 136 rows carry no `reason_code`.
 - Setups table rows: `ui/services/data_feed.py` `load_setup_rows_from_priority_report` (:203-249)
