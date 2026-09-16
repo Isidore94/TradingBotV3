@@ -72,6 +72,15 @@ def _recipe_variants(recipes: Iterable[Any]) -> dict[str, bool]:
     return variants
 
 
+def _require_authorized_recipes(recipes: Iterable[Any]) -> tuple[Any, ...]:
+    """Keep public adapters inside the existing ledger's declared recipe set."""
+    declared = tuple(recipes)
+    for recipe in declared:
+        recipe_id = _text(getattr(recipe, "recipe_id", ""))
+        authorized_recipe_context(recipe_id, trial_ledger.BACKFILL_TRIALS)
+    return declared
+
+
 def _forward_index(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], Mapping[str, Any]]:
     indexed: dict[tuple[str, str], Mapping[str, Any]] = {}
     for row in rows:
@@ -136,7 +145,7 @@ def adapt_p8_attempts(
     alternatives here, so their recipe rows collapse to the four predeclared
     entry variants before any comparison is made.
     """
-    declared = _recipe_variants(recipes)
+    declared = _recipe_variants(_require_authorized_recipes(recipes))
     if not declared:
         raise ValueError("P8 recipes must declare entry variants")
     indexed = _forward_index(forward_rows)
@@ -172,7 +181,7 @@ def adapt_m5_occurrence_attempts(
     supplies authorization context but is never expanded into one entry attempt
     per exit recipe.
     """
-    del recipes  # Explicitly prevent its exit-recipes from multiplying attempts.
+    _require_authorized_recipes(recipes)
     indexed = _forward_index(forward_rows)
     attempts: list[dict[str, Any]] = []
     for occurrence in occurrences:
@@ -180,6 +189,10 @@ def adapt_m5_occurrence_attempts(
         if not opportunity_id:
             raise ValueError("M5 occurrence needs an opportunity identity")
         variants = [variant for (identity, variant) in indexed if identity == opportunity_id]
+        if not variants:
+            # Existing M5 close recipes share one entry convention.  A missing
+            # Packet 1 row is still an attempt in that convention, not absence.
+            variants = ["m5_first_close"]
         for variant in dict.fromkeys(variants):
             attempts.append(
                 _normalise_attempt(
@@ -187,7 +200,7 @@ def adapt_m5_occurrence_attempts(
                     opportunity_id=opportunity_id,
                     variant=variant,
                     is_control=variant == "m5_first_close",
-                    forward=indexed[(opportunity_id, variant)],
+                    forward=indexed.get((opportunity_id, variant)),
                     window=window,
                 )
             )
@@ -227,6 +240,18 @@ def _distribution(values: list[float]) -> dict[str, float | None]:
     }
 
 
+def _cluster_representatives(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one stable observation per dependency cluster, never the best one."""
+    chosen: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        cluster = _text(row.get("dependency_cluster_id")) or _text(row.get("opportunity_id"))
+        key = (_text(row.get("opportunity_id")), _text(row.get("attempt_id")))
+        existing = chosen.get(cluster)
+        if existing is None or key < (_text(existing.get("opportunity_id")), _text(existing.get("attempt_id"))):
+            chosen[cluster] = row
+    return list(chosen.values())
+
+
 def _cell(rows: list[dict[str, Any]], *, useful_move_pct: float) -> dict[str, Any]:
     opportunity_ids = {_text(row.get("opportunity_id")) for row in rows}
     clusters = {_text(row.get("dependency_cluster_id")) or _text(row.get("opportunity_id")) for row in rows}
@@ -234,19 +259,20 @@ def _cell(rows: list[dict[str, Any]], *, useful_move_pct: float) -> dict[str, An
     symbols = {_text(row.get("symbol")) for row in rows if _text(row.get("symbol"))}
     exclusions = Counter(_text(row.get("state")) or "missing_data" for row in rows if _text(row.get("state")) not in MEASURABLE_STATES)
     measurable = [row for row in rows if _text(row.get("state")) in MEASURABLE_STATES and _finite(row.get("mfe_pct")) is not None]
+    distribution_rows = _cluster_representatives(measurable)
     triggered = [row for row in rows if _text(row.get("state")) not in NON_TRIGGER_STATES]
-    mfe = [_finite(row.get("mfe_pct")) for row in measurable]
-    mae = [_finite(row.get("mae_pct")) for row in measurable]
-    close = [_finite(row.get("close_pct")) for row in measurable]
-    time_to_mfe = [_finite(row.get("time_to_mfe_minutes")) for row in measurable]
+    mfe = [_finite(row.get("mfe_pct")) for row in distribution_rows]
+    mae = [_finite(row.get("mae_pct")) for row in distribution_rows]
+    close = [_finite(row.get("close_pct")) for row in distribution_rows]
+    time_to_mfe = [_finite(row.get("time_to_mfe_minutes")) for row in distribution_rows]
     mfe_values = [value for value in mfe if value is not None]
     mae_values = [value for value in mae if value is not None]
     close_values = [value for value in close if value is not None]
     time_values = [value for value in time_to_mfe if value is not None]
     evidence = evidence_stats.summarize(
         mfe_values,
-        symbols=[_text(row.get("symbol")) for row in measurable],
-        sessions=[_text(row.get("session_date")) for row in measurable],
+        symbols=[_text(row.get("symbol")) for row in distribution_rows],
+        sessions=[_text(row.get("session_date")) for row in distribution_rows],
         excluded=exclusions,
         clip=None,
     )
@@ -258,6 +284,7 @@ def _cell(rows: list[dict[str, Any]], *, useful_move_pct: float) -> dict[str, An
         "trigger_count": len(triggered),
         "trigger_rate": len(triggered) / denominator if denominator else None,
         "measurable_count": measurable_count,
+        "distribution_count": len(distribution_rows),
         "measurable_coverage": measurable_count / denominator if denominator else None,
         "missed_opportunities": denominator - measurable_count,
         "mfe_pct": _distribution(mfe_values),
@@ -278,14 +305,33 @@ def _cell(rows: list[dict[str, Any]], *, useful_move_pct: float) -> dict[str, An
 def _review_comparison(rows: list[dict[str, Any]]) -> dict[str, Any]:
     liked = [row for row in rows if _text(row.get("population")) == "liked"]
     vetoed = [row for row in rows if _text(row.get("population")) == "vetoed"]
-    signatures = lambda values: {
+    timing_signatures = lambda values: {
         (_text(row.get("window")), _text(row.get("source_knowledge_basis")), _text(row.get("anchor_knowledge_basis")))
         for row in values
     }
-    if not liked or not vetoed or not signatures(liked).intersection(signatures(vetoed)):
+    if not liked or not vetoed or not timing_signatures(liked).intersection(timing_signatures(vetoed)):
         return {
             "status": "not_evaluated",
             "reason": "unmatched_timing_source_or_window",
+            "liked_count": len(liked),
+            "vetoed_count": len(vetoed),
+        }
+    comparison_signatures = lambda values: {
+        (
+            _text(row.get("window")),
+            _text(row.get("source_knowledge_basis")),
+            _text(row.get("anchor_knowledge_basis")),
+            int((row.get("coverage") or {}).get("expected_bars") or 0),
+            int((row.get("coverage") or {}).get("observed_bars") or 0),
+            int((row.get("coverage") or {}).get("missing_bars") or 0),
+            _text(row.get("entry_convention")),
+        )
+        for row in values
+    }
+    if not comparison_signatures(liked).intersection(comparison_signatures(vetoed)):
+        return {
+            "status": "not_evaluated",
+            "reason": "unmatched_coverage_or_entry_convention",
             "liked_count": len(liked),
             "vetoed_count": len(vetoed),
         }
@@ -361,19 +407,32 @@ def compare_variants(
     base_rows = by_variant.get(baseline, {})
     challenger_rows = by_variant.get(challenger, {})
     opportunities = set(base_rows).union(challenger_rows)
-    paired = [
-        (base_rows[opportunity], challenger_rows[opportunity])
-        for opportunity in sorted(set(base_rows).intersection(challenger_rows))
-        if _text(base_rows[opportunity].get("state")) in MEASURABLE_STATES
-        and _text(challenger_rows[opportunity].get("state")) in MEASURABLE_STATES
-        and _finite(base_rows[opportunity].get("mfe_pct")) is not None
-        and _finite(challenger_rows[opportunity].get("mfe_pct")) is not None
-    ]
+    paired_by_cluster: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for opportunity in sorted(set(base_rows).intersection(challenger_rows)):
+        base_row, challenger_row = base_rows[opportunity], challenger_rows[opportunity]
+        if (
+            _text(base_row.get("state")) not in MEASURABLE_STATES
+            or _text(challenger_row.get("state")) not in MEASURABLE_STATES
+            or _finite(base_row.get("mfe_pct")) is None
+            or _finite(challenger_row.get("mfe_pct")) is None
+        ):
+            continue
+        base_cluster = _text(base_row.get("dependency_cluster_id")) or opportunity
+        challenger_cluster = _text(challenger_row.get("dependency_cluster_id")) or opportunity
+        if base_cluster != challenger_cluster:
+            continue
+        paired_by_cluster.setdefault(base_cluster, (base_row, challenger_row))
+    paired = list(paired_by_cluster.values())
     deltas = [
         _finite(challenger_row.get("mfe_pct")) - _finite(base_row.get("mfe_pct"))  # type: ignore[operator]
         for base_row, challenger_row in paired
     ]
-    challenger_mfe = [_finite(row.get("mfe_pct")) for row in challenger_rows.values() if _text(row.get("state")) in MEASURABLE_STATES]
+    challenger_mfe = [
+        _finite(row.get("mfe_pct"))
+        for row in _cluster_representatives(
+            row for row in challenger_rows.values() if _text(row.get("state")) in MEASURABLE_STATES
+        )
+    ]
     challenger_values = [value for value in challenger_mfe if value is not None]
     sessions = {
         _text(row.get("session_date"))

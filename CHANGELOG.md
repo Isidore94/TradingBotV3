@@ -54,7 +54,10 @@ They are evidence and must not be loaded as context.
   occurrences without multiplying exit recipes, retains no-trigger/missing attempts and full
   opportunity denominators, distinguishes shared-triggered movement from all-opportunity coverage,
   keeps scanner/liked/vetoed/trade/unreviewed populations separate, and reports clustered
-  uncertainty, distribution and outlier sensitivity. Declaration freezing is in-memory only;
+  uncertainty, distribution and outlier sensitivity. Repeat scans retain opportunity coverage but
+  contribute one stable dependency-cluster distribution/pair sample; public adapters refuse a
+  recipe outside the ledger and review comparisons also require matching coverage and entry
+  convention. Declaration freezing is in-memory only;
   recipe authorization and family-lifetime multiplicity resolve through `trial_ledger`, so no trial
   is registered, run or amended. It never names a winner below declared floors or for an immature
   trial. No store, detector, score, alert, ranking, journal or policy changes. Live gate #141 is owed.

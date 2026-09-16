@@ -1696,14 +1696,16 @@ exit-policy recipes.
 The reader keeps all-opportunity and shared-triggered denominators distinct: a paired gross-MFE delta
 answers only the latter, while each variant's coverage and no-trigger/missing counts answer the former.
 It never pools all-scanner, liked, vetoed, actual-trade or unreviewed populations, and a liked-vetoed
-comparison refuses unless timing, source knowledge and window match. Repeated scans collapse by
-attempt; `dependency_cluster_id` remains the correlated observation unit. Cells publish median and
+comparison refuses unless timing, source knowledge, window, coverage and entry convention match.
+Repeated scans collapse by attempt; `dependency_cluster_id` remains the correlated observation unit:
+opportunity coverage stays on its full base denominator, while distributions and shared pairs use one
+stable representative per cluster. Cells publish median and
 quantiles of gross movement, close movement, time-to-MFE, useful-move frequency, sessions, symbols,
 exclusions, session-block uncertainty and an explicit outlier sensitivity. They are discovery facts,
 never booked profit or an edge claim.
 
-The reader resolves only existing ledger-owned recipe IDs and carries each family's lifetime declared
-look count and multiplicity contract. Its in-memory declaration helper can freeze fields but cannot
+The reader resolves only existing ledger-owned recipe IDs at each public adapter and carries each
+family's lifetime declared look count and multiplicity contract. Its in-memory declaration helper can freeze fields but cannot
 register, amend after an outcome, launch or promote a trial; any changed post-outcome hypothesis needs
 the existing explicit trader-authorized registration path. Below declared opportunity/session floors,
 or while a trial remains registered/collecting, the result is `not_evaluated` and names no winner.

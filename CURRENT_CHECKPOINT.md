@@ -33,7 +33,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 141 | **Fair entry comparison (Phase 0.32 Packet 2)** - on a copied bounded completed-bar/P8 slice, normalize one P8 opportunity and one existing M5 occurrence through the reader. Verify every declared P8 entry variant has one row, a no-trigger and a missing input stay in the full denominator, shared-triggered movement is printed separately from full-population coverage, duplicated scans do not raise clusters, and no ledger/store/live output changes. This is a coverage/read-contract check, not an edge, a winner or trial registration. | lead/trader, after Packets 1-2 integration |
+| 141 | **Fair entry comparison (Phase 0.32 Packet 2)** - on a copied bounded completed-bar/P8 slice, normalize one P8 opportunity and one existing M5 occurrence through the reader. Verify every declared P8 entry variant has one row, a no-trigger and a missing input stay in the full denominator, shared-triggered movement is printed separately from full-population coverage, duplicated scans do not raise clusters or distribution/pair samples, an unregistered recipe refuses, and no ledger/store/live output changes. This is a coverage/read-contract check, not an edge, a winner or trial registration. | lead/trader, after Packets 1-2 integration |
 | 140 | **Forward entry quality (Phase 0.32 Packet 1)** - on a copied bounded completed-bar slice containing a late M5 entry, a gap and a no-trigger variant, run the pure measurement and verify each row's exact endpoint, coverage and state; a post-stop rally remains in gross MFE, the daily two-touch row is ambiguous, and no source/store/live output changes. This is measurement only, not evidence of an edge or a trial registration. | lead/trader, after Packet 1 integration |
 | 139 | **Trade Mentor raw-first AI help and large popup** - after restart, the popup opens near 900x820, keeps a manual resize across hide/show, and the 10:00 card saves the exact raw reply before local AI fills only missing fields; an existing edit stays, an ambiguous number asks one question, Save writes recalled evidence and no planned-risk field. | trader, next 10:00 prompt after integration |
 | 138 | **Grounded market-story narration** - the next overnight ledger records `market_story_narration` OK, its file names weekly/monthly/quarterly periods and only allowed source ids, and the next Mentor card shows its one question; with the model off, the last verified file stays byte-identical. | trader, next overnight run |
@@ -208,6 +208,13 @@ failed/abandoned history remains visible. The tester's nine red tests failed bef
 and pass after it. No live store, warehouse write, scanner, detector, score, alert, ranking, journal,
 policy, local setting or desk process changed. Gate #141 uses a copied bounded slice after Packets 1-2
 integrate; it cannot prove an edge.
+
+The Packet 2 reviewer fix round kept a base M5 occurrence with no forward row as a
+`missing_data` attempt, retained opportunity denominators but collapsed distributions and paired
+deltas to one stable `dependency_cluster_id` representative, and required public P8/M5 adapters to
+resolve every recipe through the existing read-only ledger. Liked/vetoed comparison now also refuses
+coverage or entry-convention mismatches. The five new red regressions failed before the repair and
+pass after it; no write or execution path was added.
 
 ### 2026-09-15 (night) — Phase 0.31 BUILT, VERIFIED AND MERGED TO MAIN
 
