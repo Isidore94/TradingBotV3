@@ -218,6 +218,7 @@ def test_unchanged_evidence_is_model_free_but_material_change_calls_once_per_ses
         session_date="2026-09-15",
         model_call=model,
         now=NOW,
+        allowed_recipe_ids={"m5_breakout_control_v1"},
     )
     same = proposals.run_next_test_job(
         facts={"report": _report(), "material_change": False, "progress": {"eligible": 19}},
@@ -385,3 +386,138 @@ def test_usage_and_prompt_contract_are_honest_and_cannot_start_a_second_model_or
     ):
         assert required.lower() in instruction.lower()
     assert proposals.inference_policy() == {"serialized": True, "new_service": False, "intraday_loop": False}
+
+
+def test_fresh_publish_failure_restores_the_prior_current_json_and_memo_pair(tmp_path, monkeypatch):
+    first = proposals.validate_proposal(
+        _proposal(), report=_report(), allowed_recipe_ids={"m5_breakout_control_v1"}
+    )
+    proposals.publish_proposal_bundle(tmp_path, proposal=first, report=_report(), now=NOW)
+    current_path = tmp_path / "next_research_test.json"
+    memo_path = tmp_path / "next_research_test.md"
+    before_current = current_path.read_text(encoding="utf-8")
+    before_memo = memo_path.read_text(encoding="utf-8")
+    revised = copy.deepcopy(first)
+    revised["proposal_id"] = "proposal-entry-close-2026-09-16-rollback"
+
+    original = proposals._atomic_write
+
+    def fail_only_the_new_memo(path, text):
+        if Path(path) == memo_path:
+            raise OSError("memo disk full")
+        return original(path, text)
+
+    monkeypatch.setattr(proposals, "_atomic_write", fail_only_the_new_memo)
+    with pytest.raises(OSError, match="memo disk full"):
+        proposals.publish_proposal_bundle(tmp_path, proposal=revised, report=_report(), now=NOW)
+
+    assert current_path.read_text(encoding="utf-8") == before_current
+    assert memo_path.read_text(encoding="utf-8") == before_memo
+
+
+def test_model_cannot_authorize_its_own_recipe_and_session_guard_ignores_its_timestamp(tmp_path):
+    calls: list[dict] = []
+    stale = _proposal()
+    stale["generated_at"] = "1999-01-01T00:00:00+00:00"
+
+    def model(_pack):
+        calls.append(_pack)
+        return stale
+
+    refused = proposals.run_next_test_job(
+        facts={"report": _report(), "material_change": True},
+        root=tmp_path / "no-allowlist",
+        session_date="2026-09-15",
+        model_call=model,
+        now=NOW,
+        allowed_recipe_ids=None,
+    )
+    assert refused["status"] == "deterministic_facts_available"
+    assert not list((tmp_path / "no-allowlist").rglob("*.json"))
+
+    first = proposals.run_next_test_job(
+        facts={"report": _report(), "material_change": True},
+        root=tmp_path / "session",
+        session_date="2026-09-15",
+        model_call=model,
+        now=NOW,
+        allowed_recipe_ids={"m5_breakout_control_v1"},
+    )
+    changed = _report()
+    changed["report_hash"] = "b2" * 32
+    second = proposals.run_next_test_job(
+        facts={"report": changed, "material_change": True},
+        root=tmp_path / "session",
+        session_date="2026-09-15",
+        model_call=model,
+        now=NOW,
+        allowed_recipe_ids={"m5_breakout_control_v1"},
+    )
+    assert first["model_called"] is True
+    assert second["model_called"] is False
+    assert second["progress_refreshed"] is False
+    assert len(calls) == 1, "an absent allowlist must not reach the model"
+
+
+def test_compact_input_keeps_exact_citation_facts_and_rejects_unsafe_or_blank_proposal_output():
+    report = _report()
+    report["entry_quality"]["cells"][0]["source_refs"] = ["outcome_path/year=2026"]
+    compact = proposals.build_compact_input({"report": report})
+    assert compact["entry_quality_cells"] == report["entry_quality"]["cells"]
+
+    unsafe_id = _proposal()
+    unsafe_id["proposal_id"] = "../../outside"
+    with pytest.raises(proposals.ProposalValidationError, match="proposal id"):
+        proposals.validate_proposal(
+            unsafe_id, report=report, allowed_recipe_ids={"m5_breakout_control_v1"}
+        )
+    blank_question = _proposal()
+    blank_question["question"] = ""
+    with pytest.raises(proposals.ProposalValidationError, match="question"):
+        proposals.validate_proposal(
+            blank_question, report=report, allowed_recipe_ids={"m5_breakout_control_v1"}
+        )
+
+
+def test_memo_keeps_markdown_and_copy_and_review_card_carry_complete_report_identity():
+    from PySide6.QtWidgets import QApplication
+
+    from ui.panels.daily_recap_panel import DailyRecapPanel
+
+    proposal = proposals.validate_proposal(
+        _proposal(), report=_report(), allowed_recipe_ids={"m5_breakout_control_v1"}
+    )
+    memo = proposals._render_memo(proposal, _report(), NOW)
+    copied = proposals.copy_test_brief(proposals.build_display_payload(_report(), proposal))
+    assert "\n## What we know\n" in memo
+    assert "\n## Active test and limits\n" in memo
+    assert "\n\n" in memo
+    for field in (
+        proposal["question"], proposal["assumption_challenged"], proposal["source_cell_ids"][0],
+        proposal["related_trial_ids"][0], proposal["setup"], proposal["entry_convention"],
+        proposal["comparison_plan"], proposal["support"], proposal["no_trigger_accounting"],
+        _report()["report_id"], _report()["report_hash"],
+    ):
+        assert str(field) in copied
+
+    app = QApplication.instance() or QApplication([])
+    panel = DailyRecapPanel()
+    try:
+        panel.render_entry_quality_proposal(proposals.build_display_payload(_report(), proposal))
+        assert _report()["report_id"] in panel.next_test_card.text()
+        assert _report()["report_hash"] in panel.next_test_card.text()
+    finally:
+        panel.deleteLater()
+        app.processEvents()
+
+
+def test_next_test_facts_preserves_available_narrated_coverage(monkeypatch, tmp_path):
+    from ai_jobs import digest, measured_report_publish, setup_research
+
+    report = _report()
+    monkeypatch.setattr(digest, "_default_root", lambda: tmp_path)
+    monkeypatch.setattr(measured_report_publish, "latest_published", lambda *_args: report)
+    facts = setup_research.next_test_facts("2026-09-15")
+
+    assert facts["report"]["narrated"] == report["narrated"]
+    assert facts["compact_input"]["narrated"]["label"] == "narrated 2 of 7"

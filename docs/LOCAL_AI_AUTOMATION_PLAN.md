@@ -2290,14 +2290,17 @@ registry. Code prepares a compact input from the published measured report, whos
 cells are explicit fixed-window movement facts and whose `report_hash` joins the proposal to the
 exact report. Selection is coverage/readiness/repeated-question based and says `narrated K of N`;
 no profit, R or result magnitude enters its key. A configured existing local model may make at
-most one serialized, material-evidence proposal per session. It receives only the compact pack and
+most one serialized, material-evidence proposal per runner session. A trusted session marker is
+spent before the call (never a model-supplied time), and an absent/empty code-owned recipe
+allowlist refuses before inference. It receives only the compact pack and
 must return the strict schema; code validates source cells, report identity, recipes, windows,
 proposed thresholds and safe action vocabulary. It cannot register/run a trial, write strategy
 code or alter a live rule. Deterministic progress refreshes require no model.
 
 Validated JSON is immutable under `briefs/next_research_test/next_research_test_history/`; current
-JSON and `next_research_test.md` are atomic views of the same facts. A timeout, validation error or
-write failure keeps the last valid proposal/memo and leaves deterministic facts available. The
+JSON and `next_research_test.md` restore as a pair on a write failure. A timeout, validation error or
+write failure keeps the last valid proposal/memo and leaves deterministic facts available. A changed
+report without a new proposal says its current memo was not refreshed. The
 Daily Recap worker, not Qt, reads the current proposal only when its report id/hash match, and the
 card/copy brief render that object without recomputation. Live proof must measure configured-model
 latency, reported token counts and peak memory when available; hardware specifications are not a

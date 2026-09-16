@@ -5873,7 +5873,9 @@ characters-per-token convention. N3's n-descending narration selection is untouc
 
 The next-test proposal has one owner: `scripts/research_proposal.py`. It receives code-prepared,
 bounded report facts, validates every observation against the cited cell and exact report id/hash,
-and stores immutable validated JSON with an atomically replaced short memo. The selection key is
+and stores immutable validated JSON with a restored current-JSON/memo pair on a write failure. The
+runner spends a trusted session marker before its one model call; an absent code-owned recipe
+allowlist refuses rather than letting model text authorize itself. The selection key is
 coverage/readiness/repeated questions/unresolved comparisons/active tests, not an observed return;
 the existing N3 `narrated K of N` statement remains visible. The local model is advisory text only:
 it may name one test to resolve uncertainty but cannot register, execute, amend or promote a test,
@@ -5882,5 +5884,6 @@ call a recipe optimal, generate code or enter any runner instruction.
 The Daily Recap Review worker reads the current proposal only when it belongs to the report it
 already loaded, then the card and clipboard brief render that object. It never computes a movement
 number or reads the AI store on Qt. A missing/changed report, model outage, validation refusal or
-failed publish leaves deterministic facts and the last good memo intact. The proposal is therefore
+failed publish leaves deterministic facts and the last good memo intact; a changed report without a
+new proposal says its memo was not refreshed. The proposal is therefore
 not permission to change a detector, score, alert, ranking, watchlist, Focus, journal or policy.

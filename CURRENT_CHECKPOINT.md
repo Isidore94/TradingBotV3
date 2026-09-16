@@ -188,14 +188,17 @@ Packet 3 adds the additive `research_proposal` validator/publication seam only. 
 unknown report/cell/recipe, fabricated observed number, infeasible window, unsafe action or text
 that tries to become a runner instruction. Validated JSON history, current JSON and the short memo
 live under the existing configured AI-store `briefs/next_research_test/` tree; a failed model or
-atomic write preserves the last valid memo. The existing setup-research path prepares a compact,
+current/memo write restores the last valid pair. The runner spends a trusted session marker before
+the one model call and refuses an absent/empty code-owned recipe allowlist. The existing
+setup-research path prepares a compact,
 coverage/readiness-selected report input without another warehouse read; it remains model-free
 when there are no published entry-quality cells. Measured Report carries an explicit entry-quality
 block and hash; Daily Recap > Review reads its matching proposal on the worker, renders the Next
-test card and copies an in-memory test brief. No trial registration/execution, live rule, store,
-detector, score, alert, ranking, Focus, watchlist, journal or policy changes. Tester contracts:
-`tests/test_sol_research_proposal.py` (19 red-before-green cases); targeted compatibility/packaging
-run 119 passed. The existing `test_ai_jobs_runner.py` historical-date baseline is red in this
+test card with report id/hash and copies an in-memory complete test brief. No trial
+registration/execution, live rule, store, detector, score, alert, ranking, Focus, watchlist,
+journal or policy changes. Reviewer fix-round contracts: `tests/test_sol_research_proposal.py`
+(5 red-before-green cases); targeted compatibility/packaging run 190 passed. The existing
+`test_ai_jobs_runner.py` historical-date baseline is red in this
 worktree (28 failures before slot execution; `session_date=''`), unrelated to Packet 3. Gates
 #142 (copied deterministic progress) and #143 (one configured local-model proposal with measured
 latency/tokens/memory) remain owed. Packaging trigger: new lazily imported top-level module;

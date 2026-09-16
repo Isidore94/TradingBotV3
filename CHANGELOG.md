@@ -43,12 +43,14 @@ They are evidence and must not be loaded as context.
   id/hash and every cited cell must match code facts; unsafe fields/actions, unknown cells/recipes,
   invented numbers and observed-looking proposed thresholds refuse. Immutable history and the
   current JSON/Markdown memo live only under the existing AI-store briefs namespace; a failed
-  model or publish retains the last good proposal and deterministic progress. Compact selection
+  current/memo write restores their prior pair. A runner-owned session marker spends the one model
+  call before inference, and an absent/empty code-owned recipe allowlist refuses. Compact selection
   is by coverage, repeated questions, unresolved comparisons, readiness and active tests, never
-  observed movement or R; it states `narrated K of N`. Measured Report publishes its stable hash
-  and explicit entry-quality cells; `setup_research` prepares their compact reader path; Daily
-  Recap > Review receives that published object on its worker, shows a Next test card and offers
-  clipboard-only **Copy test brief**. No proposal registers/runs/amends a trial or touches a
+  observed movement or R; it states `narrated K of N` and retains the full cited-cell facts.
+  Measured Report publishes its stable hash and explicit entry-quality cells; `setup_research`
+  prepares their compact reader path; Daily Recap > Review receives that published object on its
+  worker, shows a Next test card with report id/hash and offers clipboard-only **Copy test brief**.
+  No proposal registers/runs/amends a trial or touches a
   detector, score, alert, ranking, watchlist, Focus, journal, policy or live store. Gates #142-143 owed.
 
 - **Phase 0.32 Packet 1 forward entry quality (2026-09-15, unmerged).**

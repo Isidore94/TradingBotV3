@@ -1354,12 +1354,19 @@ def next_test_facts(session_date: str) -> dict[str, Any]:
     if not report_hash:
         encoded = json.dumps(report, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
         report_hash = hashlib.sha256(encoded).hexdigest()
+    narrated = dict(report.get("narrated") or {})
+    if narrated and not narrated.get("label"):
+        kept = narrated.get("narrated", narrated.get("eligible_policy_cells", 0))
+        total = narrated.get("of", 0)
+        narrated["label"] = f"narrated {kept} of {total}"
     facts_report = {
         "schema": "entry_quality_report_v1",
         "report_id": report.get("report_id"),
         "report_hash": report_hash,
         "as_of": report.get("as_of"),
-        "narrated": {"narrated": 0, "of": 0, "label": "narrated 0 of 0"},
+        # Preserve measured narration coverage when a report supplies it. An
+        # absent block is unknown, not a fabricated "0 of 0" statement.
+        "narrated": narrated,
         "entry_quality": dict(report.get("entry_quality") or {"cells": []}),
         "trial_progress": list(report.get("trial_progress") or ()),
     }

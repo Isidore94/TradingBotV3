@@ -725,7 +725,8 @@ class DailyRecapPanel(QFrame):
             f"{changed.get('field', 'unknown')}={changed.get('value', 'unknown')}\n"
             f"Limits: {self._entry_quality_proposal.get('unknown', 'not measured')} · "
             f"{proposal.get('status', 'proposed')} · report "
-            f"{self._entry_quality_proposal.get('report_id', '')}"
+            f"{self._entry_quality_proposal.get('report_id', '')} · hash "
+            f"{self._entry_quality_proposal.get('report_hash', '')}"
         )
 
     def entry_quality_proposal_payload(self) -> dict[str, Any] | None:
