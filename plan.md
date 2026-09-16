@@ -528,10 +528,12 @@ explicit trader-authorized ledger path.
    `scripts/research_proposal.py` validates the structured, source-cell-linked advisory proposal
    and atomically publishes immutable history plus the short current memo under the existing
    AI-store `briefs/next_research_test/` namespace. `setup_research` prepares its compact,
-   result-independent input from the published measured report; no report/cell means collecting,
-   not a made-up suggestion. The report carries a hash and an explicit empty-or-published
-   entry-quality cell block; Daily Recap > Review reads the same validated object on its worker,
-   prints the Next test card, and copies a no-write brief. A proposal never registers, runs or
+   result-independent input from the published measured report; only a measured Packet 2
+   `entry_comparison_summary` cell makes it ready, while an absent/invalid summary publishes an
+   explicit unknown cell and keeps it collecting. The report carries a hash and deterministic
+   fixed-window entry-quality cells; citations may name only declared source cells and their
+   stated source windows. Daily Recap > Review and Setup Tracker's compact Next-test route reuse
+   the same validated display object; neither reads a store, ranks, or calls a model. A proposal never registers, runs or
    amends a trial. The local model remains serialized, advisory and once per runner session when an
    eligible material fact path has a code-owned recipe allowlist; a model-free report refreshes the
    current JSON/memo pair with deterministic trial progress while retaining the proposal's source

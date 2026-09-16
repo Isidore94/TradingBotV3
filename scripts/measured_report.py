@@ -213,12 +213,12 @@ class MeasuredReport:
             "policy": list(self.policy),
             "example_tables": [dict(table) for table in self.example_tables],
             "cells": [cell.as_dict() for cell in self._cells],
-            # Phase 0.32 consumes only cells deliberately labelled by a future
-            # entry-quality publisher.  Older reports expose an honest empty
-            # set instead of inventing a movement result from exit-policy cells.
+            # Phase 0.32 consumes only Packet 2's explicitly published,
+            # fixed-window comparison cells.  An absent export remains an
+            # honest unknown rather than borrowing an exit-policy result.
             "entry_quality": {
                 "cells": [cell.as_dict() for cell in self._cells if cell.section == "entry_quality"],
-                "note": "fixed-window forward movement only; empty means not published yet",
+                "note": "Packet 2 fixed-window forward movement only; unknown means not published yet",
             },
             "sections": {
                 name: [cell.cell_id for cell in rows]
@@ -262,6 +262,9 @@ class ReportSources:
     journal_trades: Path | None = None
     working_lately: Path | None = None
     market_theses: Path | None = None
+    # Phase 0.32 Packet 2's pure comparison export.  This is an explicit
+    # caller-supplied reader seam; no report build discovers or computes it.
+    entry_comparison_summary: Path | None = None
 
     @classmethod
     def from_project_paths(cls) -> "ReportSources":
@@ -284,6 +287,9 @@ class ReportSources:
             journal_trades=None,  # the journal is a database; read through its store
             working_lately=working_lately,
             market_theses=getattr(project_paths, "MARKET_THESES_FILE", None),
+            entry_comparison_summary=getattr(
+                project_paths, "ENTRY_COMPARISON_SUMMARY_FILE", None
+            ),
         )
 
     def existing(self) -> tuple[str, ...]:
@@ -296,6 +302,7 @@ class ReportSources:
             self.journal_trades,
             self.working_lately,
             self.market_theses,
+            self.entry_comparison_summary,
         ):
             if path and Path(path).exists():
                 out.append(str(path))
@@ -351,6 +358,96 @@ def _rows_from_csv(path: Any) -> list[dict[str, str]]:
         return []
     with Path(path).open("r", encoding="utf-8", newline="") as handle:
         return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _entry_quality_cells(path: Any) -> tuple[Cell, ...]:
+    """Expose Packet 2's already-computed comparison without re-measuring it.
+
+    The report owns neither bar reads nor comparison statistics.  A missing or
+    malformed optional export is one honest unknown cell, so a nightly reader
+    can remain deterministic while ``setup_research`` refuses to call a model.
+    """
+    source = Path(path) if path else None
+    if source is None or not source.exists():
+        return (
+            Cell(
+                cell_id="entry_quality.comparison_summary",
+                metric="entry-quality comparison availability",
+                unit="state",
+                value=None,
+                state=STATE_UNKNOWN,
+                unavailable="Packet 2 entry comparison summary is not published yet",
+                section="entry_quality",
+            ),
+        )
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        rows = payload.get("cells") if isinstance(payload, Mapping) else None
+        window = str(payload.get("window") or "") if isinstance(payload, Mapping) else ""
+    except (OSError, ValueError):
+        rows = None
+        window = ""
+    if not isinstance(rows, Mapping) or not window:
+        return (
+            Cell(
+                cell_id="entry_quality.comparison_summary",
+                metric="entry-quality comparison availability",
+                unit="state",
+                value=None,
+                state=STATE_UNKNOWN,
+                sources=_cite(source),
+                unavailable="Packet 2 entry comparison summary is unavailable or invalid",
+                section="entry_quality",
+            ),
+        )
+
+    metric_rows = (
+        ("useful_move_frequency", "useful move frequency", "fraction", lambda value: value),
+        ("mfe_pct", "median maximum favourable excursion", "percent", lambda value: value.get("median") if isinstance(value, Mapping) else None),
+        ("mae_pct", "median maximum adverse excursion", "percent", lambda value: value.get("median") if isinstance(value, Mapping) else None),
+        ("close_pct", "median fixed-window close movement", "percent", lambda value: value.get("median") if isinstance(value, Mapping) else None),
+        ("time_to_mfe_minutes", "median time to maximum favourable excursion", "minutes", lambda value: value.get("median") if isinstance(value, Mapping) else None),
+    )
+    cells: list[Cell] = []
+    for variant, row in sorted(rows.items()):
+        if not isinstance(row, Mapping):
+            continue
+        n = int(_number(row.get("measurable_count")) or 0)
+        for key, metric, unit, extract in metric_rows:
+            number = _number(extract(row.get(key)))
+            if number is None:
+                continue
+            cells.append(
+                Cell(
+                    cell_id=f"entry_quality.{variant}.{key}",
+                    metric=metric,
+                    unit=unit,
+                    value=number,
+                    n=n,
+                    distinct_sessions=int(_number(row.get("distinct_sessions")) or 0),
+                    distinct_symbols=int(_number(row.get("distinct_symbols")) or 0),
+                    population="all_scanner",
+                    window=(window, window),
+                    reference_clock="Packet 2 fixed-window entry comparison",
+                    state=STATE_MEASURED,
+                    sources=_cite(source),
+                    section="entry_quality",
+                )
+            )
+    if cells:
+        return tuple(cells)
+    return (
+        Cell(
+            cell_id="entry_quality.comparison_summary",
+            metric="entry-quality comparison availability",
+            unit="state",
+            value=None,
+            state=STATE_UNKNOWN,
+            sources=_cite(source),
+            unavailable="Packet 2 entry comparison contains no measured cells",
+            section="entry_quality",
+        ),
+    )
 
 
 def _rows_from_jsonl(path: Any) -> list[dict[str, Any]]:
@@ -1457,6 +1554,7 @@ def build_report(
     money_cells = _money_cells(
         preference_rows, journal_trades, session_date=session, sources=money_sources
     )
+    entry_quality_cells = _entry_quality_cells(resolved.entry_comparison_summary)
 
     ordered: list[Cell] = []
     ordered.extend(thesis_cells)
@@ -1464,6 +1562,10 @@ def build_report(
     ordered.extend(cell for cell in swing_cells if cell.section == "measured_context")
     ordered.extend(cell for cell in day_cells if cell.section == "opportunity_results")
     ordered.extend(cell for cell in swing_cells if cell.section == "opportunity_results")
+    # Packet 2 values are carried in their deterministic source order.  This
+    # insertion never computes a statistic and makes the report hash reflect
+    # exactly the entry-quality evidence the next-test path can cite.
+    ordered.extend(entry_quality_cells)
     ordered.extend(last_cells)
     ordered.extend(preference_cells)
     ordered.extend(money_cells)

@@ -2286,14 +2286,16 @@ denominator; N3 narration selection remains n-descending.
 ### 12.1 Phase 0.32 — validated next-test proposal (2026-09-16)
 
 `research_proposal.py` extends `setup_research`; it is not another agent or a second trial
-registry. Code prepares a compact input from the published measured report, whose entry-quality
-cells are explicit fixed-window movement facts and whose `report_hash` joins the proposal to the
-exact report. Selection is coverage/readiness/repeated-question based and says `narrated K of N`;
+registry. Code prepares a compact input from the published measured report, whose caller-supplied
+Packet 2 comparison summary becomes deterministic fixed-window movement cells (or one honest
+unknown cell). Only a measured cell makes the next-test path ready. Its `report_hash` joins the
+proposal to the exact report. Selection is coverage/readiness/repeated-question based and says `narrated K of N`;
 no profit, R or result magnitude enters its key. A configured existing local model may make at
 most one serialized, material-evidence proposal per runner session. A trusted session marker is
 spent before the call (never a model-supplied time), and an absent/empty code-owned recipe
 allowlist refuses before inference. It receives only the compact pack and
-must return the strict schema; code validates source cells, report identity, recipes, windows,
+must return the strict closed schema; code validates source cells, citation subset, report identity,
+recipes, each cited source window, allowed non-authoritative statuses, windows,
 proposed thresholds and safe action vocabulary. It cannot register/run a trial, write strategy
 code or alter a live rule. Deterministic progress refreshes require no model.
 
@@ -2303,6 +2305,7 @@ write failure keeps the last valid proposal/memo and leaves deterministic facts 
 model-free current-report refresh updates that pair's trial/no-trigger/missing facts while retaining
 the immutable proposal source and history. The Daily Recap worker, not Qt, reads the current view
 only when its current report id/hash match, and the card/copy brief separate that current identity
-from the proposal source without recomputation. Live proof must measure configured-model
+from the proposal source without recomputation. Setup Tracker may route that exact published display
+object into Daily Recap > Review; the route does no tracker ranking, Qt I/O, store read or model call. Live proof must measure configured-model
 latency, reported token counts and peak memory when available; hardware specifications are not a
 performance claim.

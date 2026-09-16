@@ -41,16 +41,20 @@ They are evidence and must not be loaded as context.
 - **Phase 0.32 Packet 3 next-test proposal (2026-09-16, unmerged).**
   `scripts/research_proposal.py` is a validated advisory-only proposal/memo seam: source report
   id/hash and every cited cell must match code facts; unsafe fields/actions, unknown cells/recipes,
-  invented numbers and observed-looking proposed thresholds refuse. Immutable history and the
+  invented numbers and observed-looking proposed thresholds refuse; the closed proposal/status,
+  changed-condition and citation schemas also prevent a displayed proposal from claiming
+  confirmation or authority. Immutable history and the
   current JSON/Markdown memo live only under the existing AI-store briefs namespace; a failed
   current/memo write restores their prior pair. A model-free current-report refresh updates only
   deterministic trial progress while retaining the immutable proposal source/history. A runner-owned
   session marker spends the one model call before inference, and an absent/empty code-owned recipe allowlist refuses. Compact selection
   is by coverage, repeated questions, unresolved comparisons, readiness and active tests, never
   observed movement or R; it states `narrated K of N` and retains the full cited-cell facts.
-  Measured Report publishes its stable hash and explicit entry-quality cells; `setup_research`
-  prepares their compact reader path; Daily Recap > Review receives that published object on its
-  worker, shows a Next test card with report id/hash and offers clipboard-only **Copy test brief**.
+  Measured Report reads a caller-supplied Packet 2 `entry_comparison_summary` into deterministic
+  fixed-window entry-quality cells (or an honest unknown); `setup_research` is ready only for
+  measured cells. Daily Recap > Review and Setup Tracker's compact Next-test route share the same
+  published display object, with no tracker ranking, Qt I/O or model call; Review offers
+  clipboard-only **Copy test brief**.
   No proposal registers/runs/amends a trial or touches a
   detector, score, alert, ranking, watchlist, Focus, journal, policy or live store. Gates #142-143 owed.
 

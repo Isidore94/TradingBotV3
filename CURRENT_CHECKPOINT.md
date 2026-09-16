@@ -185,7 +185,8 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 ### 2026-09-16 — Phase 0.32 Packet 3 BUILT on `codex/sol-p3-research-proposal`; review and live/local-model gates owed
 
 Packet 3 adds the additive `research_proposal` validator/publication seam only. It rejects an
-unknown report/cell/recipe, fabricated observed number, infeasible window, unsafe action or text
+unknown report/cell/recipe, fabricated observed number, a citation outside its declared cells or
+source window, an unregistered confirmation/authority status, infeasible window, unsafe action or text
 that tries to become a runner instruction. Validated JSON history, current JSON and the short memo
 live under the existing configured AI-store `briefs/next_research_test/` tree; a failed model or
 current/memo write restores the last valid pair. A model-free current-report read refreshes only
@@ -194,13 +195,14 @@ trusted session marker before the one model call and refuses an absent/empty cod
 allowlist. The existing
 setup-research path prepares a compact,
 coverage/readiness-selected report input without another warehouse read; it remains model-free
-when there are no published entry-quality cells. Measured Report carries an explicit entry-quality
-block and hash; Daily Recap > Review reads its matching proposal on the worker, renders the Next
-test card with report id/hash and copies an in-memory complete test brief. No trial
+when there are no measured Packet 2 entry-comparison cells. Measured Report carries deterministic
+fixed-window cells from a caller-supplied Packet 2 summary (or an explicit unknown) and its hash;
+Daily Recap > Review and Setup Tracker's compact route reuse its matching display object, render the
+Next test card with report id/hash and copy an in-memory complete test brief. No trial
 registration/execution, live rule, store, detector, score, alert, ranking, Focus, watchlist,
-journal or policy changes. Reviewer inspection reproduced nine new red failures against
-`e35e9fc9`; all are now covered by `tests/test_sol_research_proposal.py`; targeted
-compatibility/packaging run 194 passed. The existing
+journal or policy changes. Reviewer inspection reproduced the new red failures against
+`e983676b`; all pass in `tests/test_sol_research_proposal.py` (38 passed) and the bounded
+report/setup-research/Recap/Tracker compatibility run passes 188 tests. The existing
 `test_ai_jobs_runner.py` historical-date baseline is red in this
 worktree (28 failures before slot execution; `session_date=''`), unrelated to Packet 3. Gates
 #142 (copied deterministic progress) and #143 (one configured local-model proposal with measured
