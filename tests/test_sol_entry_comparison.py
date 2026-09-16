@@ -276,6 +276,55 @@ def test_public_m5_adapter_refuses_an_unregistered_recipe_or_entry_variant_id():
         )
 
 
+def test_m5_adapter_rejects_a_rogue_forward_variant_even_with_legitimate_declared_recipes():
+    """A genuine M5 exit grid cannot authorize a made-up forward entry attempt."""
+    import entry_comparison
+    from research_warehouse.outcomes import M5_CLOSE_RECIPES
+
+    occurrence = {"occurrence_id": "o1|AAA", "symbol": "AAA", "side": "LONG"}
+    rogue_forward = _forward("o1|AAA", "rogue_wait")
+    rogue_forward["attempt_id"] = "o1|AAA|rogue_attempt_identity"
+    with pytest.raises(ValueError, match="unauthorized entry variant"):
+        entry_comparison.adapt_m5_occurrence_attempts(
+            [occurrence], [rogue_forward], recipes=M5_CLOSE_RECIPES
+        )
+
+
+def test_normalization_preserves_packet_one_entry_rule_and_versions_gate_review_conventions():
+    """Review cohorts compare only the same named Packet 1 entry convention."""
+    import entry_comparison
+    from research_warehouse.outcomes import M5_CLOSE_RECIPES
+
+    liked_forward = _forward("liked|AAA", "m5_first_close")
+    liked_forward.update({"entry_rule": "next_completed_m5_close", "entry_rule_version": "v1"})
+    vetoed_forward = _forward("vetoed|BBB", "m5_first_close")
+    vetoed_forward.update({"entry_rule": "signal_bar_close", "entry_rule_version": "v2"})
+    liked = entry_comparison.adapt_m5_occurrence_attempts(
+        [{"occurrence_id": "liked|AAA", "symbol": "AAA", "side": "LONG", "population": "liked"}],
+        [liked_forward],
+        recipes=M5_CLOSE_RECIPES,
+    )[0]
+    vetoed = entry_comparison.adapt_m5_occurrence_attempts(
+        [{"occurrence_id": "vetoed|BBB", "symbol": "BBB", "side": "LONG", "population": "vetoed"}],
+        [vetoed_forward],
+        recipes=M5_CLOSE_RECIPES,
+    )[0]
+
+    assert liked["entry_rule"] == "next_completed_m5_close"
+    assert liked["entry_rule_version"] == "v1"
+    assert vetoed["entry_rule"] == "signal_bar_close"
+    assert vetoed["entry_rule_version"] == "v2"
+    assert liked["entry_convention"] != vetoed["entry_convention"]
+    assert entry_comparison.summarise_attempts(
+        [liked, vetoed], useful_move_pct=2.0, min_opportunities=1, min_sessions=1
+    )["review_comparison"] == {
+        "status": "not_evaluated",
+        "reason": "unmatched_coverage_or_entry_convention",
+        "liked_count": 1,
+        "vetoed_count": 1,
+    }
+
+
 def test_paired_improvement_and_all_opportunity_coverage_are_not_the_same_claim():
     """A waiting entry may improve shared fills while serving fewer opportunities."""
     import entry_comparison
