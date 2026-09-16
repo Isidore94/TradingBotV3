@@ -149,6 +149,28 @@ def test_existing_m5_entry_bearing_occurrences_share_the_normalized_attempt_inte
     assert rows[0]["mfe_pct"] == pytest.approx(2.0)
 
 
+def test_m5_adapter_keeps_a_missing_data_attempt_when_a_base_occurrence_has_no_forward_row():
+    """A base M5 opportunity with no captured forward row still counts honestly."""
+    import entry_comparison
+    from research_warehouse.outcomes import M5_CLOSE_RECIPES
+
+    occurrence = {
+        "occurrence_id": "m5|GAP|2026-09-01",
+        "symbol": "GAP",
+        "side": "LONG",
+        "dependency_cluster_id": "m5-gap-cluster",
+    }
+    rows = entry_comparison.adapt_m5_occurrence_attempts(
+        [occurrence], [], recipes=M5_CLOSE_RECIPES
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["opportunity_id"] == "m5|GAP|2026-09-01"
+    assert rows[0]["entry_variant"] == "m5_first_close"
+    assert rows[0]["state"] == "missing_data"
+    assert rows[0]["reason"] == "missing_forward_measure"
+
+
 def test_summary_reports_full_denominators_distribution_coverage_and_exclusions():
     """The published cell says what is measured, missing, and excluded."""
     import entry_comparison
@@ -201,6 +223,59 @@ def test_duplicate_scans_bars_and_recipe_rows_collapse_to_one_dependency_cluster
     assert summary["deduplicated_rows"] == 1
 
 
+def test_distinct_opportunity_ids_in_one_dependency_cluster_count_once_for_distributions_and_pairs():
+    """A re-observed episode cannot earn two distribution samples or paired votes."""
+    import entry_comparison
+
+    attempts = [
+        _attempt("o1|AAA", "m5_first_close", mfe=2.0, cluster="one-episode"),
+        _attempt("o1|AAA", "m15_acceptance_close", mfe=3.0, cluster="one-episode"),
+        _attempt("o2|AAA", "m5_first_close", mfe=2.0, cluster="one-episode"),
+        _attempt("o2|AAA", "m15_acceptance_close", mfe=3.0, cluster="one-episode"),
+    ]
+    summary = entry_comparison.summarise_attempts(
+        attempts, useful_move_pct=2.0, min_opportunities=1, min_sessions=1
+    )
+    comparison = entry_comparison.compare_variants(
+        attempts,
+        baseline="m5_first_close",
+        challenger="m15_acceptance_close",
+        window="60m",
+        min_opportunities=1,
+        min_sessions=1,
+    )
+
+    assert summary["cells"]["m5_first_close"]["distribution_count"] == 1
+    assert summary["cells"]["m5_first_close"]["mfe_pct"]["median"] == pytest.approx(2.0)
+    assert comparison["paired_shared_triggered_count"] == 1
+
+
+def test_public_p8_adapter_refuses_an_unregistered_recipe_or_entry_variant_id():
+    """The P8 adapter may read the ledger, but not become an alternate registry."""
+    from types import SimpleNamespace
+
+    import entry_comparison
+
+    rogue = SimpleNamespace(recipe_id="rogue_entry_grid_v1", entry_variant="rogue_wait", is_control=False)
+    occurrence = {"occurrence_id": "o1|AAA", "symbol": "AAA", "side": "LONG"}
+    with pytest.raises(ValueError, match="unauthorized recipe"):
+        entry_comparison.adapt_p8_attempts([occurrence], [], recipes=[rogue])
+
+
+def test_public_m5_adapter_refuses_an_unregistered_recipe_or_entry_variant_id():
+    """The M5 adapter has the same ledger gate even though exits do not fan out."""
+    from types import SimpleNamespace
+
+    import entry_comparison
+
+    rogue = SimpleNamespace(recipe_id="rogue_entry_grid_v1", entry_variant="rogue_wait", is_control=False)
+    occurrence = {"occurrence_id": "o1|AAA", "symbol": "AAA", "side": "LONG"}
+    with pytest.raises(ValueError, match="unauthorized recipe"):
+        entry_comparison.adapt_m5_occurrence_attempts(
+            [occurrence], [_forward("o1|AAA", "rogue_wait")], recipes=[rogue]
+        )
+
+
 def test_paired_improvement_and_all_opportunity_coverage_are_not_the_same_claim():
     """A waiting entry may improve shared fills while serving fewer opportunities."""
     import entry_comparison
@@ -245,6 +320,33 @@ def test_population_partitions_and_liked_veto_comparisons_require_matched_inputs
     assert review["reason"] == "unmatched_timing_source_or_window"
     assert review["liked_count"] == 1
     assert review["vetoed_count"] == 2
+
+
+def test_liked_veto_comparison_refuses_coverage_or_entry_convention_mismatches():
+    """Same source/window is insufficient when the two paths were measured differently."""
+    import entry_comparison
+
+    liked = _attempt("l1|AAA", "m5_first_close", population="liked")
+    vetoed_coverage = _attempt("v1|BBB", "m5_first_close", population="vetoed")
+    vetoed_coverage["coverage"] = {"expected_bars": 12, "observed_bars": 6, "missing_bars": 6}
+    coverage_review = entry_comparison.summarise_attempts(
+        [liked, vetoed_coverage], useful_move_pct=2.0, min_opportunities=1, min_sessions=1
+    )["review_comparison"]
+
+    vetoed_convention = _attempt("v2|CCC", "m5_first_close", population="vetoed")
+    liked["entry_convention"] = "next_completed_m5_close_v1"
+    vetoed_convention["entry_convention"] = "signal_bar_close_v1"
+    convention_review = entry_comparison.summarise_attempts(
+        [liked, vetoed_convention], useful_move_pct=2.0, min_opportunities=1, min_sessions=1
+    )["review_comparison"]
+
+    assert coverage_review == {
+        "status": "not_evaluated",
+        "reason": "unmatched_coverage_or_entry_convention",
+        "liked_count": 1,
+        "vetoed_count": 1,
+    }
+    assert convention_review == coverage_review
 
 
 def test_outliers_and_below_floor_or_immature_cells_never_name_a_winner():

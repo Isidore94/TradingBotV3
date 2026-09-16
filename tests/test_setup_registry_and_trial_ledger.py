@@ -446,6 +446,10 @@ def test_the_trial_ledger_has_exactly_one_production_writer():
     ALLOWED = {
         "scripts/research_warehouse/cli.py": "writer",
         "scripts/ai_jobs/digest.py": "reader",
+        # Phase 0.32 P2 reads declared recipe ownership and multiplicity only.
+        # It must stay a direct, read-only reader rather than becoming a second
+        # registration path or an outcome-aware ledger writer.
+        "scripts/entry_comparison.py": "reader",
     }
 
     # IMPORT-shaped, not any mention: P8's authorization block in `outcomes.py`
