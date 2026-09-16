@@ -226,6 +226,14 @@ class MainWindow(QMainWindow):
         # `_enqueue_review_alert`.
         self.daily_recap_panel.chartRequested.connect(self._chart_recap_row)
         self.daily_recap_panel.focusAddRequested.connect(self._add_staged_pick_to_focus)
+        # Packet 3's compact Tracker route receives the exact display object
+        # the Recap worker already read. No Tracker read, ranking or model work
+        # is added to this connection.
+        self.daily_recap_panel.entryQualityProposalChanged.connect(
+            lambda payload: self.research_panel.setup_tracker_panel.set_entry_quality_proposal(
+                payload, daily_recap=self.daily_recap_panel
+            )
+        )
         # ST6.3. ONE Working-lately snapshot for the whole desk, owned by the
         # window because four surfaces read it and no one panel is their parent.
         # Everything expensive is on its worker; the slots below only format.

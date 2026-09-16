@@ -27,7 +27,7 @@ import json
 import logging
 import re
 import hashlib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -177,6 +177,30 @@ def default_warehouse() -> Any | None:
                 ):
                     latest[key] = row
             return list(latest.values())
+
+        def read_entry_quality(self, session_date: str, *, now: datetime | None = None):
+            """Read only one session from the month-partitioned flat window lake."""
+            from research_warehouse.store import ResearchStore
+            import market_calendar
+
+            store = ResearchStore.open()
+            if store is None:
+                raise OSError("research_store_dir is not configured")
+            day = date.fromisoformat(str(session_date)[:10])
+            start = datetime.combine(day, datetime.min.time(), tzinfo=market_calendar.MARKET_TZ)
+            end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=market_calendar.MARKET_TZ)
+            partition = f"month={day:%Y-%m}"
+            directory = store.partition_dir("entry_quality_window", partition)
+            rows = list(
+                store.read_rows(
+                    "entry_quality_window",
+                    partition,
+                    interval_start_range=(start, end),
+                    time_column="entry_at",
+                )
+            )
+            self._paths = tuple(dict.fromkeys((*self._paths, str(directory))))
+            return rows
 
     return _LakeOutcomes()
 

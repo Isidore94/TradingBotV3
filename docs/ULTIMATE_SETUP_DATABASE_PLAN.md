@@ -948,6 +948,18 @@ outcome_definition
 - `computed_at`: timestamp; `input_capture_mode_worst`: string — worst input
   mode, drives the exclusion filter.
 
+**`entry_quality_window`** — partition: (month); grain: opportunity × attempt × window
+
+- Versioned `entry_quality_window_v1` rows are the flat, fixed-window gross M5 movement
+  view for P8's declared entry selectors. They carry `entry_at`, selector/rule/version,
+  state, MFE/MAE/close percent/ATR/R, first-touch order, coverage and knowledge basis.
+- The owned low-priority outcome pass publishes them from the same completed warehouse M5 bars
+  and selectors, independently of `outcome_path`; `exit_policy=gross_excursion_no_exit` is a
+  label, not an exit simulation. A post-stop rally therefore remains visible.
+- The shared measured report reads only the session's month partition through
+  `ResearchStore.read_rows` and creates Packet 2's in-memory comparison export. Failure is an
+  explicit unknown report cell and never costs outcomes, detectors, scores, alerts or live rules.
+
 **`scan_coverage`** — partition: (month); grain: risk_set × symbol
 
 - `risk_set_id`: string — one per scheduled scan run.
@@ -1678,10 +1690,10 @@ a same-bar two-threshold touch is `ambiguous_same_daily_bar`, not an invented se
 Reconstructed knowledge remains labelled and cannot confirm a prospective claim.
 
 The view is exit-independent by construction: raw path measurement continues after a simulated
-stop, while `outcome_path` keeps its existing named exit-policy semantics. It reads no store,
-writes no store and has zero detector, score, alert, ranking, journal or promotion influence.
-Persisting it, comparing entries, or registering a trial requires the later Phase 0.32 packets
-and their frozen-denominator/ledger contracts.
+stop, while `outcome_path` keeps its existing named exit-policy semantics. Packet 3 persists the
+versioned flat P8 `entry_quality_window` rows only in the research warehouse's owned low-priority
+outcome pass; its Packet 2 reader is in-memory and session/month-scoped. Neither reaches a
+detector, score, alert, ranking, journal or promotion path; a publication failure is isolated.
 
 ### 14.5 Fair bounded entry comparison (Phase 0.32 Packet 2, 2026-09-15)
 

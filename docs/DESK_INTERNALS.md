@@ -5883,6 +5883,13 @@ the existing N3 `narrated K of N` statement remains visible. The local model is 
 it may name one test to resolve uncertainty but cannot register, execute, amend or promote a test,
 call a recipe optimal, generate code or enter any runner instruction.
 
+The report's entry-quality facts come from versioned flat `entry_quality_window_v1` P8 rows,
+published by the owned low-priority warehouse outcome pass from its same completed M5 bars and
+declared selectors. They are gross excursion facts labelled `gross_excursion_no_exit`, never a
+replacement for `outcome_path`; the session/month-scoped `ResearchStore.read_rows` reader builds
+the Packet 2 comparison in memory. A missing/unreadable dataset is one unknown cell and cannot
+cost the old outcome build, publish a model proposal, or reach a detector, score, alert or live rule.
+
 The Daily Recap Review worker reads the current view only when its current report identity belongs
 to the report it already loaded, then the card and clipboard brief render that view while naming the
 immutable proposal source separately. It never computes a movement number or reads the AI store on

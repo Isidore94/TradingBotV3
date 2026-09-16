@@ -34,7 +34,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | # | Gate | Owed by |
 |---|---|---|
 | 143 | **Next-test local-model proposal (Phase 0.32 Packet 3)** - after integration, use a copied published entry-quality report with a configured existing local model. Verify one validated proposal references its exact report id/hash and cells, writes immutable JSON history plus `briefs/next_research_test/next_research_test.md`, and the Review card/copy brief agree. Record actual latency, reported tokens and peak memory when available; a disabled/offline model must leave deterministic facts and the prior memo intact. | lead/trader, after Packet 3 integration |
-| 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded report with known forward cells, run the setup-research/report reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and current report id/hash agree in the compact input, current JSON/memo and Review card while the immutable proposal source stays named; unchanged evidence performs no inference, proposal/trial/history or live-data write, only the paired current-view refresh. | lead/trader, after Packet 3 integration |
+| 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded P8 `entry_quality_window` month with known completed-bar cells, run the warehouse/report/setup-research reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and current report id/hash agree in the compact input, current JSON/memo, Review card and Tracker route while the immutable proposal source stays named; unchanged evidence performs no inference, proposal/trial/history or live-data write, only the paired current-view refresh. | lead/trader, after Packet 3 integration |
 | 141 | **Fair entry comparison (Phase 0.32 Packet 2)** - on a copied bounded completed-bar/P8 slice, normalize one P8 opportunity and one existing M5 occurrence through the reader. Verify every declared P8 entry variant has one row, a no-trigger and a missing input stay in the full denominator, shared-triggered movement is printed separately from full-population coverage, duplicated scans do not raise clusters or distribution/pair samples, an unregistered recipe refuses, and no ledger/store/live output changes. This is a coverage/read-contract check, not an edge, a winner or trial registration. | lead/trader, after Packets 1-2 integration |
 | 140 | **Forward entry quality (Phase 0.32 Packet 1)** - on a copied bounded completed-bar slice containing a late M5 entry, a gap and a no-trigger variant, run the pure measurement and verify each row's exact endpoint, coverage and state; a post-stop rally remains in gross MFE, the daily two-touch row is ambiguous, and no source/store/live output changes. This is measurement only, not evidence of an edge or a trial registration. | lead/trader, after Packet 1 integration |
 | 139 | **Trade Mentor raw-first AI help and large popup** - after restart, the popup opens near 900x820, keeps a manual resize across hide/show, and the 10:00 card saves the exact raw reply before local AI fills only missing fields; an existing edit stays, an ambiguous number asks one question, Save writes recalled evidence and no planned-risk field. | trader, next 10:00 prompt after integration |
@@ -195,14 +195,16 @@ trusted session marker before the one model call and refuses an absent/empty cod
 allowlist. The existing
 setup-research path prepares a compact,
 coverage/readiness-selected report input without another warehouse read; it remains model-free
-when there are no measured Packet 2 entry-comparison cells. Measured Report carries deterministic
-fixed-window cells from a caller-supplied Packet 2 summary (or an explicit unknown) and its hash;
+when there are no measured Packet 2 entry-comparison cells. The owned low-priority warehouse outcome
+pass publishes versioned flat P8 windows from the same completed M5 bars/declared selectors without
+changing `outcome_path`; Measured Report reads that session/month-scoped dataset in memory into
+deterministic cells (or an explicit unknown) and its hash;
 Daily Recap > Review and Setup Tracker's compact route reuse its matching display object, render the
 Next test card with report id/hash and copy an in-memory complete test brief. No trial
 registration/execution, live rule, store, detector, score, alert, ranking, Focus, watchlist,
 journal or policy changes. Reviewer inspection reproduced the new red failures against
-`e983676b`; all pass in `tests/test_sol_research_proposal.py` (38 passed) and the bounded
-report/setup-research/Recap/Tracker compatibility run passes 188 tests. The existing
+`77d6087b`; the five warehouse publication regressions plus the prior proposal contract pass, and
+the bounded report/setup-research/Recap/Tracker/warehouse compatibility run passes 207 tests. The existing
 `test_ai_jobs_runner.py` historical-date baseline is red in this
 worktree (28 failures before slot execution; `session_date=''`), unrelated to Packet 3. Gates
 #142 (copied deterministic progress) and #143 (one configured local-model proposal with measured

@@ -360,7 +360,31 @@ def _rows_from_csv(path: Any) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(handle)]
 
 
-def _entry_quality_cells(path: Any) -> tuple[Cell, ...]:
+def _entry_quality_unknown(reason: str, *, sources: tuple[str, ...] = ()) -> tuple[Cell, ...]:
+    return (
+        Cell(
+            cell_id="entry_quality.comparison_summary",
+            metric="entry-quality comparison availability",
+            unit="state",
+            value=None,
+            population="all_scanner",
+            window=("entry_quality_window", "not_published"),
+            exit_policy="gross_excursion_no_exit",
+            version="entry_quality_window_v1",
+            state=STATE_UNKNOWN,
+            sources=sources,
+            unavailable=reason,
+            section="entry_quality",
+        ),
+    )
+
+
+def _entry_quality_cells(
+    path: Any = None,
+    *,
+    payload: Mapping[str, Any] | None = None,
+    sources: tuple[str, ...] = (),
+) -> tuple[Cell, ...]:
     """Expose Packet 2's already-computed comparison without re-measuring it.
 
     The report owns neither bar reads nor comparison statistics.  A missing or
@@ -368,37 +392,23 @@ def _entry_quality_cells(path: Any) -> tuple[Cell, ...]:
     can remain deterministic while ``setup_research`` refuses to call a model.
     """
     source = Path(path) if path else None
-    if source is None or not source.exists():
-        return (
-            Cell(
-                cell_id="entry_quality.comparison_summary",
-                metric="entry-quality comparison availability",
-                unit="state",
-                value=None,
-                state=STATE_UNKNOWN,
-                unavailable="Packet 2 entry comparison summary is not published yet",
-                section="entry_quality",
-            ),
+    if payload is None and (source is None or not source.exists()):
+        return _entry_quality_unknown(
+            "Packet 2 entry comparison summary is not published yet",
+            sources=sources,
         )
-    try:
-        payload = json.loads(source.read_text(encoding="utf-8"))
-        rows = payload.get("cells") if isinstance(payload, Mapping) else None
-        window = str(payload.get("window") or "") if isinstance(payload, Mapping) else ""
-    except (OSError, ValueError):
-        rows = None
-        window = ""
+    if payload is None:
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = None
+    rows = payload.get("cells") if isinstance(payload, Mapping) else None
+    window = str(payload.get("window") or "") if isinstance(payload, Mapping) else ""
+    cited = _cite(source, *sources)
     if not isinstance(rows, Mapping) or not window:
-        return (
-            Cell(
-                cell_id="entry_quality.comparison_summary",
-                metric="entry-quality comparison availability",
-                unit="state",
-                value=None,
-                state=STATE_UNKNOWN,
-                sources=_cite(source),
-                unavailable="Packet 2 entry comparison summary is unavailable or invalid",
-                section="entry_quality",
-            ),
+        return _entry_quality_unknown(
+            "Packet 2 entry comparison summary is unavailable or invalid",
+            sources=cited,
         )
 
     metric_rows = (
@@ -429,24 +439,18 @@ def _entry_quality_cells(path: Any) -> tuple[Cell, ...]:
                     population="all_scanner",
                     window=(window, window),
                     reference_clock="Packet 2 fixed-window entry comparison",
+                    exit_policy="gross_excursion_no_exit",
+                    version="entry_quality_window_v1",
                     state=STATE_MEASURED,
-                    sources=_cite(source),
+                    sources=cited,
                     section="entry_quality",
                 )
             )
     if cells:
         return tuple(cells)
-    return (
-        Cell(
-            cell_id="entry_quality.comparison_summary",
-            metric="entry-quality comparison availability",
-            unit="state",
-            value=None,
-            state=STATE_UNKNOWN,
-            sources=_cite(source),
-            unavailable="Packet 2 entry comparison contains no measured cells",
-            section="entry_quality",
-        ),
+    return _entry_quality_unknown(
+        "Packet 2 entry comparison contains no measured cells",
+        sources=cited,
     )
 
 
@@ -1518,6 +1522,8 @@ def build_report(
 
     swing_rows: list[dict[str, Any]] | None = None
     warehouse_sources: tuple[str, ...] = ()
+    entry_quality_payload: Mapping[str, Any] | None = None
+    entry_quality_sources: tuple[str, ...] = ()
     warehouse_reason = (
         "no research warehouse is configured on this desk "
         "(`research_store_dir` unset), so the swing population was not read"
@@ -1530,6 +1536,16 @@ def build_report(
         except Exception as exc:  # noqa: BLE001 - an unreachable store is uncertainty
             swing_rows = None
             warehouse_reason = f"the research warehouse could not be read: {exc}"
+        try:
+            import entry_comparison
+
+            entry_rows = warehouse.read_entry_quality(session, now=moment)
+            entry_quality_payload = entry_comparison.build_export(entry_rows, as_of=session)
+            entry_quality_sources = _cite(
+                *tuple(getattr(warehouse, "source_paths", ()) or ())
+            )
+        except Exception as exc:  # noqa: BLE001 - unavailable evidence is an unknown cell
+            _log.info("Measured report: entry-quality warehouse rows unavailable (%s).", exc)
 
     intraday_sources = _cite(resolved.intraday_outcomes)
     horizon_sources = _cite(resolved.session_horizon_outcomes)
@@ -1554,7 +1570,11 @@ def build_report(
     money_cells = _money_cells(
         preference_rows, journal_trades, session_date=session, sources=money_sources
     )
-    entry_quality_cells = _entry_quality_cells(resolved.entry_comparison_summary)
+    entry_quality_cells = _entry_quality_cells(
+        resolved.entry_comparison_summary,
+        payload=entry_quality_payload,
+        sources=entry_quality_sources,
+    )
 
     ordered: list[Cell] = []
     ordered.extend(thesis_cells)
@@ -1589,7 +1609,7 @@ def build_report(
         generated_at=moment.isoformat(timespec="seconds"),
         tracker_snapshot_id=tracker_snapshot_id,
         open_theses=open_theses,
-        source_paths=resolved.existing() + warehouse_sources,
+        source_paths=resolved.existing() + warehouse_sources + entry_quality_sources,
         policy=(
             f"selection window: {selection_sessions} exchange session(s) ending {session}",
             f"follow-through horizon: {follow_through_sessions} exchange session(s)",

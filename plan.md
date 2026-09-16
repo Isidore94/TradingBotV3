@@ -529,8 +529,8 @@ explicit trader-authorized ledger path.
    and atomically publishes immutable history plus the short current memo under the existing
    AI-store `briefs/next_research_test/` namespace. `setup_research` prepares its compact,
    result-independent input from the published measured report; only a measured Packet 2
-   `entry_comparison_summary` cell makes it ready, while an absent/invalid summary publishes an
-   explicit unknown cell and keeps it collecting. The report carries a hash and deterministic
+   `entry_quality_window` cell from the month-scoped research warehouse makes it ready, while an
+   unavailable lake read publishes an explicit unknown cell and keeps it collecting. The report carries a hash and deterministic
    fixed-window entry-quality cells; citations may name only declared source cells and their
    stated source windows. Daily Recap > Review and Setup Tracker's compact Next-test route reuse
    the same validated display object; neither reads a store, ranks, or calls a model. A proposal never registers, runs or

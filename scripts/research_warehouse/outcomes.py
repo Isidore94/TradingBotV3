@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
+import json
 
 try:  # package import
     from . import exchange_calendar as xcal
@@ -2504,6 +2505,187 @@ def _same_value(left, right) -> bool:
     return left == right
 
 
+ENTRY_QUALITY_WINDOW_SCHEMA = "entry_quality_window_v1"
+ENTRY_QUALITY_EXIT_POLICY = "gross_excursion_no_exit"
+
+
+def _entry_quality_window_name(key: str) -> str:
+    """Name entry-quality's fixed M5 windows independently of exit recipes."""
+    if key == "session_close":
+        return key
+    try:
+        return f"{int(str(key).removesuffix('m'))}_trading_minutes"
+    except ValueError:
+        return str(key)
+
+
+def _entry_quality_bars(store, occurrence: dict, *, as_of: datetime) -> list[dict]:
+    """Read the occurrence month through the warehouse's completed-bar store."""
+    symbol = str(occurrence.get("symbol") or "")
+    stamp = occurrence.get("feasible_entry_time") or occurrence.get("trigger_at") or as_of
+    if isinstance(stamp, str):
+        try:
+            stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            stamp = as_of
+    if not isinstance(stamp, datetime):
+        stamp = as_of
+    partition = f"month={stamp:%Y-%m}"
+    return [
+        dict(row)
+        for row in store.read_rows("bar_m5", partition, symbols=[symbol] if symbol else None)
+        if not symbol or str(row.get("symbol") or "") == symbol
+    ]
+
+
+def build_entry_quality_windows(
+    *,
+    store,
+    p8_occurrences,
+    declared_entry_selector_ids,
+    as_of: datetime,
+    job_id: str = "entry_quality_window",
+    m5_by_symbol: dict[str, list] | None = None,
+) -> list[dict]:
+    """Publish P8's completed-bar gross windows, never an exit simulation.
+
+    The entry is supplied by P8's already-declared selector payload.  The
+    measurement deliberately calls the pure Packet 1 reader and writes a
+    separate dataset, so a post-stop rally remains visible and old
+    ``outcome_path`` rows remain byte-for-byte untouched.
+    """
+    import entry_quality
+
+    rows: list[dict] = []
+    selectors = {str(value) for value in declared_entry_selector_ids or () if str(value)}
+    cutoff = as_of if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
+    for occurrence in p8_occurrences or ():
+        source = dict(occurrence)
+        symbol = str(source.get("symbol") or "")
+        bars = (m5_by_symbol or {}).get(symbol)
+        if bars is None:
+            bars = _entry_quality_bars(store, source, as_of=cutoff)
+        selector = str(source.get("entry_selector_id") or "")
+        candidates: list[tuple[str, dict]] = []
+        if selector in selectors and source.get("feasible_entry_time") is not None:
+            candidates.append((selector, source))
+        elif selectors:
+            # Production occurrences carry the detector fact, not a simulated
+            # entry. Reuse P8's declared selectors over the same completed M5
+            # bars to create the independent entry facts.
+            ordered = sorted(
+                [row for row in bars if row.get("is_complete", True)],
+                key=lambda row: str(row.get("interval_start") or row.get("end_time") or ""),
+            )
+            for selector in sorted(selectors):
+                if selector == SETUP_ENTRY_TIMING_CONTROL_VARIANT:
+                    entry_bar, _session = _entry_bar_after_d1_close(source, ordered)
+                else:
+                    chosen = SETUP_ENTRY_TIMING_SELECTORS.get(selector)
+                    entry_bar, _session = (
+                        chosen(source, ordered, as_of=cutoff, series_cache={})
+                        if chosen is not None
+                        else (None, None)
+                    )
+                if entry_bar is None:
+                    continue
+                candidate = dict(source)
+                candidate.update(
+                    {
+                        "entry_selector_id": selector,
+                        "attempt_id": f"{source.get('occurrence_id') or source.get('opportunity_id')}|{selector}",
+                        "opportunity_id": source.get("occurrence_id") or source.get("opportunity_id"),
+                        "entry_rule": selector,
+                        "entry_rule_version": "v1",
+                        "trigger_knowledge_time": source.get("trigger_at"),
+                        "feasible_entry_time": entry_bar.get("interval_end") or entry_bar.get("end_time"),
+                        "feasible_entry_price": entry_bar.get("close"),
+                        "risk_price": source.get("stop_price_ref"),
+                    }
+                )
+                candidates.append((selector, candidate))
+        for selector, candidate in candidates:
+            # `measure_m5_forward` owns completed-bar filtering and all window
+            # coverage. It does not know about recipes, costs or an exit policy.
+            measurement_entry = dict(candidate)
+            if (
+                measurement_entry.get("favorable_threshold_pct") is None
+                and measurement_entry.get("adverse_threshold_pct") is None
+            ):
+                try:
+                    entry_price = float(measurement_entry.get("feasible_entry_price"))
+                    risk_price = float(measurement_entry.get("risk_price"))
+                    threshold = abs(entry_price - risk_price) / entry_price * 100.0
+                    measurement_entry["favorable_threshold_pct"] = threshold
+                    measurement_entry["adverse_threshold_pct"] = threshold
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+            measured = entry_quality.measure_m5_forward(measurement_entry, bars, as_of=cutoff)
+            for raw_window, payload in (measured.get("windows") or {}).items():
+                if not isinstance(payload, dict):
+                    continue
+                rows.append(
+                    {
+                    "schema_version": ENTRY_QUALITY_WINDOW_SCHEMA,
+                    "run_id": job_id,
+                    "opportunity_id": candidate.get("opportunity_id") or candidate.get("occurrence_id"),
+                    "attempt_id": candidate.get("attempt_id") or f"{candidate.get('occurrence_id') or candidate.get('opportunity_id')}|{selector}",
+                    "window": _entry_quality_window_name(str(raw_window)),
+                    "entry_at": candidate.get("feasible_entry_time"),
+                    "symbol": symbol,
+                    "side": candidate.get("side"),
+                    "entry_selector_id": selector,
+                    "entry_rule": candidate.get("entry_rule") or selector,
+                    "entry_rule_version": candidate.get("entry_rule_version") or "v1",
+                    "state": payload.get("state"),
+                    "mfe_pct": payload.get("mfe_pct"),
+                    "mae_pct": payload.get("mae_pct"),
+                    "close_pct": payload.get("close_pct"),
+                    "mfe_atr": payload.get("mfe_atr"),
+                    "mae_atr": payload.get("mae_atr"),
+                    "mfe_r": payload.get("mfe_r"),
+                    "mae_r": payload.get("mae_r"),
+                    "first_touch_order": payload.get("first_touch_order"),
+                    "coverage": json.dumps(payload.get("coverage") or {}, sort_keys=True),
+                    "source_knowledge_basis": candidate.get("source_knowledge_basis") or "unknown",
+                    "anchor_knowledge_basis": candidate.get("anchor_knowledge_basis") or "unknown",
+                    "exit_policy": ENTRY_QUALITY_EXIT_POLICY,
+                }
+            )
+    if rows:
+        # The ordinary gold grain is one current fact, not a nightly append of
+        # identical measurements.  The synthetic builder seam deliberately
+        # skips this read; real ResearchStore builds compare only the matching
+        # month/grain before publishing a changed fixed-window observation.
+        publish_rows = rows
+        if isinstance(store, ResearchStore):
+            existing: dict[tuple[str, str, str], dict] = {}
+            for partition in sorted({f"month={str(row.get('entry_at') or '')[:7]}" for row in rows}):
+                for prior in store.read_rows("entry_quality_window", partition):
+                    key = (
+                        str(prior.get("opportunity_id") or ""),
+                        str(prior.get("attempt_id") or ""),
+                        str(prior.get("window") or ""),
+                    )
+                    existing[key] = dict(prior)
+
+            def changed(row: dict) -> bool:
+                prior = existing.get(
+                    (str(row.get("opportunity_id") or ""), str(row.get("attempt_id") or ""), str(row.get("window") or ""))
+                )
+                if prior is None:
+                    return True
+                return any(
+                    key not in {"run_id"} and prior.get(key) != value
+                    for key, value in row.items()
+                )
+
+            publish_rows = [row for row in rows if changed(row)]
+        if publish_rows:
+            store.publish("entry_quality_window", publish_rows, job_id=job_id)
+    return rows
+
+
 def _bands_for(recipe, identity, champion_map, variant_map):
     """The band levels THIS recipe's family supplies for this occurrence (M4.2).
 
@@ -2720,6 +2902,9 @@ __all__ = [
     "TERMINAL_RESULT_STATES",
     "OutcomeReport",
     "Recipe",
+    "ENTRY_QUALITY_EXIT_POLICY",
+    "ENTRY_QUALITY_WINDOW_SCHEMA",
+    "build_entry_quality_windows",
     "build_outcomes",
     "half_spread",
     "is_matured",

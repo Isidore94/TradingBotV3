@@ -50,8 +50,10 @@ They are evidence and must not be loaded as context.
   session marker spends the one model call before inference, and an absent/empty code-owned recipe allowlist refuses. Compact selection
   is by coverage, repeated questions, unresolved comparisons, readiness and active tests, never
   observed movement or R; it states `narrated K of N` and retains the full cited-cell facts.
-  Measured Report reads a caller-supplied Packet 2 `entry_comparison_summary` into deterministic
-  fixed-window entry-quality cells (or an honest unknown); `setup_research` is ready only for
+  The owned low-priority warehouse outcome pass now publishes the additive versioned
+  `entry_quality_window` flat P8 fixed-window dataset from the same completed M5 bars and selectors,
+  independently of `outcome_path`; Measured Report reads that session/month-scoped dataset in memory
+  into deterministic entry-quality cells (or an honest unknown). `setup_research` is ready only for
   measured cells. Daily Recap > Review and Setup Tracker's compact Next-test route share the same
   published display object, with no tracker ranking, Qt I/O or model call; Review offers
   clipboard-only **Copy test brief**.

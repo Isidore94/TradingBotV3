@@ -479,6 +479,29 @@ def _run_outcomes(
         job_id="m5_close_recipe_outcomes",
         force=force,
     )
+    # Phase 0.32's flat entry-quality windows use the same completed M5 rows
+    # already materialised for this owned low-priority outcome pass. They are
+    # not outcome_path rows and a failure cannot cost the established outcome
+    # build or influence any live detector/scoring path.
+    entry_quality_step: dict[str, object]
+    try:
+        p8_rows = [
+            row
+            for row in selected
+            if str(row.get("canonical_setup_id") or "") == outcomes.SETUP_ENTRY_TIMING_FAMILY
+            and str(row.get("side") or "").upper() == outcomes.SETUP_ENTRY_TIMING_SIDE
+        ]
+        entry_rows = outcomes.build_entry_quality_windows(
+            store=store,
+            p8_occurrences=p8_rows,
+            declared_entry_selector_ids=set(outcomes.SETUP_ENTRY_TIMING_VARIANTS),
+            as_of=stamp,
+            job_id="entry_quality_window",
+            m5_by_symbol=m5_by_symbol,
+        )
+        entry_quality_step = {"status": "OK", "rows": len(entry_rows)}
+    except Exception as exc:  # noqa: BLE001 - additive evidence never costs outcomes
+        entry_quality_step = {"status": "FAILED", "reason": str(exc)}
     after_like_step = _run_after_like_pass(
         store, m5_by_symbol, stamp=stamp, run_id=run_id
     )
@@ -519,6 +542,7 @@ def _run_outcomes(
         "symbols": len(symbols),
         "occurrences": len(selected),
         "m5_close": vars(primary),
+        "entry_quality_window": entry_quality_step,
         "legacy_slice": vars(legacy_slice) if legacy_slice is not None else None,
         "market_context": vars(context),
         "after_like": after_like_step,

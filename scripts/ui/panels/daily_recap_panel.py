@@ -243,6 +243,9 @@ class DailyRecapPanel(QFrame):
     chartRequested = Signal(str, str)
     #: (symbol, side) - the host performs the Focus add through FocusService.
     focusAddRequested = Signal(str, str)
+    #: The already-published proposal display for the compact Tracker route.
+    #: It is emitted only after this page's worker has read and rendered it.
+    entryQualityProposalChanged = Signal(object)
 
     def __init__(
         self,
@@ -715,6 +718,7 @@ class DailyRecapPanel(QFrame):
         self._entry_quality_proposal = dict(payload) if isinstance(payload, Mapping) else None
         if not self._entry_quality_proposal:
             self.next_test_card.setText("Next test: no validated proposal has been published yet")
+            self.entryQualityProposalChanged.emit(None)
             return
         proposal = self._entry_quality_proposal.get("proposal") or {}
         control = proposal.get("control") or {}
@@ -736,6 +740,7 @@ class DailyRecapPanel(QFrame):
             f"Proposal age: generated {age.get('generated_at') or proposal.get('generated_at', '')} · "
             f"source as-of {age.get('source_as_of') or proposal.get('as_of', '')}"
         )
+        self.entryQualityProposalChanged.emit(dict(self._entry_quality_proposal))
 
     def entry_quality_proposal_payload(self) -> dict[str, Any] | None:
         """The card's source object, useful for parity checks and no more."""

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from copy import deepcopy
+import json
 from typing import Any, Iterable, Mapping, Sequence
 
 import evidence_stats
@@ -18,6 +19,7 @@ from research_warehouse import trial_ledger
 
 
 COMPARISON_SCHEMA = "entry_quality_comparison_v1"
+COMPARISON_EXPORT_SCHEMA = "entry_quality_comparison_export_v1"
 DECLARATION_SCHEMA = "entry_quality_declaration_v1"
 DEFAULT_WINDOW = "60m"
 ALL_SCANNER = "all_scanner"
@@ -399,6 +401,55 @@ def summarise_attempts(
     }
 
 
+def build_export(rows: Iterable[Mapping[str, Any]], *, as_of: str) -> dict[str, Any]:
+    """Summarise flat warehouse windows into one deterministic report export.
+
+    ``entry_quality_window`` is the only source.  This is intentionally an
+    in-memory reader: it cannot fetch bars, write the lake, or make a result
+    ranking.  One export carries exactly one window so every reported cell and
+    denominator share the same endpoint.
+    """
+    raw = [dict(row) for row in rows]
+    windows = sorted({_text(row.get("window")) for row in raw if _text(row.get("window"))})
+    if len(windows) != 1:
+        raise ValueError("entry-quality export needs exactly one declared window")
+    attempts: list[dict[str, Any]] = []
+    for row in raw:
+        coverage = row.get("coverage")
+        if isinstance(coverage, str):
+            try:
+                coverage = json.loads(coverage)
+            except ValueError:
+                coverage = {}
+        attempt_id = _text(row.get("attempt_id"))
+        inferred_variant = attempt_id.rsplit("|", 1)[-1] if "|" in attempt_id else ""
+        attempts.append(
+            {
+                **row,
+                "entry_variant": (
+                    _text(row.get("entry_selector_id"))
+                    or _text(row.get("entry_variant"))
+                    or inferred_variant
+                ),
+                "dependency_cluster_id": _text(row.get("dependency_cluster_id")) or _text(row.get("opportunity_id")),
+                "session_date": _text(row.get("session_date")) or _text(row.get("entry_at"))[:10],
+                "population": _text(row.get("population")) or ALL_SCANNER,
+                "coverage": dict(coverage) if isinstance(coverage, Mapping) else {},
+            }
+        )
+    summary = summarise_attempts(attempts, useful_move_pct=1.0)
+    return {
+        "schema": COMPARISON_EXPORT_SCHEMA,
+        "as_of": str(as_of)[:10],
+        "window": windows[0],
+        "cells": summary["cells"],
+        "populations": summary["populations"],
+        "independent_clusters": summary["independent_clusters"],
+        "deduplicated_rows": summary["deduplicated_rows"],
+        "review_comparison": summary["review_comparison"],
+    }
+
+
 def _group_by_variant(rows: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -556,12 +607,14 @@ def prepare_authorized_evaluation(
 __all__ = [
     "ALL_SCANNER",
     "COMPARISON_SCHEMA",
+    "COMPARISON_EXPORT_SCHEMA",
     "DECLARATION_SCHEMA",
     "adapt_m5_occurrence_attempts",
     "adapt_p8_attempts",
     "amend_declaration",
     "authorized_recipe_context",
     "compare_variants",
+    "build_export",
     "freeze_declaration",
     "prepare_authorized_evaluation",
     "preserve_trial_history",
