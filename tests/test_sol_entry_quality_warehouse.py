@@ -7,6 +7,7 @@ project data directory or fetch a bar.
 from __future__ import annotations
 
 import copy
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -200,3 +201,71 @@ def test_unavailable_entry_quality_cell_keeps_the_shared_report_population_windo
     assert cell["window"] == ["entry_quality_window", "not_published"]
     assert cell["version"] == "entry_quality_window_v1"
     assert cell["exit_policy"] == "gross_excursion_no_exit"
+
+
+def test_real_store_multi_window_rows_choose_the_declared_primary_window_without_result_filtering(
+    tmp_path, monkeypatch
+):
+    """The warehouse keeps all seven windows; one named window feeds one report."""
+    from ai_jobs import digest, measured_report_publish, setup_research
+    from research_warehouse.store import ResearchStore
+    import measured_report
+
+    store = ResearchStore.open(tmp_path / "research")
+    assert store is not None
+    windows = (
+        "5_trading_minutes",
+        "15_trading_minutes",
+        "30_trading_minutes",
+        "60_trading_minutes",
+        "120_trading_minutes",
+        "180_trading_minutes",
+        "session_close",
+    )
+    rows: list[dict] = []
+    for index, window in enumerate(windows):
+        row = _flat_row()
+        row.update(
+            {
+                "window": window,
+                "entry_at": "2026-09-15T13:30:00+00:00",
+                "entry_selector_id": "p8_immediate_v1",
+                "run_id": "synthetic-p8-window-test",
+                "coverage": json.dumps(row["coverage"], sort_keys=True),
+                # A selected-by-result reader would pick this spectacular late
+                # window instead of the declared 30-minute endpoint.
+                "mfe_pct": 999.0 if window == "180_trading_minutes" else float(index + 1),
+            }
+        )
+        rows.append(row)
+    published = store.publish("entry_quality_window", rows, job_id="synthetic-p8-window-test")
+    assert published.rows_published == 7
+
+    monkeypatch.setattr(ResearchStore, "open", classmethod(lambda _cls: store))
+    warehouse = measured_report_publish.default_warehouse()
+    assert {row["window"] for row in warehouse.read_entry_quality("2026-09-15", now=NOW)} == set(windows)
+
+    result = measured_report_publish.run_measured_report(
+        session_date="2026-09-15",
+        now=NOW,
+        root=tmp_path / "ai_store",
+        sources=measured_report.ReportSources(),
+        warehouse=warehouse,
+    )
+    assert result["status"] == "ok"
+    report = measured_report_publish.latest_published(tmp_path / "ai_store", "2026-09-15")
+    quality = report["entry_quality"]
+    assert quality["primary_window"] == "30_trading_minutes"
+    assert quality["available_windows"] == list(windows)
+    assert quality["cells"]
+    assert {tuple(cell["window"]) for cell in quality["cells"]} == {
+        ("30_trading_minutes", "30_trading_minutes")
+    }
+    assert all(cell["value"] != 999.0 for cell in quality["cells"])
+
+    monkeypatch.setattr(digest, "_default_root", lambda: tmp_path / "ai_store")
+    facts = setup_research.next_test_facts("2026-09-15")
+    assert facts["status"] == "ready"
+    assert facts["report"]["report_id"] == report["report_id"]
+    assert facts["report"]["entry_quality"]["primary_window"] == quality["primary_window"]
+    assert facts["report"]["entry_quality"]["available_windows"] == quality["available_windows"]
