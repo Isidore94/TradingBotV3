@@ -1335,6 +1335,43 @@ def _default_root() -> Path:
     return store.retros_dir() / "setup_research"
 
 
+def next_test_facts(session_date: str) -> dict[str, Any]:
+    """Prepare Packet 3's compact input from the already-published report.
+
+    This is a reader only.  The measured-report slot is earlier in the
+    deterministic stage, so this cannot make a second warehouse walk, a trial
+    write, or a Qt-thread calculation.  An old report with no forward cells is
+    useful status: collection is the next deterministic action, not a made-up
+    proposal.
+    """
+    from ai_jobs import digest, measured_report_publish
+    import research_proposal
+
+    report = measured_report_publish.latest_published(digest._default_root(), session_date)
+    if not report:
+        return {"status": "report_unavailable", "reason": "no published measured report"}
+    report_hash = str(report.get("report_hash") or "")
+    if not report_hash:
+        encoded = json.dumps(report, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        report_hash = hashlib.sha256(encoded).hexdigest()
+    facts_report = {
+        "schema": "entry_quality_report_v1",
+        "report_id": report.get("report_id"),
+        "report_hash": report_hash,
+        "as_of": report.get("as_of"),
+        "narrated": {"narrated": 0, "of": 0, "label": "narrated 0 of 0"},
+        "entry_quality": dict(report.get("entry_quality") or {"cells": []}),
+        "trial_progress": list(report.get("trial_progress") or ()),
+    }
+    compact = research_proposal.build_compact_input({"report": facts_report})
+    return {
+        "status": "ready" if facts_report["entry_quality"].get("cells") else "collecting",
+        "report": facts_report,
+        "compact_input": compact,
+        "note": "selection is coverage/readiness-based; narrated K of N is stated separately",
+    }
+
+
 def run_setup_research(
     *,
     session_date: str = "",
@@ -1355,8 +1392,15 @@ def run_setup_research(
             recipe_ids=(coverage or {}).get("recipe_ids"),
             now=moment,
         )
-        target_root = Path(root) if root is not None else _default_root()
         stamp = session_date or moment.date().isoformat()
+        target_root = Path(root) if root is not None else _default_root()
+        # Packet 3 is deliberately prepared beside the established narration
+        # path.  Its optional model call is gated separately and is never made
+        # here merely because an old report has no entry-quality cells.
+        try:
+            pack["next_test"] = next_test_facts(stamp)
+        except Exception as exc:  # noqa: BLE001 - report availability never costs facts
+            pack["next_test"] = {"status": "report_unavailable", "reason": str(exc)}
         # The narration's coverage is decided BEFORE the markdown is written,
         # not after it is narrated: the `.md` is published once, beside one pack
         # for the date (gate #40), and re-rendering it after the model answered
@@ -1387,6 +1431,45 @@ def run_setup_research(
         f"{pack['coverage'].get('outcomes', len(outcome_rows))} recipe outcome(s); "
         f"{pack['gate']['eligible_policy_cells']} eligible policy cell(s)"
     )
+    # Packet 3 shares this slot's one local-model allowance.  A ready
+    # entry-quality report gets the structured proposal call INSTEAD of a
+    # second free-form narration; all other nights retain the existing N3 path.
+    next_test = pack.get("next_test") or {}
+    facts = next_test.get("report") if isinstance(next_test, Mapping) else None
+    quality = facts.get("entry_quality") if isinstance(facts, Mapping) else None
+    quality_cells = quality.get("cells") if isinstance(quality, Mapping) else ()
+    allowed_recipes = {
+        str(cell.get("recipe_id") or "")
+        for cell in (quality_cells or ())
+        if isinstance(cell, Mapping) and str(cell.get("recipe_id") or "")
+    }
+    if narrate and next_test.get("status") == "ready" and allowed_recipes:
+        try:
+            from ai_jobs import store
+            import research_proposal
+
+            proposal_result = research_proposal.run_next_test_job(
+                facts={"report": facts, "material_change": True},
+                root=store.briefs_dir() / "next_research_test",
+                session_date=stamp,
+                model_call=research_proposal.configured_model_call,
+                now=moment,
+                allowed_recipe_ids=allowed_recipes,
+            )
+            outputs.extend(
+                str(proposal_result[key])
+                for key in ("history_path", "current_path", "memo_path")
+                if proposal_result.get(key)
+            )
+            return {
+                "status": "ok",
+                "model": "local" if proposal_result.get("model_called") else "",
+                "reason": f"{base}; next-test {proposal_result.get('status')}",
+                "outputs": outputs,
+            }
+        except Exception as exc:  # noqa: BLE001 - deterministic facts remain the product
+            _log.info("Setup research next-test proposal unavailable (%s).", exc)
+            return {"status": "ok", "model": "", "reason": f"{base}; next-test unavailable: {exc}", "outputs": outputs}
     if not pack["gate"]["met"] or not narrate:
         suffix = "; no model called below the evidence floor" if not pack["gate"]["met"] else ""
         return {"status": "ok", "model": "", "reason": base + suffix, "outputs": outputs}
@@ -1430,4 +1513,4 @@ def run_setup_research(
     return {"status": "ok", "model": str(narration.get("model") or ""), "reason": base + told, "outputs": outputs}
 
 
-__all__ = ["FACTS_SCHEMA", "NARRATION_SCHEMA", "build_fact_pack", "render_markdown", "run_setup_research"]
+__all__ = ["FACTS_SCHEMA", "NARRATION_SCHEMA", "build_fact_pack", "next_test_facts", "render_markdown", "run_setup_research"]

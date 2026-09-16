@@ -3093,3 +3093,14 @@ but cannot confirm a prospective claim.
 **Reopen if** a persistent warehouse dataset is added. That requires its own schema/identity,
 month-scoped `ResearchStore.read_rows` reader, writer owner, trial/denominator contract and
 failure-preserving publication path; none is implied by this pure Packet 1 seam.
+
+## BD-104 — A next-test proposal is a validated publication, not a trial
+
+**Decision (2026-09-16, Phase 0.32 Packet 3).** The proposal consumes only published measured
+report facts and writes only the AI-store briefs namespace. It has no warehouse dataset, writer,
+trial-ledger mutation or production reader. Source report id/hash, cited cell ids and values, known
+recipe identity, feasible windows and proposed (never observed) thresholds validate before the
+immutable JSON history/current memo pair can publish. The compact selection key is independent of
+observed movement/R and retains `narrated K of N`; unavailable entry-quality cells mean collect or
+repair evidence, not an inferred edge. A later warehouse dataset would require its own ERD row and
+month-keyed reader under the standing contract.

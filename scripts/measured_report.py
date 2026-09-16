@@ -213,6 +213,13 @@ class MeasuredReport:
             "policy": list(self.policy),
             "example_tables": [dict(table) for table in self.example_tables],
             "cells": [cell.as_dict() for cell in self._cells],
+            # Phase 0.32 consumes only cells deliberately labelled by a future
+            # entry-quality publisher.  Older reports expose an honest empty
+            # set instead of inventing a movement result from exit-policy cells.
+            "entry_quality": {
+                "cells": [cell.as_dict() for cell in self._cells if cell.section == "entry_quality"],
+                "note": "fixed-window forward movement only; empty means not published yet",
+            },
             "sections": {
                 name: [cell.cell_id for cell in rows]
                 for name, rows in self.sections.items()

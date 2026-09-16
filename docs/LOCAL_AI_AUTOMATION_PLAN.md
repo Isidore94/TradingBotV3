@@ -2282,3 +2282,23 @@ writes the brief, full payload and manifest. The brief is capped at 32 KiB UTF-8
 manifest uses `ai_summary._ESTIMATED_CHARS_PER_TOKEN` (2.5) for its stated token estimate.
 There is no upload or frontier call. Result-selected example tables say so and show their full
 denominator; N3 narration selection remains n-descending.
+
+### 12.1 Phase 0.32 — validated next-test proposal (2026-09-16)
+
+`research_proposal.py` extends `setup_research`; it is not another agent or a second trial
+registry. Code prepares a compact input from the published measured report, whose entry-quality
+cells are explicit fixed-window movement facts and whose `report_hash` joins the proposal to the
+exact report. Selection is coverage/readiness/repeated-question based and says `narrated K of N`;
+no profit, R or result magnitude enters its key. A configured existing local model may make at
+most one serialized, material-evidence proposal per session. It receives only the compact pack and
+must return the strict schema; code validates source cells, report identity, recipes, windows,
+proposed thresholds and safe action vocabulary. It cannot register/run a trial, write strategy
+code or alter a live rule. Deterministic progress refreshes require no model.
+
+Validated JSON is immutable under `briefs/next_research_test/next_research_test_history/`; current
+JSON and `next_research_test.md` are atomic views of the same facts. A timeout, validation error or
+write failure keeps the last valid proposal/memo and leaves deterministic facts available. The
+Daily Recap worker, not Qt, reads the current proposal only when its report id/hash match, and the
+card/copy brief render that object without recomputation. Live proof must measure configured-model
+latency, reported token counts and peak memory when available; hardware specifications are not a
+performance claim.

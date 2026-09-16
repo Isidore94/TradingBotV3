@@ -100,6 +100,10 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # shape `away_recap` is listed for - a bundle missing it would launch and
     # then fail the first time the trader opened the page.
     "daily_recap_reader",
+    # Phase 0.32: Daily Recap imports this inside its report worker for the
+    # published next-test card. A frozen desk without it would launch and fail
+    # only when Review opens, so make the reach explicit.
+    "research_proposal",
     # WISHLIST 10J: the Trade Mentor. Every one of these is reached through a
     # FUNCTION-LEVEL import - `ui.app` imports the service inside `__init__`,
     # the service imports `user_presence` inside its own, and both the window

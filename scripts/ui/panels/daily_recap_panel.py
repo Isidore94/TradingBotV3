@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -223,7 +223,14 @@ class _RecapReadWorker(QThread):
                 return
             report = measured_report.report_from_payload(payload)
             narration = measured_report_publish.narration_for(root, report.report_id)
-            self.reportLoaded.emit(report, narration or None)
+            # Proposal history is in the existing AI-store briefs namespace,
+            # not the operational home.  This worker owns the read; the UI
+            # merely renders its returned object.
+            from ai_jobs import store
+            import research_proposal
+
+            proposal = research_proposal.published_display(store.briefs_dir(create=False) / "next_research_test", payload)
+            self.reportLoaded.emit(report, {"narration": narration, "proposal": proposal})
         except Exception as exc:  # noqa: BLE001 - never costs the four views
             self.reportLoaded.emit(None, str(exc))
 
@@ -304,6 +311,7 @@ class DailyRecapPanel(QFrame):
         # WS-RP: the fifth tab, after the four views.
         self._report: Any = None
         self._handoff: Any = None
+        self._entry_quality_proposal: dict[str, Any] | None = None
         self.tabs.addTab(self._build_review_tab(), REVIEW_TAB_TITLE)
 
         # Named attributes as well as the map, because a page is read by name.
@@ -414,6 +422,12 @@ class DailyRecapPanel(QFrame):
         self.review_note.setObjectName("SectionSubtitle")
         self.review_note.setWordWrap(True)
 
+        self.next_test_card = QLabel("Next test: no validated proposal has been published yet")
+        self.next_test_card.setObjectName("SectionSubtitle")
+        self.next_test_card.setWordWrap(True)
+        self.copy_next_test_button = QPushButton("Copy test brief")
+        self.copy_next_test_button.clicked.connect(self.copy_next_test_brief)
+
         self.copy_handoff_button = QPushButton("Copy handoff")
         self.copy_handoff_button.clicked.connect(self.copy_handoff)
         self.export_handoff_button = QPushButton("Export handoff…")
@@ -438,6 +452,9 @@ class DailyRecapPanel(QFrame):
         layout.addWidget(self.review_table, 1)
         layout.addWidget(QLabel("Local review of this report"))
         layout.addWidget(self.review_note)
+        layout.addWidget(QLabel("Next test"))
+        layout.addWidget(self.next_test_card)
+        layout.addWidget(self.copy_next_test_button)
         layout.addLayout(buttons)
         layout.addWidget(self.handoff_note)
         return page
@@ -611,7 +628,12 @@ class DailyRecapPanel(QFrame):
             )
             self.review_note.setText(NO_REVIEW_YET)
             return
+        proposal = None
+        if isinstance(narration, Mapping):
+            proposal = narration.get("proposal")
+            narration = narration.get("narration")
         self.render_report(report, narration=narration)
+        self.render_entry_quality_proposal(proposal)
 
     def _render_failure(self, reason: str) -> None:
         self.status.setText(f"the session could not be read: {reason}")
@@ -687,6 +709,44 @@ class DailyRecapPanel(QFrame):
             cell = self._report.cell(item.text())
             out.append((cell.cell_id, cell.value))
         return tuple(out)
+
+    def render_entry_quality_proposal(self, payload: Mapping[str, Any] | None) -> None:
+        """Show the already-published next-test object without recomputing it."""
+        self._entry_quality_proposal = dict(payload) if isinstance(payload, Mapping) else None
+        if not self._entry_quality_proposal:
+            self.next_test_card.setText("Next test: no validated proposal has been published yet")
+            return
+        proposal = self._entry_quality_proposal.get("proposal") or {}
+        control = proposal.get("control") or {}
+        changed = proposal.get("changed_condition") or {}
+        self.next_test_card.setText(
+            f"{proposal.get('question', 'No justified new test.')}\n"
+            f"Control: {control.get('recipe_id', 'unknown')} · one change: "
+            f"{changed.get('field', 'unknown')}={changed.get('value', 'unknown')}\n"
+            f"Limits: {self._entry_quality_proposal.get('unknown', 'not measured')} · "
+            f"{proposal.get('status', 'proposed')} · report "
+            f"{self._entry_quality_proposal.get('report_id', '')}"
+        )
+
+    def entry_quality_proposal_payload(self) -> dict[str, Any] | None:
+        """The card's source object, useful for parity checks and no more."""
+        return dict(self._entry_quality_proposal) if self._entry_quality_proposal else None
+
+    def copy_next_test_brief(self) -> str:
+        """Copy the validated brief.  It has no file, model, or runner effect."""
+        if not self._entry_quality_proposal:
+            self.status.setText("there is no validated next-test proposal yet")
+            return ""
+        import research_proposal
+        from PySide6.QtWidgets import QApplication
+
+        brief = research_proposal.copy_test_brief(self._entry_quality_proposal)
+        app = QApplication.instance()
+        if app is not None:
+            app.clipboard().setText(brief)
+        self.status.setText("copied the validated next-test brief; it does not register or run anything")
+        self.statusChanged.emit(self.status.text())
+        return brief
 
     def _build_handoff(self) -> Any:
         if self._report is None:

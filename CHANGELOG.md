@@ -38,6 +38,19 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Phase 0.32 Packet 3 next-test proposal (2026-09-16, unmerged).**
+  `scripts/research_proposal.py` is a validated advisory-only proposal/memo seam: source report
+  id/hash and every cited cell must match code facts; unsafe fields/actions, unknown cells/recipes,
+  invented numbers and observed-looking proposed thresholds refuse. Immutable history and the
+  current JSON/Markdown memo live only under the existing AI-store briefs namespace; a failed
+  model or publish retains the last good proposal and deterministic progress. Compact selection
+  is by coverage, repeated questions, unresolved comparisons, readiness and active tests, never
+  observed movement or R; it states `narrated K of N`. Measured Report publishes its stable hash
+  and explicit entry-quality cells; `setup_research` prepares their compact reader path; Daily
+  Recap > Review receives that published object on its worker, shows a Next test card and offers
+  clipboard-only **Copy test brief**. No proposal registers/runs/amends a trial or touches a
+  detector, score, alert, ranking, watchlist, Focus, journal, policy or live store. Gates #142-143 owed.
+
 - **Phase 0.32 Packet 1 forward entry quality (2026-09-15, unmerged).**
   `scripts/entry_quality.py` adds `entry_quality_forward_v1`, a pure research-only view over
   caller-supplied completed M5/D1 bars. It measures named fixed elapsed/session endpoints with

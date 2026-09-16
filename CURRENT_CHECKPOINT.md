@@ -20,10 +20,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-15: Phase 0.32 Packets 1-2 are built, unmerged.** Packet 1 measures pure exit-independent paths; Packet 2 compares only supplied research rows fairly. Packet 3 remains. |
-| Working branch | **`codex/sol-p2-entry-comparison`**, carrying the tester's red contracts plus Packet 2; the shared desk checkout remains on `main` and was not restarted. |
-| Unmerged / open | Phase 0.32 Packets 1-2 await review/integration; copied-data gates #140-#141 are owed. Packet 3, gates #134-#139, H4/LRSI and older recorded gates remain open. |
-| Next action | **Review Packets 1-2 in order, then complete Phase 0.32 Packet 3 without changing any live rule.** Restart and run the existing real desk/overnight gates separately. |
+| Latest work | **2026-09-16: Phase 0.32 Packets 1-3 are built, unmerged.** Packet 3 adds only validated proposal/memo publication and a Review card over the report. |
+| Working branch | **`codex/sol-p3-research-proposal`**, carrying the tester's red contracts plus Packet 3; the shared desk checkout remains on `main` and was not restarted. |
+| Unmerged / open | Phase 0.32 Packets 1-3 await review/integration; copied-data gates #140-#143 are owed. H4/LRSI and older recorded gates remain open. |
+| Next action | **Review Packets 1-3 in order, then run the copied-data and one optional local-model gates without changing any live rule.** Restart only after integration and trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
 | Last verified baseline | **Phase 0.31 full strict pass: 8,449 passed, 6 skipped, 72 subtests; compileall, ruff and smoke 7/7 clean.** Thread warnings were errors; the two later packaging guards pass 19/19. |
 | Frozen exe | **Rebuilt and verified 2026-09-15: source 86/86 and frozen 86/86.** The Mentor's newly reachable AI module is bundled narrowly; build-time PySide6 and foreign-DLL guards are pinned. The production desk still runs from SOURCE. |
@@ -33,6 +33,8 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 143 | **Next-test local-model proposal (Phase 0.32 Packet 3)** - after integration, use a copied published entry-quality report with a configured existing local model. Verify one validated proposal references its exact report id/hash and cells, writes immutable JSON history plus `briefs/next_research_test/next_research_test.md`, and the Review card/copy brief agree. Record actual latency, reported tokens and peak memory when available; a disabled/offline model must leave deterministic facts and the prior memo intact. | lead/trader, after Packet 3 integration |
+| 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded report with known forward cells, run the setup-research/report reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and report id/hash agree in the compact input, current memo and Review card; unchanged evidence performs no inference and no proposal/trial/live-store write. | lead/trader, after Packet 3 integration |
 | 141 | **Fair entry comparison (Phase 0.32 Packet 2)** - on a copied bounded completed-bar/P8 slice, normalize one P8 opportunity and one existing M5 occurrence through the reader. Verify every declared P8 entry variant has one row, a no-trigger and a missing input stay in the full denominator, shared-triggered movement is printed separately from full-population coverage, duplicated scans do not raise clusters or distribution/pair samples, an unregistered recipe refuses, and no ledger/store/live output changes. This is a coverage/read-contract check, not an edge, a winner or trial registration. | lead/trader, after Packets 1-2 integration |
 | 140 | **Forward entry quality (Phase 0.32 Packet 1)** - on a copied bounded completed-bar slice containing a late M5 entry, a gap and a no-trigger variant, run the pure measurement and verify each row's exact endpoint, coverage and state; a post-stop rally remains in gross MFE, the daily two-touch row is ambiguous, and no source/store/live output changes. This is measurement only, not evidence of an edge or a trial registration. | lead/trader, after Packet 1 integration |
 | 139 | **Trade Mentor raw-first AI help and large popup** - after restart, the popup opens near 900x820, keeps a manual resize across hide/show, and the 10:00 card saves the exact raw reply before local AI fills only missing fields; an existing edit stays, an ambiguous number asks one question, Save writes recalled evidence and no planned-risk field. | trader, next 10:00 prompt after integration |
@@ -179,6 +181,25 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-16 — Phase 0.32 Packet 3 BUILT on `codex/sol-p3-research-proposal`; review and live/local-model gates owed
+
+Packet 3 adds the additive `research_proposal` validator/publication seam only. It rejects an
+unknown report/cell/recipe, fabricated observed number, infeasible window, unsafe action or text
+that tries to become a runner instruction. Validated JSON history, current JSON and the short memo
+live under the existing configured AI-store `briefs/next_research_test/` tree; a failed model or
+atomic write preserves the last valid memo. The existing setup-research path prepares a compact,
+coverage/readiness-selected report input without another warehouse read; it remains model-free
+when there are no published entry-quality cells. Measured Report carries an explicit entry-quality
+block and hash; Daily Recap > Review reads its matching proposal on the worker, renders the Next
+test card and copies an in-memory test brief. No trial registration/execution, live rule, store,
+detector, score, alert, ranking, Focus, watchlist, journal or policy changes. Tester contracts:
+`tests/test_sol_research_proposal.py` (19 red-before-green cases); targeted compatibility/packaging
+run 119 passed. The existing `test_ai_jobs_runner.py` historical-date baseline is red in this
+worktree (28 failures before slot execution; `session_date=''`), unrelated to Packet 3. Gates
+#142 (copied deterministic progress) and #143 (one configured local-model proposal with measured
+latency/tokens/memory) remain owed. Packaging trigger: new lazily imported top-level module;
+the frozen spec/selftest now name it. No frozen rebuild was run.
 
 ### 2026-09-15 — Phase 0.32 Packet 1 BUILT on `codex/sol-p1-forward`; review and copied-data gate owed
 

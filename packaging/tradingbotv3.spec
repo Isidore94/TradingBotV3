@@ -152,6 +152,13 @@ datas += collect_data_files("certifi")
 
 binaries = []
 hiddenimports = []
+# Daily Recap reaches the measured report and validated next-test reader only
+# on its worker after the trader opens Review. They are top-level modules, so
+# package collection cannot see them; make a missing frozen import fail here.
+hiddenimports += [
+    "measured_report", "research_proposal", "ai_jobs.store", "ai_jobs.digest",
+    "ai_jobs.measured_report_publish",
+]
 # The UI loads panels/services by name in places, and the engines import each
 # other lazily inside functions; collecting the first-party trees outright is
 # far cheaper than chasing ModuleNotFoundError one launch at a time.

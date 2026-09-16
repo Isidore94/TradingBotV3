@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import hashlib
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -244,9 +245,12 @@ def run_measured_report(
     json_path, md_path = report_paths(target, day, next_version)
     json_published = False
     try:
+        payload = report.as_dict()
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        payload["report_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         digest._publish(
             json_path,
-            json.dumps(report.as_dict(), indent=1, sort_keys=True, default=str) + "\n",
+            json.dumps(payload, indent=1, sort_keys=True, default=str) + "\n",
         )
         json_published = True
         digest._publish(md_path, measured_report.render_markdown(report))
