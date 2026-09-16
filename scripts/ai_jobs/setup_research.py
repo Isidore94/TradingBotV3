@@ -1422,6 +1422,27 @@ def run_setup_research(
                 narrated = dict(narration_view(pack)["narrated"])
             except Exception as exc:  # noqa: BLE001 - a coverage line never costs the pack
                 _log.info("Setup research narration coverage unavailable (%s).", exc)
+        # `next_test_facts` reads the measured report before this pack's bounded
+        # narration view exists. Carry the already-computed, result-independent
+        # K/N into the proposal facts before either artifact is published.
+        next_test = pack.get("next_test")
+        facts_report = next_test.get("report") if isinstance(next_test, Mapping) else None
+        if narrated and isinstance(facts_report, dict):
+            next_narrated = dict(narrated)
+            next_narrated.setdefault(
+                "label",
+                f"narrated {next_narrated.get('eligible_policy_cells', 0)} of "
+                f"{next_narrated.get('of', 0)}",
+            )
+            facts_report["narrated"] = next_narrated
+            try:
+                import research_proposal
+
+                next_test["compact_input"] = research_proposal.build_compact_input(
+                    {"report": facts_report}
+                )
+            except Exception as exc:  # noqa: BLE001 - coverage never costs the fact pack
+                _log.info("Setup research next-test compact coverage unavailable (%s).", exc)
         json_path = _superseding(target_root / str(moment.year) / f"{stamp}.json")
         outputs = [str(_publish(json_path, json.dumps(pack, indent=1, sort_keys=True, default=str) + "\n"))]
         outputs.append(

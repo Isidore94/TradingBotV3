@@ -43,8 +43,9 @@ They are evidence and must not be loaded as context.
   id/hash and every cited cell must match code facts; unsafe fields/actions, unknown cells/recipes,
   invented numbers and observed-looking proposed thresholds refuse. Immutable history and the
   current JSON/Markdown memo live only under the existing AI-store briefs namespace; a failed
-  current/memo write restores their prior pair. A runner-owned session marker spends the one model
-  call before inference, and an absent/empty code-owned recipe allowlist refuses. Compact selection
+  current/memo write restores their prior pair. A model-free current-report refresh updates only
+  deterministic trial progress while retaining the immutable proposal source/history. A runner-owned
+  session marker spends the one model call before inference, and an absent/empty code-owned recipe allowlist refuses. Compact selection
   is by coverage, repeated questions, unresolved comparisons, readiness and active tests, never
   observed movement or R; it states `narrated K of N` and retains the full cited-cell facts.
   Measured Report publishes its stable hash and explicit entry-quality cells; `setup_research`

@@ -242,11 +242,14 @@ def _render_memo(proposal: Mapping[str, Any], report: Mapping[str, Any], now: da
     """A short Markdown reader view made only from validated JSON facts."""
     progress = next((row for row in report.get("trial_progress") or () if str(row.get("trial_id")) in set(map(str, proposal.get("related_trial_ids") or ()))), {})
     counts = progress.get("progress") if isinstance(progress, Mapping) else {}
-    cells = _cells(report)
-    observed = []
-    for cite in proposal.get("cited_observations") or ():
-        cell = cells.get(str(cite.get("cell_id") or ""), {})
-        observed.append(f"{cite.get('cell_id')} = {cell.get('value')} {cell.get('unit')} ({cell.get('state')})")
+    # The proposal's observations remain the JSON that validation accepted.
+    # A later report may advance its progress without rewriting model-authored
+    # evidence to look as though it was cited at the later point in time.
+    observed = [
+        f"{cite.get('cell_id')} = {cite.get('value')} {cite.get('unit')}"
+        for cite in proposal.get("cited_observations") or ()
+        if isinstance(cite, Mapping)
+    ]
     windows = ", ".join(map(str, proposal.get("measurement_windows") or ()))
     body = f"""# Next research test
 
@@ -256,7 +259,7 @@ The next action is **{proposal.get('primary_action')}**. The question is: {propo
 
 ## What we know
 
-This memo renders validated proposal JSON against the published measured report. Its identity is report ID {report.get('report_id')} with hash {report.get('report_hash')}, measured as of {report.get('as_of')}. The narration coverage is {((report.get('narrated') or {}).get('label') or 'not available')}. The cited measured cells are {'; '.join(observed) or 'none'}. Those cells describe opportunity movement under stated windows. They are not booked profit, an exit result, or evidence that any setup is best.
+This memo renders validated proposal JSON beside the current published measured report. The current report identity is ID {report.get('report_id')} with hash {report.get('report_hash')}, measured as of {report.get('as_of')}. The proposal source remains ID {(proposal.get('source') or {}).get('report_id')} with hash {(proposal.get('source') or {}).get('report_hash')}. The narration coverage is {((report.get('narrated') or {}).get('label') or 'not available')}. The cited measured cells are {'; '.join(observed) or 'none'}. Those cells describe opportunity movement under stated windows. They are not booked profit, an exit result, or evidence that any setup is best.
 
 ## Active test and limits
 
@@ -264,7 +267,7 @@ The related trial is {progress.get('trial_id', 'not registered')}. Its recorded 
 
 ## Provenance
 
-The proposal cites source cells {', '.join(map(str, proposal.get('source_cell_ids') or ()))}, and links to trial IDs {', '.join(map(str, proposal.get('related_trial_ids') or ())) or 'none'}. Each observed value above was checked against those report cells before publication. The model may suggest wording, but it cannot supply a new number, replace a source, or authorize its own recipe. The current JSON and memo are a matched view of one validated proposal and its exact report identity.
+The proposal cites source cells {', '.join(map(str, proposal.get('source_cell_ids') or ()))}, and links to trial IDs {', '.join(map(str, proposal.get('related_trial_ids') or ())) or 'none'}. Each observed value above was checked against the proposal source before publication. The model may suggest wording, but it cannot supply a new number, replace a source, or authorize its own recipe. The current JSON and memo are a matched view of current progress and one immutable validated proposal.
 
 ## Test definition
 
@@ -298,19 +301,8 @@ def publish_proposal_bundle(root: Path, *, proposal: Mapping[str, Any], report: 
     _atomic_write(history, serialized)
     # History is immutable. A later pair failure keeps the prior current/memo
     # pair intact; the orphan history is a truthful audit of validation.
-    current_payload = {"schema": "research_next_test_current_v1", "proposal": dict(proposal), "report_id": report.get("report_id"), "report_hash": report.get("report_hash"), "updated_at": moment.isoformat()}
-    current_path = _current_json(target)
-    memo_path = _memo_path(target)
-    previous_current = current_path.read_bytes() if current_path.exists() else None
-    previous_memo = memo_path.read_bytes() if memo_path.exists() else None
-    memo = _render_memo(proposal, report, moment)
-    try:
-        _atomic_write(current_path, json.dumps(current_payload, indent=2, sort_keys=True) + "\n")
-        _atomic_write(memo_path, memo)
-    except Exception:
-        _restore_pair(current_path, previous_current)
-        _restore_pair(memo_path, previous_memo)
-        raise
+    current_payload = _current_view_payload(proposal, report, moment)
+    current_path, memo_path = _write_current_pair(target, current_payload, proposal, report, moment)
     display = build_display_payload(report, proposal, status={"worker": "complete"})
     return {"history_path": str(history), "current_path": str(current_path), "memo_path": str(memo_path), "copy_brief": copy_test_brief(display)}
 
@@ -325,13 +317,89 @@ def _restore_pair(path: Path, previous: bytes | None) -> None:
     os.replace(temporary, path)
 
 
-def _last_valid(root: Path) -> Mapping[str, Any] | None:
+def _current_report(report: Mapping[str, Any]) -> dict[str, Any]:
+    """The deterministic current facts allowed to accompany one proposal."""
+    return {
+        "report_id": report.get("report_id"),
+        "report_hash": report.get("report_hash"),
+        "as_of": report.get("as_of"),
+        "narrated": dict(report.get("narrated") or {}),
+        "trial_progress": [dict(row) for row in (report.get("trial_progress") or ()) if isinstance(row, Mapping)],
+    }
+
+
+def _current_view_payload(
+    proposal: Mapping[str, Any], report: Mapping[str, Any], moment: datetime
+) -> dict[str, Any]:
+    """One mutable view: current deterministic facts beside immutable proposal text."""
+    current = _current_report(report)
+    source = dict(proposal.get("source") or {})
+    return {
+        "schema": "research_next_test_current_v2",
+        # Kept at the top for v1 readers; these name the CURRENT report.
+        "report_id": current["report_id"],
+        "report_hash": current["report_hash"],
+        "current_report": current,
+        "proposal": dict(proposal),
+        "proposal_source": source,
+        "proposal_age": {
+            "generated_at": proposal.get("generated_at"),
+            "source_as_of": proposal.get("as_of"),
+            "current_as_of": current.get("as_of"),
+        },
+        "updated_at": moment.isoformat(),
+    }
+
+
+def _write_current_pair(
+    root: Path,
+    current_payload: Mapping[str, Any],
+    proposal: Mapping[str, Any],
+    report: Mapping[str, Any],
+    moment: datetime,
+) -> tuple[Path, Path]:
+    """Write the mutable JSON/memo pair together or restore their prior pair."""
+    current_path = _current_json(root)
+    memo_path = _memo_path(root)
+    previous_current = current_path.read_bytes() if current_path.exists() else None
+    previous_memo = memo_path.read_bytes() if memo_path.exists() else None
+    memo = _render_memo(proposal, report, moment)
+    try:
+        _atomic_write(current_path, json.dumps(dict(current_payload), indent=2, sort_keys=True) + "\n")
+        _atomic_write(memo_path, memo)
+    except Exception:
+        _restore_pair(current_path, previous_current)
+        _restore_pair(memo_path, previous_memo)
+        raise
+    return current_path, memo_path
+
+
+def _current_payload(root: Path) -> Mapping[str, Any] | None:
     try:
         payload = json.loads(_current_json(Path(root)).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _last_valid(root: Path) -> Mapping[str, Any] | None:
+    payload = _current_payload(root)
     value = payload.get("proposal") if isinstance(payload, Mapping) else None
     return value if isinstance(value, Mapping) else None
+
+
+def refresh_current_progress(
+    root: Path, *, report: Mapping[str, Any], now: datetime | None = None
+) -> dict[str, str] | None:
+    """Refresh current deterministic facts without changing proposal/history."""
+    target = Path(root)
+    proposal = _last_valid(target)
+    if proposal is None:
+        return None
+    moment = _now(now)
+    payload = _current_view_payload(proposal, report, moment)
+    current_path, memo_path = _write_current_pair(target, payload, proposal, report, moment)
+    return {"current_path": str(current_path), "memo_path": str(memo_path)}
 
 
 def run_next_test_job(*, facts: Mapping[str, Any], root: Path, session_date: str, model_call: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None, now: datetime | None = None, allowed_recipe_ids: set[str] | None = None) -> dict[str, Any]:
@@ -355,12 +423,24 @@ def run_next_test_job(*, facts: Mapping[str, Any], root: Path, session_date: str
     already = attempt_path.exists()
     material = bool(facts.get("material_change"))
     same_evidence = bool(last and (last.get("source") or {}).get("report_hash") == report.get("report_hash"))
-    base = {"status": "deterministic_facts_available", "model_called": False, "progress_refreshed": bool(same_evidence), "last_valid_proposal_id": (last or {}).get("proposal_id"), "proposal_age": bool(last)}
+    base = {"status": "deterministic_facts_available", "model_called": False, "progress_refreshed": False, "last_valid_proposal_id": (last or {}).get("proposal_id"), "proposal_age": bool(last)}
+
+    def refresh(*, model_called: bool = False, reason: str = "") -> dict[str, Any]:
+        if last is None:
+            return {**base, "model_called": model_called, "reason": reason or "no prior valid proposal was refreshed"}
+        try:
+            published = refresh_current_progress(target, report=report, now=now)
+        except Exception as exc:  # current pair is restored by the writer
+            return {**base, "model_called": model_called, "reason": reason or str(exc)}
+        if published is None:
+            return {**base, "model_called": model_called, "reason": reason or "no prior valid proposal was refreshed"}
+        return {**base, "model_called": model_called, "progress_refreshed": True, **published, **({"reason": reason} if reason else {})}
+
     if not material or same_evidence or already or model_call is None:
-        return base
+        return refresh()
     allowed = set(allowed_recipe_ids or ())
     if not allowed:
-        return {**base, "reason": "no authorized recipe allowlist"}
+        return refresh(reason="no authorized recipe allowlist")
     try:
         _atomic_write(
             attempt_path,
@@ -371,7 +451,7 @@ def run_next_test_job(*, facts: Mapping[str, Any], root: Path, session_date: str
         published = publish_proposal_bundle(target, proposal=proposal, report=report, now=now)
         return {"status": "ok", "model_called": True, "progress_refreshed": True, "proposal_id": proposal["proposal_id"], **published}
     except Exception as exc:  # model/publish failure never costs deterministic facts
-        return {"status": "deterministic_facts_available", "model_called": True, "progress_refreshed": True, "reason": str(exc), "last_valid_proposal_id": (last or {}).get("proposal_id"), "proposal_age": bool(last)}
+        return refresh(model_called=True, reason=str(exc))
 
 
 def configured_model_call(pack: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -441,7 +521,30 @@ def proposal_execution_effect(_proposal: Mapping[str, Any]) -> dict[str, bool]:
 
 
 def build_display_payload(report: Mapping[str, Any], proposal: Mapping[str, Any], *, status: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    return {"schema": "entry_quality_next_test_display_v1", "report_id": report.get("report_id"), "report_hash": report.get("report_hash"), "proposal_id": proposal.get("proposal_id"), "proposal": dict(proposal), "entry_quality_cells": list((report.get("entry_quality") or {}).get("cells") or ()), "windows": list(proposal.get("measurement_windows") or ()), "unknown": proposal.get("unknown"), "status": dict(status or {}), "narrated": dict(report.get("narrated") or {})}
+    progress = next(
+        (
+            dict(row.get("progress") or {})
+            for row in (report.get("trial_progress") or ())
+            if isinstance(row, Mapping)
+            and str(row.get("trial_id") or "") in set(map(str, proposal.get("related_trial_ids") or ()))
+        ),
+        {},
+    )
+    return {
+        "schema": "entry_quality_next_test_display_v2",
+        "report_id": report.get("report_id"),
+        "report_hash": report.get("report_hash"),
+        "proposal_source": dict(proposal.get("source") or {}),
+        "proposal_age": {"generated_at": proposal.get("generated_at"), "source_as_of": proposal.get("as_of"), "current_as_of": report.get("as_of")},
+        "current_progress": progress,
+        "proposal_id": proposal.get("proposal_id"),
+        "proposal": dict(proposal),
+        "entry_quality_cells": list((report.get("entry_quality") or {}).get("cells") or ()),
+        "windows": list(proposal.get("measurement_windows") or ()),
+        "unknown": proposal.get("unknown"),
+        "status": dict(status or {}),
+        "narrated": dict(report.get("narrated") or {}),
+    }
 
 
 def published_display(root: Path, report: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -450,13 +553,16 @@ def published_display(root: Path, report: Mapping[str, Any]) -> dict[str, Any] |
     The Daily Recap worker calls this.  It deliberately never rebuilds cells or
     makes an older proposal look current after a report has matured.
     """
-    proposal = _last_valid(Path(root))
+    payload = _current_payload(Path(root))
+    proposal = payload.get("proposal") if isinstance(payload, Mapping) else None
     if not proposal:
         return None
-    source = proposal.get("source") or {}
-    if source.get("report_id") != report.get("report_id") or source.get("report_hash") != report.get("report_hash"):
+    current = payload.get("current_report") if isinstance(payload, Mapping) else None
+    if not isinstance(current, Mapping):  # v1 current views named their only report at top level.
+        current = payload if isinstance(payload, Mapping) else {}
+    if current.get("report_id") != report.get("report_id") or current.get("report_hash") != report.get("report_hash"):
         return None
-    return build_display_payload(report, proposal, status={"worker": "complete"})
+    return build_display_payload(report, proposal, status={"worker": "complete", "proposal_refreshed": True})
 
 
 def model_usage_record(value: Mapping[str, Any]) -> dict[str, Any]:

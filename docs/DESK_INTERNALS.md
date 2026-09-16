@@ -5881,9 +5881,10 @@ the existing N3 `narrated K of N` statement remains visible. The local model is 
 it may name one test to resolve uncertainty but cannot register, execute, amend or promote a test,
 call a recipe optimal, generate code or enter any runner instruction.
 
-The Daily Recap Review worker reads the current proposal only when it belongs to the report it
-already loaded, then the card and clipboard brief render that object. It never computes a movement
-number or reads the AI store on Qt. A missing/changed report, model outage, validation refusal or
-failed publish leaves deterministic facts and the last good memo intact; a changed report without a
-new proposal says its memo was not refreshed. The proposal is therefore
+The Daily Recap Review worker reads the current view only when its current report identity belongs
+to the report it already loaded, then the card and clipboard brief render that view while naming the
+immutable proposal source separately. It never computes a movement number or reads the AI store on
+Qt. A model-free refresh updates only the current trial/no-trigger/missing facts and its memo; a
+missing prior proposal, model outage, validation refusal or failed publish leaves deterministic
+facts and the last good pair intact. The proposal is therefore
 not permission to change a detector, score, alert, ranking, watchlist, Focus, journal or policy.

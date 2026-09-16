@@ -719,14 +719,19 @@ class DailyRecapPanel(QFrame):
         proposal = self._entry_quality_proposal.get("proposal") or {}
         control = proposal.get("control") or {}
         changed = proposal.get("changed_condition") or {}
+        progress = self._entry_quality_proposal.get("current_progress") or {}
+        source = self._entry_quality_proposal.get("proposal_source") or proposal.get("source") or {}
         self.next_test_card.setText(
             f"{proposal.get('question', 'No justified new test.')}\n"
             f"Control: {control.get('recipe_id', 'unknown')} · one change: "
             f"{changed.get('field', 'unknown')}={changed.get('value', 'unknown')}\n"
+            f"Current progress: eligible {progress.get('eligible', 'unknown')} · no-trigger "
+            f"{progress.get('no_trigger', 'unknown')} · missing {progress.get('missing_data', 'unknown')}\n"
             f"Limits: {self._entry_quality_proposal.get('unknown', 'not measured')} · "
             f"{proposal.get('status', 'proposed')} · report "
             f"{self._entry_quality_proposal.get('report_id', '')} · hash "
-            f"{self._entry_quality_proposal.get('report_hash', '')}"
+            f"{self._entry_quality_proposal.get('report_hash', '')}\n"
+            f"Proposal source: {source.get('report_id', '')} · hash {source.get('report_hash', '')}"
         )
 
     def entry_quality_proposal_payload(self) -> dict[str, Any] | None:

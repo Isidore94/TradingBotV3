@@ -533,9 +533,10 @@ explicit trader-authorized ledger path.
    entry-quality cell block; Daily Recap > Review reads the same validated object on its worker,
    prints the Next test card, and copies a no-write brief. A proposal never registers, runs or
    amends a trial. The local model remains serialized, advisory and once per runner session when an
-   eligible material fact path has a code-owned recipe allowlist; deterministic facts without a
-   matching new proposal say the current memo was not refreshed. Failed model or current/memo write
-   attempts preserve the last valid pair. Gates #142-#143 are owed.
+   eligible material fact path has a code-owned recipe allowlist; a model-free report refreshes the
+   current JSON/memo pair with deterministic trial progress while retaining the proposal's source
+   identity and immutable history. Failed model or current/memo write attempts preserve the last
+   valid pair. Gates #142-#143 are owed.
 
 Fail-before-fix proof for Packet 1 is `tests/test_sol_entry_quality.py`: session/DST/early-close
 endpoints, gaps, late entries, confirmation-candle exclusion, long/short mirror, stop-then-rally

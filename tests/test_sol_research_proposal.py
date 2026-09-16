@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -455,7 +455,7 @@ def test_model_cannot_authorize_its_own_recipe_and_session_guard_ignores_its_tim
     )
     assert first["model_called"] is True
     assert second["model_called"] is False
-    assert second["progress_refreshed"] is False
+    assert second["progress_refreshed"] is True
     assert len(calls) == 1, "an absent allowlist must not reach the model"
 
 
@@ -521,3 +521,152 @@ def test_next_test_facts_preserves_available_narrated_coverage(monkeypatch, tmp_
 
     assert facts["report"]["narrated"] == report["narrated"]
     assert facts["compact_input"]["narrated"]["label"] == "narrated 2 of 7"
+
+
+def test_model_free_progress_refresh_updates_the_current_pair_display_and_review_card(tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from ui.panels.daily_recap_panel import DailyRecapPanel
+
+    source_report = _report()
+    proposal = proposals.validate_proposal(
+        _proposal(), report=source_report, allowed_recipe_ids={"m5_breakout_control_v1"}
+    )
+    first = proposals.publish_proposal_bundle(
+        tmp_path, proposal=proposal, report=source_report, now=NOW
+    )
+    history_before = Path(first["history_path"]).read_text(encoding="utf-8")
+    current_report = _report()
+    current_report["report_id"] = "entry-quality-2026-09-16-b2c3d4e5"
+    current_report["report_hash"] = "b2" * 32
+    current_report["as_of"] = "2026-09-16"
+    current_report["trial_progress"][0]["progress"] = {
+        "eligible": 23, "no_trigger": 7, "missing_data": 2, "sessions": 13,
+    }
+    calls: list[dict] = []
+    refreshed = proposals.run_next_test_job(
+        facts={"report": current_report, "material_change": False},
+        root=tmp_path,
+        session_date="2026-09-16",
+        model_call=lambda pack: calls.append(pack),
+        now=datetime(2026, 9, 16, 21, 30, tzinfo=timezone.utc),
+    )
+
+    assert refreshed["model_called"] is False
+    assert refreshed["progress_refreshed"] is True
+    assert calls == []
+    current = json.loads((tmp_path / "next_research_test.json").read_text(encoding="utf-8"))
+    assert current["current_report"]["report_id"] == current_report["report_id"]
+    assert current["current_report"]["report_hash"] == current_report["report_hash"]
+    assert current["proposal_source"] == proposal["source"]
+    assert current["proposal"] == proposal
+    assert Path(first["history_path"]).read_text(encoding="utf-8") == history_before
+    memo = (tmp_path / "next_research_test.md").read_text(encoding="utf-8")
+    assert current_report["report_id"] in memo
+    assert current_report["report_hash"] in memo
+    assert "eligible 23, no-trigger 7, missing-data 2" in memo
+    assert proposal["source"]["report_hash"] in memo
+
+    display = proposals.published_display(tmp_path, current_report)
+    assert display["report_id"] == current_report["report_id"]
+    assert display["report_hash"] == current_report["report_hash"]
+    assert display["proposal_source"] == proposal["source"]
+    assert display["current_progress"]["eligible"] == 23
+    app = QApplication.instance() or QApplication([])
+    panel = DailyRecapPanel()
+    try:
+        panel.render_entry_quality_proposal(display)
+        card = panel.next_test_card.text()
+        assert current_report["report_id"] in card
+        assert current_report["report_hash"] in card
+        assert "eligible 23" in card
+        assert proposal["source"]["report_id"] in card
+    finally:
+        panel.deleteLater()
+        app.processEvents()
+
+
+def test_model_free_progress_refresh_keeps_the_prior_pair_when_its_memo_write_fails(tmp_path, monkeypatch):
+    proposal = proposals.validate_proposal(
+        _proposal(), report=_report(), allowed_recipe_ids={"m5_breakout_control_v1"}
+    )
+    proposals.publish_proposal_bundle(tmp_path, proposal=proposal, report=_report(), now=NOW)
+    current_path = tmp_path / "next_research_test.json"
+    memo_path = tmp_path / "next_research_test.md"
+    before_current = current_path.read_text(encoding="utf-8")
+    before_memo = memo_path.read_text(encoding="utf-8")
+    changed = _report()
+    changed["report_id"] = "entry-quality-2026-09-16-pair-fail"
+    changed["report_hash"] = "c3" * 32
+    original = proposals._atomic_write
+    monkeypatch.setattr(
+        proposals,
+        "_atomic_write",
+        lambda path, text: (_ for _ in ()).throw(OSError("memo full"))
+        if Path(path) == memo_path else original(path, text),
+    )
+
+    with pytest.raises(OSError, match="memo full"):
+        proposals.refresh_current_progress(
+            tmp_path, report=changed, now=datetime(2026, 9, 16, 21, 30, tzinfo=timezone.utc)
+        )
+    assert current_path.read_text(encoding="utf-8") == before_current
+    assert memo_path.read_text(encoding="utf-8") == before_memo
+
+
+def test_model_free_progress_without_a_prior_proposal_says_nothing_was_refreshed(tmp_path):
+    result = proposals.run_next_test_job(
+        facts={"report": _report(), "material_change": False},
+        root=tmp_path,
+        session_date="2026-09-16",
+        model_call=None,
+        now=datetime(2026, 9, 16, 21, 30, tzinfo=timezone.utc),
+    )
+    assert result["model_called"] is False
+    assert result["progress_refreshed"] is False
+    assert result["reason"] == "no prior valid proposal was refreshed"
+
+
+def test_setup_research_injects_its_real_narrated_coverage_into_next_test_input(tmp_path, monkeypatch):
+    from ai_jobs import setup_research
+
+    outcomes, occurrences, contexts = [], {}, {}
+    for index in range(30):
+        occurrence_id = f"narrated-{index}"
+        outcomes.append({
+            "occurrence_id": occurrence_id,
+            "recipe_id": "m5close_post_earnings_candle1_2r_v1",
+            "entry_at": NOW + timedelta(days=index % 5),
+            "net_r": 0.5,
+            "first_hit": "TARGET",
+            "result_state": "TARGETED",
+        })
+        occurrences[occurrence_id] = {
+            "occurrence_id": occurrence_id,
+            "canonical_setup_id": "POST_EARNINGS_CANDLE_BREAK",
+            "side": "LONG",
+            "symbol": f"N{index % 6}",
+        }
+        contexts[occurrence_id] = {"M5": "bullish_weak", "D1": "bullish_strong"}
+    next_test = {
+        "status": "collecting",
+        "report": _report(),
+        "compact_input": {"narrated": {}},
+    }
+    monkeypatch.setattr(setup_research, "next_test_facts", lambda _stamp: copy.deepcopy(next_test))
+    monkeypatch.setattr(
+        setup_research,
+        "narration_view",
+        lambda _pack: {"narrated": {"eligible_policy_cells": 2, "of": 7, "selected_by": "size"}},
+    )
+    result = setup_research.run_setup_research(
+        session_date="2026-09-15", now=NOW, root=tmp_path, narrate=True,
+        inputs=(outcomes, occurrences, contexts, {"outcomes": 30}),
+    )
+    assert result["status"] == "ok"
+    saved = json.loads(Path(result["outputs"][0]).read_text(encoding="utf-8"))
+    narrated = saved["next_test"]["report"]["narrated"]
+    assert narrated["eligible_policy_cells"] == 2
+    assert narrated["of"] == 7
+    assert narrated["label"] == "narrated 2 of 7"
+    assert saved["next_test"]["compact_input"]["narrated"] == narrated

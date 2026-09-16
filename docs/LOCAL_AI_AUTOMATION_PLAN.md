@@ -2299,9 +2299,10 @@ code or alter a live rule. Deterministic progress refreshes require no model.
 
 Validated JSON is immutable under `briefs/next_research_test/next_research_test_history/`; current
 JSON and `next_research_test.md` restore as a pair on a write failure. A timeout, validation error or
-write failure keeps the last valid proposal/memo and leaves deterministic facts available. A changed
-report without a new proposal says its current memo was not refreshed. The
-Daily Recap worker, not Qt, reads the current proposal only when its report id/hash match, and the
-card/copy brief render that object without recomputation. Live proof must measure configured-model
+write failure keeps the last valid proposal/memo and leaves deterministic facts available. A
+model-free current-report refresh updates that pair's trial/no-trigger/missing facts while retaining
+the immutable proposal source and history. The Daily Recap worker, not Qt, reads the current view
+only when its current report id/hash match, and the card/copy brief separate that current identity
+from the proposal source without recomputation. Live proof must measure configured-model
 latency, reported token counts and peak memory when available; hardware specifications are not a
 performance claim.

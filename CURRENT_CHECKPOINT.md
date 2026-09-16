@@ -34,7 +34,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | # | Gate | Owed by |
 |---|---|---|
 | 143 | **Next-test local-model proposal (Phase 0.32 Packet 3)** - after integration, use a copied published entry-quality report with a configured existing local model. Verify one validated proposal references its exact report id/hash and cells, writes immutable JSON history plus `briefs/next_research_test/next_research_test.md`, and the Review card/copy brief agree. Record actual latency, reported tokens and peak memory when available; a disabled/offline model must leave deterministic facts and the prior memo intact. | lead/trader, after Packet 3 integration |
-| 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded report with known forward cells, run the setup-research/report reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and report id/hash agree in the compact input, current memo and Review card; unchanged evidence performs no inference and no proposal/trial/live-store write. | lead/trader, after Packet 3 integration |
+| 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded report with known forward cells, run the setup-research/report reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and current report id/hash agree in the compact input, current JSON/memo and Review card while the immutable proposal source stays named; unchanged evidence performs no inference, proposal/trial/history or live-data write, only the paired current-view refresh. | lead/trader, after Packet 3 integration |
 | 141 | **Fair entry comparison (Phase 0.32 Packet 2)** - on a copied bounded completed-bar/P8 slice, normalize one P8 opportunity and one existing M5 occurrence through the reader. Verify every declared P8 entry variant has one row, a no-trigger and a missing input stay in the full denominator, shared-triggered movement is printed separately from full-population coverage, duplicated scans do not raise clusters or distribution/pair samples, an unregistered recipe refuses, and no ledger/store/live output changes. This is a coverage/read-contract check, not an edge, a winner or trial registration. | lead/trader, after Packets 1-2 integration |
 | 140 | **Forward entry quality (Phase 0.32 Packet 1)** - on a copied bounded completed-bar slice containing a late M5 entry, a gap and a no-trigger variant, run the pure measurement and verify each row's exact endpoint, coverage and state; a post-stop rally remains in gross MFE, the daily two-touch row is ambiguous, and no source/store/live output changes. This is measurement only, not evidence of an edge or a trial registration. | lead/trader, after Packet 1 integration |
 | 139 | **Trade Mentor raw-first AI help and large popup** - after restart, the popup opens near 900x820, keeps a manual resize across hide/show, and the 10:00 card saves the exact raw reply before local AI fills only missing fields; an existing edit stays, an ambiguous number asks one question, Save writes recalled evidence and no planned-risk field. | trader, next 10:00 prompt after integration |
@@ -188,8 +188,10 @@ Packet 3 adds the additive `research_proposal` validator/publication seam only. 
 unknown report/cell/recipe, fabricated observed number, infeasible window, unsafe action or text
 that tries to become a runner instruction. Validated JSON history, current JSON and the short memo
 live under the existing configured AI-store `briefs/next_research_test/` tree; a failed model or
-current/memo write restores the last valid pair. The runner spends a trusted session marker before
-the one model call and refuses an absent/empty code-owned recipe allowlist. The existing
+current/memo write restores the last valid pair. A model-free current-report read refreshes only
+deterministic trial progress while retaining immutable proposal source/history. The runner spends a
+trusted session marker before the one model call and refuses an absent/empty code-owned recipe
+allowlist. The existing
 setup-research path prepares a compact,
 coverage/readiness-selected report input without another warehouse read; it remains model-free
 when there are no published entry-quality cells. Measured Report carries an explicit entry-quality
