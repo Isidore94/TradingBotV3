@@ -531,7 +531,9 @@ explicit trader-authorized ledger path.
    result-independent input from the published measured report; only a measured Packet 2
    `entry_quality_window` cell from the month-scoped research warehouse makes it ready, while an
    unavailable lake read publishes an explicit unknown cell and keeps it collecting. The report carries a hash and deterministic
-   fixed-window entry-quality cells; citations may name only declared source cells and their
+   fixed-window entry-quality cells. The declared `30_trading_minutes` primary endpoint is selected
+   by window identity before comparison values are read, while sorted available windows remain metadata;
+   citations may name only declared source cells and their
    stated source windows. Daily Recap > Review and Setup Tracker's compact Next-test route reuse
    the same validated display object; neither reads a store, ranks, or calls a model. A proposal never registers, runs or
    amends a trial. The local model remains serialized, advisory and once per runner session when an

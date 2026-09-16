@@ -22,10 +22,37 @@ COMPARISON_SCHEMA = "entry_quality_comparison_v1"
 COMPARISON_EXPORT_SCHEMA = "entry_quality_comparison_export_v1"
 DECLARATION_SCHEMA = "entry_quality_declaration_v1"
 DEFAULT_WINDOW = "60m"
+PRIMARY_WINDOW = "30_trading_minutes"
 ALL_SCANNER = "all_scanner"
 NON_TRIGGER_STATES = frozenset({"no_trigger", "missing_data", "invalid_entry", "unavailable", "pending"})
 MEASURABLE_STATES = frozenset({"complete", "partial"})
 M5_ENTRY_VARIANTS = frozenset({"m5_first_close"})
+
+
+def _window_sort_key(window: str) -> tuple[int, int, str]:
+    """Stable identity order; no movement statistic can enter this key."""
+    if window == "session_close":
+        return (1, 0, window)
+    prefix = window.removesuffix("_trading_minutes")
+    try:
+        return (0, int(prefix), window)
+    except ValueError:
+        return (0, 10**9, window)
+
+
+def available_windows(rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    """All published windows in deterministic identity order."""
+    return sorted(
+        {_text(row.get("window")) for row in rows if _text(row.get("window"))},
+        key=_window_sort_key,
+    )
+
+
+def select_primary_window(rows: Iterable[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Keep one declared endpoint before any comparison statistic is read."""
+    materialized = [dict(row) for row in rows]
+    windows = available_windows(materialized)
+    return [row for row in materialized if _text(row.get("window")) == PRIMARY_WINDOW], windows
 
 
 def _text(value: Any) -> str:
@@ -442,6 +469,8 @@ def build_export(rows: Iterable[Mapping[str, Any]], *, as_of: str) -> dict[str, 
         "schema": COMPARISON_EXPORT_SCHEMA,
         "as_of": str(as_of)[:10],
         "window": windows[0],
+        "primary_window": PRIMARY_WINDOW,
+        "available_windows": windows,
         "cells": summary["cells"],
         "populations": summary["populations"],
         "independent_clusters": summary["independent_clusters"],
@@ -608,10 +637,12 @@ __all__ = [
     "ALL_SCANNER",
     "COMPARISON_SCHEMA",
     "COMPARISON_EXPORT_SCHEMA",
+    "PRIMARY_WINDOW",
     "DECLARATION_SCHEMA",
     "adapt_m5_occurrence_attempts",
     "adapt_p8_attempts",
     "amend_declaration",
+    "available_windows",
     "authorized_recipe_context",
     "compare_variants",
     "build_export",
@@ -619,4 +650,5 @@ __all__ = [
     "prepare_authorized_evaluation",
     "preserve_trial_history",
     "summarise_attempts",
+    "select_primary_window",
 ]

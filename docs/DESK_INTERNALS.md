@@ -5889,6 +5889,8 @@ declared selectors. They are gross excursion facts labelled `gross_excursion_no_
 replacement for `outcome_path`; the session/month-scoped `ResearchStore.read_rows` reader builds
 the Packet 2 comparison in memory. A missing/unreadable dataset is one unknown cell and cannot
 cost the old outcome build, publish a model proposal, or reach a detector, score, alert or live rule.
+When more than one fixed window exists, `30_trading_minutes` is the declared primary by identity;
+the other sorted available window names remain metadata and no result value may select the report input.
 
 The Daily Recap Review worker reads the current view only when its current report identity belongs
 to the report it already loaded, then the card and clipboard brief render that view while naming the

@@ -197,14 +197,15 @@ setup-research path prepares a compact,
 coverage/readiness-selected report input without another warehouse read; it remains model-free
 when there are no measured Packet 2 entry-comparison cells. The owned low-priority warehouse outcome
 pass publishes versioned flat P8 windows from the same completed M5 bars/declared selectors without
-changing `outcome_path`; Measured Report reads that session/month-scoped dataset in memory into
-deterministic cells (or an explicit unknown) and its hash;
+changing `outcome_path`; Measured Report selects the declared `30_trading_minutes` window by
+identity before comparison values, retains sorted available-window metadata, and reads that
+session/month-scoped dataset in memory into deterministic cells (or an explicit unknown) and its hash;
 Daily Recap > Review and Setup Tracker's compact route reuse its matching display object, render the
 Next test card with report id/hash and copy an in-memory complete test brief. No trial
 registration/execution, live rule, store, detector, score, alert, ranking, Focus, watchlist,
 journal or policy changes. Reviewer inspection reproduced the new red failures against
-`77d6087b`; the five warehouse publication regressions plus the prior proposal contract pass, and
-the bounded report/setup-research/Recap/Tracker/warehouse compatibility run passes 207 tests. The existing
+`e38d1dff`; the warehouse publication/multi-window regressions plus the prior proposal contract pass, and
+the bounded report/setup-research/Recap/Tracker/warehouse compatibility run passes 208 tests. The existing
 `test_ai_jobs_runner.py` historical-date baseline is red in this
 worktree (28 failures before slot execution; `session_date=''`), unrelated to Packet 3. Gates
 #142 (copied deterministic progress) and #143 (one configured local-model proposal with measured

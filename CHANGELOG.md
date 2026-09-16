@@ -54,7 +54,9 @@ They are evidence and must not be loaded as context.
   `entry_quality_window` flat P8 fixed-window dataset from the same completed M5 bars and selectors,
   independently of `outcome_path`; Measured Report reads that session/month-scoped dataset in memory
   into deterministic entry-quality cells (or an honest unknown). `setup_research` is ready only for
-  measured cells. Daily Recap > Review and Setup Tracker's compact Next-test route share the same
+  measured cells. Its declared `30_trading_minutes` primary window is selected only by identity
+  before the export reads results, while sorted available windows travel with the report/facts.
+  Daily Recap > Review and Setup Tracker's compact Next-test route share the same
   published display object, with no tracker ranking, Qt I/O or model call; Review offers
   clipboard-only **Copy test brief**.
   No proposal registers/runs/amends a trial or touches a

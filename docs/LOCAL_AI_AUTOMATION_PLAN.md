@@ -2288,7 +2288,9 @@ denominator; N3 narration selection remains n-descending.
 `research_proposal.py` extends `setup_research`; it is not another agent or a second trial
 registry. Code prepares a compact input from the published measured report, whose session/month-scoped
 warehouse `entry_quality_window` rows become the in-memory Packet 2 comparison and deterministic
-fixed-window movement cells (or one honest unknown cell). Only a measured cell makes the next-test path ready. Its `report_hash` joins the
+fixed-window movement cells (or one honest unknown cell). The declared `30_trading_minutes` primary
+window is selected by identity before values are read and sorted available windows stay metadata.
+Only a measured cell makes the next-test path ready. Its `report_hash` joins the
 proposal to the exact report. Selection is coverage/readiness/repeated-question based and says `narrated K of N`;
 no profit, R or result magnitude enters its key. A configured existing local model may make at
 most one serialized, material-evidence proposal per runner session. A trusted session marker is

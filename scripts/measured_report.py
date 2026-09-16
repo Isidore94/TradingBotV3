@@ -188,6 +188,8 @@ class MeasuredReport:
     source_paths: tuple[str, ...] = ()
     policy: tuple[str, ...] = ()
     example_tables: tuple[dict[str, Any], ...] = ()
+    entry_quality_primary_window: str = ""
+    entry_quality_available_windows: tuple[str, ...] = ()
     _cells: tuple[Cell, ...] = field(default_factory=tuple, repr=False)
 
     def cells(self) -> tuple[Cell, ...]:
@@ -218,6 +220,8 @@ class MeasuredReport:
             # honest unknown rather than borrowing an exit-policy result.
             "entry_quality": {
                 "cells": [cell.as_dict() for cell in self._cells if cell.section == "entry_quality"],
+                "primary_window": self.entry_quality_primary_window,
+                "available_windows": list(self.entry_quality_available_windows),
                 "note": "Packet 2 fixed-window forward movement only; unknown means not published yet",
             },
             "sections": {
@@ -1524,6 +1528,8 @@ def build_report(
     warehouse_sources: tuple[str, ...] = ()
     entry_quality_payload: Mapping[str, Any] | None = None
     entry_quality_sources: tuple[str, ...] = ()
+    entry_quality_primary_window = ""
+    entry_quality_available_windows: tuple[str, ...] = ()
     warehouse_reason = (
         "no research warehouse is configured on this desk "
         "(`research_store_dir` unset), so the swing population was not read"
@@ -1540,7 +1546,18 @@ def build_report(
             import entry_comparison
 
             entry_rows = warehouse.read_entry_quality(session, now=moment)
-            entry_quality_payload = entry_comparison.build_export(entry_rows, as_of=session)
+            primary_rows, available_windows = entry_comparison.select_primary_window(entry_rows)
+            entry_quality_available_windows = tuple(available_windows)
+            if primary_rows:
+                # The declared identity is selected before `build_export`
+                # reads any values, so a later spectacular endpoint cannot
+                # become a report input by result.
+                entry_quality_payload = entry_comparison.build_export(
+                    primary_rows, as_of=session
+                )
+                entry_quality_primary_window = str(
+                    entry_quality_payload.get("primary_window") or ""
+                )
             entry_quality_sources = _cite(
                 *tuple(getattr(warehouse, "source_paths", ()) or ())
             )
@@ -1618,6 +1635,8 @@ def build_report(
             "best/worst tables: " + SELECTED_TABLE_LABEL,
         ),
         example_tables=_example_tables(intraday_rows, swing_rows),
+        entry_quality_primary_window=entry_quality_primary_window,
+        entry_quality_available_windows=entry_quality_available_windows,
         _cells=tuple(ordered),
     )
 
@@ -1668,6 +1687,7 @@ def report_from_payload(payload: Mapping[str, Any]) -> MeasuredReport:
             sections[name] = tuple(cell for cell in cells if cell.state != STATE_MEASURED)
         else:
             sections[name] = tuple(cell for cell in cells if cell.section == name)
+    entry_quality = payload.get("entry_quality") or {}
     return MeasuredReport(
         session_date=str(payload.get("session_date") or ""),
         as_of=str(payload.get("as_of") or ""),
@@ -1679,6 +1699,17 @@ def report_from_payload(payload: Mapping[str, Any]) -> MeasuredReport:
         source_paths=tuple(str(part) for part in (payload.get("source_paths") or ())),
         policy=tuple(str(part) for part in (payload.get("policy") or ())),
         example_tables=tuple(dict(table) for table in (payload.get("example_tables") or ())),
+        entry_quality_primary_window=str(
+            entry_quality.get("primary_window") if isinstance(entry_quality, Mapping) else ""
+        ),
+        entry_quality_available_windows=tuple(
+            str(part)
+            for part in (
+                entry_quality.get("available_windows")
+                if isinstance(entry_quality, Mapping)
+                else ()
+            )
+        ),
         _cells=cells,
     )
 
