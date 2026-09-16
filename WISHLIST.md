@@ -267,7 +267,7 @@ restart is owed.
 
 4. Keep the desk snappy all day (packets SN1-SN6). the prompt is below
 
-SWEEP: SN4 BUILT (`claude/ws-sn4-feed-diff`, a26f877a, gate #103); SN3 BUILT (`claude/ws-sn3-one-rrs-pass`, ca1c1a6e, gate #104; the duplicate fourth `_record_environment_focus_history` call stays, ask-first); SN2 BUILT (`claude/ws-sn2-incremental-bars`, dddcd9b4, gate #113; `SN2_FORMING_TAIL_FORCES_REFETCH = False` by lead ruling); SN5/SN6 were built 2026-09-08 on `main` (gate #92); **SN1 BUILT in Phase 0.31 on `codex/phase-031`, gate #134.**
+SWEEP: SN4 BUILT (`claude/ws-sn4-feed-diff`, a26f877a, gate #103); SN3 BUILT (`claude/ws-sn3-one-rrs-pass`, ca1c1a6e, gate #104; the duplicate fourth `_record_environment_focus_history` call stays, ask-first); SN2 BUILT (`claude/ws-sn2-incremental-bars`, dddcd9b4, gate #113; `SN2_FORMING_TAIL_FORCES_REFETCH = False` by lead ruling); SN5/SN6 were built 2026-09-08 on `main` (gate #92); **SN1 BUILT in Phase 0.31 and merged to `main` at `4563efaa`, gate #134.**
 
 Cut the M5 scanner's hold on the interpreter so the desk stays snappy at the
 close, without losing any scan, alert, board or evidence row (packets SN1-SN6).

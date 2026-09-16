@@ -20,14 +20,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-15 (night): Phase 0.31 is built on `codex/phase-031`, with H4/LRSI excluded.** It adds SN1 process isolation, canonical review identity, trendline break/retest, subject-session writes, grounded story narration, Mentor AI draft help/coaching and the larger persistent popup. |
-| Working branch | **`codex/phase-031`** in `.codex/worktrees/phase-031`; the shared `main` desk checkout was not edited or restarted. |
-| Unmerged / open | Phase 0.31 is fully verified and ready to integrate; live gates #134-#139 remain. H4/LRSI is still unbuilt by explicit trader choice. Older live gates and the recorded maintenance items remain. |
-| Next action | **Integrate Phase 0.31, then run the real desk and overnight gates #134-#139.** Phase 1 follows the live-validation week. |
+| Latest work | **2026-09-15 (night): Phase 0.31 is merged to `main` at feature commit `4563efaa`, with H4/LRSI excluded.** It adds SN1 process isolation, canonical review identity, trendline break/retest, subject-session writes, grounded story narration, Mentor AI draft help/coaching and the larger persistent popup. |
+| Working branch | **`main`**, fast-forwarded from verified `codex/phase-031`; the branch is pushed to origin and the desk was not restarted. |
+| Unmerged / open | No Phase 0.31 code remains unmerged; live gates #134-#139 remain. H4/LRSI is still unbuilt by explicit trader choice. Older live gates and the recorded maintenance items remain. |
+| Next action | **Restart the source desk, then run the real desk and overnight gates #134-#139.** Phase 1 follows the live-validation week. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
 | Last verified baseline | **Phase 0.31 full strict pass: 8,449 passed, 6 skipped, 72 subtests; compileall, ruff and smoke 7/7 clean.** Thread warnings were errors; the two later packaging guards pass 19/19. |
 | Frozen exe | **Rebuilt and verified 2026-09-15: source 86/86 and frozen 86/86.** The Mentor's newly reachable AI module is bundled narrowly; build-time PySide6 and foreign-DLL guards are pinned. The production desk still runs from SOURCE. |
-| Desk | **The shared checkout remains on `main`; Phase 0.31 was built in an isolated worktree.** No agent restarted the desk or wrote a live store. |
+| Desk | **The shared checkout is on `main` with Phase 0.31 loaded.** It was stopped during integration; no agent restarted it or wrote a live store. |
 
 ### Open gates, newest first
 
@@ -178,14 +178,15 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
 
-### 2026-09-15 (night) — Phase 0.31 BUILT in the isolated Codex worktree
+### 2026-09-15 (night) — Phase 0.31 BUILT, VERIFIED AND MERGED TO MAIN
 
 The trader authorized the remaining named WISHLIST work except H4/LRSI and asked for a much
 larger Trade Mentor popup. `codex/phase-031` now owns SN1's spawned below-normal scanner child,
 `opportunity_identity_v1` plus restatement, the completed-D1 frozen trendline break/retest watch,
 subject-session Market Journal writes, a source-checked nightly market-story narration, raw-first
-off-Qt Mentor draft filling/coaching, and persistent 900x820 popup sizing. The shared desk checkout
-was not edited or restarted and no live store was repaired. The strict full suite passed 8,449
+off-Qt Mentor draft filling/coaching, and persistent 900x820 popup sizing. Feature commit
+`4563efaa` was fast-forwarded into the clean shared `main` checkout and pushed; the desk was stopped
+and was not restarted, and no live store was repaired. The strict full suite passed 8,449
 tests with thread warnings fatal; smoke passed 7/7; source and frozen selftests both passed 86/86.
 Two later packaging guard tests passed 19/19. Gates #134-#139 hold the real-session and overnight checks.
 

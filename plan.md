@@ -270,7 +270,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.28** | Trader's 2026-09-15 desk requests: day-trade watchlist reset (DTR) + setups-table cycle and veto-hide (SC) | DTR wipes `longs.txt` / `shorts.txt` after each close. SC cycles a setups-table chart after veto / claim / Next and hides a vetoed row while the tracker keeps it. **BUILT; live gates #123 and #131 owed.** |
 | **0.29** | Pullback alert, trendline break, compression (trader 2026-09-15) | **BUILT, independently reviewed and merged.** PCT-3: compression measure, chip, calibration CLI and `compression_break` (gates #124-#125). PCT-1: Pullback alert, auto-arm and claim names (gates #126-#129). PCT-2: frozen completed-close trendline-break event plus additive D1-feed row (gate #130). Spec `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. |
 | **0.30** | Daily Recap repair (DR-REPAIR) | Streams and reduces M5 state, shows one whole best event per stock/side, uses D1 horizons for D1 decisions, keeps pending swings, states factual counts and re-reads once after the close. **BUILT and reviewed; live gate #132 owed.** |
-| **0.31** | Finish the remaining WISHLIST integration (trader 2026-09-15) | **BUILT on `codex/phase-031`; live gates #134-#139 owed.** SN1 process isolation, bounded 5E identity repair, trendline break-then-retest, grounded market-story narration, the Market Journal evening-session repair, Trade Mentor validated AI draft filling/coaching, and a larger persistent Mentor popup. **H4/LRSI is explicitly excluded.** |
+| **0.31** | Finish the remaining WISHLIST integration (trader 2026-09-15) | **BUILT and merged to `main` at `4563efaa`; live gates #134-#139 owed.** SN1 process isolation, bounded 5E identity repair, trendline break-then-retest, grounded market-story narration, the Market Journal evening-session repair, Trade Mentor validated AI draft filling/coaching, and a larger persistent Mentor popup. **H4/LRSI is explicitly excluded.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -485,8 +485,9 @@ evening subject-session storage; bounded/cited narration and model failure; raw-
 Mentor parsing, invalid units, conflicts, AI unavailable and protected fields; popup
 default/restore/clamp. Live gates begin at #134 after the build is independently checked.
 
-Built on `codex/phase-031`: focused verification is green. Gates #134-#139 retain the
-real-desk, real-model and next-session proof; no H4/LRSI implementation was added.
+Built on `codex/phase-031` and merged to `main` at `4563efaa`. The strict full suite,
+smoke, source selftest and frozen selftest are green. Gates #134-#139 retain the real-desk,
+real-model and next-session proof; no H4/LRSI implementation was added.
 
 ## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — BUILT; live validation owed
 
