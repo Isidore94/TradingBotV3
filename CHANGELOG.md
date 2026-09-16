@@ -2656,8 +2656,10 @@ The restored report implementation now sits on the current Daily Recap repair. I
 report id from stable measured cells, publishes JSON/Markdown version siblings from the final
 deterministic nightly slot, renders those published cells on a fifth Daily Recap tab, and only
 copies or exports a frontier handoff after the trader clicks. The 44 tester-written behavior
-tests were red before the module existed and are green now; the two N3 selection guards remain
-green. Gate #133 is live proof after the next overnight run; no full-suite baseline is claimed.
+tests were red before the module existed; two reviewer-blocker tests were red before their repairs;
+all 48 are green now. The N3 selection guards remain green. Gate #133 is live proof after the next
+overnight run. The full suite passed 8,435 tests plus 72 subtests with six skips; its one known Qt
+order flake passed alone. Ruff, smoke 7/7 and source selftest 83/83 are green.
 
 ### 2026-09-15 (afternoon) - Phase 0.29: Pullback alert, trendline break, compression (trader-directed; packets PCT-1..3 on `claude/pullback-compression-2026-09-15`)
 

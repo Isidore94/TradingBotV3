@@ -20,14 +20,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-15 (evening): WS-RP is built on `codex/ws-rp-resume-2026-09-15` above the reviewed Phase 0.29 and Daily Recap repair.** It adds one measured report, deterministic nightly publish, the fifth Daily Recap tab and manual-only handoff export (gate #133). |
-| Working branch | **`codex/ws-rp-resume-2026-09-15`** carries WS-RP. The shared desk checkout is clean `main` at `11b4bc9d`; this packet does not modify it. |
-| Unmerged / open | WS-RP restores the unfinished report code onto the current Daily Recap repair and preserves its state/reducer/after-close fixes. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim. Still recorded: 2026-09-03 lake incident call, lock-file sweep, cached forming candles, and gate #57 mirror proof. |
-| Next action | **Review WS-RP, then integrate the completed Phase 0.26 build for the trader's live-validation week.** Live gates #94-#133 and the older combined checks remain. |
+| Latest work | **2026-09-15 (evening): Phase 0.26 is code-complete on `main`; WS-RP was independently reviewed, repaired and merged.** It adds one measured report, deterministic nightly publish, the fifth Daily Recap tab and manual-only handoff export (gate #133). |
+| Working branch | **`main`** carries the reviewed WS-RP merge; the shared checkout is clean and the desk was not restarted. |
+| Unmerged / open | The WISHLIST sweep has no unfinished build packet; its live gates remain. Follow-ons remain unauthorized: Day-trade Tracker first-click read (~448 ms), Journal splitter/blank space, Qt order-dependent flakes, and root instruction-file trim. Still recorded: 2026-09-03 lake incident call, lock-file sweep, cached forming candles, and gate #57 mirror proof. |
+| Next action | **Run the completed Phase 0.26 build through the trader's live-validation week, beginning with gate #133 after the next overnight run.** Phase 1 is the next build phase; live gates #94-#133 and the older combined checks remain. |
 | Trader actions owed | Restart after integration, let one overnight run finish, then inspect the Report files and Daily Recap Review tab for gate #133. Existing watchlist-reset, claim and veto questions remain. Cache repair and environment backfill remain separate. |
-| Last verified baseline | **Combined test branch `claude/test-combined-2026-09-15`: 8,388 passed, 0 failed, 6 skipped, 72 subtests in 686 s; ruff clean; smoke 7/7; source selftest 83/83.** The Phase 0.29-only parent passed 8,362 tests before the Daily Recap merge. |
+| Last verified baseline | **WS-RP merge: 8,435 passed, 6 skipped and 72 subtests in 667 s; the one known Qt order flake (`test_the_manifest_is_read_on_the_refresh_path_and_never_on_paint`) passed alone.** RP 48/48, nearby 135/135, ruff clean, smoke 7/7 and source selftest 83/83; AI lock free. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
-| Desk | **The shared checkout is clean `main` at `11b4bc9d`.** The next start remains the trader's call; no builder switched, restarted or wrote through the desk checkout. |
+| Desk | **The shared checkout is clean `main` with the reviewed WS-RP merge.** The next start remains the trader's call; no agent restarted the desk or wrote a live store. |
 
 ### Open gates, newest first
 
@@ -171,6 +171,17 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-15 (evening) — Phase 0.26 CODE-COMPLETE: WS-RP reviewed, repaired and merged
+
+The trader said to continue integrating `WISHLIST.md`, authorizing restoration of its final packet,
+WS-RP (10K steps 2 and 5), from the branch backup. The tester reproduced 44 failures before the
+feature existed. Independent review found two blockers: a failed Markdown sibling could orphan JSON,
+and an all-open cohort said `unknown` instead of `pending`. Two new red tests pinned those defects;
+the repair leaves no orphan and keeps pending distinct from unavailable. Review round two returned GO.
+The merge adds no model call, upload, detector, score, alert, policy or live-store write. Gate #133 is
+the real overnight report plus Daily Recap Review/Copy/Export check. Automated proof is in the glance
+block; the single full-run failure is the already-recorded Qt order flake and passed alone.
 
 ### 2026-09-15 (afternoon/evening) — Phase 0.29 BUILT, REVIEWED AND MERGED: Pullback alert, trendline break, compression (trader-directed; lead on `claude/pullback-compression-2026-09-15`)
 
@@ -502,7 +513,7 @@ completion. **No merge to `main`** - the trader tests the sweep branch for a wee
 | 10H more chart history | `WS-CH` / `claude/ws-ch-chart-history` | MERGED (lead branch) 91bc7480; gate #107; lead lowered `_LAST_SNAPSHOT_CAP` 60 -> 12 (~8 MB per chart service at 1,000 sessions) | Wave 2. |
 | 10I thesis/context/setup join | `WS-10I` / `claude/ws-10i-context-join` | MERGED (lead branch) 054d501f; gate #118; lead decision: the Daily Recap row keeps BOTH the session's own label and the observation context (two readable facts, tooltip prints both) | Deterministic join contract + module after WS-ENV; wave 3. |
 | 10J Trade Mentor | `WS-TM` / `claude/ws-tm-trade-mentor` | MERGED (lead branch) 6e17add1; gate #110; steps 3-4 (AI form filling, coaching) deferred | Steps 1-2 (scheduler/presence + raw reads; missing-field questionnaire). AI form filling (step 3) deferred. Wave 2. |
-| 10K one measured review | `WS-AI1` / `claude/ws-ai1-enrichment-status` (step 1); `WS-RP` / `codex/ws-rp-resume-2026-09-15` (steps 2 + 5) | AI1 MERGED (sweep) e0683a31, gate #100; RP BUILT with 46 focused checks green (44 red behavior checks plus two unchanged N3 guards), live gate #133 owed | One versioned report feeds nightly publish, the fifth Daily Recap tab and a manual-only compact handoff. No model call, upload, detector, score, alert, policy or live-store write. |
+| 10K one measured review | `WS-AI1` / `claude/ws-ai1-enrichment-status` (step 1); `WS-RP` / `codex/ws-rp-resume-2026-09-15` (steps 2 + 5) | AI1 MERGED (sweep) e0683a31, gate #100; RP MERGED to `main` with 48 focused checks green, live gate #133 owed | One versioned report feeds nightly publish, the fifth Daily Recap tab and a manual-only compact handoff. No model call, upload, detector, score, alert, policy or live-store write. |
 | 11 workspace memory | - | DONE on main 8baf643b | Gate #93 still owed. |
 
 **Waves** (parallel builders never share a file): wave 1 = FC1, EF1, SX, 5A, PT4, AI1, 5D, ENV;
