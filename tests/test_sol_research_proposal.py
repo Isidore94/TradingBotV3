@@ -21,10 +21,21 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import research_proposal as proposals  # noqa: E402
+try:
+    import research_proposal as proposals  # noqa: E402
+except ModuleNotFoundError:
+    # Keep every test independently visible as red while Packet 3's additive
+    # seam does not exist.  Once the builder adds it, each test drives its own
+    # behaviour rather than inheriting this guard.
+    proposals = None
 
 
 NOW = datetime(2026, 9, 15, 21, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _packet_three_module_exists():
+    assert proposals is not None, "research_proposal module does not exist"
 
 
 def _report() -> dict:
