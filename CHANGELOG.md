@@ -61,6 +61,8 @@ They are evidence and must not be loaded as context.
   clipboard-only **Copy test brief**.
   No proposal registers/runs/amends a trial or touches a
   detector, score, alert, ranking, watchlist, Focus, journal, policy or live store. Gates #142-143 owed.
+  Final integration verification passed 8,523 tests with 6 skips and 72 subtests, ruff,
+  smoke 7/7, source selftest 87/87 and frozen selftest 87/87.
 
 - **Phase 0.32 Packet 1 forward entry quality (2026-09-15, merged 2026-09-16).**
   `scripts/entry_quality.py` adds `entry_quality_forward_v1`, a pure research-only view over

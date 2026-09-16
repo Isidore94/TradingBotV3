@@ -20,14 +20,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-16: Phase 0.32 Packets 1-3 are built and independently accepted, unmerged.** Fixed-window warehouse rows feed one fair comparison, one validated proposal/memo and the shared Review/Tracker display. |
-| Working branch | **`codex/entry-quality-next-test`**, carrying the accepted feature plus the final guard-list repair; the shared desk checkout remains on `main` and was not restarted. |
-| Unmerged / open | Phase 0.32 is ready for handoff but is deliberately not merged; copied-data gates #140-#142, local-model gate #143, the frozen rebuild and all older gates remain owed. |
-| Next action | **Run copied-data gates #140-#142 and, when wanted, local-model gate #143.** Merge/restart only on later trader direction. |
+| Latest work | **2026-09-16: Phase 0.32 Packets 1-3 are built, independently accepted and merged to `main`.** Fixed-window warehouse rows feed one fair comparison, one validated proposal/memo and the shared Review/Tracker display. |
+| Working branch | **`main` carries the accepted feature and final guard-list repair.** Integration and verification ran in the scratch worktree; the desk was not restarted. |
+| Unmerged / open | No Phase 0.32 code is unmerged; copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
+| Next action | **Run copied-data gates #140-#142 and, when wanted, local-model gate #143.** Restart only on trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
-| Last verified baseline | **Phase 0.32 full run: 8,521 passed, 6 skipped, 72 subtests, with two guard-list failures; both were repaired and the exact guards plus all Phase 0.32 tests pass 74/74.** Independent P3 review passed 314 nearby tests; ruff is clean. A strict full rerun is still owed. |
-| Frozen exe | **Source selftest is 87/87; the frozen rebuild is owed** because `research_proposal.py` is a new lazy top-level module. The production desk still runs from SOURCE and was not restarted. |
-| Desk | **The shared checkout is on `main` with Phase 0.31 loaded.** It was stopped during integration; no agent restarted it or wrote a live store. |
+| Last verified baseline | **Phase 0.32 strict full pass: 8,523 passed, 6 skipped, 72 subtests; ruff and smoke 7/7 are clean.** The nightly writer lock was free before the run. |
+| Frozen exe | **Rebuilt and verified 2026-09-16: source 87/87 and frozen 87/87.** The frozen result carries the required `(frozen)` stamp. The production desk still runs from SOURCE and was not restarted. |
+| Desk | **The shared checkout is on `main` with Phase 0.32 merged.** It stayed stopped; no agent restarted it or wrote a live store. |
 
 ### Open gates, newest first
 
@@ -182,7 +182,7 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
 
-### 2026-09-16 — Phase 0.32 Packets 1-3 BUILT and independently accepted; integration and live/local-model gates owed
+### 2026-09-16 — Phase 0.32 Packets 1-3 BUILT, independently accepted and MERGED; live/local-model gates owed
 
 Packet 3 adds the additive `research_proposal` validator/publication seam only. It rejects an
 unknown report/cell/recipe, fabricated observed number, a citation outside its declared cells or
@@ -209,7 +209,8 @@ The later full suite passed 8,521 tests and exposed two stale guard lists; both 
 Phase 0.32 test then passed 74/74. Gates
 #142 (copied deterministic progress) and #143 (one configured local-model proposal with measured
 latency/tokens/memory) remain owed. Packaging trigger: new lazily imported top-level module;
-the frozen spec/selftest now name it. No frozen rebuild was run.
+the frozen spec/selftest name it. Final integration verification passed 8,523 tests with 6 skips
+and 72 subtests, ruff, smoke 7/7, source selftest 87/87 and frozen selftest 87/87.
 
 ### 2026-09-15 — Phase 0.32 Packet 1 BUILT and independently accepted; copied-data gate owed
 

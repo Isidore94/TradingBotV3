@@ -49,9 +49,9 @@ After every required rebuild, run:
 dist\TradingBotV3\TradingBotV3.exe --selftest
 ```
 
-Latest measured result (2026-09-15): `selftest OK: 86/86 checks passed (frozen)`.
+Latest measured result (2026-09-16): `selftest OK: 87/87 checks passed (frozen)`.
 The count grows whenever a check is added, so compare the frozen run with the current
-source run rather than treating 86 as a permanent constant. What matters is the
+source run rather than treating any count as permanent. What matters is the
 **`(frozen)` suffix** and exit 0.
 
 ### Things that will bite you
