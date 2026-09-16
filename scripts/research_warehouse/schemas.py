@@ -465,6 +465,37 @@ OUTCOME_PATH = _schema(
     _provenance_columns(),
 )
 
+# Phase 0.32: fixed-window, exit-independent entry movement.  This is a
+# separate additive gold dataset; it never changes the frozen outcome_path
+# contract or substitutes a movement result for a simulated exit.
+ENTRY_QUALITY_WINDOW = _schema(
+    [
+        pa.field("opportunity_id", pa.string()),
+        pa.field("attempt_id", pa.string()),
+        pa.field("window", pa.string()),
+        pa.field("entry_at", _TS),
+        pa.field("symbol", pa.string()),
+        pa.field("side", pa.string()),
+        pa.field("entry_selector_id", pa.string()),
+        pa.field("entry_rule", pa.string()),
+        pa.field("entry_rule_version", pa.string()),
+        pa.field("state", pa.string()),
+        pa.field("mfe_pct", pa.float64()),
+        pa.field("mae_pct", pa.float64()),
+        pa.field("close_pct", pa.float64()),
+        pa.field("mfe_atr", pa.float64()),
+        pa.field("mae_atr", pa.float64()),
+        pa.field("mfe_r", pa.float64()),
+        pa.field("mae_r", pa.float64()),
+        pa.field("first_touch_order", pa.string()),
+        pa.field("coverage", pa.string()),
+        pa.field("source_knowledge_basis", pa.string()),
+        pa.field("anchor_knowledge_basis", pa.string()),
+        pa.field("exit_policy", pa.string()),
+    ],
+    _provenance_columns(),
+)
+
 SCAN_COVERAGE = _schema(
     [
         pa.field("risk_set_id", pa.string()),
@@ -657,6 +688,14 @@ DATASETS: dict[str, DatasetSpec] = {
             "computed_at",
             ("year",),
             ("occurrence_id", "recipe_id", "outcome_definition_id"),
+        ),
+        _spec(
+            "entry_quality_window",
+            LAYER_GOLD,
+            ENTRY_QUALITY_WINDOW,
+            "entry_at",
+            ("month",),
+            ("opportunity_id", "attempt_id", "window"),
         ),
         _spec(
             "scan_coverage",

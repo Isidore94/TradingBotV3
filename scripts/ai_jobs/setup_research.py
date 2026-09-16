@@ -1371,8 +1371,17 @@ def next_test_facts(session_date: str) -> dict[str, Any]:
         "trial_progress": list(report.get("trial_progress") or ()),
     }
     compact = research_proposal.build_compact_input({"report": facts_report})
+    entry_cells = facts_report["entry_quality"].get("cells") or ()
+    ready = any(
+        isinstance(cell, Mapping)
+        and cell.get("state") == "measured"
+        and cell.get("value") is not None
+        for cell in entry_cells
+    )
     return {
-        "status": "ready" if facts_report["entry_quality"].get("cells") else "collecting",
+        # A placeholder unknown cell keeps the report honest, but cannot make
+        # the proposal path look ready or spend its local-model allowance.
+        "status": "ready" if ready else "collecting",
         "report": facts_report,
         "compact_input": compact,
         "note": "selection is coverage/readiness-based; narrated K of N is stated separately",

@@ -29,6 +29,7 @@ symbol (natural key until the first real rename adds symbol_alias)
                                                    │
 setup_occurrence (occurrence_id) ──────────────────┘ anchor_instance_id (nullable FK)
   ├─1:N─ outcome_path (occurrence_id, recipe_id, outcome_definition_id)
+  ├─1:N─ entry_quality_window (opportunity_id, attempt_id, window)
   └─1:5─ setup_market_context (occurrence_id, timeframe, bias_definition_id)
 
 collection_gap (symbol, timeframe, gap_start)   — absence is a first-class fact
@@ -42,6 +43,7 @@ Cardinalities that matter for evidence counting:
 | Relationship | Cardinality | Why it is stated |
 |---|---|---|
 | `setup_occurrence` → `outcome_path` | 1:N | Alternative recipes/horizons are correlated diagnostics of ONE episode; they are never summed as independent samples. |
+| `setup_occurrence` → `entry_quality_window` | 1:N per declared entry selector/window | Fixed gross movement from completed M5 bars; exit-independent and never pooled as outcome-path R. |
 | `setup_occurrence` → `setup_market_context` | 1:5 per bias definition | M5/M30/H1/H4/D1 are five correlated point-in-time views of one entry, never five independent setup samples. |
 | `setup_occurrence` → `dependency_cluster_id` | N:1 | The episode unit for evidence floors: simultaneous EMA/AVWAP/level variants on one underlying move share one cluster. |
 | rescan of a live thesis → `setup_occurrence` | N:1 | Rescans update the same row (deterministic key below); they never append. |
@@ -179,6 +181,7 @@ coverage, gaps) → `silver/`, and the feature/setup/style/gold layers →
 | `feature_snapshot_intraday` | gold | month | `interval_start` |
 | `setup_occurrence` | gold | year | `event_at` |
 | `outcome_path` | gold | year | `computed_at` |
+| `entry_quality_window` | gold | month | `entry_at` |
 | `setup_market_context` | gold | year | `entry_at` |
 | `scan_coverage` | silver | month | `scheduled_at` |
 | `collection_gap` | silver | month | `gap_start` |

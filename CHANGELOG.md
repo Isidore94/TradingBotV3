@@ -41,16 +41,24 @@ They are evidence and must not be loaded as context.
 - **Phase 0.32 Packet 3 next-test proposal (2026-09-16, merged).**
   `scripts/research_proposal.py` is a validated advisory-only proposal/memo seam: source report
   id/hash and every cited cell must match code facts; unsafe fields/actions, unknown cells/recipes,
-  invented numbers and observed-looking proposed thresholds refuse. Immutable history and the
+  invented numbers and observed-looking proposed thresholds refuse; the closed proposal/status,
+  changed-condition and citation schemas also prevent a displayed proposal from claiming
+  confirmation or authority. Immutable history and the
   current JSON/Markdown memo live only under the existing AI-store briefs namespace; a failed
   current/memo write restores their prior pair. A model-free current-report refresh updates only
   deterministic trial progress while retaining the immutable proposal source/history. A runner-owned
   session marker spends the one model call before inference, and an absent/empty code-owned recipe allowlist refuses. Compact selection
   is by coverage, repeated questions, unresolved comparisons, readiness and active tests, never
   observed movement or R; it states `narrated K of N` and retains the full cited-cell facts.
-  Measured Report publishes its stable hash and explicit entry-quality cells; `setup_research`
-  prepares their compact reader path; Daily Recap > Review receives that published object on its
-  worker, shows a Next test card with report id/hash and offers clipboard-only **Copy test brief**.
+  The owned low-priority warehouse outcome pass now publishes the additive versioned
+  `entry_quality_window` flat P8 fixed-window dataset from the same completed M5 bars and selectors,
+  independently of `outcome_path`; Measured Report reads that session/month-scoped dataset in memory
+  into deterministic entry-quality cells (or an honest unknown). `setup_research` is ready only for
+  measured cells. Its declared `30_trading_minutes` primary window is selected only by identity
+  before the export reads results, while sorted available windows travel with the report/facts.
+  Daily Recap > Review and Setup Tracker's compact Next-test route share the same
+  published display object, with no tracker ranking, Qt I/O or model call; Review offers
+  clipboard-only **Copy test brief**.
   No proposal registers/runs/amends a trial or touches a
   detector, score, alert, ranking, watchlist, Focus, journal, policy or live store. Gates #142-143 owed.
 
@@ -61,8 +69,9 @@ They are evidence and must not be loaded as context.
   gross MFE/MAE/close movement after a hypothetical stop; separates percent, entry-frozen ATR
   and valid-risk R; excludes confirmation-bar wicks; labels reconstructed knowledge; and keeps
   daily touch order ambiguous. It has no store, detector, score, alert, ranking, journal or
-  policy effect, and `outcome_path` is unchanged. Packet 2 connects only bounded research-reader
-  denominators; Packet 3 will publish grounded next-test facts. Live gate #140 is owed.
+  policy effect, and the old `outcome_path` meanings are unchanged. Packet 2 connects bounded
+  research-reader denominators; Packet 3 publishes grounded next-test facts from the separate
+  `entry_quality_window` dataset. Live gate #140 is owed.
 
 - **Phase 0.32 Packet 2 fair entry comparison (2026-09-15, merged 2026-09-16).**
   `scripts/entry_comparison.py` is a pure reader over supplied Packet 1 measures and the existing

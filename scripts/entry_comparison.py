@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from copy import deepcopy
+import json
 from typing import Any, Iterable, Mapping, Sequence
 
 import evidence_stats
@@ -18,12 +19,40 @@ from research_warehouse import trial_ledger
 
 
 COMPARISON_SCHEMA = "entry_quality_comparison_v1"
+COMPARISON_EXPORT_SCHEMA = "entry_quality_comparison_export_v1"
 DECLARATION_SCHEMA = "entry_quality_declaration_v1"
 DEFAULT_WINDOW = "60m"
+PRIMARY_WINDOW = "30_trading_minutes"
 ALL_SCANNER = "all_scanner"
 NON_TRIGGER_STATES = frozenset({"no_trigger", "missing_data", "invalid_entry", "unavailable", "pending"})
 MEASURABLE_STATES = frozenset({"complete", "partial"})
 M5_ENTRY_VARIANTS = frozenset({"m5_first_close"})
+
+
+def _window_sort_key(window: str) -> tuple[int, int, str]:
+    """Stable identity order; no movement statistic can enter this key."""
+    if window == "session_close":
+        return (1, 0, window)
+    prefix = window.removesuffix("_trading_minutes")
+    try:
+        return (0, int(prefix), window)
+    except ValueError:
+        return (0, 10**9, window)
+
+
+def available_windows(rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    """All published windows in deterministic identity order."""
+    return sorted(
+        {_text(row.get("window")) for row in rows if _text(row.get("window"))},
+        key=_window_sort_key,
+    )
+
+
+def select_primary_window(rows: Iterable[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Keep one declared endpoint before any comparison statistic is read."""
+    materialized = [dict(row) for row in rows]
+    windows = available_windows(materialized)
+    return [row for row in materialized if _text(row.get("window")) == PRIMARY_WINDOW], windows
 
 
 def _text(value: Any) -> str:
@@ -399,6 +428,57 @@ def summarise_attempts(
     }
 
 
+def build_export(rows: Iterable[Mapping[str, Any]], *, as_of: str) -> dict[str, Any]:
+    """Summarise flat warehouse windows into one deterministic report export.
+
+    ``entry_quality_window`` is the only source.  This is intentionally an
+    in-memory reader: it cannot fetch bars, write the lake, or make a result
+    ranking.  One export carries exactly one window so every reported cell and
+    denominator share the same endpoint.
+    """
+    raw = [dict(row) for row in rows]
+    windows = sorted({_text(row.get("window")) for row in raw if _text(row.get("window"))})
+    if len(windows) != 1:
+        raise ValueError("entry-quality export needs exactly one declared window")
+    attempts: list[dict[str, Any]] = []
+    for row in raw:
+        coverage = row.get("coverage")
+        if isinstance(coverage, str):
+            try:
+                coverage = json.loads(coverage)
+            except ValueError:
+                coverage = {}
+        attempt_id = _text(row.get("attempt_id"))
+        inferred_variant = attempt_id.rsplit("|", 1)[-1] if "|" in attempt_id else ""
+        attempts.append(
+            {
+                **row,
+                "entry_variant": (
+                    _text(row.get("entry_selector_id"))
+                    or _text(row.get("entry_variant"))
+                    or inferred_variant
+                ),
+                "dependency_cluster_id": _text(row.get("dependency_cluster_id")) or _text(row.get("opportunity_id")),
+                "session_date": _text(row.get("session_date")) or _text(row.get("entry_at"))[:10],
+                "population": _text(row.get("population")) or ALL_SCANNER,
+                "coverage": dict(coverage) if isinstance(coverage, Mapping) else {},
+            }
+        )
+    summary = summarise_attempts(attempts, useful_move_pct=1.0)
+    return {
+        "schema": COMPARISON_EXPORT_SCHEMA,
+        "as_of": str(as_of)[:10],
+        "window": windows[0],
+        "primary_window": PRIMARY_WINDOW,
+        "available_windows": windows,
+        "cells": summary["cells"],
+        "populations": summary["populations"],
+        "independent_clusters": summary["independent_clusters"],
+        "deduplicated_rows": summary["deduplicated_rows"],
+        "review_comparison": summary["review_comparison"],
+    }
+
+
 def _group_by_variant(rows: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -556,14 +636,19 @@ def prepare_authorized_evaluation(
 __all__ = [
     "ALL_SCANNER",
     "COMPARISON_SCHEMA",
+    "COMPARISON_EXPORT_SCHEMA",
+    "PRIMARY_WINDOW",
     "DECLARATION_SCHEMA",
     "adapt_m5_occurrence_attempts",
     "adapt_p8_attempts",
     "amend_declaration",
+    "available_windows",
     "authorized_recipe_context",
     "compare_variants",
+    "build_export",
     "freeze_declaration",
     "prepare_authorized_evaluation",
     "preserve_trial_history",
     "summarise_attempts",
+    "select_primary_window",
 ]

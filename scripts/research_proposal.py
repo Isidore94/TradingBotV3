@@ -20,9 +20,36 @@ PROPOSAL_SCHEMA = "research_next_test_proposal_v1"
 VALID_ACTIONS = frozenset(
     {"propose_new_test", "replicate_discovery", "continue_active_trial", "repair_or_collect", "no_justified_new_test"}
 )
+VALID_PROPOSAL_STATUSES = frozenset({"proposed", "registered_collecting"})
 _FORBIDDEN_FIELDS = frozenset({"instruction", "instructions", "code", "shell", "command", "python"})
 _WINDOW_SUFFIXES = ("trading_minutes", "session_close", "exchange_sessions")
 _SAFE_PROPOSAL_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{2,127}$")
+_PROPOSAL_FIELDS = frozenset(
+    {
+        "schema", "proposal_id", "generated_at", "as_of", "source",
+        "source_cell_ids", "related_trial_ids", "primary_action", "alternatives",
+        "question", "assumption_challenged", "cited_observations", "unknown",
+        "changed_condition", "control", "setup", "side", "universe",
+        "entry_convention", "measurement_windows", "primary_metric",
+        "meaningful_effect", "minimum_evidence", "comparison_plan", "support",
+        "reject", "inconclusive", "data_needs", "no_trigger_accounting",
+        "collection_effort", "similar_trial", "status", "explanation",
+    }
+)
+
+
+def _exact_keys(value: Mapping[str, Any], expected: frozenset[str], name: str) -> None:
+    """Keep untrusted schema objects closed instead of merely well-shaped."""
+    _require(set(value) == set(expected), f"{name} schema")
+
+
+def _source_windows(cell: Mapping[str, Any]) -> set[str]:
+    raw = cell.get("window")
+    if isinstance(raw, str):
+        return {raw} if raw else set()
+    if isinstance(raw, (list, tuple)):
+        return {str(value) for value in raw if str(value)}
+    return set()
 
 
 class ProposalValidationError(ValueError):
@@ -99,6 +126,7 @@ def validate_proposal(
         raise ProposalValidationError(f"instruction field is forbidden: {sorted(forbidden)[0]}")
     copied = json.loads(json.dumps(proposal, default=str))
     _require(copied.get("schema") == PROPOSAL_SCHEMA, "proposal schema")
+    _exact_keys(copied, _PROPOSAL_FIELDS, "proposal")
     proposal_id = _required_text(copied, "proposal_id")
     _require(_SAFE_PROPOSAL_ID.fullmatch(proposal_id) is not None, "proposal id")
     for field in (
@@ -111,6 +139,7 @@ def validate_proposal(
         _required_text(copied, field)
     source = copied.get("source")
     _require(isinstance(source, Mapping), "source")
+    _exact_keys(source, frozenset({"report_id", "report_hash"}), "source")
     _required_text(source, "report_id")
     _required_text(source, "report_hash")
     _require(source.get("report_id") == report.get("report_id"), "report id")
@@ -118,6 +147,7 @@ def validate_proposal(
     _require(copied.get("primary_action") in VALID_ACTIONS, "unsafe action")
     alternatives = copied.get("alternatives")
     _require(isinstance(alternatives, list) and len(alternatives) <= 2, "alternatives")
+    _require(copied.get("status") in VALID_PROPOSAL_STATUSES, "proposal status")
     cells = _cells(report)
     source_ids = copied.get("source_cell_ids")
     _require(isinstance(source_ids, list) and source_ids, "source cell ids")
@@ -127,27 +157,41 @@ def validate_proposal(
     _require(isinstance(citations, list) and citations, "cited observations")
     for citation in citations:
         _require(isinstance(citation, Mapping), "cited observation")
+        _exact_keys(citation, frozenset({"cell_id", "value", "unit"}), "cited observation")
         identifier = str(citation.get("cell_id") or "")
         cell = cells.get(identifier)
         _require(cell is not None, f"unknown cell: {identifier}")
+        _require(identifier in set(map(str, source_ids)), f"citation outside source cells: {identifier}")
         _require(citation.get("value") == cell.get("value"), f"invented number: {identifier}")
         _require(citation.get("unit") == cell.get("unit"), f"invented number unit: {identifier}")
     changed = copied.get("changed_condition")
     _require(isinstance(changed, Mapping) and changed.get("status") == "proposed", "changed condition")
+    _exact_keys(changed, frozenset({"field", "value", "status"}), "changed condition")
     _required_text(changed, "field")
     _required_scalar(changed, "value")
     effect = copied.get("meaningful_effect")
     _require(isinstance(effect, Mapping) and effect.get("status") == "proposed", "proposed threshold")
+    _exact_keys(effect, frozenset({"value", "status", "unit"}), "meaningful effect")
     _required_scalar(effect, "value")
     _required_text(effect, "unit")
     minimum = copied.get("minimum_evidence")
     _require(isinstance(minimum, Mapping) and minimum.get("status") == "proposed", "proposed threshold")
+    _exact_keys(minimum, frozenset({"samples", "sessions", "status"}), "minimum evidence")
     _required_scalar(minimum, "samples")
     _required_scalar(minimum, "sessions")
     windows = copied.get("measurement_windows")
     _require(isinstance(windows, list) and windows and all(_window_is_feasible(value) for value in windows), "infeasible window")
+    cited_windows = [
+        _source_windows(cells[str(citation.get("cell_id") or "")])
+        for citation in citations
+    ]
+    _require(
+        all(source_window.issubset(set(map(str, windows))) for source_window in cited_windows),
+        "source window is not declared by every cited cell",
+    )
     control = copied.get("control")
     _require(isinstance(control, Mapping), "control")
+    _exact_keys(control, frozenset({"entry_confirmation", "recipe_id"}), "control")
     recipe_id = _required_text(control, "recipe_id")
     _require(recipe_id in allowed_recipe_ids, f"unknown recipe: {recipe_id}")
     trial_ids = copied.get("related_trial_ids")
@@ -248,6 +292,7 @@ def _render_memo(proposal: Mapping[str, Any], report: Mapping[str, Any], now: da
     """A short Markdown reader view made only from validated JSON facts."""
     progress = next((row for row in report.get("trial_progress") or () if str(row.get("trial_id")) in set(map(str, proposal.get("related_trial_ids") or ()))), {})
     counts = progress.get("progress") if isinstance(progress, Mapping) else {}
+    counts = counts if isinstance(counts, Mapping) else {}
     # The proposal's observations remain the JSON that validation accepted.
     # A later report may advance its progress without rewriting model-authored
     # evidence to look as though it was cited at the later point in time.
@@ -527,6 +572,12 @@ def proposal_execution_effect(_proposal: Mapping[str, Any]) -> dict[str, bool]:
 
 
 def build_display_payload(report: Mapping[str, Any], proposal: Mapping[str, Any], *, status: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    # Display is an authority boundary too: an unpublished model phrase must
+    # not acquire confirmation merely because a caller tried to render it.
+    _require(
+        proposal.get("status") in VALID_PROPOSAL_STATUSES,
+        "proposal status",
+    )
     progress = next(
         (
             dict(row.get("progress") or {})

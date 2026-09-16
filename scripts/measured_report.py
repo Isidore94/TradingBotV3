@@ -188,6 +188,8 @@ class MeasuredReport:
     source_paths: tuple[str, ...] = ()
     policy: tuple[str, ...] = ()
     example_tables: tuple[dict[str, Any], ...] = ()
+    entry_quality_primary_window: str = ""
+    entry_quality_available_windows: tuple[str, ...] = ()
     _cells: tuple[Cell, ...] = field(default_factory=tuple, repr=False)
 
     def cells(self) -> tuple[Cell, ...]:
@@ -213,12 +215,14 @@ class MeasuredReport:
             "policy": list(self.policy),
             "example_tables": [dict(table) for table in self.example_tables],
             "cells": [cell.as_dict() for cell in self._cells],
-            # Phase 0.32 consumes only cells deliberately labelled by a future
-            # entry-quality publisher.  Older reports expose an honest empty
-            # set instead of inventing a movement result from exit-policy cells.
+            # Phase 0.32 consumes only Packet 2's explicitly published,
+            # fixed-window comparison cells.  An absent export remains an
+            # honest unknown rather than borrowing an exit-policy result.
             "entry_quality": {
                 "cells": [cell.as_dict() for cell in self._cells if cell.section == "entry_quality"],
-                "note": "fixed-window forward movement only; empty means not published yet",
+                "primary_window": self.entry_quality_primary_window,
+                "available_windows": list(self.entry_quality_available_windows),
+                "note": "Packet 2 fixed-window forward movement only; unknown means not published yet",
             },
             "sections": {
                 name: [cell.cell_id for cell in rows]
@@ -262,6 +266,9 @@ class ReportSources:
     journal_trades: Path | None = None
     working_lately: Path | None = None
     market_theses: Path | None = None
+    # Phase 0.32 Packet 2's pure comparison export.  This is an explicit
+    # caller-supplied reader seam; no report build discovers or computes it.
+    entry_comparison_summary: Path | None = None
 
     @classmethod
     def from_project_paths(cls) -> "ReportSources":
@@ -284,6 +291,9 @@ class ReportSources:
             journal_trades=None,  # the journal is a database; read through its store
             working_lately=working_lately,
             market_theses=getattr(project_paths, "MARKET_THESES_FILE", None),
+            entry_comparison_summary=getattr(
+                project_paths, "ENTRY_COMPARISON_SUMMARY_FILE", None
+            ),
         )
 
     def existing(self) -> tuple[str, ...]:
@@ -296,6 +306,7 @@ class ReportSources:
             self.journal_trades,
             self.working_lately,
             self.market_theses,
+            self.entry_comparison_summary,
         ):
             if path and Path(path).exists():
                 out.append(str(path))
@@ -351,6 +362,100 @@ def _rows_from_csv(path: Any) -> list[dict[str, str]]:
         return []
     with Path(path).open("r", encoding="utf-8", newline="") as handle:
         return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _entry_quality_unknown(reason: str, *, sources: tuple[str, ...] = ()) -> tuple[Cell, ...]:
+    return (
+        Cell(
+            cell_id="entry_quality.comparison_summary",
+            metric="entry-quality comparison availability",
+            unit="state",
+            value=None,
+            population="all_scanner",
+            window=("entry_quality_window", "not_published"),
+            exit_policy="gross_excursion_no_exit",
+            version="entry_quality_window_v1",
+            state=STATE_UNKNOWN,
+            sources=sources,
+            unavailable=reason,
+            section="entry_quality",
+        ),
+    )
+
+
+def _entry_quality_cells(
+    path: Any = None,
+    *,
+    payload: Mapping[str, Any] | None = None,
+    sources: tuple[str, ...] = (),
+) -> tuple[Cell, ...]:
+    """Expose Packet 2's already-computed comparison without re-measuring it.
+
+    The report owns neither bar reads nor comparison statistics.  A missing or
+    malformed optional export is one honest unknown cell, so a nightly reader
+    can remain deterministic while ``setup_research`` refuses to call a model.
+    """
+    source = Path(path) if path else None
+    if payload is None and (source is None or not source.exists()):
+        return _entry_quality_unknown(
+            "Packet 2 entry comparison summary is not published yet",
+            sources=sources,
+        )
+    if payload is None:
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = None
+    rows = payload.get("cells") if isinstance(payload, Mapping) else None
+    window = str(payload.get("window") or "") if isinstance(payload, Mapping) else ""
+    cited = _cite(source, *sources)
+    if not isinstance(rows, Mapping) or not window:
+        return _entry_quality_unknown(
+            "Packet 2 entry comparison summary is unavailable or invalid",
+            sources=cited,
+        )
+
+    metric_rows = (
+        ("useful_move_frequency", "useful move frequency", "fraction", lambda value: value),
+        ("mfe_pct", "median maximum favourable excursion", "percent", lambda value: value.get("median") if isinstance(value, Mapping) else None),
+        ("mae_pct", "median maximum adverse excursion", "percent", lambda value: value.get("median") if isinstance(value, Mapping) else None),
+        ("close_pct", "median fixed-window close movement", "percent", lambda value: value.get("median") if isinstance(value, Mapping) else None),
+        ("time_to_mfe_minutes", "median time to maximum favourable excursion", "minutes", lambda value: value.get("median") if isinstance(value, Mapping) else None),
+    )
+    cells: list[Cell] = []
+    for variant, row in sorted(rows.items()):
+        if not isinstance(row, Mapping):
+            continue
+        n = int(_number(row.get("measurable_count")) or 0)
+        for key, metric, unit, extract in metric_rows:
+            number = _number(extract(row.get(key)))
+            if number is None:
+                continue
+            cells.append(
+                Cell(
+                    cell_id=f"entry_quality.{variant}.{key}",
+                    metric=metric,
+                    unit=unit,
+                    value=number,
+                    n=n,
+                    distinct_sessions=int(_number(row.get("distinct_sessions")) or 0),
+                    distinct_symbols=int(_number(row.get("distinct_symbols")) or 0),
+                    population="all_scanner",
+                    window=(window, window),
+                    reference_clock="Packet 2 fixed-window entry comparison",
+                    exit_policy="gross_excursion_no_exit",
+                    version="entry_quality_window_v1",
+                    state=STATE_MEASURED,
+                    sources=cited,
+                    section="entry_quality",
+                )
+            )
+    if cells:
+        return tuple(cells)
+    return _entry_quality_unknown(
+        "Packet 2 entry comparison contains no measured cells",
+        sources=cited,
+    )
 
 
 def _rows_from_jsonl(path: Any) -> list[dict[str, Any]]:
@@ -1421,6 +1526,10 @@ def build_report(
 
     swing_rows: list[dict[str, Any]] | None = None
     warehouse_sources: tuple[str, ...] = ()
+    entry_quality_payload: Mapping[str, Any] | None = None
+    entry_quality_sources: tuple[str, ...] = ()
+    entry_quality_primary_window = ""
+    entry_quality_available_windows: tuple[str, ...] = ()
     warehouse_reason = (
         "no research warehouse is configured on this desk "
         "(`research_store_dir` unset), so the swing population was not read"
@@ -1433,6 +1542,27 @@ def build_report(
         except Exception as exc:  # noqa: BLE001 - an unreachable store is uncertainty
             swing_rows = None
             warehouse_reason = f"the research warehouse could not be read: {exc}"
+        try:
+            import entry_comparison
+
+            entry_rows = warehouse.read_entry_quality(session, now=moment)
+            primary_rows, available_windows = entry_comparison.select_primary_window(entry_rows)
+            entry_quality_available_windows = tuple(available_windows)
+            if primary_rows:
+                # The declared identity is selected before `build_export`
+                # reads any values, so a later spectacular endpoint cannot
+                # become a report input by result.
+                entry_quality_payload = entry_comparison.build_export(
+                    primary_rows, as_of=session
+                )
+                entry_quality_primary_window = str(
+                    entry_quality_payload.get("primary_window") or ""
+                )
+            entry_quality_sources = _cite(
+                *tuple(getattr(warehouse, "source_paths", ()) or ())
+            )
+        except Exception as exc:  # noqa: BLE001 - unavailable evidence is an unknown cell
+            _log.info("Measured report: entry-quality warehouse rows unavailable (%s).", exc)
 
     intraday_sources = _cite(resolved.intraday_outcomes)
     horizon_sources = _cite(resolved.session_horizon_outcomes)
@@ -1457,6 +1587,11 @@ def build_report(
     money_cells = _money_cells(
         preference_rows, journal_trades, session_date=session, sources=money_sources
     )
+    entry_quality_cells = _entry_quality_cells(
+        resolved.entry_comparison_summary,
+        payload=entry_quality_payload,
+        sources=entry_quality_sources,
+    )
 
     ordered: list[Cell] = []
     ordered.extend(thesis_cells)
@@ -1464,6 +1599,10 @@ def build_report(
     ordered.extend(cell for cell in swing_cells if cell.section == "measured_context")
     ordered.extend(cell for cell in day_cells if cell.section == "opportunity_results")
     ordered.extend(cell for cell in swing_cells if cell.section == "opportunity_results")
+    # Packet 2 values are carried in their deterministic source order.  This
+    # insertion never computes a statistic and makes the report hash reflect
+    # exactly the entry-quality evidence the next-test path can cite.
+    ordered.extend(entry_quality_cells)
     ordered.extend(last_cells)
     ordered.extend(preference_cells)
     ordered.extend(money_cells)
@@ -1487,7 +1626,7 @@ def build_report(
         generated_at=moment.isoformat(timespec="seconds"),
         tracker_snapshot_id=tracker_snapshot_id,
         open_theses=open_theses,
-        source_paths=resolved.existing() + warehouse_sources,
+        source_paths=resolved.existing() + warehouse_sources + entry_quality_sources,
         policy=(
             f"selection window: {selection_sessions} exchange session(s) ending {session}",
             f"follow-through horizon: {follow_through_sessions} exchange session(s)",
@@ -1496,6 +1635,8 @@ def build_report(
             "best/worst tables: " + SELECTED_TABLE_LABEL,
         ),
         example_tables=_example_tables(intraday_rows, swing_rows),
+        entry_quality_primary_window=entry_quality_primary_window,
+        entry_quality_available_windows=entry_quality_available_windows,
         _cells=tuple(ordered),
     )
 
@@ -1546,6 +1687,7 @@ def report_from_payload(payload: Mapping[str, Any]) -> MeasuredReport:
             sections[name] = tuple(cell for cell in cells if cell.state != STATE_MEASURED)
         else:
             sections[name] = tuple(cell for cell in cells if cell.section == name)
+    entry_quality = payload.get("entry_quality") or {}
     return MeasuredReport(
         session_date=str(payload.get("session_date") or ""),
         as_of=str(payload.get("as_of") or ""),
@@ -1557,6 +1699,17 @@ def report_from_payload(payload: Mapping[str, Any]) -> MeasuredReport:
         source_paths=tuple(str(part) for part in (payload.get("source_paths") or ())),
         policy=tuple(str(part) for part in (payload.get("policy") or ())),
         example_tables=tuple(dict(table) for table in (payload.get("example_tables") or ())),
+        entry_quality_primary_window=str(
+            entry_quality.get("primary_window") if isinstance(entry_quality, Mapping) else ""
+        ),
+        entry_quality_available_windows=tuple(
+            str(part)
+            for part in (
+                entry_quality.get("available_windows")
+                if isinstance(entry_quality, Mapping)
+                else ()
+            )
+        ),
         _cells=cells,
     )
 

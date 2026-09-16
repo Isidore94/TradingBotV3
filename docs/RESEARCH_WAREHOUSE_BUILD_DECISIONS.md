@@ -3077,9 +3077,9 @@ own named simulated policy.
 Each elapsed endpoint is calculated from the later of trigger knowledge and feasible entry,
 not from a delivered-bar count, and is limited to that exchange session's scheduled close;
 the view owns its narrow 13:00 ET regular early-close calendar seam. Scheduled M5 coverage counts
-bar ends from the first full interval after the decision (09:32 therefore has 78 ends through a
-regular close), and an interval that began before knowledge/entry is excluded even if it completes
-later, so it cannot donate an earlier wick. Swing horizon N is the Nth exchange session strictly
+scheduled bar ends after the decision (09:32 therefore has 78 ends through a regular close), while
+an interval that began before knowledge/entry is excluded from movement even if it completes later,
+so it cannot donate an earlier wick. Swing horizon N is the Nth exchange session strictly
 after the entry session close; non-session daily source rows are rejected. Daily OHLC records a
 same-bar favourable/adverse threshold collision as ambiguity.
 

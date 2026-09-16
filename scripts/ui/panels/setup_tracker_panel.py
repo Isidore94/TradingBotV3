@@ -6,7 +6,7 @@ import logging
 import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -588,6 +588,16 @@ class SetupTrackerPanel(QFrame):
 
         self.status_label = QLabel("Tracker exports have not been loaded yet.")
         self.status_label.setObjectName("MutedLabel")
+        # Packet 3 receives the already-published display payload from the
+        # host.  This panel never reads a store, ranks a row, or asks a model
+        # to make the route available.
+        self._entry_quality_proposal: dict[str, Any] | None = None
+        self._entry_quality_daily_recap: Any = None
+        self.next_test_card = QLabel("Next test: no validated proposal has been published yet")
+        self.next_test_card.setObjectName("MutedLabel")
+        self.next_test_card.setWordWrap(True)
+        self.next_test_review_button = QPushButton("Open Next test in Review")
+        self.next_test_review_button.clicked.connect(self.open_entry_quality_review)
         # The attribute tab's own line: it arrives after the rest of the page,
         # so a shared status label would either lie or overwrite.
         self.attribute_status_label = QLabel("")
@@ -1037,8 +1047,44 @@ class SetupTrackerPanel(QFrame):
         layout.addWidget(header)
         layout.addLayout(kpi_row)
         layout.addWidget(self.summary_view, 1)
+        layout.addWidget(self.next_test_card)
+        layout.addWidget(self.next_test_review_button)
         layout.addWidget(self.detail_splitter, 2)
         layout.addWidget(self.status_label)
+
+    def set_entry_quality_proposal(
+        self, payload: Mapping[str, Any] | None, *, daily_recap: Any = None
+    ) -> None:
+        """Accept the exact published display object; this is a UI-only route."""
+        self._entry_quality_proposal = dict(payload) if isinstance(payload, Mapping) else None
+        self._entry_quality_daily_recap = daily_recap
+        proposal = (self._entry_quality_proposal or {}).get("proposal") or {}
+        if self._entry_quality_proposal:
+            self.next_test_card.setText(
+                f"Next test: {proposal.get('question', 'No justified new test.')}"
+            )
+        else:
+            self.next_test_card.setText("Next test: no validated proposal has been published yet")
+
+    def entry_quality_proposal_payload(self) -> dict[str, Any] | None:
+        """Return the routed display object without loading or transforming it."""
+        return dict(self._entry_quality_proposal) if self._entry_quality_proposal else None
+
+    def open_entry_quality_review(self) -> bool:
+        """Open Daily Recap's existing Review card with the same payload."""
+        recap = self._entry_quality_daily_recap
+        if not self._entry_quality_proposal or recap is None:
+            return False
+        render = getattr(recap, "render_entry_quality_proposal", None)
+        tabs = getattr(recap, "tabs", None)
+        if not callable(render) or tabs is None:
+            return False
+        render(self._entry_quality_proposal)
+        for index in range(tabs.count()):
+            if tabs.tabText(index) == "Review":
+                tabs.setCurrentIndex(index)
+                return True
+        return False
 
     def _make_table(
         self,

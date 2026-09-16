@@ -684,3 +684,186 @@ def test_setup_research_injects_its_real_narrated_coverage_into_next_test_input(
     assert narrated["of"] == 7
     assert narrated["label"] == "narrated 2 of 7"
     assert saved["next_test"]["compact_input"]["narrated"] == narrated
+
+
+def test_real_measured_report_consumes_packet_two_summary_before_the_next_test_path(tmp_path, monkeypatch):
+    """A supplied comparison is the reader's source; no bar fetch is allowed."""
+    from PySide6.QtWidgets import QApplication
+
+    from ai_jobs import digest, measured_report_publish, setup_research
+    import measured_report
+    from ui.panels.daily_recap_panel import DailyRecapPanel
+
+    summary_path = tmp_path / "entry_quality_comparison.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "schema": "entry_quality_comparison_v1",
+                "window": "30_trading_minutes",
+                "cells": {
+                    "m5_first_close": {
+                        "useful_move_frequency": 0.4,
+                        "mfe_pct": {"median": 1.5},
+                        "mae_pct": {"median": -0.3},
+                        "close_pct": {"median": 0.2},
+                        "time_to_mfe_minutes": {"median": 20.0},
+                        "opportunity_count": 5,
+                        "measurable_count": 4,
+                        "distinct_sessions": 3,
+                        "distinct_symbols": 4,
+                        "exclusions": {"missing_data": 1},
+                    }
+                },
+                "populations": {"all_scanner": {"cells": {}}},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    sources = measured_report.ReportSources(entry_comparison_summary=summary_path)
+    first = measured_report.build_report("2026-09-15", now=NOW, sources=sources)
+    second = measured_report.build_report("2026-09-15", now=NOW, sources=sources)
+    payload = first.as_dict()
+
+    cells = payload["entry_quality"]["cells"]
+    assert cells
+    assert {cell["state"] for cell in cells} == {"measured"}
+    assert all(cell["cell_id"].startswith("entry_quality.") for cell in cells)
+    assert first.report_id == second.report_id
+    assert [cell["cell_id"] for cell in cells] == [
+        cell["cell_id"] for cell in second.as_dict()["entry_quality"]["cells"]
+    ]
+
+    published = measured_report_publish.run_measured_report(
+        session_date="2026-09-15", now=NOW, root=tmp_path, sources=sources, warehouse=None
+    )
+    assert published["status"] == "ok"
+    monkeypatch.setattr(digest, "_default_root", lambda: tmp_path)
+    facts = setup_research.next_test_facts("2026-09-15")
+    assert facts["status"] == "ready"
+    assert facts["report"]["entry_quality"]["cells"] == cells
+
+    report = facts["report"]
+    cell = report["entry_quality"]["cells"][0]
+    candidate = _proposal()
+    candidate["status"] = "proposed"
+    candidate["source"] = {"report_id": report["report_id"], "report_hash": report["report_hash"]}
+    candidate["source_cell_ids"] = [cell["cell_id"]]
+    candidate["cited_observations"] = [
+        {"cell_id": cell["cell_id"], "value": cell["value"], "unit": cell["unit"]}
+    ]
+    candidate["related_trial_ids"] = []
+    validated = proposals.validate_proposal(
+        candidate, report=report, allowed_recipe_ids={"m5_breakout_control_v1"}
+    )
+    proposals.publish_proposal_bundle(tmp_path, proposal=validated, report=report, now=NOW)
+    display = proposals.published_display(tmp_path, report)
+    assert display and display["report_id"] == report["report_id"]
+    app = QApplication.instance() or QApplication([])
+    panel = DailyRecapPanel()
+    try:
+        panel.render_entry_quality_proposal(display)
+        assert candidate["question"] in panel.next_test_card.text()
+    finally:
+        panel.deleteLater()
+        app.processEvents()
+
+
+def test_missing_packet_two_source_stays_an_honest_collecting_entry_quality_read(tmp_path):
+    import measured_report
+
+    missing = tmp_path / "does_not_exist.json"
+    report = measured_report.build_report(
+        "2026-09-15",
+        now=NOW,
+        sources=measured_report.ReportSources(entry_comparison_summary=missing),
+    ).as_dict()
+
+    cells = report["entry_quality"]["cells"]
+    assert cells
+    assert {cell["state"] for cell in cells}.issubset({"unknown", "collecting"})
+    assert all(cell["value"] is None for cell in cells)
+    assert str(missing) not in report["source_paths"]
+
+
+@pytest.mark.parametrize("forbidden_status", ["confirmed", "proven", "authorized"])
+def test_unregistered_proposal_cannot_claim_confirmation_or_authority_on_the_card(forbidden_status):
+    invalid = _proposal()
+    invalid["status"] = forbidden_status
+
+    with pytest.raises(proposals.ProposalValidationError, match="proposal status"):
+        proposals.validate_proposal(
+            invalid, report=_report(), allowed_recipe_ids={"m5_breakout_control_v1"}
+        )
+    with pytest.raises(proposals.ProposalValidationError, match="proposal status"):
+        proposals.build_display_payload(_report(), invalid)
+
+    for allowed in ("proposed", "registered_collecting"):
+        candidate = _proposal()
+        candidate["status"] = allowed
+        assert proposals.validate_proposal(
+            candidate, report=_report(), allowed_recipe_ids={"m5_breakout_control_v1"}
+        )["status"] == allowed
+
+
+def test_proposal_windows_must_be_declared_by_every_cited_source_cell():
+    invalid = _proposal()
+    invalid["measurement_windows"] = ["999_trading_minutes"]
+
+    with pytest.raises(proposals.ProposalValidationError, match="source window"):
+        proposals.validate_proposal(
+            invalid, report=_report(), allowed_recipe_ids={"m5_breakout_control_v1"}
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda proposal: proposal.update(unexpected_model_field="not a fact"),
+        lambda proposal: proposal["changed_condition"].update(second_change="also unsafe"),
+        lambda proposal: proposal.update(
+            source_cell_ids=["eq.m5.breakout.control.30m"],
+            cited_observations=[
+                {"cell_id": "eq.m5.breakout.wait_close.30m", "value": 0.31, "unit": "fraction"}
+            ],
+        ),
+    ],
+)
+def test_proposal_rejects_extra_keys_and_citations_outside_its_declared_source_cells(mutate):
+    invalid = _proposal()
+    mutate(invalid)
+
+    with pytest.raises(proposals.ProposalValidationError):
+        proposals.validate_proposal(
+            invalid, report=_report(), allowed_recipe_ids={"m5_breakout_control_v1"}
+        )
+
+
+def test_setup_tracker_next_test_route_reuses_the_published_card_and_opens_recap_review():
+    """The small tracker route presents facts only; it cannot reorder setups."""
+    from PySide6.QtWidgets import QApplication
+
+    from ui.panels.daily_recap_panel import DailyRecapPanel, REVIEW_TAB_TITLE
+    from ui.panels.setup_tracker_panel import SetupTrackerPanel
+
+    proposal = proposals.validate_proposal(
+        _proposal(), report=_report(), allowed_recipe_ids={"m5_breakout_control_v1"}
+    )
+    display = proposals.build_display_payload(_report(), proposal, status={"worker": "complete"})
+    app = QApplication.instance() or QApplication([])
+    recap = DailyRecapPanel()
+    tracker = SetupTrackerPanel()
+    tracker.current_pick_rows = [{"symbol": "AAA", "side": "LONG"}]
+    before = list(tracker.current_pick_rows)
+    try:
+        tracker.set_entry_quality_proposal(display, daily_recap=recap)
+        assert tracker.entry_quality_proposal_payload() == display
+        assert proposal["question"] in tracker.next_test_card.text()
+        assert tracker.open_entry_quality_review() is True
+        assert recap.tabs.tabText(recap.tabs.currentIndex()) == REVIEW_TAB_TITLE
+        assert recap.entry_quality_proposal_payload() == display
+        assert tracker.current_pick_rows == before
+    finally:
+        tracker.deleteLater()
+        recap.deleteLater()
+        app.processEvents()

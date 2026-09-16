@@ -5873,6 +5873,8 @@ characters-per-token convention. N3's n-descending narration selection is untouc
 
 The next-test proposal has one owner: `scripts/research_proposal.py`. It receives code-prepared,
 bounded report facts, validates every observation against the cited cell and exact report id/hash,
+requires the cited-cell subset and each cited source window to be declared, and allows only the
+non-authoritative `proposed` / `registered_collecting` statuses,
 and stores immutable validated JSON with a restored current-JSON/memo pair on a write failure. The
 runner spends a trusted session marker before its one model call; an absent code-owned recipe
 allowlist refuses rather than letting model text authorize itself. The selection key is
@@ -5881,10 +5883,20 @@ the existing N3 `narrated K of N` statement remains visible. The local model is 
 it may name one test to resolve uncertainty but cannot register, execute, amend or promote a test,
 call a recipe optimal, generate code or enter any runner instruction.
 
+The report's entry-quality facts come from versioned flat `entry_quality_window_v1` P8 rows,
+published by the owned low-priority warehouse outcome pass from its same completed M5 bars and
+declared selectors. They are gross excursion facts labelled `gross_excursion_no_exit`, never a
+replacement for `outcome_path`; the session/month-scoped `ResearchStore.read_rows` reader builds
+the Packet 2 comparison in memory. A missing/unreadable dataset is one unknown cell and cannot
+cost the old outcome build, publish a model proposal, or reach a detector, score, alert or live rule.
+When more than one fixed window exists, `30_trading_minutes` is the declared primary by identity;
+the other sorted available window names remain metadata and no result value may select the report input.
+
 The Daily Recap Review worker reads the current view only when its current report identity belongs
 to the report it already loaded, then the card and clipboard brief render that view while naming the
 immutable proposal source separately. It never computes a movement number or reads the AI store on
 Qt. A model-free refresh updates only the current trial/no-trigger/missing facts and its memo; a
 missing prior proposal, model outage, validation refusal or failed publish leaves deterministic
-facts and the last good pair intact. The proposal is therefore
+facts and the last good pair intact. Setup Tracker may route that exact published display object
+into Daily Recap > Review without tracker ranking, Qt I/O, a store read or a model call. The proposal is therefore
 not permission to change a detector, score, alert, ranking, watchlist, Focus, journal or policy.
