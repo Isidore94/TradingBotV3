@@ -572,6 +572,17 @@ def test_model_free_progress_refresh_updates_the_current_pair_display_and_review
     assert display["report_hash"] == current_report["report_hash"]
     assert display["proposal_source"] == proposal["source"]
     assert display["current_progress"]["eligible"] == 23
+    copied = proposals.copy_test_brief(display)
+    assert current_report["report_id"] in copied
+    assert current_report["report_hash"] in copied
+    assert "Current report ID:" in copied
+    assert "Proposal source report ID:" in copied
+    for value in (
+        proposal["generated_at"], proposal["as_of"], proposal["source"]["report_id"],
+        proposal["source"]["report_hash"],
+    ):
+        assert value in memo
+        assert value in copied
     app = QApplication.instance() or QApplication([])
     panel = DailyRecapPanel()
     try:
@@ -581,6 +592,9 @@ def test_model_free_progress_refresh_updates_the_current_pair_display_and_review
         assert current_report["report_hash"] in card
         assert "eligible 23" in card
         assert proposal["source"]["report_id"] in card
+        assert proposal["source"]["report_hash"] in card
+        assert proposal["generated_at"] in card
+        assert proposal["as_of"] in card
     finally:
         panel.deleteLater()
         app.processEvents()

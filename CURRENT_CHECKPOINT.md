@@ -198,8 +198,9 @@ when there are no published entry-quality cells. Measured Report carries an expl
 block and hash; Daily Recap > Review reads its matching proposal on the worker, renders the Next
 test card with report id/hash and copies an in-memory complete test brief. No trial
 registration/execution, live rule, store, detector, score, alert, ranking, Focus, watchlist,
-journal or policy changes. Reviewer fix-round contracts: `tests/test_sol_research_proposal.py`
-(5 red-before-green cases); targeted compatibility/packaging run 190 passed. The existing
+journal or policy changes. Reviewer inspection reproduced nine new red failures against
+`e35e9fc9`; all are now covered by `tests/test_sol_research_proposal.py`; targeted
+compatibility/packaging run 194 passed. The existing
 `test_ai_jobs_runner.py` historical-date baseline is red in this
 worktree (28 failures before slot execution; `session_date=''`), unrelated to Packet 3. Gates
 #142 (copied deterministic progress) and #143 (one configured local-model proposal with measured

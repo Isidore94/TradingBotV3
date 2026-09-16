@@ -721,6 +721,7 @@ class DailyRecapPanel(QFrame):
         changed = proposal.get("changed_condition") or {}
         progress = self._entry_quality_proposal.get("current_progress") or {}
         source = self._entry_quality_proposal.get("proposal_source") or proposal.get("source") or {}
+        age = self._entry_quality_proposal.get("proposal_age") or {}
         self.next_test_card.setText(
             f"{proposal.get('question', 'No justified new test.')}\n"
             f"Control: {control.get('recipe_id', 'unknown')} · one change: "
@@ -731,7 +732,9 @@ class DailyRecapPanel(QFrame):
             f"{proposal.get('status', 'proposed')} · report "
             f"{self._entry_quality_proposal.get('report_id', '')} · hash "
             f"{self._entry_quality_proposal.get('report_hash', '')}\n"
-            f"Proposal source: {source.get('report_id', '')} · hash {source.get('report_hash', '')}"
+            f"Proposal source: {source.get('report_id', '')} · hash {source.get('report_hash', '')}\n"
+            f"Proposal age: generated {age.get('generated_at') or proposal.get('generated_at', '')} · "
+            f"source as-of {age.get('source_as_of') or proposal.get('as_of', '')}"
         )
 
     def entry_quality_proposal_payload(self) -> dict[str, Any] | None:

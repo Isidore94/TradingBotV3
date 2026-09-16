@@ -202,11 +202,17 @@ def _memo_path(root: Path) -> Path:
 def copy_test_brief(display: Mapping[str, Any]) -> str:
     """A clipboard-only exact proposal brief; this function never writes."""
     proposal = display.get("proposal") if isinstance(display.get("proposal"), Mapping) else display
+    source = display.get("proposal_source") if isinstance(display.get("proposal_source"), Mapping) else proposal.get("source") or {}
+    age = display.get("proposal_age") if isinstance(display.get("proposal_age"), Mapping) else {}
     return "\n".join(
         (
             f"Proposal: {proposal.get('proposal_id', '')}",
-            f"Report ID: {display.get('report_id') or (proposal.get('source') or {}).get('report_id', '')}",
-            f"Report hash: {display.get('report_hash') or (proposal.get('source') or {}).get('report_hash', '')}",
+            f"Current report ID: {display.get('report_id') or source.get('report_id', '')}",
+            f"Current report hash: {display.get('report_hash') or source.get('report_hash', '')}",
+            f"Proposal source report ID: {source.get('report_id', '')}",
+            f"Proposal source report hash: {source.get('report_hash', '')}",
+            f"Proposal generated at: {age.get('generated_at') or proposal.get('generated_at', '')}",
+            f"Proposal source as-of: {age.get('source_as_of') or proposal.get('as_of', '')}",
             f"Question: {proposal.get('question', '')}",
             f"Assumption challenged: {proposal.get('assumption_challenged', '')}",
             f"Source cells: {', '.join(map(str, proposal.get('source_cell_ids', ()) or ()))}",
@@ -259,7 +265,7 @@ The next action is **{proposal.get('primary_action')}**. The question is: {propo
 
 ## What we know
 
-This memo renders validated proposal JSON beside the current published measured report. The current report identity is ID {report.get('report_id')} with hash {report.get('report_hash')}, measured as of {report.get('as_of')}. The proposal source remains ID {(proposal.get('source') or {}).get('report_id')} with hash {(proposal.get('source') or {}).get('report_hash')}. The narration coverage is {((report.get('narrated') or {}).get('label') or 'not available')}. The cited measured cells are {'; '.join(observed) or 'none'}. Those cells describe opportunity movement under stated windows. They are not booked profit, an exit result, or evidence that any setup is best.
+This memo renders validated proposal JSON beside the current published measured report. The current report identity is ID {report.get('report_id')} with hash {report.get('report_hash')}, measured as of {report.get('as_of')}. The proposal source remains ID {(proposal.get('source') or {}).get('report_id')} with hash {(proposal.get('source') or {}).get('report_hash')}; it was generated at {proposal.get('generated_at')} from source as-of {proposal.get('as_of')}. The narration coverage is {((report.get('narrated') or {}).get('label') or 'not available')}. The cited measured cells are {'; '.join(observed) or 'none'}. Those cells describe opportunity movement under stated windows. They are not booked profit, an exit result, or evidence that any setup is best.
 
 ## Active test and limits
 
