@@ -69,8 +69,9 @@ They are evidence and must not be loaded as context.
   gross MFE/MAE/close movement after a hypothetical stop; separates percent, entry-frozen ATR
   and valid-risk R; excludes confirmation-bar wicks; labels reconstructed knowledge; and keeps
   daily touch order ambiguous. It has no store, detector, score, alert, ranking, journal or
-  policy effect, and `outcome_path` is unchanged. Packet 2 connects only bounded research-reader
-  denominators; Packet 3 will publish grounded next-test facts. Live gate #140 is owed.
+  policy effect, and the old `outcome_path` meanings are unchanged. Packet 2 connects bounded
+  research-reader denominators; Packet 3 publishes grounded next-test facts from the separate
+  `entry_quality_window` dataset. Live gate #140 is owed.
 
 - **Phase 0.32 Packet 2 fair entry comparison (2026-09-15, unmerged).**
   `scripts/entry_comparison.py` is a pure reader over supplied Packet 1 measures and the existing

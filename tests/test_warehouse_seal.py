@@ -348,7 +348,7 @@ def test_torn_manifest_tail_is_repaired_not_treated_as_corruption(store):
 
 
 def test_dataset_registry_is_the_frozen_increment_plus_registered_context(store):
-    """The original 13 tables plus the Phase-6 setup-context addition."""
+    """The frozen tables plus setup context and exit-independent entry quality."""
     assert sorted(schemas.DATASETS) == sorted(
         [
             "anchor_instance",
@@ -356,6 +356,7 @@ def test_dataset_registry_is_the_frozen_increment_plus_registered_context(store)
             "bar_derived",
             "bar_m5",
             "collection_gap",
+            "entry_quality_window",
             "feature_snapshot_daily",
             "feature_snapshot_intraday",
             "level_state_daily",

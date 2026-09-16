@@ -20,13 +20,13 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-16: Phase 0.32 Packets 1-3 are built, unmerged.** Packet 3 adds only validated proposal/memo publication and a Review card over the report. |
-| Working branch | **`codex/sol-p3-research-proposal`**, carrying the tester's red contracts plus Packet 3; the shared desk checkout remains on `main` and was not restarted. |
-| Unmerged / open | Phase 0.32 Packets 1-3 await review/integration; copied-data gates #140-#143 are owed. H4/LRSI and older recorded gates remain open. |
-| Next action | **Review Packets 1-3 in order, then run the copied-data and one optional local-model gates without changing any live rule.** Restart only after integration and trader direction. |
+| Latest work | **2026-09-16: Phase 0.32 Packets 1-3 are built and independently accepted, unmerged.** Fixed-window warehouse rows feed one fair comparison, one validated proposal/memo and the shared Review/Tracker display. |
+| Working branch | **`codex/entry-quality-next-test`**, carrying the accepted feature plus the final guard-list repair; the shared desk checkout remains on `main` and was not restarted. |
+| Unmerged / open | Phase 0.32 is ready for handoff but is deliberately not merged; copied-data gates #140-#142, local-model gate #143, the frozen rebuild and all older gates remain owed. |
+| Next action | **Run copied-data gates #140-#142 and, when wanted, local-model gate #143.** Merge/restart only on later trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
-| Last verified baseline | **Phase 0.31 full strict pass: 8,449 passed, 6 skipped, 72 subtests; compileall, ruff and smoke 7/7 clean.** Thread warnings were errors; the two later packaging guards pass 19/19. |
-| Frozen exe | **Rebuilt and verified 2026-09-15: source 86/86 and frozen 86/86.** The Mentor's newly reachable AI module is bundled narrowly; build-time PySide6 and foreign-DLL guards are pinned. The production desk still runs from SOURCE. |
+| Last verified baseline | **Phase 0.32 full run: 8,521 passed, 6 skipped, 72 subtests, with two guard-list failures; both were repaired and the exact guards plus all Phase 0.32 tests pass 74/74.** Independent P3 review passed 314 nearby tests; ruff is clean. A strict full rerun is still owed. |
+| Frozen exe | **Source selftest is 87/87; the frozen rebuild is owed** because `research_proposal.py` is a new lazy top-level module. The production desk still runs from SOURCE and was not restarted. |
 | Desk | **The shared checkout is on `main` with Phase 0.31 loaded.** It was stopped during integration; no agent restarted it or wrote a live store. |
 
 ### Open gates, newest first
@@ -182,7 +182,7 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
 
-### 2026-09-16 — Phase 0.32 Packet 3 BUILT on `codex/sol-p3-research-proposal`; review and live/local-model gates owed
+### 2026-09-16 — Phase 0.32 Packets 1-3 BUILT and independently accepted; integration and live/local-model gates owed
 
 Packet 3 adds the additive `research_proposal` validator/publication seam only. It rejects an
 unknown report/cell/recipe, fabricated observed number, a citation outside its declared cells or
@@ -204,15 +204,14 @@ Daily Recap > Review and Setup Tracker's compact route reuse its matching displa
 Next test card with report id/hash and copy an in-memory complete test brief. No trial
 registration/execution, live rule, store, detector, score, alert, ranking, Focus, watchlist,
 journal or policy changes. Reviewer inspection reproduced the new red failures against
-`e38d1dff`; the warehouse publication/multi-window regressions plus the prior proposal contract pass, and
-the bounded report/setup-research/Recap/Tracker/warehouse compatibility run passes 208 tests. The existing
-`test_ai_jobs_runner.py` historical-date baseline is red in this
-worktree (28 failures before slot execution; `session_date=''`), unrelated to Packet 3. Gates
+`e38d1dff`; the final independent review returned GO and its bounded nearby run passed 314 tests.
+The later full suite passed 8,521 tests and exposed two stale guard lists; both repairs and every
+Phase 0.32 test then passed 74/74. Gates
 #142 (copied deterministic progress) and #143 (one configured local-model proposal with measured
 latency/tokens/memory) remain owed. Packaging trigger: new lazily imported top-level module;
 the frozen spec/selftest now name it. No frozen rebuild was run.
 
-### 2026-09-15 — Phase 0.32 Packet 1 BUILT on `codex/sol-p1-forward`; review and copied-data gate owed
+### 2026-09-15 — Phase 0.32 Packet 1 BUILT and independently accepted; copied-data gate owed
 
 Packet 1 adds only `scripts/entry_quality.py`: a pure `entry_quality_forward_v1` view over
 caller-provided completed bars. M5 uses elapsed 5/15/30/60/120/180-minute endpoints and the
@@ -222,12 +221,12 @@ knowledge identity, gross no-exit MFE/MAE/close movement, timing, threshold orde
 ATR/valid-risk R, coverage and an explicit honest state. Confirmation bars are excluded, daily
 same-bar order remains ambiguous, a post-stop rally remains visible, reconstructed inputs cannot
 confirm prospective claims, and `outcome_path` is untouched. The tester's nine red tests failed
-before the module existed and pass after it. Packet 2 will attach predeclared bounded denominators;
-Packet 3 will extend the existing research narration/publication path. No live store, scanner,
+before the module existed and pass after it. Packet 2 attaches predeclared bounded denominators;
+Packet 3 extends the existing research narration/publication path. No live store, scanner,
 score, alert, watchlist, Focus, journal, policy, local setting or desk process changed. Gate #140
 uses a copied bounded data slice after integration; it cannot prove an edge.
 
-### 2026-09-15 — Phase 0.32 Packet 2 BUILT on `codex/sol-p2-entry-comparison`; review and copied-data gate owed
+### 2026-09-15 — Phase 0.32 Packet 2 BUILT and independently accepted; copied-data gate owed
 
 Packet 2 adds only `scripts/entry_comparison.py`, a pure reader over caller-supplied Packet 1 rows
 and the existing read-only trial ledger. It emits one normalized attempt for every declared P8 entry

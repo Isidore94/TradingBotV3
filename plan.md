@@ -271,7 +271,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.29** | Pullback alert, trendline break, compression (trader 2026-09-15) | **BUILT, independently reviewed and merged.** PCT-3: compression measure, chip, calibration CLI and `compression_break` (gates #124-#125). PCT-1: Pullback alert, auto-arm and claim names (gates #126-#129). PCT-2: frozen completed-close trendline-break event plus additive D1-feed row (gate #130). Spec `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. |
 | **0.30** | Daily Recap repair (DR-REPAIR) | Streams and reduces M5 state, shows one whole best event per stock/side, uses D1 horizons for D1 decisions, keeps pending swings, states factual counts and re-reads once after the close. **BUILT and reviewed; live gate #132 owed.** |
 | **0.31** | Finish the remaining WISHLIST integration (trader 2026-09-15) | **BUILT and merged to `main` at `4563efaa`; live gates #134-#139 owed.** SN1 process isolation, bounded 5E identity repair, trendline break-then-retest, grounded market-story narration, the Market Journal evening-session repair, Trade Mentor validated AI draft filling/coaching, and a larger persistent Mentor popup. **H4/LRSI is explicitly excluded.** |
-| **0.32** | Entry quality and the next test (trader 2026-09-15) | Research-only forward movement, fair entry comparison, and a grounded local-AI next-test proposal/memo. **Packets 1-3 are built, unmerged:** Packet 1 on `codex/sol-p1-forward`, Packet 2 on `codex/sol-p2-entry-comparison`, and Packet 3 on `codex/sol-p3-research-proposal`. No detector, score, alert, ranking, watchlist, Focus, journal, policy or live-store change. |
+| **0.32** | Entry quality and the next test (trader 2026-09-15) | Research-only forward movement, fair entry comparison, and a grounded local-AI next-test proposal/memo. **Packets 1-3 are built and independently accepted on `codex/entry-quality-next-test`, unmerged.** No detector, score, alert, ranking, watchlist, Focus, journal, policy or live-setting change. Gates #140-#143 and the frozen rebuild remain. |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — QUEUED** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -490,7 +490,7 @@ Built on `codex/phase-031` and merged to `main` at `4563efaa`. The strict full s
 smoke, source selftest and frozen selftest are green. Gates #134-#139 retain the real-desk,
 real-model and next-session proof; no H4/LRSI implementation was added.
 
-## Phase 0.32 — Entry quality and the next test (trader 2026-09-15) — Packets 1-3 BUILT; review/integration and live gates remain
+## Phase 0.32 — Entry quality and the next test (trader 2026-09-15) — BUILT and independently accepted; integration and gates remain
 
 This is a bounded, research-only program. It measures what an opportunity offered after a
 named feasible entry without choosing an exit, then compares predeclared entry variants on
@@ -500,7 +500,7 @@ watchlist, Focus, review policy, journal, live setting, live backfill, desk rest
 registration change. Sections 5-7 remain binding; any new trial still uses the existing
 explicit trader-authorized ledger path.
 
-1. **Packet 1 — forward movement (BUILT on `codex/sol-p1-forward`, unmerged):**
+1. **Packet 1 — forward movement (BUILT and independently accepted, unmerged):**
    `scripts/entry_quality.py` is a pure, versioned view over caller-supplied completed bars.
    M5 measures 5/15/30/60/120/180 elapsed trading minutes and the same session's close;
    D1 measures the 1/2/3/5/10 exchange-session endpoints strictly after the entry session.
@@ -508,7 +508,7 @@ explicit trader-authorized ledger path.
    missing/pending/no-trigger/invalid/unavailable states, frozen-at-entry ATR and valid-risk R,
    point-in-time knowledge labels, and honest first-touch ambiguity. It has no store or exit
    simulator dependency and leaves `outcome_path` unchanged. Gate #140 is owed.
-2. **Packet 2 — fair entry comparison (BUILT on `codex/sol-p2-entry-comparison`, unmerged):**
+2. **Packet 2 — fair entry comparison (BUILT and independently accepted, unmerged):**
    `scripts/entry_comparison.py` is a pure reader that normalizes bounded P8 and existing M5
    entry-bearing occurrences to Packet 1's 60-minute view. It keeps one row for every declared
    P8 opportunity/entry variant, including no-trigger and missing-data rows; reports full and
@@ -524,7 +524,7 @@ explicit trader-authorized ledger path.
    freezes declarations without registering them, and never names a winner below floors or while
    a trial is immature. It creates no grid, store write, detector, score, alert, ranking or trial.
    Gate #141 is owed.
-3. **Packet 3 — next test (BUILT on `codex/sol-p3-research-proposal`, unmerged):**
+3. **Packet 3 — next test (BUILT and independently accepted, unmerged):**
    `scripts/research_proposal.py` validates the structured, source-cell-linked advisory proposal
    and atomically publishes immutable history plus the short current memo under the existing
    AI-store `briefs/next_research_test/` namespace. `setup_research` prepares its compact,

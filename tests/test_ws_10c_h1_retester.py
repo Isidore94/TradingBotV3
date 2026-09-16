@@ -840,7 +840,13 @@ def test_nothing_new_reaches_the_retired_h1_emitter_seam():
     offenders = []
     for path in sorted(ROOT_DIR.rglob("*.py")):
         parts = set(path.relative_to(ROOT_DIR).parts)
-        if ".git" in parts or ".venv" in parts or "build" in parts or "dist" in parts:
+        if (
+            ".git" in parts
+            or ".venv" in parts
+            or ".test_tmp" in parts
+            or "build" in parts
+            or "dist" in parts
+        ):
             continue
         if path == legacy or path.name in (
             "test_bounce_learning.py",
