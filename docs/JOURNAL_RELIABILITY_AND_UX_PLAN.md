@@ -657,8 +657,8 @@ column by no path at all.
 
 `AutoTagger.note_lane_candidates` takes the Market Journal entries whose
 `symbols` carry the trade's symbol and whose **actual write time** (`created_at`;
-the ledger overwrites `session_date` with the session of the append, which
-answers a different question) falls inside the trade's own window — open to
+Phase 0.31 keeps the subject in `session_date` and the write day in
+`written_session_date`) falls inside the trade's own window — open to
 close, widened by ONE trading session before the open. A **date-only broker fill
 has no intraday window** and gets `unmeasured`, never a tag, which is rule 2
 above applied to a window instead of a bucket.
@@ -829,3 +829,10 @@ written DURING the session — the one thing the field exists to deny. It now as
 `market_calendar.session_close`, and falls back to the date comparison when the
 calendar cannot place the session, because a coarse answer beats none. Existing
 rows are never rewritten; they keep the value they were written with.
+
+**Phase 0.31 Trade Mentor amendment (2026-09-15).** The 10:00 card saves one
+`RECALLED_RAW` opportunity event containing the trader's exact text before a local model runs.
+The model works off the Qt thread and returns a schema-checked draft only for missing fields;
+field state, exact source span and numeric unit are validated. The trader's combined
+Save/Correct action writes the existing `RECALLED` rows. No model path writes planned stop,
+entry or risk, and an unavailable model leaves the raw row plus the manual controls.

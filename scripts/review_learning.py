@@ -61,6 +61,11 @@ from project_paths import (  # noqa: E402
 )
 from evidence_stats import LATELY_SESSIONS, lately_start  # noqa: E402
 from review_events import load_review_events, review_event_store_mtime  # noqa: E402
+from opportunity_identity import (  # noqa: E402
+    IDENTITY_VERSION,
+    opportunity_id,
+    opportunity_key,
+)
 
 REVIEW_LEARNING_SCHEMA = "review_learning_v1"
 
@@ -184,10 +189,12 @@ REJECT_ACTIONS = {
 
 @dataclass
 class Episode:
-    """Everything that happened to one (trade_date, symbol) in the queue."""
+    """Everything that happened to one side/timeframe thesis in the queue."""
 
     trade_date: str
     symbol: str
+    opportunity_id: str = ""
+    identity_version: str = IDENTITY_VERSION
     side: str = ""
     resolution: str = "shown_only"  # take | reject | skip | shown_only
     shown: bool = False
@@ -255,17 +262,23 @@ _CONTEXT_KEYS = (
 
 
 def build_episodes(rows: Iterable[dict]) -> list[Episode]:
-    """Fold raw event rows into per-(trade_date, symbol) decision episodes."""
-    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    """Fold rows without merging opposite sides or D1/M5 theses."""
+    grouped: dict[tuple[str, str, str, str, str], list[dict]] = defaultdict(list)
     for row in rows:
         trade_date = str(row.get("trade_date") or "")
         symbol = str(row.get("symbol") or "").upper()
         if trade_date and symbol:
-            grouped[(trade_date, symbol)].append(row)
+            grouped[opportunity_key(row)].append(row)
 
     episodes = []
-    for (trade_date, symbol), events in sorted(grouped.items()):
-        episode = Episode(trade_date=trade_date, symbol=symbol)
+    for (trade_date, symbol, side, timeframe, _thesis), events in sorted(grouped.items()):
+        episode = Episode(
+            trade_date=trade_date,
+            symbol=symbol,
+            side="" if side == "UNKNOWN" else side,
+            timeframe="" if timeframe == "UNKNOWN" else timeframe,
+            opportunity_id=opportunity_id(events[0]),
+        )
         rank = 0  # 0 shown_only, 1 skip, 2 reject, 3 take
         for row in events:
             action = str(row.get("action") or "")
@@ -314,6 +327,28 @@ def build_episodes(rows: Iterable[dict]) -> list[Episode]:
                     episode.dislike_reasons = ";".join(sorted(existing | codes))
         episodes.append(episode)
     return episodes
+
+
+def identity_restatement(rows: Iterable[dict]) -> dict[str, Any]:
+    """Quantify how many legacy date+symbol groups the v1 identity splits."""
+    legacy: dict[tuple[str, str], set[tuple[str, str, str, str, str]]] = defaultdict(set)
+    row_count = 0
+    for row in rows:
+        trade_date = str(row.get("trade_date") or "")
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not trade_date or not symbol:
+            continue
+        row_count += 1
+        legacy[(trade_date, symbol)].add(opportunity_key(row))
+    split = {key: values for key, values in legacy.items() if len(values) > 1}
+    return {
+        "identity_version": IDENTITY_VERSION,
+        "event_rows": row_count,
+        "legacy_episode_count": len(legacy),
+        "canonical_episode_count": sum(len(values) for values in legacy.values()),
+        "split_legacy_groups": len(split),
+        "additional_episodes": sum(len(values) - 1 for values in split.values()),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -412,9 +447,9 @@ def attach_annotation_veto_reasons(
     zero, never an error: the scoreboard is a reading of the record, and a
     record that will not open is a quieter board rather than a failed run.
     """
-    by_key: dict[tuple[str, str], Episode] = {
-        (episode.trade_date, episode.symbol): episode for episode in episodes
-    }
+    by_key: dict[tuple[str, str, str], list[Episode]] = defaultdict(list)
+    for episode in episodes:
+        by_key[(episode.trade_date, episode.symbol, episode.side)].append(episode)
     if not by_key:
         return 0
     try:
@@ -424,25 +459,42 @@ def attach_annotation_veto_reasons(
     except Exception:
         return 0
 
-    touched: set[tuple[str, str]] = set()
+    touched: set[str] = set()
     for annotation in annotations:
         symbol = str(annotation.get("symbol") or "").strip().upper()
         session_date = str(annotation.get("session_date") or "").strip()
         code = str(annotation.get("reason_code") or "").strip().lower()
         if not symbol or not session_date or not code:
             continue
-        episode = by_key.get((session_date, symbol))
-        if episode is None:
-            continue
         side = str(annotation.get("side") or "").strip().upper()
-        if side and episode.side and side != episode.side:
-            # Two different directional claims on one name in one day. Nothing
-            # here can say which chart the veto was about, so it is skipped
-            # rather than attached to the wrong one.
+        candidates = list(by_key.get((session_date, symbol, side), ()))
+        if not candidates and not side:
+            candidates = [
+                episode
+                for key, grouped in by_key.items()
+                if key[:2] == (session_date, symbol)
+                for episode in grouped
+            ]
+        timeframe = str(annotation.get("timeframe") or "").strip().upper()
+        if timeframe:
+            exact_timeframe = [
+                episode for episode in candidates if episode.timeframe.upper() == timeframe
+            ]
+            if exact_timeframe:
+                candidates = exact_timeframe
+        event_id = str(annotation.get("event_id") or "").strip()
+        if event_id:
+            exact = [episode for episode in candidates if episode.event_id == event_id]
+            if exact:
+                candidates = exact
+        if len(candidates) != 1:
+            # Ambiguous old rows remain unmatched. Attaching one veto to two
+            # theses would put words in the trader's mouth.
             continue
+        episode = candidates[0]
         existing = set(_split_bounce_types(episode.dislike_reasons))
         episode.dislike_reasons = ";".join(sorted(existing | {code}))
-        touched.add((session_date, symbol))
+        touched.add(episode.opportunity_id)
     return len(touched)
 
 
@@ -805,6 +857,7 @@ def build_review_learning_state(
         if str(row.get("trade_date") or "") >= cutoff
     ]
     episodes = build_episodes(rows)
+    restatement = identity_restatement(rows)
     # Before aggregation: the veto codes are a DIMENSION, so they have to be on
     # the episodes when the segments are cut. They change no resolution.
     annotation_matches = attach_annotation_veto_reasons(episodes, annotations_path)
@@ -820,6 +873,7 @@ def build_review_learning_state(
         "outcome_matches": outcome_matches,
         "forward_matches": forward_matches,
         "annotation_veto_matches": annotation_matches,
+        "identity_restatement": restatement,
         **aggregate,
         "blind_spots": blind_spots,
         "leaks": leaks,

@@ -230,24 +230,13 @@ def session_date_for(now: datetime | None = None) -> str:
 def session_of_entry(entry: Mapping[str, Any]) -> str:
     """Which session a STORED entry is about - the one selection rule (WS-10D).
 
-    `EvidenceLedger.append` applies its own fields last, so the `session_date`
-    on a stored row is the market-local date of the WRITE, not the date
-    `build_entry` computed. Measured 2026-09-12: a note typed at 21:00 Pacific
-    on the 11th is 00:00 New York on the 12th, so the row says `2026-09-12`
-    while `session_date_for` on the same moment correctly answers
-    `2026-09-11`. A reader that groups by the stored field loses the evening
-    review - the single entry a day's story most wants.
-
-    So the session is recomputed from `created_at`, which the ledger does not
-    touch, through the same function the writing surfaces use. Every reader
-    that needs "the entries about day X" calls THIS, so the desk's Story pane
-    and the overnight rollup can never disagree.
-
-    The limit, stated rather than hidden: an entry deliberately filed against an
-    OLDER session - written Tuesday about Friday - cannot be recovered either
-    way, because its intended `session_date` never reached disk. Repairing the
-    ledger stamp is its own packet.
+    Phase 0.31 preserves an explicit subject in `session_date` and records the
+    actual write day separately as `written_session_date`. Older rows predate
+    that contract, so this reader keeps the created-at fallback for them.
     """
+    subject = str(entry.get("session_date") or "").strip()
+    if subject and str(entry.get("written_session_date") or "").strip():
+        return subject
     raw = str(entry.get("created_at") or "").strip()
     if raw:
         try:

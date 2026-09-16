@@ -120,19 +120,14 @@ WHY EACH ASSERTION IS A NUMBER AND NOT A SHAPE
   week stays cached.
 
 ===========================================================================
-THE LEDGER STAMP TRAP (verified 2026-09-12, and why one test drives the real store)
+THE SUBJECT-SESSION CONTRACT (repaired in Phase 0.31)
 ===========================================================================
 
-``EvidenceLedger.append`` applies its own fields LAST, so it OVERWRITES the
-``session_date`` ``build_entry`` computed, with the market-local date of the WRITE
-moment. Measured: a note typed 21:00 Pacific on 2026-09-11 is 00:00 New York on
-2026-09-12, so the stored row says ``session_date == "2026-09-12"`` while the entry is
-about 2026-09-11 - and ``market_journal.session_date_for`` on the same moment correctly
-answers ``"2026-09-11"``. So the day's entries may NOT be selected by the stored
-``session_date`` alone, and ``daily_story`` is driven here through a REAL
-``MarketJournalService`` over a REAL ``EvidenceLedger`` in ``tmp_path`` so a selection
-that loses the evening note cannot pass. Fixing the ledger stamp is NOT this packet;
-surviving it is.
+``EvidenceLedger.append`` now preserves an explicit subject in ``session_date`` and
+stores the market-local write day in ``written_session_date``. Older rows remain
+readable through the created-at fallback. ``daily_story`` is driven here through a
+REAL ``MarketJournalService`` over a REAL ``EvidenceLedger`` in ``tmp_path`` so a
+selection that loses an evening note cannot pass.
 
 Nothing here touches a live store: every path is ``tmp_path`` and every clock is
 injected. No test sleeps.
@@ -451,11 +446,9 @@ def test_the_same_sentence_predicts_the_session_only_when_it_was_typed_during_it
     `written_after_the_session` from the real exchange close, so the two rows differ
     only in when they were typed - and the story must read the second as hindsight.
 
-    Driven through a REAL service and a REAL ledger because of the stamp trap: the
-    21:00 Pacific write is 00:00 New York the next day, so `EvidenceLedger.append`
-    stamps `session_date == "2026-09-12"` over the "2026-09-11" the entry was built
-    with. A `daily_story` that selects on the stored `session_date` loses the evening
-    note entirely.
+    Driven through a REAL service and ledger because the 21:00 Pacific write is the
+    next New-York date. The subject must stay 2026-09-11 while the write day records
+    2026-09-12.
     """
     service = _service(tmp_path)
 
@@ -476,6 +469,8 @@ def test_the_same_sentence_predicts_the_session_only_when_it_was_typed_during_it
     assert midday["ok"] is True and evening["ok"] is True
     assert midday["entry"]["written_after_the_session"] is False
     assert evening["entry"]["written_after_the_session"] is True
+    assert evening["entry"]["session_date"] == SESSION
+    assert evening["entry"]["written_session_date"] == "2026-09-12"
 
     story = service.daily_story(SESSION, index_bars={"SPY": _flat_bars()})
 

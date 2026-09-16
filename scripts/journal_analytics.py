@@ -639,10 +639,9 @@ class AutoTagger:
             entry_id = str(entry.get("entry_id") or "").strip()
             if not entry_id or entry_id in replaced:
                 continue
-            # `created_at` is when the entry was actually WRITTEN. The ledger
-            # overwrites `session_date` with the session of the append, so the
-            # session field answers a different question and this window is not
-            # about it.
+            # `created_at` is when the entry was actually WRITTEN. Phase 0.31
+            # preserves the subject in `session_date` and stores the write day
+            # separately; this intraday window still needs the exact write time.
             written_at = _market_moment(entry.get("created_at"))
             body = str(entry.get("text") or "")
             symbols = {

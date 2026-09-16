@@ -110,16 +110,12 @@ would only bound disk growth.
   `ai_said` is the third kind and is ALWAYS EMPTY here — code computes, the model explains in
   a later packet — and it exists as a field so no renderer has to guess whether a sentence
   came from a person or a model. A session with no note has an empty `trader_said` and a
-  sentence saying so: no note, no invented thesis. **The ledger stamp trap is why
-  `market_journal.session_of_entry` exists.** `EvidenceLedger.append` applies its own fields
-  LAST, so it overwrites the `session_date` `build_entry` computed with the market-local date
-  of the WRITE: measured 2026-09-12, a note typed 21:00 Pacific on the 11th is 00:00 New York
-  on the 12th, so the row says `2026-09-12` while `session_date_for` on the same moment
-  correctly answers `2026-09-11`. Grouping by the stored field loses the evening review — the
-  one entry a story most wants — so the session is recomputed from `created_at`, which the
-  ledger does not touch, in ONE function both the desk pane and the overnight rollup call.
-  Repairing the stamp is a separate packet; an entry deliberately filed against an OLDER
-  session is unrecoverable either way, because its intended date never reached disk.
+  sentence saying so: no note, no invented thesis. **Phase 0.31 repaired the subject-session
+  stamp.** `EvidenceLedger.append(subject_session_date=...)` preserves the session the note is
+  ABOUT in `session_date` and records the market-local write day separately in
+  `written_session_date`; the monthly segment follows the subject. `market_journal.session_of_entry`
+  prefers that explicit pair and keeps the `created_at` reconstruction only for legacy rows,
+  so a 21:00 Pacific review remains with the completed session and older evidence still reads.
   **The thesis quotes itself** (`scripts/market_thesis.py`, `market_theses.jsonl`,
   append-only, keyed on `entry_id` + `extractor_version`): every field carries a span that
   reproduces it exactly, `unstated` is a real answer with no span, and the invalidation and
@@ -1916,8 +1912,8 @@ baseline rather than diagnostic evidence.
     non-`.py` runtime asset is covered by a `datas` rule. It found the spec five packages behind
     the tree (`ai_jobs`, `desk_link`, `gui_app`, `indicators`, `market_prep_gui`). `desk_link` was
     bundled from then until P1.5 **removed the package entirely (2026-08-24)**; `indicators` and
-    `ops` are bundled; the rest are documented allowlist entries — each unreachable from
-    `launch_gui.py`, the frozen entry point.
+    `ops` are bundled. Phase 0.31 made one `ai_jobs` module reachable from Trade Mentor, so the
+    spec collects only `ai_jobs.market_story_narration`, not the source-only nightly tree.
     **Fix the spec, never the test** — deliberate omissions go in its documented allowlists.
   - `launch_gui.py --selftest` (`scripts/selftest.py`) imports every lazily-loaded engine and loads
     every `__file__`-relative asset (theme.qss, the veto vocabulary), no window and no network,
@@ -1930,6 +1926,12 @@ baseline rather than diagnostic evidence.
     disjoint. It exists because `ai_jobs` was in both, the unfrozen selftest passed 30/30 all week,
     and the desk's first frozen run (2026-08-09) was the first execution anywhere to catch it.
   - Between them, triggers 2-4 below are now caught by the normal test run.
+  - **Codex build-host DLL fence (2026-09-15).** A Codex desktop shell adds its own poppler and
+    libheif directories to the DLL search path. PyInstaller once copied their ICU, private CRT
+    and OpenSSL files beside the desk: Qt failed with "procedure not found", then SSL vanished
+    when the first broad filter removed too much. The spec now pins build-time qtpy to PySide6,
+    excludes binaries whose source is the Codex runtime cache, and replaces an intercepted
+    OpenSSL pair with the current Python runtime's own DLLs. The frozen selftest is 86/86.
 - **Triggers — a change of these kinds can break the bundle, so rebuild and run the frozen selftest:**
   1. New third-party dependency (`requirements-*.txt` / `constraints.txt`) — may need hiddenimports or `collect_data_files`. **Not** covered by the guards.
   2. New non-`.py` runtime asset. The spec mirrors every `FIRST_PARTY_PACKAGES` tree plus `config/`; an asset outside those silently goes missing. *(spec-drift test catches it)*
@@ -2028,7 +2030,7 @@ before changing the behaviour a rule governs.**
 - **The tax number is the BROKER's, never ours** (trader decision 2026-08-28: *"Statement is source of truth for final pnl/tax purposes"*). Every other P&L in the journal is RECOMPUTED — average-cost matching, price x qty — which is what makes per-setup statistics possible and also drifts from the broker's cent-rounded figures (-$0.24 on $5,299 across the year). `journal_tax_report` recomputes NOTHING: it sums `raw_executions.net_amount`, the broker's own statement of each fill's cash, and for a FLAT position that sum IS the realised P&L, so no cost-basis model is needed or used. It **refuses** rather than estimates — an open position, one whose opening fill was invented (`SYNTHETIC_OPEN`), or one with any fill lacking a stated amount is EXCLUDED and named with its reason. CAD converts per fill at the booked BoC rate; an unbooked date withholds that position's CAD total rather than guessing. A `VOID_EXECUTION` row never reaches a total. The recomputed figure sits beside it as a cross-check, never blended.
 - **The setup tracker is mirrored into a SQLite record store after every JSON save, and the JSON is still the truth** (decision 0017, F3 step 1, 2026-09-04). `scripts/tracker_store.py` writes one row per record with a content hash, behind `tracker_storage_shadow` (default ON), after `save_json` and never able to fail the save; no reader may load from the SQLite until gate #57 (five parity-clean live saves, `python scripts/tracker_store.py verify`) is met, and then readers move ONE AT A TIME, narrowest first. **A terminal outcome row is re-simulated only with `force`** (BD-98): the nightly never passes it; `cli recompute-outcomes` does, one lock per bucket, writing only where the result changed.
 - **Address home-folder stores by their `project_paths` named constants** — resolving by name under the wrong root shipped a blank page for six days.
-- **The overnight runner's `veto_cohort_grading` slot is deterministic and calls no model.** **The order is decision 0018's: deterministic slots, then the digest, then narration, then the model-gated slots; a later phase appends inside its stage and never reorders across stages** (`docs/decisions/0018-deterministic-stage-before-narration.md`, 2026-09-04 - the two narration slots held up to 2½ h of reserve ahead of every deterministic slot, a slot that cannot fit its reserve records SKIPPED, the 2026-09-01 run took six hours, and no deterministic slot reads either narration slot's OUTPUT). The order is pinned once, as `EXPECTED_SLOT_ORDER` in `tests/test_ai_jobs_runner.py`. Nothing in this chain may reach a detector, score, alert, watchlist, Focus, the review queue or `review_policy.json`.
+- **The overnight runner's `veto_cohort_grading` slot is deterministic and calls no model.** **The order is decision 0018's: deterministic slots, then the digest, then narration, then the model-gated slots; a later phase appends inside its stage and never reorders across stages** (`docs/decisions/0018-deterministic-stage-before-narration.md`, 2026-09-04 - the original two narration slots held up to 2½ h of reserve ahead of every deterministic slot, a slot that cannot fit its reserve records SKIPPED, the 2026-09-01 run took six hours, and no deterministic slot reads a narration slot's OUTPUT). Phase 0.31 appends `market_story_narration` at that stage's end. The order is pinned once, as `EXPECTED_SLOT_ORDER` in `tests/test_ai_jobs_runner.py`. Nothing in this chain may reach a detector, score, alert, watchlist, Focus, the review queue or `review_policy.json`.
 - **The digest gate has TWO halves and both are measured** (packet Q4, 2026-09-04). `clean_digest_sessions` counts a RUN of CONSECUTIVE clean exchange sessions ending at the newest pack, walked through `market_calendar.previous_session` and **never by weekday arithmetic**: clean is `is_session` plus an EMPTY `unavailable` (the pack's own failure record - its summary already calls such a pack INCOMPLETE), a non-session pack neither counts nor breaks, and `first_gap_session` names where the run stopped. `sessions_collected` keeps its pre-Q4 distinct-count meaning for existing readers. The second half is a FILE: `digest_audit_approval.json` beside the packs, written **only** by `python -m ai_jobs.digest approve-audit --pack <date> …` (run from `scripts/`; refuses fewer than three packs and any date with no pack), and **no nightly job may write it** - a runner that approves its own evidence has asserted, not audited. `gate_met = window_met and audit_recorded`, and **`journal_enrichment` refuses until both are true**, its ledger row reading `refused: audit not recorded`. `review_policy_draft` and `setup_research` have their OWN gates and are untouched by this. **The System Health gate strip shows the number the gate TURNS ON** - `sessions_consecutive_clean`, not `sessions_collected` - and the Enrichment counter's `met` reads `gate_met`, so the strip can never say "Digest 11/10" at a two-session run or "Enrichment met" on a night the slot refuses.
 - **`entry_index.json` is the compact handoff and it is deterministic** (Q4.4). Written beside the packs at the end of `run_daily_digest` with a temp-and-rename, where a failure is logged and **never fails the digest**. Four sections that are **never merged** - `intraday_held_run` (MFE/MAE only; `close_r` is the RESULT and is not blended in), `swing_win_rates` and `journal_execution` (both EMPTY BY CONSTRUCTION with the reason stated, because the fact pack carries champion INTRADAY outcomes and no journal block), `preference_observations` (classified by `review_learning`'s TAKE/REJECT sets, not by a second list) - plus `changes_vs_prior_window` **by FLOOR STATUS only, never by ranking immature cells**, carrying `this_window_packs` / `prior_window_packs` so "46 cleared, 0 fell" cannot read as a finding when the prior window simply had no packs, the registered trials listed UNRANKED with their frozen windows, and an `open_questions_for_a_ticker_brief` that stays empty because a brief opens only for a STATED question. **Every `pack_path` it prints is the file the numbers were READ from** - the newest superseding sibling from `latest_pack_files_by_session`, never `facts_path`'s version 1, because a citation to a superseded pack points the reader at the record that was corrected (3 of 9 live sessions are superseded); a same-second tie breaks on the supersession index, never on the file NAME, which sorts `.1` before the base file. `repo_commit()` resolves HEAD through the `gitdir:` pointer as well as a plain `.git` directory, because in a git WORKTREE - where every agent builds - `.git` is a FILE and the manifest's own helper returns "".
 
@@ -3138,8 +3140,8 @@ name while the trade was open reached the Journal's Tags column by no path at al
 
 - **The window is the trade's OWN, with one trading session of margin before the open.**
   `AutoTagger.note_window_for` walks `market_calendar.previous_session`; the write time
-  compared against it is the entry's `created_at`, because the `EvidenceLedger` overwrites
-  `session_date` with the session of the APPEND and that answers a different question. A
+  compared against it is the entry's `created_at`, because the subject session and the exact
+  write time answer different questions. A
   **date-only broker fill has no intraday window** (`journal_trade_shape.is_date_only`) and
   the verdict is `unmeasured`, never a tag.
 - **The lane matches a CLAIM, never a mood.** The vocabulary is `setup_docs.SETUP_DOCS` -
@@ -3262,13 +3264,11 @@ bounce starts two.
 - **What did not change:** every widget, signal and owner. `MainWindow` owns the one `StrengthBoardService`; `attach_strength_board` hands the panel to `StrengthPage.attach_strength_board`; every ticker click still charts into the centre pane; the adoption gate, the parity toggle, the sort, the Copy RS/RW buttons and the two review buttons are untouched. `CollapsibleSection` has no caller left and stays as a widget. Pinned in `tests/test_qt_strength_board_in_the_desk.py` section 5 (seven tests, RED first).
 - **File-scoped ask-first:** `alert_center_panel.py` houses alert code; the trader's message IS the instruction for this window, and the edit is hosting only - no alert, tier, fold, queue or evidence behaviour touched.
 
-## SN - the scanner's hold on the interpreter (2026-09-08; SN5/SN6 and SN4 built, SN1-SN3 open)
-
-## SN - the scanner's hold on the interpreter (2026-09-08 SN5/SN6, 2026-09-12 SN3/SN4, 2026-09-13 SN2; SN1 open)
+## SN - the scanner's hold on the interpreter (2026-09-08 through 2026-09-15; SN1-SN6 built)
 
 - **What the trader said:** the desk was *"really quite laggy"* at the close; then, on 9% of the week's usage, *"Anything we can get done from wishlist.md that's quick and cheap?"* and *"Go"* for SN5 and SN6.
 - **What was measured (2026-09-08, `thread_cpu.jsonl` / `ui_stalls.jsonl`):** `Thread-4 (run_strategy)` at 0.62 of a core on average in hour 13, 71-88% per minute at the close, climbing from 0.35 at 06:00; the GUI thread at 0.10-0.15; 13,031 GUI stalls over 50 ms (four hours hit the 2,000-record cap, so undercounted), 245-365 blocked seconds per hour, one 30.6 s stall at 13:01:53. Cycle 24's preamble was 658 s: the fast lane 333 s over 258-259 names (107 auto-adopted + 64 + 129 trader files, alphabetical), then four RRS passes 275 s. A cycle is ~25 min and `wait_for_candle_close` returns at once, so the loop never rests.
-- **Why a thread cannot be made polite:** the scanner shares the interpreter lock with the GUI; a CPU-bound thread releases it only at the interpreter's switch interval, and no priority trick frees it (the F1 lesson). The full fix is SN1, the scanner in a below-normal child process. Until then the thread must GIVE the lock away.
+- **Why a thread cannot be made polite:** the scanner shared the interpreter lock with the GUI; a CPU-bound thread released it only at the interpreter's switch interval, and no priority trick freed it (the F1 lesson). SN1 now owns `run_bot_with_gui` in one Windows-spawned below-normal child (`ui/services/bounce_process.py`). Commands cross one pipe; every GUI callback crosses one bounded queue in original order. `BounceService` is the only owner, restarts a dead child on the health tick, and retires or terminates it on shutdown. The proxy exposes the existing chart/regime/entry-assist reads; chart ticks request one symbol rather than copying the full cache, while the warehouse retains its once-per-minute snapshot. The detector, bars, timing, alert filters and evidence writers are unchanged.
 - **SN5 - the breath.** `BounceBot._breathe` waits `SYMBOL_BREATH_SECONDS` (0.02) on `_stop_event` after each symbol's compute, in the fast lane and in both main-sweep loops. On the stop event and never `time.sleep`, so a set event returns immediately and shutdown is not one symbol slower. Cost: ~586 symbol scans a cycle x 20 ms = ~12 s on a 25-minute cycle. Pacing only: the loop, the set, the bars and every output are unchanged; `ScanCycleClock` still never sleeps.
 - **SN6 - the trader first.** `BounceBot._fast_lane_order` returns the trader's own Focus names (no marker in `focus_auto_picks.json`) alphabetically, then the auto-adopted ones alphabetically; the sweep follows as before. The engine reads the markers through `focus_picks.load_auto_pick_symbols()`, which shares `_read_todays_auto_pick_markers` with the store, so both apply the same per-entry `session_date` rule (R2.1). A failed or missing read is an EMPTY set: every name then scans as the trader's, which promotes and never demotes or drops a name - absence of a marker means the trader owns it (R2). The fast-lane log line prints both counts.
 - **What did not change:** `request_and_detect_bounce`, the RRS passes, `_rebuild_feed`, every detector, threshold, tier, fold and evidence row. SN1 remains in WISHLIST as an idea until the trader moves it into `plan.md`; SN2, SN3 and SN4 landed in the 2026-09-12/13 sweep.
@@ -4303,6 +4303,15 @@ both bindings fail. The original WS-TM card occupied `AlertChartReview`'s layout
 after the arm bar. The 2026-09-14 trader correction removes it from that layout:
 it is a separate window and consumes no chart height, even while open.
 
+**Phase 0.31 finishes the form help.** Each incomplete trade now has one raw answer box.
+Pressing its local-AI button writes `RECALLED_RAW` first, then a `QRunnable` asks the existing
+medium local model for a strict draft. Only missing fields are allowed; each answer needs an
+exact source span, numbers need one named unit, and a control the trader already touched is
+never overwritten. Save answers remains the only writer of `RECALLED`; planned-risk columns
+remain unreachable. The last verified market-story narration supplies one bounded coaching
+question. The popup opens at 900x820, has a 760x720 floor, remembers resize on every hide/close,
+and no show path calls `adjustSize` over that choice.
+
 **Ownership.** `MainWindow` owns the service (one timer, one state file, and the card's
 host is built more than once), started in `showEvent` and stopped in `closeEvent` beside
 `WorkingLatelyService`; `AlertChartReview` owns exactly one card and the always-available
@@ -4310,12 +4319,11 @@ host is built more than once), started in `showEvent` and stopped in `closeEvent
 persisted, independent of Auto in both directions), the DST-aware sentence and a "Pause
 today" button that emits a REQUEST rather than writing the service's state.
 
-**Tests:** `tests/test_ws_tm_trade_mentor.py` — 36, written red before any of this
-existed (commit `ed705b7a`) and all green after.
+**Tests:** `tests/test_ws_tm_trade_mentor.py` — original 36 were written red before WS-TM;
+Phase 0.31 adds raw-first, validation and persistent-size coverage.
 
-**Reopen trigger.** WISHLIST 10J step 3 (a local model filling a form from the raw text)
-or step 4 (coaching) is authorized; the trader asks for a different hour, a different
-grace, or for a prompt to survive being away.
+**Reopen trigger.** The trader asks for a different hour, a different grace, or for a
+prompt to survive being away.
 
 ---
 
@@ -4325,8 +4333,8 @@ grace, or for a prompt to survive being away.
   better entry* - a quick H1/H4 retester arm button below the chart, on the shared arm
   surface. And the fence around it, in the same breath: **a like or a tag alone never
   arms it, and the watch expresses entry timing, not a setup claim or an order.** Step 1
-  only is built (the H1 15-EMA bounce); steps 2 (H4 / LRSI) and 3 (trendline
-  break-then-retest) are not.
+  built first as the H1 15-EMA bounce. Phase 0.31 adds step 3's completed-D1 frozen
+  trendline break/retest/confirmation watch; step 2 (H4/LRSI) remains excluded.
 - **Why that fence is load-bearing.** Everything else this desk records is a claim of
   some kind - a like is training data, a veto is a verdict, a Focus pick is a name worth
   watching. A retester watch is none of those: it says *"tell me when this shape prints,

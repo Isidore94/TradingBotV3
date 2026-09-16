@@ -85,6 +85,7 @@ TRADE_CAP_DEFAULT = 3
 
 #: The append-only event type the answers are stored as.
 EVENT_RECALLED = "RECALLED"
+EVENT_RECALLED_RAW = "RECALLED_RAW"
 
 #: The status values that mean the trade touched the session.
 _SESSION_STATUSES = ("CLOSED", "OPEN", "PARTIALLY_CLOSED")
@@ -202,6 +203,8 @@ def recalled_fields(store: Any, trade_id: str) -> list[dict[str, Any]]:
                 "text": str(payload.get("text") or ""),
                 # None, never 0.0. "I had no stop" is not a stop at zero.
                 "value": payload.get("value"),
+                "unit": str(payload.get("unit") or ""),
+                "source_span": str(payload.get("source_span") or ""),
                 "recalled_after_session": bool(payload.get("recalled_after_session")),
                 "recorded_at": str(row.get("occurred_at") or ""),
                 "trade_date": str(payload.get("trade_date") or ""),
@@ -306,6 +309,8 @@ def save_answers(
             "text": str((answer or {}).get("text") or ""),
             # Never coerced to a float: an absent number stays absent.
             "value": value if value is not None else None,
+            "unit": str((answer or {}).get("unit") or ""),
+            "source_span": str((answer or {}).get("source_span") or ""),
             "recalled_after_session": True,
             "trade_date": str(trade_date or ""),
         }
@@ -320,3 +325,32 @@ def save_answers(
         )
         written.append(row)
     return written
+
+
+def save_raw_reply(
+    store: Any,
+    trade_id: str,
+    raw_text: str,
+    *,
+    missing: tuple[str, ...] = (),
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Save the trader's exact words before any local model sees them."""
+    body = str(raw_text or "")
+    if not body.strip():
+        raise ValueError("the raw answer is empty")
+    moment = now or datetime.now().astimezone()
+    payload = {
+        "raw_text": body,
+        "missing_fields": [name for name in missing if name in MATERIAL_FIELDS],
+        "recalled_after_session": True,
+    }
+    return store.record_opportunity_event(
+        opportunity_id=f"trade:{trade_id}",
+        event_type=EVENT_RECALLED_RAW,
+        trade_id=str(trade_id),
+        occurred_at=moment,
+        reason="raw_next_morning_reply",
+        payload=payload,
+        source="trade_mentor",
+    )

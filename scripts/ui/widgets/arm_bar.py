@@ -454,6 +454,14 @@ class ArmBar(QFrame):
                 "either direction; the alert names the band. Needs an "
                 "earnings anchor in the cache"
             ),
+            "trendline_break": (
+                "a completed D1 bar closes through the exact scan trendline "
+                "saved when you arm it"
+            ),
+            "trendline_break_retest": (
+                "a completed D1 bar breaks the saved scan trendline, a later "
+                "bar retests it, and a third completed bar confirms"
+            ),
         }.get(kind, "")
         return (
             f"Toggle a persistent {label} alert for this symbol: {detail}. "

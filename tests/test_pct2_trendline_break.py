@@ -112,6 +112,58 @@ def test_trendline_break_is_an_extension_and_focus_never_auto_arms_it():
     assert "trendline_break" not in D1_PULLBACK_KINDS
 
 
+def test_break_then_retest_is_a_distinct_trader_only_watch():
+    from chart_watch import D1_EVENT_KINDS, D1_PULLBACK_KINDS, D1_TRADER_ONLY_KINDS
+
+    assert D1_EVENT_KINDS["trendline_break_retest"] == "Trendline break + retest"
+    assert "trendline_break_retest" in D1_TRADER_ONLY_KINDS
+    assert "trendline_break_retest" not in D1_PULLBACK_KINDS
+
+
+def test_break_then_retest_needs_three_completed_d1_bars_and_uses_the_frozen_line():
+    from chart_watch import D1EventWatch, evaluate_d1_event_watch
+
+    watch = D1EventWatch(
+        symbol="TLBR",
+        kind="trendline_break_retest",
+        armed_at=datetime(2026, 9, 10, 10, 0),
+        side="LONG",
+        trendline_candidate=dict(FROZEN_LONG_LINE),
+        trendline_knowledge_at=ARMED_AT,
+    )
+    warmup = [
+        {
+            "dt": datetime(2026, 8, 20) + timedelta(days=index),
+            "open": 99.5,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 99.5,
+            "volume": 1_000.0,
+        }
+        for index in range(14)
+    ]
+    broke = _daily(11, close=101.0, high=101.5, low=99.5)
+    retested = _daily(12, close=100.2, high=100.8, low=99.8)
+    confirmed = _daily(15, close=101.0, high=101.2, low=100.1)
+
+    assert evaluate_d1_event_watch(
+        watch, [], warmup + [broke, retested], now=datetime(2026, 9, 15)
+    ) is None
+    hit = evaluate_d1_event_watch(
+        watch, [], warmup + [broke, retested, confirmed], now=datetime(2026, 9, 16)
+    )
+    assert hit is not None
+    assert hit.details["rule_version"] == "trendline_break_retest_v1"
+    assert hit.details["break_date"] == "2026-09-11"
+    assert hit.details["retest_date"] == "2026-09-12"
+    assert "break + retest" in hit.message.lower()
+
+    # The current day's forming confirmation is not evidence yet.
+    assert evaluate_d1_event_watch(
+        watch, [], warmup + [broke, retested, confirmed], now=datetime(2026, 9, 15, 12)
+    ) is None
+
+
 def test_a_completed_d1_close_crosses_the_frozen_line_only_in_its_setup_direction():
     """Close, not wick, is the evidence.  LONG and SHORT are mirrors."""
     from chart_watch import evaluate_d1_event_watch

@@ -136,8 +136,18 @@ def record_trade_review(
     trade = _store().get_trade(trade_id)
     if trade is None:
         return None
+    from opportunity_identity import IDENTITY_VERSION, opportunity_id
+
+    identity_row = {
+        "trade_date": str(trade.get("trade_date") or ""),
+        "symbol": str(trade.get("symbol") or ""),
+        "side": str(trade.get("direction") or ""),
+        "timeframe": str(trade.get("holding_period") or "TRADE"),
+        "setup_family": str(setup_tags or trade.get("setup_tags") or "journal_review"),
+    }
+    canonical_id = opportunity_id(identity_row)
     return _store().record_opportunity_event(
-        opportunity_id=f"trade:{trade_id}",
+        opportunity_id=canonical_id,
         lifecycle_id=f"trade:{trade_id}",
         event_type="REVIEWED",
         symbol=str(trade.get("symbol") or ""),
@@ -148,6 +158,8 @@ def record_trade_review(
             "review_outcome": str(review_outcome or "").strip(),
             "setup_tags": str(setup_tags or "").strip(),
             "notes": str(notes or "").strip(),
+            "identity_version": IDENTITY_VERSION,
+            "canonical_opportunity_id": canonical_id,
         },
         source="journal_gui",
     )

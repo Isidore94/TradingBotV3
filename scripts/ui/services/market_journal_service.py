@@ -103,11 +103,8 @@ class MarketJournalService(QObject):
         HERE and nowhere else: there is one owner of this store (ground rule 8),
         and a prompt-answering surface with its own writer would be a second one.
 
-        A caveat the caller must know: `EvidenceLedger.append` stamps its own
-        `session_date` from the WRITE moment's market-local date, last, so a
-        caller cannot overwrite it. That is right for the ledger and wrong for
-        the question "which hour was this read about?", which is why the slot's
-        `scheduled_at` and the trader's `responded_at` both live in `mentor`.
+        Phase 0.31 passes the subject session explicitly. The ledger preserves
+        it in `session_date` and records the write day separately.
         """
         import market_journal
 
@@ -135,7 +132,11 @@ class MarketJournalService(QObject):
             # entirely. No production caller passed `now` before WISHLIST 10J,
             # which is why it never showed; the Trade Mentor's injected clock is
             # what found it.
-            row = self._stream().append(entry, now=now)
+            row = self._stream().append(
+                entry,
+                now=now,
+                subject_session_date=session_date,
+            )
         except Exception as exc:  # noqa: BLE001
             logging.warning("Market journal entry not written: %s", exc)
             self.statusChanged.emit(f"entry NOT saved: {exc}")
@@ -167,26 +168,7 @@ class MarketJournalService(QObject):
         return rows
 
     def entries_about(self, session_date: str) -> list[dict[str, Any]]:
-        """The entries ABOUT one session - WS-10D, and not a `session_date` read.
-
-        `EvidenceLedger.append` applies its own fields LAST, so it overwrites
-        the `session_date` `build_entry` computed with the market-local date of
-        the WRITE moment. Measured 2026-09-12: a note typed at 21:00 Pacific on
-        the 11th is 00:00 New York on the 12th, so the stored row says
-        `2026-09-12` while the note is about the 11th - and the evening review,
-        the one entry a story most wants, is exactly the entry a
-        `session_date` filter loses.
-
-        `market_journal.session_date_for` answers the question the field's name
-        claims (which session is a note typed at this moment about) and answers
-        it from the exchange's own open, so it is what selects here. Repairing
-        the ledger stamp is a separate packet; surviving it is this one's job.
-
-        The known limit, stated rather than hidden: an entry deliberately filed
-        against an OLDER session - written on Tuesday about Friday - cannot be
-        recovered by either route, because the intended `session_date` never
-        reached disk. It lands on the day it was written.
-        """
+        """Entries about one session, including legacy pre-Phase-0.31 rows."""
         import market_journal
 
         wanted = str(session_date or "").strip()

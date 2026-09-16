@@ -110,6 +110,27 @@ def test_the_segment_follows_the_session_not_the_utc_month(tmp_path):
     assert [path.name for path in ledger.segments()] == ["intraday_outcome_events-202608.jsonl"]
 
 
+def test_an_explicit_subject_session_is_kept_beside_the_write_session(tmp_path):
+    """A Pacific evening note is about Friday even after New York reaches Saturday."""
+    ledger = el.EvidenceLedger(
+        stream="market_journal", schema="market_journal_entry_v1", directory=tmp_path
+    )
+    saturday_new_york = datetime(2026, 9, 12, 4, 0, tzinfo=timezone.utc)
+
+    row = ledger.append(
+        {"entry_id": "note-1", "session_date": "ignored-caller-field"},
+        now=saturday_new_york,
+        subject_session_date="2026-09-11",
+    )
+
+    assert row["session_date"] == "2026-09-11"
+    assert row["written_session_date"] == "2026-09-12"
+    assert [path.name for path in ledger.segments()] == ["market_journal-202609.jsonl"]
+    assert [item["entry_id"] for item in ledger.read(start="2026-09-11", end="2026-09-11")] == [
+        "note-1"
+    ]
+
+
 def test_segments_are_monthly(tmp_path):
     ledger = _ledger(tmp_path)
     ledger.append({"event_id": "a"}, now=datetime(2026, 7, 15, 16, 0, tzinfo=timezone.utc))

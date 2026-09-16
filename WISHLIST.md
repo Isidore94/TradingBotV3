@@ -267,7 +267,7 @@ restart is owed.
 
 4. Keep the desk snappy all day (packets SN1-SN6). the prompt is below
 
-SWEEP: SN4 BUILT (`claude/ws-sn4-feed-diff`, a26f877a, gate #103); SN3 BUILT (`claude/ws-sn3-one-rrs-pass`, ca1c1a6e, gate #104; the duplicate fourth `_record_environment_focus_history` call stays, ask-first); SN2 BUILT (`claude/ws-sn2-incremental-bars`, dddcd9b4, gate #113; `SN2_FORMING_TAIL_FORCES_REFETCH = False` by lead ruling); SN5/SN6 were built 2026-09-08 on `main` (gate #92); SN1 DEFERRED until SN2-SN6 prove themselves on a live day, per this prompt's own order.
+SWEEP: SN4 BUILT (`claude/ws-sn4-feed-diff`, a26f877a, gate #103); SN3 BUILT (`claude/ws-sn3-one-rrs-pass`, ca1c1a6e, gate #104; the duplicate fourth `_record_environment_focus_history` call stays, ask-first); SN2 BUILT (`claude/ws-sn2-incremental-bars`, dddcd9b4, gate #113; `SN2_FORMING_TAIL_FORCES_REFETCH = False` by lead ruling); SN5/SN6 were built 2026-09-08 on `main` (gate #92); **SN1 BUILT in Phase 0.31 on `codex/phase-031`, gate #134.**
 
 Cut the M5 scanner's hold on the interpreter so the desk stays snappy at the
 close, without losing any scan, alert, board or evidence row (packets SN1-SN6).
@@ -435,7 +435,7 @@ every other row keeps its order after them. Blocks are removed here as they land
 
 5. Close the preference-learning loop - Fable 5.1 decision queue (2026-09-09)
 
-SWEEP: 5A BUILT (`claude/ws-5a-weekend-verdict`, df475e45, gate #96, floor 5 by builder ruling); 5B BUILT (`claude/ws-5b-preference-symmetric`, a0a29f04, gate #112); 5C folded into WS-AI1 (`claude/ws-ai1-enrichment-status`, e0683a31, gate #100); 5D BUILT (`claude/ws-5d-watchlist-intent`, e8770233, gate #94); 5E DEFERRED (investigation; identity repair belongs to plan.md Phase 4); 5F folded into WS-DR (views 3 and 4 of the Daily Recap).
+SWEEP: 5A BUILT (`claude/ws-5a-weekend-verdict`, df475e45, gate #96, floor 5 by builder ruling); 5B BUILT (`claude/ws-5b-preference-symmetric`, a0a29f04, gate #112); 5C folded into WS-AI1 (`claude/ws-ai1-enrichment-status`, e0683a31, gate #100); 5D BUILT (`claude/ws-5d-watchlist-intent`, e8770233, gate #94); **5E's bounded identity repair BUILT in Phase 0.31** (`opportunity_identity_v1`, restatement reported; annotation-only ordering gate retained, gate #135); 5F folded into WS-DR (views 3 and 4 of the Daily Recap).
 
 STATUS: PROPOSED ONLY. The trader asked Codex to place this assessment and suggested
 fixes here so Fable 5.1 can decide what to do. This is NOT permission to implement
@@ -807,7 +807,7 @@ Read M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN and AUTO_MODES_AND_QUIET_HOURS_PLAN
 
 ### 10C. One opt-in H1/H4 retester with named triggers (requests 3, 4, 5)
 
-SWEEP: step 1 BUILT - packet WS-10C on `claude/ws-10c-h1-retester`, merged at adcaeb19, gate #116 (`h1_ema_bounce_v1`, the H1 retester button, one fire then disarm, every-mode push through the armed sender; a yfinance H1 fallback for armed names by lead ruling because the desk caches ~35 of the 45 warm-up bars - the trader may overrule); steps 2-3 (H4 / LRSI options, trendline break-then-retest) not in this sweep.
+SWEEP: step 1 BUILT - packet WS-10C on `claude/ws-10c-h1-retester`, merged at adcaeb19, gate #116; **step 3 trendline break-then-retest BUILT in Phase 0.31**, completed D1 bars over the frozen scan line, gate #136. Step 2 H4/LRSI remains excluded by the trader.
 
 Trader intent: on selected “TOP weekly pattern” names, wait for a better entry instead
 of jumping in. Add a quick **H1/H4 retester** arm button below the chart, using the shared
@@ -861,7 +861,7 @@ and existing expiry/price-alert contracts. Reuse the owners cited above.
 
 ### 10D. Market Journal tells the market story and challenges my thesis (request 6)
 
-SWEEP: steps 1-2 BUILT, step 3 through the existing runner slot - packet WS-10D on `claude/ws-10d-market-story`, merged at f38823b7, gate #114; the narration of step 3 deferred. FOLLOW-UP OWED (found, not fixed): `EvidenceLedger.append` files an evening Pacific note under the next New-York session; 10D routes around it.
+SWEEP: steps 1-2 and deterministic rollups BUILT on `claude/ws-10d-market-story`; **grounded narration and the evening subject-session repair BUILT in Phase 0.31**, gates #137-#138. A failed model keeps the last verified narrative and all facts.
 
 Existing foundation: `market_journal.py:78` keeps text, symbols, session and actual write
 time; `ui/services/market_journal_service.py:77` owns writes, `:200` reads captures and
@@ -1205,7 +1205,7 @@ shared contract early; ship the deterministic join before asking the AI to expla
 
 ### 10J. Trade Mentor — a steady, low-friction stream of trader context (2026-09-11)
 
-SWEEP: steps 1-2 BUILT - packet WS-TM on `claude/ws-tm-trade-mentor`, merged at 6e17add1, gate #110 (scheduler/presence, raw reads, the missing-field questionnaire; Settings checkbox ships OFF); steps 3-4 (AI form filling, coaching) deferred.
+SWEEP: steps 1-2 BUILT on `claude/ws-tm-trade-mentor`; **steps 3-4 BUILT in Phase 0.31**: raw words first, off-thread schema-checked local-AI draft, exact spans/units, one grounded coaching question, and a larger resize-persistent popup. Gate #139; Settings still ships OFF.
 
 Trader request: a Settings checkbox named **Trade Mentor**. While enabled, ask hourly
 for an M5 market read, at 08:00 and 12:00 Pacific for a D1 read, and around 10:00 for

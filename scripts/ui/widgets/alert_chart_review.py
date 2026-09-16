@@ -47,6 +47,35 @@ class _MentorPopup(QDialog):
 
     dismissed = Signal()
 
+    SIZE_SETTING = "qt_trade_mentor_popup_size_v1"
+    DEFAULT_SIZE = (900, 820)
+    MINIMUM_SIZE = (760, 720)
+
+    def restore_saved_size(self) -> None:
+        """Restore a useful size, bounded by the screen that owns the window."""
+
+        from project_paths import get_local_setting
+
+        raw = get_local_setting(self.SIZE_SETTING, list(self.DEFAULT_SIZE))
+        try:
+            width, height = int(raw[0]), int(raw[1])
+        except (TypeError, ValueError, IndexError):
+            width, height = self.DEFAULT_SIZE
+        screen = self.screen()
+        available = screen.availableGeometry() if screen is not None else None
+        if available is not None:
+            width = min(width, max(self.MINIMUM_SIZE[0], available.width() - 48))
+            height = min(height, max(self.MINIMUM_SIZE[1], available.height() - 48))
+        self.resize(max(self.MINIMUM_SIZE[0], width), max(self.MINIMUM_SIZE[1], height))
+
+    def _save_size(self) -> None:
+        from project_paths import save_local_setting
+
+        try:
+            save_local_setting(self.SIZE_SETTING, [self.width(), self.height()])
+        except OSError:
+            pass
+
     def keyPressEvent(self, event):  # noqa: N802 - Qt override
         if event.key() == Qt.Key.Key_Escape:
             self.close()
@@ -55,6 +84,7 @@ class _MentorPopup(QDialog):
         super().keyPressEvent(event)
 
     def closeEvent(self, event):  # noqa: N802 - Qt override
+        self._save_size()
         self.dismissed.emit()
         event.accept()
 
@@ -431,8 +461,8 @@ class AlertChartReview(QWidget):
         self.mentor_popup.setWindowTitle("Trade Mentor")
         self.mentor_popup.setModal(False)
         self.mentor_popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.mentor_popup.setMaximumHeight(640)
-        self.mentor_popup.setMinimumWidth(420)
+        self.mentor_popup.setMinimumSize(*_MentorPopup.MINIMUM_SIZE)
+        self.mentor_popup.restore_saved_size()
         popup_layout = QVBoxLayout(self.mentor_popup)
         popup_layout.setContentsMargins(0, 0, 0, 0)
         self.mentor_card = TradeMentorCard(
@@ -446,8 +476,8 @@ class AlertChartReview(QWidget):
         popup_layout.addWidget(self.mentor_scroll)
         self.mentor_card.setVisible(False)
         self.mentor_popup.dismissed.connect(self._dismiss_mentor_popup)
-        self.mentor_card.answered.connect(lambda _slot_id: self.mentor_popup.hide())
-        self.mentor_card.skipped.connect(lambda _record: self.mentor_popup.hide())
+        self.mentor_card.answered.connect(lambda _slot_id: self._hide_mentor_popup_window())
+        self.mentor_card.skipped.connect(lambda _record: self._hide_mentor_popup_window())
         # Always reachable, whether or not anything is due: "I want to write a
         # read now" must never require waiting for the top of an hour. It sits
         # in the existing verb row rather than adding a second one - CLAUDE.md
@@ -730,7 +760,6 @@ class AlertChartReview(QWidget):
         """
         try:
             self.mentor_card.show_slot(slot, previous=previous)
-            self.mentor_popup.adjustSize()
             self.mentor_popup.show()
         except Exception:  # noqa: BLE001 - a prompt never costs the chart
             import logging
@@ -740,11 +769,15 @@ class AlertChartReview(QWidget):
     def hide_mentor_popup(self) -> None:
         try:
             self.mentor_card.hide_card()
-            self.mentor_popup.hide()
+            self._hide_mentor_popup_window()
         except Exception:  # noqa: BLE001
             import logging
 
             logging.debug("Trade Mentor card could not be hidden.", exc_info=True)
+
+    def _hide_mentor_popup_window(self) -> None:
+        self.mentor_popup._save_size()
+        self.mentor_popup.hide()
 
     # Existing scheduler callers use this name.  Both paths hide the same
     # reusable popup; expiry and Pause have already recorded their own state.
@@ -760,7 +793,6 @@ class AlertChartReview(QWidget):
     def _on_give_a_read(self) -> None:
         try:
             self.mentor_card.give_a_read()
-            self.mentor_popup.adjustSize()
             self.mentor_popup.show()
         except Exception:  # noqa: BLE001
             import logging

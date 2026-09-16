@@ -140,7 +140,9 @@ def service_factory(monkeypatch):
 
     def factory(construct, *, retire_timeout: float = 0.25, cls=None):
         monkeypatch.setattr(bounce_bot, "run_bot_with_gui", construct)
-        service = (cls or BounceService)()
+        # These tests own the in-process startup worker's cancellation seams.
+        # SN1's child-process contract has its own real-spawn test module.
+        service = (cls or BounceService)(use_process=False)
         service.STARTUP_RETIRE_TIMEOUT = retire_timeout
         made.append(service)
         return service

@@ -532,7 +532,8 @@ The trader's brief (WISHLIST 10C): on a weekly-pattern name they already like,
 **wait for a better entry** — a quick H1/H4 retester armed from the chart. A
 like or a tag never arms it; **the watch expresses entry timing, not a setup
 claim and not an order.** Step 1 only is built: one opt-in H1 15-EMA bounce.
-Steps 2 (H4 / LRSI options) and 3 (trendline break-then-retest) are not built.
+Step 3 (trendline break-then-retest) is built in Phase 0.31. Step 2 (H4 / LRSI
+options) remains excluded by the trader's 2026-09-15 instruction.
 
 **The rule is frozen and versioned.** `scripts/indicators/h1_ema_bounce.py`,
 `RULE_VERSION = "h1_ema_bounce_v1"`. A change to any line below is a NEW

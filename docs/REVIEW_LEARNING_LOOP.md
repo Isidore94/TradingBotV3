@@ -95,9 +95,11 @@ to surface the best alerts.
 - Capture only starts once the GUI restarts onto a build >= c45d965; expect
   ~2-3 weeks of sessions before segment samples clear the n>=8 gates.
 - **Ordering is gated to annotation-only** (`GUI_TRADE_DISCOVERY_LEARNING_PLAN.md`
-  Phase 0 task 6). Episodes still fold by `(trade_date, symbol)`, so a Swing
-  and an M5 thesis - or a long and a short - collapse into one sample, and
-  "take" still includes arming a watch. Until the Phase 3 identity/parity gate
+  Phase 0 task 6). Since Phase 0.31, `opportunity_identity_v1` folds by session,
+  symbol, side, timeframe and thesis slot, so opposite sides and D1/M5 no longer
+  merge; the state reports the old-vs-new restatement counts. Old annotations
+  with too little identity stay unmatched instead of being guessed. "Take"
+  still includes arming a watch. Until the Phase 3 parity gate
   passes, `priority_delta` and the segment scores annotate and are stamped on
   every impression but do NOT move the active queue, which stays FIFO. Write
   policy rules as usual; they are evidence and annotation now, ordering later.

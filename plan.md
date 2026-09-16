@@ -263,13 +263,14 @@ where the phase says so; it never authorizes an early promotion.
 | **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1–V3/R4 merged; V4's Working-lately switch and AWAY Recap remain NOT BUILT - they are P6 and G6 of Phase 0.22** |
 | **0.22** | Desk reshape + tracker evidence repairs (G0–G7, P1–P6) | Two lanes that never share a branch: the layout lane (Weekend overlap, clipped tables, Market Journal reader, stale Research detail, a Research › Results landing page, AWAY Recap, speed) and the measurement lane (the six Setup Tracker packets). **AUTHORIZED 2026-09-06; G0/G1/G3/G4/G2a merged to `main`, G2b built (unmerged), G4b/G5/G7 queued** |
 | **0.23** | Setups ranked by a point system | Trader 2026-09-08: the setups table ordered by four graded inputs (family record, nearby S/R, RS/RW by direction, recent bounce) as a switch that only reorders, graded against the tracker's outcomes with a trader-gated self-correction. **BUILT 2026-09-08; gates #90-#91 owed.** |
-| **0.24** | Keep the desk snappy all day (SN1-SN6) | Trader 2026-09-08: cut the M5 scanner's hold on the interpreter without losing a scan, alert, board or evidence row. **SN5 (breathe) and SN6 (trader picks first) BUILT 2026-09-08 on `main`; live gate #92 owed. SN1-SN4 stay in WISHLIST until the trader moves them here.** |
+| **0.24** | Keep the desk snappy all day (SN1-SN6) | **BUILT through Phase 0.31.** SN5/SN6 pace and order, SN4 diffs the feed, SN3 shares one RRS pass, SN2 extends cached bars, and SN1 owns the unchanged scanner in one below-normal child process. Live gates #92 and #134 are owed. |
 | **0.25** | Workspace memory (WISHLIST 11) | Trader 2026-09-12: a root `MEMORY.md` routing index and `memory/` provenance-tagged detail, adapted from JumpStarter M1; recall only, never authority. **BUILT 2026-09-12 on `main`; verification gate #93 owed.** |
 | **0.26** | WISHLIST sweep (trader 2026-09-12) | Every selected WISHLIST item built as one feature dump for the trader's live-validation week. **BUILT, independently reviewed and merged 2026-09-15; gates #94-#118 and #133 remain live.** |
 | **0.27** | Claimed D1 picks (trader 2026-09-14) | A CLAIMED like on a D1 chart becomes a ranked pick in Master AVWAP Setups, the D1 chart is done, M5 stays on the left and D1 on the right, and the claims are graded beside FAV/HC. **BUILT 2026-09-14 as packets D1C-A / D1C-L / D1C-B on `lead/d1c-integration` above the sweep tip; live gates #119-#121 owed; nothing merged to `main`.** |
 | **0.28** | Trader's 2026-09-15 desk requests: day-trade watchlist reset (DTR) + setups-table cycle and veto-hide (SC) | DTR wipes `longs.txt` / `shorts.txt` after each close. SC cycles a setups-table chart after veto / claim / Next and hides a vetoed row while the tracker keeps it. **BUILT; live gates #123 and #131 owed.** |
 | **0.29** | Pullback alert, trendline break, compression (trader 2026-09-15) | **BUILT, independently reviewed and merged.** PCT-3: compression measure, chip, calibration CLI and `compression_break` (gates #124-#125). PCT-1: Pullback alert, auto-arm and claim names (gates #126-#129). PCT-2: frozen completed-close trendline-break event plus additive D1-feed row (gate #130). Spec `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. |
 | **0.30** | Daily Recap repair (DR-REPAIR) | Streams and reduces M5 state, shows one whole best event per stock/side, uses D1 horizons for D1 decisions, keeps pending swings, states factual counts and re-reads once after the close. **BUILT and reviewed; live gate #132 owed.** |
+| **0.31** | Finish the remaining WISHLIST integration (trader 2026-09-15) | **BUILT on `codex/phase-031`; live gates #134-#139 owed.** SN1 process isolation, bounded 5E identity repair, trendline break-then-retest, grounded market-story narration, the Market Journal evening-session repair, Trade Mentor validated AI draft filling/coaching, and a larger persistent Mentor popup. **H4/LRSI is explicitly excluded.** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -390,8 +391,8 @@ penalty is tuned. Answers recorded: chart arm plus auto-arm on claimed D1 picks 
 measure and chip first; every named ask-first file may be edited additively for this work. The
 spec, verified premises, packet texts, tests and gates: `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`.
 Sections 5-7 bind: no existing detector rule or score changes, completed bars only, missing history
-is `not measured`, nothing hidden, `review_policy.json` untouched. WISHLIST 10C steps 2-3 are
-narrowed into this phase (no H4; a trendline break-then-retest stays in WISHLIST).
+is `not measured`, nothing hidden, `review_policy.json` untouched. WISHLIST 10C's direct-break
+piece landed here; Phase 0.31 added break-then-retest. H4/LRSI stays out.
 
 ## Phase 0.28 — Trader's 2026-09-15 desk requests (DTR + SC) — BUILT; live gates #123 and #131 owed
 
@@ -448,6 +449,45 @@ may overrule); evidence stores never cost the event; nothing on the Qt thread re
 outcome clocks are never pooled; `review_policy.json` has no suppression field. What remains for this phase
 is the trader's live validation (#119-#121) and the merge decision, which travels with the sweep branch's.
 
+## Phase 0.31 — Remaining WISHLIST integration (trader 2026-09-15) — BUILT; live proof owed
+
+The trader explicitly authorized every remaining build item named in the 2026-09-15
+handoff except H4/LRSI. This is also the ask-first approval for the exact scanner,
+alert, journal and AI seams below. It does not authorize an order path, a detector or
+score change, a live-data repair, or a desk restart.
+
+1. **SN1:** own BounceBot in one below-normal child process, proxy the existing desk
+   commands and snapshots, stream every callback over one bounded message channel,
+   restart cleanly, and retire the child with the desk. The detector and timing stay
+   byte-for-byte unchanged.
+2. **5E identity:** stop `review_learning` from merging opposite sides or D1/M5
+   theses. Use one canonical, versioned opportunity identity shared with journal
+   evidence; keep old rows readable and quantify the restatement. This does not lift
+   the annotation-only ordering gate.
+3. **10C step 3 only:** add an opt-in frozen trendline **break then retest** watch,
+   distinct from the already-built direct break. Completed D1 bars only, persisted
+   line identity and knowledge time, one fire per episode. H4 and LRSI remain out.
+4. **10D:** preserve a Market Journal entry's stated subject session while also
+   recording the write session. Add schema-checked, source-linked local-AI narration
+   over the deterministic daily/weekly/monthly/quarterly story facts. A failed model
+   leaves the last verified narration and every deterministic fact intact.
+5. **10J:** save the trader's raw next-morning answer first, parse it off the Qt
+   thread through the existing local-model owner, validate units/states/source spans,
+   and populate only a reviewable draft. Existing values are never overwritten and
+   no draft becomes a planned-risk fact. Coaching reuses 10D/10I facts and asks one
+   grounded question; it never gives an order instruction.
+6. **Mentor popup:** open substantially larger, remember the trader's resize, and
+   clamp restored geometry to the available screen.
+
+Fail-before-fix coverage: child priority/one-child/restart/shutdown and callback parity;
+opposite-side/timeframe identity; break/retest state, forming-bar and redraw cases;
+evening subject-session storage; bounded/cited narration and model failure; raw-first
+Mentor parsing, invalid units, conflicts, AI unavailable and protected fields; popup
+default/restore/clamp. Live gates begin at #134 after the build is independently checked.
+
+Built on `codex/phase-031`: focused verification is green. Gates #134-#139 retain the
+real-desk, real-model and next-session proof; no H4/LRSI implementation was added.
+
 ## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — BUILT; live validation owed
 
 **2026-09-14 trader-directed WS-DR follow-up - BUILT by the lead on `claude/desk-combined-2026-09-14` (the sweep's successor):** the Daily Recap reads TODAY by
@@ -472,9 +512,8 @@ Trader, 2026-09-12: *"Start incorporating features from [WISHLIST.md]. Analyze t
 integrate in whatever order seems more efficient ... one big feature dump then I will test it over a
 week. Astra will review but we will do that after code completion."* This is the explicit move of
 every WISHLIST item into the build sequence, with these exclusions recorded by the lead (the trader
-may overrule): **SN1** (the scanner child process) waits for SN2-SN6's live proof as the trader's own
-prompt requires; **5E** (identity/journal coverage) is investigation that belongs to Phase 4's
-canonical-opportunity identity; **item 7's legacy.py outcome-row stamp** and **item 9's hide-or-detector
+may overrule): **SN1** (the scanner child process) and **5E** (identity/journal coverage) were
+initially held back and are now built under the trader's Phase 0.31 approval; **item 7's legacy.py outcome-row stamp** and **item 9's hide-or-detector
 change** stay ask-first and are replaced inside the sweep by a dated label store and a display-only
 badge. Sections 5-7 bind every packet: no detector, score, alert or order change; golden fixtures
 before any bar-frame or RRS change; completed bars only; evidence stores never cost the event; shadow
@@ -494,9 +533,8 @@ there. **Owed asks, all ask-first
 return) and the live `repair --apply`; ENV's legacy.py stamp on the tracker outcome row; SN3's
 duplicate fourth `_record_environment_focus_history` call; WS's hide-vs-mark, previous anchor and
 other surfaces; AI1's slate decision (the `preference_to_trade` section joins the nightly slate) is
-recorded, the trader may overrule. Deferred by lead decision: SN1, 5E, 10D step-3 narration, 10J
-steps 3-4, 10C steps 2-3. Follow-up owed (found by the 10D tester, not fixed): `EvidenceLedger.append`
-files an evening Pacific note under the next New-York session.
+recorded, the trader may overrule. Phase 0.31 later built SN1, 5E, 10D step-3 narration, 10J
+steps 3-4 and 10C step 3, and fixed the evening-note subject session. H4/LRSI remains excluded.
 
 **Astra's independent review (2026-09-13) and its repairs.** The review of the sweep at 85781c8f returned NO-GO on four blockers (B1 stale backup H1 history, B2 a new arm firing on an old bounce, B3 the armed phone push on the Qt thread, B4 gate 107 asking for the retired Chart Review page) plus one verification packet (the Journal migration-failure test depended on test order). All five are repaired on branches off the sweep tip c4df3ac8 - `claude/rv-h1-history`, `claude/rv-h1-arm-time`, `claude/rv-h1-phone-worker` (a chain, in that order), `claude/rv-live-gate-107`, `claude/rv-journal-test-order` - each with red tests first and an independent reviewer GO by reproduction, combined on `lead/rv-integration` and independently accepted at 6753f9fd (7968 passed, 5 skipped, exit 0). On 2026-09-14 the trader authorized loading that exact code plus status-only documentation into the local sweep checkout. Sections 5-7 still bind: the frozen `h1_ema_bounce_v1` was not edited, no detector, score, sigma, threshold, retired emitter, watchlist adoption or review policy changed. Repair acceptance is complete. WS-RP then closed the final build packet on 2026-09-15 and was independently reviewed before the sweep merged to `main`. Still open: the trader's test week (gates #94-#118 and #133, with #107 rewritten and #116 amended).
 

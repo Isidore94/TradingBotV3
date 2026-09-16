@@ -757,6 +757,8 @@ def test_the_chart_host_reuses_a_modeless_popup_and_keeps_the_arm_bar_under_the_
     assert len(cards) == 1, "the host owns exactly one mentor card"
     card = cards[0]
     popup = review.mentor_popup
+    assert popup.minimumWidth() >= 760
+    assert popup.minimumHeight() >= 720
     assert popup.isWindow()
     assert not popup.isModal()
     assert popup.isAncestorOf(card)
@@ -768,6 +770,11 @@ def test_the_chart_host_reuses_a_modeless_popup_and_keeps_the_arm_bar_under_the_
     card.skipped.connect(skipped.append)
     review.show_mentor_slot(_nine_slot())
     _app.processEvents()
+    popup.resize(880, 790)
+    review.hide_mentor_popup()
+    review.show_mentor_slot(_nine_slot())
+    _app.processEvents()
+    assert (popup.width(), popup.height()) == (880, 790)
     assert popup.isVisible()
     # Offscreen Qt has no Windows window manager to observe activation itself.
     # This attribute is the deterministic scheduled-show contract; the next
@@ -1120,6 +1127,97 @@ def test_the_ten_oclock_card_asks_only_the_missing_fields_and_files_what_was_ans
     assert rows["target"]["recorded_at"] == _pacific(NORMAL_SESSION, 10, 6, 12).isoformat()
     # Asked and answered: the next morning does not ask again.
     assert check.build_task(store, NORMAL_SESSION).trades == ()
+
+
+def test_local_ai_draft_requires_exact_words_and_only_missing_fields():
+    from trade_mentor_ai import extract_draft
+
+    raw = "No fixed target. My stop was if SPY lost 5400."
+
+    def request(**kwargs):
+        assert kwargs["provider"] == "local"
+        assert kwargs["evidence"]["raw_text"] == raw
+        return {
+            "model": "local-test",
+            "prompt_version": "trade_mentor_ai_draft_v1",
+            "summary": {
+                "answers": [
+                    {
+                        "field": "target",
+                        "state": "no_fixed_target",
+                        "text": "No fixed target",
+                        "value": None,
+                        "unit": "",
+                        "source_span": "No fixed target",
+                    },
+                    {
+                        "field": "stop",
+                        "state": "not_supplied",
+                        "text": "if SPY lost 5400",
+                        "value": 5400.0,
+                        "unit": "underlying_price",
+                        "source_span": "SPY lost 5400",
+                    },
+                ],
+                "follow_up": "",
+            },
+        }
+
+    draft = extract_draft(
+        raw,
+        ("stop", "target"),
+        {"trade_id": "T1", "symbol": "AAPL", "direction": "LONG"},
+        request=request,
+    )
+    assert [row["field"] for row in draft["answers"]] == ["target", "stop"]
+    assert draft["answers"][1]["unit"] == "underlying_price"
+
+
+def test_local_ai_draft_rejects_an_invented_span():
+    from trade_mentor_ai import extract_draft
+
+    def request(**_kwargs):
+        return {
+            "summary": {
+                "answers": [
+                    {
+                        "field": "stop",
+                        "state": "not_supplied",
+                        "text": "stop at 99",
+                        "value": 99.0,
+                        "unit": "underlying_price",
+                        "source_span": "stop at 99",
+                    }
+                ],
+                "follow_up": "",
+            }
+        }
+
+    with pytest.raises(ValueError, match="exact source span"):
+        extract_draft(
+            "I do not remember the stop",
+            ("stop",),
+            {"trade_id": "T1"},
+            request=request,
+        )
+
+
+def test_raw_trade_reply_is_saved_before_parsing(tmp_path):
+    import trade_mentor_trade_check as check
+
+    store = _store(tmp_path)
+    _seed_trade(store, "T1", "AAPL")
+    row = check.save_raw_reply(
+        store,
+        "T1",
+        "No target; stop if VWAP fails.",
+        missing=("stop", "target"),
+        now=_pacific(NORMAL_SESSION, 10, 8),
+    )
+    assert row["event_type"] == check.EVENT_RECALLED_RAW
+    assert row["payload"]["raw_text"] == "No target; stop if VWAP fails."
+    assert row["payload"]["missing_fields"] == ["stop", "target"]
+    assert row["payload"]["recalled_after_session"] is True
 
 
 def test_an_ordinary_hour_carries_no_leftover_trade_questions(tmp_path):

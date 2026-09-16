@@ -55,13 +55,7 @@ SCRIPTS = ROOT / "scripts"
 # launch_gui.py, the frozen entry point, can import it. All four below were
 # re-verified against the tree at the 2026-08-09 merge, and the frozen
 # --selftest exercises the lazy engines that would expose a wrong call here.
-PACKAGES_NOT_IN_THE_BUNDLE = {
-    "ai_jobs": (
-        "local-AI batch layer (plan.md 13b). Its only entry point is "
-        "scripts/run_ai_jobs.py, a scheduled CLI run from the repo checkout; "
-        "launch_gui.py never reaches it."
-    ),
-}
+PACKAGES_NOT_IN_THE_BUNDLE = {}
 #: The A4 suite's name for the same allowlist.
 UNCOLLECTED_PACKAGES = PACKAGES_NOT_IN_THE_BUNDLE
 
@@ -120,7 +114,26 @@ def _execute_spec() -> dict:
             self.kwargs = kwargs
             captured["scripts"] = scripts
             captured["kwargs"] = kwargs
-            self.pure, self.scripts, self.binaries, self.datas = [], [], [], []
+            self.pure, self.scripts, self.datas = [], [], []
+            self.binaries = [
+                (
+                    "foreign.dll",
+                    str(Path.home() / ".cache" / "codex-runtimes" / "tool" / "foreign.dll"),
+                    "BINARY",
+                ),
+                (
+                    "libcrypto-3-x64.dll",
+                    str(
+                        Path.home()
+                        / ".cache"
+                        / "codex-runtimes"
+                        / "tool"
+                        / "libcrypto-3-x64.dll"
+                    ),
+                    "BINARY",
+                ),
+                ("safe.dll", str(ROOT / "safe.dll"), "BINARY"),
+            ]
 
     class _Passthrough:
         def __init__(self, *args, **kwargs):
@@ -278,6 +291,19 @@ def test_the_spec_still_executes(spec):
     """A spec that cannot be evaluated cannot be checked - or built."""
     assert spec["_collected_packages"], "no collect_submodules calls found"
     assert spec["datas"], "the spec bundles no data files at all"
+
+
+def test_the_frozen_ai_package_is_narrow_and_names_the_mentor_reader(spec_result):
+    partial = spec_result["namespace"]["PARTIAL_PACKAGE_MODULES"]
+    assert set(partial["ai_jobs"]) == {"ai_jobs", "ai_jobs.market_story_narration"}
+    assert spec_result["namespace"]["os"].environ["QT_API"] == "pyside6"
+
+
+def test_foreign_codex_runtime_dlls_cannot_enter_the_frozen_desk(spec):
+    by_name = {entry[0]: entry[1] for entry in spec["a"].binaries}
+    assert set(by_name) == {"libcrypto-3-x64.dll", "safe.dll"}
+    assert ".cache\\codex-runtimes" not in by_name["libcrypto-3-x64.dll"].lower()
+    assert Path(by_name["libcrypto-3-x64.dll"]).is_file()
 
 
 def test_every_runtime_asset_under_scripts_is_bundled(spec_result):

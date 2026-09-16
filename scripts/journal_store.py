@@ -123,6 +123,9 @@ OPPORTUNITY_EVENT_TYPES = {
     # read as a documented pre-entry plan. `scripts/trade_mentor_trade_check.py`
     # is its only writer.
     "RECALLED",
+    # Exact next-morning words, saved before the local model prepares a
+    # schema-checked recalled-field draft. It is evidence, never a plan field.
+    "RECALLED_RAW",
 }
 
 

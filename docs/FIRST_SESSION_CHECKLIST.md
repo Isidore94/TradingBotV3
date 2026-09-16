@@ -53,7 +53,10 @@ Then:
    dist\TradingBotV3\TradingBotV3.exe --selftest
    ```
 
-   Current expected result: `selftest OK: 31/31 checks passed (frozen)` (last verified 2026-08-18 on `c69b69c`, with `build/` and `dist/` deleted first). The count grows whenever a check is added, so treat the number as a floor to re-read here rather than a constant: it was 29 before `scan_worker` (2026-08-13) and 30 before the testing-plan asset (2026-08-15). What matters is the **`(frozen)` suffix** and exit 0 - the source selftest prints the same count without it, which is how three packets of notes once recorded a frozen run that never happened.
+   Latest measured result: `selftest OK: 86/86 checks passed (frozen)`
+   (2026-09-15, Phase 0.31). The count grows, so compare it with the current
+   source selftest rather than treating 86 as permanent. What matters is the
+   **`(frozen)` suffix** and exit 0.
 7. Launch with `launch_gui.py`; verify one process only.
 8. Capture the initial System Health page. UNKNOWN is acceptable before the first
    instrumented event but must not be silently rolled up as HEALTHY.

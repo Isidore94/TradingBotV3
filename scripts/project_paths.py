@@ -446,6 +446,9 @@ MARKET_THESES_FILE = PERSISTENT_DATA_DIR / "market_theses.jsonl"
 # is recomputed from the daily stories whenever its inputs' hash changes, so
 # losing the directory costs one overnight slot and nothing else.
 MARKET_STORY_ROLLUPS_DIR = RUNTIME_DATA_DIR / "market_story_rollups"
+# Verified local-AI explanations of the deterministic packs. Derived and
+# replaceable; a failed model call keeps the last verified file untouched.
+MARKET_STORY_NARRATIONS_DIR = RUNTIME_DATA_DIR / "market_story_narrations"
 
 TRADE_MENTOR_SLOTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_slots.json"
 TRADE_MENTOR_DRAFTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_drafts.json"

@@ -110,14 +110,15 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # turned the feature on for.
     "trade_mentor_schedule",
     "trade_mentor_trade_check",
+    "trade_mentor_ai",
+    "ai_summary",
+    "ai_jobs.market_story_narration",
     "user_presence",
     "ui.services.trade_mentor_service",
     "ui.widgets.trade_mentor_card",
-    # NOT ai_jobs: the local AI batch layer is deliberately out of the bundle
-    # (PACKAGES_NOT_IN_THE_BUNDLE in tests/test_packaging_spec_drift.py). Its
-    # only entry point is scripts/run_ai_jobs.py, a scheduled CLI run from the
-    # repo checkout, so the frozen exe cannot import it and must not be asked
-    # to. test_selftest_modules_are_actually_bundled keeps the two in step.
+    # Phase 0.31 makes the bounded ai_jobs request owner reachable from the
+    # Trade Mentor, so the package is now collected and these imports are part
+    # of the frozen proof.
     # The journal (R7). Five of these are top-level modules the frozen desk only
     # ever reaches through a chain of imports - ui.services.journal_feed and
     # ui.services.journal_import_service pull in journal_runner, which pulls in

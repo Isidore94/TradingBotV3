@@ -80,6 +80,34 @@ def test_build_episodes_resolution_priority_and_context_merge():
     assert only_toggle[0].shown is False
 
 
+def test_review_episodes_never_merge_opposite_sides_or_timeframes():
+    rows = [
+        _row("shown", symbol="NVDA", side="LONG", timeframe="M5", event_id="same"),
+        _row("like_advance", symbol="NVDA", side="LONG", timeframe="M5", event_id="same"),
+        _row("shown", symbol="NVDA", side="SHORT", timeframe="M5", event_id="same"),
+        _row("remove_today", symbol="NVDA", side="SHORT", timeframe="M5", event_id="same"),
+        _row("shown", symbol="NVDA", side="LONG", timeframe="D1", is_d1=True, event_id="same"),
+        _row("skip", symbol="NVDA", side="LONG", timeframe="D1", is_d1=True, event_id="same"),
+    ]
+
+    episodes = build_episodes(rows)
+
+    assert len(episodes) == 3
+    assert {(row.side, row.timeframe, row.resolution) for row in episodes} == {
+        ("LONG", "M5", "take"),
+        ("SHORT", "M5", "reject"),
+        ("LONG", "D1", "skip"),
+    }
+    assert len({row.opportunity_id for row in episodes}) == 3
+    assert {row.identity_version for row in episodes} == {"opportunity_identity_v1"}
+
+    restatement = review_learning.identity_restatement(rows)
+    assert restatement["legacy_episode_count"] == 1
+    assert restatement["canonical_episode_count"] == 3
+    assert restatement["split_legacy_groups"] == 1
+    assert restatement["additional_episodes"] == 2
+
+
 def test_aggregate_shrinks_thin_segments_toward_overall():
     rows = []
     # 12 S-tier shown, 8 taken; 12 B-tier shown, none taken.
@@ -694,6 +722,21 @@ def test_a_veto_on_the_other_side_is_skipped_rather_than_guessed(tmp_path):
     episodes = build_episodes([_row("shown"), _row("skip")])  # side LONG
     assert attach_annotation_veto_reasons(episodes, log) == 0
     assert episodes[0].dislike_reasons == ""
+
+
+def test_an_old_veto_without_a_matching_timeframe_does_not_label_two_theses(tmp_path):
+    log = tmp_path / "trader_annotations.jsonl"
+    _annotation(log, "NVDA", "LONG", "too_extended_from_base")
+    episodes = build_episodes(
+        [
+            _row("shown", timeframe="M5", event_id="m5"),
+            _row("shown", timeframe="H1", event_id="h1"),
+        ]
+    )
+    from review_learning import attach_annotation_veto_reasons
+
+    assert attach_annotation_veto_reasons(episodes, log) == 0
+    assert all(not episode.dislike_reasons for episode in episodes)
 
 
 def test_an_unreadable_annotation_log_is_a_quieter_board_not_a_failure(tmp_path):

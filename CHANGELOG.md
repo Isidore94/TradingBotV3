@@ -38,6 +38,21 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Phase 0.31 remaining WISHLIST integration (2026-09-15, H4/LRSI excluded).**
+  `BounceService` owns the unchanged M5 scanner through one below-normal spawned child and
+  restarts it after a crash; callbacks cross a bounded queue and commands a pipe. Review
+  learning uses `opportunity_identity_v1` (session, symbol, side, timeframe, thesis), reports
+  the old-to-new restatement, and leaves ambiguous old veto annotations unmatched; journal
+  reviews stamp that same canonical identity while the ordering gate stays annotation-only.
+  `trendline_break_retest_v1` is a trader-only, frozen-line, three-completed-D1-bar watch.
+  Market Journal writes preserve the subject session plus the write session, and the nightly
+  narration stage adds a strict, source-linked explanation of deterministic story packs while
+  preserving the last verified file on failure. Trade Mentor saves raw morning words first,
+  prepares a validated off-Qt local-AI draft, keeps existing values, shows one grounded coaching
+  question, and opens in a resize-persistent 900x820 popup. The frozen bundle now includes only
+  the reachable `ai_jobs.market_story_narration` module, pins PySide6 during analysis, and fences
+  foreign Codex PDF/image DLLs while restoring Python's own SSL pair. Live gates #134-#139 are owed.
+
 **Daily Recap (WISHLIST 10F + 5F, packet WS-DR, 2026-09-13).** The nav entry `AWAY Recap` is now **Daily Recap** and is offered in EVERY Auto mode. `scripts/daily_recap_reader.py` reads one session from the DURABLE stores - its whole input is a session, a lookback, a clock and a set of PATHS (`RecapSources`, twelve stores), never `center._alerts`, so a restart or a midnight roll cannot lose the record and the same session reads the same in another interpreter. It declares per-source coverage (`rows` / `oldest` / `newest` / `unavailable_reason`) and four frozen views: `worked_today` (the session's M5 outcome rows; `mfe_pct` / `eod_move_pct` are read ALREADY side-adjusted from a store whose side column is `direction`), `recent_swings` (the 1/2/3 lookback is one control - the window is counted on the exchange calendar and the horizon reported is the same number; next-session close, first next-session favorable move and the selected end are three columns and an immature horizon is `pending`, never zero), `my_decisions` (likes quick and claimed, swing favorites, passes, vetoes, not-today and the M5 click-away as separate facts at the `(trade_date, symbol, side, category slot)` grain plus the verdict; repeated clicks link with an occurrence count and credit from the first; `unfavorite` never graded; a retraction removes a favorite; one pass with two codes is ONE decision; WS-5B's report supplies journal R and P&L joined on the CHANNEL) and `rejected_that_worked` (refusals whose side-adjusted later path was favorable, with the trader's own reason and the ADVERSE move beside it). A decision's credit starts at its own timestamp - measured forward from the last completed bar where a pass sidecar makes the timing knowable, `unavailable` where nothing recorded WHEN, never the day's number and never 0.0; `pick_feedback` / `alert_review_events` timestamps are NAIVE on the desk and the reader ATTACHES the desk zone, never strips an aware side. `scripts/ui/panels/daily_recap_panel.py` draws it as four TABS (stacked, the fourth runs past the bottom at 1640x980), each with its cohort/window/n/pending sentence and a sort control limited to the declared measures; the read is on a worker and the page is usable before it returns; a row click goes through `show_board_symbol`, so a recap row is a board look and takes no place in the waiting list (`alert_center_panel.py` untouched; the decision time travels in the row's Time column and tooltip because the chart has no marker seam). The AWAY staged-pick block moved onto the page unchanged (stage, never adopt; the R2 gate shown at click time, never enforced). `away_recap.build_recap`, `away_recap_panel.py` (still constructed and still fed on page select) and `autopilot_today.txt` are untouched, so the phone digest is unchanged; no push was added; `AWAY_RECAP_PAGE_TITLE` is kept as an alias of `DAILY_RECAP_PAGE_TITLE`. `scripts/selftest.py` lists `daily_recap_reader` (imported by name on the worker), selftest 80 -> 81. Tests: `tests/test_ws_dr_daily_recap.py` (the tester's board-door test records only symbol-bearing alerts by lead fix - the scanner's own symbol-less `Scanning paused.` row reaches that door and is discarded on its first line; the builder's added test measures the waiting list itself). Follow-up noted, not built: `desk_bench.py` benches `away_recap` only. **Automatic read at 12:00 Pacific (trader-directed, 2026-09-14):** `scripts/daily_recap_schedule.py` is the PURE decision (`due_session(now, auto_time, last_fired_session)` -> today's ISO date or `None`; due from the configured wall-clock time until midnight on an exchange session, once per session; `parse_auto_time` / `auto_time_from_settings` read `local_settings.json` `daily_recap_auto_time`, default `"12:00"`, `""`/`"off"` disabling and a mistyped value disabling rather than guessing; `next_fire_at` is a label only; Pacific is `America/Los_Angeles`, DST-aware). `DailyRecapPanel` owns one `QTimer` (`AUTO_POLL_INTERVAL_MS` 60 s) started by `MainWindow.showEvent` beside the Mentor's, never in the constructor; `poll_auto_read` -> `show_session(today)` refills the picker, selects today and calls `reload`; a desk started after the hour reads today on its first tick. The noon read is PROVISIONAL by the reader's own labelling (the close is 13:00 Pacific) and the next read of the session - page select or Refresh - is the closed one; `reload` now calls `_refresh_session_picker`, which rebuilds the list only when the newest completed session moved, keeping the selection by DATE, so today loses its "provisional" label after the close without a restart. No scan, fetch, push or write, so it runs in every Auto mode and is outside `auto_scanning_due` (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` amendment 2026-09-14). `clock` and `auto_time_reader` are injectable. Tests: `tests/test_daily_recap_auto_populate.py` (both DST regimes, weekend/holiday, late start, once-per-session, the relabel after the close, the `showEvent` seam); the WS-DR picker test is now clock-aware (it only passed before 13:00 Pacific).
 - **Daily Recap repair (DR-REPAIR, 2026-09-15).** `daily_recap_reader` streams the append-only M5 log (coverage still counts every update), retains the latest nonblank event state while keeping blank ids distinct, and displays one whole best measured event per stock/side. Annotation timeframe is preserved: M5 decisions read the reduced M5 state and D1 decisions read their matching session-horizon result, with missing unavailable and immature pending; `Rejected, and it worked` uses the same source split. Pending swings now render with an explicit state and dashes. The reader supplies the compact factual summary; the panel only formats it. `daily_recap_schedule.post_close_due_session` schedules exactly one additional worker read after the exchange-owned regular or early close. No store write, detector, score, alert, queue, Focus, watchlist, or policy behavior changed. Tests: `test_daily_recap_repair.py` plus the reconciled existing Daily Recap contracts. Live gate #132 owed.
 - **Workspace memory (2026-09-12, WISHLIST 11):** root `MEMORY.md` is a routing index
@@ -1354,13 +1369,14 @@ They are evidence and must not be loaded as context.
   `review_policy_draft` and `setup_research` keep their own separate gates.
 - **The nightly slate runs in three stages** (decision 0018, 2026-09-04):
   every deterministic slot, then `ai_summary` + `ticker_briefs` as a unit, then
-  the model-gated slots. The narration pair held up to 2½ h of reserve ahead of
+  the model-gated slots. The original narration pair held up to 2½ h of reserve ahead of
   every deterministic slot, a slot that cannot fit its reserve records SKIPPED,
   the 2026-09-01 run took six hours - and no deterministic slot reads either
   narration slot's OUTPUT. Relative order inside each stage, every reserve and
   every retry budget unchanged. The rule is now "a later phase appends inside its
   stage and never reorders across stages", and the order is pinned once as
-  `EXPECTED_SLOT_ORDER` in `tests/test_ai_jobs_runner.py`.
+  `EXPECTED_SLOT_ORDER` in `tests/test_ai_jobs_runner.py`; Phase 0.31 appends
+  `market_story_narration` at the end of that same stage.
 - **`entry_index.json` is the compact, deterministic handoff** (Q4.4). Written
   beside the packs at the end of `run_daily_digest` with a temp-and-rename; a
   failure is logged and NEVER fails the digest. Sessions in the `LATELY_SESSIONS`
@@ -1499,10 +1515,9 @@ They are evidence and must not be loaded as context.
   `bars_through`, `bars_used` and a named rule version, an absent series reading `unmeasured`
   with a reason), and `ai_said`, ALWAYS EMPTY here - code computes, the model explains in a
   later packet. No note means an empty `trader_said` and a sentence saying so. Which session an
-  entry belongs to is ONE function, `market_journal.session_of_entry`, recomputed from
-  `created_at`, because `EvidenceLedger.append` overwrites the entry's own `session_date` with
-  the market-local date of the WRITE (a 21:00 Pacific note is stored under the next session -
-  the ledger defect stays outside this packet, written down in DESK_INTERNALS).
+  entry belongs to is ONE function, `market_journal.session_of_entry`. Phase 0.31 preserves
+  the explicit subject in `session_date`, records the actual write day in
+  `written_session_date`, and retains the created-at fallback for legacy rows.
   `scripts/market_thesis.py` reads a note with a versioned vocabulary into claim / horizon (in
   exchange SESSIONS) / stance / condition / invalidation / benchmarks, every field carrying a
   span that reproduces it exactly, `unstated` carrying none; a later note links only inside the
@@ -1548,8 +1563,8 @@ They are evidence and must not be loaded as context.
   `tests/test_ws_5b_preference_symmetric.py` (17).
 - **A fourth auto-tagging lane: the trader's own Market Journal notes (WS-10E, WISHLIST 10E,
   2026-09-13, sweep branch).** `AutoTagger` now reads the Market Journal. For a CLOSED trade,
-  entries whose `symbols` carry the trade's symbol and whose ACTUAL write time (`created_at` -
-  the ledger overwrites `session_date` with the session of the append) fall inside the trade's
+  entries whose `symbols` carry the trade's symbol and whose ACTUAL write time (`created_at`;
+  the subject and write day are stored separately since Phase 0.31) fall inside the trade's
   own window - open to close, widened by one trading session before the open - are candidates;
   a date-only broker fill has no intraday window and is `unmeasured`. A tag is emitted only for
   an explicit claim: `setup_docs.SETUP_DOCS` compiled to whole-token phrase patterns from each
@@ -2649,6 +2664,15 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-15 (night) - Phase 0.31 remaining WISHLIST integration
+
+The trader moved every remaining item named in the handoff into the build except H4/LRSI and
+asked for a much larger Trade Mentor popup. Built together on `codex/phase-031`: SN1 process
+isolation; the bounded opportunity-identity repair and restatement; the opt-in trendline
+break/retest watch; the evening subject-session fix; grounded story narration; raw-first,
+reviewable Mentor AI form filling and coaching; and persistent popup sizing. Focused tests are
+green; the real desk, local model and overnight artifacts remain gates #134-#139.
 
 ### 2026-09-15 (evening) - WS-RP shared measured report (WISHLIST 10K steps 2 + 5)
 

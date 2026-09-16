@@ -591,9 +591,10 @@ def test_the_scope_can_be_selected_on_demand():
         # Neither slot moves a prior job or crosses a decision-0018 boundary.
         "market_story_rollups",
         "measured_report",
-        # Stage 2: the narration pair, moved here as a unit by decision 0018.
+        # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
         "ai_summary",
         "ticker_briefs",
+        "market_story_narration",
         # Stage 3. LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run
         # gated: the enrichment pass refuses below the digest's gate - both
         # halves of it since Q4 - and the policy draft writes only

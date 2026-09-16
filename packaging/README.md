@@ -49,7 +49,10 @@ After every required rebuild, run:
 dist\TradingBotV3\TradingBotV3.exe --selftest
 ```
 
-Current expected result: `selftest OK: 31/31 checks passed (frozen)`. The count grows whenever a check is added, so treat the number as a floor to re-read here rather than a constant: it was 29 before `scan_worker` (2026-08-13) and 30 before the testing-plan asset (2026-08-15). What matters is the **`(frozen)` suffix** and exit 0 - the source selftest prints the same count without it, which is how three packets of notes once recorded a frozen run that never happened.
+Latest measured result (2026-09-15): `selftest OK: 86/86 checks passed (frozen)`.
+The count grows whenever a check is added, so compare the frozen run with the current
+source run rather than treating 86 as a permanent constant. What matters is the
+**`(frozen)` suffix** and exit 0.
 
 ### Things that will bite you
 
@@ -95,6 +98,10 @@ Current expected result: `selftest OK: 31/31 checks passed (frozen)`. The count 
   functions that use it, behind `duckdb_available()`, and pyarrow answers every
   slice query without it (LD-04). The spec collects it when it is installed and
   says so when it is not; neither case fails the build.
+- **A Codex-hosted build inherits Codex's PDF/image DLL search paths.** The spec
+  pins qtpy to PySide6 at build time, drops DLLs sourced from the Codex runtime
+  cache, and replaces any intercepted OpenSSL pair with Python's own DLLs. Without
+  that fence, foreign ICU/CRT files can make Qt fail with "procedure not found".
 
 ### The spec-drift guard
 

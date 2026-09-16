@@ -458,7 +458,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
 
     ``docs/decisions/0018-deterministic-stage-before-narration.md``. The order
     used to be "later phases append; they never reorder", and under that rule
-    the two narration slots - ``ai_summary`` and ``ticker_briefs``, up to two
+    the narration slots - ``ai_summary``, ``ticker_briefs`` and the bounded
+    market-story narration, up to three
     and a half hours of reserve between them - sat ahead of every deterministic
     slot for no reason other than having been written first. On 2026-09-01 the
     run took six hours, and a reservation that cannot fit inside what is left
@@ -499,6 +500,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         enrichment,
         evidence_report,
         journal_auto_tag,
+        market_story_narration,
         measured_report_publish,
         note_vocabulary_audit,
         policy_draft,
@@ -769,6 +771,19 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=120.0,
             description="Medium-tier advisory briefs for Focus/watchlist tickers",
             max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
+        ),
+        # Phase 0.31 / WISHLIST 10D step 3. Appended at the end of the
+        # narration stage. It reads only the deterministic story packs above,
+        # and a failure preserves the last verified narration.
+        JobSlot(
+            name="market_story_narration",
+            run=market_story_narration.run_market_story_narration,
+            reserve_minutes=15.0,
+            description=(
+                "Grounded weekly/monthly/quarterly Market Journal narration "
+                "and one Trade Mentor coaching question"
+            ),
+            max_attempts=3,
         ),
         # ------------------------------------------------------------------
         # STAGE 3: the model-gated slots. Unchanged, and still last.

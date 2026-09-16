@@ -55,7 +55,7 @@ def test_bounce_service_stop_stops_bot_and_all_timers():
     _qapp()
     from ui.services.bounce_service import BounceService
 
-    service = BounceService()
+    service = BounceService(use_process=False)
 
     calls = {}
 
@@ -137,7 +137,7 @@ def test_stop_during_startup_cannot_install_a_late_bot(monkeypatch):
 
     monkeypatch.setattr(bounce_bot, "run_bot_with_gui", fake_run_bot_with_gui)
 
-    service = BounceService()
+    service = BounceService(use_process=False)
     service.STARTUP_RETIRE_TIMEOUT = 0.25
     service.start()
     worker = service._session.thread  # this service owns exactly one startup thread
@@ -220,7 +220,7 @@ def test_healthy_startup_hands_the_regime_to_auto_tracking(monkeypatch):
         bounce_bot, "run_bot_with_gui", lambda callback, start_scanning_enabled=False: FakeBot()
     )
 
-    service = BounceService()
+    service = BounceService(use_process=False)
     try:
         service.STARTUP_RETIRE_TIMEOUT = 5.0
         assert service.start() is True

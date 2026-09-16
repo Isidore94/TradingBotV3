@@ -139,7 +139,13 @@ class EvidenceLedger:
             return ()
 
     # -- writing ----------------------------------------------------------
-    def append(self, event: Mapping[str, Any], *, now: datetime | None = None) -> dict:
+    def append(
+        self,
+        event: Mapping[str, Any],
+        *,
+        now: datetime | None = None,
+        subject_session_date: date | str | None = None,
+    ) -> dict:
         """Append one event and return the row exactly as it was written.
 
         The caller's fields are copied, never mutated, and the ledger's own
@@ -150,12 +156,25 @@ class EvidenceLedger:
         moment = now or datetime.now(timezone.utc)
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
+        written_session = market_session_date(moment)
+        subject_session = _as_date(subject_session_date)
+        if subject_session_date not in (None, "") and subject_session is None:
+            raise ValueError(f"invalid subject_session_date: {subject_session_date!r}")
         row = dict(event or {})
         row.update(
             {
                 "schema": self.schema,
                 "event_at": moment.astimezone(timezone.utc).isoformat(timespec="seconds"),
-                "session_date": market_session_date(moment).isoformat(),
+                "session_date": (subject_session or written_session).isoformat(),
+                # Present only when the event is deliberately filed ABOUT a
+                # different session.  This keeps the operational clock without
+                # sacrificing the subject date (for example a Pacific evening
+                # Market Journal note after New York has crossed midnight).
+                **(
+                    {"written_session_date": written_session.isoformat()}
+                    if subject_session is not None
+                    else {}
+                ),
                 "writer_host": socket.gethostname(),
                 "writer_pid": os.getpid(),
             }
@@ -163,7 +182,18 @@ class EvidenceLedger:
         if self.run_id:
             row["run_id"] = self.run_id
         line = json.dumps(row, default=str, separators=(",", ":"), sort_keys=True)
-        path = self.segment_for(moment)
+        segment_moment = moment
+        if subject_session is not None:
+            # Only the YYYYMM partition matters here.  Noon UTC cannot cross
+            # into an adjacent market date, so it is a safe representative.
+            segment_moment = datetime(
+                subject_session.year,
+                subject_session.month,
+                subject_session.day,
+                17,
+                tzinfo=timezone.utc,
+            )
+        path = self.segment_for(segment_moment)
         with self._lock:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8", newline="\n") as handle:

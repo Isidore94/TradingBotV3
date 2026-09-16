@@ -1684,11 +1684,12 @@ floor) have their OWN gates and are unchanged.
 
 **The nightly slate runs in three stages — decision 0018**
 ([`docs/decisions/0018-deterministic-stage-before-narration.md`](decisions/0018-deterministic-stage-before-narration.md)):
-every deterministic slot, then `ai_summary` and `ticker_briefs` as a unit, then
-the model-gated slots. The two narration slots held up to two and a half hours
+every deterministic slot, then narration, then the model-gated slots. Decision
+0018 moved `ai_summary` and `ticker_briefs` as a unit; Phase 0.31 appends
+`market_story_narration` at that stage's end. The original two slots held up to two and a half hours
 of reserve ahead of every deterministic slot; a slot whose reserve does not fit
 the remaining window records SKIPPED; the 2026-09-01 run took six hours; and
-**no deterministic slot reads either narration slot's output** (`daily_digest`
+**no deterministic slot reads a narration slot's output** (`daily_digest`
 imports `ai_summary` as a library to narrate its own pack and reads no file
 from either). The relative order inside each stage, and every reserve and retry
 budget, are unchanged. §7.1's rule becomes: **a later phase appends inside its
@@ -2179,14 +2180,12 @@ surface rendering a story never has to guess whether a sentence came from a pers
 model. A session with no note has an EMPTY `trader_said` and a sentence saying so: no
 note, no invented thesis.
 
-**Which session an entry belongs to is one rule.** `EvidenceLedger.append` applies its
-own fields last and overwrites the `session_date` `build_entry` computed with the
-market-local date of the WRITE, so a note typed at 21:00 Pacific is stored under the
-next session. `market_journal.session_of_entry` recomputes it from `created_at` (which
-the ledger does not touch) and is the ONE selector; the desk's Story pane and the
-overnight rollup both call it. Repairing the ledger stamp is a separate packet. An entry
-deliberately filed against an older session cannot be recovered by either route, because
-its intended date never reached disk — stated rather than hidden.
+**Which session an entry belongs to is one rule.** Phase 0.31 gives
+`EvidenceLedger.append` an explicit `subject_session_date`: the stored `session_date` is
+the session the note is ABOUT and `written_session_date` is the market-local date of the
+write. Default callers keep the old write-date behavior. The Market Journal owner passes
+the selected subject session, so a 21:00 Pacific recollection remains beside that session
+without being backdated; `created_at` still tells when it was actually written.
 
 **The thesis is extracted, quoted, and never graded by the outcome.**
 `scripts/market_thesis.py` reads a note with a small versioned vocabulary into `claim`,
@@ -2216,7 +2215,11 @@ afterwards. Every pack names its covered, expected and missing sessions, carries
 theses forward, and is rebuilt only when its `inputs_hash` changed. Narrating these packs
 joins the existing narration stage in a later packet; nothing here calls a model, and
 nothing here reaches a detector, score, gate, alert, watchlist, Focus, the review queue or
-`review_policy.json`.
+`review_policy.json`. Phase 0.31 adds `market_story_narration` at the end of the existing
+narration stage. It sees only the latest deterministic weekly/monthly/quarterly packs,
+validates a strict schema and exact source ids, writes atomically, and keeps the prior
+verified narration when the local model fails. Its one bounded `mentor_question` is shown
+by the existing Trade Mentor card; it is coaching, never an order instruction.
 
 **Thesis, context, opportunity and trade share ONE identity and time contract** (WISHLIST
 10I, plus 10K's "measure environment, then connect it"; `scripts/context_join.py`,

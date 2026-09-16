@@ -55,8 +55,14 @@ Answers to the lead's four questions (same day):
    for THIS work, additively. No existing detector rule or score changes; tests pin today's numbers.
 
 This is WISHLIST 10C steps 2 and 3 ("H4 / LRSI pullback options", "trendline break") moved into
-the build by the trader's words above, narrowed to M15/M30 (no H4) and to a direct break (the
-break-then-retest of a trendline stays in WISHLIST).
+the build by the trader's words above. Phase 0.29 was narrowed to M15/M30 and a direct break.
+Phase 0.31 later added the opt-in frozen `trendline_break_retest`; H4/LRSI remains explicitly
+excluded.
+
+`trendline_break_retest_v1` requires three distinct completed D1 bars: a close through the
+arm-time frozen line, a later touch/hold within 0.25 D1 ATR14, then a later continuation close
+0.10 ATR beyond the line. It expires that episode after ten completed bars or a 0.25-ATR wrong-
+side close. It is trader-only, one-shot, and never enters the automatic Focus pullback lane.
 
 ## 3. Lead decisions (the trader may overrule any of these)
 

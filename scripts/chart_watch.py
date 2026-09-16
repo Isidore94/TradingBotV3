@@ -123,6 +123,7 @@ D1_EVENT_KINDS = {
     # its scan line is frozen when the trader arms it, so a redraw cannot move
     # the alert that was requested.
     "trendline_break": "Trendline break",
+    "trendline_break_retest": "Trendline break + retest",
 }
 
 # EXTENSION events say "the move is going": a new range high/low, or a close
@@ -146,7 +147,18 @@ D1_EXTENSION_KINDS = frozenset(
         "trendline_break",
     }
 )
-D1_PULLBACK_KINDS = frozenset(D1_EVENT_KINDS) - D1_EXTENSION_KINDS
+# Multi-bar thesis watches are armed only by the trader.  They are neither an
+# automatic Focus pullback nor a one-bar extension.
+D1_TRADER_ONLY_KINDS = frozenset({"trendline_break_retest"})
+D1_PULLBACK_KINDS = (
+    frozenset(D1_EVENT_KINDS) - D1_EXTENSION_KINDS - D1_TRADER_ONLY_KINDS
+)
+
+TRENDLINE_BREAK_RETEST_RULE_VERSION = "trendline_break_retest_v1"
+TRENDLINE_BREAK_RETEST_ATR_LENGTH = 14
+TRENDLINE_RETEST_TOUCH_ATR = 0.25
+TRENDLINE_RETEST_CONFIRM_ATR = 0.10
+TRENDLINE_RETEST_MAX_BARS = 10
 
 # Which of the derived AVWAPE levels each kind watches ("" = the line).
 _AVWAPE_KIND_BANDS = {
@@ -1059,7 +1071,7 @@ def d1_event_watch_to_dict(watch: D1EventWatch) -> dict:
         "kind": watch.kind,
         "armed_at": _naive(watch.armed_at).isoformat(),
     }
-    if watch.kind == "trendline_break":
+    if watch.kind in {"trendline_break", "trendline_break_retest"}:
         payload.update(
             {
                 "side": str(watch.side or "").strip().upper(),
@@ -1083,7 +1095,7 @@ def d1_event_watch_from_dict(payload: Mapping[str, Any]) -> D1EventWatch | None:
         return None
     if not symbol or kind not in D1_EVENT_KINDS:
         return None
-    if kind != "trendline_break":
+    if kind not in {"trendline_break", "trendline_break_retest"}:
         return D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
     candidate = payload.get("trendline_candidate")
     knowledge_at = payload.get("trendline_knowledge_at")
@@ -1507,6 +1519,121 @@ def _evaluate_frozen_trendline_break(
     return None
 
 
+def _evaluate_frozen_trendline_break_retest(
+    watch: D1EventWatch, daily: list[dict], moment: datetime
+) -> ChartWatchTrigger | None:
+    """Confirm a break, a later retest, then a later continuation close.
+
+    All three observations use completed D1 bars and the exact line frozen at
+    arm time.  ATR only sizes tolerance; missing ATR means unmeasured.
+    """
+    if not _trendline_candidate_is_frozen(watch.trendline_candidate):
+        return None
+    if not isinstance(watch.trendline_knowledge_at, datetime):
+        return None
+    side = str(watch.side or "").strip().upper()
+    if side not in {"LONG", "SHORT"}:
+        return None
+
+    from indicators.atr import wilder_atr
+
+    armed_at = _naive(watch.armed_at)
+    candidate = watch.trendline_candidate
+    break_index: int | None = None
+    break_date: date | None = None
+    retest_index: int | None = None
+    retest_date: date | None = None
+
+    for index, bar in enumerate(daily):
+        stamp = _naive(bar["dt"])
+        if stamp.date() <= armed_at.date() or stamp.date() >= moment.date() or index == 0:
+            continue
+        line = _frozen_trendline_price(candidate, daily, index)
+        prior_line = _frozen_trendline_price(candidate, daily, index - 1)
+        if line is None or prior_line is None:
+            continue
+        try:
+            previous_close = float(daily[index - 1]["close"])
+            high = float(bar["high"])
+            low = float(bar["low"])
+            close = float(bar["close"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        atr = wilder_atr(daily[: index + 1], TRENDLINE_BREAK_RETEST_ATR_LENGTH)
+        if atr is None:
+            continue
+
+        if break_index is None:
+            crossed = (
+                previous_close <= prior_line and close > line
+                if side == "LONG"
+                else previous_close >= prior_line and close < line
+            )
+            if crossed:
+                break_index = index
+                break_date = stamp.date()
+            continue
+
+        if index - break_index > TRENDLINE_RETEST_MAX_BARS:
+            break_index = None
+            break_date = None
+            retest_index = None
+            retest_date = None
+            continue
+
+        wrong_side = (
+            close < line - (TRENDLINE_RETEST_TOUCH_ATR * atr)
+            if side == "LONG"
+            else close > line + (TRENDLINE_RETEST_TOUCH_ATR * atr)
+        )
+        if wrong_side:
+            break_index = None
+            break_date = None
+            retest_index = None
+            retest_date = None
+            continue
+
+        if retest_index is None:
+            touched = low <= line + (TRENDLINE_RETEST_TOUCH_ATR * atr) and high >= line - (
+                TRENDLINE_RETEST_TOUCH_ATR * atr
+            )
+            held = close >= line if side == "LONG" else close <= line
+            if touched and held:
+                retest_index = index
+                retest_date = stamp.date()
+            continue
+
+        if index <= retest_index:
+            continue
+        confirmed = (
+            close >= line + (TRENDLINE_RETEST_CONFIRM_ATR * atr)
+            if side == "LONG"
+            else close <= line - (TRENDLINE_RETEST_CONFIRM_ATR * atr)
+        )
+        if not confirmed:
+            continue
+        return ChartWatchTrigger(
+            watch=watch,  # type: ignore[arg-type]
+            price=close,
+            bar_dt=stamp,
+            message=(
+                f"Trendline break + retest ({side.lower()}): confirmed at {close:.2f} "
+                f"over frozen line {line:.2f} (D1 bar {stamp:%m/%d})"
+            ),
+            resolved_side=side.lower(),
+            details={
+                "rule_version": TRENDLINE_BREAK_RETEST_RULE_VERSION,
+                "break_date": break_date.isoformat() if break_date else "",
+                "retest_date": retest_date.isoformat() if retest_date else "",
+                "confirm_date": stamp.date().isoformat(),
+                "line_id": str(candidate.get("line_id") or ""),
+                "line_price": line,
+                "atr": atr,
+            },
+        )
+    return None
+
+
 def evaluate_d1_event_watch(
     watch: D1EventWatch,
     m5_bars: Iterable[Mapping[str, Any]] | None,
@@ -1544,6 +1671,10 @@ def evaluate_d1_event_watch(
         # This event has no intraday path: a wick or a forming D1 bar is not
         # confirmation, and the current scan is never consulted here.
         return _evaluate_frozen_trendline_break(watch, daily, moment)
+    if watch.kind == "trendline_break_retest":
+        # Like the direct break, this is completed-D1 evidence only.  The
+        # break, retest and confirmation must be three distinct bars.
+        return _evaluate_frozen_trendline_break_retest(watch, daily, moment)
 
     session_bars = _session_bars(m5_bars, moment)
     completed = [bar for bar in session_bars if _bar_end(bar) <= moment]

@@ -294,7 +294,7 @@ def test_force_overrides_the_window_and_the_completed_check(tmp_path):
 
 #: The nightly slate, pinned. **Decision 0018**
 #: (`docs/decisions/0018-deterministic-stage-before-narration.md`, 2026-09-04):
-#: three stages - every deterministic slot, then the narration pair, then the
+#: three stages - every deterministic slot, then narration, then the
 #: model-gated slots. A later phase appends INSIDE its stage and never reorders
 #: across stages, so this tuple is the one place the order is written down in a
 #: test and the only place a future packet edits.
@@ -324,9 +324,11 @@ EXPECTED_SLOT_ORDER = (
     # reads what the slots above it wrote and feeds nothing above it, so it
     # CLOSES the deterministic stage.
     "measured_report",
-    # stage 2 - narration, moved here as a unit by decision 0018
+    # stage 2 - the original pair moved here by decision 0018; Phase 0.31
+    # appends the bounded market-story narration inside the same stage.
     "ai_summary",
     "ticker_briefs",
+    "market_story_narration",
     # stage 3 - the model-gated slots, unchanged
     "journal_enrichment",
     "review_policy_draft",

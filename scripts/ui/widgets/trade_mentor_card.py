@@ -43,7 +43,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QRunnable, QThreadPool, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -77,6 +77,33 @@ _QUESTIONS = {
 }
 
 _D1_QUESTION = "And the daily picture?"
+
+
+class _MentorAIWorkerSignals(QObject):
+    ready = Signal(str, object)
+    failed = Signal(str, str)
+
+
+class _MentorAIWorker(QRunnable):
+    """One bounded local-model call, always outside the Qt thread."""
+
+    def __init__(self, trade_id: str, raw_text: str, missing: tuple[str, ...], trade: dict):
+        super().__init__()
+        self.trade_id = trade_id
+        self.raw_text = raw_text
+        self.missing = missing
+        self.trade = trade
+        self.signals = _MentorAIWorkerSignals()
+
+    def run(self) -> None:
+        try:
+            from trade_mentor_ai import extract_draft
+
+            draft = extract_draft(self.raw_text, self.missing, self.trade)
+        except Exception as exc:  # noqa: BLE001 - raw answer already survived
+            self.signals.failed.emit(self.trade_id, str(exc))
+            return
+        self.signals.ready.emit(self.trade_id, draft)
 
 
 class TradeMentorCard(QWidget):
@@ -129,6 +156,10 @@ class TradeMentorCard(QWidget):
         self.previous_label.setObjectName("MutedLabel")
         self.previous_label.setWordWrap(True)
         self.previous_label.setVisible(False)
+        self.coaching_label = QLabel("")
+        self.coaching_label.setObjectName("MutedLabel")
+        self.coaching_label.setWordWrap(True)
+        self.coaching_label.setVisible(False)
 
         self.text_box = QPlainTextEdit(self)
         self.text_box.setPlaceholderText(
@@ -161,6 +192,10 @@ class TradeMentorCard(QWidget):
         self.trade_check_box.setVisible(False)
         #: trade_id -> field -> (state combo, free-text box)
         self._answer_inputs: dict[str, dict[str, tuple[QComboBox, QLineEdit]]] = {}
+        self._trade_questions: dict[str, Any] = {}
+        self._raw_trade_inputs: dict[str, QPlainTextEdit] = {}
+        self._ai_draft_buttons: dict[str, QPushButton] = {}
+        self._ai_drafts: dict[str, dict[str, dict[str, Any]]] = {}
         self._trade_store = None
         self.save_answers_button = QPushButton("Save answers")
         self.save_answers_button.setToolTip(
@@ -204,6 +239,7 @@ class TradeMentorCard(QWidget):
         layout.setSpacing(4)
         layout.addWidget(self.prompt_label)
         layout.addWidget(self.previous_label)
+        layout.addWidget(self.coaching_label)
         layout.addWidget(self.text_box)
         layout.addWidget(self.d1_label)
         layout.addWidget(self.d1_box)
@@ -346,6 +382,14 @@ class TradeMentorCard(QWidget):
             self.previous_label.setText("")
             self.previous_label.setVisible(False)
         self.unchanged_button.setEnabled(bool(self._previous))
+        try:
+            from ai_jobs.market_story_narration import latest_coaching_question
+
+            coaching = latest_coaching_question()
+        except Exception:  # noqa: BLE001 - coaching never costs the prompt
+            coaching = ""
+        self.coaching_label.setText(f"One thing to test: {coaching}" if coaching else "")
+        self.coaching_label.setVisible(bool(coaching))
         self.status_label.setText(
             "Post-close read." if bool(getattr(slot, "post_close", False)) else ""
         )
@@ -367,6 +411,10 @@ class TradeMentorCard(QWidget):
 
     def _clear_trade_check(self) -> None:
         self._answer_inputs = {}
+        self._trade_questions = {}
+        self._raw_trade_inputs = {}
+        self._ai_draft_buttons = {}
+        self._ai_drafts = {}
         while self._trade_check_layout.count():
             item = self._trade_check_layout.takeAt(0)
             widget = item.widget()
@@ -427,11 +475,28 @@ class TradeMentorCard(QWidget):
         self.trade_check_label.setVisible(True)
 
         for question in task.trades:
+            self._trade_questions[question.trade_id] = question
             heading = QLabel(
                 f"{question.symbol} {question.direction}".strip() or question.trade_id
             )
             heading.setObjectName("MutedLabel")
             self._trade_check_layout.addWidget(heading)
+            raw_box = QPlainTextEdit(self.trade_check_box)
+            raw_box.setMaximumHeight(72)
+            raw_box.setPlaceholderText(
+                "Tell me in one note: why, stop/invalidation, target, and setup. "
+                "Your exact words are saved before local AI fills the draft."
+            )
+            self._trade_check_layout.addWidget(raw_box)
+            ai_button = QPushButton("Fill missing fields with local AI", self.trade_check_box)
+            ai_button.clicked.connect(
+                lambda _checked=False, trade_id=question.trade_id: self._start_ai_draft(
+                    trade_id
+                )
+            )
+            self._trade_check_layout.addWidget(ai_button)
+            self._raw_trade_inputs[question.trade_id] = raw_box
+            self._ai_draft_buttons[question.trade_id] = ai_button
             fields: dict[str, tuple[QComboBox, QLineEdit]] = {}
             for name in question.missing:
                 row = QWidget(self.trade_check_box)
@@ -456,6 +521,88 @@ class TradeMentorCard(QWidget):
         self.trade_check_box.setVisible(True)
         self.save_answers_button.setVisible(True)
 
+    def _start_ai_draft(self, trade_id: str) -> None:
+        """Save raw words, then let the local model prepare editable controls."""
+        import trade_mentor_trade_check as check
+
+        question = self._trade_questions.get(trade_id)
+        raw_box = self._raw_trade_inputs.get(trade_id)
+        button = self._ai_draft_buttons.get(trade_id)
+        body = raw_box.toPlainText() if raw_box is not None else ""
+        if question is None or not body.strip() or self._trade_store is None:
+            self._set_status("Type your answer first. Nothing was sent.")
+            return
+        try:
+            check.save_raw_reply(
+                self._trade_store,
+                trade_id,
+                body,
+                missing=tuple(question.missing),
+                now=self._now(),
+            )
+        except Exception as exc:  # noqa: BLE001 - journal writes fail loudly
+            self._set_status(f"Your words were NOT saved: {exc}")
+            return
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("Local AI is filling the draft…")
+        trade = {
+            "trade_id": trade_id,
+            "symbol": str(question.symbol or ""),
+            "direction": str(question.direction or ""),
+        }
+        worker = _MentorAIWorker(trade_id, body, tuple(question.missing), trade)
+        worker.signals.ready.connect(self._apply_ai_draft)
+        worker.signals.failed.connect(self._ai_draft_failed)
+        QThreadPool.globalInstance().start(worker)
+        self._set_status("Your exact words are saved. Local AI is making an editable draft.")
+
+    def _apply_ai_draft(self, trade_id: str, payload: object) -> None:
+        draft = dict(payload) if isinstance(payload, Mapping) else {}
+        fields = self._answer_inputs.get(trade_id, {})
+        kept: dict[str, dict[str, Any]] = {}
+        conflicts: list[str] = []
+        for answer in draft.get("answers") or []:
+            if not isinstance(answer, Mapping):
+                continue
+            name = str(answer.get("field") or "")
+            controls = fields.get(name)
+            if controls is None:
+                continue
+            combo, text_input = controls
+            if combo.currentData() or text_input.text().strip():
+                conflicts.append(name)
+                continue
+            state = str(answer.get("state") or "")
+            index = combo.findData(state)
+            if index < 0:
+                continue
+            combo.setCurrentIndex(index)
+            text_input.setText(str(answer.get("text") or answer.get("source_span") or ""))
+            kept[name] = dict(answer)
+        self._ai_drafts[trade_id] = kept
+        button = self._ai_draft_buttons.get(trade_id)
+        if button is not None:
+            button.setEnabled(True)
+            button.setText("Refill from a new raw answer")
+        follow_up = str(draft.get("follow_up") or "").strip()
+        message = f"Draft filled for {len(kept)} field(s). Check it, then Save answers."
+        if conflicts:
+            message += " I kept your existing " + ", ".join(conflicts) + "."
+        if follow_up:
+            message += " One question: " + follow_up
+        self._set_status(message)
+
+    def _ai_draft_failed(self, trade_id: str, reason: str) -> None:
+        button = self._ai_draft_buttons.get(trade_id)
+        if button is not None:
+            button.setEnabled(True)
+            button.setText("Try local AI again")
+        self._set_status(
+            "Your exact words are safe. Local AI could not fill the draft. "
+            "You can use the fields by hand. " + str(reason or "")
+        )
+
     def save_trade_check(self) -> dict[str, Any]:
         """File every field the trader actually answered, and nothing else."""
         import trade_mentor_trade_check as check
@@ -471,7 +618,20 @@ class TradeMentorCard(QWidget):
                 state = str(combo.currentData() or "")
                 if not state:
                     continue
-                answers[name] = {"state": state, "text": text_input.text().strip()}
+                answer = {"state": state, "text": text_input.text().strip()}
+                ai_answer = self._ai_drafts.get(trade_id, {}).get(name, {})
+                if (
+                    ai_answer
+                    and str(ai_answer.get("state") or "") == state
+                    and str(ai_answer.get("text") or ai_answer.get("source_span") or "").strip()
+                    == text_input.text().strip()
+                ):
+                    answer.update(
+                        value=ai_answer.get("value"),
+                        unit=str(ai_answer.get("unit") or ""),
+                        source_span=str(ai_answer.get("source_span") or ""),
+                    )
+                answers[name] = answer
             if not answers:
                 continue
             try:

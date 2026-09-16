@@ -184,6 +184,8 @@ class BounceService(QObject):
         parent=None,
         *,
         environment_annotations_path: Path = MARKET_ENVIRONMENT_ANNOTATIONS_FILE,
+        use_process: bool = True,
+        process_launcher_spec: str = "bounce_bot:run_bot_with_gui",
     ) -> None:
         super().__init__(parent)
         config = load_bounce_config()
@@ -198,6 +200,8 @@ class BounceService(QObject):
         self.environment_annotations_path = Path(environment_annotations_path)
         self.scanning_enabled = False
         self.include_approaching = False
+        self._use_process = bool(use_process)
+        self._process_launcher_spec = str(process_launcher_spec)
 
         self._bot = None
         self._lock = threading.Lock()
@@ -901,6 +905,7 @@ class BounceService(QObject):
     def refresh_health(self) -> None:
         if not self._is_live():
             return
+        self._restart_dead_process_child()
         bot = self._current_bot()
         if bot is None:
             self._emit(self.connectionChanged, "IB: disconnected")
@@ -1017,14 +1022,24 @@ class BounceService(QObject):
         try:
             try:
                 if not session.is_cancelled:
-                    from bounce_bot import run_bot_with_gui
+                    if self._use_process:
+                        from ui.services.bounce_process import BounceProcessProxy
+                    else:
+                        from bounce_bot import run_bot_with_gui
 
                 try:
                     if not session.is_cancelled:
-                        bot = run_bot_with_gui(
-                            self._make_callback(session),
-                            start_scanning_enabled=self.scanning_enabled,
-                        )
+                        if self._use_process:
+                            bot = BounceProcessProxy(
+                                self._make_callback(session),
+                                start_scanning_enabled=self.scanning_enabled,
+                                launcher_spec=self._process_launcher_spec,
+                            )
+                        else:
+                            bot = run_bot_with_gui(
+                                self._make_callback(session),
+                                start_scanning_enabled=self.scanning_enabled,
+                            )
                 finally:
                     # The IB connect is behind us (returned or raised): a new
                     # generation may now safely open its own.  Set before any
@@ -1189,7 +1204,36 @@ class BounceService(QObject):
 
     def _current_bot(self):
         with self._lock:
-            return self._bot
+            bot = self._bot
+        process = getattr(bot, "process", None) if bot is not None else None
+        if bool(getattr(bot, "is_process_proxy", False)) and (
+            process is None or not process.is_alive()
+        ):
+            return None
+        return bot
+
+    def _restart_dead_process_child(self) -> bool:
+        """A crashed scanner is retired and replaced on the next health tick."""
+        with self._lock:
+            bot = self._bot
+            if not bool(getattr(bot, "is_process_proxy", False)):
+                return False
+            process = getattr(bot, "process", None)
+            if process is not None and process.is_alive():
+                return False
+            self._bot = None
+            session = self._session
+            self._session = None
+            self._generation += 1
+        if session is not None:
+            session.cancelled.set()
+        try:
+            bot.stop(timeout=0.5)
+        except Exception:
+            pass
+        self._emit(self.connectionChanged, "IB: scanner child restarting")
+        self._emit(self.statusChanged, "scanner child stopped; restarting")
+        return self.start()
 
     def _with_bot(self, callback: Callable[[Any], Any]) -> Any:
         bot = self._current_bot()

@@ -15,10 +15,16 @@ exactly as the source checkout does, so the exe and `python launch_gui.py` share
 one set of data.
 """
 
+import os
 import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+
+# The runtime hook pins the launched exe. The build process needs the same pin
+# before hook-qtpy runs, or a stray developer PyQt5 install makes qtpy collect
+# the wrong binding even though Analysis excludes it later.
+os.environ["QT_API"] = "pyside6"
 
 SPEC_DIR = Path(SPECPATH).resolve()
 ROOT = SPEC_DIR.parent
@@ -53,6 +59,9 @@ FIRST_PARTY_PACKAGES = (
     "market_prep",
     "diagnostics",
     "research_warehouse",
+    # Phase 0.31: the desk's Trade Mentor now imports the bounded local-AI
+    # request owner and grounded market-story reader at button/card time.
+    "ai_jobs",
     # R5 (2026-08-17): `indicators` gained its first real importer when the LRSI
     # cross engine wired in - bounce_bot_lib.legacy -> m5_signal_engines ->
     # indicators.efficiency_lrsi. It was allowlisted as unreachable until then.
@@ -66,6 +75,15 @@ FIRST_PARTY_PACKAGES = (
     # executes, and shipping them costs ~12 KB and keeps the tree mirrored.
     "ops",
 )
+
+# Most first-party packages are collected whole. ``ai_jobs`` is the exception:
+# the source-only nightly runner contains optional analysis/UI helpers, while
+# the frozen desk reaches only the bounded story reader used by Trade Mentor.
+# Pulling the whole tree made qtpy inspect the stray PyQt5 install before the
+# PySide6 hook and produced a mixed-Qt bundle. Keep this allowlist exact.
+PARTIAL_PACKAGE_MODULES = {
+    "ai_jobs": frozenset(("ai_jobs", "ai_jobs.market_story_narration")),
+}
 
 
 def _package_dir(name):
@@ -142,7 +160,11 @@ hiddenimports = []
 # is a bundle that starts and then dies at the first lazy import. Fail the
 # build loudly instead.
 for package in FIRST_PARTY_PACKAGES:
-    found = collect_submodules(package)
+    allowed = PARTIAL_PACKAGE_MODULES.get(package)
+    found = collect_submodules(
+        package,
+        filter=(lambda name, allowed=allowed: name in allowed) if allowed else (lambda _name: True),
+    )
     if not found:
         raise SystemExit(f"spec error: collect_submodules({package!r}) found nothing — check sys.path above")
     print(f"[spec] {package}: {len(found)} submodules")
@@ -188,6 +210,35 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# Codex desktop adds its own PDF/image runtimes to PATH. PyInstaller's binary
+# dependency walk can mistake those unrelated DLLs for app dependencies. In
+# September 2026 that copied poppler's ICU and libheif's private CRT beside the
+# desk, and QtCore then failed at import with a missing procedure. Nothing in
+# TradingBotV3 imports from Codex's cache; fence the host toolchain out.
+_CODEX_RUNTIME_TOKEN = "\\.cache\\codex-runtimes\\"
+_python_ssl_names = {"libcrypto-3-x64.dll", "libssl-3-x64.dll"}
+_clean_binaries = []
+_foreign_codex_count = 0
+_python_ssl_replacements = 0
+for _entry in a.binaries:
+    if _CODEX_RUNTIME_TOKEN not in str(_entry[1]).lower():
+        _clean_binaries.append(_entry)
+        continue
+    _foreign_codex_count += 1
+    _binary_name = Path(_entry[0]).name.lower()
+    if _binary_name in _python_ssl_names:
+        _python_dll = Path(sys.base_prefix) / "DLLs" / _binary_name
+        if not _python_dll.is_file():
+            raise SystemExit(f"spec error: Python SSL DLL not found: {_python_dll}")
+        _clean_binaries.append((_entry[0], str(_python_dll), _entry[2]))
+        _python_ssl_replacements += 1
+a.binaries = _clean_binaries
+if _foreign_codex_count:
+    print(
+        f"[spec] fenced {_foreign_codex_count} foreign Codex runtime DLL(s); "
+        f"restored {_python_ssl_replacements} Python SSL DLL(s)"
+    )
 
 pyz = PYZ(a.pure)
 

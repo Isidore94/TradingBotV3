@@ -4781,6 +4781,13 @@ class AlertCenterPanel(QFrame):
         from `m5_chart_bars` itself, so if this lookup ever diverged the cost
         would be a missed cache hit, not a wrong bar.
         """
+        if bool(getattr(bot, "is_process_proxy", False)):
+            # A symbol-sized RPC avoids copying the scanner's entire M5 cache
+            # across the process boundary on every chart-watch tick.
+            try:
+                return bot.m5_chart_bars(symbol, max_sessions=2) or []
+            except Exception:
+                return []
         latest = getattr(bot, "latest_bars", None)
         if not isinstance(latest, dict):
             return []
@@ -4828,7 +4835,11 @@ class AlertCenterPanel(QFrame):
             source = []
         stamp = self._m5_source_stamp(source)
         cached = self._m5_bar_dicts.get(key)
-        if cached is not None and cached[0] is source and cached[1] == stamp:
+        same_source = cached is not None and (
+            cached[0] is source
+            or bool(getattr(bot, "is_process_proxy", False))
+        )
+        if cached is not None and same_source and cached[1] == stamp:
             self._m5_bar_dicts.move_to_end(key)
             return cached[2]
         try:
@@ -6043,7 +6054,7 @@ class AlertCenterPanel(QFrame):
             self.statusChanged.emit(f"{symbol}: {label} alert already armed.")
             return False
         moment = datetime.now()
-        if kind == "trendline_break":
+        if kind in {"trendline_break", "trendline_break_retest"}:
             evidence = self._current_trendline_report_evidence(symbol, side)
             candidate, knowledge_at = evidence if evidence is not None else (None, None)
             resolved_side = str(side or "").strip().upper()
@@ -6051,7 +6062,7 @@ class AlertCenterPanel(QFrame):
                 resolved_side = str(candidate.get("side") or "").strip().upper()
             if not isinstance(candidate, dict) or resolved_side not in {"LONG", "SHORT"}:
                 self.statusChanged.emit(
-                    f"{symbol}: Trendline break needs the saved scan line before it can arm."
+                    f"{symbol}: {label} needs the saved scan line before it can arm."
                 )
                 return False
             self._d1_event_watches.append(
