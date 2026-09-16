@@ -1657,6 +1657,31 @@ Tracker and playbook results currently use materially different entries and
 stops. They remain incomparable until each carries an explicit recipe/outcome ID
 — resolved by Phase 6's recipe IDs and the Section 19.5 parity gate.
 
+### 14.4 Fixed-window entry-quality view (Phase 0.32 Packet 1, 2026-09-15)
+
+`entry_quality_forward_v1` is a separate, pure research view over supplied completed bars;
+it is not a replacement for `outcome_path`, a recipe result or booked profit. Its purpose is
+the narrower question: *what gross movement did a named feasible entry offer before an exit
+choice is made?* M5 endpoints are 5/15/30/60/120/180 elapsed trading minutes plus the entry
+session close, never a count of delivered bars and never tomorrow's session. Swing endpoints
+are the 1/2/3/5/10 completed exchange sessions strictly after the entry session close.
+
+Every row carries opportunity and attempt identity, symbol/side, rule/version, trigger and
+feasible-entry knowledge, source/anchor knowledge basis, coverage and an explicit state. It
+reports side-adjusted gross MFE, MAE, close move, time to MFE, declared favourable/adverse
+first-touch order, percent, entry-frozen ATR-normalized movement and R only when the entry
+already had a valid risk reference. Missing bars, no trigger, invalid entry, pending endpoint,
+late unavailable M5 horizon and incomplete coverage remain distinct from zero. A confirmation
+bar at or before knowledge time supplies no excursion. Daily OHLC cannot establish wick order:
+a same-bar two-threshold touch is `ambiguous_same_daily_bar`, not an invented sequence.
+Reconstructed knowledge remains labelled and cannot confirm a prospective claim.
+
+The view is exit-independent by construction: raw path measurement continues after a simulated
+stop, while `outcome_path` keeps its existing named exit-policy semantics. It reads no store,
+writes no store and has zero detector, score, alert, ranking, journal or promotion influence.
+Persisting it, comparing entries, or registering a trial requires the later Phase 0.32 packets
+and their frozen-denominator/ledger contracts.
+
 ## 15. Research and statistical framework
 
 The apparatus in this section activates when registered technical-variation

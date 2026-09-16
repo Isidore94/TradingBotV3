@@ -38,6 +38,16 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Phase 0.32 Packet 1 forward entry quality (2026-09-15, unmerged).**
+  `scripts/entry_quality.py` adds `entry_quality_forward_v1`, a pure research-only view over
+  caller-supplied completed M5/D1 bars. It measures named fixed elapsed/session endpoints with
+  coverage and explicit unavailable/pending/partial/no-trigger/invalid/missing states; retains
+  gross MFE/MAE/close movement after a hypothetical stop; separates percent, entry-frozen ATR
+  and valid-risk R; excludes confirmation-bar wicks; labels reconstructed knowledge; and keeps
+  daily touch order ambiguous. It has no store, detector, score, alert, ranking, journal or
+  policy effect, and `outcome_path` is unchanged. Packet 2 will connect bounded denominators;
+  Packet 3 will publish grounded next-test facts. Live gate #140 is owed.
+
 - **Phase 0.31 remaining WISHLIST integration (2026-09-15, H4/LRSI excluded).**
   `BounceService` owns the unchanged M5 scanner through one below-normal spawned child and
   restarts it after a crash; callbacks cross a bounded queue and commands a pipe. Review

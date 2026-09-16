@@ -20,10 +20,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-15 (night): Phase 0.31 is merged to `main` at feature commit `4563efaa`, with H4/LRSI excluded.** It adds SN1 process isolation, canonical review identity, trendline break/retest, subject-session writes, grounded story narration, Mentor AI draft help/coaching and the larger persistent popup. |
-| Working branch | **`main`**, fast-forwarded from verified `codex/phase-031`; the branch is pushed to origin and the desk was not restarted. |
-| Unmerged / open | No Phase 0.31 code remains unmerged; live gates #134-#139 remain. H4/LRSI is still unbuilt by explicit trader choice. Older live gates and the recorded maintenance items remain. |
-| Next action | **Restart the source desk, then run the real desk and overnight gates #134-#139.** Phase 1 follows the live-validation week. |
+| Latest work | **2026-09-15: Phase 0.32 Packet 1 is built on `codex/sol-p1-forward`, unmerged.** It adds only a pure, exit-independent completed-bar forward-movement view; Packets 2-3 remain. |
+| Working branch | **`codex/sol-p1-forward`**, carrying the tester's red contracts plus Packet 1; the shared desk checkout remains on `main` and was not restarted. |
+| Unmerged / open | Phase 0.32 Packet 1 awaits review/integration; its real copied-data gate #140 is owed. Packets 2-3, gates #134-#139, H4/LRSI and older recorded gates remain open. |
+| Next action | **Review Packet 1, then complete Phase 0.32 Packets 2-3 without changing any live rule.** Restart and run the existing real desk/overnight gates separately. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
 | Last verified baseline | **Phase 0.31 full strict pass: 8,449 passed, 6 skipped, 72 subtests; compileall, ruff and smoke 7/7 clean.** Thread warnings were errors; the two later packaging guards pass 19/19. |
 | Frozen exe | **Rebuilt and verified 2026-09-15: source 86/86 and frozen 86/86.** The Mentor's newly reachable AI module is bundled narrowly; build-time PySide6 and foreign-DLL guards are pinned. The production desk still runs from SOURCE. |
@@ -33,6 +33,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 140 | **Forward entry quality (Phase 0.32 Packet 1)** - on a copied bounded completed-bar slice containing a late M5 entry, a gap and a no-trigger variant, run the pure measurement and verify each row's exact endpoint, coverage and state; a post-stop rally remains in gross MFE, the daily two-touch row is ambiguous, and no source/store/live output changes. This is measurement only, not evidence of an edge or a trial registration. | lead/trader, after Packet 1 integration |
 | 139 | **Trade Mentor raw-first AI help and large popup** - after restart, the popup opens near 900x820, keeps a manual resize across hide/show, and the 10:00 card saves the exact raw reply before local AI fills only missing fields; an existing edit stays, an ambiguous number asks one question, Save writes recalled evidence and no planned-risk field. | trader, next 10:00 prompt after integration |
 | 138 | **Grounded market-story narration** - the next overnight ledger records `market_story_narration` OK, its file names weekly/monthly/quarterly periods and only allowed source ids, and the next Mentor card shows its one question; with the model off, the last verified file stays byte-identical. | trader, next overnight run |
 | 137 | **An evening note stays with its subject session** - file a Market Journal note for the completed session after 21:00 Pacific; it appears in that session's story with `written_session_date` showing the later write day and `written_after_the_session=true`. | trader, first evening note after integration |
@@ -177,6 +178,21 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-15 — Phase 0.32 Packet 1 BUILT on `codex/sol-p1-forward`; review and copied-data gate owed
+
+Packet 1 adds only `scripts/entry_quality.py`: a pure `entry_quality_forward_v1` view over
+caller-provided completed bars. M5 uses elapsed 5/15/30/60/120/180-minute endpoints and the
+same exchange session close (including regular early close handling); D1 uses 1/2/3/5/10 exchange
+sessions strictly after the entry session close. Each row retains stable opportunity/attempt and
+knowledge identity, gross no-exit MFE/MAE/close movement, timing, threshold order, entry-frozen
+ATR/valid-risk R, coverage and an explicit honest state. Confirmation bars are excluded, daily
+same-bar order remains ambiguous, a post-stop rally remains visible, reconstructed inputs cannot
+confirm prospective claims, and `outcome_path` is untouched. The tester's nine red tests failed
+before the module existed and pass after it. Packet 2 will attach predeclared bounded denominators;
+Packet 3 will extend the existing research narration/publication path. No live store, scanner,
+score, alert, watchlist, Focus, journal, policy, local setting or desk process changed. Gate #140
+uses a copied bounded data slice after integration; it cannot prove an edge.
 
 ### 2026-09-15 (night) — Phase 0.31 BUILT, VERIFIED AND MERGED TO MAIN
 

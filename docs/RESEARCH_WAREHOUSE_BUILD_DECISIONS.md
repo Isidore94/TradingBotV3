@@ -3063,3 +3063,31 @@ decide.
 and plan.md sec 5 forbid without a sec 7 decision), or if a THIRD band family
 appears — at which point `band_family` should become a lookup of column prefixes
 rather than a two-way branch.
+
+## BD-103 — Gross fixed-window entry movement is a sidecar view, not an exit result
+
+**Decision (2026-09-15, Phase 0.32 Packet 1).** `scripts/entry_quality.py` owns
+`entry_quality_forward_v1`, a pure calculation over a caller-supplied sequence of completed
+bars. It neither reads nor writes the warehouse, does not register a trial and does not alter
+`outcome_path`; therefore its gross MFE/MAE/close measures are never called P&L, an exit result
+or a promoted edge. The existing frozen exit path remains byte-for-byte authoritative for its
+own named simulated policy.
+
+**Time contract.** M5 bar timestamps are completed-bar end times in the exchange timezone.
+Each elapsed endpoint is calculated from the later of trigger knowledge and feasible entry,
+not from a delivered-bar count, and is limited to that exchange session's scheduled close;
+the view owns its narrow 13:00 ET regular early-close calendar seam. Swing horizon N is the Nth
+exchange session strictly after the entry session close. A bar at or before knowledge time is
+excluded, so a confirmation candle cannot donate its earlier wick. Daily OHLC records a
+same-bar favourable/adverse threshold collision as ambiguity.
+
+**Honesty contract.** Every requested base attempt receives a window row with stable identity,
+knowledge labels, coverage and one of complete, pending, partial, no-trigger, invalid-entry,
+missing-data or unavailable. Missing is never zero; a late M5 entry may have a close row and an
+unavailable longer row. ATR and risk are frozen entry inputs, and R is null without a valid
+contemporaneous risk reference. Reconstructed source or anchor knowledge can inform research
+but cannot confirm a prospective claim.
+
+**Reopen if** a persistent warehouse dataset is added. That requires its own schema/identity,
+month-scoped `ResearchStore.read_rows` reader, writer owner, trial/denominator contract and
+failure-preserving publication path; none is implied by this pure Packet 1 seam.
