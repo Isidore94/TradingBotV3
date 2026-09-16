@@ -1683,6 +1683,33 @@ writes no store and has zero detector, score, alert, ranking, journal or promoti
 Persisting it, comparing entries, or registering a trial requires the later Phase 0.32 packets
 and their frozen-denominator/ledger contracts.
 
+### 14.5 Fair bounded entry comparison (Phase 0.32 Packet 2, 2026-09-15)
+
+`entry_quality_comparison_v1` is a pure reader of supplied `entry_quality_forward_v1` rows and the
+existing append-only trial ledger. It is not an outcome simulator, a new trial registry, a market-data
+reader or a route to a live decision. P8 first collapses its twelve target recipes to the four declared
+entry variants, then emits exactly one attempt per `(opportunity_id, entry_variant)`; absent measures
+are `missing_data` and a waiting rule that never fills remains `no_trigger`. Existing M5
+entry-bearing occurrences use the same normalized row shape without being multiplied by their
+exit-policy recipes.
+
+The reader keeps all-opportunity and shared-triggered denominators distinct: a paired gross-MFE delta
+answers only the latter, while each variant's coverage and no-trigger/missing counts answer the former.
+It never pools all-scanner, liked, vetoed, actual-trade or unreviewed populations, and a liked-vetoed
+comparison refuses unless timing, source knowledge and window match. Repeated scans collapse by
+attempt; `dependency_cluster_id` remains the correlated observation unit. Cells publish median and
+quantiles of gross movement, close movement, time-to-MFE, useful-move frequency, sessions, symbols,
+exclusions, session-block uncertainty and an explicit outlier sensitivity. They are discovery facts,
+never booked profit or an edge claim.
+
+The reader resolves only existing ledger-owned recipe IDs and carries each family's lifetime declared
+look count and multiplicity contract. Its in-memory declaration helper can freeze fields but cannot
+register, amend after an outcome, launch or promote a trial; any changed post-outcome hypothesis needs
+the existing explicit trader-authorized registration path. Below declared opportunity/session floors,
+or while a trial remains registered/collecting, the result is `not_evaluated` and names no winner.
+No reader here writes a store or touches a detector, score, alert, ranking, watchlist, Focus, journal,
+review policy or Qt thread.
+
 ## 15. Research and statistical framework
 
 The apparatus in this section activates when registered technical-variation

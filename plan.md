@@ -271,7 +271,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.29** | Pullback alert, trendline break, compression (trader 2026-09-15) | **BUILT, independently reviewed and merged.** PCT-3: compression measure, chip, calibration CLI and `compression_break` (gates #124-#125). PCT-1: Pullback alert, auto-arm and claim names (gates #126-#129). PCT-2: frozen completed-close trendline-break event plus additive D1-feed row (gate #130). Spec `docs/PULLBACK_COMPRESSION_TRENDLINE_PLAN.md`. |
 | **0.30** | Daily Recap repair (DR-REPAIR) | Streams and reduces M5 state, shows one whole best event per stock/side, uses D1 horizons for D1 decisions, keeps pending swings, states factual counts and re-reads once after the close. **BUILT and reviewed; live gate #132 owed.** |
 | **0.31** | Finish the remaining WISHLIST integration (trader 2026-09-15) | **BUILT and merged to `main` at `4563efaa`; live gates #134-#139 owed.** SN1 process isolation, bounded 5E identity repair, trendline break-then-retest, grounded market-story narration, the Market Journal evening-session repair, Trade Mentor validated AI draft filling/coaching, and a larger persistent Mentor popup. **H4/LRSI is explicitly excluded.** |
-| **0.32** | Entry quality and the next test (trader 2026-09-15) | Research-only forward movement, fair entry comparison, and a grounded local-AI next-test proposal/memo. **Packet 1 BUILT on `codex/sol-p1-forward`; Packets 2-3 remain.** No detector, score, alert, ranking, watchlist, Focus, journal, policy or live-store change. |
+| **0.32** | Entry quality and the next test (trader 2026-09-15) | Research-only forward movement, fair entry comparison, and a grounded local-AI next-test proposal/memo. **Packet 1 is built on `codex/sol-p1-forward`; Packet 2 is built on `codex/sol-p2-entry-comparison`; Packet 3 remains.** No detector, score, alert, ranking, watchlist, Focus, journal, policy or live-store change. |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — QUEUED** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -490,7 +490,7 @@ Built on `codex/phase-031` and merged to `main` at `4563efaa`. The strict full s
 smoke, source selftest and frozen selftest are green. Gates #134-#139 retain the real-desk,
 real-model and next-session proof; no H4/LRSI implementation was added.
 
-## Phase 0.32 — Entry quality and the next test (trader 2026-09-15) — Packet 1 BUILT; Packets 2-3 remain
+## Phase 0.32 — Entry quality and the next test (trader 2026-09-15) — Packets 1-2 BUILT; Packet 3 remains
 
 This is a bounded, research-only program. It measures what an opportunity offered after a
 named feasible entry without choosing an exit, then compares predeclared entry variants on
@@ -508,10 +508,17 @@ explicit trader-authorized ledger path.
    missing/pending/no-trigger/invalid/unavailable states, frozen-at-entry ATR and valid-risk R,
    point-in-time knowledge labels, and honest first-touch ambiguity. It has no store or exit
    simulator dependency and leaves `outcome_path` unchanged. Gate #140 is owed.
-2. **Packet 2 — fair entry comparison (remaining):** wire the view to bounded P8 entries and
-   one existing M5 occurrence population, retaining one opportunity denominator per variant,
-   no-trigger and coverage counts, clustered uncertainty, frozen registration and no new
-   Cartesian search.
+2. **Packet 2 — fair entry comparison (BUILT on `codex/sol-p2-entry-comparison`, unmerged):**
+   `scripts/entry_comparison.py` is a pure reader that normalizes bounded P8 and existing M5
+   entry-bearing occurrences to Packet 1's 60-minute view. It keeps one row for every declared
+   P8 opportunity/entry variant, including no-trigger and missing-data rows; reports full and
+   shared-triggered denominators separately; preserves all-scanner, liked, vetoed, actual-trade
+   and unreviewed populations; de-duplicates repeat scans at the attempt and dependency-cluster
+   levels; and reports distribution, coverage, clustered uncertainty and outlier sensitivity.
+   It resolves recipe ownership and family-lifetime looks through the existing read-only ledger,
+   freezes declarations without registering them, and never names a winner below floors or while
+   a trial is immature. It creates no grid, store write, detector, score, alert, ranking or trial.
+   Gate #141 is owed.
 3. **Packet 3 — next test (remaining):** extend the existing `setup_research` fact/narration
    path and published report/Review surface with a validated proposal, short memo and copyable
    brief. The model remains advisory, cannot calculate facts or register/run a trial, and a
@@ -521,6 +528,9 @@ Fail-before-fix proof for Packet 1 is `tests/test_sol_entry_quality.py`: session
 endpoints, gaps, late entries, confirmation-candle exclusion, long/short mirror, stop-then-rally
 gross MFE, daily ambiguity, risk/ATR separation, explicit states and reconstructed knowledge. The
 actual data gate uses a copied bounded completed-bar slice only; no live store is written.
+Packet 2's fail-before-fix proof is `tests/test_sol_entry_comparison.py`: declared P8 and M5
+normalization, no-trigger/missing denominators, duplicate dependence, paired-versus-full coverage,
+population separation, robust outlier handling, frozen declarations and ledger-only authorization.
 
 ## Phase 0.26 — WISHLIST sweep (trader 2026-09-12) — BUILT; live validation owed
 

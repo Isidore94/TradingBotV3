@@ -45,8 +45,19 @@ They are evidence and must not be loaded as context.
   gross MFE/MAE/close movement after a hypothetical stop; separates percent, entry-frozen ATR
   and valid-risk R; excludes confirmation-bar wicks; labels reconstructed knowledge; and keeps
   daily touch order ambiguous. It has no store, detector, score, alert, ranking, journal or
-  policy effect, and `outcome_path` is unchanged. Packet 2 will connect bounded denominators;
-  Packet 3 will publish grounded next-test facts. Live gate #140 is owed.
+  policy effect, and `outcome_path` is unchanged. Packet 2 connects only bounded research-reader
+  denominators; Packet 3 will publish grounded next-test facts. Live gate #140 is owed.
+
+- **Phase 0.32 Packet 2 fair entry comparison (2026-09-15, unmerged).**
+  `scripts/entry_comparison.py` is a pure reader over supplied Packet 1 measures and the existing
+  read-only trial ledger. It normalizes P8's four declared entry variants and existing M5
+  occurrences without multiplying exit recipes, retains no-trigger/missing attempts and full
+  opportunity denominators, distinguishes shared-triggered movement from all-opportunity coverage,
+  keeps scanner/liked/vetoed/trade/unreviewed populations separate, and reports clustered
+  uncertainty, distribution and outlier sensitivity. Declaration freezing is in-memory only;
+  recipe authorization and family-lifetime multiplicity resolve through `trial_ledger`, so no trial
+  is registered, run or amended. It never names a winner below declared floors or for an immature
+  trial. No store, detector, score, alert, ranking, journal or policy changes. Live gate #141 is owed.
 
 - **Phase 0.31 remaining WISHLIST integration (2026-09-15, H4/LRSI excluded).**
   `BounceService` owns the unchanged M5 scanner through one below-normal spawned child and
