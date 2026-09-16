@@ -3076,9 +3076,11 @@ own named simulated policy.
 **Time contract.** M5 bar timestamps are completed-bar end times in the exchange timezone.
 Each elapsed endpoint is calculated from the later of trigger knowledge and feasible entry,
 not from a delivered-bar count, and is limited to that exchange session's scheduled close;
-the view owns its narrow 13:00 ET regular early-close calendar seam. Swing horizon N is the Nth
-exchange session strictly after the entry session close. A bar at or before knowledge time is
-excluded, so a confirmation candle cannot donate its earlier wick. Daily OHLC records a
+the view owns its narrow 13:00 ET regular early-close calendar seam. Scheduled M5 coverage counts
+bar ends from the first full interval after the decision (09:32 therefore has 78 ends through a
+regular close), and an interval that began before knowledge/entry is excluded even if it completes
+later, so it cannot donate an earlier wick. Swing horizon N is the Nth exchange session strictly
+after the entry session close; non-session daily source rows are rejected. Daily OHLC records a
 same-bar favourable/adverse threshold collision as ambiguity.
 
 **Honesty contract.** Every requested base attempt receives a window row with stable identity,

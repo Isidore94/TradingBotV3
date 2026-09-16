@@ -25,6 +25,7 @@ ENTRY_QUALITY_SCHEMA = "entry_quality_forward_v1"
 M5_WINDOW_MINUTES: tuple[int, ...] = (5, 15, 30, 60, 120, 180)
 SWING_WINDOW_SESSIONS: tuple[int, ...] = (1, 2, 3, 5, 10)
 M5_BAR_MINUTES = 5
+REGULAR_SESSION_OPEN = time(9, 30)
 MARKET_TZ = ZoneInfo("America/New_York")
 REGULAR_SESSION_CLOSE = time(16, 0)
 EARLY_SESSION_CLOSE = time(13, 0)
@@ -167,6 +168,24 @@ def _base_payload(entry: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
 
 def _coverage(expected: int, observed: int) -> dict[str, int]:
     return {"expected_bars": expected, "observed_bars": observed, "missing_bars": max(0, expected - observed)}
+
+
+def _expected_m5_bar_ends(start: datetime, endpoint: datetime) -> int:
+    """Count scheduled completed M5 ends inside a fixed elapsed window.
+
+    The count starts with the first scheduled bar that *begins* at or after the
+    decision time.  This is deliberately not ``(endpoint - start) // 5``:
+    a 09:32 entry still has all 78 scheduled 09:35..16:00 completed bars.
+    """
+    session_open = datetime.combine(start.date(), REGULAR_SESSION_OPEN, tzinfo=MARKET_TZ)
+    bar_span = timedelta(minutes=M5_BAR_MINUTES)
+    first_end = session_open + bar_span
+    if start >= first_end:
+        elapsed = start - session_open
+        first_end = session_open + bar_span * (int(elapsed.total_seconds() // bar_span.total_seconds()) + 1)
+    if first_end > endpoint:
+        return 0
+    return int((endpoint - first_end).total_seconds() // bar_span.total_seconds()) + 1
 
 
 def _m5_bars(rows: Iterable[Mapping[str, Any]]) -> tuple[list[tuple[datetime, float, float, float]], int]:
@@ -322,8 +341,16 @@ def measure_m5_forward(entry: Mapping[str, Any], bars: Iterable[Mapping[str, Any
 
     close_at = session_endpoint(day)
     all_bars, rejected = _m5_bars(bars)
-    eligible = [bar for bar in all_bars if measurement_start < bar[0] <= close_at]
-    excluded_before_knowledge = sum(1 for bar in all_bars if bar[0] <= knowledge_time)
+    bar_span = timedelta(minutes=M5_BAR_MINUTES)
+    # A completed end after the decision is not enough: its OHLC can still
+    # contain a wick from before knowledge/entry.  The whole interval must be
+    # after the named start before it can supply forward movement.
+    # Coverage answers whether the scheduled completed-bar ends arrived.  Path
+    # movement is stricter: an end may be present while its interval includes
+    # pre-entry price action that cannot be credited to the entry.
+    coverage_eligible = [bar for bar in all_bars if measurement_start < bar[0] <= close_at]
+    eligible = [bar for bar in coverage_eligible if measurement_start <= bar[0] - bar_span]
+    excluded_before_knowledge = sum(1 for bar in all_bars if bar[0] - bar_span < measurement_start)
     risk, risk_reason = _risk(entry_price, entry.get("risk_price"), side)
     atr = _float(entry.get("entry_atr"))
     favorable_threshold = _float(entry.get("favorable_threshold_pct"))
@@ -336,7 +363,8 @@ def measure_m5_forward(entry: Mapping[str, Any], bars: Iterable[Mapping[str, Any
     base_state = str(entry.get("state") or "complete")
 
     def one_window(endpoint: datetime, *, unavailable: bool = False) -> dict[str, Any]:
-        expected = max(0, int((endpoint - measurement_start).total_seconds() // (M5_BAR_MINUTES * 60)))
+        expected = _expected_m5_bar_ends(measurement_start, endpoint)
+        coverage_bars = [bar for bar in coverage_eligible if bar[0] <= endpoint]
         in_window = [bar for bar in eligible if bar[0] <= endpoint]
         if unavailable:
             return _empty_window(
@@ -345,19 +373,27 @@ def measure_m5_forward(entry: Mapping[str, Any], bars: Iterable[Mapping[str, Any
         if base_state == "no_trigger":
             return _empty_window(state="no_trigger", reason="entry_variant_did_not_trigger", expected=expected, endpoint=endpoint)
         if as_of_market < endpoint:
-            return _empty_window(state="pending", reason="window_endpoint_not_completed", expected=expected, observed=len(in_window), endpoint=endpoint)
-        if not in_window:
+            return _empty_window(state="pending", reason="window_endpoint_not_completed", expected=expected, observed=len(coverage_bars), endpoint=endpoint)
+        if not coverage_bars:
             return _empty_window(state="missing_data", reason="no_bar_at_or_before_window_endpoint", expected=expected, endpoint=endpoint)
         # A stale last observation cannot silently stretch a fixed elapsed window.
-        if endpoint - in_window[-1][0] > timedelta(minutes=15):
+        if endpoint - coverage_bars[-1][0] > timedelta(minutes=15):
             return _empty_window(
                 state="missing_data",
                 reason="no_bar_at_or_before_window_endpoint",
                 expected=expected,
-                observed=len(in_window),
+                observed=len(coverage_bars),
                 endpoint=endpoint,
             )
-        state = "complete" if len(in_window) >= expected else "partial"
+        if not in_window:
+            return _empty_window(
+                state="missing_data",
+                reason="no_whole_completed_bar_after_entry",
+                expected=expected,
+                observed=len(coverage_bars),
+                endpoint=endpoint,
+            )
+        state = "complete" if len(coverage_bars) >= expected else "partial"
         reason = "complete_coverage" if state == "complete" else "completed_window_has_missing_bars"
         row = _moves(
             in_window,
@@ -374,7 +410,7 @@ def measure_m5_forward(entry: Mapping[str, Any], bars: Iterable[Mapping[str, Any
                 "state": state,
                 "reason": reason,
                 "endpoint_time": endpoint.isoformat(),
-                "coverage": _coverage(expected, len(in_window)),
+                "coverage": _coverage(expected, len(coverage_bars)),
                 "risk_reason": risk_reason,
                 "bars_excluded_before_knowledge": excluded_before_knowledge,
                 "bars_rejected_invalid": rejected,
@@ -418,7 +454,7 @@ def measure_swing_forward(
     parsed: dict[date, tuple[date, float, float, float]] = {}
     for row in daily_bars or ():
         day, high, low, close = _day(row.get("date") or row.get("time")), _float(row.get("high")), _float(row.get("low")), _float(row.get("close"))
-        if day is not None and high is not None and low is not None and close is not None and low <= high:
+        if day is not None and is_session(day) and high is not None and low is not None and close is not None and low <= high:
             parsed.setdefault(day, (day, high, low, close))
     risk, risk_reason = _risk(entry_price, entry.get("risk_price"), side)
     atr = _float(entry.get("entry_atr"))

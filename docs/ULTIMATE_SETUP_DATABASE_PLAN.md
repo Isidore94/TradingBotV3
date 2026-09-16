@@ -1671,8 +1671,9 @@ feasible-entry knowledge, source/anchor knowledge basis, coverage and an explici
 reports side-adjusted gross MFE, MAE, close move, time to MFE, declared favourable/adverse
 first-touch order, percent, entry-frozen ATR-normalized movement and R only when the entry
 already had a valid risk reference. Missing bars, no trigger, invalid entry, pending endpoint,
-late unavailable M5 horizon and incomplete coverage remain distinct from zero. A confirmation
-bar at or before knowledge time supplies no excursion. Daily OHLC cannot establish wick order:
+late unavailable M5 horizon and incomplete coverage remain distinct from zero. A bar supplies no
+excursion unless its whole completed M5 interval begins at or after knowledge/feasible entry; a
+later completed end cannot donate an earlier wick. Daily OHLC cannot establish wick order:
 a same-bar two-threshold touch is `ambiguous_same_daily_bar`, not an invented sequence.
 Reconstructed knowledge remains labelled and cannot confirm a prospective claim.
 
