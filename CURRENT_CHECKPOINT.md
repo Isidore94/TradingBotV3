@@ -216,6 +216,12 @@ resolve every recipe through the existing read-only ledger. Liked/vetoed compari
 coverage or entry-convention mismatches. The five new red regressions failed before the repair and
 pass after it; no write or execution path was added.
 
+The second Packet 2 repair rejects a rogue supplied forward entry variant even when its surrounding
+recipe grid is ledger-authorized. Normalization now retains Packet 1 `entry_rule` and
+`entry_rule_version` and derives the review convention from them when needed, so differently named
+entry rules cannot compare as matched. The two new red regressions failed before the repair and pass
+after it; no write or execution path was added.
+
 ### 2026-09-15 (night) — Phase 0.31 BUILT, VERIFIED AND MERGED TO MAIN
 
 The trader authorized the remaining named WISHLIST work except H4/LRSI and asked for a much

@@ -56,8 +56,9 @@ They are evidence and must not be loaded as context.
   keeps scanner/liked/vetoed/trade/unreviewed populations separate, and reports clustered
   uncertainty, distribution and outlier sensitivity. Repeat scans retain opportunity coverage but
   contribute one stable dependency-cluster distribution/pair sample; public adapters refuse a
-  recipe outside the ledger and review comparisons also require matching coverage and entry
-  convention. Declaration freezing is in-memory only;
+  recipe or forward entry variant outside the declared ledger-owned axis and retain Packet 1's
+  entry rule/version; review comparisons also require matching coverage and entry convention.
+  Declaration freezing is in-memory only;
   recipe authorization and family-lifetime multiplicity resolve through `trial_ledger`, so no trial
   is registered, run or amended. It never names a winner below declared floors or for an immature
   trial. No store, detector, score, alert, ranking, journal or policy changes. Live gate #141 is owed.

@@ -1704,7 +1704,9 @@ quantiles of gross movement, close movement, time-to-MFE, useful-move frequency,
 exclusions, session-block uncertainty and an explicit outlier sensitivity. They are discovery facts,
 never booked profit or an edge claim.
 
-The reader resolves only existing ledger-owned recipe IDs at each public adapter and carries each
+The reader resolves only existing ledger-owned recipe IDs at each public adapter and rejects a supplied
+forward row whose entry variant is outside that adapter's declared axis. Normalization carries Packet
+1's named entry rule and version into the entry convention used for review matching. It carries each
 family's lifetime declared look count and multiplicity contract. Its in-memory declaration helper can freeze fields but cannot
 register, amend after an outcome, launch or promote a trial; any changed post-outcome hypothesis needs
 the existing explicit trader-authorized registration path. Below declared opportunity/session floors,

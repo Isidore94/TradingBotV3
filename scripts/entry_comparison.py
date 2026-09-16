@@ -23,6 +23,7 @@ DEFAULT_WINDOW = "60m"
 ALL_SCANNER = "all_scanner"
 NON_TRIGGER_STATES = frozenset({"no_trigger", "missing_data", "invalid_entry", "unavailable", "pending"})
 MEASURABLE_STATES = frozenset({"complete", "partial"})
+M5_ENTRY_VARIANTS = frozenset({"m5_first_close"})
 
 
 def _text(value: Any) -> str:
@@ -92,6 +93,18 @@ def _forward_index(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], M
     return indexed
 
 
+def _validated_forward_index(
+    rows: Iterable[Mapping[str, Any]], *, allowed_variants: Iterable[str]
+) -> dict[tuple[str, str], Mapping[str, Any]]:
+    """Refuse a supplied forward attempt outside the already-declared entry axis."""
+    allowed = {_text(variant) for variant in allowed_variants}
+    indexed = _forward_index(rows)
+    for _opportunity_id, variant in indexed:
+        if variant not in allowed:
+            raise ValueError(f"unauthorized entry variant: {variant}")
+    return indexed
+
+
 def _normalise_attempt(
     occurrence: Mapping[str, Any],
     *,
@@ -102,6 +115,11 @@ def _normalise_attempt(
     window: str,
 ) -> dict[str, Any]:
     source = forward or {}
+    entry_rule = _text(source.get("entry_rule")) or _text(occurrence.get("entry_rule"))
+    entry_rule_version = _text(source.get("entry_rule_version")) or _text(occurrence.get("entry_rule_version"))
+    entry_convention = _text(source.get("entry_convention")) or _text(occurrence.get("entry_convention"))
+    if not entry_convention and entry_rule:
+        entry_convention = f"{entry_rule}:{entry_rule_version}" if entry_rule_version else entry_rule
     payload = source.get("windows", {}).get(window, {}) if isinstance(source.get("windows"), Mapping) else {}
     state = _text(payload.get("state")) if isinstance(payload, Mapping) else ""
     if not state:
@@ -114,6 +132,9 @@ def _normalise_attempt(
         "attempt_id": f"{opportunity_id}|{variant}",
         "dependency_cluster_id": _text(occurrence.get("dependency_cluster_id")) or opportunity_id,
         "entry_variant": variant,
+        "entry_rule": entry_rule,
+        "entry_rule_version": entry_rule_version,
+        "entry_convention": entry_convention,
         "is_control": bool(is_control),
         "window": window,
         "state": state,
@@ -148,7 +169,7 @@ def adapt_p8_attempts(
     declared = _recipe_variants(_require_authorized_recipes(recipes))
     if not declared:
         raise ValueError("P8 recipes must declare entry variants")
-    indexed = _forward_index(forward_rows)
+    indexed = _validated_forward_index(forward_rows, allowed_variants=declared)
     attempts: list[dict[str, Any]] = []
     for occurrence in opportunities:
         opportunity_id = _text(occurrence.get("occurrence_id")) or _text(occurrence.get("opportunity_id"))
@@ -182,7 +203,7 @@ def adapt_m5_occurrence_attempts(
     per exit recipe.
     """
     _require_authorized_recipes(recipes)
-    indexed = _forward_index(forward_rows)
+    indexed = _validated_forward_index(forward_rows, allowed_variants=M5_ENTRY_VARIANTS)
     attempts: list[dict[str, Any]] = []
     for occurrence in occurrences:
         opportunity_id = _text(occurrence.get("occurrence_id")) or _text(occurrence.get("opportunity_id"))

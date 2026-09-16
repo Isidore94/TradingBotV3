@@ -517,7 +517,9 @@ explicit trader-authorized ledger path.
    levels (with distributions and pairs using one stable cluster representative); and reports
    distribution, coverage, clustered uncertainty and outlier sensitivity. Its public adapters
    resolve every supplied recipe through the existing read-only ledger; liked/vetoed comparisons
-   also require matching source, time/window, coverage and entry convention. It resolves
+   also require matching source, time/window, coverage and entry convention. Forward rows must
+   name that adapter's declared entry variant, and normalized rows retain Packet 1 entry rule and
+   version. It resolves
    family-lifetime looks through the existing read-only ledger,
    freezes declarations without registering them, and never names a winner below floors or while
    a trial is immature. It creates no grid, store write, detector, score, alert, ranking or trial.
