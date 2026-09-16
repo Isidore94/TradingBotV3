@@ -156,6 +156,22 @@ VIEW_ORDER: tuple[str, ...] = (
 #: while a worker runs reads as a broken page.
 LOADING_NOTE = "Reading the session from the stores… (0 rows so far, 0 pending)"
 
+#: Packet WS-RP: the FIFTH tab, added after the four views rather than swapped
+#: in for one of them. It shows the session's published measured report - the
+#: same cells, the same `report_id`, as the export carries.
+REVIEW_TAB_TITLE = "Review"
+
+#: What the local-AI review area says when nothing has been narrated for this
+#: report id. This packet adds NO model call: it reads what the narration stage
+#: left beside the report, and says so plainly when there is nothing.
+NO_REVIEW_YET = "no review yet"
+
+#: The Review tab's columns. `Cell` is the id the narration cites, the export
+#: carries and this page prints - so it leads.
+REVIEW_COLUMNS = (
+    "Cell", "Value", "Unit", "State", "n", "Population", "Window", "Why not",
+)
+
 
 class _RecapReadWorker(QThread):
     """One session read, off the GUI thread (ground rule 9).
@@ -167,6 +183,10 @@ class _RecapReadWorker(QThread):
 
     loaded = Signal(object)
     failed = Signal(str)
+    #: (report, narration) - packet WS-RP. The Review tab's payload is READ off
+    #: the published files on this same worker; it is never rebuilt on the Qt
+    #: thread and the page never computes a number of its own.
+    reportLoaded = Signal(object, object)
 
     def __init__(self, session_date: str, lookback_sessions: int, parent=None) -> None:
         super().__init__(parent)
@@ -184,6 +204,28 @@ class _RecapReadWorker(QThread):
             self.failed.emit(str(exc))
             return
         self.loaded.emit(session)
+        self._emit_report()
+
+    def _emit_report(self) -> None:  # pragma: no cover - same signal seam
+        """The published measured report for this session, or nothing at all.
+
+        An absent report is not a failure: the first overnight run after this
+        lands is what writes one, and the tab says so.
+        """
+        try:
+            import measured_report
+            from ai_jobs import digest, measured_report_publish
+
+            root = digest._default_root()
+            payload = measured_report_publish.latest_published(root, self._session)
+            if not payload:
+                self.reportLoaded.emit(None, None)
+                return
+            report = measured_report.report_from_payload(payload)
+            narration = measured_report_publish.narration_for(root, report.report_id)
+            self.reportLoaded.emit(report, narration or None)
+        except Exception as exc:  # noqa: BLE001 - never costs the four views
+            self.reportLoaded.emit(None, str(exc))
 
 
 class DailyRecapPanel(QFrame):
@@ -259,6 +301,10 @@ class DailyRecapPanel(QFrame):
         self._sorts: dict[str, QComboBox] = {}
         for name in VIEW_ORDER:
             self.tabs.addTab(self._build_view(name), VIEW_COLUMNS[name][0])
+        # WS-RP: the fifth tab, after the four views.
+        self._report: Any = None
+        self._handoff: Any = None
+        self.tabs.addTab(self._build_review_tab(), REVIEW_TAB_TITLE)
 
         # Named attributes as well as the map, because a page is read by name.
         self.worked_today_table = self._tables["worked_today"]
@@ -342,6 +388,58 @@ class DailyRecapPanel(QFrame):
         self._tables[name] = table
         self._notes[name] = note
         self._sorts[name] = sort_picker
+        return page
+
+    def _build_review_tab(self) -> QWidget:
+        """The measured report, printed. It computes nothing and writes nothing.
+
+        The numbers come off the PUBLISHED file through the recap's own worker,
+        so this tab and the export cannot disagree: they are the same cells and
+        the same `report_id`, which is printed here in full for exactly that
+        reason.
+        """
+        page = QWidget()
+        self.report_id_label = QLabel("no measured report has been published yet")
+        self.report_id_label.setObjectName("SectionSubtitle")
+        self.report_id_label.setWordWrap(True)
+        self.report_id_label.setMaximumHeight(theme.px(44))
+
+        self.review_table = QTableWidget(0, len(REVIEW_COLUMNS))
+        self.review_table.setHorizontalHeaderLabels(list(REVIEW_COLUMNS))
+        self.review_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.review_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.review_table.setMinimumHeight(theme.px(160))
+
+        self.review_note = QLabel(NO_REVIEW_YET)
+        self.review_note.setObjectName("SectionSubtitle")
+        self.review_note.setWordWrap(True)
+
+        self.copy_handoff_button = QPushButton("Copy handoff")
+        self.copy_handoff_button.clicked.connect(self.copy_handoff)
+        self.export_handoff_button = QPushButton("Export handoff…")
+        self.export_handoff_button.clicked.connect(self._export_handoff_clicked)
+        self.handoff_note = QLabel(
+            "The handoff is YOUR click: it writes three files (a capped "
+            "readable brief, the full JSON payload and a manifest) or puts the "
+            "brief on the clipboard. Nothing is uploaded and no model is called."
+        )
+        self.handoff_note.setObjectName("SectionSubtitle")
+        self.handoff_note.setWordWrap(True)
+        self.handoff_note.setMaximumHeight(theme.px(48))
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.copy_handoff_button)
+        buttons.addWidget(self.export_handoff_button)
+        buttons.addStretch(1)
+
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.report_id_label)
+        layout.addWidget(self.review_table, 1)
+        layout.addWidget(QLabel("Local review of this report"))
+        layout.addWidget(self.review_note)
+        layout.addLayout(buttons)
+        layout.addWidget(self.handoff_note)
         return page
 
     def _fill_session_picker(self, select: str | None = None) -> None:
@@ -497,7 +595,23 @@ class DailyRecapPanel(QFrame):
         self._worker = _RecapReadWorker(self.session_date(), self.lookback_sessions(), self)
         self._worker.loaded.connect(self.render_session)
         self._worker.failed.connect(self._render_failure)
+        self._worker.reportLoaded.connect(self._on_report_loaded)
         self._worker.start()
+
+    def _on_report_loaded(self, report: Any, narration: Any) -> None:
+        """The worker's measured report. An absent one is a sentence, not a hole."""
+        if report is None:
+            self._report = None
+            self._handoff = None
+            self.review_table.setRowCount(0)
+            self.report_id_label.setText(
+                "no measured report has been published for this session yet - "
+                "the overnight run writes one"
+                + (f" ({narration})" if narration else "")
+            )
+            self.review_note.setText(NO_REVIEW_YET)
+            return
+        self.render_report(report, narration=narration)
 
     def _render_failure(self, reason: str) -> None:
         self.status.setText(f"the session could not be read: {reason}")
@@ -525,6 +639,104 @@ class DailyRecapPanel(QFrame):
             f"Daily Recap: {getattr(session, 'session_date', '')} read from "
             f"{len(getattr(session, 'coverage', {}) or {})} stores"
         )
+
+    # -- the Review tab (WS-RP) -------------------------------------------
+    def render_report(self, report: Any, narration: Any = None) -> None:
+        """Draw one `MeasuredReport`. Formatting only - it computes nothing."""
+        self._report = report
+        self._handoff = None
+        cells = tuple(report.cells())
+        self.report_id_label.setText(
+            f"report_id {report.report_id} · as of {report.as_of} · "
+            f"{len(cells)} cells · the export carries this same id"
+        )
+        self.review_table.setRowCount(len(cells))
+        for index, cell in enumerate(cells):
+            value = cell.value
+            values = (
+                cell.cell_id,
+                UNMEASURED if value is None else str(value),
+                cell.unit,
+                cell.state,
+                str(cell.n),
+                cell.population,
+                f"{cell.window[0]}..{cell.window[1]}" if cell.window else "",
+                cell.unavailable,
+            )
+            for column, text in enumerate(values):
+                item = QTableWidgetItem(str(text))
+                if cell.unavailable:
+                    item.setToolTip(cell.unavailable)
+                self.review_table.setItem(index, column, item)
+        apply_width_rule_to_table_widget(self.review_table, text_columns=(5, 7))
+        text = str(narration or "").strip()
+        self.review_note.setText(text or NO_REVIEW_YET)
+
+    def review_cells(self) -> tuple[tuple[str, Any], ...]:
+        """`(cell_id, value)` for every row SHOWN, in the order shown.
+
+        The parity seam: what this tab shows and what the export carries are
+        the same cells read off the same report, and this is how a test proves
+        the two can never drift.
+        """
+        out: list[tuple[str, Any]] = []
+        for index in range(self.review_table.rowCount()):
+            item = self.review_table.item(index, 0)
+            if item is None or self._report is None:
+                continue
+            cell = self._report.cell(item.text())
+            out.append((cell.cell_id, cell.value))
+        return tuple(out)
+
+    def _build_handoff(self) -> Any:
+        if self._report is None:
+            return None
+        if self._handoff is None:
+            import measured_report
+
+            self._handoff = measured_report.build_handoff(self._report)
+        return self._handoff
+
+    def copy_handoff(self) -> str:
+        """The brief on the clipboard. Nothing on disk, nothing on the wire."""
+        handoff = self._build_handoff()
+        if handoff is None:
+            self.status.setText("there is no measured report to hand off yet")
+            return ""
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.clipboard().setText(handoff.markdown)
+        self.status.setText(
+            f"copied the brief for report {handoff.report_id} "
+            f"({handoff.manifest['markdown_bytes']} bytes, "
+            f"~{handoff.manifest['markdown_tokens_estimated']} estimated tokens)"
+        )
+        self.statusChanged.emit(self.status.text())
+        return handoff.markdown
+
+    def export_handoff(self, directory: Any) -> dict[str, str]:
+        """Three files under `directory`: the brief, the payload, the manifest."""
+        handoff = self._build_handoff()
+        if handoff is None:
+            self.status.setText("there is no measured report to hand off yet")
+            return {}
+        written = handoff.write(directory)
+        self.status.setText(
+            f"exported the handoff for report {handoff.report_id} to {directory}"
+        )
+        self.statusChanged.emit(self.status.text())
+        return written
+
+    def _export_handoff_clicked(self) -> None:
+        """Ask where, then write. A dialog, because an export is a decision."""
+        from PySide6.QtWidgets import QFileDialog
+
+        directory = QFileDialog.getExistingDirectory(self, "Export the handoff to…")
+        if not directory:
+            return
+        self.export_handoff(directory)
 
     def _sync_sort_picker(self, name: str, view: Any) -> None:
         picker = self._sorts[name]
@@ -745,6 +957,9 @@ __all__ = [
     "AUTO_POLL_INTERVAL_MS",
     "DailyRecapPanel",
     "LOOKBACK_CHOICES",
+    "NO_REVIEW_YET",
+    "REVIEW_COLUMNS",
+    "REVIEW_TAB_TITLE",
     "VIEW_COLUMNS",
     "VIEW_ORDER",
 ]

@@ -499,6 +499,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         enrichment,
         evidence_report,
         journal_auto_tag,
+        measured_report_publish,
         note_vocabulary_audit,
         policy_draft,
         setup_research,
@@ -703,6 +704,27 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Weekly, monthly and quarterly Market Journal story packs "
                 "(deterministic, no model; rebuilt only when an input changed)"
+            ),
+            max_attempts=3,
+        ),
+        # Packet WS-RP (2026-09-13), APPENDED after `market_story_rollups` and
+        # it now CLOSES the deterministic stage. It reads the day's own
+        # evidence stores - the journal money, the intraday outcomes, the
+        # session-horizon file and the warehouse - and publishes ONE measured
+        # report plus its markdown sibling. Everything it reads is written by a
+        # slot above it, so it belongs last inside the stage; it calls no model
+        # and nothing below it reads its output, so it stays ahead of
+        # `ai_summary` rather than joining the narration stage.
+        #
+        # Deterministic, seconds of work, and a failure never fails the night -
+        # hence `journal_import`'s attempt budget rather than the briefs'.
+        JobSlot(
+            name="measured_report",
+            run=measured_report_publish.run_measured_report,
+            reserve_minutes=5.0,
+            description=(
+                "One measured report for the session - the five WISHLIST 10K "
+                "answers with their populations (deterministic, no model)"
             ),
             max_attempts=3,
         ),

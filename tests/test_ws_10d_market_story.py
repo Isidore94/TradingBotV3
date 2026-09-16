@@ -943,18 +943,20 @@ def test_a_second_run_over_unchanged_inputs_rebuilds_nothing_and_a_changed_day_r
     assert pack["inputs_hash"], "a cache key that is empty caches nothing"
 
 
-def test_the_rollup_slot_closes_the_deterministic_stage():
+def test_the_measured_report_slot_closes_the_deterministic_stage():
     """Decision 0018: a later phase APPENDS inside its stage and never reorders.
 
-    `market_story_rollups` is the LAST deterministic slot - after `daily_digest` and
-    after `theta_pick_grading`, directly ahead of `ai_summary`. It is deterministic, so
-    it keeps `journal_import`'s attempt budget rather than the briefs'.
+    `market_story_rollups` remains after `daily_digest` and `theta_pick_grading`; WS-RP
+    appends `measured_report` immediately after it, directly ahead of `ai_summary`.
+    Both are deterministic and retain `journal_import`'s attempt budget rather than the
+    briefs'.
     """
     from ai_jobs import runner
 
     names = tuple(slot.name for slot in runner.default_slots())
     assert "market_story_rollups" in names, names
-    assert names[names.index("ai_summary") - 1] == "market_story_rollups", names
+    assert names[names.index("ai_summary") - 1] == "measured_report", names
+    assert names[names.index("measured_report") - 1] == "market_story_rollups", names
     assert names.index("market_story_rollups") > names.index("daily_digest")
     assert names.index("market_story_rollups") > names.index("theta_pick_grading")
 

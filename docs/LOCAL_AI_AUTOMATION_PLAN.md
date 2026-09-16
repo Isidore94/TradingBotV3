@@ -2257,3 +2257,25 @@ nothing in this chain reaches a detector, score, alert, watchlist, Focus, the re
 or `review_policy.json`. The long form - the three joins that would have been wrong, the
 table of certainties and the day-trade vocabulary trap - is `docs/DESK_INTERNALS.md`
 "10I - two contexts per row, three verdicts per thesis".
+
+## 12 One shared measured report (WISHLIST 10K steps 2 + 5, WS-RP)
+
+`measured_report_v1` is a pure, six-section report with one stable `report_id` and `as_of`
+session. Its five separate answers are broker-net total profit once per trade; side-adjusted
+opportunity with adverse movement beside it; first-target speed in trading minutes; the named
+EOD mark; and separately controlled observation/follow-through exchange sessions. Every cell
+carries its population, window, source paths, clock, exit policy, version and an honest
+`measured` / `pending` / `unknown` state. Missing risk leaves R unknown; a close-time entry has
+no same-session EOD measure; unavailable warehouse evidence does not block the report.
+
+The final deterministic `measured_report` slot publishes atomic JSON and Markdown siblings
+under the digest root, adds their identity to `entry_index.json`, and writes a new version only
+when the measured cells change. A sibling failure removes the new JSON half, so a rerun repairs
+the pair without mistaking it for a verified version. An all-open warehouse cohort is `pending`,
+not `unknown`; an unreachable warehouse remains `unknown`. Its failure does not fail the night. The fifth Daily Recap tab
+reads the published report on its worker and may show an existing narration for that report id,
+but this feature makes no model call. Copy is clipboard-only; Export is trader-initiated and
+writes the brief, full payload and manifest. The brief is capped at 32 KiB UTF-8 and the
+manifest uses `ai_summary._ESTIMATED_CHARS_PER_TOKEN` (2.5) for its stated token estimate.
+There is no upload or frontier call. Result-selected example tables say so and show their full
+denominator; N3 narration selection remains n-descending.

@@ -5841,3 +5841,20 @@ is the same "not today" in the trader's hand; the hide is per symbol; a claimed 
 **Reopen trigger.** The trader asks for the hidden rows to be REMOVED from the report, for the
 walk to follow the Points order instead of the visible order, or for the M5 alert bar to
 cycle the same way. Gate #124.
+
+## RP - one report id, two views (2026-09-15, WISHLIST 10K)
+
+The measured report is a reader, not a decision maker. `scripts/measured_report.py` computes
+the five answers from existing evidence and assigns one id from the stable cells plus `as_of`;
+a wall-clock tick cannot make a new report, but a matured cell must. Its published JSON and
+Markdown are version siblings: identical evidence leaves the last verified files alone, and
+changed evidence writes `_v2` beside `_v1`. A failed publish never costs the nightly digest.
+
+Daily Recap's Review tab does not rebuild numbers on the Qt thread. Its worker reads the
+published report, prints the same id and cells, and may read a narration already associated
+with that id; absence is `no review yet`, never a model request. Copy is clipboard-only.
+Export is the trader's click and writes the brief, payload and manifest to their selected
+folder. No route uploads, opens a socket, reaches a detector, score, alert, watchlist, Focus,
+review queue, `review_policy.json` or a live store. The brief declares every omission, stays
+under 32 KiB UTF-8, and reports its token estimate using the desk's existing 2.5
+characters-per-token convention. N3's n-descending narration selection is untouched.
