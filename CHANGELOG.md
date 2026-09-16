@@ -38,7 +38,7 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
-- **Phase 0.32 Packet 3 next-test proposal (2026-09-16, unmerged).**
+- **Phase 0.32 Packet 3 next-test proposal (2026-09-16, merged).**
   `scripts/research_proposal.py` is a validated advisory-only proposal/memo seam: source report
   id/hash and every cited cell must match code facts; unsafe fields/actions, unknown cells/recipes,
   invented numbers and observed-looking proposed thresholds refuse. Immutable history and the
@@ -54,7 +54,7 @@ They are evidence and must not be loaded as context.
   No proposal registers/runs/amends a trial or touches a
   detector, score, alert, ranking, watchlist, Focus, journal, policy or live store. Gates #142-143 owed.
 
-- **Phase 0.32 Packet 1 forward entry quality (2026-09-15, unmerged).**
+- **Phase 0.32 Packet 1 forward entry quality (2026-09-15, merged 2026-09-16).**
   `scripts/entry_quality.py` adds `entry_quality_forward_v1`, a pure research-only view over
   caller-supplied completed M5/D1 bars. It measures named fixed elapsed/session endpoints with
   coverage and explicit unavailable/pending/partial/no-trigger/invalid/missing states; retains
@@ -64,7 +64,7 @@ They are evidence and must not be loaded as context.
   policy effect, and `outcome_path` is unchanged. Packet 2 connects only bounded research-reader
   denominators; Packet 3 will publish grounded next-test facts. Live gate #140 is owed.
 
-- **Phase 0.32 Packet 2 fair entry comparison (2026-09-15, unmerged).**
+- **Phase 0.32 Packet 2 fair entry comparison (2026-09-15, merged 2026-09-16).**
   `scripts/entry_comparison.py` is a pure reader over supplied Packet 1 measures and the existing
   read-only trial ledger. It normalizes P8's four declared entry variants and existing M5
   occurrences without multiplying exit recipes, retains no-trigger/missing attempts and full

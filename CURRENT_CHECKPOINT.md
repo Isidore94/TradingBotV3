@@ -20,14 +20,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-16: Phase 0.32 Packets 1-3 are built, unmerged.** Packet 3 adds only validated proposal/memo publication and a Review card over the report. |
-| Working branch | **`codex/sol-p3-research-proposal`**, carrying the tester's red contracts plus Packet 3; the shared desk checkout remains on `main` and was not restarted. |
-| Unmerged / open | Phase 0.32 Packets 1-3 await review/integration; copied-data gates #140-#143 are owed. H4/LRSI and older recorded gates remain open. |
-| Next action | **Review Packets 1-3 in order, then run the copied-data and one optional local-model gates without changing any live rule.** Restart only after integration and trader direction. |
+| Latest work | **2026-09-16: Phase 0.32 Packets 1-3 were independently accepted and merged to `main`.** Packet 3 adds only validated proposal/memo publication and a Review card over the report. |
+| Working branch | **`main` at the reviewed Phase 0.32 tip plus this status reconciliation.** The desk stayed stopped and no live store was touched. |
+| Unmerged / open | No Phase 0.32 code is unmerged; copied-data and optional local-model gates #140-#143 are owed. H4/LRSI and older recorded gates remain open. |
+| Next action | **Run copied-data gates #140-#142, then optional local-model gate #143 without changing any live rule.** Restart only on trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
-| Last verified baseline | **Phase 0.31 full strict pass: 8,449 passed, 6 skipped, 72 subtests; compileall, ruff and smoke 7/7 clean.** Thread warnings were errors; the two later packaging guards pass 19/19. |
-| Frozen exe | **Rebuilt and verified 2026-09-15: source 86/86 and frozen 86/86.** The Mentor's newly reachable AI module is bundled narrowly; build-time PySide6 and foreign-DLL guards are pinned. The production desk still runs from SOURCE. |
-| Desk | **The shared checkout is on `main` with Phase 0.31 loaded.** It was stopped during integration; no agent restarted it or wrote a live store. |
+| Last verified baseline | **Phase 0.32 review GO at `47abfdd0`: 28 Packet 3 and 142 compatibility tests passed; ruff, compileall, smoke 7/7 and source selftest 87/87 were clean.** The last full strict baseline remains Phase 0.31: 8,449 passed, 6 skipped, 72 subtests; the nightly writer lock prevented a valid full rerun. |
+| Frozen exe | **Last rebuilt 2026-09-15: source 86/86 and frozen 86/86.** Phase 0.32 adds one lazy module to the spec and source selftest is now 87/87; no frozen rebuild was run. The production desk still runs from SOURCE. |
+| Desk | **The shared checkout is on `main` with Phase 0.32 merged.** It stayed stopped; no agent restarted it or wrote a live store. |
 
 ### Open gates, newest first
 
@@ -182,7 +182,7 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
 
-### 2026-09-16 — Phase 0.32 Packet 3 BUILT on `codex/sol-p3-research-proposal`; review and live/local-model gates owed
+### 2026-09-16 — Phase 0.32 Packets 1-3 BUILT, REVIEWED GO AND MERGED TO MAIN; gates #140-#143 owed
 
 Packet 3 adds the additive `research_proposal` validator/publication seam only. It rejects an
 unknown report/cell/recipe, fabricated observed number, infeasible window, unsafe action or text
@@ -199,10 +199,10 @@ block and hash; Daily Recap > Review reads its matching proposal on the worker, 
 test card with report id/hash and copies an in-memory complete test brief. No trial
 registration/execution, live rule, store, detector, score, alert, ranking, Focus, watchlist,
 journal or policy changes. Reviewer inspection reproduced nine new red failures against
-`e35e9fc9`; all are now covered by `tests/test_sol_research_proposal.py`; targeted
-compatibility/packaging run 194 passed. The existing
-`test_ai_jobs_runner.py` historical-date baseline is red in this
-worktree (28 failures before slot execution; `session_date=''`), unrelated to Packet 3. Gates
+`e35e9fc9`; all are now covered by `tests/test_sol_research_proposal.py`. Independent review at
+`47abfdd0` returned GO: 28 Packet 3 and 142 compatibility checks passed; ruff, compileall,
+smoke 7/7 and source selftest 87/87 were clean. The nightly AI writer lock prevented a valid full
+suite rerun; two unchanged Q4 runner tests remained red outside this diff. Gates
 #142 (copied deterministic progress) and #143 (one configured local-model proposal with measured
 latency/tokens/memory) remain owed. Packaging trigger: new lazily imported top-level module;
 the frozen spec/selftest now name it. No frozen rebuild was run.
