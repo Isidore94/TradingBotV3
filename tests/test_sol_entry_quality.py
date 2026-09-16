@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -316,3 +316,102 @@ def test_reconstructed_knowledge_is_labelled_and_cannot_confirm_a_prospective_cl
     assert result["prospective_eligible"] is False
     assert _m5(result, 15)["confirmation_valid"] is False
     assert _m5(result, 15)["confirmation_reason"] == "reconstructed_knowledge_cannot_confirm_prospective_claim"
+
+
+def test_off_grid_entry_counts_every_completed_m5_bar_through_the_session_close():
+    """09:32 to 16:00 has 78 bar ends, even though it is 388 elapsed minutes."""
+    import entry_quality
+
+    first_end = _moment("2026-03-09", "09:35:00")
+    bars = [
+        {
+            "time": (first_end + timedelta(minutes=5 * index)).isoformat(),
+            "high": 101.0,
+            "low": 99.5,
+            "close": 100.0,
+        }
+        for index in range(78)
+    ]
+    result = entry_quality.measure_m5_forward(
+        _entry(
+            trigger_knowledge_time="2026-03-09T09:32:00-04:00",
+            feasible_entry_time="2026-03-09T09:32:00-04:00",
+        ),
+        bars,
+        as_of=_moment("2026-03-09", "16:30:00"),
+    )
+
+    assert _close(result)["state"] == "complete"
+    assert _close(result)["coverage"] == {
+        "expected_bars": 78,
+        "observed_bars": 78,
+        "missing_bars": 0,
+    }
+
+
+def test_knowledge_inside_a_completed_bar_excludes_that_bars_earlier_wick():
+    """A 10:02 decision cannot receive a high reached during the 10:00–10:05 bar."""
+    import entry_quality
+
+    result = entry_quality.measure_m5_forward(
+        _entry(
+            trigger_knowledge_time="2026-03-09T10:02:00-04:00",
+            feasible_entry_time="2026-03-09T10:02:00-04:00",
+        ),
+        [
+            _bar("2026-03-09", "10:05:00", 109.0, 99.0, 101.0),
+            _bar("2026-03-09", "10:10:00", 102.0, 99.0, 101.0),
+            _bar("2026-03-09", "10:15:00", 102.0, 100.0, 101.0),
+        ],
+        as_of=_moment("2026-03-09", "16:30:00"),
+    )
+
+    assert _m5(result, 15)["mfe_pct"] == pytest.approx(2.0)
+    assert _m5(result, 15)["bars_excluded_before_knowledge"] == 1
+
+
+def test_non_session_daily_bars_cannot_inflate_or_complete_swing_coverage():
+    """Weekend and holiday rows are bad source data, not extra exchange sessions."""
+    import entry_quality
+
+    normal_sessions = (
+        "2026-01-06",
+        "2026-01-07",
+        "2026-01-08",
+        "2026-01-09",
+        "2026-01-12",
+        "2026-01-13",
+        "2026-01-14",
+        "2026-01-15",
+        "2026-01-16",
+        "2026-01-20",
+    )
+    daily = [
+        {"date": day, "high": 110.0, "low": 99.0, "close": 105.0}
+        for day in normal_sessions
+    ]
+    daily.extend(
+        [
+            {"date": "2026-01-10", "high": 900.0, "low": 99.0, "close": 800.0},
+            {"date": "2026-01-19", "high": 999.0, "low": 99.0, "close": 900.0},
+        ]
+    )
+    result = entry_quality.measure_swing_forward(
+        _entry(
+            opportunity_id="opp|D1|ACME|2026-01-05",
+            attempt_id="attempt|opp|D1|ACME|base_entry_v1",
+            trigger_knowledge_time="2026-01-05T16:00:00-05:00",
+            feasible_entry_time="2026-01-05T16:00:00-05:00",
+        ),
+        daily,
+        last_completed_session=date(2026, 1, 20),
+    )
+
+    ten = result["windows"]["10_session"]
+    assert ten["state"] == "complete"
+    assert ten["coverage"] == {
+        "expected_sessions": 10,
+        "observed_sessions": 10,
+        "missing_sessions": 0,
+    }
+    assert ten["mfe_pct"] == pytest.approx(10.0)
