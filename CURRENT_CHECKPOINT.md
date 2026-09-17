@@ -20,10 +20,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-16: Phase 0.32 Packets 1-3 are built, independently accepted and merged to `main`.** Fixed-window warehouse rows feed one fair comparison, one validated proposal/memo and the shared Review/Tracker display. |
+| Latest work | **2026-09-16: Phase 0.32 is merged and its plain-language trader test guide is ready.** Fixed-window warehouse rows feed one fair comparison, one validated proposal/memo and the shared Review/Tracker display. |
 | Working branch | **`main` carries the accepted feature and final guard-list repair.** Integration and verification ran in the scratch worktree; the desk was not restarted. |
 | Unmerged / open | No Phase 0.32 code is unmerged; copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
-| Next action | **Run copied-data gates #140-#142 and, when wanted, local-model gate #143.** Restart only on trader direction. |
+| Next action | **Trader: use `docs/PHASE_032_TRADER_TEST_GUIDE.md` after restart. Lead: run copied-data gates #140-#142 and, when wanted, local-model gate #143.** Restart only on trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
 | Last verified baseline | **Phase 0.32 strict full pass: 8,523 passed, 6 skipped, 72 subtests; ruff and smoke 7/7 are clean.** The nightly writer lock was free before the run. |
 | Frozen exe | **Rebuilt and verified 2026-09-16: source 87/87 and frozen 87/87.** The frozen result carries the required `(frozen)` stamp. The production desk still runs from SOURCE and was not restarted. |

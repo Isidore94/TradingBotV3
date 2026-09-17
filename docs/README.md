@@ -1,7 +1,7 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-09-12** (WISHLIST 11: `MEMORY.md` and `memory/` added as workspace
-memory; before that 2026-09-07, ST7: decision 0019 added; `CHANGELOG.md`'s 2026-09-03 to
+Last reconciled: **2026-09-16** (Phase 0.32 plain-language trader test guide added;
+before that 2026-09-12, WISHLIST 11 added `MEMORY.md` and `memory/`; `CHANGELOG.md`'s 2026-09-03 to
 2026-09-05 entries moved to `archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`).
 
 One line per file. Status and decisions live in the root control set, never here; if a
@@ -26,6 +26,7 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 |---|---|
 | [`AGENT_TEAM.md`](AGENT_TEAM.md) | Claude and Codex delegation; Astra leads Luna/Terra through `.codex/agents/`, with repo defaults in `.codex/config.toml` |
 | [`FIRST_SESSION_CHECKLIST.md`](FIRST_SESSION_CHECKLIST.md) | Live-session validation for a new build |
+| [`PHASE_032_TRADER_TEST_GUIDE.md`](PHASE_032_TRADER_TEST_GUIDE.md) | Plain-language screen checks for Phase 0.32 Entry quality and Next test |
 | [`DESK_TESTING_PLAN.md`](DESK_TESTING_PLAN.md) | Trader's step-by-step testing sequence; shipped in the exe, rendered at Settings ▸ Testing Plan |
 | [`AWAY_SCANNER_RUNBOOK.md`](AWAY_SCANNER_RUNBOOK.md) | Auto/Away operation and report recovery |
 | [`EVENING_MODE_RUNBOOK.md`](EVENING_MODE_RUNBOOK.md) | EVENING mode and ntfy phone setup |

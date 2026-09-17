@@ -500,6 +500,9 @@ watchlist, Focus, review policy, journal, live setting, live backfill, desk rest
 registration change. Sections 5-7 remain binding; any new trial still uses the existing
 explicit trader-authorized ledger path.
 
+The trader's plain-language screen checks are in
+[`docs/PHASE_032_TRADER_TEST_GUIDE.md`](docs/PHASE_032_TRADER_TEST_GUIDE.md).
+
 1. **Packet 1 — forward movement (BUILT, independently accepted and merged):**
    `scripts/entry_quality.py` is a pure, versioned view over caller-supplied completed bars.
    M5 measures 5/15/30/60/120/180 elapsed trading minutes and the same session's close;
