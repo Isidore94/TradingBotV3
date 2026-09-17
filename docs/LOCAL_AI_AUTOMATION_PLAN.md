@@ -658,6 +658,16 @@ That redesign has **not been done**. Concretely, for the next agent:
 >    the pass writes only `ai_trade_enrichment`, and
 >    `scripts/journal_bulk_tag.py` remains the one machine writer of a real tag.
 >
+> **Repair 2026-09-17 — one local grammar fallback, never a weaker contract.**
+> The configured backend rejects this enrichment schema while compiling its grammar
+> only when `summary.maxLength` is exactly 2,000. Keep that ceiling and send the full
+> closed schema first. Only an HTTP 400 that explicitly says grammar parsing or
+> initialization failed earns exactly one retry with `response_format` set to
+> `{"type": "json_object"}`; any other HTTP failure still fails after one request.
+> The returned object is validated against the original five-field closed schema, and
+> `validate_structured_output` enforces declared string `maxLength`, so the fallback
+> cannot accept a longer summary or a partial answer.
+>
 > The reader is `ui/services/journal_feed.latest_ai_enrichment` (newest row that
 > nothing supersedes) rendered by `TradesTab._show_trade` on the existing detail
 > read path, marked advisory. An `abstained` or `failed` row is SHOWN, not

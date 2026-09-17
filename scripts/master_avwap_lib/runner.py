@@ -16,7 +16,20 @@ from master_avwap_shared import build_active_bounce_summary, load_master_avwap_e
 # Packet WS-TH (2026-09-12). The theta picks the scan just printed, recorded as
 # shadow evidence in the scan's own output pass - never from `legacy.py`'s
 # tracker save (lead ruling (c)). A failed append loses the row, never the scan.
-from theta_pick_tracker import record_theta_picks
+
+
+def record_theta_picks(*args, **kwargs):
+    """Resolve the shadow recorder after package initialization.
+
+    ``theta_pick_tracker`` imports a focused ``master_avwap_lib`` module, whose
+    compatibility package loads ``legacy`` and then this runner.  Importing the
+    recorder above would therefore request it from a partially initialized
+    tracker.  Keeping this module-level forwarding seam also preserves the
+    scan tests' and callers' ``runner.record_theta_picks`` monkeypatch point.
+    """
+    from theta_pick_tracker import record_theta_picks as _record_theta_picks
+
+    return _record_theta_picks(*args, **kwargs)
 
 # Scanner orchestration is extracted while helper functions continue to migrate.
 globals().update(

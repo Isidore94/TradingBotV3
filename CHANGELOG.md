@@ -38,6 +38,16 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Overnight AI repair (2026-09-17, pending integration).**
+  `master_avwap_lib.runner.record_theta_picks` is a module-level lazy forwarding
+  seam, so a cold `theta_pick_tracker` import cannot cycle through the compatibility
+  package while scan callers can still monkeypatch the recorder. The local provider
+  keeps its full closed schema and retries exactly once with `json_object` only for
+  an explicit HTTP 400 grammar parse/initialization failure; all returned text is
+  still validated against the original contract, including `maxLength`. No theta
+  score, recorder identity, stage order, output identity, evidence semantics, journal
+  selection, timeout, or live store changes. Gate #144 is owed.
+
 - **Phase 0.32 Packet 3 next-test proposal (2026-09-16, merged).**
   `scripts/research_proposal.py` is a validated advisory-only proposal/memo seam: source report
   id/hash and every cited cell must match code facts; unsafe fields/actions, unknown cells/recipes,
@@ -2716,6 +2726,19 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-17 — Overnight AI cold-start and local-schema repair (pending integration)
+
+The `theta_pick_tracker` cold import previously reached `runner.py` while its recorder
+was partially initialized. The runner now resolves that recorder only when the scan calls
+it, retaining the module-level monkeypatch seam. A configured local backend also rejected
+the enrichment schema only when `summary.maxLength` was exactly 2,000. The shared provider
+now makes one `json_object` retry solely for an explicit HTTP 400 grammar parsing or
+initialization failure, then validates the same original closed enrichment contract locally;
+the small structural validator now enforces string `maxLength`. Other HTTP failures do not
+retry. The committed tester regressions failed 4/5 on the pre-fix code and pass 5/5 after it.
+No score, journal selection, timeout, live store, desk process, or model change. Gate #144
+is the next scan and overnight observation after integration.
 
 ### 2026-09-15 (night) - Phase 0.31 remaining WISHLIST integration
 

@@ -549,6 +549,12 @@ def validate_structured_output(
         if expected == "string":
             if not isinstance(value, str):
                 raise ValueError(f"{name}.{key} must be a string")
+            max_length = spec.get("maxLength")
+            if isinstance(max_length, int) and not isinstance(max_length, bool):
+                if len(value) > max_length:
+                    raise ValueError(
+                        f"{name}.{key} must be at most {max_length} characters"
+                    )
             allowed = spec.get("enum")
             if allowed is not None and value not in allowed:
                 raise ValueError(f"{name}.{key}={value!r} is outside {sorted(allowed)}")
@@ -3697,6 +3703,7 @@ def _request_local_summary(
         },
     }
     last_error: Exception | None = None
+    grammar_fallback_used = False
     #: Whether the ONE shorter-output retry has already been spent, and how many
     #: answers were cut. Kept apart from `attempt` because a length stop and a
     #: validation rejection are different failures that share the same budget.
@@ -3731,6 +3738,18 @@ def _request_local_summary(
         status_code = int(getattr(response, "status_code", 0) or 0)
         if status_code >= 400:
             detail = str(getattr(response, "text", "") or body)[:1000]
+            grammar_failure = (
+                status_code == 400
+                and "grammar" in detail.lower()
+                and ("parse" in detail.lower() or "initializ" in detail.lower())
+            )
+            if grammar_failure and not grammar_fallback_used:
+                # The local backend rejects this contract only while compiling
+                # its grammar.  Its JSON-object mode still lets the shared
+                # validator enforce the original closed contract below.
+                payload = {**payload, "response_format": {"type": "json_object"}}
+                grammar_fallback_used = True
+                continue
             raise RuntimeError(f"local request failed ({status_code}): {detail}")
         # Checked before the text is parsed, and raised rather than retried: a
         # retry re-sends the same evidence plus MORE text (the rejection note),

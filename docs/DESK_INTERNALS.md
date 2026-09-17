@@ -1273,6 +1273,24 @@ therefore **unobserved live** and is covered by test only.
 
 ---
 
+## Overnight AI repair - import seams and grammar fallback (2026-09-17)
+
+`theta_pick_tracker` imports a focused `master_avwap_lib` module, whose compatibility
+package loads `legacy` and then `runner`. A top-level runner import of the tracker recorder
+therefore requested `record_theta_picks` from a partially initialized module. The runner now
+has a module-level lazy forwarding function: the scan resolves the real recorder only when it
+writes its existing shadow evidence, while callers retain the `runner.record_theta_picks`
+monkeypatch seam. No theta score, row identity, recorder timing, stage order, or evidence
+semantics changed.
+
+The local backend has a second narrow compatibility defect: it rejects the full enrichment
+schema only while compiling grammar when `summary.maxLength` is exactly 2,000. The first
+request retains that full contract. Only an explicit HTTP 400 grammar parse/initialization
+message earns one `json_object` fallback; the returned object is still checked against the
+original closed schema, including the 2,000-character limit. Other HTTP failures never retry.
+The repair changes neither model nor timeout, never changes journal trade selection, and leaves
+prior artifacts intact on a failure.
+
 ## M1 - a shadow that measured nothing for ten days (2026-09-05)
 
 The long form behind the CLAUDE.md rule *"The AVWAP band challenger is measured through
