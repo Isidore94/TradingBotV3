@@ -2740,7 +2740,8 @@ retry. The committed tester regressions failed 4/5 on the pre-fix code and pass 
 No score, journal selection, timeout, live store, desk process, or model change. Independent
 review returned GO after the packet recorded the trader's exact authorization for the narrow
 shadow-recorder seam. The branch fast-forwarded to `main` at `4fbe5f6e`; gate #144 is the next
-scan and overnight observation.
+scan and overnight observation. Final integration verification passed 8,528 tests with 6 skips
+and 72 subtests, ruff, smoke 7/7 and source selftest 87/87 with the nightly lock free.
 
 ### 2026-09-15 (night) - Phase 0.31 remaining WISHLIST integration
 
