@@ -38,7 +38,7 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
-- **Overnight AI repair (2026-09-17, pending integration).**
+- **Overnight AI repair (2026-09-17, merged).**
   `master_avwap_lib.runner.record_theta_picks` is a module-level lazy forwarding
   seam, so a cold `theta_pick_tracker` import cannot cycle through the compatibility
   package while scan callers can still monkeypatch the recorder. The local provider
@@ -2727,7 +2727,7 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 
 ## Recent changes (the last two build days)
 
-### 2026-09-17 — Overnight AI cold-start and local-schema repair (pending integration)
+### 2026-09-17 — Overnight AI cold-start and local-schema repair (merged)
 
 The `theta_pick_tracker` cold import previously reached `runner.py` while its recorder
 was partially initialized. The runner now resolves that recorder only when the scan calls
@@ -2737,8 +2737,10 @@ now makes one `json_object` retry solely for an explicit HTTP 400 grammar parsin
 initialization failure, then validates the same original closed enrichment contract locally;
 the small structural validator now enforces string `maxLength`. Other HTTP failures do not
 retry. The committed tester regressions failed 4/5 on the pre-fix code and pass 5/5 after it.
-No score, journal selection, timeout, live store, desk process, or model change. Gate #144
-is the next scan and overnight observation after integration.
+No score, journal selection, timeout, live store, desk process, or model change. Independent
+review returned GO after the packet recorded the trader's exact authorization for the narrow
+shadow-recorder seam. The branch fast-forwarded to `main` at `4fbe5f6e`; gate #144 is the next
+scan and overnight observation.
 
 ### 2026-09-15 (night) - Phase 0.31 remaining WISHLIST integration
 

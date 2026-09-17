@@ -20,14 +20,14 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-17: the overnight AI repair is built on `codex/overnight-ai-repair-tests`.** A theta cold import no longer cycles, and the local enrichment contract has one narrow grammar fallback. |
-| Working branch | **`main` still carries the accepted Phase 0.32 feature; `codex/overnight-ai-repair-tests` holds the unmerged repair.** The desk was not restarted. |
-| Unmerged / open | The overnight repair awaits lead integration and live gate #144; copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
-| Next action | **Lead: review and integrate the overnight repair, then observe gate #144. Trader: use `docs/PHASE_032_TRADER_TEST_GUIDE.md` after restart.** Restart only on trader direction. |
+| Latest work | **2026-09-17: the overnight AI repair is reviewed GO and merged to `main`.** A theta cold import no longer cycles, and the local enrichment contract has one narrow grammar fallback. |
+| Working branch | **`main` carries Phase 0.32 and the accepted overnight repair at `4fbe5f6e`.** The desk was not restarted. |
+| Unmerged / open | No overnight-repair code is unmerged; live gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
+| Next action | **Observe gate #144 on the next scan and overnight run. Trader: use `docs/PHASE_032_TRADER_TEST_GUIDE.md` after restart.** Restart only on trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
 | Last verified baseline | **Overnight repair full pass: 8,528 passed, 6 skipped, 72 subtests; ruff and smoke 7/7 are clean.** The nightly writer lock was free before the run. |
 | Frozen exe | **Rebuilt and verified 2026-09-16: source 87/87 and frozen 87/87.** The frozen result carries the required `(frozen)` stamp. The production desk still runs from SOURCE and was not restarted. |
-| Desk | **The shared checkout is on `main` with Phase 0.32 merged.** It stayed stopped; no agent restarted it or wrote a live store. |
+| Desk | **The shared checkout is on `main` with the overnight repair merged.** It stayed stopped; no agent restarted it or wrote a live store. |
 
 ### Open gates, newest first
 
