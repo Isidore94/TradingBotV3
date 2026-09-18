@@ -201,6 +201,18 @@ class DayReviewService:
             try:
                 import day_review_bars
                 stored = day_review_bars.read_session_bars(session) or {}
+                # A later matched trade is measured against its EXIT session,
+                # never against the decision day's tape. Reads are durable and
+                # stay on this worker; missing past tapes are backfilled by the
+                # page's existing worker door on the next open.
+                for trade in all_trades:
+                    if str(trade.get("status") or "").lower() != "closed":
+                        continue
+                    exit_day = str(trade.get("last_closing_leg_at") or trade.get("closed_at") or "")[:10]
+                    if exit_day and exit_day != session:
+                        exit_bars = day_review_bars.read_session_bars(exit_day)
+                        if exit_bars is not None:
+                            stored[exit_day] = exit_bars
             except Exception:  # noqa: BLE001
                 _log.debug("Walk-away bars unreadable.", exc_info=True)
             payload["walkaway"] = walkaway_day.build(

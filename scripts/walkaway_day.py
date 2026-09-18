@@ -92,9 +92,13 @@ def _identity(session: str, row: Mapping[str, Any]) -> tuple[str, str, str, str,
     return (session, str(row.get("symbol") or "").upper(), str(row.get("side") or "").upper(), str(row.get("category") or "pick"), str(row.get("verdict") or ""), str(row.get("timeframe") or "M5").upper(), str(row.get("stamp") or row.get("created_at") or ""))
 
 
-def _preference_state(rows: Sequence[Mapping[str, Any]], symbol: str, side: str) -> str:
+def _preference_state(rows: Sequence[Mapping[str, Any]], session: str, symbol: str, side: str, source: str, verdict: str) -> str:
+    channels = {("annotations", "like"): "annotation:like_claim", ("annotations", "pass"): "annotation:pass", ("annotations", "veto"): "annotation:veto", ("pick_feedback", "like"): "pick_feedback:like", ("pick_feedback", "dislike"): "pick_feedback:dislike", ("pick_feedback", "not_today"): "pick_feedback:not_today", ("swing_favorites", "swing_favorite"): "swing_favorite", ("review_events", "m5_click_away"): "review_event:m5_click_away"}
+    channel = channels.get((source, verdict), "")
     for row in rows:
-        if str(row.get("symbol") or "").upper() == symbol and str(row.get("side") or row.get("direction") or "").upper() == side:
+        row_session = str(row.get("session_date") or "")[:10]
+        row_channel = str(row.get("channel") or "")
+        if ((row_session == session or not row_session) and str(row.get("symbol") or "").upper() == symbol and str(row.get("side") or row.get("direction") or "").upper() == side and (row_channel == channel or not row_channel)):
             return str(row.get("match_state") or "")
     return ""
 
@@ -121,6 +125,7 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
     liked: list[WalkawayRow] = []
     rejected: list[WalkawayRow] = []
     early: list[WalkawayRow] = []
+    early_trade_ids: set[str] = set()
 
     for ident, row in unique.items():
         symbol, side, verdict = ident[1], ident[2], ident[4]
@@ -129,7 +134,7 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
         state = "measured" if ran is not None else "unmeasured no_bars"
         capture = str(row.get("capture_id") or row.get("event_id") or "")
         matches = [trade for trade in trades if str(trade.get("symbol") or "").upper() == symbol and str(trade.get("direction") or trade.get("side") or "").upper() == side]
-        pref = _preference_state(preference, symbol, side)
+        pref = _preference_state(preference, session, symbol, side, str(row.get("source") or ""), verdict)
         claimed = capture and capture in claimed_refs
         if verdict in REJECTS:
             rejected.append(WalkawayRow(ident, stamp, symbol, side, ident[3], verdict.replace("_", " "), ran_after_pct=ran, state=state))
@@ -144,18 +149,35 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
                     left = _after_move(_bars_for(bars, symbol, exit_day, allow_direct=False), exit_stamp, side)
                     exit_state = "measured" if left is not None else f"unmeasured no_bars (exit {exit_day})"
                     early.append(WalkawayRow(ident, stamp, symbol, side, ident[3], f"liked {session[5:]}, entered {str(trade.get('opened_at') or '')[:10][5:]}", traded="yes", you_made=_number(trade.get("net_pnl")), left_on_table_pct=left, state=exit_state))
+                    early_trade_ids.add(str(trade.get("trade_id") or ""))
             else:
                 traded = "window" if pref == "window_open" else "no"
                 liked.append(WalkawayRow(ident, stamp, symbol, side, ident[3], verdict.replace("_", " "), ran_after_pct=ran, traded=traded, state=state))
 
-    claimed_rows: list[WalkawayRow] = []
-    for key, events in claim_events.items():
-        claim = next((row for row in events if str(row.get("action") or "").lower() == "claim"), None)
-        if claim is None or str(claim.get("session_date") or "")[:10] != session:
+    # Every position closed on the selected day belongs in C, even if no
+    # earlier like was linked to it. A linked trade remains one row.
+    for trade in trades:
+        exit_stamp = _moment(trade.get("last_closing_leg_at") or trade.get("closed_at"))
+        if str(trade.get("status") or "").lower() != "closed" or not exit_stamp or exit_stamp.date().isoformat() != session:
             continue
-        symbol, side, setup = key
+        trade_id = str(trade.get("trade_id") or "")
+        if trade_id in early_trade_ids:
+            continue
+        symbol = str(trade.get("symbol") or "").upper()
+        side = str(trade.get("direction") or trade.get("side") or "").upper()
+        left = _after_move(_bars_for(bars, symbol, session, allow_direct=False), exit_stamp, side)
+        state = "measured" if left is not None else f"unmeasured no_bars (exit {session})"
+        early.append(WalkawayRow((session, symbol, side, "trade", "trade_close", "M5", exit_stamp.isoformat()), exit_stamp, symbol, side, "trade", "closed trade", traded="yes", you_made=_number(trade.get("net_pnl")), left_on_table_pct=left, state=state))
+
+    claimed_rows: list[WalkawayRow] = []
+    for claim in claims:
+        if str(claim.get("action") or "").lower() != "claim" or str(claim.get("session_date") or "")[:10] != session:
+            continue
+        symbol, side, setup = (str(claim.get("symbol") or "").upper(), str(claim.get("side") or "").upper(), str(claim.get("claimed_setup_id") or ""))
         horizon = str(claim.get("horizon") or "").lower()
-        drop = next((row for row in events if str(row.get("action") or "").lower() in {"drop", "expire"}), None)
+        events = claim_events.get((symbol, side, setup), ())
+        start = list(events).index(claim)
+        drop = next((row for row in events[start + 1:] if str(row.get("action") or "").lower() in {"drop", "expire"}), None)
         decision = next((ident for ident, row in unique.items() if str(row.get("capture_id") or "") == str(claim.get("annotation_ref") or "")), (session, symbol, side, setup or "claim", "claim", "D1", ""))
         horizon_sessions = {"d1": 5, "m5": 1}.get(horizon)
         outcome = next((row for row in sources.get("outcomes") or ()
