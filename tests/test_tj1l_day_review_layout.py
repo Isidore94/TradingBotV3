@@ -13,8 +13,7 @@ This file is presentation only and it pins the SHAPE, not a pixel:
   then the one lazily built SPY chart (a chart wants width). RIGHT: the entries
   list over the reader, then *New entry*, its verb row, and the collapsed
   *External forecast*.
-* Row 3 is *Walk-away* as a 2 x 2 grid: the one real table top-left and TJ-2's
-  three populations as small titled frames, each one title line and one note.
+* Row 3 is *Walk-away* as a 2 x 2 grid of its four TJ-2B tables.
 * Row 4 is *What you traded* beside *Ideas from the desk's AI*.
 * Every table fills its cell: the last section stretches and the rest measure
   their contents, so "Against me first %" is no longer "ainst me first".
@@ -123,6 +122,7 @@ def _payload(**overrides):
         "theses": [],
         "entries": [],
         "rejected_that_worked": [],
+        "walkaway": None,
         "trades": [],
         "forecast": {},
         "spy_m5_bars": [],
@@ -187,18 +187,14 @@ def _labels(widget) -> list[str]:
 def test_the_page_holds_one_horizontal_splitter_named_for_the_two_columns(panel):
     from ui.panels.day_review_panel import COLUMNS_OBJECT_NAME
 
-    splitters = [
-        child
-        for child in panel.findChildren(QSplitter)
-        if child.orientation() == Qt.Orientation.Horizontal
-    ]
+    splitters = [child for child in panel.findChildren(QSplitter) if child.orientation() == Qt.Orientation.Horizontal]
     assert len(splitters) == 1, f"one horizontal splitter, got {len(splitters)}"
     columns = splitters[0]
     assert columns is panel.columns
     assert columns.objectName() == COLUMNS_OBJECT_NAME == "DayReviewColumns"
     assert columns.count() == 2, "two columns, never three"
     # A column dragged to nothing is a column the trader cannot find again -
-        # the same rule the desk's D1 column split is built to.
+    # the same rule the desk's D1 column split is built to.
     assert columns.childrenCollapsible() is False
 
 
@@ -220,14 +216,13 @@ def test_the_default_split_is_fifty_five_forty_five(panel, qapp):
 def test_what_happened_the_theses_and_the_spy_chart_are_the_left_column(panel):
     left = panel.columns.widget(0)
     right = panel.columns.widget(1)
-    for widget in (panel.story_note, panel.story_facts, panel.theses,
-                   panel.spy_note, panel._chart_holder):
+    for widget in (panel.story_note, panel.story_facts, panel.theses, panel.spy_note, panel._chart_holder):
         assert _is_descendant(widget, left), widget
         assert not _is_descendant(widget, right), widget
 
 
 def test_the_theses_sit_directly_under_the_story_and_the_chart_last(panel):
-    """"Open theses directly UNDER it (not beside it)" - the trader's option 1."""
+    """ "Open theses directly UNDER it (not beside it)" - the trader's option 1."""
     layout = panel.left_column.layout()
     story = layout.indexOf(panel.story_section)
     theses = layout.indexOf(panel.theses_section)
@@ -265,9 +260,7 @@ def test_every_box_in_the_right_column_spans_the_column(panel):
 
     for widget in (panel.entry_text, panel.entry_reader, panel.forecast_box):
         assert widget.maximumWidth() >= 16_777_215 - 1, widget
-        assert (
-            widget.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
-        ), widget
+        assert widget.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding, widget
 
 
 def test_the_scale_seam_leaves_both_boxes_spanning(panel):
@@ -325,49 +318,42 @@ def test_the_entries_list_and_the_reader_share_a_vertical_splitter(panel, qapp):
 # ==========================================================================
 # 3. the walk-away grid
 # ==========================================================================
-def test_the_walkaway_is_a_two_by_two_grid_with_the_table_top_left(panel):
+def test_the_walkaway_is_a_two_by_two_grid_with_four_tables(panel):
     grid = panel.walkaway_grid
     assert isinstance(grid, QGridLayout)
     assert grid.rowCount() == 2 and grid.columnCount() == 2
     top_left = grid.itemAtPosition(0, 0)
     assert top_left is not None
-    assert _is_descendant(panel.rejected_that_worked_table, top_left.widget())
+    assert _is_descendant(panel.walkaway_tables["rejected"], top_left.widget())
     # Equal cells: neither column may swallow the other.
     assert grid.columnStretch(0) == grid.columnStretch(1) == 1
 
 
-def test_the_three_tj2_populations_are_the_other_three_cells_in_order(panel):
-    from ui.panels.day_review_panel import WALKAWAY_PLACEHOLDERS
-
-    titles = [title for title, _note in WALKAWAY_PLACEHOLDERS]
-    assert titles == [
-        "Liked but never traded",
-        "Traded, then left early",
-        "Claimed D1 picks",
-    ]
-    for (row, column), title in zip(((0, 1), (1, 0), (1, 1)), titles):
+def test_the_three_tj2_tables_fill_the_other_three_cells_in_order(panel):
+    expected = (
+        ((0, 1), "liked_not_traded", "Liked but never traded"),
+        ((1, 0), "traded_left_early", "Traded, then left early"),
+        ((1, 1), "claimed_d1", "Claimed D1 picks"),
+    )
+    for (row, column), name, title in expected:
         item = panel.walkaway_grid.itemAtPosition(row, column)
         assert item is not None, (row, column)
         cell = item.widget()
         assert cell is panel.walkaway_cells[(row, column)]
         assert title in _labels(cell), (row, column, _labels(cell))
+        assert _is_descendant(panel.walkaway_tables[name], cell)
 
 
-def test_each_placeholder_is_a_small_titled_frame_with_one_note_line(panel):
-    from ui import theme
-    from ui.panels.day_review_panel import WALKAWAY_PLACEHOLDERS
-
-    for (row, column), (title, note) in zip(
-        ((0, 1), (1, 0), (1, 1)), WALKAWAY_PLACEHOLDERS
+def test_each_walkaway_cell_is_a_titled_ten_column_table(panel):
+    for (row, column), name in zip(
+        ((0, 1), (1, 0), (1, 1)),
+        ("liked_not_traded", "traded_left_early", "claimed_d1"),
     ):
         cell = panel.walkaway_cells[(row, column)]
         assert isinstance(cell, QFrame), cell
-        texts = _labels(cell)
-        assert texts == [title, note], texts
-        assert cell.findChildren(QTableWidget) == [], "a placeholder holds no table"
-        # "an empty placeholder is one title line + one note line, not a tall box"
-        assert cell.minimumHeight() <= theme.px(90), cell.minimumHeight()
-        assert cell.sizeHint().height() <= theme.px(170), cell.sizeHint().height()
+        table = panel.walkaway_tables[name]
+        assert _is_descendant(table, cell)
+        assert table.columnCount() == 10
 
 
 # ==========================================================================
@@ -391,15 +377,12 @@ def test_every_table_on_the_page_stretches_its_last_column(panel):
     from PySide6.QtWidgets import QHeaderView
 
     tables = panel.findChildren(QTableWidget)
-    assert len(tables) == 2, [table.objectName() for table in tables]
+    assert len(tables) == 5, [table.objectName() for table in tables]
     for table in tables:
         header = table.horizontalHeader()
         assert header.stretchLastSection() is True, table
         for column in range(table.columnCount() - 1):
-            assert (
-                header.sectionResizeMode(column)
-                == QHeaderView.ResizeMode.ResizeToContents
-            ), (table, column)
+            assert header.sectionResizeMode(column) == QHeaderView.ResizeMode.ResizeToContents, (table, column)
 
 
 def test_a_filled_table_still_stretches_its_last_column(panel):
@@ -408,8 +391,12 @@ def test_a_filled_table_still_stretches_its_last_column(panel):
             rejected_that_worked=[_Row("NVDA"), _Row("AMD")],
             trades=[
                 {
-                    "trade_id": "t-1", "symbol": "NVDA", "direction": "LONG",
-                    "quantity": 100, "net_pnl": 240.0, "status": "closed",
+                    "trade_id": "t-1",
+                    "symbol": "NVDA",
+                    "direction": "LONG",
+                    "quantity": 100,
+                    "net_pnl": 240.0,
+                    "status": "closed",
                     "opened_at": f"{SESSION}T07:05:00-07:00",
                 }
             ],
@@ -421,7 +408,7 @@ def test_a_filled_table_still_stretches_its_last_column(panel):
 
 @pytest.mark.parametrize("rows", ([], [_Row("NVDA"), _Row("AMD")]))
 def test_the_long_walkaway_headers_are_not_clipped(panel, qapp, rows):
-    """"ainst me first" and "r the decisio" are what the CEILING did to them.
+    """The TJ-2B long headers must fill their own table cells.
 
     Measured on 73d308a0 with the desk's own theme applied: "Against me first %"
     hints 273 px and the shared width rule's `MAX_COLUMN_WIDTH` clamped it to
@@ -449,10 +436,12 @@ def test_the_long_walkaway_headers_are_not_clipped(panel, qapp, rows):
     try:
         for column in range(table.columnCount()):
             text = table.horizontalHeaderItem(column).text()
-            if text not in {"Against me first %", "After the decision %"}:
+            if text not in {"Held at close %", "Left on the table %"}:
                 continue
             assert header.sectionSize(column) >= header.sectionSizeHint(column), (
-                text, header.sectionSize(column), header.sectionSizeHint(column)
+                text,
+                header.sectionSize(column),
+                header.sectionSizeHint(column),
             )
     finally:
         panel.hide()
@@ -461,9 +450,7 @@ def test_the_long_walkaway_headers_are_not_clipped(panel, qapp, rows):
 # ==========================================================================
 # 6. the ratio is remembered
 # ==========================================================================
-def test_the_column_split_round_trips_through_the_saved_setting(
-    qapp, clean_split_settings
-):
+def test_the_column_split_round_trips_through_the_saved_setting(qapp, clean_split_settings):
     from project_paths import get_local_setting, invalidate_local_settings_cache
     from ui.panels.day_review_panel import COLUMN_SPLIT_KEY
 
