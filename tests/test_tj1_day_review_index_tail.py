@@ -1,33 +1,37 @@
-"""TJ-1 round-2 blocker - an APPEND is not a REWRITE.
+"""TJ-1 rounds 2 and 3 - an APPEND is not a REWRITE, and the scope is a NAME.
 
-The stamp clause invalidated the index on any change to the four indexed stores,
-and `intraday_bounce_outcomes.csv` is appended to all day by the M5 scanner.
-Measured on the staged home (reviewer, round 2): a warm open was 609 ms, and after
-ONE appended row for a DIFFERENT session it was 12,124 ms with the 22 MB index
-rewritten - and nothing the page prints had changed.
+Round 2: the stamp clause invalidated the index on any change to the four indexed
+stores, and `intraday_bounce_outcomes.csv` is appended to all day by the M5
+scanner. A warm open of 609 ms became **12,124 ms** after ONE appended row for a
+different session, and the 22 MB index was rewritten with nothing on the page
+different. So a mismatch is READ: a file that only GREW has its appended TAIL
+parsed, and only a row this index would have KEPT makes it stale.
 
-So a mismatch is now read, not assumed:
+Round 3: the first cut of that scope asked about the SESSION alone, and it was
+useless live. Every recent index carries target sessions running weeks forward -
+six live indexes from 2026-08-28 to 2026-09-17 all hold 2026-09-18, with targets
+out to 2026-10-01 - so `trade_date = today` appends always landed on `rebuild`.
+The scope is now `(session, symbol)`: the day's own views read EVERY name of the
+selected session and its lookback window, while a target session weeks ahead only
+matters for the handful of NAMES the index's own observations reference.
 
-* the file only GREW -> read ONLY the appended tail (seek to the stored size, and
-  re-attach the header so the rows parse) and rebuild only if an appended row
-  falls inside THIS index's scope: its session, its lookback window, or a target
-  session of a windowed swing observation it carries;
-* the file SHRANK, or changed at the SAME SIZE -> that is a rewrite (the warehouse
-  recompute) and it rebuilds, as does a bare `os.utime` that moves nothing but the
-  clock, which a stamp cannot tell from a same-size rewrite;
-* anything the tail cannot ANSWER - a row with an unparseable session, a boundary
-  that is not a line end, an unreadable or header-less file - rebuilds. Uncertainty
-  rebuilds; it never assumes.
+So this fixture is built the way the live store is: windowed swing observations
+whose targets run weeks forward, including today. The three cases the rule turns
+on are:
 
-An out-of-scope append leaves the 22 MB body alone and records the new stamp in a
-few hundred bytes beside it (`stamp.json`), so the next open compares sizes rather
-than reading the same tail again.
+* an appended intraday row for TODAY on a name no observation references -> the
+  index stands (`moved`), and its 22 MB body is not touched;
+* the same row on a name one of them references -> `rebuild`;
+* an appended horizon row inside the window -> `rebuild`.
+
+Everything a rewrite can look like - a shrink, a same-size rewrite, a bare touch,
+a vanished store - rebuilds, and so does anything the tail cannot answer.
 """
 
 from __future__ import annotations
 
-import io as _io
 import csv
+import io as _io
 import json
 import os
 import sys
@@ -42,12 +46,25 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+#: The session the index is OF, and the two before it (its lookback window).
 SESSION = "2026-09-10"
 PRIOR_1 = "2026-09-09"
-#: Far outside the window: this is what the M5 scanner's live appends look like
-#: to an index of a session last week.
-OUT_OF_SCOPE = "2026-09-17"
+PRIOR_2 = "2026-09-08"
+#: The clock: Friday morning, so 2026-09-10 is the last completed session and
+#: 2026-09-11 is TODAY - the session the M5 scanner is appending rows for while
+#: the trader opens yesterday's page.
 NOW = datetime(2026, 9, 11, 7, 30)
+TODAY = "2026-09-11"
+#: Weeks forward, the way a real 3-session horizon row's target looks a month out.
+FAR_TARGET = "2026-10-01"
+
+#: A name one of the index's own windowed observations is measured INTO today: an
+#: appended row for it changes what the page prints.
+TODAY_REFERENCED_SYMBOL = "AAPL"
+#: A name none of them reference. This is the ordinary case all session long - the
+#: scanner logs hundreds of names the index has never heard of.
+TODAY_UNREFERENCED_SYMBOL = "ZZZZ"
+
 LOOKBACK = 3
 
 INTRADAY_HEADER = (
@@ -94,9 +111,45 @@ def _intraday_row(session: str, symbol: str, *, status: str = "closed") -> str:
     )
 
 
+def _horizon_row(
+    symbol: str, scan_date: str, target: str, horizon: str, *, measured: bool = True
+) -> str:
+    scan_row_id = f"{symbol}:{scan_date}:{scan_date}-130129"
+    return _row(
+        HORIZON_HEADER,
+        observation_id=f"{scan_row_id}:{horizon}",
+        scan_row_id=scan_row_id,
+        symbol=symbol,
+        side="LONG",
+        scan_date=scan_date,
+        target_session=target,
+        horizon_sessions=horizon,
+        sessions_spanned=horizon,
+        entry_close="100.00",
+        entry_close_source="session_bar",
+        side_return_pct="2.00" if measured else "",
+        favorable="True" if measured else "",
+        measured="True" if measured else "",
+        maturity="mature" if measured else "immature",
+        unmeasured_reason="" if measured else "horizon_not_reached",
+        outcome_kind="favorable_direction_session_v2",
+        knowledge_basis="entry_session_close_to_target_session_close",
+        tier="S",
+        tier_source="derived_from_bucket",
+        priority_bucket="favorite_setup",
+        setup_family="avwap_band_bounce",
+        collapsed_same_session="1",
+    )
+
+
 @pytest.fixture()
 def sources(tmp_path):
-    """The four indexed stores with one in-scope row each."""
+    """The four indexed stores, shaped like the live ones.
+
+    The horizon store is the point: its windowed observations are measured into
+    sessions WEEKS AHEAD - one into today, one into October - which is what made a
+    session-only scope useless.
+    """
     import daily_recap_reader
 
     home = tmp_path / "home"
@@ -107,18 +160,21 @@ def sources(tmp_path):
     focus = home / "human_focus_outcomes.csv"
 
     intraday.write_text(
-        INTRADAY_HEADER + "\n" + _intraday_row(SESSION, "NVDA"), encoding="utf-8"
+        INTRADAY_HEADER
+        + "\n"
+        + _intraday_row(SESSION, "NVDA")
+        + _intraday_row(PRIOR_1, "NFLX"),
+        encoding="utf-8",
     )
     horizon.write_text(
         HORIZON_HEADER
         + "\n"
-        + _row(
-            HORIZON_HEADER,
-            observation_id="AAPL:1", scan_row_id="AAPL", symbol="AAPL", side="LONG",
-            scan_date=PRIOR_1, target_session=SESSION, horizon_sessions="1",
-            sessions_spanned="1", entry_close="100.00", side_return_pct="2.00",
-            favorable="True", measured="True", maturity="mature",
-        ),
+        # Inside the window, measured into TODAY: this is the pair that matters.
+        + _horizon_row(TODAY_REFERENCED_SYMBOL, PRIOR_1, TODAY, "1", measured=False)
+        # Inside the window, measured into next month.
+        + _horizon_row("MSFT", PRIOR_2, FAR_TARGET, "3", measured=False)
+        # Inside the window and already matured into the selected session.
+        + _horizon_row("ORCL", PRIOR_1, SESSION, "1"),
         encoding="utf-8",
     )
     tier.write_text(
@@ -168,36 +224,108 @@ def _append(path, text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. an append outside this index's scope
+# 0. the fixture really has the shape the rule is about
 # ---------------------------------------------------------------------------
-def test_one_appended_out_of_scope_row_keeps_the_index(sources):
-    """The M5 scanner appending today's rows must not expire last week's index."""
+def test_the_index_carries_observations_measured_weeks_forward(sources):
+    """Otherwise every test below would prove nothing about the live store."""
+    index = _index(sources)
+    targets = {
+        row["target_session"] for row in index["session_horizon_outcomes"]["rows"]
+    }
+    assert TODAY in targets, "no observation is measured into today"
+    assert FAR_TARGET in targets, "no observation runs weeks forward"
+    assert max(targets) > SESSION
+
+
+def test_the_scope_is_a_name_and_a_session_not_a_session_alone(sources):
+    import day_review_index
+
+    scope = day_review_index._index_scope(_index(sources))
+    assert (TODAY, TODAY_REFERENCED_SYMBOL) in scope.pairs
+    assert (TODAY, TODAY_UNREFERENCED_SYMBOL) not in scope.pairs
+    assert (FAR_TARGET, "MSFT") in scope.pairs
+    # The selected session and its window count for ANY name.
+    assert scope.session == SESSION
+    assert scope.first <= PRIOR_1 <= scope.last
+
+
+# ---------------------------------------------------------------------------
+# 1. today's appends, which is what the scanner does all session
+# ---------------------------------------------------------------------------
+def test_todays_append_for_an_unreferenced_name_keeps_the_index(sources):
+    """The ordinary case: hundreds of names the index never heard of."""
     import day_review_index
 
     index = _index(sources)
-    _append(sources.intraday_outcomes, _intraday_row(OUT_OF_SCOPE, "TSLA"))
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_UNREFERENCED_SYMBOL))
 
     assert day_review_index.stamp_verdict(index, sources=sources)[0] == "moved"
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is False
 
 
-def test_the_warm_read_still_uses_that_index(sources):
+def test_todays_append_for_a_referenced_name_rebuilds(sources):
+    """`AAPL`'s windowed observation is measured INTO today, and the swing view
+    reads that name's own excursion on it."""
+    import day_review_index
+
+    index = _index(sources)
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_REFERENCED_SYMBOL))
+
+    assert day_review_index.stamp_verdict(index, sources=sources)[0] == "rebuild"
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
+
+
+def test_an_appended_horizon_row_inside_the_window_rebuilds(sources):
+    """A new observation scanned inside the window changes the swing view."""
+    import day_review_index
+
+    index = _index(sources)
+    _append(
+        sources.session_horizon_outcomes,
+        _horizon_row(TODAY_REFERENCED_SYMBOL, PRIOR_1, TODAY, "3", measured=False),
+    )
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
+
+
+def test_a_hundred_unreferenced_appends_still_keep_it(sources):
+    """A whole session of scanner output, none of it this index's business."""
+    import day_review_index
+
+    index = _index(sources)
+    for number in range(100):
+        _append(sources.intraday_outcomes, _intraday_row(TODAY, f"SYM{number:03d}"))
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is False
+
+
+def test_one_referenced_row_among_many_unreferenced_ones_rebuilds(sources):
+    import day_review_index
+
+    index = _index(sources)
+    for number in range(20):
+        _append(sources.intraday_outcomes, _intraday_row(TODAY, f"SYM{number:03d}"))
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_REFERENCED_SYMBOL))
+    for number in range(20, 40):
+        _append(sources.intraday_outcomes, _intraday_row(TODAY, f"SYM{number:03d}"))
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
+
+
+def test_the_warm_read_still_uses_the_index_after_an_unreferenced_append(sources):
     """End to end: the page's answer comes off the index, not the stores."""
     import daily_recap_reader
+    import day_review_index
 
     index = _index(sources)
     expected = daily_recap_reader.read_session(
         SESSION, lookback_sessions=LOOKBACK, now=NOW, sources=sources, index=index
     )
-    _append(sources.intraday_outcomes, _intraday_row(OUT_OF_SCOPE, "TSLA"))
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_UNREFERENCED_SYMBOL))
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is False
+
+    original = daily_recap_reader._read_intraday_outcomes
 
     def _refuse(_path):
-        raise AssertionError("the intraday log was streamed after an out-of-scope append")
+        raise AssertionError("the intraday log was streamed after an unreferenced append")
 
-    import day_review_index
-
-    assert day_review_index.is_stale(index, now=NOW, sources=sources) is False
-    original = daily_recap_reader._read_intraday_outcomes
     daily_recap_reader._read_intraday_outcomes = _refuse
     try:
         got = daily_recap_reader.read_session(
@@ -208,6 +336,24 @@ def test_the_warm_read_still_uses_that_index(sources):
     assert got == expected
 
 
+def test_the_tail_is_the_only_thing_read(sources, monkeypatch):
+    """An unreferenced append costs a few hundred bytes, not 476 MB."""
+    import daily_recap_reader
+    import day_review_index
+
+    index = _index(sources)
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_UNREFERENCED_SYMBOL))
+    monkeypatch.setattr(
+        daily_recap_reader,
+        "_read_intraday_outcomes",
+        lambda _path: pytest.fail("the staleness check streamed the whole log"),
+    )
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is False
+
+
+# ---------------------------------------------------------------------------
+# 2. the stamp sidecar
+# ---------------------------------------------------------------------------
 def test_the_new_stamp_is_recorded_without_rewriting_the_body(sources, tmp_path):
     """22 MB stays put; a few hundred bytes land beside it."""
     import day_review_index
@@ -216,11 +362,12 @@ def test_the_new_stamp_is_recorded_without_rewriting_the_body(sources, tmp_path)
     body = Path(day_review_index.write_index(_index(sources), root=root, now=NOW))
     before = (body.stat().st_mtime_ns, body.stat().st_size)
 
-    _append(sources.intraday_outcomes, _intraday_row(OUT_OF_SCOPE, "TSLA"))
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_UNREFERENCED_SYMBOL))
     stored = day_review_index.read_index(SESSION, root=root)
-    assert day_review_index.is_stale(stored, now=NOW, sources=sources) is False
+    verdict, stamp = day_review_index.stamp_verdict(stored, sources=sources)
+    assert verdict == "moved"
 
-    written = day_review_index.refresh_stamp(stored, sources=sources, root=root)
+    written = day_review_index.refresh_stamp(stored, stamp=stamp, root=root)
     assert written is not None and Path(written).name == "stamp.json"
     assert (body.stat().st_mtime_ns, body.stat().st_size) == before, "the body was rewritten"
     assert Path(written).stat().st_size < 4096
@@ -228,6 +375,40 @@ def test_the_new_stamp_is_recorded_without_rewriting_the_body(sources, tmp_path)
     # ...and the next read compares against the NEW sizes, so no tail is needed.
     again = day_review_index.read_index(SESSION, root=root)
     assert day_review_index.stamp_verdict(again, sources=sources)[0] == "same"
+
+
+def test_refresh_stamp_with_a_precomputed_stamp_does_not_stat_again(sources, tmp_path):
+    """One verdict per open (reviewer, round 3): the caller has already stat-ed
+    the stores and read the tail."""
+    import day_review_index
+
+    root = tmp_path / "day_review"
+    day_review_index.write_index(_index(sources), root=root, now=NOW)
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_UNREFERENCED_SYMBOL))
+    stored = day_review_index.read_index(SESSION, root=root)
+    _verdict, stamp = day_review_index.stamp_verdict(stored, sources=sources)
+
+    calls: list[int] = []
+    original = day_review_index.sources_stamp
+    day_review_index.sources_stamp = lambda *a, **k: (
+        calls.append(1) or original(*a, **k)
+    )
+    try:
+        assert day_review_index.refresh_stamp(stored, stamp=stamp, root=root) is not None
+    finally:
+        day_review_index.sources_stamp = original
+    assert calls == [], "refresh_stamp re-stat-ed the stores"
+
+
+def test_a_stamp_that_matches_the_body_writes_nothing(sources, tmp_path):
+    import day_review_index
+
+    root = tmp_path / "day_review"
+    day_review_index.write_index(_index(sources), root=root, now=NOW)
+    stored = day_review_index.read_index(SESSION, root=root)
+    _verdict, stamp = day_review_index.stamp_verdict(stored, sources=sources)
+    assert day_review_index.refresh_stamp(stored, stamp=stamp, root=root) is None
+    assert not day_review_index.stamp_path(SESSION, root=root).exists()
 
 
 def test_a_stamp_sidecar_for_another_session_is_ignored(sources, tmp_path):
@@ -250,7 +431,7 @@ def test_a_fresh_body_write_clears_the_sidecar(sources, tmp_path):
 
     root = tmp_path / "day_review"
     day_review_index.write_index(_index(sources), root=root, now=NOW)
-    _append(sources.intraday_outcomes, _intraday_row(OUT_OF_SCOPE, "TSLA"))
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_UNREFERENCED_SYMBOL))
     stored = day_review_index.read_index(SESSION, root=root)
     day_review_index.refresh_stamp(stored, sources=sources, root=root)
     assert day_review_index.stamp_path(SESSION, root=root).is_file()
@@ -262,7 +443,7 @@ def test_a_fresh_body_write_clears_the_sidecar(sources, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 2. an append INSIDE this index's scope
+# 3. in-scope appends of the older kinds
 # ---------------------------------------------------------------------------
 def test_a_late_finalisation_for_the_indexed_session_rebuilds(sources):
     """The append-only log's own case: the same event, finalized later."""
@@ -270,46 +451,60 @@ def test_a_late_finalisation_for_the_indexed_session_rebuilds(sources):
 
     index = _index(sources)
     _append(sources.intraday_outcomes, _intraday_row(SESSION, "NVDA", status="closed"))
-
-    assert day_review_index.stamp_verdict(index, sources=sources)[0] == "rebuild"
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
 
 
-def test_an_appended_row_inside_the_lookback_window_rebuilds(sources):
+def test_a_new_name_on_the_indexed_session_rebuilds(sources):
+    """The selected session counts for ANY name: it is the day being read."""
     import day_review_index
 
     index = _index(sources)
-    _append(sources.intraday_outcomes, _intraday_row(PRIOR_1, "NFLX"))
+    _append(sources.intraday_outcomes, _intraday_row(SESSION, TODAY_UNREFERENCED_SYMBOL))
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
 
 
-def test_an_appended_row_for_a_target_session_rebuilds(sources):
-    """A windowed swing observation is measured INTO a session, and the swing
-    view reads that name's M5 excursion on it."""
+def test_a_new_name_inside_the_lookback_window_rebuilds(sources):
     import day_review_index
 
-    _append(
-        sources.session_horizon_outcomes,
-        _row(HORIZON_HEADER, observation_id="MSFT:3", scan_row_id="MSFT", symbol="MSFT",
-             side="SHORT", scan_date=PRIOR_1, target_session="2026-09-14",
-             horizon_sessions="3", sessions_spanned="3", entry_close="100.00",
-             measured="", maturity="immature"),
-    )
     index = _index(sources)
-    assert "2026-09-14" in {
-        row["target_session"] for row in index["session_horizon_outcomes"]["rows"]
-    }
-
-    _append(sources.intraday_outcomes, _intraday_row("2026-09-14", "MSFT"))
+    _append(sources.intraday_outcomes, _intraday_row(PRIOR_1, TODAY_UNREFERENCED_SYMBOL))
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
 
 
+def test_an_append_for_a_far_target_of_a_referenced_name_rebuilds(sources):
+    """October is out of every window, and the swing view still reads MSFT there."""
+    import day_review_index
+
+    index = _index(sources)
+    _append(sources.intraday_outcomes, _intraday_row(FAR_TARGET, "MSFT"))
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
+
+
+def test_an_append_for_a_far_session_on_an_unreferenced_name_does_not(sources):
+    import day_review_index
+
+    index = _index(sources)
+    _append(sources.intraday_outcomes, _intraday_row(FAR_TARGET, TODAY_UNREFERENCED_SYMBOL))
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is False
+
+
+# ---------------------------------------------------------------------------
+# 4. anything the tail cannot answer
+# ---------------------------------------------------------------------------
 def test_an_appended_row_with_no_readable_session_rebuilds(sources):
-    """Uncertainty rebuilds, never assumes."""
     import day_review_index
 
     index = _index(sources)
     _append(sources.intraday_outcomes, _intraday_row("", "GOOG"))
+    assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
+
+
+def test_an_appended_row_with_no_symbol_rebuilds(sources):
+    """A `(session, symbol)` scope cannot answer a row with no name."""
+    import day_review_index
+
+    index = _index(sources)
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, ""))
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
 
 
@@ -321,13 +516,12 @@ def test_a_tail_that_does_not_start_on_a_line_boundary_rebuilds(sources):
     stamp = dict(index["sources_stamp"]["intraday_outcomes"])
     stamp["size"] = max(stamp["size"] - 12, 1)
     index["sources_stamp"]["intraday_outcomes"] = stamp
-    _append(sources.intraday_outcomes, _intraday_row(OUT_OF_SCOPE, "TSLA"))
-
+    _append(sources.intraday_outcomes, _intraday_row(TODAY, TODAY_UNREFERENCED_SYMBOL))
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
 
 
 # ---------------------------------------------------------------------------
-# 3. a rewrite, however it looks
+# 5. a rewrite, however it looks
 # ---------------------------------------------------------------------------
 def test_a_truncated_file_rebuilds(sources):
     import day_review_index
@@ -349,7 +543,6 @@ def test_a_same_size_rewrite_rebuilds(sources):
     assert len(rewritten) == len(text), "the fixture must keep the size identical"
     path.write_text(rewritten, encoding="utf-8")
     os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1_000_000))
-
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
 
 
@@ -361,7 +554,6 @@ def test_a_bare_touch_with_no_new_bytes_rebuilds(sources):
     index = _index(sources)
     path = Path(sources.intraday_outcomes)
     os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 5_000_000))
-
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is True
 
 
@@ -381,30 +573,14 @@ def test_an_unchanged_store_set_reads_as_same(sources):
     assert day_review_index.is_stale(index, now=NOW, sources=sources) is False
 
 
-def test_the_tail_is_the_only_thing_read(sources, monkeypatch):
-    """The point of the rule: an out-of-scope append costs a few hundred bytes,
-    not 476 MB. `_read_intraday_outcomes` is the streaming reader, and it is not
-    called at all."""
-    import daily_recap_reader
-    import day_review_index
-
-    index = _index(sources)
-    _append(sources.intraday_outcomes, _intraday_row(OUT_OF_SCOPE, "TSLA"))
-    monkeypatch.setattr(
-        daily_recap_reader,
-        "_read_intraday_outcomes",
-        lambda _path: pytest.fail("the staleness check streamed the whole log"),
-    )
-    assert day_review_index.is_stale(index, now=NOW, sources=sources) is False
-
-
 def test_the_check_is_fast_enough_to_run_on_every_open(sources):
     """Measured rather than asserted by shape: a bounded number of stats plus a
     tail read."""
     import day_review_index
 
     index = _index(sources)
-    _append(sources.intraday_outcomes, _intraday_row(OUT_OF_SCOPE, "TSLA"))
+    for number in range(50):
+        _append(sources.intraday_outcomes, _intraday_row(TODAY, f"SYM{number:03d}"))
     start = time.perf_counter()
     for _ in range(20):
         day_review_index.is_stale(index, now=NOW, sources=sources)

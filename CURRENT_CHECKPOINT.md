@@ -33,7 +33,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 145 | **One Day Review page (TJ-1)** - after restart the left nav shows **Day Review** where Market Journal and Daily Recap were, and neither old page is anywhere; opening Day Review on a completed session paints in under a second once its index exists and the first entry click is under 300 ms (bench on a staged home: the retired page's session read 16,502 ms settle p50, Day Review's WARM read **820 ms p50 / 834 ms p95**, entry click 121 ms; **a warm open while the M5 scanner is appending to the intraday log stays warm - 660 ms after one out-of-scope appended row, decided in 21.6 ms without rewriting the 22 MB index**; a COLD open of a session with no index yet paints after **12.5 s** while it builds one, and the post-close tick that normally builds it returns in **0.2 ms** and lands the index 11 s later on a worker - the desk must never freeze while it happens); no `[desk]` row is visible on the page, in the story or in the overnight narration, and flipping the Auto mode adds a line to the Auto Pilot log and no journal row; "Paste daily forecast…" stores a brief for the session the trader chose and shows it under External forecast, and a second paste for that session replaces it on the page; a note typed on the page and one typed on the desk tab both appear. NOT a failure: a past session saying "chart after the close" (TJ-2 brings the stored bars), three labelled walk-away placeholders, the empty ideas card, or the first open of a session being slow once - the index is written as it goes. | trader, next restart on the branch |
+| 145 | **One Day Review page (TJ-1)** - after restart the left nav shows **Day Review** where Market Journal and Daily Recap were, and neither old page is anywhere; opening Day Review on a completed session paints in under a second once its index exists and the first entry click is under 300 ms (bench on a staged home: the retired page's session read 16,502 ms settle p50, Day Review's WARM read **820 ms p50 / 834 ms p95**, entry click 121 ms; **warm is the state after the close and outside trading hours (500-820 ms), which is when the page is read** - DURING a session an appended M5 row for one of the ~1,198 names that index's own observations reference (effectively the whole scanned universe) rebuilds it, 11,380 ms on the read worker with the Qt thread at 0.17 ms and the page still showing what it had, while an append for any other name is decided in 28 ms and keeps the open at 502 ms with the 22 MB body untouched; a COLD open of a session with no index yet paints after **12.5 s** while it builds one, and the post-close tick that normally builds it returns in **0.2 ms** and lands the index 11 s later on a worker - the desk must never freeze while it happens); no `[desk]` row is visible on the page, in the story or in the overnight narration, and flipping the Auto mode adds a line to the Auto Pilot log and no journal row; "Paste daily forecast…" stores a brief for the session the trader chose and shows it under External forecast, and a second paste for that session replaces it on the page; a note typed on the page and one typed on the desk tab both appear. NOT a failure: a past session saying "chart after the close" (TJ-2 brings the stored bars), three labelled walk-away placeholders, the empty ideas card, or the first open of a session being slow once - the index is written as it goes. | trader, next restart on the branch |
 | 144 | **Overnight AI repair** - after integration, the next D1 scan imports and records theta picks without a circular-import failure, and a local enrichment run stays advisory, validates the closed five-field contract including its 2,000-character summary ceiling, and leaves prior artifacts intact on failure. If the backend explicitly returns an HTTP 400 grammar parse/initialization error, it makes exactly one JSON-object fallback request; other HTTP failures do not retry. | lead/trader, next scan + overnight run after integration |
 | 143 | **Next-test local-model proposal (Phase 0.32 Packet 3)** - after integration, use a copied published entry-quality report with a configured existing local model. Verify one validated proposal references its exact report id/hash and cells, writes immutable JSON history plus `briefs/next_research_test/next_research_test.md`, and the Review card/copy brief agree. Record actual latency, reported tokens and peak memory when available; a disabled/offline model must leave deterministic facts and the prior memo intact. | lead/trader, after Packet 3 integration |
 | 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded P8 `entry_quality_window` month with known completed-bar cells, run the warehouse/report/setup-research reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and current report id/hash agree in the compact input, current JSON/memo, Review card and Tracker route while the immutable proposal source stays named; unchanged evidence performs no inference, proposal/trial/history or live-data write, only the paired current-view refresh. | lead/trader, after Packet 3 integration |
@@ -213,14 +213,23 @@ Still owed and unchanged since they were written; nothing here was closed by mov
   gate describes; the cold number is stated beside it rather than averaged into it** (the
   first handoff printed 1,099 ms for the cold open - a warm figure, corrected by the
   reviewer).
-- **Round 2 of review found the stamp's cost.** Invalidating the index on ANY change to the
-  four stores meant the M5 scanner's own appends expired it: one appended row for another
-  session turned a 609 ms warm open into 12,124 ms and rewrote 22 MB for nothing. A mismatch
-  is now READ - a file that only grew has its appended tail parsed, and only a row inside
-  that index's session, window or target sessions rebuilds; a shrink, a same-size rewrite or
-  a bare touch rebuilds; anything unparseable rebuilds. Out-of-scope growth records the new
-  stamp in a `stamp.json` sidecar and leaves the body alone: **verdict in 21.6 ms, open in
-  660 ms, body untouched** on the staged home.
+- **Rounds 2 and 3 of review were both about the stamp.** Invalidating the index on ANY
+  change meant the M5 scanner's own appends expired it (609 ms -> 12,124 ms and a 22 MB
+  rewrite for one row of another session), so a mismatch is now READ: a file that only grew
+  has its appended TAIL parsed, and a shrink, a same-size rewrite, a bare touch or anything
+  unparseable rebuilds. Round 3 then found that the first scope - the SESSION alone - had no
+  live benefit, because every recent index carries target sessions weeks forward (six live
+  indexes 2026-08-28..2026-09-17 all hold 2026-09-18, targets to 2026-10-01), so today's
+  appends always rebuilt. The scope is `(session, symbol)` now: the selected session and its
+  window count for any name, a far target only for the names the index's own observations
+  reference. Measured on the staged home, index of 2026-09-17, one row appended for
+  2026-09-18: an UNREFERENCED name is decided in **28.3 ms**, opens in **502 ms**, body
+  untouched (the new stamp goes in a `stamp.json` sidecar); a REFERENCED name is decided in
+  24.2 ms and rebuilds in **11,380 ms** on the worker, Qt thread 0.17 ms. **The honest limit:
+  that index references 1,198 names for 2026-09-18 - effectively the whole scanned universe -
+  so during a session almost every append rebuilds.** The rule keeps the page warm after the
+  close and outside trading hours, which is when it is read; narrowing further means updating
+  one swing row in place rather than rebuilding, which is TJ-2's question.
 - **Getting there took two rounds, and the second is the interesting one.** The first index
   covered the two biggest stores and left the read at 2,217 ms. A store-by-store measurement
   said the rest was the 14 MB tier CSV (944 ms) and the 1.0 MB human-focus CSV (164 ms) -

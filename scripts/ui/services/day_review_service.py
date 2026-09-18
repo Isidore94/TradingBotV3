@@ -216,19 +216,21 @@ class DayReviewService:
         sources = daily_recap_reader.RecapSources()
         try:
             stored = day_review_index.read_index(session)
-            # `sources` as well as the clock: an index whose stores were REWRITTEN
-            # (a warehouse recompute) describes files that are no longer there,
-            # and no clause about pending horizons would see it. An APPEND is read
-            # at the tail instead - the M5 scanner appends all day - so only an
-            # appended row inside this index's own scope makes it stale.
-            if stored is not None and not day_review_index.is_stale(
-                stored, now=now, sources=sources
-            ):
-                index = stored
-                # The stores grew outside this index's scope: record the new
-                # stamp beside the body so the next open compares sizes instead
-                # of reading the same tail again. A few hundred bytes, not 22 MB.
-                day_review_index.refresh_stamp(stored, sources=sources)
+            if stored is not None:
+                # The files' own verdict, computed ONCE per open (it stats the
+                # four stores and may read an appended tail): an index whose
+                # stores were REWRITTEN describes files that are no longer there,
+                # while an APPEND outside this index's scope leaves it valid.
+                verdict, stamp = day_review_index.stamp_verdict(stored, sources=sources)
+                if verdict != "rebuild" and not day_review_index.is_stale(
+                    stored, now=now
+                ):
+                    index = stored
+                    if verdict == "moved":
+                        # Grew outside the scope: record the new stamp beside the
+                        # body so the next open compares sizes instead of reading
+                        # the same tail again. Hundreds of bytes, not 22 MB.
+                        day_review_index.refresh_stamp(stored, stamp=stamp)
         except Exception:  # noqa: BLE001
             _log.debug("The stored Day Review index was unreadable.", exc_info=True)
             index = None

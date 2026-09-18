@@ -1622,9 +1622,13 @@ They are evidence and must not be loaded as context.
   built, and stale when a stored `(size, mtime)` stamp of the indexed stores says they were
   REWRITTEN - shrunk, or changed at the same size, as a warehouse recompute does. GROWTH is
   read instead of assumed: the M5 scanner appends to the intraday log all day, so the
-  appended TAIL is parsed and only a row inside that index's own session, window or target
-  sessions makes it stale; an out-of-scope append leaves the 22 MB body alone and records
-  the new stamp in a `stamp.json` beside it, which is 660 ms rather than 12.1 s per open). The index is written only for a CLOSED session, only
+  appended TAIL is parsed and the scope is `(session, symbol)` - the selected session and its
+  window count for any name, a target session weeks forward only for the names the index's
+  own observations reference. An append it does not reference leaves the 22 MB body alone and
+  records the new stamp in a `stamp.json` beside it: 28 ms to decide, 502 ms to open. One it
+  does reference rebuilds on the worker, 11.4 s, with the page still showing what it had -
+  and on the live store that set is ~1,198 names, so the rule keeps the page warm after the
+  close and outside trading hours rather than during a session). The index is written only for a CLOSED session, only
   when its content changed, and the folder is pruned to the newest 40; the post-close build
   runs on a worker and the SPY bars are read on the Qt thread and handed into the read. `_d1_horizon_row` and `_outcome_for` became dict lookups built once per read
   (keyed by session and symbol, never by side), which is what took an indexed read from

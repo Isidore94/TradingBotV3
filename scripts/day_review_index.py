@@ -53,6 +53,7 @@ import csv
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -242,25 +243,62 @@ def sources_stamp(sources: Any) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _index_scope(index: Mapping[str, Any]) -> tuple[str, str, str, set[str]]:
-    """`(session, window_first, window_last, target sessions)` for a stored index.
+@dataclass(frozen=True)
+class _Scope:
+    """What an index would have kept, as the tail rule has to ask it.
 
-    Rebuilt from what the index itself carries, never from the live stores: the
+    `sessions` are the dates where ANY name counts - the selected session and its
+    lookback window, which is what the day's own views read. `pairs` are
+    `(session, symbol)`: the swing view reads ONE name's excursion on the session
+    its pick was measured into, so a target session weeks forward only matters for
+    the handful of names the index's own observations reference.
+
+    That distinction is the whole point (reviewer, round 3). Every recent index
+    holds target sessions running weeks ahead - six live indexes from 2026-08-28
+    to 2026-09-17 all carry 2026-09-18, with targets out to 2026-10-01 - so a
+    scope keyed on the SESSION alone made every `trade_date = today` append from
+    the M5 scanner a rebuild, which is the cost the tail rule exists to avoid.
+    SIDE is deliberately not in the key: a blank side matches either side, so a
+    side-blind pair is the conservative answer.
+    """
+
+    session: str
+    first: str
+    last: str
+    pairs: frozenset[tuple[str, str]]
+
+
+def _index_scope(index: Mapping[str, Any]) -> _Scope:
+    """The scope a stored index describes.
+
+    Rebuilt from what the index itself CARRIES, never from the live stores: the
     question a tail row has to answer is "would THIS index have kept you".
     """
     session = str(index.get("session_date") or "")[:10]
     lookback = max(1, int(index.get("lookback_sessions") or 3))
     first, last, _ = _horizon_scope(session, lookback)
-    targets: set[str] = set()
+    pairs: set[tuple[str, str]] = set()
     horizon = index.get("session_horizon_outcomes")
     if isinstance(horizon, Mapping):
         for row in horizon.get("rows") or ():
             if not isinstance(row, Mapping):
                 continue
             target = daily_recap_reader._session_text(row.get("target_session"))
-            if target:
-                targets.add(target)
-    return session, first, last, targets
+            symbol = daily_recap_reader._symbol(row.get("symbol"))
+            if target and symbol:
+                pairs.add((target, symbol))
+    intraday = index.get("intraday_outcomes")
+    if isinstance(intraday, Mapping):
+        # A late append for an event this index already holds changes the latest
+        # append it kept, so its own rows are part of the scope too.
+        for row in intraday.get("rows") or ():
+            if not isinstance(row, Mapping):
+                continue
+            stamp = daily_recap_reader._session_text(row.get("trade_date"))
+            symbol = daily_recap_reader._symbol(row.get("symbol"))
+            if stamp and symbol:
+                pairs.add((stamp, symbol))
+    return _Scope(session=session, first=first, last=last, pairs=frozenset(pairs))
 
 
 def _appended_tail_touches(
@@ -273,11 +311,21 @@ def _appended_tail_touches(
     change turned one appended row for ANOTHER session into a 12.1 s open and a
     22 MB rewrite with nothing on the page different (reviewer, round 2).
 
+    It reads the tail with the file's OWN header re-attached, so it trusts the
+    column NAMES the store declares (`trade_date` / `scan_date` and `symbol`) and
+    not their positions; a store that renamed a column would answer "unparseable"
+    and rebuild, which is the safe direction.
+
+    The tail is read WHOLE. After a week unopened that tail is a week of appends -
+    tens of MB on the intraday log - which is still two orders of magnitude less
+    than the 476 MB stream it replaces, and it happens once, on the open that then
+    records a fresh stamp.
+
     Answers True - rebuild - for anything it cannot read as out of scope:
 
     * a tail that does not begin at a line boundary (the stored size was taken
       mid-append, so the first row is a fragment);
-    * a row whose session cannot be parsed;
+    * a row whose session OR symbol cannot be read;
     * a file with no header to parse the tail against.
 
     Uncertainty rebuilds; it never assumes.
@@ -310,9 +358,13 @@ def _appended_tail_touches(
         return True
     for row in rows:
         stamp = daily_recap_reader._session_text(row.get(session_field))
-        if not stamp:
+        symbol = daily_recap_reader._symbol(row.get("symbol"))
+        if not stamp or not symbol:
             return True
-        if _in_scope(stamp, *scope):
+        if stamp == scope.session or scope.first <= stamp <= scope.last:
+            # The day's own views read every name of the session and its window.
+            return True
+        if (stamp, symbol) in scope.pairs:
             return True
     return False
 
@@ -324,9 +376,10 @@ def stamp_verdict(
 
     * **same** - every indexed store is byte-for-byte where it was.
     * **moved** - a store only GREW, and none of the appended rows belong to
-      this index's session, window or target sessions. The body is still right;
-      only the stamp needs recording (`refresh_stamp`), which is a few hundred
-      bytes rather than 22 MB.
+      this index's scope: its session, its lookback window, or a `(session,
+      symbol)` pair its own observations reference. The body is still right; only
+      the stamp needs recording (`refresh_stamp`), which is a few hundred bytes
+      rather than 22 MB.
     * **rebuild** - a store SHRANK, changed at the SAME SIZE (a warehouse
       recompute rewrites in place), gained an in-scope row, or cannot be read.
       A bare `os.utime` with no size change lands here too: a same-size change
@@ -585,19 +638,36 @@ def read_index(session_date: str, *, root: Path | None = None) -> dict[str, Any]
 
 
 def refresh_stamp(
-    index: Mapping[str, Any], *, sources: Any, root: Path | None = None
+    index: Mapping[str, Any],
+    *,
+    sources: Any = None,
+    stamp: Mapping[str, Mapping[str, Any]] | None = None,
+    root: Path | None = None,
 ) -> Path | None:
     """Record the stores' CURRENT stamp beside an index whose body is still right.
 
-    Called after a "moved" verdict. Quiet on failure: without it the next open
-    reads the same tail again, which is milliseconds, never a wrong page.
+    Called after a "moved" verdict. Hand it the `stamp` that verdict was computed
+    from: the caller has already stat-ed the stores and read the tail, and doing
+    it again would be the second of two identical answers per open (reviewer,
+    round 3). With no `stamp`, `sources` is stat-ed here.
+
+    Quiet on failure: without it the next open reads the same tail again, which is
+    milliseconds, never a wrong page.
     """
     session = str((index or {}).get("session_date") or "")[:10]
     if not session:
         return None
-    verdict, current = stamp_verdict(index, sources=sources)
-    if verdict == "same":
-        return None
+    if stamp is not None:
+        current = {name: dict(value) for name, value in dict(stamp).items()}
+        if current == {
+            name: dict(value)
+            for name, value in dict(index.get("sources_stamp") or {}).items()
+        }:
+            return None
+    else:
+        verdict, current = stamp_verdict(index, sources=sources)
+        if verdict == "same":
+            return None
     path = stamp_path(session, root=root)
     temp = path.with_suffix(".json.tmp")
     try:

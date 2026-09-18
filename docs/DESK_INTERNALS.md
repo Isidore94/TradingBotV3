@@ -6015,25 +6015,45 @@ horizons would ever notice; the stamp is only consulted when the caller passes `
 a clock-only question, and an index written before the clause existed, are answered as
 before.
 
-**An APPEND is not a REWRITE, and that distinction is the whole value of the stamp.** The
-first cut of it invalidated on any change, and `intraday_bounce_outcomes.csv` is appended to
-all day by the M5 scanner: one appended row for ANOTHER session turned a 609 ms warm open
-into **12,124 ms** and rewrote the 22 MB index, with nothing on the page different (reviewer,
-round 2). So a mismatch is READ, not assumed (`stamp_verdict`): a file that only GREW has its
-appended TAIL read - seek to the stored size, re-attach the header line so the rows parse -
-and the index is stale only if an appended row falls inside THIS index's scope (its session,
-its lookback window, or a target session of a windowed swing observation it carries, rebuilt
-from the index itself by `_index_scope`). A file that SHRANK or changed at the SAME SIZE is a
-rewrite and rebuilds; so does a bare `os.utime`, which a stamp cannot tell from a same-size
-rewrite and which is rare enough to pay for one rebuild. Anything the tail cannot ANSWER -
-a row whose session will not parse, a boundary that is not a line end (the stored size was
-taken mid-append), a header-less or unreadable file - rebuilds: uncertainty rebuilds, it
-never assumes. When the growth is out of scope the 22 MB body is left alone and the new stamp
-goes into a few hundred bytes beside it (`stamp.json`, cleared by the next real body write),
-so the following open compares sizes instead of reading the same tail again. Measured on the
-staged home after ONE out-of-scope appended row: the verdict is decided in **21.6 ms**, the
-open paints in **660 ms**, and the body is not touched.
-`tests/test_tj1_day_review_index_tail.py` holds the seventeen cases.
+**An APPEND is not a REWRITE, and the scope is a NAME, not a session.** The stamp's first cut
+invalidated on any change, and `intraday_bounce_outcomes.csv` is appended to all day by the
+M5 scanner: one appended row for another session turned a 609 ms warm open into **12,124 ms**
+and rewrote the 22 MB index with nothing on the page different (reviewer, round 2). So a
+mismatch is READ, not assumed (`stamp_verdict`): a file that only GREW has its appended TAIL
+parsed - seek to the stored size, re-attach the header line so the rows parse against the
+column NAMES the store declares - and the index is stale only if an appended row is one it
+would have KEPT. A file that SHRANK or changed at the SAME SIZE is a rewrite and rebuilds; so
+does a bare `os.utime`, which a stamp cannot tell from a same-size rewrite and which is rare
+enough to pay for one rebuild. Anything the tail cannot ANSWER - a row whose session or
+symbol will not read, a boundary that is not a line end (the stored size was taken
+mid-append), a header-less or unreadable file - rebuilds: uncertainty rebuilds, it never
+assumes. When the growth is out of scope the 22 MB body is left alone and the new stamp goes
+into a few hundred bytes beside it (`stamp.json`, overlaid by `read_index`, ignored when it
+names another session, cleared by the next real body write), so the following open compares
+sizes instead of reading the same tail again. The tail is read WHOLE: after a week unopened
+that is a week of appends, tens of MB, which is still two orders of magnitude below the
+476 MB stream and happens once.
+
+**The scope is `(session, symbol)` because a session-only scope had no live benefit at all**
+(reviewer, round 3). Every recent index carries target sessions running weeks forward - six
+live indexes from 2026-08-28 to 2026-09-17 all hold 2026-09-18, with targets out to
+2026-10-01 - so `trade_date = today` appends always landed on `rebuild`. `_index_scope` now
+answers with the SESSIONS where any name counts (the selected session and its lookback
+window, which the day's own views read whole) and the `(session, symbol)` PAIRS its own
+observations reference; side is deliberately not in the key, because a blank side matches
+either.
+
+**What that buys, measured on the staged home** (index of 2026-09-17, one appended intraday
+row dated 2026-09-18): an append for a name the index does NOT reference is decided in
+**28.3 ms**, the page opens in **502 ms** and the body is untouched; an append for a name it
+DOES reference is decided in 24.2 ms and rebuilds - **11,380 ms**, on the read worker with the
+Qt thread at 0.17 ms, the page still showing what it had. **And the honest limit: that index
+references 1,198 names for 2026-09-18 - effectively the whole scanned universe - so DURING a
+session almost every append rebuilds.** The rule keeps the page warm after the close and
+outside trading hours, which is when the trader reads it, and it costs 28 ms to find out.
+Narrowing further means updating one swing row's `first_favorable_pct` in place instead of
+rebuilding, which is TJ-2's question, not this one.
+`tests/test_tj1_day_review_index_tail.py` holds the twenty-eight cases.
 
 **How wide the index is, and the line between fast and fresh.** The first cut covered the
 two biggest stores and left an indexed read at 2,217 ms, which did not meet the gate's
