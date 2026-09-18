@@ -389,9 +389,9 @@ it after a restart.
 
 *Goal:* every decision the trader made that day, and what the name did after.
 
-**TJ-2A MERGED 2026-09-18 (`main` `4dd99034`):** a closed session now has a
-durable completed M5 parquet tape and the page reads its SPY bars. TJ-2B's four
-walk-away tables are BUILT pending review on `codex/tj2b-walkaway`; TJ-2 is not merged. Gates #152 and #153 remain live.
+**TJ-2 MERGED 2026-09-18 (`main` `d3ae3aff`):** a closed session now has a
+durable completed M5 parquet tape and the page reads its SPY bars; four walk-away
+tables project durable decisions, claims and later trades. Gates #152 and #153 remain live.
 
 What exists: `daily_recap_reader._decisions` / `_decision_rows` (`:1022-1320`, grain
 `(session_date, symbol, side, category, verdict, timeframe)`), `REJECT_VERDICTS`
@@ -400,7 +400,8 @@ What exists: `daily_recap_reader._decisions` / `_decision_rows` (`:1022-1320`, g
 `preference_trade_outcomes.REPORT_FILE` (`:157-168, 1553-1566`, states `matched`,
 `window_open`, `no_match_after_window`, `journal_unavailable`, `matching_unavailable`),
 `journal_walkaway.run_walkaway_analysis` (D1, ATR-based, Weekend Prep only). `RecapSources`
-(`:137-186`) does NOT read `claimed_picks.jsonl`.
+reads `claimed_picks.jsonl` at construction time, so a staged or restarted reader keeps its
+own claim-history source.
 
 Changes:
 1. New pure `scripts/walkaway_day.py`: `build(session, sources, bars) -> WalkawayDay` with

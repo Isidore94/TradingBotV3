@@ -53,14 +53,15 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
-- **Day Review instant walk-away (TJ-2B, 2026-09-18, built).** `walkaway_day` is a pure projection of the one Day Review worker payload: separate decision times survive source duplicates, claims replay their history, and missing bars or horizons state what was not measured. The four populations do not alter a detector, score, alert, store, or live desk state; gate #153 remains owed.
+- **Day Review instant walk-away (TJ-2B, 2026-09-18, merged into local `main`
+  `d3ae3aff`).** `walkaway_day` is a pure projection of the one Day Review worker payload: separate decision times survive source duplicates, claims replay their history, and missing bars or horizons state what was not measured. Claim history resolves with each reader's staged home, so a restart reads the same durable source. The four populations do not alter a detector, score, alert, store, or live desk state; gate #153 remains owed.
 
 - **Day Review durable session bars (TJ-2A, 2026-09-18, merged into local `main`
   `4dd99034`).** Closed sessions fetch decided names plus four
   benchmarks in batched Yahoo M5 requests, store completed regular-hours bars in
   `DAY_REVIEW_DIR/bars/<session>.parquet`, and show the durable SPY tape on a past
   Day Review. Index then bars work stays off the Qt thread; a missing past tape has a
-  single-flight worker backfill. TJ-2B's walk-away tables are still unbuilt.
+  single-flight worker backfill. Gate #152 remains owed on a real closed session.
 
 - **Overnight AI repair (2026-09-17, merged).**
   `master_avwap_lib.runner.record_theta_picks` is a module-level lazy forwarding
@@ -2828,6 +2829,15 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-18 - TJ-2: Day Review session bars and instant walk-away (local `main` `d3ae3aff`)
+
+TJ-2A stores completed regular-hours M5 bars after the close and supplies the past-session
+SPY tape. TJ-2B adds four pure Day Review tables: liked not traded, rejected names, traded
+then left early, and claimed D1 picks. The claim source resolves with the staged home at
+reader construction, so a fresh process replays the same claim history. Full pytest: 8,824
+passed, 14 skipped, 72 subtests, exit 0; ruff clean, smoke 7/7, selftest 92/92. Gates #152
+and #153 need a real closed session.
 
 ### 2026-09-18 - TJ-1L: Day Review in two columns (branch `claude/tj1l-day-review-layout`)
 

@@ -20,18 +20,18 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-18: TJ-2B BUILT pending review on `codex/tj2b-walkaway` - four pure walk-away populations in the Day Review worker payload; focused tests green.** TJ-2A remains the merged durable-bars base. |
-| Working branch | **`main` at the TJ-2A integration (`4dd99034`), not pushed.** The desk was NOT restarted. |
+| Latest work | **2026-09-18: TJ-2 is merged into local `main` (`d3ae3aff`) - durable session bars and four pure walk-away tables in Day Review.** |
+| Working branch | **`main` at the TJ-2 integration (`d3ae3aff`), not pushed.** The desk was NOT restarted. |
 | Unmerged / open | **`claude/tj1l-day-review-layout` is unmerged** (TJ-1L, presentation only; its live check folds into gate #145). Live gate **#145** (Day Review) is owed at the next restart; gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. Two known suite flakes, unowned: `test_ws_10a_scan_freshness` (manifest re-read while painting) and `test_g7_speed_pass` (Research first paint loads `price alerts`), each green standalone. |
-| Next action | **Lead: review and integrate TJ-2B.** Gate #152 is owed after one closed session; gate #153 is owed after TJ-2B integration. |
+| Next action | **TJ-2 is complete.** Gates #152 and #153 are owed after the next closed session and trader restart. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
-| Last verified baseline | **TJ-2A integration: 8,814 passed, 14 skipped, 72 subtests, 0 failed, pytest exit 0 (2026-09-18); ruff clean, smoke 7/7, source selftest 91/91.** |
+| Last verified baseline | **TJ-2 integration: 8,824 passed, 14 skipped, 72 subtests, 0 failed, pytest exit 0 (2026-09-18); ruff clean, smoke 7/7, source selftest 92/92.** |
 | Frozen exe | **Rebuilt and verified 2026-09-16: source 87/87 and frozen 87/87.** The frozen result carries the required `(frozen)` stamp. The production desk still runs from SOURCE and was not restarted. |
-| Desk | **The shared checkout is on `main` at the TJ-2A merge.** It stayed stopped through the build; no agent restarted it or wrote a live store. |
+| Desk | **The shared checkout is on `main` at the TJ-2 merge.** It stayed stopped through the build; no agent restarted it or wrote a live store. |
 
-### 2026-09-18 — TJ-2B BUILT, PENDING REVIEW
+### 2026-09-18 — TJ-2B MERGED
 
-The worker supplies four pure walk-away populations from durable rows, claims, later trades and exit-day bars. The page reads one payload. Review and gate #153 remain owed.
+The worker supplies four pure walk-away populations from durable rows, claims, later trades and exit-day bars. The page reads one payload. Review passed, full pytest passed with exit 0, and gates #152/#153 remain owed on a real closed session.
 
 ### Open gates, newest first
 
