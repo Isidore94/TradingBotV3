@@ -165,7 +165,7 @@ def test_later_matched_trade_moves_like_to_c_and_uses_exit_day_bars():
     day = _build(
         decisions=(_decision(stamp="2026-09-16T08:00:00-07:00"),),
         trades=(trade,),
-        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG"},),
+        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG", "trade_id": "t-1"},),
         bars={SESSION: _bars()["AAA"], EXIT_SESSION: exit_bars["AAA"]},
     )
     assert not day.liked_not_traded
@@ -177,7 +177,7 @@ def test_later_matched_trade_moves_like_to_c_and_uses_exit_day_bars():
     missing = _build(
         decisions=(_decision(stamp="2026-09-16T08:00:00-07:00"),),
         trades=(trade,),
-        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG"},),
+        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG", "trade_id": "t-1"},),
         bars=_bars(),
     ).traded_left_early[0]
     assert missing.state == "unmeasured no_bars (exit 2026-09-18)"
@@ -214,7 +214,7 @@ def test_left_on_table_never_falls_back_to_a_pre_exit_bar():
     row = _build(
         decisions=(_decision(stamp="2026-09-16T08:00:00-07:00"),),
         trades=(trade,),
-        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG"},),
+        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG", "trade_id": "t-pre-exit"},),
         bars=pre_exit_only,
     ).traded_left_early[0]
     assert row.left_on_table_pct is None
@@ -232,7 +232,7 @@ def test_open_later_trade_is_pending_c_while_window_open_like_stays_a():
     day = _build(
         decisions=(_decision(stamp="2026-09-16T08:00:00-07:00"),),
         trades=(open_trade,),
-        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG"},),
+        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG", "trade_id": "open"},),
     )
     assert day.traded_left_early[0].state == "pending trade open"
     assert day.traded_left_early[0].left_on_table_pct is None
@@ -242,6 +242,13 @@ def test_open_later_trade_is_pending_c_while_window_open_like_stays_a():
         preference=({"match_state": "window_open", "symbol": "AAA", "side": "LONG"},),
     ).liked_not_traded[0]
     assert waiting.traded == "window"
+
+
+def test_blank_legacy_preference_trade_id_never_claims_an_unrelated_trade():
+    trade = {"trade_id": "later", "symbol": "AAA", "direction": "LONG", "status": "closed", "opened_at": "2026-09-18T10:00:00-07:00"}
+    day = _build(decisions=(_decision(stamp="2026-09-16T08:00:00-07:00"),), trades=(trade,), preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG"},))
+    assert len(day.liked_not_traded) == 1
+    assert not day.traded_left_early
 
 
 def test_claim_history_replays_by_claim_key_and_claimed_annotation_routes_only_d():

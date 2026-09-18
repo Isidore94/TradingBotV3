@@ -136,11 +136,9 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
         pref_row = _preference_row(preference, session, symbol, side, str(row.get("source") or ""), verdict)
         pref = str((pref_row or {}).get("match_state") or "")
         wanted_trade_id = str((pref_row or {}).get("trade_id") or "")
-        # A real matched preference row must name its trade.  The only tolerated
-        # old shape has neither session nor channel nor id (the pre-contract
-        # fixture); a partial modern row fails closed into A, never another C.
-        legacy_pref = bool(pref_row) and not wanted_trade_id and not str(pref_row.get("session_date") or "") and not str(pref_row.get("channel") or "")
-        matches = [trade for trade in trades if (str(trade.get("trade_id") or "") == wanted_trade_id if wanted_trade_id else legacy_pref) and (_moment(trade.get("opened_at")) or datetime.min) > (stamp or datetime.min)]
+        # Match only the exact durable trade identity. A blank id is unknown,
+        # not permission to choose another same-symbol position.
+        matches = [trade for trade in trades if wanted_trade_id and str(trade.get("trade_id") or "") == wanted_trade_id and (_moment(trade.get("opened_at")) or datetime.min) > (stamp or datetime.min)]
         claimed = capture and capture in claimed_refs
         if verdict in REJECTS:
             rejected.append(WalkawayRow(ident, stamp, symbol, side, ident[3], verdict.replace("_", " "), ran_after_pct=ran, state=state))
