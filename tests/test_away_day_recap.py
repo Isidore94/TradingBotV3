@@ -281,6 +281,7 @@ def test_selecting_the_away_recap_page_hands_it_the_alert_center_backing_list(mo
     surface built to show them. The reproduction printed `backing 1
     recap_input 0`.
     """
+    import ui.app as app_module
     from ui.app import MainWindow, PAGE_SPECS
     from ui.state import UiState
 
@@ -303,11 +304,13 @@ def test_selecting_the_away_recap_page_hands_it_the_alert_center_backing_list(mo
         assert center._alerts, "the backing list must fill in AWAY - that half already worked"
 
         # WS-DR (2026-09-13) renamed this nav entry to "Daily Recap" and gave
-        # the slot to the store-backed page. The AWAY digest panel is still
-        # built, still handed the Alert Center's backing list when that page is
-        # selected, and still what `away_recap.build_recap` draws - which is
-        # exactly what this test is about.
-        index = [spec.title for spec in PAGE_SPECS].index("Daily Recap")
+        # the slot to the store-backed page; TJ-1 (2026-09-17) merged that page
+        # and the Market Journal into "Day Review". The AWAY digest panel is
+        # still built, still handed the Alert Center's backing list when that
+        # page is selected, and still what `away_recap.build_recap` draws - which
+        # is exactly what this test is about. The TITLE is read from the module's
+        # own constant so the next rename cannot leave this silently green.
+        index = [spec.title for spec in PAGE_SPECS].index(app_module.DAY_REVIEW_PAGE_TITLE)
         window._select_page(index)
 
         rows = window.away_recap_panel._alerts
@@ -330,6 +333,7 @@ def test_the_recap_feed_is_oldest_first_and_carries_the_d1_rows(monkeypatch):
     """The order is the order the day happened - the only ordering nobody has
     to defend - and the D1 feed is part of the day, flagged rather than merged
     away."""
+    import ui.app as app_module
     from ui.app import MainWindow, PAGE_SPECS
     from ui.models.bounce import FOCUS_D1_EVENT_TAG
     from ui.state import UiState
@@ -351,7 +355,9 @@ def test_the_recap_feed_is_oldest_first_and_carries_the_d1_rows(monkeypatch):
         d1.is_d1 = True
         center.add_alert(d1)
 
-        window._select_page([spec.title for spec in PAGE_SPECS].index("Daily Recap"))
+        window._select_page(
+            [spec.title for spec in PAGE_SPECS].index(app_module.DAY_REVIEW_PAGE_TITLE)
+        )
         rows = window.away_recap_panel._alerts
 
         assert [row["symbol"] for row in rows] == ["AAA", "CCC", "BBB"]

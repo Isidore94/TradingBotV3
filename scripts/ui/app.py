@@ -41,8 +41,11 @@ from ui.panels.bounce_panel import format_auto_regime_reading
 from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
 from ui.panels.away_recap_panel import AwayRecapPanel
-from ui.panels.daily_recap_panel import DailyRecapPanel
-from ui.panels.market_journal_panel import MarketJournalPanel
+# TJ-1 item 3: `DayReviewPanel` takes the place of BOTH `MarketJournalPanel` and
+# `DailyRecapPanel`. Those two modules stay on disk, unregistered and no longer
+# constructed, until TJ-8 deletes them - the reviewer reproduces against them and
+# `SetupTrackerPanel`'s next-test route is still tested through the recap class.
+from ui.panels.day_review_panel import DayReviewPanel
 from ui.panels.weekend_prep_panel import WeekendPrepPanel
 from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
@@ -91,17 +94,15 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     # reference implementation) and `FocusPicksPanel` is still built by the
     # desk, where BounceBot alerts and the RRS snapshot still reach it.
     PageSpec("Journal", "mdi.notebook-outline", "journal_panel"),
-    # R10.H. The label difference from "Journal" above is deliberate and
-    # recorded: that one is the trade and tax record, this one is what the
-    # trader thought. Merging them would turn the tax journal into a diary.
-    PageSpec("Market Journal", "mdi.book-open-variant", "market_journal_panel"),
-    # R1 amendment 2026-08-24: an AWAY day ends in a recap, not a queue - the
-    # return surface that replaced 317 pending review items. WS-DR (WISHLIST
-    # 10F, 2026-09-13) takes that slot for EVERY Auto mode and reads the day
-    # from the durable stores instead of this process's alert list; the AWAY
-    # page's class stays on disk because the phone digest and the staged-pick
-    # feed still run through it.
-    PageSpec("Daily Recap", "mdi.calendar-check-outline", "daily_recap_panel"),
+    # TJ-1 item 3 (trader, 2026-09-17; decision 0021 answer 1). ONE page where
+    # Market Journal and Daily Recap used to be two: "daily recap and market
+    # journal feel less than ideal … I feel like currently it's overcomplicated
+    # … if you think it's better to combine daily recap and market journal
+    # that's fine with me." It takes the Market Journal's SLOT rather than
+    # joining the end, because a page appended after Settings is a different
+    # page to reach for. The label difference from "Journal" above is still
+    # deliberate and still recorded: that one is the trade and tax record.
+    PageSpec("Day Review", "mdi.calendar-text", "day_review_panel"),
     PageSpec("Weekend Prep", "mdi.calendar-weekend", "weekend_prep_panel"),
     PageSpec("Universe", "mdi.earth", "universe_panel"),
     PageSpec("Research", "mdi.flask-outline", "research_panel"),
@@ -111,15 +112,15 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Settings", "mdi.cog-outline", "settings_panel"),
 )
 
-#: The recap page, matched by TITLE rather than index so a reorder cannot
-#: silently unwire it - the class of bug `test_qt_page_specs` exists for.
-#: Selecting it refreshes two things: the Daily Recap's own store read, and the
-#: AWAY digest panel that is still handed the Alert Center's backing list.
-DAILY_RECAP_PAGE_TITLE = "Daily Recap"
-
-#: The old name, kept as an alias for one release: it was the title AND the
-#: page, and a caller that still asks for it is asking for this page.
-AWAY_RECAP_PAGE_TITLE = DAILY_RECAP_PAGE_TITLE
+#: The day page, matched by TITLE rather than index so a reorder cannot silently
+#: unwire it - the class of bug `test_qt_page_specs` exists for. Selecting it
+#: refreshes two things: the page's own store read, and the AWAY digest panel
+#: that is still handed the Alert Center's backing list.
+#:
+#: ONE constant, renamed from `DAILY_RECAP_PAGE_TITLE` by TJ-1 item 3 rather than
+#: aliased: two constants for one live page is the drift `test_qt_page_specs`
+#: exists for, and the old `AWAY_RECAP_PAGE_TITLE` alias had no caller left.
+DAY_REVIEW_PAGE_TITLE = "Day Review"
 
 
 class MainWindow(QMainWindow):
@@ -141,16 +142,27 @@ class MainWindow(QMainWindow):
 
         self.trading_panel = TradingDeskPanel(workspace_mode=self.state.workspace_mode)
         self.journal_panel = JournalPanel()
-        self.market_journal_panel = MarketJournalPanel()
+        from ui.services.market_journal_service import shared_journal_service
+
         self.away_recap_panel = AwayRecapPanel(
             focus_service=self.trading_panel.focus_service,
-            journal_service=self.market_journal_panel.service,
+            journal_service=shared_journal_service(),
         )
-        # WS-DR. The Daily Recap reads the durable stores on its own worker; it
-        # is handed no feed, which is the whole point of it.
-        self.daily_recap_panel = DailyRecapPanel(
-            focus_service=self.trading_panel.focus_service
-        )
+        # TJ-1 item 3. The Day Review page reads the durable stores on ONE
+        # worker and is handed no feed, which is the whole point of it. The one
+        # thing the desk hands it is the Alert Center's memory-only bar accessor,
+        # so the SPY section can draw today's tape without fetching anything.
+        # It goes to the PAGE, not to its service: that accessor mutates the
+        # Alert Center's cache and arms a `QTimer.singleShot`, so it may only be
+        # called on the Qt thread, and the page calls it in the slot that starts
+        # each read (reviewer, 2026-09-17).
+        self.day_review_panel = DayReviewPanel()
+        try:
+            self.day_review_panel.set_bars_reader(
+                self.trading_panel.alert_center.journal_chart_bars
+            )
+        except Exception:  # noqa: BLE001 - no bars is a note on the page, never a failure
+            logging.debug("The Day Review bars reader could not be wired.", exc_info=True)
         self.weekend_prep_panel = WeekendPrepPanel(
             focus_service=self.trading_panel.focus_service
         )
@@ -177,11 +189,14 @@ class MainWindow(QMainWindow):
         )
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
-        # Every auto-mode flip becomes a Market Journal row with SPY's tape
-        # attached, so the journal reads as ONE timeline - what the trader
-        # thought and what the desk did, in order. Evidence only: nothing here
-        # reaches a detector, score, alert, watchlist, Focus or the queue.
+        # Every auto-mode flip says so in the Auto Pilot log, and nowhere else
+        # (TJ-1 item 1). It used to write a Market Journal row with SPY's tape
+        # attached; the trader asked for that to stop. Nothing here reaches a
+        # detector, score, alert, watchlist, Focus or the queue.
         self.autopilot_panel.service.autoModeChanged.connect(self._record_auto_mode_flip)
+        # TJ-1 item 6(b): the staged-pick table lives on the Auto Pilot page now.
+        # The ADD is still performed here, by the store's own owner.
+        self.autopilot_panel.focusAddRequested.connect(self._add_staged_pick_to_focus)
         self.settings_panel = SettingsPanel(
             self.state,
             bounce_service=self.trading_panel.bounce_panel.service,
@@ -219,19 +234,19 @@ class MainWindow(QMainWindow):
         self.away_recap_panel.symbolActivated.connect(
             self.trading_panel.alert_center.show_board_symbol
         )
-        # WS-DR. The Daily Recap uses the SAME named door, and it is routed
-        # through a method rather than the bound slot so the call is resolved
-        # when the row is clicked: `show_board_symbol` is a board's door, and a
-        # board chart holds no place in the waiting list - nothing here reaches
-        # `_enqueue_review_alert`.
-        self.daily_recap_panel.chartRequested.connect(self._chart_recap_row)
-        self.daily_recap_panel.focusAddRequested.connect(self._add_staged_pick_to_focus)
-        # Packet 3's compact Tracker route receives the exact display object
-        # the Recap worker already read. No Tracker read, ranking or model work
-        # is added to this connection.
-        self.daily_recap_panel.entryQualityProposalChanged.connect(
+        # WS-DR, TJ-1. The Day Review page uses the SAME named door, and it is
+        # routed through a method rather than the bound slot so the call is
+        # resolved when the row is clicked: `show_board_symbol` is a board's
+        # door, and a board chart holds no place in the waiting list - nothing
+        # here reaches `_enqueue_review_alert`.
+        self.day_review_panel.chartRequested.connect(self._chart_recap_row)
+        # Packet 3's compact Tracker route receives the exact display object the
+        # worker already read. It comes from Research > Results since TJ-1 item
+        # 6(a), which is where the measured report is printed. No Tracker read,
+        # ranking or model work is added to this connection.
+        self.research_panel.results_panel.entryQualityProposalChanged.connect(
             lambda payload: self.research_panel.setup_tracker_panel.set_entry_quality_proposal(
-                payload, daily_recap=self.daily_recap_panel
+                payload, daily_recap=self.research_panel.results_panel
             )
         )
         # ST6.3. ONE Working-lately snapshot for the whole desk, owned by the
@@ -708,9 +723,9 @@ class MainWindow(QMainWindow):
             self.workspace_button.setVisible(mode_visible)
             self.tabs_button.setVisible(mode_visible)
             interaction_trace.mark("layout")
-            if PAGE_SPECS[index].title == DAILY_RECAP_PAGE_TITLE:
+            if PAGE_SPECS[index].title == DAY_REVIEW_PAGE_TITLE:
                 self._feed_away_recap()
-                self._reload_daily_recap()
+                self._reload_day_review()
         finally:
             # Closed here rather than left open: a span that outlived its click
             # would attribute every later idle stall to the last page visited.
@@ -755,13 +770,13 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             logging.exception("The staged pick %s could not be added to Focus.", symbol)
 
-    def _reload_daily_recap(self) -> None:
-        """Kick the Daily Recap's worker. Quiet on failure: a recap that cannot
-        be read must never cost the page switch that asked for it."""
+    def _reload_day_review(self) -> None:
+        """Kick the Day Review page's worker. Quiet on failure: a day that
+        cannot be read must never cost the page switch that asked for it."""
         try:
-            self.daily_recap_panel.reload()
+            self.day_review_panel.reload()
         except Exception:
-            logging.exception("The Daily Recap could not be reloaded.")
+            logging.exception("The Day Review page could not be reloaded.")
 
     def _open_journal_trade(self, trade_id: str) -> None:
         """Show the Journal page on one trade (ST5.5). Never a writer.
@@ -785,49 +800,29 @@ class MainWindow(QMainWindow):
             )
 
     def _record_auto_mode_flip(self, previous: str, current: str) -> None:
-        """Write the flip into the Market Journal, with SPY as it stood.
+        """Say the flip in the Auto Pilot log. Not in the journal (TJ-1 item 1).
 
-        The trader asked for "what the charts looked like when the auto mode
-        flipped" (2026-08-27). The row is marked machine-written through its
-        ORIGIN, so a reader counting "what did you think?" never counts a
-        sentence nobody thought.
+        It used to write a Market Journal row with SPY's tape attached, on the
+        theory that the journal would read as one timeline. It read as noise
+        instead: on the live desk 2026-09-17 those rows were **34 of 77** and
+        the nightly narration repeated them back. The trader's answer was
+        "i don't need to see the SPY auto modes pasted in there" (decision
+        0021 answer 3), so the desk's own hand goes where the desk's own lines
+        already live - one Auto Pilot log line, no journal write, no capture.
 
-        Quiet on every failure path: an evidence store must never cost the
-        thing it records, and the mode has already changed by the time this
-        runs.
+        The method keeps its name and its caller
+        (`autoModeChanged.connect(self._record_auto_mode_flip)`), and it stays
+        quiet on every failure path: the mode has already changed by the time
+        this runs, and a log line may never cost the thing it records. The old
+        rows are still on disk and are FILTERED at read time
+        (`market_journal.is_machine_entry`), never deleted.
         """
         try:
-            import market_journal
-            import market_journal_capture
-            from datetime import date
-
-            service = self.market_journal_panel.service
-            benchmark = market_journal_capture.BENCHMARK_SYMBOL
-            text = (
-                f"Auto mode {previous or 'UNKNOWN'} -> {current or 'UNKNOWN'}. "
-                "Written by the desk, not the trader."
-            )
-            result = service.write_entry(
-                text=text,
-                session_date=date.today().isoformat(),
-                timeframe=market_journal.TIMEFRAME_M5,
-                symbols=[benchmark],
-                origin=market_journal.ORIGIN_AUTO_MODE_FLIP,
-            )
-            entry_id = str((result.get("entry") or {}).get("entry_id") or "")
-            if not result.get("ok") or not entry_id:
-                return
-            m5_bars, d1_bars = self.trading_panel.alert_center.journal_chart_bars(benchmark)
-            service.capture_charts(
-                entry_id=entry_id,
-                symbol=benchmark,
-                reason=market_journal_capture.REASON_MODE_FLIP,
-                note=f"{previous} -> {current}",
-                m5_bars=m5_bars,
-                d1_bars=d1_bars,
+            self.autopilot_panel.service.log(
+                f"Auto mode {previous or 'UNKNOWN'} -> {current or 'UNKNOWN'}."
             )
         except Exception:
-            logging.exception("The auto-mode flip could not be journalled.")
+            logging.exception("The auto-mode flip could not be logged.")
 
     def _feed_away_recap(self) -> None:
         """Hand the recap the Alert Center's own backing list, then reload.
@@ -943,7 +938,7 @@ class MainWindow(QMainWindow):
             if not button.icon().isNull():
                 button.setIconSize(QSize(theme.px(18), theme.px(18)))
         self.trading_panel.apply_scaled_metrics()
-        self.market_journal_panel.refresh_reader_measure()
+        self.day_review_panel.refresh_reader_measure()
 
     def _set_scan_status(self, message: str) -> None:
         self.scan_status.setText(f"Scan: {message}")
@@ -1040,9 +1035,10 @@ class MainWindow(QMainWindow):
         # while a test is still monkeypatching what it reads.
         self.trade_mentor_service.start()
         self._sync_trade_mentor_label()
-        # Trader request 2026-09-14: the Daily Recap reads today by itself at
-        # 12:00 Pacific. Same seam, same reason - the tick reads a setting.
-        self.daily_recap_panel.start()
+        # Trader request 2026-09-14, kept by TJ-1: the day page reads today by
+        # itself at 12:00 Pacific, and its post-close tick builds that session's
+        # index. Same seam, same reason - the tick reads a setting.
+        self.day_review_panel.start()
 
     # -- Trade Mentor (WISHLIST 10J) --------------------------------------
     def _trade_mentor_cached_bars(self, timeframe, symbols, *, now, timeout_seconds):
@@ -1158,14 +1154,11 @@ class MainWindow(QMainWindow):
         for panel in (
             self.trading_panel,
             self.journal_panel,
-            # Added 2026-08-27: this page now owns two workers and the shared
-            # journal service's capture threads. It was absent from this list
-            # while it owned one, which cost nothing then and would cost a
-            # half-written capture now.
-            self.market_journal_panel,
-            # WS-DR: it owns a read worker of its own, so it joins the list the
-            # day it gains one rather than the day someone notices.
-            self.daily_recap_panel,
+            # TJ-1: ONE page where the Market Journal and the Daily Recap were
+            # two. It owns a read worker and writes through the shared journal
+            # service's capture threads, and a capture killed half-written is
+            # what this list is for.
+            self.day_review_panel,
             self.weekend_prep_panel,
             self.universe_panel,
             self.research_panel,

@@ -171,6 +171,15 @@ STAGE_ALLOWLIST: tuple[str, ...] = (
     "data/runtime/evidence_ledgers/market_journal-*.jsonl",
     "data/runtime/evidence_ledgers/market_journal_charts-*.jsonl",
     "data/runtime/evidence_ledgers/market_regime_shifts-*.jsonl",
+    # -- the Daily Recap / Day Review session read (TJ-1 item 7) --------
+    # The two big outcome stores the session read streams, plus the four small
+    # ones beside them. Without these the page under measurement reads an
+    # EMPTY store, which is the one thing a bench must not do: an absent file
+    # is measured as a fast page.
+    "data/runtime/master_avwap_session_horizon_outcomes.csv",
+    "data/runtime/auto_populate_pending.json",
+    "d1_environment.jsonl",
+    "output/preference_trade_outcomes.csv",
     # -- capture / review evidence -------------------------------------
     "trader_annotations.jsonl",
     "alert_review_events.jsonl",
@@ -785,6 +794,14 @@ def build_panel(name: str):
         from ui.panels.market_journal_panel import MarketJournalPanel
 
         return MarketJournalPanel()
+    if name == "daily_recap":
+        from ui.panels.daily_recap_panel import DailyRecapPanel
+
+        return DailyRecapPanel()
+    if name == "day_review":
+        from ui.panels.day_review_panel import DayReviewPanel
+
+        return DayReviewPanel()
     if name == "research":
         from ui.panels.research_panel import ResearchPanel
 
@@ -803,6 +820,12 @@ def build_panel(name: str):
 PANEL_NAMES: tuple[str, ...] = (
     "weekend_prep",
     "market_journal",
+    # TJ-1: both sides of the swap are measurable, so the handoff's before and
+    # after numbers come off the same tool. `market_journal` and `daily_recap`
+    # are the two pages `day_review` replaces; they stay here until TJ-8
+    # deletes the modules.
+    "daily_recap",
+    "day_review",
     "research",
     "away_recap",
     "journal",
@@ -854,6 +877,22 @@ def workload_ops(name: str, panel) -> list[tuple[str, Callable[[], Any]]]:
         if tabs is not None:
             ops.append(("research.select.daytrade_tracker", lambda: tabs.setCurrentWidget(daytrade)))
         ops.extend(_tab_ops(daytrade.tabs, "daytrade.tab"))
+    elif name == "daily_recap":
+        ops.append(("daily_recap.reload", panel.reload))
+        tabs = getattr(panel, "tabs", None)
+        if tabs is not None:
+            ops.extend(_tab_ops(tabs, "daily_recap.tab"))
+    elif name == "day_review":
+        # The same three questions TJ-1's gate asks: what does opening it cost,
+        # what does one session read cost, and what does clicking an entry cost.
+        ops.append(("day_review.reload", panel.reload))
+        for row in range(10):
+            ops.append(
+                (
+                    f"day_review.entry[{row}]",
+                    lambda r=row: panel.entries.setCurrentRow(r),
+                )
+            )
     elif name == "away_recap":
         ops.append(("away_recap.reload", panel.reload))
     elif name == "journal":

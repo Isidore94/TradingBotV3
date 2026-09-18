@@ -20,12 +20,12 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-17 evening: `plan.md` rewritten for Phase 0.33, the trader journal program (decision 0021); the old roadmap is archived at `docs/archive/PLAN_ARCHIVE_2026-09-17.md`.** Earlier that day: pullback alerts manual-only, display, claimed-rating and LRSI changes, still in the working tree. |
-| Working branch | **`main` carries Phase 0.32 and the accepted overnight repair (`4fbe5f6e`; status reconciliation `6f2a2fdf`), plus uncommitted desk display work.** The desk was not restarted. |
-| Unmerged / open | No overnight-repair code is unmerged; live gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
-| Next action | **Lead writes `.claude/packets/TJ-1.md` from `plan.md` §12.4 and runs recon -> tester -> builder -> reviewer on its own branch.** Gate #144 is still observed on the next scan and overnight run; restart only on trader direction. |
+| Latest work | **2026-09-17 evening: TJ-1 BUILT on `claude/tj1-day-review` - one Day Review page replaces Market Journal and Daily Recap, the desk stops writing auto-mode journal rows, and a per-session index replaces the 476 MB open.** Earlier that day: `plan.md` rewritten for Phase 0.33 (decision 0021, old roadmap archived at `docs/archive/PLAN_ARCHIVE_2026-09-17.md`); pullback alerts manual-only, display, claimed-rating and LRSI changes. |
+| Working branch | **`claude/tj1-day-review` carries TJ-1 (tester `79ca5fd0` + six builder commits) above `main`'s Phase 0.32 and overnight repair (`4fbe5f6e`; status reconciliation `6f2a2fdf`).** Not merged; the desk was not restarted. |
+| Unmerged / open | TJ-1 awaits review and integration; live gate **#145** is owed on it. Live gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
+| Next action | **Reviewer reproduces TJ-1 on `claude/tj1-day-review`, then the lead integrates and the trader restarts once for gate #145.** Gate #144 is still observed on the next scan and overnight run; restart only on trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
-| Last verified baseline | **Integrated overnight repair: 8,528 passed, 6 skipped, 72 subtests; ruff, smoke 7/7 and source selftest 87/87 are clean.** The nightly writer lock was free before the run. |
+| Last verified baseline | **TJ-1 on `claude/tj1-day-review`: 8,720 passed, 14 skipped, 72 subtests, 0 failed, pytest exit 0; ruff clean, smoke 7/7, source selftest 90/90** (87 before - three new lazily-imported modules joined `LAZY_ENGINE_MODULES`). `tests/test_veto_cohort_grading.py` had expired against the wall clock at 00:00 ET on 2026-09-18 (its fixture picks of 2026-08-03 fell outside `update_human_focus_outcomes`' 45 calendar days) and is now deterministic: an autouse fixture freezes the ONE seam `reference_date=None` resolves through (`human_focus_tracking._market_date`) at 2026-08-20, the date the tests already ask for, with the defect named in the test - `ai_jobs.cohorts.run_veto_cohort_grading` hardcodes `reference_date=None`, so the grading window is measured from the clock rather than the session, and the job reported `graded=2` while writing zero rows. Both evidence-path files are untouched; the lead carries that defect into a later packet. The nightly writer lock was free before the run. `main`'s own baseline is the integrated overnight repair: 8,528 passed, 6 skipped, selftest 87/87. |
 | Frozen exe | **Rebuilt and verified 2026-09-16: source 87/87 and frozen 87/87.** The frozen result carries the required `(frozen)` stamp. The production desk still runs from SOURCE and was not restarted. |
 | Desk | **The shared checkout is on `main` with the overnight repair merged.** It stayed stopped; no agent restarted it or wrote a live store. |
 
@@ -33,6 +33,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 145 | **One Day Review page (TJ-1)** - after restart the left nav shows **Day Review** where Market Journal and Daily Recap were, and neither old page is anywhere; opening Day Review on a completed session paints in under a second once its index exists and the first entry click is under 300 ms (bench on a staged home: the retired page's session read 13,500-16,500 ms across runs settle p50, Day Review's WARM read **820 ms p50 / 834 ms p95**, entry click 121 ms; **warm is the state after the close and outside trading hours (500-820 ms), which is when the page is read** - DURING a session an appended M5 row for one of the ~1,198 names that index's own observations reference (effectively the whole scanned universe) rebuilds it, 11,380 ms on the read worker with the Qt thread at 0.17 ms and the page still showing what it had, while an append for any other name is decided in 28 ms and keeps the open at 502 ms with the 22 MB body untouched; a COLD open of a session with no index yet paints after **12.5 s** while it builds one, and the post-close tick that normally builds it returns in **0.2 ms** and lands the index 11 s later on a worker - the desk must never freeze while it happens); no `[desk]` row is visible on the page, in the story or in the overnight narration, and flipping the Auto mode adds a line to the Auto Pilot log and no journal row; "Paste daily forecast…" stores a brief for the session the trader chose and shows it under External forecast, and a second paste for that session replaces it on the page; a note typed on the page and one typed on the desk tab both appear. NOT a failure: a past session saying "chart after the close" (TJ-2 brings the stored bars), three labelled walk-away placeholders, the empty ideas card, or the first open of a session being slow once - the index is written as it goes. | trader, next restart on the branch |
 | 144 | **Overnight AI repair** - after integration, the next D1 scan imports and records theta picks without a circular-import failure, and a local enrichment run stays advisory, validates the closed five-field contract including its 2,000-character summary ceiling, and leaves prior artifacts intact on failure. If the backend explicitly returns an HTTP 400 grammar parse/initialization error, it makes exactly one JSON-object fallback request; other HTTP failures do not retry. | lead/trader, next scan + overnight run after integration |
 | 143 | **Next-test local-model proposal (Phase 0.32 Packet 3)** - after integration, use a copied published entry-quality report with a configured existing local model. Verify one validated proposal references its exact report id/hash and cells, writes immutable JSON history plus `briefs/next_research_test/next_research_test.md`, and the Review card/copy brief agree. Record actual latency, reported tokens and peak memory when available; a disabled/offline model must leave deterministic facts and the prior memo intact. | lead/trader, after Packet 3 integration |
 | 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded P8 `entry_quality_window` month with known completed-bar cells, run the warehouse/report/setup-research reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and current report id/hash agree in the compact input, current JSON/memo, Review card and Tracker route while the immutable proposal source stays named; unchanged evidence performs no inference, proposal/trial/history or live-data write, only the paired current-view refresh. | lead/trader, after Packet 3 integration |
@@ -182,6 +183,77 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-17 (evening) — TJ-1 BUILT: one Day Review page (branch `claude/tj1-day-review`)
+
+- **What happened.** Phase 0.33's first packet, built on the tester's red branch
+  (`79ca5fd0`, 104 tests, 96 red). The nav is now ten pages with **Day Review** in the
+  Market Journal's slot and no Daily Recap; the desk stops writing its own
+  `Auto mode X -> Y` journal rows (34 of 77 on the live desk) and says it in the Auto Pilot
+  log instead; `market_journal.is_machine_entry` became the ONE filter that
+  `entries_about`, `build_daily_story` and the nightly `_stories_from_journal` inherit, so
+  the rows already on disk are hidden and nothing is deleted. A per-session index under the
+  new `project_paths.DAY_REVIEW_DIR` holds exactly the rows and the full-file coverage the
+  session read would have built, and `read_session(index=…)` takes it instead of streaming
+  the 476 MB intraday log and the 29 MB horizon CSV. "Paste weekly forecast" is "Paste daily
+  forecast…" and files against the SESSION the brief is about, read by the new deterministic
+  `scripts/forecast_brief.py`. The Daily Recap's Review tab is a Measured report section on
+  Research > Results and its staged picks are on Auto Pilot; both retired panel modules stay
+  on disk, unregistered, until TJ-8.
+- **Measured, on a STAGED copy of the home folder** (`scripts/ui/desk_bench.py`, 1640x980,
+  three repeats; never the live store). Before: `market_journal.construct` 362 ms sync p95 /
+  121 ms settle, first show 570 ms settle p95, an entry click ~121 ms settle;
+  `daily_recap.construct` 21 ms, **`daily_recap.reload` 13,500-16,500 ms across runs settle p50**. After:
+  `day_review.construct` 4-20 ms, **a WARM indexed session read 820 ms settle p50 / 834 ms
+  p95**, an entry click 121 ms settle / 0.6 ms sync, and the Qt thread costs 0.2 ms either
+  way because a reload only starts a worker. **A COLD open - no index on disk - paints after
+  12,549 ms** while the read builds one; the post-close tick that normally does that
+  building returns in **0.2 ms** and lands the index 11.0 s later on its own worker. One
+  index is 22.7 MB. **Gate #145's "under one second" is met WARM, which is the state the
+  gate describes; the cold number is stated beside it rather than averaged into it** (the
+  first handoff printed 1,099 ms for the cold open - a warm figure, corrected by the
+  reviewer).
+- **Rounds 2 and 3 of review were both about the stamp.** Invalidating the index on ANY
+  change meant the M5 scanner's own appends expired it (609 ms -> 12,124 ms and a 22 MB
+  rewrite for one row of another session), so a mismatch is now READ: a file that only grew
+  has its appended TAIL parsed, and a shrink, a same-size rewrite, a bare touch or anything
+  unparseable rebuilds. Round 3 then found that the first scope - the SESSION alone - had no
+  live benefit, because every recent index carries target sessions weeks forward (six live
+  indexes 2026-08-28..2026-09-17 all hold 2026-09-18, targets to 2026-10-01), so today's
+  appends always rebuilt. The scope is `(session, symbol)` now: the selected session and its
+  window count for any name, a far target only for the names the index's own observations
+  reference. Measured on the staged home, index of 2026-09-17, one row appended for
+  2026-09-18: an UNREFERENCED name is decided in **28.3 ms**, opens in **502 ms**, body
+  untouched (the new stamp goes in a `stamp.json` sidecar); a REFERENCED name is decided in
+  24.2 ms and rebuilds in **11,380 ms** on the worker, Qt thread 0.17 ms. **The honest limit:
+  that index references 1,198 names for 2026-09-18 - effectively the whole scanned universe -
+  so during a session almost every append rebuilds.** The rule keeps the page warm after the
+  close and outside trading hours, which is when it is read; narrowing further means updating
+  one swing row in place rather than rebuilding, which is TJ-2's question.
+- **Getting there took two rounds, and the second is the interesting one.** The first index
+  covered the two biggest stores and left the read at 2,217 ms. A store-by-store measurement
+  said the rest was the 14 MB tier CSV (944 ms) and the 1.0 MB human-focus CSV (164 ms) -
+  both of which `read_session` opens for their COVERAGE LINE alone, so indexing them cannot
+  change an answer - and then a profile said the remainder was not IO at all:
+  `_d1_horizon_row` walked the whole horizon slice once per D1 decision (117 x 13,700 rows)
+  and `_outcome_for` walked every outcome per call. Both are dict lookups now, keyed by
+  `(session, symbol)` and never by side, with the side and horizon rules kept inside the
+  lookup and checked against a brute-force reference walk. Indexed read: 1,715 -> 812 -> 265
+  ms; the page's whole read: 1,991 -> 396 ms. `alert_review_events.jsonl` (0.27 MB) and
+  `preference_trade_outcomes.csv` (0.44 MB) stay LIVE on purpose - both are rewritten as the
+  trader and the journal move, and indexing them would buy 23 ms. The "10.5 MB
+  review-events" in the first handoff was a measurement error: that is the
+  `alert_review_events/` segment directory, which `read_session` never opens.
+- **Verification.** 8,720 passed, 14 skipped, 72 subtests, 0 failed, pytest exit 0; ruff clean, smoke
+  7/7, source selftest 90/90 (87 before: `ui.services.day_review_service`,
+  `day_review_index` and `forecast_brief` joined `selftest.LAZY_ENGINE_MODULES`, and the two
+  top-level ones are named in `packaging/tradingbotv3.spec`'s `hiddenimports` because
+  package collection cannot see a top-level module). The nightly AI lock was free before the
+  run. No live store was written and the desk was not restarted.
+- **What remains.** Reviewer reproduction, then integration; live gate **#145**; TJ-8 still
+  deletes `market_journal_panel.py` and `daily_recap_panel.py`.
+- **Long form.** DESK_INTERNALS "Day Review - one page, no machine rows, a per-session
+  index".
 
 ### 2026-09-17 — Phase 0.33 planned: the trader journal program (plan.md rewritten, decision 0021)
 

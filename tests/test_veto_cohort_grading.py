@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import csv
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -65,6 +65,43 @@ def _bars(symbol: str, directory: Path, *, days: int = 14, start: float = 100.0)
         }
     )
     frame.to_parquet(directory / f"{symbol}.parquet", index=False)
+
+
+#: The market date every test in this file grades AS OF. It is the same date the
+#: tests already pass as `session_date`, and the fixture picks (2026-08-03) sit
+#: well inside the 45 calendar days `update_human_focus_outcomes` grades over.
+GRADED_AS_OF = date(2026, 8, 20)
+
+
+@pytest.fixture(autouse=True)
+def _grade_as_of_a_fixed_market_date(monkeypatch):
+    """Freeze the date the grading resolves `reference_date=None` through.
+
+    **The defect this pins, so nobody "fixes" it back:** these tests pass
+    `session_date="2026-08-20"` and it never reaches the math -
+    `ai_jobs.cohorts.run_veto_cohort_grading` hands
+    `update_human_focus_outcomes` a hardcoded `reference_date=None`, so the
+    grading window is measured from the WALL CLOCK. `update_human_focus_outcomes`
+    then drops every pick older than `reference - 45 calendar days`
+    (`recent_calendar_days=45`), which means this file's fixed fixture dates aged
+    out on their own: at 00:00 ET on 2026-09-18 the market date passed
+    2026-08-03 + 45 days and three tests began failing, with the job still
+    reporting `graded=2` while writing zero outcome rows. The reference being the
+    clock rather than the session asked for is the defect; the lead is carrying it
+    into a later packet (2026-09-17), and `ai_jobs/cohorts.py` and
+    `human_focus_tracking.py` are evidence-path files this test may not edit.
+
+    Only the `None` path is frozen. An explicit date still resolves normally, so
+    nothing here can hide a caller that passes one.
+    """
+    import human_focus_tracking
+
+    real = human_focus_tracking._market_date
+
+    def _fixed(value=None):
+        return GRADED_AS_OF if value is None else real(value)
+
+    monkeypatch.setattr(human_focus_tracking, "_market_date", _fixed)
 
 
 @pytest.fixture

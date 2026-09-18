@@ -257,9 +257,19 @@ def test_the_desk_tab_captures_the_charts_after_the_entry_is_written():
     assert write_at < capture_at
 
 
-def test_the_auto_mode_flip_is_journalled_with_spy_attached():
+def test_the_auto_mode_flip_is_still_recorded_but_no_longer_in_the_journal():
+    """Retargeted by TJ-1 item 1 (decision 0021 answer 3).
+
+    The CONNECT is unchanged - the desk still reacts to every flip, through the
+    same method name - and the two assertions that the reaction writes a
+    journal row with SPY attached are now false by design: those rows were 34
+    of 77 on the live desk and the trader asked for them to stop. What the
+    reaction writes instead is one Auto Pilot log line, asserted at the seam in
+    `tests/test_tj1_machine_rows.py`.
+    """
     source = APP_SOURCE.read_text(encoding="utf-8")
 
     assert "autoModeChanged.connect(self._record_auto_mode_flip)" in source
-    assert "ORIGIN_AUTO_MODE_FLIP" in source
-    assert "REASON_MODE_FLIP" in source
+    assert "autopilot_panel.service.log(" in source
+    assert "ORIGIN_AUTO_MODE_FLIP" not in source
+    assert "REASON_MODE_FLIP" not in source

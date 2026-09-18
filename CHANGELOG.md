@@ -1596,6 +1596,58 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **One Day Review page, no machine rows, a per-session index (TJ-1, 2026-09-17,
+  branch `claude/tj1-day-review`).** `Day Review`
+  (`scripts/ui/panels/day_review_panel.py` + `scripts/ui/services/day_review_service.py`)
+  takes the Market Journal's nav slot and does the Daily Recap's job: one session at a
+  time, one `read_day` payload read on ONE `QThread`, six sections that paint from that
+  payload and nothing else, ZERO `CandleChart`s at construction and ONE built on the first
+  payload that carries SPY bars. The picker is the Daily Recap's (15 completed sessions plus
+  Today marked provisional) and `daily_recap_schedule`'s noon and post-close functions still
+  make the decision; the post-close tick builds that session's index once through
+  `DayReviewService.build_index_for`. An auto-mode flip is now ONE Auto Pilot log line
+  (public `AutopilotService.log`, forwarding to the one `_log` writer) and writes no journal
+  row and captures nothing, and `market_journal.is_machine_entry` is the ONE filter, applied
+  in `MarketJournalService.entries_about`, `market_story.build_daily_story` and
+  `market_story_rollups._stories_from_journal` - the 34-of-77 rows already on disk are
+  hidden, never deleted. `scripts/day_review_index.py` + `project_paths.DAY_REVIEW_DIR`
+  store, per session, `sessions/<date>/outcomes.json` holding exactly the `_Store`s
+  `read_session` would have built (its rows, the FULL-FILE coverage, the append counts) for
+  every store over a megabyte - the 476 MB intraday log, the 31 MB horizon CSV, the 14 MB
+  tier CSV and the 1.0 MB human-focus CSV - while the six small ones stay LIVE so a veto, a
+  note, a favorite or a staged pick from a minute ago is on the page; revival is ALL OR
+  NOTHING, anything that is not an index of that session and window streams, and
+  `day_review_index.is_stale` is the one staleness rule (pending only; stale once the session
+  it waited for has closed, always stale for a session that had not closed when it was
+  built, and stale when a stored `(size, mtime)` stamp of the indexed stores says they were
+  REWRITTEN - shrunk, or changed at the same size, as a warehouse recompute does. GROWTH is
+  read instead of assumed: the M5 scanner appends to the intraday log all day, so the
+  appended TAIL is parsed and the scope is `(session, symbol)` - the selected session and its
+  window count for any name, a target session weeks forward only for the names the index's
+  own observations reference. An append it does not reference leaves the 22 MB body alone and
+  records the new stamp in a `stamp.json` beside it: 28 ms to decide, 502 ms to open. One it
+  does reference rebuilds on the worker, 11.4 s, with the page still showing what it had -
+  and on the live store that set is ~1,198 names, so the rule keeps the page warm after the
+  close and outside trading hours rather than during a session). The index is written only for a CLOSED session, only
+  when its content changed, and the folder is pruned to the newest 40; the post-close build
+  runs on a worker and the SPY bars are read on the Qt thread and handed into the read. `_d1_horizon_row` and `_outcome_for` became dict lookups built once per read
+  (keyed by session and symbol, never by side), which is what took an indexed read from
+  2,217 ms to **820 ms settle p50** warm against the retired page's 13,500-16,500 ms across runs; the
+  post-close build runs on a worker (the slot returns in 0.2 ms) and a cold open, with no
+  index yet, paints after 12.5 s while it builds. "Paste
+  daily forecast..." files a brief against `target_session` through
+  `MarketJournalService.import_daily_forecast` (a second paste supersedes the first;
+  `market_thesis.record_forecast` records `target_session` beside the kept `target_week`;
+  `import_weekly_forecast` is a deprecated alias for one release), and
+  `scripts/forecast_brief.py` reads it by heading match only - no model, nothing fetched,
+  anything unsaid left empty. The Daily Recap's Review tab is now the **Measured report**
+  section on Research > Results (same cells, same `report_id`, same `review_cells` parity
+  seam, same `ReadWorker`, `entryQualityProposalChanged` moved with it) and its Staged picks
+  table and verb are on the **Auto Pilot** page (same `focusAddRequested`, the R2 gate still
+  SHOWN and never enforced). `market_journal_panel.py` and `daily_recap_panel.py` stay on
+  disk, unregistered and no longer constructed, until TJ-8. Gate #145 owed. Long form:
+  DESK_INTERNALS "Day Review - one page, no machine rows, a per-session index".
+
 - **The Market Journal tells the session's story and challenges the thesis in it (WS-10D,
   WISHLIST 10D / 10K, 2026-09-13, sweep branch).** `scripts/market_story.py` builds a
   `DailyStory` in three kinds that never blur: `trader_said` (the day's entries verbatim in
@@ -2754,6 +2806,27 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-17 (evening) - TJ-1: one Day Review page (branch `claude/tj1-day-review`)
+
+The trader asked for one page instead of two: "daily recap and market journal feel less than
+ideal ... it's overcomplicated ... this should be a simple 'what worked what didn't and what
+was your process'." Phase 0.33's first packet builds the bones (decision 0021). The nav is
+now ten pages with **Day Review** where Market Journal and Daily Recap were; the desk stops
+writing its own `Auto mode X -> Y` journal rows (34 of 77 on the live desk) and says it in
+the Auto Pilot log instead; `is_machine_entry` becomes the one filter that every
+trader-facing and nightly reader inherits, and the rows already on disk are hidden rather
+than deleted. Opening a session was a 13,500-16,500 ms across runs settle (measured on a staged home) because
+the reader streamed a 476 MB CSV on every open; a per-session index under `DAY_REVIEW_DIR`
+now holds exactly the rows and the full-file coverage that read would have built for every
+store over a megabyte, the small trader-written ones stay live, and two per-decision walks
+inside the reader became dict lookups - together 13,500-16,500 ms across runs -> **820 ms** settle p50 warm
+(a cold open with no index paints after 12.5 s, and the post-close build runs on a worker). "Paste weekly forecast" is "Paste daily forecast..." and files
+against the SESSION the brief is about, read by the new deterministic `forecast_brief`.
+The Review tab moved to Research > Results as a Measured report section and the staged picks
+to Auto Pilot; both retired panel modules stay on disk until TJ-8. The tester's 104 tests
+(96 red) pass without a weakened assertion, plus one builder test for the post-close index
+seam, proven red by removing it. Live gate #145 is owed.
 
 ### 2026-09-17 — Overnight AI cold-start and local-schema repair (merged)
 

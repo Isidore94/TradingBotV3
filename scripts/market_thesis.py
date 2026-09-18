@@ -701,6 +701,7 @@ def record_forecast(
     source_model: str = "",
     created_at_claimed: str = "",
     target_week: str = "",
+    target_session: str = "",
     scenarios: Iterable[str] = (),
     links: Iterable[str] = (),
     session_date: str = "",
@@ -713,6 +714,12 @@ def record_forecast(
     NOT filled from the import moment, because a later import is not
     information known earlier - that difference is the entire reason the two
     timestamps are separate fields.
+
+    TJ-1 item 5 adds ``target_session``: the trader's brief is DAILY, so what
+    the row has to record is the day it is about. ``target_week`` is kept, and
+    kept separate, for the rows written before that - a weekly forecast is not a
+    daily one and writing one into the other's field would make both unreadable.
+    Both default to :data:`UNKNOWN`, which is what "this paste did not say" is.
     """
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
@@ -730,6 +737,7 @@ def record_forecast(
         "created_at_claimed": str(created_at_claimed or "").strip() or UNKNOWN,
         "imported_at": imported_at,
         "target_week": str(target_week or "").strip() or UNKNOWN,
+        "target_session": str(target_session or "").strip() or UNKNOWN,
         "scenarios": [str(item) for item in (scenarios or ())],
         "links": [str(item) for item in (links or ())],
         "text": str(text or ""),

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -724,21 +725,50 @@ def _read_intraday_outcomes(path: Path) -> _Store:
     )
 
 
+def _outcomes_by_name(
+    outcomes: Sequence[_Outcome],
+) -> dict[tuple[str, str], list[_Outcome]]:
+    """`(trade_date, symbol) -> its rows, in file order`.
+
+    Built ONCE per read (TJ-1 follow-up). `_outcome_for` used to walk every
+    outcome of the session on every call, and the callers ask about one name at a
+    time: 3,281 calls over a real session's rows was 274 ms of profiled time for
+    a question a dict answers. SIDE is deliberately NOT part of the key - a row
+    with no side matches either side, so the side rule stays where it was, inside
+    the lookup, applied to this name's handful of rows.
+    """
+    grouped: dict[tuple[str, str], list[_Outcome]] = {}
+    for row in outcomes:
+        grouped.setdefault((row.trade_date, row.symbol), []).append(row)
+    return grouped
+
+
 def _outcome_for(
-    outcomes: Sequence[_Outcome], session_date: str, symbol: str, side: str
+    outcomes: Sequence[_Outcome] | Mapping[tuple[str, str], Sequence[_Outcome]],
+    session_date: str,
+    symbol: str,
+    side: str,
 ) -> _Outcome | None:
     """The session's outcome row for one name and side, or `None`.
 
-    Side is part of the key: the same symbol can carry a long and a short row
-    on one day, and they are opposite readings of the same tape.
+    Side is part of the selection: the same symbol can carry a long and a short
+    row on one day, and they are opposite readings of the same tape.
+
+    Takes either the flat sequence (which it walks, as it always did) or the
+    grouping `_outcomes_by_name` builds. The two answer identically by
+    construction: the group holds exactly the rows the walk would have kept for
+    `(trade_date, symbol)`, in the same order, and the side rule and
+    `_best_outcome` are then applied to the same candidates.
     """
-    candidates = [
-        row
-        for row in outcomes
-        if row.trade_date == session_date
-        and row.symbol == symbol
-        and (not side or not row.side or row.side == side)
-    ]
+    if isinstance(outcomes, Mapping):
+        rows: Sequence[_Outcome] = outcomes.get((session_date, symbol), ())
+    else:
+        rows = [
+            row
+            for row in outcomes
+            if row.trade_date == session_date and row.symbol == symbol
+        ]
+    candidates = [row for row in rows if not side or not row.side or row.side == side]
     return _best_outcome(candidates)
 
 
@@ -870,6 +900,9 @@ def _recent_swings_view(
     """
     first, last = window
     horizon = max(1, int(lookback_sessions))
+    # One pass over the outcomes, then one lookup per observation (TJ-1
+    # follow-up); it used to be one walk of them all per observation.
+    outcome_index = _outcomes_by_name(outcomes)
     grouped: dict[tuple[str, str, str], dict[int, dict[str, Any]]] = {}
     for row in horizon_store.rows:
         scan_date = _session_text(row.get("scan_date"))
@@ -894,7 +927,7 @@ def _recent_swings_view(
         selected_end = _measured_return(selected_row)
         target_session = _session_text((next_row or {}).get("target_session"))
         outcome = (
-            _outcome_for(outcomes, target_session, symbol, side)
+            _outcome_for(outcome_index, target_session, symbol, side)
             if target_session
             else None
         )
@@ -1213,6 +1246,10 @@ def _decision_rows(
         grouped[key].append(decision)
 
     sidecar_bars = _pass_bar_index(annotations, session_date, annotations_path)
+    # Both lookups below are asked once per decision, so they are indexed once
+    # here rather than walking their store per call.
+    outcome_index = _outcomes_by_name(outcomes)
+    horizon_index = _horizon_rows_by_name(horizon_store, session_date)
 
     rows: list[RecapRow] = []
     for key in order:
@@ -1226,10 +1263,13 @@ def _decision_rows(
         )
         first = members[0]
         timeframe = first.timeframe if first.timeframe in {"M5", "D1"} else "M5"
-        outcome = _outcome_for(outcomes, session_date, first.symbol, first.side)
+        outcome = _outcome_for(outcome_index, session_date, first.symbol, first.side)
         d1_row = (
             _d1_horizon_row(
-                horizon_store, session_date, first.symbol, first.side, lookback_sessions
+                horizon_index.get(first.symbol, ()),
+                first.symbol,
+                first.side,
+                lookback_sessions,
             )
             if timeframe == "D1"
             else None
@@ -1320,17 +1360,40 @@ def _decision_rows(
     return tuple(rows)
 
 
+def _horizon_rows_by_name(
+    store: _Store, session_date: str
+) -> dict[str, list[Mapping[str, Any]]]:
+    """`symbol -> that name's rows scanned on `session_date`, in file order`.
+
+    Built ONCE per read (TJ-1 follow-up). `_d1_horizon_row` walked the WHOLE
+    horizon store per D1 decision - 117 decisions over a 13,700-row window slice
+    was 1.1 s of profiled time and the single biggest cost left in an indexed
+    read, which is the cost gate #145's "under one second" was failing on.
+    Neither the SIDE nor the horizon is part of the key, for the same reason as
+    `_outcomes_by_name`: a blank side matches either side, so both rules stay
+    inside the lookup, applied to this name's handful of rows in file order.
+    """
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for row in store.rows:
+        if _session_text(row.get("scan_date")) != session_date:
+            continue
+        grouped.setdefault(_symbol(row.get("symbol")), []).append(row)
+    return grouped
+
+
 def _d1_horizon_row(
-    store: _Store,
-    session_date: str,
+    rows: Sequence[Mapping[str, Any]],
     symbol: str,
     side: str,
     lookback_sessions: int,
 ) -> Mapping[str, Any] | None:
-    """The D1 row matching the decision's own session and declared horizon."""
-    for row in store.rows:
-        if _session_text(row.get("scan_date")) != session_date:
-            continue
+    """The D1 row matching the decision's own session and declared horizon.
+
+    `rows` is this name's rows for that session (`_horizon_rows_by_name`), in the
+    order the file holds them, so the FIRST match is the same row the full walk
+    used to return.
+    """
+    for row in rows:
         if _symbol(row.get("symbol")) != symbol:
             continue
         row_side = _side(row.get("side"))
@@ -1477,12 +1540,13 @@ def _rejected_that_worked_view(
     credited move - the part still available after the decision - is a THIRD
     column and is never blended with the day's path.
     """
+    outcome_index = _outcomes_by_name(outcomes)
     rows: list[RecapRow] = []
     for row in decision_rows:
         if row.detail.get("verdict") not in REJECT_VERDICTS:
             continue
         timeframe = str(row.detail.get("timeframe") or "M5")
-        outcome = _outcome_for(outcomes, session_date, row.symbol, row.side)
+        outcome = _outcome_for(outcome_index, session_date, row.symbol, row.side)
         favorable = (
             row.measures.get("d1_result_pct")
             if timeframe == "D1"
@@ -1588,6 +1652,20 @@ def _staged_picks(path: Path, now: datetime) -> tuple[dict[str, tuple[str, ...]]
     return staged, _coverage("staged_picks", target, rows, [_parse_moment(payload.get("date"))])
 
 
+def staged_picks(
+    *, path: Path | None = None, now: datetime | None = None
+) -> dict[str, tuple[str, ...]]:
+    """AWAY's staged picks for today, normalised. Worker-thread call.
+
+    Public because the table that shows them is on the Auto Pilot page since
+    TJ-1 item 6(b), and there is ONE normalisation of "which names are staged" -
+    this one. It reads; it never adopts.
+    """
+    target = Path(path) if path is not None else Path(RecapSources().staged_picks)
+    staged, _coverage_row = _staged_picks(target, now or datetime.now())
+    return staged
+
+
 def _environment_labels(path: Path) -> tuple[dict[str, str], SourceCoverage]:
     """WS-ENV's session labels. A session nobody labelled reads `unknown`."""
     target = Path(path)
@@ -1637,26 +1715,57 @@ def read_session(
     lookback_sessions: int = 3,
     now: datetime | None = None,
     sources: RecapSources | None = None,
+    index: Mapping[str, Any] | None = None,
 ) -> RecapSession:
     """One session, read from the durable stores. Pure; worker-only.
 
     Its whole input is a session, a lookback, a clock and a set of PATHS - no
     process-scoped feed, no in-memory alert list, no tracker. Call it on a
     worker: it opens nine files.
+
+    `index` (TJ-1 item 4) is a `day_review_index` payload for THIS session and
+    THIS lookback. When one is given and it really is that, every store over a
+    megabyte comes out of it instead of being streamed - the 476 MB intraday log,
+    the 31 MB horizon CSV, the 14 MB tier CSV and the 1 MB human-focus CSV - and
+    the small ones are read live as always, so a note, a veto or a staged pick
+    from a minute ago is still on the page. Anything else about the index
+    (another session, another window, a shape this reader does not recognise, a
+    revival that fails, a store it does not carry) STREAMS: an index is a cache
+    and a cache may never change the answer.
     """
     session_date = _session_text(session_date)
     lookback_sessions = max(1, int(lookback_sessions))
     now = now or datetime.now()
     sources = sources or RecapSources()
 
-    intraday = _read_intraday_outcomes(sources.intraday_outcomes)
-    tier = _read_csv("tier_outcomes", sources.tier_outcomes, "run_timestamp")
-    horizon = _read_csv(
-        "session_horizon_outcomes", sources.session_horizon_outcomes, "scan_date"
-    )
-    human_focus = _read_csv(
-        "human_focus_outcomes", sources.human_focus_outcomes, "updated_at"
-    )
+    indexed = None
+    if index is not None:
+        try:
+            import day_review_index
+
+            indexed = day_review_index.stores_for(
+                index, session_date=session_date, lookback_sessions=lookback_sessions
+            )
+        except Exception:  # noqa: BLE001 - a cache never costs the read
+            logging.debug("A Day Review index was unusable; streaming.", exc_info=True)
+            indexed = None
+    if indexed is not None:
+        intraday = indexed["intraday_outcomes"]
+        horizon = indexed["session_horizon_outcomes"]
+        tier = indexed["tier_outcomes"]
+        human_focus = indexed["human_focus_outcomes"]
+    else:
+        intraday = _read_intraday_outcomes(sources.intraday_outcomes)
+        horizon = _read_csv(
+            "session_horizon_outcomes", sources.session_horizon_outcomes, "scan_date"
+        )
+        tier = _read_csv("tier_outcomes", sources.tier_outcomes, "run_timestamp")
+        human_focus = _read_csv(
+            "human_focus_outcomes", sources.human_focus_outcomes, "updated_at"
+        )
+    # Small, and trader-written during the day: read LIVE so a verdict, a note, a
+    # favorite or a staged pick from a minute ago is on the page. The measured
+    # cost of all six together is under 70 ms (2026-09-17, staged home).
     preference_store = _read_csv(
         "preference_report", sources.preference_report, "generated_at"
     )

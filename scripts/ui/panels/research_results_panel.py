@@ -24,7 +24,7 @@ import logging
 from datetime import date
 from typing import Any, Mapping
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -33,7 +33,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -49,7 +52,7 @@ from ui.models.tracker_table_model import ROW_ROLE, TrackerTableModel
 from ui.read_worker import ReadWorker, join_worker
 from ui.services.journal_feed import load_trades
 from ui.services.working_lately_service import read_persisted_snapshot
-from ui.widgets.data_table import DataTable
+from ui.widgets.data_table import DataTable, apply_width_rule_to_table_widget
 from ui.widgets.research_explanation_view import ResearchExplanationView
 from ui.widgets.section_header import SectionHeader
 
@@ -95,6 +98,32 @@ WINDOW_ON_BOT_TOOLTIP = (
 READER_MEASURE_CHARS = 100
 READER_MEASURE_MAX_PX = 1200
 READER_MEASURE_MIN_PX = 240
+
+# ---------------------------------------------------------------------------
+# The Measured report section - MOVED here by TJ-1 item 6(a)
+# ---------------------------------------------------------------------------
+# It was the Daily Recap's fifth tab (packet WS-RP). The Daily Recap page is
+# gone (decision 0021 answer 1) and the published measured report is not about
+# one trading day the trader is reading back - it is the desk's own statistics
+# readout, which is what this page is. Same cells, same `report_id`, same parity
+# seam (`review_cells`), same `ReadWorker`: nothing here computes a number.
+
+#: The section's title, printed and asserted.
+MEASURED_REPORT_TITLE = "Measured report"
+
+#: What the local-AI review area says when nothing has been narrated for this
+#: report id. This section adds NO model call: it reads what the narration stage
+#: left beside the report, and says so plainly when there is nothing.
+NO_REVIEW_YET = "no review yet"
+
+#: The section's columns. `Cell` is the id the narration cites, the export
+#: carries and this page prints - so it leads.
+REVIEW_COLUMNS = (
+    "Cell", "Value", "Unit", "State", "n", "Population", "Window", "Why not",
+)
+
+#: What a cell reads when nobody measured it. Never a 0.00 (plan.md sec 5).
+UNMEASURED = "—"
 
 
 def _reader_measure(metrics: QFontMetrics) -> int:
@@ -269,11 +298,20 @@ class _BandCard(QFrame):
 class ResearchResultsPanel(QFrame):
     """The Results page: four populations, one at a time, never pooled."""
 
+    #: The already-published proposal display for the compact Tracker route
+    #: (TJ-1 item 6(a): it travelled here with the Measured report section).
+    #: Emitted only after this page's worker has read and rendered it.
+    entryQualityProposalChanged = Signal(object)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
 
         self._worker: ReadWorker | None = None
+        self._report_worker: ReadWorker | None = None
+        self._report: Any = None
+        self._handoff: Any = None
+        self._entry_quality_proposal: dict[str, Any] | None = None
         self._pending = False
         self._pushed_payload: dict[str, Any] | None = None
         self._selection = _valid_selection(
@@ -352,9 +390,20 @@ class ResearchResultsPanel(QFrame):
         self.shortlist.clicked.connect(self._on_row_clicked)
         self.explanation_view = ResearchExplanationView(self)
 
+        self._build_measured_report()
         self._build_layout()
         self._apply_selection_to_buttons()
         self.refresh_reader_measure()
+        # The Measured report's read waits for the first SHOW (G7.1's rule for
+        # this page: the desk builds nine Research children at startup and each
+        # one loads when its tab is opened). Starting it in the constructor gave
+        # the desk a thread for a section nobody had looked at, and it outlived
+        # the panel in a test that only called `deleteLater`.
+        #
+        # Set BEFORE `refresh()`: that call can reach a `showEvent` (a render
+        # that polishes or shows a child), and a `showEvent` that ran before this
+        # attribute existed would raise `AttributeError` inside a Qt slot.
+        self._report_loaded_once = False
         self.refresh()
 
     def refresh_reader_measure(self) -> None:
@@ -444,6 +493,10 @@ class ResearchResultsPanel(QFrame):
         self.detail_splitter.setStretchFactor(0, 3)
         self.detail_splitter.setStretchFactor(1, 2)
         layout.addWidget(self.detail_splitter, 1)
+        # TJ-1 item 6(a): the Daily Recap's Review tab, as a section at the FOOT
+        # of this page. Under the four populations, because it is the desk's own
+        # published readout rather than a cut of them.
+        layout.addWidget(self._measured_report_section())
         layout.addWidget(self.status_label)
 
     # -- selection ---------------------------------------------------------
@@ -713,6 +766,280 @@ class ResearchResultsPanel(QFrame):
                 return
         view.clear()
 
+    # -- the Measured report section (moved here by TJ-1 item 6(a)) --------
+
+    def _build_measured_report(self) -> None:
+        """The published report's widgets. It computes nothing and writes nothing.
+
+        The numbers come off the PUBLISHED file through this page's own
+        `ReadWorker`, so this section and the export cannot disagree: they are
+        the same cells and the same `report_id`, which is printed here in full
+        for exactly that reason.
+        """
+        self.report_id_label = QLabel("no measured report has been published yet")
+        self.report_id_label.setObjectName("SectionSubtitle")
+        self.report_id_label.setWordWrap(True)
+
+        self.review_table = QTableWidget(0, len(REVIEW_COLUMNS))
+        self.review_table.setHorizontalHeaderLabels(list(REVIEW_COLUMNS))
+        self.review_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.review_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.review_table.setMinimumHeight(theme.px(160))
+
+        self.review_note = QLabel(NO_REVIEW_YET)
+        self.review_note.setObjectName("SectionSubtitle")
+        self.review_note.setWordWrap(True)
+
+        self.next_test_card = QLabel(
+            "Next test: no validated proposal has been published yet"
+        )
+        self.next_test_card.setObjectName("SectionSubtitle")
+        self.next_test_card.setWordWrap(True)
+        self.copy_next_test_button = QPushButton("Copy test brief")
+        self.copy_next_test_button.clicked.connect(self.copy_next_test_brief)
+
+        self.copy_handoff_button = QPushButton("Copy handoff")
+        self.copy_handoff_button.clicked.connect(self.copy_handoff)
+        self.export_handoff_button = QPushButton("Export handoff…")
+        self.export_handoff_button.clicked.connect(self._export_handoff_clicked)
+        self.handoff_note = QLabel(
+            "The handoff is YOUR click: it writes three files (a capped "
+            "readable brief, the full JSON payload and a manifest) or puts the "
+            "brief on the clipboard. Nothing is uploaded and no model is called."
+        )
+        self.handoff_note.setObjectName("SectionSubtitle")
+        self.handoff_note.setWordWrap(True)
+
+    def _measured_report_section(self) -> QWidget:
+        holder = QWidget()
+        layout = QVBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(
+            SectionHeader(
+                MEASURED_REPORT_TITLE,
+                "The desk's own published statistics for the newest session that "
+                "has them - the same cells, and the same report id, the export "
+                "carries. Nothing here is computed on this page.",
+            )
+        )
+        layout.addWidget(self.report_id_label)
+        layout.addWidget(self.review_table, 1)
+        layout.addWidget(QLabel("Local review of this report"))
+        layout.addWidget(self.review_note)
+        layout.addWidget(QLabel("Next test"))
+        layout.addWidget(self.next_test_card)
+        layout.addWidget(self.copy_next_test_button)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.copy_handoff_button)
+        buttons.addWidget(self.export_handoff_button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        layout.addWidget(self.handoff_note)
+        return holder
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Read the published measured report the first time the page is shown.
+
+        Not in the constructor: the desk builds every Research child at startup
+        and most are never opened, so the cost stays with the section that is
+        actually being looked at (G7.1). A page switch is not a re-read; the
+        Refresh path is `refresh_report`.
+        """
+        super().showEvent(event)
+        if not self._report_loaded_once:
+            self._report_loaded_once = True
+            self.refresh_report()
+
+    def refresh_report(self) -> None:
+        """Read the published report on this page's worker, never on the Qt thread."""
+        if self._report_worker is not None and self._report_worker.isRunning():
+            return
+        worker = ReadWorker(_read_measured_report, self)
+        worker.finished_with.connect(self._on_report_loaded)
+        worker.failed.connect(self._on_report_failed)
+        self._report_worker = worker
+        worker.start()
+
+    def _on_report_failed(self, message: str) -> None:
+        self.report_id_label.setText(
+            f"no measured report could be read: {message}"
+        )
+        self._report_worker = None
+
+    def _on_report_loaded(self, payload: object) -> None:
+        """The worker's measured report. An absent one is a sentence, not a hole."""
+        self._report_worker = None
+        data = payload if isinstance(payload, Mapping) else {}
+        report = data.get("report")
+        if report is None:
+            self._report = None
+            self._handoff = None
+            self.review_table.setRowCount(0)
+            reason = str(data.get("error") or "")
+            self.report_id_label.setText(
+                "no measured report has been published yet - the overnight run "
+                "writes one" + (f" ({reason})" if reason else "")
+            )
+            self.review_note.setText(NO_REVIEW_YET)
+            return
+        self.render_report(report, narration=data.get("narration"))
+        self.render_entry_quality_proposal(data.get("proposal"))
+
+    def render_report(self, report: Any, narration: Any = None) -> None:
+        """Draw one `MeasuredReport`. Formatting only - it computes nothing."""
+        self._report = report
+        self._handoff = None
+        cells = tuple(report.cells())
+        self.report_id_label.setText(
+            f"report_id {report.report_id} · as of {report.as_of} · "
+            f"{len(cells)} cells · the export carries this same id"
+        )
+        self.review_table.setRowCount(len(cells))
+        for index, cell in enumerate(cells):
+            value = cell.value
+            values = (
+                cell.cell_id,
+                UNMEASURED if value is None else str(value),
+                cell.unit,
+                cell.state,
+                str(cell.n),
+                cell.population,
+                f"{cell.window[0]}..{cell.window[1]}" if cell.window else "",
+                cell.unavailable,
+            )
+            for column, text in enumerate(values):
+                item = QTableWidgetItem(str(text))
+                if cell.unavailable:
+                    item.setToolTip(cell.unavailable)
+                self.review_table.setItem(index, column, item)
+        apply_width_rule_to_table_widget(self.review_table, text_columns=(5, 7))
+        text = str(narration or "").strip()
+        self.review_note.setText(text or NO_REVIEW_YET)
+
+    def review_cells(self) -> tuple[tuple[str, Any], ...]:
+        """`(cell_id, value)` for every row SHOWN, in the order shown.
+
+        The parity seam: what this section shows and what the export carries are
+        the same cells read off the same report, and this is how a test proves
+        the two can never drift.
+        """
+        out: list[tuple[str, Any]] = []
+        for index in range(self.review_table.rowCount()):
+            item = self.review_table.item(index, 0)
+            if item is None or self._report is None:
+                continue
+            cell = self._report.cell(item.text())
+            out.append((cell.cell_id, cell.value))
+        return tuple(out)
+
+    def render_entry_quality_proposal(self, payload: Mapping[str, Any] | None) -> None:
+        """Show the already-published next-test object without recomputing it."""
+        self._entry_quality_proposal = (
+            dict(payload) if isinstance(payload, Mapping) else None
+        )
+        if not self._entry_quality_proposal:
+            self.next_test_card.setText(
+                "Next test: no validated proposal has been published yet"
+            )
+            self.entryQualityProposalChanged.emit(None)
+            return
+        proposal = self._entry_quality_proposal.get("proposal") or {}
+        control = proposal.get("control") or {}
+        changed = proposal.get("changed_condition") or {}
+        progress = self._entry_quality_proposal.get("current_progress") or {}
+        source = (
+            self._entry_quality_proposal.get("proposal_source")
+            or proposal.get("source")
+            or {}
+        )
+        age = self._entry_quality_proposal.get("proposal_age") or {}
+        self.next_test_card.setText(
+            f"Next test: {proposal.get('question', 'No justified new test.')}\n"
+            f"Control: {control.get('recipe_id', 'unknown')} · one change: "
+            f"{changed.get('field', 'unknown')}={changed.get('value', 'unknown')}\n"
+            f"Current progress: eligible {progress.get('eligible', 'unknown')} · no-trigger "
+            f"{progress.get('no_trigger', 'unknown')} · missing {progress.get('missing_data', 'unknown')}\n"
+            f"Limits: {self._entry_quality_proposal.get('unknown', 'not measured')} · "
+            f"{proposal.get('status', 'proposed')} · report "
+            f"{self._entry_quality_proposal.get('report_id', '')} · hash "
+            f"{self._entry_quality_proposal.get('report_hash', '')}\n"
+            f"Proposal source: {source.get('report_id', '')} · hash {source.get('report_hash', '')}\n"
+            f"Proposal age: generated {age.get('generated_at') or proposal.get('generated_at', '')} · "
+            f"source as-of {age.get('source_as_of') or proposal.get('as_of', '')}"
+        )
+        self.entryQualityProposalChanged.emit(dict(self._entry_quality_proposal))
+
+    def entry_quality_proposal_payload(self) -> dict[str, Any] | None:
+        """The card's source object, useful for parity checks and no more."""
+        return (
+            dict(self._entry_quality_proposal) if self._entry_quality_proposal else None
+        )
+
+    def copy_next_test_brief(self) -> str:
+        """Copy the validated brief. It has no file, model, or runner effect."""
+        if not self._entry_quality_proposal:
+            self.status_label.setText("there is no validated next-test proposal yet")
+            return ""
+        import research_proposal
+        from PySide6.QtWidgets import QApplication
+
+        brief = research_proposal.copy_test_brief(self._entry_quality_proposal)
+        app = QApplication.instance()
+        if app is not None:
+            app.clipboard().setText(brief)
+        self.status_label.setText(
+            "copied the validated next-test brief; it does not register or run anything"
+        )
+        return brief
+
+    def _build_handoff(self) -> Any:
+        if self._report is None:
+            return None
+        if self._handoff is None:
+            import measured_report
+
+            self._handoff = measured_report.build_handoff(self._report)
+        return self._handoff
+
+    def copy_handoff(self) -> str:
+        """The brief on the clipboard. Nothing on disk, nothing on the wire."""
+        handoff = self._build_handoff()
+        if handoff is None:
+            self.status_label.setText("there is no measured report to hand off yet")
+            return ""
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.clipboard().setText(handoff.markdown)
+        self.status_label.setText(
+            f"copied the brief for report {handoff.report_id} "
+            f"({handoff.manifest['markdown_bytes']} bytes, "
+            f"~{handoff.manifest['markdown_tokens_estimated']} estimated tokens)"
+        )
+        return handoff.markdown
+
+    def export_handoff(self, directory: Any) -> dict[str, str]:
+        """Three files under `directory`: the brief, the payload, the manifest."""
+        handoff = self._build_handoff()
+        if handoff is None:
+            self.status_label.setText("there is no measured report to hand off yet")
+            return {}
+        written = handoff.write(directory)
+        self.status_label.setText(
+            f"exported the handoff for report {handoff.report_id} to {directory}"
+        )
+        return written
+
+    def _export_handoff_clicked(self) -> None:
+        """Ask where, then write. A dialog, because an export is a decision."""
+        from PySide6.QtWidgets import QFileDialog
+
+        directory = QFileDialog.getExistingDirectory(self, "Export the handoff to…")
+        if not directory:
+            return
+        self.export_handoff(directory)
+
     # -- shutdown ----------------------------------------------------------
 
     def shutdown(self) -> None:
@@ -720,6 +1047,40 @@ class ResearchResultsPanel(QFrame):
         self._pending = False
         join_worker(self._worker)
         self._worker = None
+        join_worker(self._report_worker)
+        self._report_worker = None
+
+
+def _read_measured_report() -> dict[str, Any]:
+    """The newest published measured report, its narration and its proposal.
+
+    On the WORKER (TJ-1 item 6(a)), with the same imports the Daily Recap's
+    Review tab used: `latest_published` with no session named answers "the newest
+    session that has one", which is the right question for a page with no session
+    picker. An absent report is NOT a failure - the first overnight run after
+    this lands writes one, and the section says so.
+    """
+    try:
+        import measured_report
+        from ai_jobs import digest, measured_report_publish
+
+        root = digest._default_root()
+        payload = measured_report_publish.latest_published(root)
+        if not payload:
+            return {"report": None, "narration": None, "proposal": None}
+        report = measured_report.report_from_payload(payload)
+        narration = measured_report_publish.narration_for(root, report.report_id)
+        # Proposal history is in the existing AI-store briefs namespace, not the
+        # operational home. This read owns it; the UI only renders the object.
+        import research_proposal
+        from ai_jobs import store
+
+        proposal = research_proposal.published_display(
+            store.briefs_dir(create=False) / "next_research_test", payload
+        )
+    except Exception as exc:  # noqa: BLE001 - never costs the four populations
+        return {"report": None, "narration": None, "proposal": None, "error": str(exc)}
+    return {"report": report, "narration": narration, "proposal": proposal}
 
 
 def _read_environment_rows(as_of) -> list[dict[str, Any]]:

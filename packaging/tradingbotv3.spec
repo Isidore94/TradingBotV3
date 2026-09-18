@@ -159,6 +159,12 @@ hiddenimports += [
     "measured_report", "research_proposal", "ai_jobs.store", "ai_jobs.digest",
     "ai_jobs.measured_report_publish",
 ]
+# TJ-1: the Day Review page reaches its per-session index and the forecast reader
+# only on its worker (the index) and when the trader pastes a brief (the reader).
+# Both are top-level modules, for the same reason and with the same consequence as
+# the three above: package collection cannot see them, so a missing frozen import
+# has to fail here rather than at the first open.
+hiddenimports += ["day_review_index", "forecast_brief"]
 # The UI loads panels/services by name in places, and the engines import each
 # other lazily inside functions; collecting the first-party trees outright is
 # far cheaper than chasing ModuleNotFoundError one launch at a time.

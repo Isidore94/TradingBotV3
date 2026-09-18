@@ -5919,3 +5919,234 @@ missing prior proposal, model outage, validation refusal or failed publish leave
 facts and the last good pair intact. Setup Tracker may route that exact published display object
 into Daily Recap > Review without tracker ranking, Qt I/O, a store read or a model call. The proposal is therefore
 not permission to change a detector, score, alert, ranking, watchlist, Focus, journal or policy.
+
+## Day Review - one page, no machine rows, a per-session index (2026-09-17, packet TJ-1)
+
+**The trader's words.** "daily recap and market journal feel less than ideal ... I feel
+like currently it's overcomplicated ... Market journal just sucks, it has information but
+it really should be compacting the days ... rename paste weekly forecast to paste daily
+forecast, that's where I paste the output from my scheduled chatgpt prompt ... i don't need
+to see the SPY auto modes pasted in there ... there's just too much shit in these tabs and
+it's laggy as all hell. this should be a simple 'what worked what didn't and what was your
+process'. ... if you think it's better to combine daily recap and market journal that's
+fine with me." Answers: `docs/decisions/0021-trader-journal-consolidation.md`.
+
+**What was measured, not assumed.** On a staged copy of the live home folder at 1640x980,
+three repeats (`scripts/ui/desk_bench.py`, which TJ-1 taught to build both sides of the
+swap): `daily_recap.reload` settled in **13,500-16,500 ms across runs** (p50) because
+`daily_recap_reader._read_intraday_outcomes` streams the whole 476 MB
+`intraday_bounce_outcomes.csv` on every open with the 29 MB horizon CSV behind it, and
+every view then filters by session AFTERWARDS. `market_journal.construct` cost 362 ms
+(sync p95) and its first show settled 570 ms (p95). On the live desk the desk's OWN
+`Auto mode X -> Y` journal rows were **34 of 77**, and the 2026-09-16 nightly narration
+read them back as if the trader had written them.
+
+**The three rules the page is built to.**
+
+1. **One read, one payload.** `DayReviewService.read_day` returns one mapping with every
+   section in it and the page paints from that and nothing else, on ONE `QThread`. A
+   section that owned a read could start one on the Qt thread; a section that owns a
+   payload key cannot. Each store is read in its own guard, so one unreadable store costs
+   one section and names itself in `payload["error"]` - a blank section with no reason
+   reads as "nothing happened", which is a claim nobody measured.
+2. **One chart, built on first need.** The retired Market Journal page built FOUR
+   `CandleChart`s on the first entry click (299 ms, the G0 baseline). This page constructs
+   with ZERO, builds ONE when a payload carries SPY bars, and reuses it. A past session has
+   no bars in the running scanner's memory, so it says "chart after the close" rather than
+   drawing an empty axis; TJ-2 brings the stored bars.
+3. **No machine row, twice over.** `market_journal.is_machine_entry` is the ONE filter and
+   it is applied in `MarketJournalService.entries_about` (which is how `daily_story` and
+   `theses_for` select their rows), in `market_story.build_daily_story` (defensively, in
+   the pure function, so TJ-4's packs cannot forget it) and in
+   `market_story_rollups._stories_from_journal` (the nightly packs). The page filters again
+   because it is the surface the trader complained about. A Trade Mentor answer is NOT a
+   machine row: the trader wrote every word of it and the desk only chose the moment.
+   **Nothing is deleted** - the ledger is append-only and the 34 rows are still on disk.
+
+**The flip.** `MainWindow._record_auto_mode_flip` keeps its name and its caller and writes
+one Auto Pilot log line through the new public `AutopilotService.log`, which forwards to
+`_log` - still the one writer of the deque, the file, the `logging` line and `logMessage`.
+The sentence "Written by the desk, not the trader" is gone because it was written for a
+JOURNAL reader; in the Auto Pilot log every line is the desk's.
+`market_journal_capture.REASON_MODE_FLIP` stays defined: the old sidecars carry it.
+
+**The index.** `scripts/day_review_index.py` writes
+`DAY_REVIEW_DIR/sessions/<date>/outcomes.json` holding exactly the `_Store`s
+`read_session` would have built for that session: the rows its views consult (latest append
+per `event_id`, in the streaming reader's own order), the **full-file** `SourceCoverage`
+carried forward unchanged, and `raw_rows_by_session`. Storing the kept-row count as
+coverage instead would quietly relabel a 476 MB file as a 40-row one, so the equality test
+is on the whole `RecapSession` dataclass, coverage included. `read_session(index=...)` uses a
+valid index for THIS session and THIS lookback and otherwise STREAMS - another session,
+another window, a corrupt file, a revival that fails or a store the index does not carry all
+read the stores, because a cache may never change the answer. `is_stale` is the one
+staleness rule: only a horizon row that had not matured can change, so a pending index is
+stale once the session it was waiting for has CLOSED, an index built before its own session
+closed is always stale (that file is still being appended to), and an index with nothing
+pending is never stale. The post-close tick builds it once, through ONE named seam,
+`DayReviewService.build_index_for`.
+
+**Two things that may NEVER happen on the Qt thread, both found by review (2026-09-17).**
+First, the post-close index build: it was called straight from the 60-second timer slot and
+froze the desk for **22.8 seconds** while it streamed the big stores. It runs on
+`_IndexBuildWorker` now - single-flight, the page says "Building <date>'s index in the
+background…", the slot returns in 0.2 ms, and the page repaints if the finished index is the
+session on screen. Second, `alert_center.journal_chart_bars`: it LOOKS like a cache read and
+is not one - it mutates `_m5_bar_dicts` and arms a `QTimer.singleShot`, and a `singleShot`
+armed from a thread with no event loop never fires, which latched
+`_d1_prefetch_flush_armed` True and killed D1 prefetch for the rest of the session. So the
+Qt-thread slot that starts a read calls it (once, and only for a session that has not
+closed) and hands the bars into the worker's inputs; `DayReviewService` holds no bars reader
+and `read_day` takes `spy_m5_bars` as an INPUT. `MainWindow` hands the accessor to the PAGE,
+never to the service, and a source-level test says so. The tests pin the THREAD IDs, because
+that is what was wrong: `tests/test_tj1_day_review_post_close_index.py` and
+`tests/test_tj1_day_review_bars_on_the_qt_thread.py`.
+
+**What an index costs the home folder.** One is 22.7 MB, it lives in the SHARED home, and
+it is rebuildable - so three rules bound the churn (`write_index`): a session that has NOT
+CLOSED is never indexed (its stores are still being appended to and `is_stale` would refuse
+the file anyway, so today's page streams until the post-close build), an index whose content
+is UNCHANGED is not rewritten (two builds of a finished session differ only in `built_at`,
+and 22.7 MB is not worth a timestamp), and the folder is pruned to the newest
+`KEEP_SESSIONS` (40) on each write. `is_stale` also compares a stored `sources_stamp` -
+`(size, mtime_ns)` per indexed store - because a warehouse recompute REWRITES those CSVs and
+can change the rows of a session that closed weeks ago, which no clause about pending
+horizons would ever notice; the stamp is only consulted when the caller passes `sources`, so
+a clock-only question, and an index written before the clause existed, are answered as
+before.
+
+**An APPEND is not a REWRITE, and the scope is a NAME, not a session.** The stamp's first cut
+invalidated on any change, and `intraday_bounce_outcomes.csv` is appended to all day by the
+M5 scanner: one appended row for another session turned a 609 ms warm open into **12,124 ms**
+and rewrote the 22 MB index with nothing on the page different (reviewer, round 2). So a
+mismatch is READ, not assumed (`stamp_verdict`): a file that only GREW has its appended TAIL
+parsed - seek to the stored size, re-attach the header line so the rows parse against the
+column NAMES the store declares - and the index is stale only if an appended row is one it
+would have KEPT. A file that SHRANK or changed at the SAME SIZE is a rewrite and rebuilds; so
+does a bare `os.utime`, which a stamp cannot tell from a same-size rewrite and which is rare
+enough to pay for one rebuild. Anything the tail cannot ANSWER - a row whose session or
+symbol will not read, a boundary that is not a line end (the stored size was taken
+mid-append), a header-less or unreadable file - rebuilds: uncertainty rebuilds, it never
+assumes. When the growth is out of scope the 22 MB body is left alone and the new stamp goes
+into a few hundred bytes beside it (`stamp.json`, overlaid by `read_index`, ignored when it
+names another session, cleared by the next real body write), so the following open compares
+sizes instead of reading the same tail again. The tail is read WHOLE: after a week unopened
+that is a week of appends, tens of MB, which is still two orders of magnitude below the
+476 MB stream and happens once.
+
+**The scope is `(session, symbol)` because a session-only scope had no live benefit at all**
+(reviewer, round 3). Every recent index carries target sessions running weeks forward - six
+live indexes from 2026-08-28 to 2026-09-17 all hold 2026-09-18, with targets out to
+2026-10-01 - so `trade_date = today` appends always landed on `rebuild`. `_index_scope` now
+answers with the SESSIONS where any name counts (the selected session and its lookback
+window, which the day's own views read whole) and the `(session, symbol)` PAIRS its own
+observations reference; side is deliberately not in the key, because a blank side matches
+either.
+
+**What that buys, measured on the staged home** (index of 2026-09-17, one appended intraday
+row dated 2026-09-18): an append for a name the index does NOT reference is decided in
+**28.3 ms**, the page opens in **502 ms** and the body is untouched; an append for a name it
+DOES reference is decided in 24.2 ms and rebuilds - **11,380 ms**, on the read worker with the
+Qt thread at 0.17 ms, the page still showing what it had. **And the honest limit: that index
+references 1,198 names for 2026-09-18 - effectively the whole scanned universe - so DURING a
+session almost every append rebuilds.** The rule keeps the page warm after the close and
+outside trading hours, which is when the trader reads it, and it costs 28 ms to find out.
+Narrowing further means updating one swing row's `first_favorable_pct` in place instead of
+rebuilding, which is TJ-2's question, not this one.
+`tests/test_tj1_day_review_index_tail.py` holds the twenty-eight cases.
+
+**How wide the index is, and the line between fast and fresh.** The first cut covered the
+two biggest stores and left an indexed read at 2,217 ms, which did not meet the gate's
+"under one second". Measured store by store on the staged home (2026-09-17): intraday
+476 MB / 4,995 ms, horizon 31 MB / 2,704 ms, **tier 14 MB / 944 ms**, **human-focus 1.0 MB /
+164 ms**, then pick-feedback 0.40 MB / 36 ms, review-events 0.27 MB / 15 ms, preference
+0.44 MB / 8 ms, annotations 0.35 MB / 4 ms and four more at about 2 ms together. So
+`INDEXED_SOURCE_SPECS` covers the FOUR stores over a megabyte, and the six small ones are
+read LIVE on every open - a freshness rule, not an oversight: a veto, a note, a favorite or a
+staged pick from a minute ago has to be on the page. `alert_review_events.jsonl` and
+`preference_trade_outcomes.csv` are deliberately OUT even though the follow-up packet named
+them, and the reason is worth keeping: both are rewritten as the trader and the journal move
+(the M5 click-away verdict lands in the first; the second is regenerated as trades arrive),
+an index carries no signal for a REWRITE, and indexing them would buy 23 ms. The 10.5 MB
+figure once attributed to review-events was a MEASUREMENT ERROR: that is the
+`alert_review_events/` segment directory, which `read_session` never opens - it reads the
+single 0.27 MB root file. Indexing tier and human-focus cannot change any answer at all,
+because `read_session` opens both for their COVERAGE LINE alone and no view reads a row of
+either.
+
+**Two lookups that were walks.** With the stores indexed, the whole remaining cost was
+compute: `_d1_horizon_row` walked the entire horizon slice once per D1 decision (117
+decisions over 13,700 rows - 1.1 s of profiled time, the single biggest item left) and
+`_outcome_for` walked every outcome of the session per call (3,281 calls, 274 ms). Both are
+now asked through a dict built once per read (`_horizon_rows_by_name`, `_outcomes_by_name`),
+and **neither dict is keyed on SIDE or horizon**: a row with a blank side matches either
+request, so those rules stay inside the lookup, applied to one name's handful of rows in
+file order, and the FIRST match is still the row the walk returned.
+`tests/test_tj1_day_review_index_wide.py` checks both against a brute-force reference walk
+over rows built to make the two able to disagree. That took the indexed read from 812 ms to
+265 ms and the page's whole read to 396 ms.
+
+**The forecast.** The button reads "Paste daily forecast..." and the dialog asks for the text,
+the SESSION it is about and the source model. `MarketJournalService.import_daily_forecast`
+files the entry against `target_session` and `market_thesis.record_forecast` records it
+beside `target_week`, which is kept and kept separate - a weekly forecast is not a daily one
+and writing one into the other's field would make both unreadable. A second paste for the
+same session SUPERSEDES the first, so the page shows one brief and both rows stay on disk.
+`import_weekly_forecast` survives one release as a deprecated alias.
+`scripts/forecast_brief.py` is the view over the text: heading match only,
+case-insensitive, no model, nothing fetched, and anything the document does not say stays
+empty. Two readings worth writing down, both from the brief the trader pasted on
+2026-09-17: `~8/10 through tomorrow, then potentially falling toward 6-7/10` is THREE
+scores (8, 6, 7) because a range scores both ends, and `around September 29-30` on a
+Turbulence line is NONE, because it carries no `/10`. The ranked-signals line is split on
+the arrow in the order written - a set would lose the ranking, which is the whole content of
+that line.
+
+**Move, not delete.** The Daily Recap's Review tab is a **Measured report** section at the
+foot of Research > Results, with the same cells, the same `report_id`, the same
+`review_cells` parity seam and the same `ReadWorker`; `latest_published(root)` with no
+session named answers "the newest session that has one", which is the right question for a
+page with no session picker. Its read waits for the page's FIRST SHOW, not the constructor,
+because that is G7.1's rule for this page - the desk builds nine Research children at
+startup and each loads when its tab is opened. The first cut read it in `__init__`, which
+gave the desk a thread for a section nobody had looked at and could outlive a panel that was
+only `deleteLater`-ed; `tests/test_tj1_measured_report_load_rule.py` pins WHO STARTS the
+read rather than when it lands, because on a worker the second question is a race even when
+the answer is wrong. The Staged picks table and its verb are on the **Auto Pilot**
+page under the log, keeping `focusAddRequested` so the add is still performed by
+`FocusService`, the store's own owner - AWAY still STAGES and never adopts, the page still
+only ASKS, and the R2 adoption gate is SHOWN at click time and never enforced.
+`SetupTrackerPanel.open_entry_quality_review` learned that its host may be a SECTION rather
+than a tab: it renders, then hops the tab strip only if the host has one.
+
+**What is gone from the trader's screen** (plan.md 12.2): the environment timeline, "What
+the desk measured that session", the calendar overlay, the thesis drafting pane and "Save
+interpretation", the four capture panes and the five Daily Recap tabs. Every store stays;
+`market_journal_panel.py` and `daily_recap_panel.py` stay on disk, unregistered and no
+longer constructed, until TJ-8 deletes them - which is why the WS-RP and Sol proposal tests
+that construct the recap class directly still pass as written.
+
+**What it cost, measured the same way each time** (`scripts/ui/desk_bench.py`, staged home,
+1640x980, three repeats). Retired page: `market_journal` construct 362 ms sync p95, first
+show 570 ms settle p95, entry click 121 ms; `daily_recap.reload` **13,500-16,500 ms across runs** settle p50.
+Day Review, **cold and warm stated separately because they differ by 15x** (the first
+handoff printed 1,099 ms for the cold open, which was a warm bench figure and wrong -
+reviewer, 2026-09-17): construct 4-20 ms; **the Qt thread costs 0.2 ms either way** (a
+`reload` only starts a worker). COLD, with no index on disk: the page paints after
+**12,549 ms**, because that read streams the four big stores and builds the index behind
+it. WARM: the page paints after **607-677 ms**, `day_review.reload` settles at **820 ms p50
+/ 834 ms p95** on the bench (an earlier 550 ms p50 was measured in the process that had just
+written the index; 820 ms is the conservative number), entry click 121 ms settle / 0.6 ms
+sync. The POST-CLOSE tick: **slot 0.2 ms, index lands 11.0 s later on its worker** - it was
+22.8 s of frozen desk when the slot did the work itself. One index is 22.7 MB; reading it
+costs 92 ms.
+
+**Tests:** the tester's `tests/test_tj1_machine_rows.py`,
+`tests/test_tj1_page_specs.py`, `tests/test_tj1_day_review_page.py`,
+`tests/test_tj1_day_review_index.py`, `tests/test_tj1_forecast_brief.py` and
+`tests/test_tj1_moves.py` (104 tests, 96 red at the tester's commit), plus three builder
+files for the seams none of them pinned, each proven red first:
+`tests/test_tj1_day_review_post_close_index.py` (the one named build seam),
+`tests/test_tj1_day_review_index_staleness.py` (the two edges of the staleness rule, found
+by the bench) and `tests/test_tj1_day_review_index_wide.py` (the widened index's equality,
+its all-or-nothing revival, and the two rewritten lookups against a reference walk).

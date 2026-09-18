@@ -168,7 +168,15 @@ class MarketJournalService(QObject):
         return rows
 
     def entries_about(self, session_date: str) -> list[dict[str, Any]]:
-        """Entries about one session, including legacy pre-Phase-0.31 rows."""
+        """Entries about one session, including legacy pre-Phase-0.31 rows.
+
+        TJ-1 item 2: the desk's OWN rows are dropped here, which is the ONE
+        filter every trader-facing read of this store inherits (`daily_story`
+        and `theses_for` both select through this method). A Trade Mentor answer
+        is NOT one of them - the trader wrote every word of it and the desk only
+        chose the moment. Nothing is deleted: `is_machine_entry` is asked at
+        read time off `origin`, and the rows stay in the append-only ledger.
+        """
         import market_journal
 
         wanted = str(session_date or "").strip()
@@ -178,6 +186,7 @@ class MarketJournalService(QObject):
             row
             for row in self.entries_for()
             if market_journal.session_of_entry(row) == wanted
+            and not market_journal.is_machine_entry(row)
         ]
         rows.sort(key=lambda row: str(row.get("created_at") or ""))
         return rows
@@ -232,9 +241,21 @@ class MarketJournalService(QObject):
         quietly replace it on the next refresh. Nothing is written here - a
         read that writes is how a store grows rows nobody asked for.
         """
+        import market_journal
         import market_thesis
 
-        entries = self.entries_about(session_date) if session_date else self.entries_for()
+        # TJ-1 item 2: the machine-row filter is inherited through
+        # `entries_about`, so the no-session path has to apply it itself - a
+        # thesis drafted from a row nobody thought is the defect either way.
+        entries = (
+            self.entries_about(session_date)
+            if session_date
+            else [
+                row
+                for row in self.entries_for()
+                if not market_journal.is_machine_entry(row)
+            ]
+        )
         try:
             stored = market_thesis.current_theses(market_thesis.read_rows())
         except Exception:  # noqa: BLE001
@@ -292,7 +313,103 @@ class MarketJournalService(QObject):
         self.statusChanged.emit("interpretation saved; the original draft is untouched")
         return {"ok": True, "row": row}
 
-    # -- the imported weekly forecast (WISHLIST 10K) -----------------------
+    # -- the imported daily forecast (TJ-1 item 5; WISHLIST 10K before it) --
+    def import_daily_forecast(
+        self,
+        *,
+        text: str,
+        target_session: str = "",
+        source_model: str = "",
+        created_at_claimed: str = "",
+        target_week: str = "",
+        scenarios: Iterable[str] = (),
+        links: Iterable[str] = (),
+        now: datetime | None = None,
+        theses_path=None,
+    ) -> dict[str, Any]:
+        """Paste someone else's brief in, whole, FILED AGAINST ONE SESSION.
+
+        The trader's scheduled ChatGPT prompt produces one brief a day ("that's
+        where I paste the output from my scheduled chatgpt prompt", 2026-09-17),
+        so the question the store has to answer is "which DAY is this about" -
+        not which week. `target_session` is that answer and it comes from the
+        caller (the brief's own first heading, or the page's session), never
+        from the paste moment: a brief pasted at 21:00 for today is about today.
+
+        Two writes and one order: the ENTRY first (the text is the thing worth
+        keeping), then the sidecar that records where it came from. A sidecar
+        failure is reported and never costs the import - the evidence store may
+        not cost the event it records.
+
+        A SECOND paste for the same session supersedes the first, so the page's
+        External forecast block shows one brief rather than two. Both rows stay
+        on disk; superseding is a read-side decision (`resolve_entries`).
+
+        `created_at_claimed` stays `unknown` when nobody supplied it. Filling it
+        from `imported_at` would turn "a forecast written at some unknown time"
+        into "a forecast written at the moment it was pasted", which is a claim
+        about what was knowable when, and it would be false.
+        """
+        import market_journal
+        import market_thesis
+
+        session = str(target_session or "").strip() or market_journal.session_date_for(now)
+        written = self.write_entry(
+            text=text,
+            session_date=session,
+            timeframe=market_journal.TIMEFRAME_D1,
+            origin=market_journal.ORIGIN_EXTERNAL_FORECAST,
+            now=now,
+            supersedes=self._current_forecast_entry_id(session),
+        )
+        if not written.get("ok"):
+            return written
+        entry = written["entry"]
+        try:
+            sidecar = market_thesis.record_forecast(
+                entry_id=str(entry.get("entry_id") or ""),
+                text=str(entry.get("text") or ""),
+                source_model=source_model,
+                created_at_claimed=created_at_claimed,
+                target_week=target_week,
+                target_session=session,
+                scenarios=scenarios,
+                links=links,
+                session_date=str(session or entry.get("session_date") or ""),
+                path=theses_path,
+                now=now,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Forecast sidecar not written: %s", exc)
+            self.statusChanged.emit(f"forecast saved; its source row was NOT: {exc}")
+            return {"ok": True, "entry": entry, "forecast": None, "sidecar_error": str(exc)}
+        self.statusChanged.emit(
+            f"daily forecast imported as outside commentary for {session}"
+        )
+        return {"ok": True, "entry": entry, "forecast": sidecar}
+
+    def _current_forecast_entry_id(self, session_date: str) -> str:
+        """The forecast entry this session already has, if any. Read-only.
+
+        Quiet on failure: an unreadable store means "no earlier forecast", which
+        writes a new independent row - the wrong answer is a second row on the
+        page, never a lost paste.
+        """
+        import market_journal
+
+        try:
+            rows = [
+                row
+                for row in self.entries_about(session_date)
+                if str(row.get("origin") or "") == market_journal.ORIGIN_EXTERNAL_FORECAST
+            ]
+        except Exception:  # noqa: BLE001
+            logging.debug("Earlier forecasts unreadable.", exc_info=True)
+            return ""
+        if not rows:
+            return ""
+        return str(rows[-1].get("entry_id") or "")
+
     def import_weekly_forecast(
         self,
         *,
@@ -306,50 +423,25 @@ class MarketJournalService(QObject):
         now: datetime | None = None,
         theses_path=None,
     ) -> dict[str, Any]:
-        """Paste someone else's weekly forecast in, whole.
+        """DEPRECATED (TJ-1 item 5): use `import_daily_forecast`.
 
-        Two writes and one order: the ENTRY first (the text is the thing worth
-        keeping), then the sidecar that records where it came from. A sidecar
-        failure is reported and never costs the import - the evidence store may
-        not cost the event it records.
-
-        `created_at_claimed` stays `unknown` when nobody supplied it. Filling it
-        from `imported_at` would turn "a forecast written at some unknown time"
-        into "a forecast written at the moment it was pasted", which is a claim
-        about what was knowable when, and it would be false.
+        The weekly name survives one release as a thin alias so a caller written
+        before the rename is not broken by it; the next packet deletes it. It
+        files the text against `session_date` exactly as the daily method files
+        it against `target_session`, and it still passes `target_week` through
+        for the rows that have one.
         """
-        import market_journal
-        import market_thesis
-
-        written = self.write_entry(
+        return self.import_daily_forecast(
             text=text,
-            session_date=session_date or market_journal.session_date_for(now),
-            timeframe=market_journal.TIMEFRAME_D1,
-            origin=market_journal.ORIGIN_EXTERNAL_FORECAST,
+            target_session=session_date,
+            source_model=source_model,
+            created_at_claimed=created_at_claimed,
+            target_week=target_week,
+            scenarios=scenarios,
+            links=links,
             now=now,
+            theses_path=theses_path,
         )
-        if not written.get("ok"):
-            return written
-        entry = written["entry"]
-        try:
-            sidecar = market_thesis.record_forecast(
-                entry_id=str(entry.get("entry_id") or ""),
-                text=str(entry.get("text") or ""),
-                source_model=source_model,
-                created_at_claimed=created_at_claimed,
-                target_week=target_week,
-                scenarios=scenarios,
-                links=links,
-                session_date=str(session_date or entry.get("session_date") or ""),
-                path=theses_path,
-                now=now,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logging.warning("Forecast sidecar not written: %s", exc)
-            self.statusChanged.emit(f"forecast saved; its source row was NOT: {exc}")
-            return {"ok": True, "entry": entry, "forecast": None, "sidecar_error": str(exc)}
-        self.statusChanged.emit("weekly forecast imported as outside commentary")
-        return {"ok": True, "entry": entry, "forecast": sidecar}
 
     # -- chart captures ---------------------------------------------------
     def capture_charts(

@@ -106,7 +106,11 @@ def build_daily_story(
     two places, with two answers, is how an evening note disappears.
     """
     session = str(session_date or "").strip()
-    rows = [dict(row) for row in (entries or ())]
+    # TJ-1 item 2: the desk's OWN rows are dropped here, defensively, as well as
+    # in the readers that select the entries. A story is an AI input (TJ-4 reads
+    # it) and a caller that builds its own entry list must not have to remember
+    # the filter; the ledger itself is never rewritten.
+    rows = [dict(row) for row in (entries or ()) if not _is_machine_entry(row)]
     # Stable: two entries written in the same second keep the order they came in.
     rows.sort(key=lambda row: str(row.get("created_at") or ""))
 
@@ -170,6 +174,20 @@ def build_daily_story(
         sources=sources,
         notes=tuple(notes),
     )
+
+
+def _is_machine_entry(row: Mapping[str, Any]) -> bool:
+    """Did the desk write this row rather than the trader? (TJ-1 item 2.)
+
+    `market_journal.is_machine_entry` is the ONE definition; it is imported
+    lazily with a literal fallback for the same reason `_is_external_forecast`
+    is - this module is pure by contract and is imported by the nightly slots.
+    """
+    try:
+        from market_journal import is_machine_entry
+    except Exception:  # pragma: no cover - the function is in the same repo
+        return str(row.get("origin") or "") == "auto_mode_flip"
+    return is_machine_entry(row)
 
 
 def _is_external_forecast(row: Mapping[str, Any]) -> bool:

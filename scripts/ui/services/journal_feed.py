@@ -274,6 +274,17 @@ def selection_spans_tax_groups(selected: Iterable[tuple[str, str]]) -> bool:
     return len(statuses) > 1
 
 
+def trades_on(trade_date: Any) -> list[dict[str, Any]]:
+    """Every trade the store files under one date. Worker-thread call.
+
+    TJ-1 item 3: the Day Review page's "What you traded" section REFERS to these
+    rows and the Journal page stays the place to tag and correct them, so this is
+    a read through the SAME shared store the Journal page uses - not a second
+    connection, and not a second definition of what a trade is.
+    """
+    return _store().list_trades(trade_date=trade_date)
+
+
 def load_trades(
     *,
     broker: str = "All",
