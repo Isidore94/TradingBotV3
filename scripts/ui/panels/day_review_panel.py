@@ -1163,6 +1163,12 @@ class DayReviewPanel(QFrame):
         for name in ("liked_not_traded", "traded_left_early", "claimed_d1"):
             table = self.walkaway_tables[name]
             rows = tuple(getattr(day, name, ()) or ())
+            values = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
+            median = values[len(values) // 2] if values else None
+            heading = table.parentWidget().findChild(QLabel) if table.parentWidget() else None
+            if heading is not None:
+                base = {"liked_not_traded": "Liked but never traded", "traded_left_early": "Traded, then left early", "claimed_d1": "Claimed D1 picks"}[name]
+                heading.setText(f"{base} — n={len(rows)}; median Ran after {_tj2_pct(median)}")
             self._walkaway_table_rows[id(table)] = rows
             table.setRowCount(len(rows))
             for index, row in enumerate(rows):
@@ -1175,6 +1181,9 @@ class DayReviewPanel(QFrame):
         table = self.walkaway_tables["rejected"]
         self._walkaway_rows = rows
         self._walkaway_table_rows[id(table)] = rows
+        values = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
+        median = values[len(values) // 2] if values else None
+        self.walkaway_note.setText(f"n={len(rows)}; median Ran after {_tj2_pct(median)}. Double-click a row to chart it.")
         table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
