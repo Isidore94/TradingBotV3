@@ -84,18 +84,46 @@ INTRADAY_HEADER = (
 #: the LAST append per `event_id` while coverage counts every line on disk, and
 #: an index that stores one number for both is wrong.
 INTRADAY_ROWS = (
-    ("NVDA_long_20260910_09_40_00_ema_15", SESSION, "NVDA", "long", "09:40:00",
-     "open", "", "", "", ""),
-    ("NVDA_long_20260910_09_40_00_ema_15", SESSION, "NVDA", "long", "09:40:00",
-     "closed", "104.00", "4.00", "5.50", "-0.80"),
-    ("TSLA_short_20260910_09_45_00_ema_15", SESSION, "TSLA", "short", "09:45:00",
-     "closed", "95.00", "5.00", "6.00", "-0.80"),
+    ("NVDA_long_20260910_09_40_00_ema_15", SESSION, "NVDA", "long", "09:40:00", "open", "", "", "", ""),
+    (
+        "NVDA_long_20260910_09_40_00_ema_15",
+        SESSION,
+        "NVDA",
+        "long",
+        "09:40:00",
+        "closed",
+        "104.00",
+        "4.00",
+        "5.50",
+        "-0.80",
+    ),
+    (
+        "TSLA_short_20260910_09_45_00_ema_15",
+        SESSION,
+        "TSLA",
+        "short",
+        "09:45:00",
+        "closed",
+        "95.00",
+        "5.00",
+        "6.00",
+        "-0.80",
+    ),
     # Present and EMPTY, which is what an unfinalized row looks like on disk.
-    ("AMD_long_20260910_10_05_00_ema_15", SESSION, "AMD", "long", "10:05:00",
-     "open", "", "", "", ""),
+    ("AMD_long_20260910_10_05_00_ema_15", SESSION, "AMD", "long", "10:05:00", "open", "", "", "", ""),
     # A prior session's row, which must never leak into today's views.
-    ("NFLX_long_20260909_09_40_00_ema_15", PRIOR_1, "NFLX", "long", "09:40:00",
-     "closed", "707.00", "1.00", "2.00", "-1.00"),
+    (
+        "NFLX_long_20260909_09_40_00_ema_15",
+        PRIOR_1,
+        "NFLX",
+        "long",
+        "09:40:00",
+        "closed",
+        "707.00",
+        "1.00",
+        "2.00",
+        "-1.00",
+    ),
     # No event_id at all: an incomplete identity, kept as its own row.
     ("", SESSION, "KBR", "short", "09:35:00", "closed", "77.60", "3.00", "4.00", "-1.50"),
 )
@@ -133,36 +161,92 @@ def _csv_text(header: str, rows) -> str:
 def _intraday_csv() -> str:
     context = json.dumps({"market_environment": "bullish_strong"}, sort_keys=True)
     rows = []
-    for (event_id, trade_date, symbol, direction, entry_time, status,
-         eod_close, eod_move, mfe_pct, mae_pct) in INTRADAY_ROWS:
-        rows.append([
-            "1", event_id, "registered", f"{trade_date}T13:10:00-07:00", trade_date,
-            symbol, direction, f"{trade_date}T{entry_time}", "100.00", "", "", "", "",
-            "", "", "", "", "", "False", "False", "False", status, "", context, "",
-            eod_close, eod_move, mfe_pct, mae_pct,
-        ])
+    for (
+        event_id,
+        trade_date,
+        symbol,
+        direction,
+        entry_time,
+        status,
+        eod_close,
+        eod_move,
+        mfe_pct,
+        mae_pct,
+    ) in INTRADAY_ROWS:
+        rows.append(
+            [
+                "1",
+                event_id,
+                "registered",
+                f"{trade_date}T13:10:00-07:00",
+                trade_date,
+                symbol,
+                direction,
+                f"{trade_date}T{entry_time}",
+                "100.00",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "False",
+                "False",
+                "False",
+                status,
+                "",
+                context,
+                "",
+                eod_close,
+                eod_move,
+                mfe_pct,
+                mae_pct,
+            ]
+        )
     return _csv_text(INTRADAY_HEADER, rows)
 
 
 def _session_horizon_csv() -> str:
     rows = []
-    for (symbol, side, scan_date, target, horizon, ret, favorable,
-         measured, maturity) in SESSION_HORIZON_ROWS:
+    for symbol, side, scan_date, target, horizon, ret, favorable, measured, maturity in SESSION_HORIZON_ROWS:
         scan_row_id = f"{symbol}:{scan_date}:{scan_date}-130129"
-        rows.append([
-            f"{scan_row_id}:{horizon}", scan_row_id, symbol, side, scan_date, target,
-            horizon, horizon, "100.00", "session_bar", "", ret, favorable, measured,
-            maturity, "" if measured else "horizon_not_reached",
-            "favorable_direction_session_v2",
-            "entry_session_close_to_target_session_close", "S", "derived_from_bucket",
-            "favorite_setup", "avwap_band_bounce", "", "1",
-        ])
+        rows.append(
+            [
+                f"{scan_row_id}:{horizon}",
+                scan_row_id,
+                symbol,
+                side,
+                scan_date,
+                target,
+                horizon,
+                horizon,
+                "100.00",
+                "session_bar",
+                "",
+                ret,
+                favorable,
+                measured,
+                maturity,
+                "" if measured else "horizon_not_reached",
+                "favorable_direction_session_v2",
+                "entry_session_close_to_target_session_close",
+                "S",
+                "derived_from_bucket",
+                "favorite_setup",
+                "avwap_band_bounce",
+                "",
+                "1",
+            ]
+        )
     return _csv_text(SESSION_HORIZON_HEADER, rows)
 
 
 @pytest.fixture()
 def sources(tmp_path):
-    """A `RecapSources` whose twelve paths all live under `tmp_path`.
+    """A `RecapSources` whose thirteen paths all live under `tmp_path`.
 
     Every path is explicit, including the two with a `default_factory`: a read
     that silently reached a real store would not be a fixture.
@@ -188,23 +272,20 @@ def sources(tmp_path):
         staged_picks=root / "auto_populate_pending.json",
         environment_labels=root / "d1_environment.jsonl",
         working_lately=root / "snapshot_latest.json",
+        claimed_picks=root / "claimed_picks.jsonl",
     )
 
 
 def _streamed(sources):
     import daily_recap_reader
 
-    return daily_recap_reader.read_session(
-        SESSION, lookback_sessions=LOOKBACK, now=NOW, sources=sources
-    )
+    return daily_recap_reader.read_session(SESSION, lookback_sessions=LOOKBACK, now=NOW, sources=sources)
 
 
 def _index(sources):
     import day_review_index
 
-    return day_review_index.build_index(
-        SESSION, lookback_sessions=LOOKBACK, sources=sources, now=NOW
-    )
+    return day_review_index.build_index(SESSION, lookback_sessions=LOOKBACK, sources=sources, now=NOW)
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +307,8 @@ def test_the_fixture_stores_read_the_way_the_numbers_below_claim(sources):
     assert session.session_date == SESSION
     assert session.provisional is False
     assert set(session.coverage) == set(daily_recap_reader.SOURCE_NAMES)
+    assert "claimed_picks" in session.coverage
+    assert session.coverage["claimed_picks"].path == str(sources.claimed_picks)
 
 
 # ---------------------------------------------------------------------------
@@ -273,10 +356,7 @@ def test_the_stored_intraday_rows_are_the_last_append_for_each_event(sources):
     """The append-only log's identity rule survives the round trip: the NVDA
     row in the index is the CLOSED one, not the registered one."""
     index = _index(sources)
-    nvda = [
-        row for row in index["intraday_outcomes"]["rows"]
-        if str(row.get("symbol")) == "NVDA"
-    ]
+    nvda = [row for row in index["intraday_outcomes"]["rows"] if str(row.get("symbol")) == "NVDA"]
     assert len(nvda) == 1, nvda
     assert nvda[0]["status"] == "closed"
     assert nvda[0]["mfe_pct"] == "5.50"
@@ -297,22 +377,38 @@ def test_an_index_over_only_matured_rows_is_not_pending(sources, tmp_path):
 
     matured = [row for row in SESSION_HORIZON_ROWS if row[8] == "mature"]
     rows = []
-    for (symbol, side, scan_date, target, horizon, ret, favorable,
-         measured, maturity) in matured:
+    for symbol, side, scan_date, target, horizon, ret, favorable, measured, maturity in matured:
         scan_row_id = f"{symbol}:{scan_date}:{scan_date}-130129"
-        rows.append([
-            f"{scan_row_id}:{horizon}", scan_row_id, symbol, side, scan_date, target,
-            horizon, horizon, "100.00", "session_bar", "", ret, favorable, measured,
-            maturity, "", "favorable_direction_session_v2",
-            "entry_session_close_to_target_session_close", "S", "derived_from_bucket",
-            "favorite_setup", "avwap_band_bounce", "", "1",
-        ])
-    Path(sources.session_horizon_outcomes).write_text(
-        _csv_text(SESSION_HORIZON_HEADER, rows), encoding="utf-8"
-    )
-    index = day_review_index.build_index(
-        SESSION, lookback_sessions=LOOKBACK, sources=sources, now=NOW
-    )
+        rows.append(
+            [
+                f"{scan_row_id}:{horizon}",
+                scan_row_id,
+                symbol,
+                side,
+                scan_date,
+                target,
+                horizon,
+                horizon,
+                "100.00",
+                "session_bar",
+                "",
+                ret,
+                favorable,
+                measured,
+                maturity,
+                "",
+                "favorable_direction_session_v2",
+                "entry_session_close_to_target_session_close",
+                "S",
+                "derived_from_bucket",
+                "favorite_setup",
+                "avwap_band_bounce",
+                "",
+                "1",
+            ]
+        )
+    Path(sources.session_horizon_outcomes).write_text(_csv_text(SESSION_HORIZON_HEADER, rows), encoding="utf-8")
+    index = day_review_index.build_index(SESSION, lookback_sessions=LOOKBACK, sources=sources, now=NOW)
     assert index["pending"] is False
 
 
@@ -331,9 +427,7 @@ def test_an_indexed_read_never_opens_the_476_mb_intraday_file(sources, monkeypat
         raise AssertionError("read_session streamed the intraday log despite the index")
 
     monkeypatch.setattr(daily_recap_reader, "_read_intraday_outcomes", _refuse)
-    got = daily_recap_reader.read_session(
-        SESSION, lookback_sessions=LOOKBACK, now=NOW, sources=sources, index=index
-    )
+    got = daily_recap_reader.read_session(SESSION, lookback_sessions=LOOKBACK, now=NOW, sources=sources, index=index)
     assert got == expected
 
 
@@ -350,9 +444,7 @@ def test_an_indexed_read_never_opens_the_session_horizon_file(sources, monkeypat
         return original(name, path, clock_field)
 
     monkeypatch.setattr(daily_recap_reader, "_read_csv", _guard)
-    got = daily_recap_reader.read_session(
-        SESSION, lookback_sessions=LOOKBACK, now=NOW, sources=sources, index=index
-    )
+    got = daily_recap_reader.read_session(SESSION, lookback_sessions=LOOKBACK, now=NOW, sources=sources, index=index)
     assert got == expected
 
 
@@ -449,7 +541,10 @@ def test_a_nonsense_index_is_ignored_and_the_stores_are_read_instead(sources):
     import daily_recap_reader
 
     got = daily_recap_reader.read_session(
-        SESSION, lookback_sessions=LOOKBACK, now=NOW, sources=sources,
+        SESSION,
+        lookback_sessions=LOOKBACK,
+        now=NOW,
+        sources=sources,
         index={"schema": "something_else", "session_date": "1999-01-04"},
     )
     assert got == _streamed(sources)

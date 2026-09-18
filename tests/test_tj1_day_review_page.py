@@ -29,7 +29,7 @@ The contract these tests pin, so the builder has nothing to guess:
     auto_time_reader=None)``, signals ``statusChanged(str)`` and
     ``chartRequested(str, str)``, and the members
     ``session_picker``, ``refresh_button``, ``story_note``, ``theses``,
-    ``rejected_that_worked_table``, ``entries``, ``entry_reader``,
+    ``rejected_that_worked_table``, ``walkaway_tables``, ``entries``, ``entry_reader``,
     ``entry_text``, ``save_button``, ``timeframe_picker``,
     ``paste_forecast_button``, ``forecast_box``, ``trades_table``, ``spy_note``,
     ``ideas_note``, plus ``render(payload)``, ``reload()``, ``start()``,
@@ -74,6 +74,7 @@ PAYLOAD_KEYS = (
     "theses",
     "entries",
     "rejected_that_worked",
+    "walkaway",
     "trades",
     "forecast",
     "spy_m5_bars",
@@ -121,16 +122,21 @@ def _entry(entry_id, text, *, created_at, origin="journal_page", timeframe="M5")
 
 
 TRADER_EARLY = _entry(
-    "mj-1", "Gap up and the semis led. I waited for the pullback.",
+    "mj-1",
+    "Gap up and the semis led. I waited for the pullback.",
     created_at="2026-09-10T06:40:00-07:00",
 )
 MENTOR_LATER = _entry(
-    "mj-2", "10:00 read: breadth turned, I am flat and comfortable.",
-    created_at="2026-09-10T10:00:00-07:00", origin="trade_mentor",
+    "mj-2",
+    "10:00 read: breadth turned, I am flat and comfortable.",
+    created_at="2026-09-10T10:00:00-07:00",
+    origin="trade_mentor",
 )
 MACHINE_ROW = _entry(
-    "mj-3", "Auto mode DESK -> AWAY. Written by the desk, not the trader.",
-    created_at="2026-09-10T07:05:00-07:00", origin="auto_mode_flip",
+    "mj-3",
+    "Auto mode DESK -> AWAY. Written by the desk, not the trader.",
+    created_at="2026-09-10T07:05:00-07:00",
+    origin="auto_mode_flip",
 )
 LONG_ENTRY = _entry(
     "mj-4",
@@ -142,8 +148,11 @@ LONG_ENTRY = _entry(
 SPY_BARS = [
     {
         "dt": datetime(2026, 9, 10, 6, 30) + timedelta(minutes=5 * i),
-        "open": 100.0 + i, "high": 101.0 + i, "low": 99.5 + i,
-        "close": 100.5 + i, "volume": 1000 + i,
+        "open": 100.0 + i,
+        "high": 101.0 + i,
+        "low": 99.5 + i,
+        "close": 100.5 + i,
+        "volume": 1000 + i,
     }
     for i in range(12)
 ]
@@ -157,6 +166,7 @@ def _payload(**overrides):
         "theses": [],
         "entries": [],
         "rejected_that_worked": [],
+        "walkaway": None,
         "trades": [],
         "forecast": {},
         "spy_m5_bars": [],
@@ -242,8 +252,12 @@ def test_every_section_is_painted_from_the_one_payload(panel):
             theses=[{"entry_id": "mj-1", "text": "Dip buys work while the 10-year is calm."}],
             trades=[
                 {
-                    "trade_id": "t-1", "symbol": "NVDA", "direction": "LONG",
-                    "quantity": 100, "net_pnl": 240.0, "status": "closed",
+                    "trade_id": "t-1",
+                    "symbol": "NVDA",
+                    "direction": "LONG",
+                    "quantity": 100,
+                    "net_pnl": 240.0,
+                    "status": "closed",
                     "opened_at": f"{SESSION}T07:05:00-07:00",
                 }
             ],
@@ -263,24 +277,31 @@ def test_every_section_is_painted_from_the_one_payload(panel):
     assert "Nothing yet" in NO_IDEAS_YET
 
 
-def test_the_walkaway_table_is_the_rejected_that_worked_columns_under_its_new_title(panel):
-    """TJ-1 ships ONE of the four walk-away tables; TJ-2 brings the rest.
-    Its columns are the ones the Daily Recap already showed."""
+def test_the_walkaway_is_four_ten_column_tables_under_its_fixed_titles(panel):
+    """TJ-2B replaces TJ-1's one recap table and three placeholders."""
     from ui.panels.day_review_panel import WALKAWAY_TITLE
 
     assert WALKAWAY_TITLE == "Passed, and it ran"
-    headers = [
-        panel.rejected_that_worked_table.horizontalHeaderItem(i).text()
-        for i in range(panel.rejected_that_worked_table.columnCount())
+    expected = [
+        "Time",
+        "Symbol",
+        "Side",
+        "What you did",
+        "Ran after %",
+        "Held at close %",
+        "Traded?",
+        "You made",
+        "Left on the table %",
+        "State",
     ]
-    assert headers == [
-        "Time", "Symbol", "Side", "Verdict", "My reason", "It ran %",
-        "Against me first %", "After the decision %", "Environment",
-    ]
+    assert tuple(panel.walkaway_tables) == ("liked_not_traded", "rejected", "traded_left_early", "claimed_d1")
+    for table in panel.walkaway_tables.values():
+        assert table.columnCount() == 10
+        assert [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())] == expected
 
 
 def test_the_trades_line_is_read_only_and_names_the_money_once(panel):
-    """"What you traded" refers; the Journal page is still where trades are
+    """ "What you traded" refers; the Journal page is still where trades are
     tagged and corrected (decision 0021 consequences)."""
     from PySide6.QtWidgets import QTableWidget
 
@@ -288,8 +309,12 @@ def test_the_trades_line_is_read_only_and_names_the_money_once(panel):
         _payload(
             trades=[
                 {
-                    "trade_id": "t-1", "symbol": "NVDA", "direction": "LONG",
-                    "quantity": 100, "net_pnl": 240.0, "status": "closed",
+                    "trade_id": "t-1",
+                    "symbol": "NVDA",
+                    "direction": "LONG",
+                    "quantity": 100,
+                    "net_pnl": 240.0,
+                    "status": "closed",
                     "opened_at": f"{SESSION}T07:05:00-07:00",
                 }
             ]
@@ -390,14 +415,17 @@ def test_enter_saves_and_shift_enter_makes_a_newline(panel, qapp):
 
 
 def test_the_forecast_button_is_the_daily_one_and_files_against_the_page_session(panel):
-    """"rename paste weekly forecast to paste daily forecast" (trader, 2026-09-17)."""
+    """ "rename paste weekly forecast to paste daily forecast" (trader, 2026-09-17)."""
     label = panel.paste_forecast_button.text()
     assert "daily forecast" in label.lower()
     assert "weekly" not in label.lower()
 
     panel._import_forecast(
-        {"text": "# Market Morning Brief — Thursday, September 17, 2026\n\nRates first.",
-         "target_session": "2026-09-17", "source_model": "chatgpt"}
+        {
+            "text": "# Market Morning Brief — Thursday, September 17, 2026\n\nRates first.",
+            "target_session": "2026-09-17",
+            "source_model": "chatgpt",
+        }
     )
     assert panel._stub_service.forecasts, "the page asked the service to import it"
     assert panel._stub_service.forecasts[0]["target_session"] == "2026-09-17"
@@ -431,11 +459,13 @@ def test_the_automatic_read_asks_both_schedule_functions_and_decides_nothing(pan
 
     asked: list[str] = []
     monkeypatch.setattr(
-        daily_recap_schedule, "due_session",
+        daily_recap_schedule,
+        "due_session",
         lambda *_a, **_k: asked.append("noon") or None,
     )
     monkeypatch.setattr(
-        daily_recap_schedule, "post_close_due_session",
+        daily_recap_schedule,
+        "post_close_due_session",
         lambda *_a, **_k: asked.append("post_close") or SESSION,
     )
     shown: list[str] = []
@@ -459,7 +489,8 @@ def test_the_noon_read_wins_when_it_is_due_and_remembers_it_fired(panel, monkeyp
 
     monkeypatch.setattr(daily_recap_schedule, "due_session", _due)
     monkeypatch.setattr(
-        daily_recap_schedule, "post_close_due_session",
+        daily_recap_schedule,
+        "post_close_due_session",
         lambda *_a, **_k: pytest.fail("the post-close check runs only when noon is not due"),
     )
     shown: list[str] = []
@@ -533,9 +564,7 @@ def test_the_service_builds_and_writes_an_index_for_a_session_that_has_none(monk
 
     monkeypatch.setattr(day_review_index, "read_index", lambda *_a, **_k: None)
     written: list[object] = []
-    monkeypatch.setattr(
-        day_review_index, "write_index", lambda index, **_k: written.append(index)
-    )
+    monkeypatch.setattr(day_review_index, "write_index", lambda index, **_k: written.append(index))
     DayReviewService().read_day(SESSION, now=NOW)
     assert written, "an opened session leaves an index behind for next time"
 
