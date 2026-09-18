@@ -395,7 +395,12 @@ class ResearchResultsPanel(QFrame):
         self._apply_selection_to_buttons()
         self.refresh_reader_measure()
         self.refresh()
-        self.refresh_report()
+        #: The Measured report's read waits for the first SHOW (G7.1's rule for
+        #: this page: the desk builds nine Research children at startup and each
+        #: one loads when its tab is opened). Starting it here gave the desk a
+        #: thread at startup for a section nobody had looked at, and it outlived
+        #: the panel in a test that only called `deleteLater`.
+        self._report_loaded_once = False
 
     def refresh_reader_measure(self) -> None:
         """Recompute the reading measure from the CURRENT font (G3b item 3).
@@ -827,6 +832,19 @@ class ResearchResultsPanel(QFrame):
         layout.addLayout(buttons)
         layout.addWidget(self.handoff_note)
         return holder
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Read the published measured report the first time the page is shown.
+
+        Not in the constructor: the desk builds every Research child at startup
+        and most are never opened, so the cost stays with the section that is
+        actually being looked at (G7.1). A page switch is not a re-read; the
+        Refresh path is `refresh_report`.
+        """
+        super().showEvent(event)
+        if not self._report_loaded_once:
+            self._report_loaded_once = True
+            self.refresh_report()
 
     def refresh_report(self) -> None:
         """Read the published report on this page's worker, never on the Qt thread."""

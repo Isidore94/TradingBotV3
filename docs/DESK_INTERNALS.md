@@ -6037,7 +6037,13 @@ that line.
 foot of Research > Results, with the same cells, the same `report_id`, the same
 `review_cells` parity seam and the same `ReadWorker`; `latest_published(root)` with no
 session named answers "the newest session that has one", which is the right question for a
-page with no session picker. The Staged picks table and its verb are on the **Auto Pilot**
+page with no session picker. Its read waits for the page's FIRST SHOW, not the constructor,
+because that is G7.1's rule for this page - the desk builds nine Research children at
+startup and each loads when its tab is opened. The first cut read it in `__init__`, which
+gave the desk a thread for a section nobody had looked at and could outlive a panel that was
+only `deleteLater`-ed; `tests/test_tj1_measured_report_load_rule.py` pins WHO STARTS the
+read rather than when it lands, because on a worker the second question is a race even when
+the answer is wrong. The Staged picks table and its verb are on the **Auto Pilot**
 page under the log, keeping `focusAddRequested` so the add is still performed by
 `FocusService`, the store's own owner - AWAY still STAGES and never adopts, the page still
 only ASKS, and the R2 adoption gate is SHOWN at click time and never enforced.
