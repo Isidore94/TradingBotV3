@@ -329,12 +329,20 @@ Changes:
    worker for any session opened without one; a file whose horizon rows were pending and
    have since matured is rebuilt. `read_session` takes the index when present. Test: for a
    fixture CSV the indexed answer is byte-equal to the streamed one.
-5. Forecast: the button reads "Paste daily forecast…"; the dialog asks for the text, the
-   session it is about (default: the page's session) and the source model; the service
-   method is `import_daily_forecast`; `record_forecast` gains `target_session` (old rows keep
-   `target_week`); a second paste for the same session writes a new row with `supersedes`.
-   Nothing reads it during the session except the page's own "External forecast" block; the
-   overnight story reads it (TJ-4).
+5. Forecast: the button reads "Paste daily forecast…"; the dialog asks for the text and
+   the session it is about (default: the date parsed from the brief's first heading, e.g.
+   `Thursday, September 17, 2026`, else the page's session) and the source model (default
+   `chatgpt`); the service method is `import_daily_forecast`; `record_forecast` gains
+   `target_session` (old rows keep `target_week`); a second paste for the same session writes
+   a new row with `supersedes`. The whole text is stored verbatim. A small deterministic
+   reader `scripts/forecast_brief.py` pulls, by heading match only: the title date, the
+   `Intraday playbook` section (its **bullish continuation** and **bearish reversal**
+   paragraphs), the `Bottom line` section and its ranked-signals line, and every
+   `Turbulence: N/10` number; anything not found is null, never guessed. The example the
+   trader pasted on 2026-09-17 is the fixture
+   `tests/fixtures/day_review/forecast_2026-09-17.md` and the reader's golden test. Nothing
+   reads the forecast during the session except the page's own "External forecast" block;
+   the overnight story reads it (TJ-4).
 6. Move, not delete: the Review tab's widgets and worker
    (`daily_recap_panel.py:159-236, 434-462, 765-813`) become a "Measured report" section on
    Research > Results; the Staged picks table (`daily_recap_panel.py:333-343, 968-998`) moves
@@ -462,8 +470,12 @@ Changes:
    (≤1200), `what_you_thought` (≤600), `were_you_right` [{`claim`, `source_id`, `verdict`
    right|wrong|unresolved, `evidence_id`}], `chased_against_news` {`verdict` yes|no|unknown,
    `evidence_id`}, `process` (≤400), `sources`, `prompt_version`, `inputs_hash`, `model`.
-   An unchanged hash skips the call. A forecast absent → `chased_against_news.verdict =
-   unknown`, never guessed. A note absent → no invented thesis.
+   An unchanged hash skips the call. The forecast enters the pack as the `forecast_brief`
+   fields (playbook, bottom line, turbulence), each with its own `source_id`, plus the
+   verbatim text; `chased_against_news` is judged against the brief's stated bearish-reversal
+   conditions and the trader's own notes and trades — the desk does not measure oil or the
+   10-year, so a condition the desk cannot see is `unknown`, never assumed. A forecast absent
+   → `chased_against_news.verdict = unknown`. A note absent → no invented thesis.
 3. **Rolling D1 view** in the same slot, `d1_view_narration_v1` → `DAY_REVIEW_DIR /
    "d1_view.json"`: inputs are the D1-timeframe notes of the last `LATELY_SESSIONS` (20),
    `market_thesis.current_theses`, and the weekly pack's measured facts; output `belief_now`
@@ -502,8 +514,10 @@ Changes:
    days are named, never padded.
 2. **Slot** `week_review_narration` (`scripts/ai_jobs/week_review_narration.py`), Stage 2,
    after `day_review_narration`, runs on the last session of the exchange week; provider
-   = frontier when configured (`ai_week_review_provider`, default `frontier_if_configured`,
-   the existing key seams), else local medium; inputs are the five packs, five narrations
+   = **OpenAI** (trader, 2026-09-17: "chatgpt API will do it"), through the existing
+   `openai` Responses path in `ai_summary.request_ai_summary` and its configured key;
+   `ai_week_review_provider` defaults to `openai`, and with no key the slot falls back to
+   local medium and says so in the ledger; inputs are the five packs, five narrations
    and the weekly rollup — never bars, never the lake; output `DAY_REVIEW_DIR / "week" /
    <W>.json`, schema `week_review_narration_v1`: `headline`, `what_happened` (≤1500),
    `were_you_right` {`right`, `wrong`, `unresolved`, three cited examples},
@@ -585,10 +599,9 @@ per branch off `main`, merged after review; the desk restarts only on trader dir
 
 #### 12.6 Trader actions this program needs
 
-- Paste ONE example of the scheduled ChatGPT forecast into chat so TJ-1's dialog and TJ-4's
-  prompt are shaped to it (not required to start TJ-1).
-- Say which frontier provider TJ-5 may bill (the desk already names an Anthropic model for
-  the AI Summary; the OpenAI path exists too).
+- DONE 2026-09-17: one example forecast pasted (now the fixture
+  `tests/fixtures/day_review/forecast_2026-09-17.md`); the week story bills the OpenAI
+  (ChatGPT) API.
 - Restart the desk after TJ-1 merges; answer the 10:00 Mentor prompt on a normal day so
   TJ-4 has material; write notes from the desk tab as usual.
 

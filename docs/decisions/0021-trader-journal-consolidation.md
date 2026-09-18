@@ -39,10 +39,14 @@ The trader answered twelve questions on 2026-09-17. Each answer is binding:
    away / vetoed / not today; traded then left early; claimed D1 picks.
 5. **One SPY chart always; a name's chart on click.**
 6. **The local model writes each day's story overnight; the frontier model writes the
-   week's** (one paid call per week). A Redo button reruns a day outside market hours.
+   week's** (one paid call per week) — the OpenAI (ChatGPT) API, the trader's choice the
+   same evening. A Redo button reruns a day outside market hours.
 7. **The forecast (the trader's scheduled ChatGPT output) may be pasted at any time**,
    before or after the close; it is read only in the overnight run, to summarise the day
-   it is about. "Paste weekly forecast…" becomes "Paste daily forecast…".
+   it is about. "Paste weekly forecast…" becomes "Paste daily forecast…". The trader
+   supplied one example (a dated "Market Morning Brief" with a dashboard, an Intraday
+   playbook with bullish-continuation and bearish-reversal conditions, one- and two-week
+   turbulence scores and a ranked-signals bottom line); it is the reader's fixture.
 8. **One day summary of the trader's own thoughts, plus a rolling D1 view** of what they
    believe about the bigger picture and whether each open thesis is still true.
 9. **The AI's ideas live on a card on Day Review and Week Review** with Keep / Dismiss;
