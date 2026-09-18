@@ -62,6 +62,8 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "chart_watch",
     "ui.services.chart_data_service",
     "ui.services.bar_cache",
+    # TJ-2B's Day Review worker imports this only after the page opens.
+    "walkaway_day",
     "ui.services.safe_import",
     # capture + annotations
     "ui.annotations.store",

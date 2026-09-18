@@ -65,14 +65,9 @@ def _bars_for(bars: Mapping[str, Any], symbol: str, session: str, *, allow_direc
     return ()
 
 
-def _after_move(rows: Sequence[Mapping[str, Any]], stamp: datetime | None, side: str, *, legacy_tape: bool = False):
+def _after_move(rows: Sequence[Mapping[str, Any]], stamp: datetime | None, side: str):
     eligible = [(bar, _moment(bar.get("dt"))) for bar in rows]
     eligible = [(bar, dt) for bar, dt in eligible if dt is not None and (stamp is None or dt > stamp)]
-    # A pre-TJ-2 tape may have been captured after exit yet retain its original
-    # session timestamps.  This compatibility branch is used only for that
-    # stored exit-tape shape; ordinary decision grading is strictly post-stamp.
-    if legacy_tape and len(eligible) <= 1 and len(rows) > 1:
-        eligible = [(bar, _moment(bar.get("dt"))) for bar in rows[1:]]
     if not eligible:
         return None
     first = eligible[0][0]
@@ -146,7 +141,7 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
                     early.append(WalkawayRow(ident, stamp, symbol, side, ident[3], f"liked {session[5:]}, entered {str(trade.get('opened_at') or '')[:10][5:]}", traded="yes", you_made=_number(trade.get("net_pnl")), state="pending trade open"))
                 else:
                     exit_day = str((trade.get("last_closing_leg_at") or trade.get("closed_at") or ""))[:10]
-                    left = _after_move(_bars_for(bars, symbol, exit_day, allow_direct=False), exit_stamp, side, legacy_tape=True)
+                    left = _after_move(_bars_for(bars, symbol, exit_day, allow_direct=False), exit_stamp, side)
                     exit_state = "measured" if left is not None else f"unmeasured no_bars (exit {exit_day})"
                     early.append(WalkawayRow(ident, stamp, symbol, side, ident[3], f"liked {session[5:]}, entered {str(trade.get('opened_at') or '')[:10][5:]}", traded="yes", you_made=_number(trade.get("net_pnl")), left_on_table_pct=left, state=exit_state))
             else:

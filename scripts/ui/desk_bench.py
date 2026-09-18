@@ -165,6 +165,7 @@ STAGE_ALLOWLIST: tuple[str, ...] = (
     "data/runtime/rejection_cohort_*.csv",
     "data/runtime/weekend_prep_state.json",
     "pick_feedback.jsonl",
+    "claimed_picks.jsonl",
     "review_preference_state.json",
     "swing_favorites.jsonl",
     # -- the Market Journal --------------------------------------------
