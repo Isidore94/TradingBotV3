@@ -6015,6 +6015,26 @@ horizons would ever notice; the stamp is only consulted when the caller passes `
 a clock-only question, and an index written before the clause existed, are answered as
 before.
 
+**An APPEND is not a REWRITE, and that distinction is the whole value of the stamp.** The
+first cut of it invalidated on any change, and `intraday_bounce_outcomes.csv` is appended to
+all day by the M5 scanner: one appended row for ANOTHER session turned a 609 ms warm open
+into **12,124 ms** and rewrote the 22 MB index, with nothing on the page different (reviewer,
+round 2). So a mismatch is READ, not assumed (`stamp_verdict`): a file that only GREW has its
+appended TAIL read - seek to the stored size, re-attach the header line so the rows parse -
+and the index is stale only if an appended row falls inside THIS index's scope (its session,
+its lookback window, or a target session of a windowed swing observation it carries, rebuilt
+from the index itself by `_index_scope`). A file that SHRANK or changed at the SAME SIZE is a
+rewrite and rebuilds; so does a bare `os.utime`, which a stamp cannot tell from a same-size
+rewrite and which is rare enough to pay for one rebuild. Anything the tail cannot ANSWER -
+a row whose session will not parse, a boundary that is not a line end (the stored size was
+taken mid-append), a header-less or unreadable file - rebuilds: uncertainty rebuilds, it
+never assumes. When the growth is out of scope the 22 MB body is left alone and the new stamp
+goes into a few hundred bytes beside it (`stamp.json`, cleared by the next real body write),
+so the following open compares sizes instead of reading the same tail again. Measured on the
+staged home after ONE out-of-scope appended row: the verdict is decided in **21.6 ms**, the
+open paints in **660 ms**, and the body is not touched.
+`tests/test_tj1_day_review_index_tail.py` holds the seventeen cases.
+
 **How wide the index is, and the line between fast and fresh.** The first cut covered the
 two biggest stores and left an indexed read at 2,217 ms, which did not meet the gate's
 "under one second". Measured store by store on the staged home (2026-09-17): intraday

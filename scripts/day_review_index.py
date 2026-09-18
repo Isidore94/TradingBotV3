@@ -49,6 +49,7 @@ this one, except lazily inside `read_session`: one direction, no cycle.
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import os
@@ -97,6 +98,17 @@ KEEP_SESSIONS = 40
 def default_root() -> Path:
     """`DAY_REVIEW_DIR`, read at CALL time so a test can redirect it."""
     return Path(project_paths.DAY_REVIEW_DIR)
+
+
+def stamp_path(session_date: str, *, root: Path | None = None) -> Path:
+    """`stamp.json` beside the index - a few hundred bytes, not 22 MB.
+
+    When the stores have only GROWN outside this index's scope, the body is still
+    the right answer and the only thing out of date is the stamp. Recording it
+    here means the next open compares against the new size instead of reading the
+    same tail again, without rewriting the body (reviewer, round 2).
+    """
+    return index_path(session_date, root=root).with_name("stamp.json")
 
 
 def index_path(session_date: str, *, root: Path | None = None) -> Path:
@@ -230,6 +242,121 @@ def sources_stamp(sources: Any) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _index_scope(index: Mapping[str, Any]) -> tuple[str, str, str, set[str]]:
+    """`(session, window_first, window_last, target sessions)` for a stored index.
+
+    Rebuilt from what the index itself carries, never from the live stores: the
+    question a tail row has to answer is "would THIS index have kept you".
+    """
+    session = str(index.get("session_date") or "")[:10]
+    lookback = max(1, int(index.get("lookback_sessions") or 3))
+    first, last, _ = _horizon_scope(session, lookback)
+    targets: set[str] = set()
+    horizon = index.get("session_horizon_outcomes")
+    if isinstance(horizon, Mapping):
+        for row in horizon.get("rows") or ():
+            if not isinstance(row, Mapping):
+                continue
+            target = daily_recap_reader._session_text(row.get("target_session"))
+            if target:
+                targets.add(target)
+    return session, first, last, targets
+
+
+def _appended_tail_touches(
+    name: str, path: Path, stored_size: int, index: Mapping[str, Any]
+) -> bool:
+    """Did the bytes appended since `stored_size` change what this index says?
+
+    Reads ONLY the tail. The reason this exists: `intraday_bounce_outcomes.csv`
+    is appended to all day by the M5 scanner, so a stamp that invalidated on ANY
+    change turned one appended row for ANOTHER session into a 12.1 s open and a
+    22 MB rewrite with nothing on the page different (reviewer, round 2).
+
+    Answers True - rebuild - for anything it cannot read as out of scope:
+
+    * a tail that does not begin at a line boundary (the stored size was taken
+      mid-append, so the first row is a fragment);
+    * a row whose session cannot be parsed;
+    * a file with no header to parse the tail against.
+
+    Uncertainty rebuilds; it never assumes.
+    """
+    session_field = INDEXED_SOURCE_SPECS[name][2]
+    scope = _index_scope(index)
+    try:
+        with path.open("rb") as handle:
+            header = handle.readline()
+            if not header.strip():
+                return True
+            if stored_size > 0:
+                # The byte before the boundary must be the end of a line, or
+                # what follows is half a row.
+                handle.seek(stored_size - 1)
+                if handle.read(1) not in (b"\n", b"\r"):
+                    return True
+            handle.seek(max(stored_size, 0))
+            tail = handle.read()
+    except OSError as exc:
+        _log.info("The appended tail of %s could not be read: %s", path, exc)
+        return True
+    if not tail.strip():
+        return False
+    try:
+        text = (header.decode("utf-8", "replace") + tail.decode("utf-8", "replace")).splitlines()
+        rows = list(csv.DictReader(text))
+    except Exception:  # noqa: BLE001 - an unreadable tail rebuilds
+        _log.info("The appended tail of %s could not be parsed.", path)
+        return True
+    for row in rows:
+        stamp = daily_recap_reader._session_text(row.get(session_field))
+        if not stamp:
+            return True
+        if _in_scope(stamp, *scope):
+            return True
+    return False
+
+
+def stamp_verdict(
+    index: Mapping[str, Any], *, sources: Any
+) -> tuple[str, dict[str, dict[str, Any]]]:
+    """`("same" | "moved" | "rebuild", the stores' current stamp)`.
+
+    * **same** - every indexed store is byte-for-byte where it was.
+    * **moved** - a store only GREW, and none of the appended rows belong to
+      this index's session, window or target sessions. The body is still right;
+      only the stamp needs recording (`refresh_stamp`), which is a few hundred
+      bytes rather than 22 MB.
+    * **rebuild** - a store SHRANK, changed at the SAME SIZE (a warehouse
+      recompute rewrites in place), gained an in-scope row, or cannot be read.
+      A bare `os.utime` with no size change lands here too: a same-size change
+      is a rewrite as far as a stamp can tell, and a touched file with no new
+      bytes is rare enough to pay for one rebuild.
+    """
+    current = sources_stamp(sources)
+    stored = index.get("sources_stamp")
+    if not isinstance(stored, Mapping) or not stored:
+        return "same", current
+    verdict = "same"
+    for name in INDEXED_SOURCES:
+        was = stored.get(name)
+        now_stamp = current.get(name)
+        if not isinstance(was, Mapping) or not isinstance(now_stamp, Mapping):
+            return "rebuild", current
+        if dict(was) == dict(now_stamp):
+            continue
+        old_size = int(was.get("size", -1))
+        new_size = int(now_stamp.get("size", -1))
+        if old_size < 0 or new_size < 0 or new_size < old_size or new_size == old_size:
+            return "rebuild", current
+        if _appended_tail_touches(
+            name, Path(getattr(sources, name)), old_size, index
+        ):
+            return "rebuild", current
+        verdict = "moved"
+    return verdict, current
+
+
 def _in_scope(value: Any, session: str, first: str, last: str, targets: set[str]) -> bool:
     """Does a row's own session belong to this read?
 
@@ -316,13 +443,15 @@ def is_stale(
 ) -> bool:
     """Could the answer in this file have changed since it was written?
 
-    With `sources` given, the first question is the blunt one: **are those files
-    still the files this index was built from** (`sources_stamp`)? A warehouse
-    recompute rewrites the outcome CSVs and can change the rows of a session that
-    closed weeks ago, which none of the clauses below would ever notice. Without
-    `sources` - a caller that has none, and every test that asks about the clock
-    alone - the stamp is not consulted, and an index written before this clause
-    existed carries no stamp and is not failed for it.
+    With `sources` given, the first question is about the FILES: are they still
+    the files this index was built from (`stamp_verdict`)? A warehouse recompute
+    rewrites the outcome CSVs and can change the rows of a session that closed
+    weeks ago, which none of the clauses below would ever notice. But growth is
+    not a rewrite - the M5 scanner appends to the intraday log all day - so an
+    APPEND is read at the tail and only an appended row that belongs to this
+    index's own scope makes it stale. Without `sources` - a caller that has none,
+    and every test that asks about the clock alone - none of that is consulted,
+    and an index written before the stamp existed is not failed for lacking one.
 
     Then two things can change it, and only two:
 
@@ -343,13 +472,8 @@ def is_stale(
     """
     if not isinstance(index, Mapping):
         return True
-    if sources is not None:
-        stored = index.get("sources_stamp")
-        if isinstance(stored, Mapping) and stored:
-            if {
-                name: dict(value) for name, value in stored.items()
-            } != sources_stamp(sources):
-                return True
+    if sources is not None and stamp_verdict(index, sources=sources)[0] == "rebuild":
+        return True
     if not bool(index.get("pending")):
         return False
     built = _moment(index.get("built_at"))
@@ -439,7 +563,62 @@ def read_index(session_date: str, *, root: Path | None = None) -> dict[str, Any]
     if not isinstance(payload, Mapping) or str(payload.get("schema") or "") != SCHEMA:
         _log.info("The Day Review index %s is not an index of this schema.", path)
         return None
-    return dict(payload)
+    index = dict(payload)
+    # The sidecar stamp, when one was recorded after an out-of-scope append. It
+    # only ever REPLACES the stamp; a sidecar that is unreadable or belongs to
+    # another session is ignored, which costs one tail read.
+    stamp_file = stamp_path(session_date, root=root)
+    try:
+        sidecar = json.loads(stamp_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return index
+    except (OSError, json.JSONDecodeError) as exc:
+        _log.info("The Day Review stamp %s could not be read: %s", stamp_file, exc)
+        return index
+    if (
+        isinstance(sidecar, Mapping)
+        and str(sidecar.get("session_date") or "") == str(index.get("session_date") or "")
+        and isinstance(sidecar.get("sources_stamp"), Mapping)
+    ):
+        index["sources_stamp"] = dict(sidecar["sources_stamp"])
+    return index
+
+
+def refresh_stamp(
+    index: Mapping[str, Any], *, sources: Any, root: Path | None = None
+) -> Path | None:
+    """Record the stores' CURRENT stamp beside an index whose body is still right.
+
+    Called after a "moved" verdict. Quiet on failure: without it the next open
+    reads the same tail again, which is milliseconds, never a wrong page.
+    """
+    session = str((index or {}).get("session_date") or "")[:10]
+    if not session:
+        return None
+    verdict, current = stamp_verdict(index, sources=sources)
+    if verdict == "same":
+        return None
+    path = stamp_path(session, root=root)
+    temp = path.with_suffix(".json.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp.write_text(
+            json.dumps(
+                {"schema": SCHEMA, "session_date": session, "sources_stamp": current},
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temp, path)
+    except Exception as exc:  # noqa: BLE001 - a stamp is never worth the page
+        _log.info("The Day Review stamp %s was not written: %s", path, exc)
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    return path
 
 
 def _session_has_closed(session: str, now: datetime | None = None) -> bool:
@@ -501,6 +680,28 @@ def _body(index: Mapping[str, Any]) -> str:
     return json.dumps(payload, default=str, sort_keys=True)
 
 
+def _stamp_only(session: str, index: Mapping[str, Any], *, root: Path | None = None) -> None:
+    """Record just the stamp of an index whose rows are already on disk."""
+    stamp = index.get("sources_stamp")
+    if not isinstance(stamp, Mapping):
+        return
+    path = stamp_path(session, root=root)
+    temp = path.with_suffix(".json.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp.write_text(
+            json.dumps(
+                {"schema": SCHEMA, "session_date": session, "sources_stamp": dict(stamp)},
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temp, path)
+    except Exception as exc:  # noqa: BLE001 - a stamp is never worth the page
+        _log.info("The Day Review stamp for %s was not written: %s", session, exc)
+
+
 def write_index(
     index: Mapping[str, Any],
     *,
@@ -531,9 +732,16 @@ def write_index(
     temp = path.with_suffix(".json.tmp")
     try:
         body = _body(index)
-        if path.is_file() and _body(json.loads(path.read_text(encoding="utf-8"))) == body:
-            _log.debug("The Day Review index for %s is unchanged.", session)
-            return path
+        if path.is_file():
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            if _body(stored) == body:
+                _log.debug("The Day Review index for %s is unchanged.", session)
+                return path
+            # The BODY is identical apart from the stamp: record the stamp in the
+            # sidecar rather than rewriting 22 MB for a few hundred bytes.
+            if _body({**dict(stored), "sources_stamp": index.get("sources_stamp")}) == body:
+                _stamp_only(session, index, root=root)
+                return path
     except Exception:  # noqa: BLE001 - an unreadable old file is simply replaced
         _log.debug("The stored Day Review index could not be compared.", exc_info=True)
     try:
@@ -550,6 +758,11 @@ def write_index(
         except OSError:
             pass
         return None
+    # A fresh body carries its own stamp, so any sidecar is now history.
+    try:
+        stamp_path(session, root=root).unlink(missing_ok=True)
+    except OSError:
+        pass
     # `index_path` is <base>/sessions/<date>/outcomes.json, so three parents up
     # is the base whether or not a root was named.
     _prune(path.parent.parent.parent)
@@ -558,12 +771,19 @@ def write_index(
 
 __all__ = [
     "INDEXED_SOURCES",
+    "INDEXED_SOURCE_SPECS",
+    "KEEP_SESSIONS",
     "SCHEMA",
     "build_index",
     "default_root",
     "index_path",
     "is_stale",
     "read_index",
+    "read_store",
+    "refresh_stamp",
+    "sources_stamp",
+    "stamp_path",
+    "stamp_verdict",
     "store_from_payload",
     "store_payload",
     "stores_for",

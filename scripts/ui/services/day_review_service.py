@@ -213,15 +213,22 @@ class DayReviewService:
         import day_review_index
 
         index: Mapping[str, Any] | None = None
+        sources = daily_recap_reader.RecapSources()
         try:
             stored = day_review_index.read_index(session)
-            # `sources` as well as the clock: an index whose stores have been
-            # rewritten since (a warehouse recompute) describes files that are
-            # no longer there, and no clause about pending horizons would see it.
+            # `sources` as well as the clock: an index whose stores were REWRITTEN
+            # (a warehouse recompute) describes files that are no longer there,
+            # and no clause about pending horizons would see it. An APPEND is read
+            # at the tail instead - the M5 scanner appends all day - so only an
+            # appended row inside this index's own scope makes it stale.
             if stored is not None and not day_review_index.is_stale(
-                stored, now=now, sources=daily_recap_reader.RecapSources()
+                stored, now=now, sources=sources
             ):
                 index = stored
+                # The stores grew outside this index's scope: record the new
+                # stamp beside the body so the next open compares sizes instead
+                # of reading the same tail again. A few hundred bytes, not 22 MB.
+                day_review_index.refresh_stamp(stored, sources=sources)
         except Exception:  # noqa: BLE001
             _log.debug("The stored Day Review index was unreadable.", exc_info=True)
             index = None

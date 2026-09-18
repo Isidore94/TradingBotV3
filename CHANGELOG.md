@@ -1619,8 +1619,12 @@ They are evidence and must not be loaded as context.
   NOTHING, anything that is not an index of that session and window streams, and
   `day_review_index.is_stale` is the one staleness rule (pending only; stale once the session
   it waited for has closed, always stale for a session that had not closed when it was
-  built, and stale when a stored `(size, mtime)` stamp of the indexed stores has moved - a
-  warehouse recompute rewrites them). The index is written only for a CLOSED session, only
+  built, and stale when a stored `(size, mtime)` stamp of the indexed stores says they were
+  REWRITTEN - shrunk, or changed at the same size, as a warehouse recompute does. GROWTH is
+  read instead of assumed: the M5 scanner appends to the intraday log all day, so the
+  appended TAIL is parsed and only a row inside that index's own session, window or target
+  sessions makes it stale; an out-of-scope append leaves the 22 MB body alone and records
+  the new stamp in a `stamp.json` beside it, which is 660 ms rather than 12.1 s per open). The index is written only for a CLOSED session, only
   when its content changed, and the folder is pruned to the newest 40; the post-close build
   runs on a worker and the SPY bars are read on the Qt thread and handed into the read. `_d1_horizon_row` and `_outcome_for` became dict lookups built once per read
   (keyed by session and symbol, never by side), which is what took an indexed read from
