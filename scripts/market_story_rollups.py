@@ -485,7 +485,16 @@ def _stories_from_journal(journal_dir: Path | None = None) -> list[Any]:
             )
         )
         result = ledger.read()
-        entries = market_journal.resolve_entries(result.rows)
+        # TJ-1 item 2: the desk's own rows never reach a pack. They were read
+        # back into the 2026-09-16 narration ("Auto mode desk entries were
+        # recorded on 2026-09-16"), which is the defect the trader named. A
+        # session whose only rows were the desk's now has no story at all,
+        # rather than a story with nothing in it.
+        entries = [
+            row
+            for row in market_journal.resolve_entries(result.rows)
+            if not market_journal.is_machine_entry(row)
+        ]
     except Exception:  # noqa: BLE001 - an unreadable journal is no story
         _log.debug("Market journal unreadable for the rollups.", exc_info=True)
         return []
