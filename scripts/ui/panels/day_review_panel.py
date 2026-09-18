@@ -337,6 +337,8 @@ class DayReviewPanel(QFrame):
         self._worker: _DayReadWorker | None = None
         self._index_worker: _IndexBuildWorker | None = None
         self._bars_worker: _IndexBuildWorker | None = None
+        self._bars_backfill_queue: list[str] = []
+        self._bars_backfill_queued: set[str] = set()
         self._building_index = ""
         #: The desk's own M5 cache accessor (`alert_center.journal_chart_bars`).
         #: Called ONLY on the Qt thread, by `reload`, and only for a session that
@@ -952,7 +954,7 @@ class DayReviewPanel(QFrame):
             logging.debug("The Day Review index build could not start.", exc_info=True)
 
     def _backfill_bars_for(self, session_date: str) -> None:
-        """Single-flight past-session recovery, always outside the Qt thread."""
+        """Queue past-session recovery; one off-Qt worker drains FIFO."""
         import day_review_bars
 
         session = str(session_date or "")[:10]
@@ -960,10 +962,21 @@ class DayReviewPanel(QFrame):
             return
         if day_review_bars.read_session_bars(session) is not None:
             return
+        if session not in self._bars_backfill_queued:
+            self._bars_backfill_queue.append(session)
+            self._bars_backfill_queued.add(session)
+        self._start_next_bars_backfill()
+
+    def _start_next_bars_backfill(self) -> None:
         if self._bars_worker is not None and self._bars_worker.isRunning():
             return
+        if not self._bars_backfill_queue:
+            return
+        session = self._bars_backfill_queue.pop(0)
         method = getattr(self.service, "backfill_session_bars_for", None)
         if not callable(method):
+            self._bars_backfill_queued.discard(session)
+            self._start_next_bars_backfill()
             return
 
         class _BarsWorker(QThread):
@@ -977,9 +990,14 @@ class DayReviewPanel(QFrame):
                     logging.info("Day Review bars backfill failed.", exc_info=True)
 
         self._bars_worker = _BarsWorker(method, session, self)
+        self._bars_worker.finished.connect(lambda: self._on_bars_backfill_finished(session))
         self.status.setText(FETCHING_BARS_NOTE.format(session=session))
         self.statusChanged.emit(self.status.text())
         self._bars_worker.start()
+
+    def _on_bars_backfill_finished(self, session: str) -> None:
+        self._bars_backfill_queued.discard(session)
+        self._start_next_bars_backfill()
 
     def _on_index_built(self, session_date: str) -> None:
         """The index landed. Repaint that session if it is the one on screen."""
