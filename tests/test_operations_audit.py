@@ -465,6 +465,9 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         "away_report", "industry_board", "spy_shadow", "greatness_shadow",
         "candidate_registry", "owned_process_counts", "provider_counters",
         "universe_and_market_data_freshness", "disk_storage_warnings",
+        # TJ-2A: the durable closed-session M5 tape; a fresh sandbox has no
+        # file, so UNKNOWN is the honest pre-first-close state.
+        "day_review_bars",
         # R6(a): the overnight AI batch layer. It reports HEALTHY here because
         # no ai_store_dir is configured in the test environment - a measured
         # "deliberately off", not an unmeasured unknown, which is why the
@@ -508,13 +511,17 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
     implemented = {
         item["id"]: item["status"]
         for item in payload["checks"]
-        if item["id"] in operational and item["id"] != "provider_counters"
+        if item["id"] in operational and item["id"] not in {"provider_counters", "day_review_bars"}
     }
     assert set(implemented.values()) == {"healthy"}
     unknown_operational = {
         item["id"] for item in payload["checks"] if item["id"] in operational and item["status"] == "unknown"
     }
-    assert unknown_operational == {"provider_counters"}
+    assert unknown_operational == {"provider_counters", "day_review_bars"}
+    assert (
+        {item["id"]: item for item in payload["checks"]}["day_review_bars"]["source"]
+        == str(diagnostics / "day_review" / "bars")
+    )
     # Cold-start learning artifacts are degraded, not broken: runtime health
     # must stay honest about the scheduler, not be dragged down by a ledger
     # that no reviewed alert has created yet.

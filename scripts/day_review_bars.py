@@ -168,8 +168,9 @@ def fetch_session_bars(symbols: Iterable[str], session: str, *, downloader=None)
     return answer
 
 
-def bars_path(session: str | date) -> Path:
-    return Path(DAY_REVIEW_DIR) / "bars" / f"{_session_text(session)}.parquet"
+def bars_path(session: str | date, *, root: Path | None = None) -> Path:
+    """The session file below ``root`` (or the durable production root)."""
+    return Path(root if root is not None else DAY_REVIEW_DIR) / "bars" / f"{_session_text(session)}.parquet"
 
 
 def write_session_bars(session: str, bars: Mapping[str, Iterable[Mapping[str, Any]]]) -> Path:
@@ -215,9 +216,11 @@ def write_session_bars(session: str, bars: Mapping[str, Iterable[Mapping[str, An
     return path
 
 
-def read_session_bars(session: str) -> dict[str, list[dict[str, Any]]] | None:
+def read_session_bars(
+    session: str, *, root: Path | None = None
+) -> dict[str, list[dict[str, Any]]] | None:
     """Read bars grouped by symbol, or ``None`` when no durable file exists."""
-    path = bars_path(session)
+    path = bars_path(session, root=root)
     if not path.is_file():
         return None
     try:
