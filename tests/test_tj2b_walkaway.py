@@ -127,7 +127,41 @@ def test_later_matched_trade_moves_like_to_c_and_uses_exit_day_bars():
         "last_closing_leg_at": "2026-09-18T11:00:00-07:00",
         "net_pnl": 42.0,
     }
-    exit_bars = _bars(session=EXIT_SESSION, high=130.0)
+    # The enormous 11:00 high belongs to the exit bar, so it is unavailable
+    # after that close.  The first completed bar strictly AFTER the last
+    # closing leg is 11:05, opening at 120.
+    exit_bars = {
+        "AAA": [
+            {
+                "dt": "2026-09-18T10:55:00-07:00",
+                "open": 100,
+                "high": 200,
+                "low": 99,
+                "close": 150,
+            },
+            {
+                "dt": "2026-09-18T11:00:00-07:00",
+                "open": 150,
+                "high": 250,
+                "low": 149,
+                "close": 160,
+            },
+            {
+                "dt": "2026-09-18T11:05:00-07:00",
+                "open": 120,
+                "high": 130,
+                "low": 119,
+                "close": 125,
+            },
+            {
+                "dt": "2026-09-18T15:55:00-07:00",
+                "open": 125,
+                "high": 129,
+                "low": 124,
+                "close": 128,
+            },
+        ]
+    }
     day = _build(
         decisions=(_decision(stamp="2026-09-16T08:00:00-07:00"),),
         trades=(trade,),
@@ -137,7 +171,7 @@ def test_later_matched_trade_moves_like_to_c_and_uses_exit_day_bars():
     assert not day.liked_not_traded
     row = day.traded_left_early[0]
     assert "liked 09-16, entered 09-18" in row.what_you_did
-    assert row.left_on_table_pct == pytest.approx(25 / 105 * 100)
+    assert row.left_on_table_pct == pytest.approx(10 / 120 * 100)
     assert row.state == "measured"
 
     missing = _build(
@@ -147,6 +181,44 @@ def test_later_matched_trade_moves_like_to_c_and_uses_exit_day_bars():
         bars=_bars(),
     ).traded_left_early[0]
     assert missing.state == "unmeasured no_bars (exit 2026-09-18)"
+
+
+def test_left_on_table_never_falls_back_to_a_pre_exit_bar():
+    trade = {
+        "trade_id": "t-pre-exit",
+        "symbol": "AAA",
+        "direction": "LONG",
+        "status": "closed",
+        "opened_at": "2026-09-18T10:00:00-07:00",
+        "closed_at": "2026-09-18T11:00:00-07:00",
+        "last_closing_leg_at": "2026-09-18T11:00:00-07:00",
+    }
+    pre_exit_only = {
+        EXIT_SESSION: [
+            {
+                "dt": "2026-09-18T10:55:00-07:00",
+                "open": 100,
+                "high": 300,
+                "low": 99,
+                "close": 200,
+            },
+            {
+                "dt": "2026-09-18T11:00:00-07:00",
+                "open": 200,
+                "high": 400,
+                "low": 199,
+                "close": 300,
+            },
+        ]
+    }
+    row = _build(
+        decisions=(_decision(stamp="2026-09-16T08:00:00-07:00"),),
+        trades=(trade,),
+        preference=({"match_state": "matched", "symbol": "AAA", "side": "LONG"},),
+        bars=pre_exit_only,
+    ).traded_left_early[0]
+    assert row.left_on_table_pct is None
+    assert row.state == "unmeasured no_bars (exit 2026-09-18)"
 
 
 def test_open_later_trade_is_pending_c_while_window_open_like_stays_a():
