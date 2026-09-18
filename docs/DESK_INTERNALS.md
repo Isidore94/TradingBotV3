@@ -6148,6 +6148,8 @@ them under `DAY_REVIEW_DIR/bars/<session>.parquet`; a failed symbol is absent. C
 reads take SPY from this durable file, while today's tape remains the Qt-thread cache handoff.
 A missing past file starts one backfill worker and never fetches the in-progress session.
 
+**TJ-2B walk-away (2026-09-18).** `walkaway_day.build` is pure: it reads the worker's durable rows and bars only. A source duplicate is one decision but two decision times remain two rows; claims replay by key so a later drop is historical context, never a deletion. A later matched trade moves a like to left-early, and absent exit bars, horizons, or maturity are named states rather than zeros.
+
 **Layout: two columns, and tables that fill the width** (TJ-1L, 2026-09-18). The trader, the
 first time he read the page on a 3800 px screen: *"there's a lot of empty space horizontally
 that's not being efficiently used"* - and, offered three shapes, he chose two columns. The

@@ -112,6 +112,18 @@ WALKAWAY_COLUMNS: tuple[tuple[str, str | None], ...] = (
     ("After the decision %", "favorable_pct_after_decision"),
     ("Environment", None),
 )
+TJ2B_WALKAWAY_COLUMNS = (
+    "Time", "Symbol", "Side", "What you did", "Ran after %", "Held at close %",
+    "Traded?", "You made", "Left on the table %", "State",
+)
+
+
+def _tj2_pct(value: object) -> str:
+    return UNMEASURED if value is None else f"{float(value):+.2f}%"
+
+
+def _tj2_number(value: object) -> str:
+    return UNMEASURED if value is None else f"{float(value):+.2f}"
 
 #: The three tables TJ-2 adds, as (title, note) - each one a small titled frame
 #: holding its place in the 2 x 2 grid. A labelled cell rather than an empty
@@ -420,6 +432,32 @@ class DayReviewPanel(QFrame):
                 WALKAWAY_PLACEHOLDER_CELLS, WALKAWAY_PLACEHOLDERS
             )
         }
+        self.walkaway_tables: dict[str, QTableWidget] = {}
+        for name in ("liked_not_traded",):
+            table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
+            table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
+            table.setEditTriggers(QTableWidget.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectRows)
+            table.itemActivated.connect(self._activate_walkaway)
+            table.itemDoubleClicked.connect(self._activate_walkaway)
+            _fill_the_width(table)
+            self.walkaway_tables[name] = table
+        self.walkaway_tables["rejected"] = self.rejected_that_worked_table
+        for name in ("traded_left_early", "claimed_d1"):
+            table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
+            table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
+            table.setEditTriggers(QTableWidget.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectRows)
+            table.itemActivated.connect(self._activate_walkaway)
+            table.itemDoubleClicked.connect(self._activate_walkaway)
+            _fill_the_width(table)
+            self.walkaway_tables[name] = table
+        for cell, name, title in (
+            ((0, 1), "liked_not_traded", "Liked but never traded"),
+            ((1, 0), "traded_left_early", "Traded, then left early"),
+            ((1, 1), "claimed_d1", "Claimed D1 picks"),
+        ):
+            self.walkaway_cells[cell] = self._table_cell(title, self.walkaway_tables[name])
 
     @staticmethod
     def _placeholder_cell(title: str, note: str) -> QFrame:
@@ -442,6 +480,20 @@ class DayReviewPanel(QFrame):
         subtitle.setWordWrap(True)
         body.addWidget(subtitle)
         frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        return frame
+
+    @staticmethod
+    def _table_cell(title: str, table: QTableWidget) -> QFrame:
+        """A labelled TJ-2 population, replacing the TJ-1 placeholder."""
+        frame = QFrame()
+        frame.setObjectName("Panel")
+        body = QVBoxLayout(frame)
+        body.setContentsMargins(10, 8, 10, 8)
+        body.setSpacing(2)
+        heading = QLabel(title)
+        heading.setObjectName("SectionTitle")
+        body.addWidget(heading)
+        body.addWidget(table)
         return frame
 
     def _build_said(self) -> None:
@@ -1033,6 +1085,8 @@ class DayReviewPanel(QFrame):
         self._render_story(payload.get("story"))
         self._render_theses(payload.get("theses") or [])
         self._render_walkaway(tuple(payload.get("rejected_that_worked") or ()))
+        if payload.get("walkaway") is not None:
+            self._render_tj2b_walkaway(payload["walkaway"])
         self._render_entries(list(payload.get("entries") or []))
         self._render_forecast(dict(payload.get("forecast") or {}))
         self._render_trades(list(payload.get("trades") or []))
@@ -1103,6 +1157,27 @@ class DayReviewPanel(QFrame):
             if self._walkaway_rows
             else "Nothing you passed on ran, on this session's measured rows."
         )
+
+    def _render_tj2b_walkaway(self, day) -> None:
+        for name in ("liked_not_traded", "traded_left_early", "claimed_d1"):
+            table = self.walkaway_tables[name]
+            rows = tuple(getattr(day, name, ()) or ())
+            table.setRowCount(len(rows))
+            for index, row in enumerate(rows):
+                values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
+                          row.what_you_did, _tj2_pct(row.ran_after_pct), _tj2_pct(row.held_at_close_pct),
+                          row.traded, _tj2_number(row.you_made), _tj2_pct(row.left_on_table_pct), row.state)
+                for column, value in enumerate(values):
+                    table.setItem(index, column, QTableWidgetItem(value))
+        rows = tuple(getattr(day, "rejected", ()) or ())
+        table = self.walkaway_tables["rejected"]
+        self._walkaway_rows = rows
+        table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
+                      row.what_you_did, "", _tj2_pct(row.ran_after_pct), "", "", "", "")
+            for column, value in enumerate(values):
+                table.setItem(index, column, QTableWidgetItem(value))
 
     def _walkaway_cell(self, row: Any, header: str, measure: str | None) -> tuple[str, str]:
         """One cell's text and its tooltip. `None` is a dash WITH its reason."""

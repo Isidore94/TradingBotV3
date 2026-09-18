@@ -161,6 +161,9 @@ class RecapSources:
     staged_picks: Path = project_paths.AUTO_POPULATE_PENDING_FILE
     environment_labels: Path = field(default_factory=_environment_default)
     working_lately: Path = field(default_factory=_working_lately_default)
+    # TJ-2B reads claim history (not only live claims) to show a historical
+    # placement and any later drop beside the session where it was made.
+    claimed_picks: Path = project_paths.CLAIMED_PICKS_FILE
 
 
 def _preference_report_default() -> Path:
@@ -184,6 +187,7 @@ SOURCE_NAMES: tuple[str, ...] = (
     "staged_picks",
     "environment_labels",
     "working_lately",
+    "claimed_picks",
 )
 
 

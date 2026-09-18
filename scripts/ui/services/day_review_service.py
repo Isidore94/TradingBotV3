@@ -49,6 +49,7 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     "theses",
     "entries",
     "rejected_that_worked",
+    "walkaway",
     "trades",
     "forecast",
     "spy_m5_bars",
@@ -77,6 +78,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "theses": [],
         "entries": [],
         "rejected_that_worked": (),
+        "walkaway": None,
         "trades": [],
         "forecast": {},
         "spy_m5_bars": [],
@@ -149,6 +151,7 @@ class DayReviewService:
             _log.debug("Day Review theses unreadable.", exc_info=True)
 
         payload["provisional"] = self._provisional(session, moment)
+        recap = None
         try:
             recap = self._read_recap(session, lookback_sessions, moment)
         except Exception as exc:  # noqa: BLE001
@@ -164,6 +167,40 @@ class DayReviewService:
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the day's trades could not be read: {exc}")
             _log.debug("Day Review trades unreadable.", exc_info=True)
+
+        # TJ-2B is another projection of the SAME worker payload.  It opens no
+        # live desk store and the page never starts a second read for a table.
+        try:
+            import claimed_picks
+            import walkaway_day
+
+            decisions = []
+            for row in tuple(getattr(getattr(recap, "my_decisions", None), "rows", ()) or ()):
+                detail = getattr(row, "detail", {}) or {}
+                decisions.append({
+                    "session_date": session,
+                    "symbol": getattr(row, "symbol", ""), "side": getattr(row, "side", ""),
+                    "category": getattr(row, "category", "pick"),
+                    "verdict": detail.get("verdict", ""), "source": getattr(row, "source", ""),
+                    "timeframe": detail.get("timeframe", "M5"),
+                    "stamp": getattr(getattr(row, "observed_at", None), "isoformat", lambda: "")(),
+                    "capture_id": getattr(row, "capture_id", ""),
+                })
+            sources = getattr(recap, "sources", None)
+            claims = claimed_picks.load_rows(getattr(sources, "claimed_picks", claimed_picks.CLAIMED_PICKS_FILE))
+            stored = {}
+            try:
+                import day_review_bars
+                stored = day_review_bars.read_session_bars(session) or {}
+            except Exception:  # noqa: BLE001
+                _log.debug("Walk-away bars unreadable.", exc_info=True)
+            payload["walkaway"] = walkaway_day.build(
+                session, {"decisions": decisions, "preference": (), "outcomes": ()}, stored,
+                trades=payload["trades"], claims=claims, now=moment,
+            )
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"the instant walk-away tables could not be built: {exc}")
+            _log.debug("Day Review instant walk-away unreadable.", exc_info=True)
 
         payload["spy_m5_bars"] = [
             dict(bar) for bar in (spy_m5_bars or ()) if isinstance(bar, Mapping)
