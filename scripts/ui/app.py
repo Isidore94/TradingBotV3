@@ -785,49 +785,29 @@ class MainWindow(QMainWindow):
             )
 
     def _record_auto_mode_flip(self, previous: str, current: str) -> None:
-        """Write the flip into the Market Journal, with SPY as it stood.
+        """Say the flip in the Auto Pilot log. Not in the journal (TJ-1 item 1).
 
-        The trader asked for "what the charts looked like when the auto mode
-        flipped" (2026-08-27). The row is marked machine-written through its
-        ORIGIN, so a reader counting "what did you think?" never counts a
-        sentence nobody thought.
+        It used to write a Market Journal row with SPY's tape attached, on the
+        theory that the journal would read as one timeline. It read as noise
+        instead: on the live desk 2026-09-17 those rows were **34 of 77** and
+        the nightly narration repeated them back. The trader's answer was
+        "i don't need to see the SPY auto modes pasted in there" (decision
+        0021 answer 3), so the desk's own hand goes where the desk's own lines
+        already live - one Auto Pilot log line, no journal write, no capture.
 
-        Quiet on every failure path: an evidence store must never cost the
-        thing it records, and the mode has already changed by the time this
-        runs.
+        The method keeps its name and its caller
+        (`autoModeChanged.connect(self._record_auto_mode_flip)`), and it stays
+        quiet on every failure path: the mode has already changed by the time
+        this runs, and a log line may never cost the thing it records. The old
+        rows are still on disk and are FILTERED at read time
+        (`market_journal.is_machine_entry`), never deleted.
         """
         try:
-            import market_journal
-            import market_journal_capture
-            from datetime import date
-
-            service = self.market_journal_panel.service
-            benchmark = market_journal_capture.BENCHMARK_SYMBOL
-            text = (
-                f"Auto mode {previous or 'UNKNOWN'} -> {current or 'UNKNOWN'}. "
-                "Written by the desk, not the trader."
-            )
-            result = service.write_entry(
-                text=text,
-                session_date=date.today().isoformat(),
-                timeframe=market_journal.TIMEFRAME_M5,
-                symbols=[benchmark],
-                origin=market_journal.ORIGIN_AUTO_MODE_FLIP,
-            )
-            entry_id = str((result.get("entry") or {}).get("entry_id") or "")
-            if not result.get("ok") or not entry_id:
-                return
-            m5_bars, d1_bars = self.trading_panel.alert_center.journal_chart_bars(benchmark)
-            service.capture_charts(
-                entry_id=entry_id,
-                symbol=benchmark,
-                reason=market_journal_capture.REASON_MODE_FLIP,
-                note=f"{previous} -> {current}",
-                m5_bars=m5_bars,
-                d1_bars=d1_bars,
+            self.autopilot_panel.service.log(
+                f"Auto mode {previous or 'UNKNOWN'} -> {current or 'UNKNOWN'}."
             )
         except Exception:
-            logging.exception("The auto-mode flip could not be journalled.")
+            logging.exception("The auto-mode flip could not be logged.")
 
     def _feed_away_recap(self) -> None:
         """Hand the recap the Alert Center's own backing list, then reload.

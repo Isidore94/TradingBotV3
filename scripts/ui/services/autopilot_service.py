@@ -2425,6 +2425,16 @@ class AutopilotService(QObject):
             pass
         self.logMessage.emit(line)
 
+    def log(self, message: str) -> None:
+        """Write one line into the Auto Pilot log from outside this service.
+
+        TJ-1 item 1. `_log` stays the ONE writer (the deque, the file, the
+        `logging` line and the `logMessage` signal are all it); this is a public
+        door onto it so the desk window can say "Auto mode DESK -> AWAY." here
+        instead of writing a Market Journal row nobody thought.
+        """
+        self._log(str(message))
+
     def log_lines(self) -> list[str]:
         return list(self._log_lines)
 
