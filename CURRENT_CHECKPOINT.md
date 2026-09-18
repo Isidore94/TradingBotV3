@@ -20,10 +20,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-17: the overnight AI repair is reviewed GO and merged to `main`.** A theta cold import no longer cycles, and the local enrichment contract has one narrow grammar fallback. |
-| Working branch | **`main` carries Phase 0.32 and the accepted overnight repair (`4fbe5f6e`; status reconciliation `6f2a2fdf`).** The desk was not restarted. |
+| Latest work | **2026-09-17 evening: `plan.md` rewritten for Phase 0.33, the trader journal program (decision 0021); the old roadmap is archived at `docs/archive/PLAN_ARCHIVE_2026-09-17.md`.** Earlier that day: pullback alerts manual-only, display, claimed-rating and LRSI changes, still in the working tree. |
+| Working branch | **`main` carries Phase 0.32 and the accepted overnight repair (`4fbe5f6e`; status reconciliation `6f2a2fdf`), plus uncommitted desk display work.** The desk was not restarted. |
 | Unmerged / open | No overnight-repair code is unmerged; live gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
-| Next action | **Observe gate #144 on the next scan and overnight run. Trader: use `docs/PHASE_032_TRADER_TEST_GUIDE.md` after restart.** Restart only on trader direction. |
+| Next action | **Lead writes `.claude/packets/TJ-1.md` from `plan.md` §12.4 and runs recon -> tester -> builder -> reviewer on its own branch.** Gate #144 is still observed on the next scan and overnight run; restart only on trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
 | Last verified baseline | **Integrated overnight repair: 8,528 passed, 6 skipped, 72 subtests; ruff, smoke 7/7 and source selftest 87/87 are clean.** The nightly writer lock was free before the run. |
 | Frozen exe | **Rebuilt and verified 2026-09-16: source 87/87 and frozen 87/87.** The frozen result carries the required `(frozen)` stamp. The production desk still runs from SOURCE and was not restarted. |
@@ -182,6 +182,64 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-17 — Phase 0.33 planned: the trader journal program (plan.md rewritten, decision 0021)
+
+- **What happened.** The trader judged the Market Journal and Daily Recap pages ("too much
+  shit in these tabs and it's laggy … this should be a simple 'what worked, what didn't and
+  what was your process'"), emptied `plan.md` and asked for a fresh plan that lower models
+  (Opus / Terra) can build from, after a question round. Twelve questions were asked and
+  answered; the answers are decision 0021 and `plan.md` §12.1.
+- **What was measured first (read-only, live stores):** 77 Market Journal rows over 16
+  sessions, 34 of them the desk's own `Auto mode X -> Y` rows, which the 2026-09-16 nightly
+  `market_story_narration` already repeated; `intraday_bounce_outcomes.csv` is 476 MB and the
+  Daily Recap streams it whole on every open; no reader filters `is_machine_entry`; the
+  local model is `gemma3:12b-tbv3ctx-64k` on Ollama, off-hours 01:00–09:00.
+- **What was written.** `plan.md` (sections 1–8 and 13 kept short with the same numbers;
+  §12 is Phase 0.33, packets TJ-1 … TJ-8, live gates #145–#151 reserved),
+  `docs/decisions/0021-trader-journal-consolidation.md`,
+  `docs/archive/PLAN_ARCHIVE_2026-09-17.md` (the old file verbatim), `docs/README.md`.
+  No code changed; `CHANGELOG.md` unchanged (no behaviour, contract or status changed).
+- **Baseline.** Unchanged by this entry (docs only, committed as `e865bdf4` and pushed).
+  The WORKING TREE suite that evening: 8,529 passed, 2 failed
+  (`test_pct1_pullback_declined` armed-board row, `test_ws_10c_h1_retester` retired H1
+  emitter seam), both from the uncommitted pullback display work below, both passing on a
+  clean checkout of HEAD; ruff clean. Whoever integrates that work owns those two.
+- **Next.** TJ-1 (bones) is first: one Day Review page, the machine rows stop, the
+  per-session index, "Paste daily forecast…". Both trader asks were answered the same
+  evening: the example forecast is `tests/fixtures/day_review/forecast_2026-09-17.md`
+  and the week story bills the OpenAI (ChatGPT) API.
+
+### 2026-09-17 — Visual Alert Review colour key (trader-directed, working tree)
+
+The review feed now colours personal D1 level alerts red, Focus D1 alerts green, ordinary D1
+alerts blue, and Pullback fires amber (M15), purple (M30) or cyan (H1). Persistent Pullback rows
+stay in the D1 feed and show their real source bar in a second badge. This is presentation only:
+no detector, score, alert emission, routing, sound, queue, capture, Focus, store or live-data
+behaviour changed. Red-first widget tests now cover all six tones and the rendered dark/light QSS;
+targeted verification is recorded at handoff. The desk remains stopped and no restart occurred.
+
+### 2026-09-17 — Master AVWAP claimed rows reset by market session (trader-directed, working tree)
+
+The Setups table now includes only active claimed rows whose `session_date` matches the current
+market session. Older claims remain append-only history and retain their normal grading, active-life,
+auto-arm and repeat-review behaviour. The test proves an active yesterday claim remains in the store
+but is absent from the table while today's appears. No record was deleted and no desk restart occurred.
+
+### 2026-09-17 — Claimed-like current rating (trader-directed, working tree)
+
+A claimed-only D1 row now uses the existing latest Master scan's full score inputs when that scan
+measured its symbol. Its immutable claim snapshot remains unchanged; a symbol the scan did not
+measure still says unmeasured rather than receiving invented facts. The worker already refreshes
+that scan cache off the Qt thread whenever its hourly output changes. No detector, scanner output,
+alert, watchlist, Focus or claim-store behavior changed.
+
+### 2026-09-17 — Pullback retest LRSI gate (trader-directed, working tree)
+
+M15 and M30 Pullback SMA retests now require a same-timeframe LRSI 80 reversal on the retest bar
+or either of the two completed bars before it. A retest that only holds the line emits no Pullback
+alert, feed row, review row or phone push. The existing reclaim-plus-LRSI and later-LRSI rules are
+unchanged. The targeted pullback rule/review tests pass (36), as does ruff; no restart occurred.
 
 ### 2026-09-16 — Phase 0.32 Packets 1-3 BUILT, independently accepted and MERGED; live/local-model gates owed
 

@@ -8,8 +8,9 @@ all its labels. Preserve distinct setups and directions for the same symbol."*
 PURE. This module reads a claim store's rows and a list of `SetupRow` and
 returns a new list. It writes nothing, reads no file, touches no Qt object and
 computes no statistic: the point total a claimed row shows is
-`setup_points.score_row`'s, from the measurements the claim carried, and this
-module's whole job is to put those measurements where that function looks.
+`setup_points.score_row`'s. A current Master scan can supply fresh score inputs
+for a claimed-only row without changing the original claim, and this module's
+whole job is to put those measurements where that function looks.
 
 Two outcomes per active claim, and only two:
 
@@ -20,9 +21,10 @@ Two outcomes per active claim, and only two:
   the scan's, because the scan measured it and the like did not.
 * **The scan does not carry it.** Then the claim is a NEW row, built from what
   the desk knew when the claim was made (`known_at_claim`, possibly `{}`) and
-  honest about the rest: `score` is None because the scan never scored this
-  name, `expected_r` is None unless the claim carried one, and the Points cell
-  states what was not measured rather than filling the holes with zeros.
+  honest about the rest: `score` is None because the claim is not a scan row.
+  Its Points cell uses the latest full-scan inputs when that scan measured the
+  symbol, otherwise it states what was not measured rather than filling holes
+  with zeros.
 
 **A like grants nothing.** It never sets `favorite_setup` or `high_conviction`
 on any row, never changes a score, and never reaches a detector, an alert, a
@@ -165,7 +167,9 @@ def _label_as_claimed(row: SetupRow, claim: Mapping[str, Any]) -> SetupRow:
     return labelled
 
 
-def row_from_claim(claim: Mapping[str, Any]) -> SetupRow | None:
+def row_from_claim(
+    claim: Mapping[str, Any], *, current_analysis: Mapping[str, Any] | None = None
+) -> SetupRow | None:
     """One claimed-only row: what the trader claimed, and what was known then."""
     symbol = str(claim.get("symbol") or "").strip().upper()
     side = str(claim.get("side") or "").strip().upper()
@@ -174,6 +178,7 @@ def row_from_claim(claim: Mapping[str, Any]) -> SetupRow | None:
     setup_id = str(claim.get("claimed_setup_id") or "").strip()
     known = claim.get("known_at_claim")
     known = dict(known) if isinstance(known, Mapping) else {}
+    analysis = dict(current_analysis) if isinstance(current_analysis, Mapping) else {}
     raw: dict[str, Any] = {
         "symbol": symbol,
         "side": side,
@@ -188,12 +193,16 @@ def row_from_claim(claim: Mapping[str, Any]) -> SetupRow | None:
         # know?" and a reader asking "what does this score?" are different
         # readers (lead ruling, 2026-09-14).
         "known_at_claim": dict(known),
+        "current_analysis": dict(analysis),
         "bucket_keys": [CLAIMED_BUCKET],
         "classification_badges": [CLAIMED_BADGE],
     }
     for field in _RAW_MEASUREMENT_FIELDS:
         if field in known and known.get(field) not in (None, ""):
             raw[field] = known.get(field)
+    # The original claim is immutable evidence.  The current scan is a
+    # separate, display-only reading that wins only for the current rating.
+    raw.update(analysis)
     # Deliberately NOT `raw.setdefault("setup_family", claimed_family(setup_id))`.
     # The claimed id is what the TRADER said; a `setup_family` is what the scan
     # MEASURED, and the point system reads that field as a measurement - a
@@ -224,7 +233,8 @@ def _claim_sort_key(claim: Mapping[str, Any]) -> str:
 
 
 def merge_claims(
-    rows: Iterable[SetupRow], claims: Iterable[Mapping[str, Any]]
+    rows: Iterable[SetupRow], claims: Iterable[Mapping[str, Any]],
+    *, analysis_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[SetupRow]:
     """The scan's rows with the trader's active claims folded in. Pure.
 
@@ -266,7 +276,11 @@ def merge_claims(
         unmatched.append(claim)
 
     for claim in sorted(unmatched, key=_claim_sort_key, reverse=True):
-        row = row_from_claim(claim)
+        symbol = str(claim.get("symbol") or "").strip().upper()
+        row = row_from_claim(
+            claim,
+            current_analysis=(analysis_by_symbol or {}).get(symbol),
+        )
         if row is not None:
             merged.append(row)
     return merged

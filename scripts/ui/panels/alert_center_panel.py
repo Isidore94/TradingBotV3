@@ -4880,7 +4880,10 @@ class AlertCenterPanel(QFrame):
             kind,
             symbol,
             side,
-            self._m5_bars_for(symbol),
+            # A Pullback watch has no M5 baseline. Reading the chart cache here
+            # can take its lock while a refresh owns it, so a button press must
+            # never pay for bars this watch does not use.
+            () if kind == PULLBACK_KIND else self._m5_bars_for(symbol),
             source_text=source_text,
         )
         self._chart_watches.append(watch)
@@ -6200,9 +6203,18 @@ class AlertCenterPanel(QFrame):
                 self._refresh_review_armed_kinds()
                 self.armedWatchesChanged.emit()
 
-        # The trader's own picks arm themselves, BEFORE anything is evaluated,
-        # so a pick claimed a minute ago is judged on this very tick.
-        self._sweep_auto_pullback_watches(moment)
+        # Trader direction 2026-09-17: Pullback alerts are MANUAL only.  Clear
+        # the retired automatic rows once so old claim/Focus pre-arms cannot
+        # survive a restart, and never recreate them from the sweep.
+        automatic = [watch for watch in self._chart_watches if self._is_auto_pullback_watch(watch)]
+        if automatic:
+            automatic_keys = {_key(watch) for watch in automatic}
+            self._chart_watches = [
+                watch for watch in self._chart_watches if _key(watch) not in automatic_keys
+            ]
+            self._save_chart_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
         armed = [
             watch
             for watch in self._chart_watches

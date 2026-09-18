@@ -54,6 +54,14 @@ def _qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def _claim_session_matches_the_fixture(monkeypatch):
+    """The historical fixture claims are today's claims unless a test says otherwise."""
+    import claimed_picks
+
+    monkeypatch.setattr(claimed_picks, "current_session_date", lambda _now=None: "2026-09-14")
+
+
 CHIP_FAV = "favorite_setup"
 CHIP_HC = "high_conviction"
 CHIP_NEAR = "near_favorite_zone"
@@ -134,6 +142,31 @@ def _write_claims(path: Path, claims) -> None:
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in claims),
         encoding="utf-8",
     )
+
+
+def test_setups_table_shows_only_claims_from_the_current_market_session(tmp_path, monkeypatch):
+    """Yesterday's still-active claim stays in history but leaves the Setups table."""
+    import claimed_picks
+
+    claims = tmp_path / "claimed_picks.jsonl"
+    yesterday = _claim("YESTERDAY", claim_at="2026-09-16T08:25:00-07:00")
+    yesterday["session_date"] = "2026-09-16"
+    today = _claim("TODAY", claim_at="2026-09-17T08:25:00-07:00")
+    today["session_date"] = "2026-09-17"
+    _write_claims(claims, [yesterday, today])
+    monkeypatch.setattr(claimed_picks, "current_session_date", lambda _now=None: "2026-09-17")
+    panel, _ = _build_panel(tmp_path, monkeypatch)
+    try:
+        panel.refresh_from_reports()
+
+        assert {"YESTERDAY", "TODAY"} <= {
+            row["symbol"] for row in claimed_picks.active_claims(claims)
+        }
+        shown = _symbols(panel.model.rows())
+        assert "TODAY" in shown
+        assert "YESTERDAY" not in shown
+    finally:
+        panel.deleteLater()
 
 
 def _build_panel(tmp_path, monkeypatch, *, rows=None, claims_path=None, settings=None):
@@ -417,6 +450,32 @@ def test_the_claimed_rows_score_is_blank_and_its_points_say_what_was_not_measure
         assert bucket_cell == "My liked trade"
     finally:
         panel.deleteLater()
+
+
+def test_a_claimed_only_row_uses_the_latest_full_scan_inputs_for_points():
+    """The claim stays immutable; the current scan supplies its live rating."""
+    from ui.services.claimed_setup_rows import merge_claims
+    import setup_points
+
+    claim = _claim("ZZZZ", "LONG", "avwap_band_bounce")
+    analysis = {
+        "expected_r": 1.0,
+        "last_close": 100.0,
+        "atr20": 5.0,
+        "hv_level_blocking_count": 2,
+        "daily_relative_strength_score": 3.0,
+        "rs_vs_industry": 2.0,
+        "has_bounce_event_today": True,
+        "setup_family": "alpha",
+    }
+
+    row = merge_claims([], [claim], analysis_by_symbol={"ZZZZ": analysis})[0]
+    points = setup_points.score_row(row.raw, side=row.side)
+
+    assert row.raw["known_at_claim"] == {}
+    assert row.raw["current_analysis"] == analysis
+    assert row.raw["expected_r"] == 1.0
+    assert points.total == 32.0  # +10 R, +5 RS, +15 bounce, -8 S/R, +10 base
 
 
 def test_a_claimed_scan_row_keeps_its_own_labels_and_gains_one(tmp_path, monkeypatch):

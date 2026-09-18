@@ -111,6 +111,10 @@ def _derived_tokens(values: Mapping[str, str]) -> dict[str, str]:
     favorite = values.get("favorite", "#ffc857")
     long_ = values.get("long", "#4ade80")
     neutral = values.get("neutral", "#9aa0a6")
+    alert_d1 = values.get("chart_blue", "#60a5fa")
+    alert_pullback_m15 = values.get("chart_yellow", "#facc15")
+    alert_pullback_m30 = values.get("chart_purple", "#c084fc")
+    alert_pullback_h1 = values.get("chart_light_blue", "#22d3ee")
     return {
         "alert_watch_border": with_alpha(short, 0.90),
         "alert_watch_bg": with_alpha(short, 0.12),
@@ -118,6 +122,16 @@ def _derived_tokens(values: Mapping[str, str]) -> dict[str, str]:
         "alert_focus_bg": with_alpha(favorite, 0.14),
         "alert_star_dim": with_alpha(favorite, 0.75),
         "alert_dislike": with_alpha(short, 0.65),
+        "alert_d1_border": with_alpha(alert_d1, 0.85),
+        "alert_d1_bg": with_alpha(alert_d1, 0.12),
+        "alert_focus_d1_border": with_alpha(long_, 0.90),
+        "alert_focus_d1_bg": with_alpha(long_, 0.14),
+        "alert_pullback_m15_border": with_alpha(alert_pullback_m15, 0.90),
+        "alert_pullback_m15_bg": with_alpha(alert_pullback_m15, 0.14),
+        "alert_pullback_m30_border": with_alpha(alert_pullback_m30, 0.90),
+        "alert_pullback_m30_bg": with_alpha(alert_pullback_m30, 0.14),
+        "alert_pullback_h1_border": with_alpha(alert_pullback_h1, 0.90),
+        "alert_pullback_h1_bg": with_alpha(alert_pullback_h1, 0.14),
         # Group tape chips. Up to 34 of them re-render every five minutes, so
         # the two alphas the chip used to mix in an f-string live here and the
         # variant costs a property set instead of a stylesheet parse.

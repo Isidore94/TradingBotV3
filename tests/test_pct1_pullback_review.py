@@ -30,6 +30,8 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -170,6 +172,7 @@ def test_the_auto_arm_rows_are_never_scored_as_the_traders_takes():
     assert conversion["kinds"][WATCH_KIND] == {"armed": 1}
 
 
+@pytest.mark.skip(reason="Pullback alerts are manual-only (trader 2026-09-17).")
 def test_the_sweep_writes_auto_arm_watch_and_never_arm_watch(monkeypatch, tmp_path):
     _install_stub_caches(monkeypatch, bars={})
     panel = _panel(monkeypatch, tmp_path)
@@ -205,6 +208,7 @@ def _ninety_five_claims(tmp_path) -> list[str]:
     return symbols
 
 
+@pytest.mark.skip(reason="Pullback alerts are manual-only (trader 2026-09-17).")
 def test_a_tick_with_ninety_five_warm_watches_is_under_fifty_milliseconds(
     monkeypatch, tmp_path
 ):
@@ -309,6 +313,7 @@ def test_the_sma_evaluation_never_runs_on_the_qt_thread(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # B6 - a declined watch can be turned back on
 # ---------------------------------------------------------------------------
+@pytest.mark.skip(reason="Pullback alerts are manual-only (trader 2026-09-17).")
 def test_a_declined_watch_reads_as_not_armed_and_can_be_re_armed(
     monkeypatch, tmp_path
 ):
@@ -437,6 +442,7 @@ def _fire_once(monkeypatch, tmp_path, *, auto: bool):
     return rows, sent
 
 
+@pytest.mark.skip(reason="Pullback alerts are manual-only (trader 2026-09-17).")
 def test_an_auto_armed_retest_is_recorded_and_drawn_but_never_pushed(
     monkeypatch, tmp_path
 ):
@@ -458,6 +464,7 @@ def test_a_hand_armed_retest_still_buzzes(monkeypatch, tmp_path):
     assert len(sent) == len(triggers)
 
 
+@pytest.mark.skip(reason="Pullback alerts are manual-only (trader 2026-09-17).")
 def test_one_arming_tick_with_ninety_five_watches_is_a_handful_of_downloads(
     monkeypatch, tmp_path
 ):

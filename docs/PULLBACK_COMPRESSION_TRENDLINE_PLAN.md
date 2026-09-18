@@ -86,8 +86,9 @@ side close. It is trader-only, one-shot, and never enters the automatic Focus pu
     has gone back below it since, and an LRSI reversal prints on M30 OR M15 after the reclaim.
     Fires once per episode; a completed M30 close back below the SMA ends the episode.
   - `sma_retest` (M15 and M30): after a reclaim, a completed bar's low tags the SMA (within
-    0.25 ATR-14 of that timeframe, or through it) and closes above it. Fires once per timeframe
-    per episode.
+    0.25 ATR-14 of that timeframe, or through it), closes above it, and has an LRSI reversal on
+    that timeframe on the retest bar or either of the two before it. Fires once per timeframe per
+    episode.
   - A new episode begins when a completed close goes back below the SMA; an episode's triggers
     may fire again in a new episode. A watch ends at expiry (10 trading days, existing policy),
     on disarm, or when the trader's claim / swing Focus pick that auto-armed it is dropped.
@@ -95,11 +96,8 @@ side close. It is trader-only, one-shot, and never enters the automatic Focus pu
     minutes <= now). Warm-up: 160 M15 bars / 85 M30 bars (SMA + LRSI's 13); fewer is
     `not measured (N of 160 M15 bars)`. yfinance `15m`/`30m` for a `1mo` period, one cache instance
     per interval on the H1 cache's own worker pattern, zero IB traffic. Stale after 24 h.
-- **Auto-arm is DESK-mode-agnostic and pushes in every mode**, the same door as the H1 retester
-  (`notify_armed_watch`): these are the trader's own picks, the recorded exception class of
-  Research/Focus price alerts. An auto-armed watch shows `auto: claimed pick` / `auto: swing
-  Focus` in its source text; disarming it by hand is remembered (`declined`) so the poll does not
-  re-arm it while that claim or pick lives. Recorded in `AUTO_MODES_AND_QUIET_HOURS_PLAN.md`.
+- **Pullback alerts are manual-only (trader 2026-09-17).** Claims and Focus picks never pre-arm
+  them. Old automatic rows are removed on the poll; pressing the chart button is the only arm path.
 - **Three claim names** (in `setup_docs.SETUP_DOCS`, new group `"Entry timing and breaks"`, all
   three in `EXTRA_CLAIM_IDS` so the rail offers them): `pullback_sma_reclaim` "Pullback reclaim
   (M15 150 / M30 75 SMA)", `trendline_break` "Trendline break", `compression_break` "Compression
@@ -305,8 +303,9 @@ M15 and M30 fixtures for both sides - below-then-reclaim with an LRSI 80 cross o
 fires `sma_reclaim_lrsi` with `lrsi_from_below_50` true when a bar 2-4 back was under 50 and false
 otherwise; a reclaim with the cross 4 bars back does NOT fire; a reclaim whose bar ended before
 `armed_at` does not fire; `reclaim_then_lrsi` fires on a later M15 cross while every M30 close
-stays above SMA-75 and is cancelled by one close below; `sma_retest` fires on a low within 0.25 ATR
-that closes above and not on a close below; each trigger at most once per episode and again in a
+stays above SMA-75 and is cancelled by one close below; `sma_retest` fires only when a low within
+0.25 ATR closes above AND an LRSI cross is on that timeframe within its three-bar window, and not
+on a hold without that cross or a close below; each trigger at most once per episode and again in a
 new episode; fewer than the warm-up bars -> `None`; a forming bar is never read (bar_start +
 minutes > now); `IntradayHistoryCache(15)` buckets on 15-minute boundaries and fetches once per
 completed bucket (fake downloader); a stored `h1_ema_bounce` watch loads as `pullback` with the H1

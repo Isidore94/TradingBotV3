@@ -414,8 +414,11 @@ The new rule, and it is deliberately narrow:
 * A **CLAIMED** like whose horizon resolves to **`d1`** writes ONE row into
   `claimed_picks.jsonl` (`scripts/claimed_picks.py`, append-only, identity
   `(symbol, side, claimed_setup_id)`), and that row becomes ONE row in the
-  Master AVWAP setups table with the chip **My liked trade**. A second claim of
-  an active key appends nothing and is still a success - the pick exists.
+  Master AVWAP setups table with the chip **My liked trade** for its current
+  market session only. The record and every other active-claim reader retain
+  the normal lifecycle; this table filter deletes or retires nothing. A second
+  claim of an active key appends nothing and is still a success - the pick
+  exists.
 * **The pick is saved and confirmed BEFORE the chart is retired.** A store that
   could not be written keeps the chart, fires `likeRecorded`, and says
   `NOT PLACED - claimed_picks.jsonl could not be written; chart kept`. The

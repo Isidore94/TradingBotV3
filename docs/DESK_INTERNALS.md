@@ -5691,8 +5691,9 @@ measure first, then tune.
   `reclaim_then_lrsi` is the M30 leg and fires on the later cross - on the M30 itself or on the
   M15 companion series the caller hands in - while every completed M30 close holds the 75-SMA;
   `sma_retest` fires on a bar AFTER the reclaim whose low comes within 0.25 ATR-14 of the line (or
-  through it) and which still closes on the right side. **The reclaim bar is never its own
-  retest.** Warm-up is the SMA's length plus ten (160 M15 / 85 M30 bars) and 24 h of silence is
+  through it), which still closes on the right side, AND whose own timeframe has an LRSI 80 cross
+  on that bar or either of the two before it. **The reclaim bar is never its own retest.** Warm-up
+  is the SMA's length plus ten (160 M15 / 85 M30 bars) and 24 h of silence is
   stale; both answer `None`, which is NOT MEASURED, never a verdict.
 - **80 is a parameter, never a live level.** The oscillator is the champion's
   `efficiency_lrsi.compute_efficiency_lrsi`, whose `CROSS_LEVELS (20, 50)` are the M5 engines'
@@ -5800,10 +5801,10 @@ written down, because each is a rule the next standing-arm feature inherits.
   ten-trading-day arm.
 - **Phone volume is a design decision, not a side effect** (lead, 2026-09-15; the trader may
   overrule). The reviewer measured ~85 fires a session at 108 watches, 70 % of them `sma_retest`.
-  A watch the DESK armed pushes `sma_reclaim_lrsi` and `reclaim_then_lrsi` and writes `sma_retest`
-  as a feed row and a review row WITHOUT a push; a watch the TRADER armed by hand pushes all
-  three, because they asked for that exact name by pressing the button. Nothing is withheld either
-  way - every fire is on the feed and in the evidence.
+  A watch the DESK armed pushes `sma_reclaim_lrsi` and `reclaim_then_lrsi` and writes an LRSI-
+  confirmed `sma_retest` as a feed row and a review row WITHOUT a push; a watch the TRADER armed
+  by hand pushes all three. A held retest without that LRSI cross makes no fire, feed row or
+  review row. Nothing else is withheld - every fire is on the feed and in the evidence.
 - **`ChartWatch.fired` is keyed `trigger@timeframe`.** Keyed on the trigger alone, one watch's M15
   and M30 stamps overwrote each other and a restart re-announced whichever lost.
 ## SC - the setups table cycles, and a veto for the day hides the row (2026-09-15, trader-directed)

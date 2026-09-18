@@ -842,6 +842,7 @@ def test_nothing_new_reaches_the_retired_h1_emitter_seam():
         parts = set(path.relative_to(ROOT_DIR).parts)
         if (
             ".git" in parts
+            or ".codex" in parts  # sibling worktrees checked out under the repo
             or ".venv" in parts
             or ".test_tmp" in parts
             or "build" in parts

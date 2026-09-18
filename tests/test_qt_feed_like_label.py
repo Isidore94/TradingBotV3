@@ -94,6 +94,100 @@ def test_no_action_without_a_focus_service():
     assert item.favorite_button is None
 
 
+@pytest.mark.parametrize(
+    ("alert", "focus_category", "tone", "source_badge"),
+    [
+        (
+            {"timeframe": "D1"},
+            "",
+            "d1",
+            "",
+        ),
+        (
+            {"timeframe": "D1"},
+            "swing",
+            "focus-d1",
+            "",
+        ),
+        (
+            {
+                "timeframe": "D1",
+                "tag": "chart_watch",
+                "payload": {"chart_watch_kind": "d1_level_above"},
+            },
+            "",
+            "personal-d1",
+            "",
+        ),
+        (
+            {
+                "timeframe": "D1",
+                "tag": "chart_watch",
+                "payload": {"chart_watch_kind": "pullback", "timeframe": "M15"},
+            },
+            "",
+            "pullback-m15",
+            "M15 PULLBACK",
+        ),
+        (
+            {
+                "timeframe": "D1",
+                "tag": "chart_watch",
+                "payload": {"chart_watch_kind": "pullback", "timeframe": "M30"},
+            },
+            "",
+            "pullback-m30",
+            "M30 PULLBACK",
+        ),
+        (
+            {
+                "timeframe": "D1",
+                "tag": "chart_watch",
+                "payload": {"chart_watch_kind": "pullback", "timeframe": "H1"},
+            },
+            "",
+            "pullback-h1",
+            "H1 PULLBACK",
+        ),
+    ],
+)
+def test_alert_feed_item_uses_a_clear_tone_for_d1_and_pullback_alerts(
+    alert, focus_category, tone, source_badge
+):
+    """The D1 feed keeps its home label while exposing a pullback's real source bar."""
+    from ui.models.bounce import BounceAlert
+    from ui.widgets.alert_feed_item import AlertFeedItem
+    from ui.widgets.badge import Badge
+
+    item = AlertFeedItem(
+        BounceAlert(time_text="09:31:00", symbol="NVDA", side="LONG", **alert),
+        focus_category=focus_category,
+    )
+
+    assert item.property("alertTone") == tone
+    badge_texts = [badge.text() for badge in item.findChildren(Badge)]
+    if source_badge:
+        assert "D1" in badge_texts
+        assert source_badge in badge_texts
+
+
+def test_alert_tone_rules_are_present_in_the_rendered_theme():
+    """The property names stay tied to real QSS rules in both app themes."""
+    from ui.theme import build_stylesheet
+
+    for theme_name in ("dark", "light"):
+        stylesheet = build_stylesheet(theme_name)
+        for tone in (
+            "personal-d1",
+            "focus-d1",
+            "d1",
+            "pullback-m15",
+            "pullback-m30",
+            "pullback-h1",
+        ):
+            assert f'[alertTone="{tone}"]' in stylesheet
+
+
 def test_an_alert_with_no_symbol_gets_no_action():
     from ui.models.bounce import BounceAlert
     from ui.widgets.alert_feed_item import AlertFeedItem

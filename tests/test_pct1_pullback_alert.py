@@ -601,6 +601,38 @@ def test_a_low_inside_a_quarter_atr_of_the_sma_that_closes_above_it_retests():
     assert fire.bar_dt == bar_dt(index, 15)
     assert fire.sma == pytest.approx(M15_RETEST_SMA, abs=1e-9)
     assert fire.atr == pytest.approx(M15_RETEST_TAG_ATR, abs=1e-9)
+    assert fire.lrsi_from_below_50 is True
+    assert "LRSI 80 cross" in fire.message
+
+
+def test_a_retest_that_held_without_a_recent_lrsi_reversal_is_silent():
+    """A hold alone is noise; the M15/M30 retest needs the LRSI reversal."""
+    closes = list(M15_STALE_CROSS_CLOSES) + [128.0]
+    bars = make_bars(closes, 15)
+    index = len(closes) - 1
+    sma_at = simple_mean(closes, index, M15_SMA)
+    bars[-1] = {
+        "dt": bar_dt(index, 15),
+        "open": closes[index],
+        "high": closes[index] + 1.0,
+        "low": sma_at,
+        "close": closes[index],
+        "volume": 2_000,
+    }
+    assert closes[index] > sma_at
+    assert cross_up_80(closes) == (M15_STALE_CROSS_INDEX,)
+    assert M15_STALE_CROSS_INDEX < index - 2  # outside the three-bar window
+
+    result = evaluate(
+        bars,
+        sma_length=M15_SMA,
+        bar_minutes=15,
+        armed_at=bar_dt(0, 15),
+        now=bar_end(index, 15),
+    )
+
+    assert result is not None
+    assert TRIGGER_RETEST not in triggers_of(result)
 
 
 def test_a_low_six_tenths_of_an_atr_above_the_sma_never_tagged_it():

@@ -477,11 +477,11 @@ class MasterAvwapPanel(QWidget):
             if claimed_picks_path is not None
             else (CLAIMED_PICKS_FILE if default_store else None)
         )
-        #: mtime+size+day keyed cache over the claims file. ONE small read when
-        #: the file changed, never one per refresh and never on the paint path
-        #: (nothing expensive on the Qt thread). The DAY is part of the key
-        #: because the fade is a session clock: a desk left running past
-        #: midnight has to re-ask.
+        #: mtime+size+session keyed cache over the claims file. ONE small read
+        #: when the file changed, never one per refresh and never on the paint
+        #: path (nothing expensive on the Qt thread). The SESSION is part of
+        #: the key: this table shows only today's claimed picks, so a desk left
+        #: running across the market-date roll must re-ask.
         self._claims_cache: list[dict] = []
         self._claims_cache_stamp: object = _CLAIMS_UNREAD
         self._claims_cache_day: str = ""
@@ -1751,11 +1751,11 @@ class MasterAvwapPanel(QWidget):
     # Packet D1C-A: the trader's claimed D1 picks
     # ------------------------------------------------------------------
     def active_claims(self) -> list[dict]:
-        """The live claims, from an mtime-keyed cache over the claims file.
+        """Today's live claims, from an mtime-and-session keyed file cache.
 
-        Trader, 2026-09-14: *"Claimed picks must survive refreshes, rescans and
-        restarts."* The FILE is the persistence - this panel holds no list of
-        its own, so a second panel built on the same store sees the same picks.
+        The append-only file preserves every claim for history, grading,
+        auto-armed Pullback watches and the chart-review queue gate. This
+        table alone projects the claims made in the current market session.
         """
         path = getattr(self, "_claimed_picks_path", None)
         if path is None:
@@ -1765,18 +1765,31 @@ class MasterAvwapPanel(QWidget):
             stamp: object = (stat.st_mtime_ns, stat.st_size)
         except OSError:
             stamp = None
+        claims_reader = None
         try:
-            today = date.today().isoformat()
+            import claimed_picks
+
+            claims_reader = claimed_picks
+            today = claimed_picks.current_session_date()
         except Exception:  # noqa: BLE001 - a clock never costs the table
-            today = self._claims_cache_day
+            try:
+                today = date.today().isoformat()
+            except Exception:  # noqa: BLE001 - preserve the prior safe view
+                today = self._claims_cache_day
         if stamp == self._claims_cache_stamp and today == self._claims_cache_day:
             return self._claims_cache
         rows: list[dict] = []
         if stamp is not None:
             try:
-                import claimed_picks
+                if claims_reader is None:
+                    import claimed_picks
 
-                rows = claimed_picks.active_claims(Path(path))
+                    claims_reader = claimed_picks
+                rows = [
+                    row
+                    for row in claims_reader.active_claims(Path(path))
+                    if str(row.get("session_date") or "").strip()[:10] == today
+                ]
             except Exception:  # noqa: BLE001 - an unreadable store costs no row
                 rows = []
         self._claims_cache = rows
@@ -1791,8 +1804,11 @@ class MasterAvwapPanel(QWidget):
             return list(rows)
         try:
             from ui.services.claimed_setup_rows import merge_claims
+            from ui.services.ai_state_levels import cached_symbol_claim_analysis
 
-            return merge_claims(rows, claims)
+            return merge_claims(
+                rows, claims, analysis_by_symbol=cached_symbol_claim_analysis()
+            )
         except Exception:  # noqa: BLE001 - a claim never costs the scan's rows
             return list(rows)
 

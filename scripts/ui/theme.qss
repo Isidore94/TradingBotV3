@@ -294,6 +294,44 @@ QWidget#Panel[alertKind="focus"] {
     background: @alert_focus_bg@;
 }
 
+/* Alert review colour key.  `alertTone` only changes presentation: routing
+   still reads alert.timeframe (D1 for persistent Pullback rows). */
+QWidget#Panel[alertTone="personal-d1"] {
+    border: 1px solid @alert_watch_border@;
+    border-left: 4px solid @short@;
+    background: @alert_watch_bg@;
+}
+
+QWidget#Panel[alertTone="focus-d1"] {
+    border: 1px solid @alert_focus_d1_border@;
+    border-left: 4px solid @long@;
+    background: @alert_focus_d1_bg@;
+}
+
+QWidget#Panel[alertTone="d1"] {
+    border: 1px solid @alert_d1_border@;
+    border-left: 4px solid @chart_blue@;
+    background: @alert_d1_bg@;
+}
+
+QWidget#Panel[alertTone="pullback-m15"] {
+    border: 1px solid @alert_pullback_m15_border@;
+    border-left: 4px solid @chart_yellow@;
+    background: @alert_pullback_m15_bg@;
+}
+
+QWidget#Panel[alertTone="pullback-m30"] {
+    border: 1px solid @alert_pullback_m30_border@;
+    border-left: 4px solid @chart_purple@;
+    background: @alert_pullback_m30_bg@;
+}
+
+QWidget#Panel[alertTone="pullback-h1"] {
+    border: 1px solid @alert_pullback_h1_border@;
+    border-left: 4px solid @chart_light_blue@;
+    background: @alert_pullback_h1_bg@;
+}
+
 QLabel#AlertSymbolLink {
     font-weight: 700;
     text-decoration: underline;

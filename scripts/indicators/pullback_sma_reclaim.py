@@ -23,7 +23,8 @@ Three triggers, one episode clock, one timeframe per call:
   the message names which series crossed.
 * ``sma_retest`` - after the reclaim, a completed bar AFTER the reclaim bar
   tags the SMA (its low within ``RETEST_TOLERANCE_ATR`` of the line, or clean
-  through it) and still CLOSES on the right side of it.
+  through it), still CLOSES on the right side of it, and has an LRSI cross up
+  through 80 on that bar or either of the two before it.
 
 What this module holds, and why each line is here:
 
@@ -462,20 +463,32 @@ def evaluate(
         )
         if retest_index is not None:
             reason = REASON_RETESTED
-            tolerance = ""
-            if atr:
-                row = completed[retest_index]
-                sma_at = smas[retest_index] or 0.0
-                extreme = row["low"] if long_side else row["high"]
-                tolerance = f" (low {abs(extreme - sma_at) / atr:.2f} ATR off the line)"
-            _fire(
-                TRIGGER_SMA_RETEST,
-                retest_index,
-                cross_index=None,
-                message=(
-                    f"{label} {int(sma_length)}-SMA retest held{tolerance}"
-                ),
-            )
+            window = {
+                retest_index - back for back in range(CROSS_WINDOW_BARS + 1)
+            }
+            in_window = sorted(index for index in crosses if index in window)
+            if in_window:
+                cross_index = in_window[-1]
+                tolerance = ""
+                if atr:
+                    row = completed[retest_index]
+                    sma_at = smas[retest_index] or 0.0
+                    extreme = row["low"] if long_side else row["high"]
+                    tolerance = f" (low {abs(extreme - sma_at) / atr:.2f} ATR off the line)"
+                flag = (
+                    " (from below 50)"
+                    if _crossed_from_below_fifty(values, cross_index)
+                    else " (not under 50 first)"
+                )
+                _fire(
+                    TRIGGER_SMA_RETEST,
+                    retest_index,
+                    cross_index=cross_index,
+                    message=(
+                        f"{label} {int(sma_length)}-SMA retest held + "
+                        f"LRSI {LRSI_CROSS_LEVEL:.0f} cross{flag}{tolerance}"
+                    ),
+                )
 
     new_fired = tuple(already) + tuple(
         hit.trigger for hit in fired if hit.trigger not in already

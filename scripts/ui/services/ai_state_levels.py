@@ -15,7 +15,7 @@ from typing import Any
 
 from project_paths import MASTER_AVWAP_AI_STATE_FILE
 
-_cache: dict[str, Any] = {"mtime": None, "levels": {}, "compression": {}}
+_cache: dict[str, Any] = {"mtime": None, "levels": {}, "compression": {}, "claim_analysis": {}}
 
 #: PCT-3: the compression fields the setups table's `compressed` chip reads.
 #: The report line the table is built from does not carry them; this file does,
@@ -29,6 +29,18 @@ COMPRESSION_FIELDS = (
     "compression_range_atr_ratio",
     "compression_close_range_atr_ratio",
     "compression_rule_version",
+)
+
+#: The existing hourly Master scan already measures these fields for every
+#: symbol it reads.  Claimed-only rows use this small, fresh projection rather
+#: than making a claim's old snapshot look like a current rating.
+CLAIM_ANALYSIS_FIELDS = (
+    "last_trade_date", "last_close", "atr20", "expected_r", "setup_family",
+    "setup_tags", "favorite_signals", "has_bounce_event_today",
+    "hv_level_blocking_count", "hv_level_nearby_count", "cloud_level_nearby_count",
+    "hv_level_nearest_distance_atr", "daily_relative_strength_score",
+    "rs_vs_industry", "industry_relative_strength_score", "trend_ma_alignment_note",
+    "priority_trendline_note", "priority_sma_levels", "side",
 )
 
 
@@ -58,6 +70,7 @@ def _refresh(force: bool) -> str:
 
     levels: dict[str, dict] = {}
     compression: dict[str, dict] = {}
+    claim_analysis: dict[str, dict] = {}
     symbols = payload.get("symbols") if isinstance(payload, dict) else {}
     for symbol, entry in (symbols or {}).items():
         if not isinstance(entry, dict):
@@ -77,9 +90,16 @@ def _refresh(force: bool) -> str:
         carried = {field: entry[field] for field in COMPRESSION_FIELDS if field in entry}
         if carried:
             compression[key] = carried
+        analysis = {field: entry[field] for field in CLAIM_ANALYSIS_FIELDS if field in entry}
+        if analysis:
+            # `setup_points.sr_part` calls this `previous_close`; the scanner
+            # publishes its current completed daily close as `last_close`.
+            analysis["previous_close"] = entry.get("last_close")
+            claim_analysis[key] = analysis
     _cache["mtime"] = mtime
     _cache["levels"] = levels
     _cache["compression"] = compression
+    _cache["claim_analysis"] = claim_analysis
     return "parsed"
 
 
@@ -119,6 +139,11 @@ def cached_symbol_compression() -> dict[str, dict]:
     on a worker and the panel has asked for one more refresh.
     """
     return _cache["compression"] or {}
+
+
+def cached_symbol_claim_analysis() -> dict[str, dict]:
+    """Fresh full-scan score inputs for claimed rows; never reads on Qt."""
+    return _cache["claim_analysis"] or {}
 
 
 def cache_signature() -> object:

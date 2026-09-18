@@ -36,6 +36,21 @@ archives named under `Revision history`, the newest being
 [`docs/archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`](docs/archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md).
 They are evidence and must not be loaded as context.
 
+- **Manual-only Pullback alerts (2026-09-17, working tree).** Claims and Focus names no longer
+  pre-arm Pullback alerts; any old automatic row is removed. The chart button is the only arm path,
+  and it skips the unnecessary M5-cache read that could stall the desk.
+
+- **Claimed-like current rating (2026-09-17, working tree).** A claimed-only
+  D1 row now overlays the latest Master AVWAP scan's existing score inputs for
+  its Points rating. Its original claim snapshot stays immutable, and an
+  unmeasured symbol remains honest rather than receiving invented data. The
+  scan, its outputs, detector, alerts, watchlists and claim store are unchanged.
+
+- **Pullback retest LRSI gate (2026-09-17, working tree).** M15 and M30 SMA retests now fire only
+  with a same-timeframe LRSI 80 reversal on the retest bar or either of the two before it. A hold
+  alone writes no Pullback alert, feed row, review row or phone push. The reclaim and later-LRSI
+  triggers are unchanged; gate #126 remains owed.
+
 ### Application, runtime, and data ownership
 
 - **Overnight AI repair (2026-09-17, merged).**
@@ -1130,6 +1145,19 @@ They are evidence and must not be loaded as context.
   evidence remains research-only. Legacy D1 champion alerts are unchanged.
 
 ### Charts, review, alerts, and phone surfaces
+
+- **Visual Alert Review colour key (2026-09-17, trader-directed).** Alert rows now carry a
+  display-only `alertTone` property: personal D1 level alerts are red, Focus D1 alerts green,
+  standard D1 alerts blue, and Pullback fires amber (M15), purple (M30) or cyan (H1). Persistent
+  Pullback rows remain in the D1 feed for their existing routing, while a second badge names the
+  measured source timeframe. No alert emission, routing, sound, queue, capture, score, detector,
+  Focus or store behaviour changed. Tests: `tests/test_qt_feed_like_label.py`.
+
+- **Claimed D1 picks reset in Master AVWAP Setups each market day (2026-09-17, trader-directed).**
+  The table now projects only active `claimed_picks.jsonl` rows whose `session_date` is the current
+  market session. Old claims remain append-only evidence and remain active for their existing fade,
+  grading, Pullback auto-arm and repeat-review paths. Nothing is deleted, expired early or removed
+  from any other reader. Tests: `tests/test_d1c_claimed_picks_panel.py`.
 
 - **A claimed D1 like is a pick, and the chart is done (packet D1C-A, trader 2026-09-14, branch `claude/d1c-claimed-picks-build`, reviewed GO).** A CLAIMED like whose horizon resolves to `d1` writes one row into the append-only `claimed_picks.jsonl` (`scripts/claimed_picks.py`, `project_paths.CLAIMED_PICKS_FILE`, identity `(symbol, side, claimed_setup_id)`, a duplicate appending nothing, the fade `focus_picks.FADE_TRADING_DAYS` trading days on `market_calendar.trading_days_between` - due on the ELEVENTH session by the packet's "more than" rule, one later than the Focus fade - with a raising calendar expiring nothing) and that row appears once in the Master AVWAP setups table through the pure `ui/services/claimed_setup_rows.merge_claims`: labelling a matching scan row in place with `My liked trade`, or becoming a new row with a blank Score, its `known_at_claim` measurements and the Points notes naming what was not measured. The horizon is resolved once by `claimed_picks.claim_horizon` from the alert (`is_d1` -> d1; the panel's M5-review flag -> m5; else the setup's registry group, which today has no day-trade group, so d1 or unknown) and never from the capture rail; the rail's stale timeframe is fixed at its own seam - `AlertChartReview.set_alert` passes `bounce.capture_timeframe(alert.timeframe)` ("5m"/"M5"/"5" -> M5, anything else including blank -> D1), so a typed D1 look after an M5 chart no longer stamps M5 and a real `"5m"` alert now gets its M5 sidecar. The pick is SAVED before the chart is retired: `claimPlaced` -> `AlertCenterPanel._place_claimed_d1` -> `_retire_claimed_review` (a separate method from the parking verb: no `remove_today`, no `_parked_symbols`, no Focus drop; one `like_advance` as before), and a failed write keeps the chart, fires `likeRecorded`, and the rail shows `NOT PLACED - claimed_picks.jsonl could not be written; chart kept` through `CaptureRail.set_capture_status` (a listener's line outranks the verb's own for that commit). While a claim is active the same `(symbol, side)` `is_d1` scan alert stays out of the review queue at the one door (`_enqueue_review_alert`, after the parked check, before the M5 branch, chart-watch exempt, an mtime-keyed `_active_claim_keys` cache, the skip counted and stated on the pane); M5 alerts, chart-watches, detection, the feed, the evidence streams and the phone push are untouched and nothing reaches `review_policy.json`. `SetupRow.bucket_keys` and the focus feed's fold make a row answerable to every bucket it belongs to; the setups strip is five independently checkable chips FAV / HC / Near / Liked / All (`qt_setups_bucket_chips`, a one-time migration of `qt_setups_bucket_filter`; the proxy tests `row.bucket_keys & selected`); `setup_points.RANKED_BUCKETS` gains `claimed_like`; a claimed row's context menu offers `Drop my claim` (`DataTable.add_row_action(visible=)`, shown only where `bucket_keys` carries `claimed_like`). A claim writes nothing to Focus or a watchlist (lead decision; the trader may overrule); `docs/CHART_REVIEW_WORKSPACE_PLAN.md` section 7 records the narrow supersession. Tests: `tests/test_d1c_claimed_picks_store.py`, `_route.py`, `_queue.py`, `_panel.py` (73 red from the tester, ten added by the builder). Long form: `docs/DESK_INTERNALS.md` "D1C".
 - **M5 on the left, D1 on the right (packet D1C-L, trader 2026-09-14, branch `claude/d1c-desk-sides-build`, reviewed GO).** The Trading Desk's left column is the M5 alert bar ALONE (`m5_column` stays a one-child vertical splitter so every mount, rescue and floor keeps its seam; the ST6.4 Working-lately line is still the first thing inside the bar) and a new `d1_column` vertical splitter holds the Master AVWAP workspace over the swing favorites strip, non-collapsible, the setups taking the stretch and opening at 6:1 (`D1_COLUMN_SPLIT_KEY = "qt_d1_column_split_sizes_v1"`; `M5_COLUMN_SPLIT_KEY` retired in place, never written, the old value untouched). The strip's 2026-08-31 place at the bottom of the M5 list is SUPERSEDED by the same trader; both writes, the `vetted` like-origin, the retraction row, the "took" badge, the day-roll re-derive and every action and signal are untouched. Workspace mode mounts `d1_column` as the third column and tabs mode's "Master AVWAP" tab holds it, so `set_setups_visible`, the open-hidden state, F9, `_setups_restore_sizes`, `_apply_column_floors` and the `_detach_mode_panels` rescue act on the COLUMN, and the strip hides and shows with the setups. Two consequences of the move were repaired in the same change (both builder-added tests pass on the base; they guard the move, not prior bugs): `show_watchlist`'s tabs-mode branch now raises `d1_column`, and the tabs-mode visibility calls come after `addTab` so a parentless column is never shown as a top-level window whose `showEvent` fired the strip's one-shot `firstShown` and emptied the chips. Files: `scripts/ui/panels/trading_desk.py`; tests `tests/test_d1c_desk_sides.py` plus one re-pointed assertion each in `tests/test_st6_service_and_surfaces.py`, `tests/test_qt_m5_alert_bar.py`, `tests/test_qt_desk_layout.py` and the re-pointed `TestWhereItLives` in `tests/test_qt_swing_favorites.py`. Long form: `docs/DESK_INTERNALS.md` "D1C-L".

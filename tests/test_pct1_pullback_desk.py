@@ -616,7 +616,7 @@ def _claim(tmp_path, symbol, side, *, horizon="d1", now=None):
     )
 
 
-def test_the_poll_arms_one_watch_per_d1_claim_and_swing_focus_name(
+def test_the_poll_never_auto_arms_a_pullback_from_a_claim_or_focus_name(
     monkeypatch, tmp_path
 ):
     _install_stub_caches(monkeypatch, bars={})
@@ -629,14 +629,19 @@ def test_the_poll_arms_one_watch_per_d1_claim_and_swing_focus_name(
 
     panel._poll_pullback_watches(now=datetime.now())
 
-    armed = {watch.symbol: watch for watch in _pullback_watches(panel)}
-    assert set(armed) == {"NVDA", "AMD"}, sorted(armed)
-    assert armed["NVDA"].side == "LONG"
-    assert armed["AMD"].side == "SHORT"
-    assert armed["NVDA"].source_text == CLAIM_SOURCE_TEXT
-    assert armed["AMD"].source_text == FOCUS_SOURCE_TEXT
+    assert _pullback_watches(panel) == []
 
 
+def test_the_pullback_button_never_reads_m5_bars_on_the_qt_thread(monkeypatch, tmp_path):
+    panel = _panel(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        panel, "_m5_bars_for", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("M5 read"))
+    )
+
+    assert panel.arm_chart_watch_for("NVDA", "LONG", WATCH_KIND) is True
+
+
+@pytest.mark.skip(reason="Pullback alerts are manual-only (trader 2026-09-17).")
 def test_the_poll_never_arms_the_same_pick_twice(monkeypatch, tmp_path):
     _install_stub_caches(monkeypatch, bars={})
     service = _focus_service(tmp_path)
@@ -651,6 +656,7 @@ def test_the_poll_never_arms_the_same_pick_twice(monkeypatch, tmp_path):
     assert symbols == ["AMD", "NVDA"]
 
 
+@pytest.mark.skip(reason="Pullback alerts are manual-only (trader 2026-09-17).")
 def test_a_watch_the_trader_disarmed_is_not_armed_again_while_the_claim_lives(
     monkeypatch, tmp_path
 ):
@@ -670,6 +676,7 @@ def test_a_watch_the_trader_disarmed_is_not_armed_again_while_the_claim_lives(
     assert [w.symbol for w in _pullback_watches(panel)] == ["AMD"]
 
 
+@pytest.mark.skip(reason="Pullback alerts are manual-only (trader 2026-09-17).")
 def test_dropping_the_claim_retires_its_auto_watch_with_one_row(
     monkeypatch, tmp_path
 ):
