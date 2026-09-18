@@ -300,7 +300,7 @@ def _day_review_bars_check(root: Path) -> dict[str, Any]:
                 "No Day Review session bars file yet.", source=bars_root, details={}
             )
         session = files[-1].stem[:10]
-        stored = day_review_bars.read_session_bars(session) or {}
+        stored = day_review_bars.read_session_bars(session, root=Path(root)) or {}
         return _check(
             "day_review_bars", "Day Review bars", STATUS_HEALTHY,
             f"Last bars session {session}: {len(stored)} symbols.", source=bars_root,

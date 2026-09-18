@@ -323,21 +323,17 @@ def test_backfill_refuses_the_open_session(qapp, monkeypatch):
         panel.deleteLater()
 
 
-def test_operations_audit_reports_last_bars_session_and_symbol_count(monkeypatch, tmp_path):
-    """System Health exposes the durable file in one compact, non-reading line."""
+def test_operations_audit_reads_count_from_its_injected_bars_root(monkeypatch, tmp_path):
+    """System Health must not resolve the process-global production bars root."""
     bars = _bars_module()
     import operations_audit
 
     monkeypatch.setattr(bars, "DAY_REVIEW_DIR", tmp_path)
-    monkeypatch.setattr(
-        bars,
-        "read_session_bars",
-        lambda session: {"SPY": [_bar(9, 30)], "QQQ": [_bar(9, 30)]}
-        if session == SESSION
-        else None,
-    )
-    (tmp_path / "bars").mkdir()
-    (tmp_path / "bars" / f"{SESSION}.parquet").touch()
+    monkeypatch.setattr(bars, "session_is_closed", lambda *_a, **_k: True)
+    bars.write_session_bars(SESSION, {"SPY": [_bar(9, 30)], "QQQ": [_bar(9, 30)]})
+    # If the audit reader ignores its root, this empty directory produces no
+    # count even though its injected root contains two symbols.
+    monkeypatch.setattr(bars, "DAY_REVIEW_DIR", tmp_path / "wrong-production-root")
 
     check = operations_audit._day_review_bars_check(tmp_path)
 
