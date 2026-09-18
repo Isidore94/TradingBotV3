@@ -698,14 +698,24 @@ def test_a_session_read_survives_a_restart_unchanged(stores, tmp_path):
 
 
 def test_read_session_takes_no_process_scoped_feed(stores):
-    """Its whole input is a session, a lookback, a clock and a set of PATHS."""
+    """Its whole input is a session, a lookback, a clock and a set of PATHS.
+
+    TJ-1 item 4 adds ONE more: `index`, a stored payload of the rows this reader
+    would itself have read off those same paths. It is DATA, not a feed - it
+    carries no process state, it defaults to `None`, and an index that is not of
+    this session and this window is ignored and the stores are streamed
+    (`tests/test_tj1_day_review_index.py`).
+    """
     import inspect
 
     import daily_recap_reader
 
     parameters = inspect.signature(daily_recap_reader.read_session).parameters
-    assert set(parameters) == {"session_date", "lookback_sessions", "now", "sources"}
+    assert set(parameters) == {
+        "session_date", "lookback_sessions", "now", "sources", "index",
+    }
     assert parameters["lookback_sessions"].default == 3
+    assert parameters["index"].default is None
 
     source_fields = {field.name for field in dataclass_fields(daily_recap_reader.RecapSources)}
     missing = [name for name in REQUIRED_SOURCES if name not in source_fields]

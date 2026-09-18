@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -1637,23 +1638,47 @@ def read_session(
     lookback_sessions: int = 3,
     now: datetime | None = None,
     sources: RecapSources | None = None,
+    index: Mapping[str, Any] | None = None,
 ) -> RecapSession:
     """One session, read from the durable stores. Pure; worker-only.
 
     Its whole input is a session, a lookback, a clock and a set of PATHS - no
     process-scoped feed, no in-memory alert list, no tracker. Call it on a
     worker: it opens nine files.
+
+    `index` (TJ-1 item 4) is a `day_review_index` payload for THIS session and
+    THIS lookback. When one is given and it really is that, the two big outcome
+    stores come out of it instead of being streamed - the 476 MB intraday log
+    and the 31 MB horizon CSV - and the eight small stores are read live as
+    always, so a note written since the index was built is still on the page.
+    Anything else about the index (another session, another window, a shape this
+    reader does not recognise, a revival that fails) STREAMS: an index is a
+    cache and a cache may never change the answer.
     """
     session_date = _session_text(session_date)
     lookback_sessions = max(1, int(lookback_sessions))
     now = now or datetime.now()
     sources = sources or RecapSources()
 
-    intraday = _read_intraday_outcomes(sources.intraday_outcomes)
+    indexed = None
+    if index is not None:
+        try:
+            import day_review_index
+
+            indexed = day_review_index.stores_for(
+                index, session_date=session_date, lookback_sessions=lookback_sessions
+            )
+        except Exception:  # noqa: BLE001 - a cache never costs the read
+            logging.debug("A Day Review index was unusable; streaming.", exc_info=True)
+            indexed = None
+    if indexed is not None:
+        intraday, horizon = indexed
+    else:
+        intraday = _read_intraday_outcomes(sources.intraday_outcomes)
+        horizon = _read_csv(
+            "session_horizon_outcomes", sources.session_horizon_outcomes, "scan_date"
+        )
     tier = _read_csv("tier_outcomes", sources.tier_outcomes, "run_timestamp")
-    horizon = _read_csv(
-        "session_horizon_outcomes", sources.session_horizon_outcomes, "scan_date"
-    )
     human_focus = _read_csv(
         "human_focus_outcomes", sources.human_focus_outcomes, "updated_at"
     )

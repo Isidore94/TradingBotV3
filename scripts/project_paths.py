@@ -390,6 +390,14 @@ ALERT_REVIEW_EVENTS_DIR = PERSISTENT_DATA_DIR / "alert_review_events"
 # desk GUI is its sole writer. Analysis-only evidence: nothing in the running
 # system reads this file to mute, score, gate, or alert (plan.md sec 5).
 TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
+# The Day Review page's own folder (plan.md Phase 0.33, packet TJ-1 item 4).
+# `sessions/<date>/outcomes.json` is a per-session index over the two big
+# outcome stores, so opening a completed session is a small read rather than a
+# 476 MB stream. The index itself is DERIVED and rebuildable - a deleted one
+# costs a slow open and nothing else - but it lives in the SHARED home because
+# the later TJ packets put the session's own M5 bars beside it, and those are
+# not rebuildable once the bars age out of the provider's window.
+DAY_REVIEW_DIR = PERSISTENT_DATA_DIR / "day_review"
 # Append-only JSONL of the trader's hand-vetted swing picks - "today's best
 # swing targets", typed at the end of a session into the strip under the M5
 # alert list. One row per action: an add carries (session_date, symbol, side,
