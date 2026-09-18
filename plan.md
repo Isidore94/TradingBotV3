@@ -193,10 +193,10 @@ section; the lag is on opening the tab and clicking an entry.
 #### 12.2 The shape
 
 Left nav before: Trading Desk · Journal · **Market Journal** · **Daily Recap** · Weekend
-Prep · Research · Auto Pilot · AI Summary · System Health · Settings.
+Prep · Universe · Research · Auto Pilot · A.I. Summary · System Health · Settings.
 
 Left nav after: Trading Desk · Journal · **Day Review** · Weekend Prep (opens on **Week
-Review**) · Research · Auto Pilot · AI Summary · System Health · Settings.
+Review**) · Universe · Research · Auto Pilot · A.I. Summary · System Health · Settings.
 
 **Day Review** is one date at a time (a session picker, Today marked provisional until the
 close), read top to bottom:
@@ -250,7 +250,9 @@ steps are unchanged.
   `market_journal`), never rewritten, never deleted; a hidden row is filtered by its
   `origin`. Derived, rebuildable artefacts live under `RUNTIME_DATA_DIR`
   (`project_paths`), durable ones under `PERSISTENT_DATA_DIR`; every new path is a named
-  `project_paths` constant (`DAY_REVIEW_DIR`, `AI_IDEAS_FILE`, `AI_IDEAS_STATE_FILE`). Write
+  `project_paths` constant (`DAY_REVIEW_DIR` under `PERSISTENT_DATA_DIR`, because TJ-2's bars
+  files cannot be rebuilt after yfinance's 60-day window even though the index and the
+  narrations inside it can; `AI_IDEAS_FILE`, `AI_IDEAS_STATE_FILE`). Write
   local first, the DAS after. A scratch script sets `TRADINGBOTV3_DATA_DIR` before any
   import and aborts if it resolves under `C:\TradingBotData`.
 - **AI.** Local inference only in the off-hours window (`ai_offhours_start`/`_end`, today
