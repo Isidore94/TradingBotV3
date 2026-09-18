@@ -5971,19 +5971,51 @@ JOURNAL reader; in the Auto Pilot log every line is the desk's.
 `market_journal_capture.REASON_MODE_FLIP` stays defined: the old sidecars carry it.
 
 **The index.** `scripts/day_review_index.py` writes
-`DAY_REVIEW_DIR/sessions/<date>/outcomes.json` holding exactly the two `_Store`s
+`DAY_REVIEW_DIR/sessions/<date>/outcomes.json` holding exactly the `_Store`s
 `read_session` would have built for that session: the rows its views consult (latest append
 per `event_id`, in the streaming reader's own order), the **full-file** `SourceCoverage`
 carried forward unchanged, and `raw_rows_by_session`. Storing the kept-row count as
 coverage instead would quietly relabel a 476 MB file as a 40-row one, so the equality test
 is on the whole `RecapSession` dataclass, coverage included. `read_session(index=...)` uses a
 valid index for THIS session and THIS lookback and otherwise STREAMS - another session,
-another window, a corrupt file or a revival that fails all read the stores, because a cache
-may never change the answer. The eight small stores are always read live, so a note written
-since the index was built is still on the page. `is_stale` is the one staleness rule: only a
-horizon row that had not matured can change, so a pending index is stale once the session it
-was waiting for has CLOSED, and an index with nothing pending is never stale. The post-close
-tick builds it once, through ONE named seam, `DayReviewService.build_index_for`.
+another window, a corrupt file, a revival that fails or a store the index does not carry all
+read the stores, because a cache may never change the answer. `is_stale` is the one
+staleness rule: only a horizon row that had not matured can change, so a pending index is
+stale once the session it was waiting for has CLOSED, an index built before its own session
+closed is always stale (that file is still being appended to), and an index with nothing
+pending is never stale. The post-close tick builds it once, through ONE named seam,
+`DayReviewService.build_index_for`.
+
+**How wide the index is, and the line between fast and fresh.** The first cut covered the
+two biggest stores and left an indexed read at 2,217 ms, which did not meet the gate's
+"under one second". Measured store by store on the staged home (2026-09-17): intraday
+476 MB / 4,995 ms, horizon 31 MB / 2,704 ms, **tier 14 MB / 944 ms**, **human-focus 1.0 MB /
+164 ms**, then pick-feedback 0.40 MB / 36 ms, review-events 0.27 MB / 15 ms, preference
+0.44 MB / 8 ms, annotations 0.35 MB / 4 ms and four more at about 2 ms together. So
+`INDEXED_SOURCE_SPECS` covers the FOUR stores over a megabyte, and the six small ones are
+read LIVE on every open - a freshness rule, not an oversight: a veto, a note, a favorite or a
+staged pick from a minute ago has to be on the page. `alert_review_events.jsonl` and
+`preference_trade_outcomes.csv` are deliberately OUT even though the follow-up packet named
+them, and the reason is worth keeping: both are rewritten as the trader and the journal move
+(the M5 click-away verdict lands in the first; the second is regenerated as trades arrive),
+an index carries no signal for a REWRITE, and indexing them would buy 23 ms. The 10.5 MB
+figure once attributed to review-events was a MEASUREMENT ERROR: that is the
+`alert_review_events/` segment directory, which `read_session` never opens - it reads the
+single 0.27 MB root file. Indexing tier and human-focus cannot change any answer at all,
+because `read_session` opens both for their COVERAGE LINE alone and no view reads a row of
+either.
+
+**Two lookups that were walks.** With the stores indexed, the whole remaining cost was
+compute: `_d1_horizon_row` walked the entire horizon slice once per D1 decision (117
+decisions over 13,700 rows - 1.1 s of profiled time, the single biggest item left) and
+`_outcome_for` walked every outcome of the session per call (3,281 calls, 274 ms). Both are
+now asked through a dict built once per read (`_horizon_rows_by_name`, `_outcomes_by_name`),
+and **neither dict is keyed on SIDE or horizon**: a row with a blank side matches either
+request, so those rules stay inside the lookup, applied to one name's handful of rows in
+file order, and the FIRST match is still the row the walk returned.
+`tests/test_tj1_day_review_index_wide.py` checks both against a brute-force reference walk
+over rows built to make the two able to disagree. That took the indexed read from 812 ms to
+265 ms and the page's whole read to 396 ms.
 
 **The forecast.** The button reads "Paste daily forecast..." and the dialog asks for the text,
 the SESSION it is about and the source model. `MarketJournalService.import_daily_forecast`
@@ -6019,9 +6051,19 @@ interpretation", the four capture panes and the five Daily Recap tabs. Every sto
 longer constructed, until TJ-8 deletes them - which is why the WS-RP and Sol proposal tests
 that construct the recap class directly still pass as written.
 
+**What it cost, measured the same way each time** (`scripts/ui/desk_bench.py`, staged home,
+1640x980, three repeats). Retired page: `market_journal` construct 362 ms sync p95, first
+show 570 ms settle p95, entry click 121 ms; `daily_recap.reload` **16,502 ms** settle p50.
+Day Review: construct 17 ms sync p50 / 121 ms settle, **`reload` 550 ms settle p50 / 562 ms
+p95**, first open (which builds and writes the index) 1,099 ms settle p95, entry click
+121 ms settle / 0.6 ms sync. Building an index costs 8.6 s once; reading it costs 92 ms.
+
 **Tests:** the tester's `tests/test_tj1_machine_rows.py`,
 `tests/test_tj1_page_specs.py`, `tests/test_tj1_day_review_page.py`,
 `tests/test_tj1_day_review_index.py`, `tests/test_tj1_forecast_brief.py` and
-`tests/test_tj1_moves.py` (104 tests, 96 red at the tester's commit), plus the builder's
-`tests/test_tj1_day_review_post_close_index.py` for the one seam none of them pinned,
-proven red by removing it.
+`tests/test_tj1_moves.py` (104 tests, 96 red at the tester's commit), plus three builder
+files for the seams none of them pinned, each proven red first:
+`tests/test_tj1_day_review_post_close_index.py` (the one named build seam),
+`tests/test_tj1_day_review_index_staleness.py` (the two edges of the staleness rule, found
+by the bench) and `tests/test_tj1_day_review_index_wide.py` (the widened index's equality,
+its all-or-nothing revival, and the two rewritten lookups against a reference walk).

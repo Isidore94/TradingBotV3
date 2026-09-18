@@ -7,8 +7,20 @@ TJ-1 item 4. Measured on the live desk 2026-09-17:
 then filters by session AFTERWARDS. On a staged copy of that home folder one
 `daily_recap.reload` settled in 16.5 seconds.
 
-The index stores, per session, exactly the two `_Store`s `read_session` would
-have built for it:
+**How wide it is, and why.** The first cut covered the two biggest stores and left
+an indexed read at 2,217 ms, which did not meet gate #145's "under one second". It
+now covers every store `read_session` opens whose live file is over a megabyte -
+the 476 MB intraday log, the 31 MB horizon CSV, the 14 MB tier CSV and the 1.0 MB
+human-focus CSV (`INDEXED_SOURCE_SPECS`) - and the six small ones are still read
+LIVE on every open, because a veto, a note, a favorite or a staged pick from a
+minute ago has to be on the page. That is a freshness rule, not an optimisation,
+and it is why `alert_review_events.jsonl` (0.27 MB, 15 ms) and
+`preference_trade_outcomes.csv` (0.44 MB, 8 ms) are deliberately NOT in here: both
+are rewritten as the trader and the journal move, and indexing them would buy
+23 ms at the price of a page that had stopped listening.
+
+The index stores, per session, exactly the `_Store`s `read_session` would have
+built for it:
 
 * ``rows`` - only the rows the views for that session and its lookback window
   actually consult (the latest append per `event_id`, as the streaming reader
@@ -21,7 +33,9 @@ have built for it:
 
 So an indexed read is the SAME ANSWER off a small file, and that equality is the
 contract: `read_session(date, index=build_index(date))` equals
-`read_session(date)` on the whole `RecapSession` dataclass.
+`read_session(date)` on the whole `RecapSession` dataclass. It is ALL OR NOTHING -
+an index that carries some of `INDEXED_SOURCES` and not others reads as absent, so
+an index written by an earlier build simply causes one slow open and is replaced.
 
 **It is derived and it may never cost the page.** A missing index means a slow
 open; a corrupt one means a slow open; a write that fails is logged and the page
@@ -50,9 +64,26 @@ _log = logging.getLogger(__name__)
 #: Schema NAME (ground rule 5). A file that does not carry it is not an index.
 SCHEMA = "day_review_index_v1"
 
-#: The two stores the index covers. The other ten are small and are read live,
-#: so a note written since the index was built is still on the page.
-INDEXED_SOURCES: tuple[str, ...] = ("intraday_outcomes", "session_horizon_outcomes")
+#: The stores the index covers, and how each one is read and narrowed:
+#: `name -> (reader, clock_field, session_field)`. The reader is the SAME
+#: function `read_session` uses, so an indexed store is built by the code that
+#: would otherwise have streamed it; `session_field` is the column whose value
+#: says which trading session a row belongs to, and it is how the slice is cut.
+#:
+#: The FOUR here are every store `read_session` opens whose live file is over a
+#: megabyte (measured 2026-09-17 on a staged copy of the live home folder:
+#: 476 MB, 31 MB, 14 MB, 1.0 MB - and 944 ms + 164 ms of a 1,754 ms indexed read
+#: came from the last two alone). Everything else stays LIVE, and two of those
+#: are named in the docstring above because the reason is not their size.
+INDEXED_SOURCE_SPECS: dict[str, tuple[str, str, str]] = {
+    "intraday_outcomes": ("intraday", "logged_at", "trade_date"),
+    "session_horizon_outcomes": ("csv", "scan_date", "scan_date"),
+    "tier_outcomes": ("csv", "run_timestamp", "scan_date"),
+    "human_focus_outcomes": ("csv", "updated_at", "trade_date"),
+}
+
+#: The order they are declared in, and the set an index must carry to be usable.
+INDEXED_SOURCES: tuple[str, ...] = tuple(INDEXED_SOURCE_SPECS)
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +190,35 @@ def _horizon_scope(session_date: str, lookback_sessions: int) -> tuple[str, str,
     return first, last, session_date
 
 
+def read_store(name: str, sources: Any):
+    """Read one indexed store the way `read_session` reads it. One reader each.
+
+    Named rather than inlined so the builder and the streaming reader cannot
+    drift: an index built by a different function from the one it replaces is an
+    index that agrees with nothing.
+    """
+    reader, clock_field, _session_field = INDEXED_SOURCE_SPECS[name]
+    path = getattr(sources, name)
+    if reader == "intraday":
+        return daily_recap_reader._read_intraday_outcomes(path)
+    return daily_recap_reader._read_csv(name, path, clock_field)
+
+
+def _in_scope(value: Any, session: str, first: str, last: str, targets: set[str]) -> bool:
+    """Does a row's own session belong to this read?
+
+    Three ways in, and they are the three the views ask about: the SELECTED
+    session, the lookback WINDOW (`_recent_swings_view`, `_d1_horizon_row`), and
+    the TARGET session a windowed swing observation was measured into (the swing
+    view reads that name's own M5 excursion on it). A row outside all three is
+    read by nothing, which is why leaving it out cannot change the answer.
+    """
+    stamp = daily_recap_reader._session_text(value)
+    if not stamp:
+        return False
+    return stamp == session or first <= stamp <= last or stamp in targets
+
+
 def build_index(
     session_date: str,
     *,
@@ -166,52 +226,38 @@ def build_index(
     sources: Any = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Read the two big stores once and write down what this session needs.
+    """Read the big stores once and write down what this session needs.
 
     Streams exactly what `read_session` streams - same functions, same identity
     rules - and then narrows the ROWS to the sessions the views consult while
-    carrying the coverage forward whole.
+    carrying every coverage line forward whole.
     """
     session = str(session_date or "").strip()[:10]
     lookback = max(1, int(lookback_sessions))
     sources = sources or daily_recap_reader.RecapSources()
     moment = now or datetime.now()
 
-    intraday = daily_recap_reader._read_intraday_outcomes(sources.intraday_outcomes)
-    horizon = daily_recap_reader._read_csv(
-        "session_horizon_outcomes", sources.session_horizon_outcomes, "scan_date"
-    )
+    stores = {name: read_store(name, sources) for name in INDEXED_SOURCES}
+    horizon = stores["session_horizon_outcomes"]
 
     first, last, _ = _horizon_scope(session, lookback)
-    horizon_rows: list[Mapping[str, Any]] = []
+    # The horizon store first, because what it says is pending decides both the
+    # staleness rule and which OTHER sessions the rest of the slice needs.
+    targets: set[str] = set()
     pending_targets: list[str] = []
     pending = False
     for row in horizon.rows:
-        scan_date = daily_recap_reader._session_text(row.get("scan_date"))
-        if not (first <= scan_date <= last or scan_date == session):
+        if not _in_scope(row.get("scan_date"), session, first, last, set()):
             continue
-        horizon_rows.append(row)
+        target = daily_recap_reader._session_text(row.get("target_session"))
+        if target:
+            targets.add(target)
         if daily_recap_reader._measured_return(row) is None:
             pending = True
-            target = daily_recap_reader._session_text(row.get("target_session"))
             if target:
                 pending_targets.append(target)
 
-    # The intraday sessions the views ask about: the selected one, and the
-    # target session of every horizon row in the window (the swing view reads
-    # the name's own M5 excursion on the session its pick was measured INTO).
-    wanted = {session}
-    for row in horizon_rows:
-        target = daily_recap_reader._session_text(row.get("target_session"))
-        if target:
-            wanted.add(target)
-    intraday_rows = [
-        row
-        for row in intraday.rows
-        if daily_recap_reader._session_text(row.get("trade_date")) in wanted
-    ]
-
-    return {
+    payload: dict[str, Any] = {
         "schema": SCHEMA,
         "session_date": session,
         "lookback_sessions": lookback,
@@ -220,9 +266,16 @@ def build_index(
         else moment.isoformat(timespec="seconds"),
         "pending": bool(pending),
         "pending_target_sessions": sorted(set(pending_targets)),
-        "intraday_outcomes": store_payload(intraday, intraday_rows),
-        "session_horizon_outcomes": store_payload(horizon, horizon_rows),
     }
+    for name, store in stores.items():
+        session_field = INDEXED_SOURCE_SPECS[name][2]
+        kept = [
+            row
+            for row in store.rows
+            if _in_scope(row.get(session_field), session, first, last, targets)
+        ]
+        payload[name] = store_payload(store, kept)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -293,13 +346,19 @@ def stores_for(
     *,
     session_date: str,
     lookback_sessions: int,
-):
-    """`(intraday, horizon)` from a VALID index for this read, else `None`.
+) -> dict[str, Any] | None:
+    """`{name: _Store}` from a VALID index for this read, else `None`.
 
     Validated on what it is an index OF, not only on its shape: an index for
     another session, or for another lookback window, holds the wrong horizon
     rows, and a reader that used it anyway would print one session's numbers
     under another's date.
+
+    **ALL OR NOTHING.** An index that carries some of `INDEXED_SOURCES` and not
+    others is answered as absent, which is how an index written by an earlier
+    build - when this covered two stores rather than four - is treated: the read
+    streams and leaves a complete one behind. Half a cache is the shape of bug
+    where one store is a week old and the page looks fine.
     """
     if not isinstance(index, Mapping):
         return None
@@ -310,9 +369,7 @@ def stores_for(
     if int(index.get("lookback_sessions") or 0) != max(1, int(lookback_sessions)):
         return None
     try:
-        return tuple(
-            store_from_payload(index[name]) for name in INDEXED_SOURCES
-        )
+        return {name: store_from_payload(index[name]) for name in INDEXED_SOURCES}
     except (KeyError, TypeError, ValueError):
         _log.debug("A Day Review index could not be revived; streaming instead.")
         return None

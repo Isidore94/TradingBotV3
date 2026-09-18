@@ -282,8 +282,13 @@ steps are unchanged.
 ##### TJ-1 — Bones: one Day Review page, no machine rows, fast reads, the daily forecast
 
 **BUILT 2026-09-17** on `claude/tj1-day-review` (tester's 104 tests green without a weakened
-assertion, plus one builder test for the post-close index seam). Live gate **#145** below is
-what remains owed; TJ-8 still deletes the two retired panel modules. What landed, and what
+assertion, plus three builder files for the seams they did not pin). Live gate **#145** below
+is what remains owed; TJ-8 still deletes the two retired panel modules. Two amendments to
+item 4 as built, both measured: the index covers every store over a megabyte (the two named
+here plus `tier_outcomes` and `human_focus_outcomes`, which `read_session` opens for their
+coverage line alone) while the six small trader-written stores stay live, and the two
+per-decision walks inside `daily_recap_reader` became dict lookups - 16,502 ms -> 550 ms
+settle p50 on a staged home, so the gate's "under one second" holds. What landed, and what
 each number turned out to be, is in DESK_INTERNALS "Day Review - one page, no machine rows,
 a per-session index".
 

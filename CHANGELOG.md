@@ -1611,12 +1611,17 @@ They are evidence and must not be loaded as context.
   in `MarketJournalService.entries_about`, `market_story.build_daily_story` and
   `market_story_rollups._stories_from_journal` - the 34-of-77 rows already on disk are
   hidden, never deleted. `scripts/day_review_index.py` + `project_paths.DAY_REVIEW_DIR`
-  store, per session, `sessions/<date>/outcomes.json` holding exactly the two `_Store`s
-  `read_session` would have built (its rows, the FULL-FILE coverage, the append counts), and
-  `read_session(index=...)` uses it instead of streaming the 476 MB intraday log and the
-  29 MB horizon CSV; anything that is not an index of that session and window streams, the
-  eight small stores are always read live, and `day_review_index.is_stale` is the one
-  staleness rule (pending only, stale once the session it waited for has closed). "Paste
+  store, per session, `sessions/<date>/outcomes.json` holding exactly the `_Store`s
+  `read_session` would have built (its rows, the FULL-FILE coverage, the append counts) for
+  every store over a megabyte - the 476 MB intraday log, the 31 MB horizon CSV, the 14 MB
+  tier CSV and the 1.0 MB human-focus CSV - while the six small ones stay LIVE so a veto, a
+  note, a favorite or a staged pick from a minute ago is on the page; revival is ALL OR
+  NOTHING, anything that is not an index of that session and window streams, and
+  `day_review_index.is_stale` is the one staleness rule (pending only; stale once the session
+  it waited for has closed, and always stale for a session that had not closed when it was
+  built). `_d1_horizon_row` and `_outcome_for` became dict lookups built once per read
+  (keyed by session and symbol, never by side), which is what took an indexed read from
+  2,217 ms to **550 ms settle p50** against the retired page's 16,502 ms. "Paste
   daily forecast..." files a brief against `target_session` through
   `MarketJournalService.import_daily_forecast` (a second paste supersedes the first;
   `market_thesis.record_forecast` records `target_session` beside the kept `target_week`;
@@ -2800,8 +2805,9 @@ the Auto Pilot log instead; `is_machine_entry` becomes the one filter that every
 trader-facing and nightly reader inherits, and the rows already on disk are hidden rather
 than deleted. Opening a session was a 16,502 ms settle (measured on a staged home) because
 the reader streamed a 476 MB CSV on every open; a per-session index under `DAY_REVIEW_DIR`
-now holds exactly the rows and the full-file coverage that read would have built, and
-`read_session` takes it. "Paste weekly forecast" is "Paste daily forecast..." and files
+now holds exactly the rows and the full-file coverage that read would have built for every
+store over a megabyte, the small trader-written ones stay live, and two per-decision walks
+inside the reader became dict lookups - together 16,502 ms -> **550 ms** settle p50. "Paste weekly forecast" is "Paste daily forecast..." and files
 against the SESSION the brief is about, read by the new deterministic `forecast_brief`.
 The Review tab moved to Research > Results as a Measured report section and the staged picks
 to Auto Pilot; both retired panel modules stay on disk until TJ-8. The tester's 104 tests
