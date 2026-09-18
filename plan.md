@@ -153,7 +153,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-2 … TJ-8 PLANNED |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 … TJ-8 PLANNED |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -378,7 +378,12 @@ Day Review on a completed session paints in under one second once its index exis
 first entry click in under 300 ms (bench numbers in the handoff); no `[desk]` row is visible
 anywhere and a mode flip adds no journal row; "Paste daily forecast…" stores a forecast for
 the chosen session and shows it under External forecast; the trader can add a note from the
-page and from the desk tab and both appear.
+page and from the desk tab and both appear. **TJ-1L (2026-09-18) adds one clause:** the page
+reads in TWO COLUMNS - *What happened* / *Open theses* / the SPY pane left, the entries list
+over the reader with *New entry* and the forecast right, *Walk-away* as a 2 x 2 grid and
+*What you traded* beside the ideas card - every table fills its cell with its headers whole
+("Against me first %", never "ainst me first"), and the column split is where the trader left
+it after a restart.
 
 ##### TJ-2 — Instant walk-away
 

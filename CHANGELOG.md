@@ -1645,7 +1645,20 @@ They are evidence and must not be loaded as context.
   seam, same `ReadWorker`, `entryQualityProposalChanged` moved with it) and its Staged picks
   table and verb are on the **Auto Pilot** page (same `focusAddRequested`, the R2 gate still
   SHOWN and never enforced). `market_journal_panel.py` and `daily_recap_panel.py` stay on
-  disk, unregistered and no longer constructed, until TJ-8. Gate #145 owed. Long form:
+  disk, unregistered and no longer constructed, until TJ-8. **Since TJ-1L (2026-09-18) the
+  page reads in TWO COLUMNS** (trader: *"there's a lot of empty space horizontally that's not
+  being efficiently used"*): one horizontal `QSplitter` named `DayReviewColumns` at 55/45,
+  restored at construction and saved per machine on the drag through `ui.panels.desk_layout`
+  (`qt_day_review_columns_v1`), with *What happened* / *Open theses* / the SPY pane (320 px
+  floor, taking the column's slack) LEFT and the entries list over the reader in their own
+  60/40 splitter (`qt_day_review_said_split_v1`) with *New entry* and the 3-line external
+  forecast RIGHT; *Walk-away* is a 2 x 2 grid of equal columns, the real table top-left and
+  TJ-2's three populations as small titled frames; *What you traded* sits beside *Ideas from
+  the desk's AI*. Every table on the page measures its columns (`ResizeToContents`, set once
+  at construction) and stretches the last section, which is what stopped "Against me first %"
+  printing as "ainst me first". Presentation only - no reader, service, store, worker or
+  signal moved, and the page is still ONE `QScrollArea` with ONE chart built on first need.
+  Gate #145 owed. Long form:
   DESK_INTERNALS "Day Review - one page, no machine rows, a per-session index".
 
 - **The Market Journal tells the session's story and challenges the thesis in it (WS-10D,
@@ -2806,6 +2819,23 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-18 - TJ-1L: Day Review in two columns (branch `claude/tj1l-day-review-layout`)
+
+The trader, after the first look at Day Review on a 3800 px screen: *"there's a lot of empty
+space horizontally that's not being efficiently used"* - and he chose two columns of the
+three shapes offered. Presentation only, inside the one `QScrollArea` the page already was:
+a `DayReviewColumns` splitter at 55/45 (dragged, saved per machine, restored at
+construction) holds *What happened* with *Open theses* under it and the SPY pane taking the
+column's slack on the LEFT, and the entries list over the reader in their own 60/40 splitter
+with *New entry* and the 3-line external forecast on the RIGHT; *Walk-away* is a 2 x 2 grid
+with TJ-2's three populations as small titled frames; *What you traded* sits beside *Ideas
+from the desk's AI*. Every table now measures its columns and stretches the last section, so
+the header that read "ainst me first" reads "Against me first %" and a table fills its cell.
+No reader, service, store, worker or signal changed. Measured on a staged home (7 repeats,
+1900x1000): construct settle p50 33.6 -> 53.3 ms (fifteen more widgets, once per desk
+start), first show settle p50 900 -> 864 ms, session read 876 -> 869 ms, entry click 122 ms
+unchanged. Gate #145 gains one clause.
 
 ### 2026-09-17 (evening) - TJ-1: one Day Review page (branch `claude/tj1-day-review`)
 
