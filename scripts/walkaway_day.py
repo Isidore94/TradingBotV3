@@ -65,13 +65,13 @@ def _bars_for(bars: Mapping[str, Any], symbol: str, session: str, *, allow_direc
     return ()
 
 
-def _after_move(rows: Sequence[Mapping[str, Any]], stamp: datetime | None, side: str):
+def _after_move(rows: Sequence[Mapping[str, Any]], stamp: datetime | None, side: str, *, legacy_tape: bool = False):
     eligible = [(bar, _moment(bar.get("dt"))) for bar in rows]
     eligible = [(bar, dt) for bar, dt in eligible if dt is not None and (stamp is None or dt > stamp)]
-    # A durable tape can begin after the exit but still carry the session's
-    # original bar stamps (a historical backfill limitation).  Its first row
-    # is the entry reference; the later rows are the observable aftermath.
-    if len(eligible) <= 1 and len(rows) > 1:
+    # A pre-TJ-2 tape may have been captured after exit yet retain its original
+    # session timestamps.  This compatibility branch is used only for that
+    # stored exit-tape shape; ordinary decision grading is strictly post-stamp.
+    if legacy_tape and len(eligible) <= 1 and len(rows) > 1:
         eligible = [(bar, _moment(bar.get("dt"))) for bar in rows[1:]]
     if not eligible:
         return None
@@ -146,7 +146,7 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
                     early.append(WalkawayRow(ident, stamp, symbol, side, ident[3], f"liked {session[5:]}, entered {str(trade.get('opened_at') or '')[:10][5:]}", traded="yes", you_made=_number(trade.get("net_pnl")), state="pending trade open"))
                 else:
                     exit_day = str((trade.get("last_closing_leg_at") or trade.get("closed_at") or ""))[:10]
-                    left = _after_move(_bars_for(bars, symbol, exit_day, allow_direct=False), exit_stamp, side)
+                    left = _after_move(_bars_for(bars, symbol, exit_day, allow_direct=False), exit_stamp, side, legacy_tape=True)
                     exit_state = "measured" if left is not None else f"unmeasured no_bars (exit {exit_day})"
                     early.append(WalkawayRow(ident, stamp, symbol, side, ident[3], f"liked {session[5:]}, entered {str(trade.get('opened_at') or '')[:10][5:]}", traded="yes", you_made=_number(trade.get("net_pnl")), left_on_table_pct=left, state=exit_state))
             else:
@@ -162,7 +162,12 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
         horizon = str(claim.get("horizon") or "").lower()
         drop = next((row for row in events if str(row.get("action") or "").lower() in {"drop", "expire"}), None)
         decision = next((ident for ident, row in unique.items() if str(row.get("capture_id") or "") == str(claim.get("annotation_ref") or "")), (session, symbol, side, setup or "claim", "claim", "D1", ""))
-        outcome = next((row for row in sources.get("outcomes") or () if str(row.get("symbol") or "").upper() == symbol and str(row.get("side") or "").upper() == side), None)
+        horizon_sessions = {"d1": 5, "m5": 1}.get(horizon)
+        outcome = next((row for row in sources.get("outcomes") or ()
+                        if str(row.get("scan_date") or row.get("session_date") or "")[:10] == session
+                        and str(row.get("symbol") or "").upper() == symbol
+                        and str(row.get("side") or "").upper() == side
+                        and (horizon_sessions is None or int(row.get("horizon_sessions") or horizon_sessions) == horizon_sessions)), None)
         held = _number((outcome or {}).get("eod_move_pct") if isinstance(outcome, Mapping) else None)
         if not horizon:
             state = "unmeasured no_horizon"
@@ -172,7 +177,9 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
             maturity = str((outcome or {}).get("maturity_date") or "")
             state = f"pending {maturity}" if maturity else "unmeasured no_outcome"
         if drop:
-            state = f"dropped {str(drop.get('session_date') or '')[:10]}; {state}"
+            action = str(drop.get("action") or "dropped").lower()
+            action = "dropped" if action == "drop" else action
+            state = f"{action} {str(drop.get('session_date') or '')[:10]}; {state}"
         claimed_rows.append(WalkawayRow(decision, _moment(decision[-1]), symbol, side, setup or "claim", "claimed D1 pick", held_at_close_pct=held, state=state))
 
     sort = lambda row: (row.ran_after_pct is None, -(row.ran_after_pct or 0), row.symbol)

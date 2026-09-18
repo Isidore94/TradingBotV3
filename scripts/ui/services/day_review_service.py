@@ -172,22 +172,31 @@ class DayReviewService:
         # live desk store and the page never starts a second read for a table.
         try:
             import claimed_picks
+            import daily_recap_reader
             import walkaway_day
 
+            recap_sources = daily_recap_reader.RecapSources()
+            annotations = daily_recap_reader._read_jsonl("annotations", recap_sources.annotations, "created_at")
+            feedback = daily_recap_reader._read_jsonl("pick_feedback", recap_sources.pick_feedback, "ts")
+            favorites = daily_recap_reader._read_jsonl("swing_favorites", recap_sources.swing_favorites, "event_at")
+            events = daily_recap_reader._read_jsonl("review_events", recap_sources.review_events, "ts")
             decisions = []
-            for row in tuple(getattr(getattr(recap, "my_decisions", None), "rows", ()) or ()):
-                detail = getattr(row, "detail", {}) or {}
+            for decision in daily_recap_reader._decisions(session, annotations, feedback, favorites, events):
                 decisions.append({
                     "session_date": session,
-                    "symbol": getattr(row, "symbol", ""), "side": getattr(row, "side", ""),
-                    "category": getattr(row, "category", "pick"),
-                    "verdict": detail.get("verdict", ""), "source": getattr(row, "source", ""),
-                    "timeframe": detail.get("timeframe", "M5"),
-                    "stamp": getattr(getattr(row, "observed_at", None), "isoformat", lambda: "")(),
-                    "capture_id": getattr(row, "capture_id", ""),
+                    "symbol": decision.symbol, "side": decision.side,
+                    "category": decision.category, "verdict": decision.verdict,
+                    "source": decision.source, "timeframe": decision.timeframe,
+                    "stamp": getattr(decision.observed_at, "isoformat", lambda: "")(),
+                    "capture_id": decision.capture_id,
                 })
-            sources = getattr(recap, "sources", None)
-            claims = claimed_picks.load_rows(getattr(sources, "claimed_picks", claimed_picks.CLAIMED_PICKS_FILE))
+            claims = claimed_picks.load_rows(recap_sources.claimed_picks)
+            preference = daily_recap_reader._read_csv("preference_report", recap_sources.preference_report, "generated_at").rows
+            outcomes = daily_recap_reader._read_csv("session_horizon_outcomes", recap_sources.session_horizon_outcomes, "scan_date").rows
+            # A preference can match a later trade, so this is intentionally the
+            # journal's full read, not the visible session-only trades table.
+            from journal_store import JournalStore
+            all_trades = list(JournalStore().list_trades())
             stored = {}
             try:
                 import day_review_bars
@@ -195,8 +204,8 @@ class DayReviewService:
             except Exception:  # noqa: BLE001
                 _log.debug("Walk-away bars unreadable.", exc_info=True)
             payload["walkaway"] = walkaway_day.build(
-                session, {"decisions": decisions, "preference": (), "outcomes": ()}, stored,
-                trades=payload["trades"], claims=claims, now=moment,
+                session, {"decisions": decisions, "preference": preference, "outcomes": outcomes}, stored,
+                trades=all_trades, claims=claims, now=moment,
             )
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the instant walk-away tables could not be built: {exc}")

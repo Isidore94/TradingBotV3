@@ -411,9 +411,9 @@ class DayReviewPanel(QFrame):
         self.theses.setMaximumHeight(theme.px(150))
 
     def _build_walkaway(self) -> None:
-        self.rejected_that_worked_table = QTableWidget(0, len(WALKAWAY_COLUMNS))
+        self.rejected_that_worked_table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
         self.rejected_that_worked_table.setHorizontalHeaderLabels(
-            [header for header, _measure in WALKAWAY_COLUMNS]
+            TJ2B_WALKAWAY_COLUMNS
         )
         self.rejected_that_worked_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.rejected_that_worked_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -433,6 +433,7 @@ class DayReviewPanel(QFrame):
             )
         }
         self.walkaway_tables: dict[str, QTableWidget] = {}
+        self._walkaway_table_rows: dict[int, tuple[Any, ...]] = {}
         for name in ("liked_not_traded",):
             table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
             table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
@@ -1162,6 +1163,7 @@ class DayReviewPanel(QFrame):
         for name in ("liked_not_traded", "traded_left_early", "claimed_d1"):
             table = self.walkaway_tables[name]
             rows = tuple(getattr(day, name, ()) or ())
+            self._walkaway_table_rows[id(table)] = rows
             table.setRowCount(len(rows))
             for index, row in enumerate(rows):
                 values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
@@ -1172,6 +1174,7 @@ class DayReviewPanel(QFrame):
         rows = tuple(getattr(day, "rejected", ()) or ())
         table = self.walkaway_tables["rejected"]
         self._walkaway_rows = rows
+        self._walkaway_table_rows[id(table)] = rows
         table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
@@ -1391,9 +1394,10 @@ class DayReviewPanel(QFrame):
         if item is None:
             return
         index = item.row()
-        if index < 0 or index >= len(self._walkaway_rows):
+        rows = self._walkaway_table_rows.get(id(item.tableWidget()), self._walkaway_rows)
+        if index < 0 or index >= len(rows):
             return
-        row = self._walkaway_rows[index]
+        row = rows[index]
         symbol = str(getattr(row, "symbol", "") or "").strip().upper()
         if not symbol:
             return

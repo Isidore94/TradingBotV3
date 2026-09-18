@@ -391,7 +391,7 @@ it after a restart.
 
 **TJ-2A MERGED 2026-09-18 (`main` `4dd99034`):** a closed session now has a
 durable completed M5 parquet tape and the page reads its SPY bars. TJ-2B's four
-walk-away tables remain planned; TJ-2 as a whole is not built. Gate #152 remains live.
+walk-away tables are BUILT pending review on `codex/tj2b-walkaway`; TJ-2 is not merged. Gates #152 and #153 remain live.
 
 What exists: `daily_recap_reader._decisions` / `_decision_rows` (`:1022-1320`, grain
 `(session_date, symbol, side, category, verdict, timeframe)`), `REJECT_VERDICTS`

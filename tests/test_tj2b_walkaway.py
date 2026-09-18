@@ -241,3 +241,19 @@ def test_service_and_page_use_one_worker_payload_for_four_tables_and_emit_chart_
     assert seen == [("AAA", "LONG")]
     panel.shutdown()
     panel.deleteLater()
+
+
+def test_each_walkaway_table_activates_its_own_row(qapp):
+    """A liked row must not accidentally chart the rejected table's row."""
+    from ui.panels.day_review_panel import DayReviewPanel
+
+    day = _build(decisions=(_decision(stamp="2026-09-16T08:00:00-07:00", verdict="like"),))
+    panel = DayReviewPanel(service=object(), clock=lambda: datetime(2026, 9, 17, 8, 0))
+    seen = []
+    panel.chartRequested.connect(lambda symbol, side: seen.append((symbol, side)))
+    panel.render({"session_date": SESSION, "walkaway": day})
+    table = panel.walkaway_tables["liked_not_traded"]
+    table.itemActivated.emit(table.item(0, 1))
+    assert seen == [("AAA", "LONG")]
+    panel.shutdown()
+    panel.deleteLater()
