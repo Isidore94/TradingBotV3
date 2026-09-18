@@ -197,6 +197,11 @@ Still owed and unchanged since they were written; nothing here was closed by mov
   the external forecast collapsed to three lines. Row 3 is *Walk-away* as a 2 x 2 grid of
   equal columns (the real table top-left, TJ-2's three populations as small titled frames,
   top-aligned). Row 4 is *What you traded* beside *Ideas from the desk's AI*.
+- **The right column's boxes span it** (lead's tweak on the same branch, after the first
+  3800x2000 render): the reader and *External forecast* stopped at about 420 px of an 890 px
+  column because of the G3 100-character cap. `refresh_reader_measure` keeps its name and its
+  `_apply_scaled_metrics` caller and now clears the cap instead of setting one; the Market
+  Journal's own reader is untouched and `test_g3_market_journal_reader.py` still pins it.
 - **The headers.** "Against me first %" printed as "ainst me first" because the shared width
   rule clamps a column at 260 px and that header hints 273 px under the desk theme; a header
   is centred, so it clipped at both ends with no ellipsis. Both tables on this page now

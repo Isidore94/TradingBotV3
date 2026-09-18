@@ -6156,7 +6156,15 @@ on this page that turns width into information. RIGHT: the entries list over the
 their own 60/40 vertical splitter (`qt_day_review_said_split_v1`, a 300 px floor so the 40%
 half clears the reader's own 90 px minimum and the preset IS the preset), then *New entry*
 spanning the column, its Timeframe / Save / Paste row, the "filed under the session" note and
-*External forecast* collapsed to three lines. Row 3 is *Walk-away* as a 2 x 2 grid of equal
+*External forecast* collapsed to three lines. **Every box in that column spans the column**:
+the G3 100-character cap that used to hold the reader and the forecast at a readable measure
+is what put the empty space back once they sat in a 45% column - measured at 3800x2000 both
+stopped at about 420 px of an 890 px column while *New entry* under them ran the full width -
+so `refresh_reader_measure` keeps its name and its `MainWindow._apply_scaled_metrics` caller
+and now CLEARS the cap and sets `Expanding` instead of setting one. The column the trader
+drags is the measure. (The Market Journal's own reader keeps the G3 cap; that page is a
+different shape and `tests/test_g3_market_journal_reader.py` still pins it.) Row 3 is
+*Walk-away* as a 2 x 2 grid of equal
 COLUMNS with rows that fit their content: the one real table top-left and TJ-2's three
 populations as small titled frames, top-aligned, one title line and one note line each -
 three empty tables padded to a table's height would read as three tables that failed to load.

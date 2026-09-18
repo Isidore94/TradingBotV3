@@ -705,16 +705,28 @@ class DayReviewPanel(QFrame):
         outer.addWidget(self.scroll)
 
     def refresh_reader_measure(self) -> None:
-        """Keep the reader's column at a readable measure (the G3 fix round).
+        """The reader and the forecast span the RIGHT column (TJ-1L).
 
-        A line of running text is readable at about 45-100 characters; the pane
-        keeps its width and the TEXT is capped inside it.
+        The G3 rule capped both at a 100-character measure, which was right
+        when they sat across a page WIDE enough to need one. In the 45% column
+        the cap is what puts the empty space back: measured at 3800x2000 both
+        boxes stopped at about 420 px of an 890 px column while `New entry`
+        under them ran the full width. The COLUMN is the measure now - the
+        trader drags it, and the splitter is the control.
+
+        The seam keeps its name and its caller: `MainWindow._apply_scaled_metrics`
+        calls it on a scale change, and both widgets must come back spanning.
         """
         try:
             for widget in (self.entry_reader, self.forecast_box):
                 widget.ensurePolished()
-                per_char = max(1, int(widget.fontMetrics().averageCharWidth()))
-                widget.setMaximumWidth(max(theme.px(240), min(per_char * 100, theme.px(1200))))
+                # `QWIDGETSIZE_MAX`, which PySide6 does not export: the value
+                # Qt uses for "no maximum", and what `setMaximumWidth` must be
+                # given to UNDO an earlier cap.
+                widget.setMaximumWidth(16_777_215)
+                widget.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, widget.sizePolicy().verticalPolicy()
+                )
         except Exception:  # noqa: BLE001 - a measure is never worth the page
             logging.debug("The Day Review reader measure failed.", exc_info=True)
 

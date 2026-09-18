@@ -253,10 +253,29 @@ def test_what_you_said_the_new_entry_box_and_the_forecast_are_the_right_column(p
         assert not _is_descendant(widget, left), widget
 
 
-def test_the_new_entry_box_spans_the_whole_column(panel):
-    """A 100-character measure is right for READING; a box you type into wants
-    the column. Only the reader and the forecast carry the measure cap."""
-    assert panel.entry_text.maximumWidth() >= 16_777_215 - 1
+def test_every_box_in_the_right_column_spans_the_column(panel):
+    """The G3 100-character cap is what put the empty space back.
+
+    Measured at 3800x2000 on the first build: the reader and the External
+    forecast stopped at about 420 px of an 890 px column while `New entry`
+    under them ran its full width. In a column the trader can drag, the COLUMN
+    is the measure - the splitter is the control, not a cap he cannot see.
+    """
+    from PySide6.QtWidgets import QSizePolicy
+
+    for widget in (panel.entry_text, panel.entry_reader, panel.forecast_box):
+        assert widget.maximumWidth() >= 16_777_215 - 1, widget
+        assert (
+            widget.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+        ), widget
+
+
+def test_the_scale_seam_leaves_both_boxes_spanning(panel):
+    """`MainWindow._apply_scaled_metrics` calls this on a scale change; it must
+    not re-cap what it was written to cap."""
+    panel.refresh_reader_measure()
+    for widget in (panel.entry_reader, panel.forecast_box):
+        assert widget.maximumWidth() >= 16_777_215 - 1, widget
 
 
 def test_the_spy_chart_pane_has_room_to_be_a_chart(panel):
