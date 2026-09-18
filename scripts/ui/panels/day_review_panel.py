@@ -1092,6 +1092,8 @@ class DayReviewPanel(QFrame):
         self._render_forecast(dict(payload.get("forecast") or {}))
         self._render_trades(list(payload.get("trades") or []))
         self._render_chart(list(payload.get("spy_m5_bars") or []))
+        for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
+            self._backfill_bars_for(str(exit_session))
         error = str(payload.get("error") or "")
         self.status.setText(error or f"Day Review: {session}")
         self.statusChanged.emit(self.status.text())
@@ -1164,7 +1166,8 @@ class DayReviewPanel(QFrame):
             table = self.walkaway_tables[name]
             rows = tuple(getattr(day, name, ()) or ())
             values = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
-            median = values[len(values) // 2] if values else None
+            middle = len(values) // 2
+            median = (values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2) if values else None
             heading = table.parentWidget().findChild(QLabel) if table.parentWidget() else None
             if heading is not None:
                 base = {"liked_not_traded": "Liked but never traded", "traded_left_early": "Traded, then left early", "claimed_d1": "Claimed D1 picks"}[name]
@@ -1182,7 +1185,8 @@ class DayReviewPanel(QFrame):
         self._walkaway_rows = rows
         self._walkaway_table_rows[id(table)] = rows
         values = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
-        median = values[len(values) // 2] if values else None
+        middle = len(values) // 2
+        median = (values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2) if values else None
         self.walkaway_note.setText(f"n={len(rows)}; median Ran after {_tj2_pct(median)}. Double-click a row to chart it.")
         table.setRowCount(len(rows))
         for index, row in enumerate(rows):

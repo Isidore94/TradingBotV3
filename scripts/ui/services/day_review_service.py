@@ -219,6 +219,13 @@ class DayReviewService:
                 session, {"decisions": decisions, "preference": preference, "outcomes": outcomes}, stored,
                 trades=all_trades, claims=claims, now=moment,
             )
+            payload["walkaway_backfill_sessions"] = tuple(
+                exit_day for trade in all_trades
+                if str(trade.get("status") or "").lower() == "closed"
+                and (exit_day := str(trade.get("last_closing_leg_at") or trade.get("closed_at") or "")[:10])
+                and exit_day != session and exit_day not in stored
+                and day_review_bars.session_is_backfillable(exit_day, now=moment)
+            )
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the instant walk-away tables could not be built: {exc}")
             _log.debug("Day Review instant walk-away unreadable.", exc_info=True)

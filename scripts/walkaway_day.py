@@ -92,15 +92,15 @@ def _identity(session: str, row: Mapping[str, Any]) -> tuple[str, str, str, str,
     return (session, str(row.get("symbol") or "").upper(), str(row.get("side") or "").upper(), str(row.get("category") or "pick"), str(row.get("verdict") or ""), str(row.get("timeframe") or "M5").upper(), str(row.get("stamp") or row.get("created_at") or ""))
 
 
-def _preference_state(rows: Sequence[Mapping[str, Any]], session: str, symbol: str, side: str, source: str, verdict: str) -> str:
+def _preference_row(rows: Sequence[Mapping[str, Any]], session: str, symbol: str, side: str, source: str, verdict: str) -> Mapping[str, Any] | None:
     channels = {("annotations", "like"): "annotation:like_claim", ("annotations", "pass"): "annotation:pass", ("annotations", "veto"): "annotation:veto", ("pick_feedback", "like"): "pick_feedback:like", ("pick_feedback", "dislike"): "pick_feedback:dislike", ("pick_feedback", "not_today"): "pick_feedback:not_today", ("swing_favorites", "swing_favorite"): "swing_favorite", ("review_events", "m5_click_away"): "review_event:m5_click_away"}
     channel = channels.get((source, verdict), "")
     for row in rows:
         row_session = str(row.get("session_date") or "")[:10]
         row_channel = str(row.get("channel") or "")
         if ((row_session == session or not row_session) and str(row.get("symbol") or "").upper() == symbol and str(row.get("side") or row.get("direction") or "").upper() == side and (row_channel == channel or not row_channel)):
-            return str(row.get("match_state") or "")
-    return ""
+            return row
+    return None
 
 
 def _claim_events(claims: Sequence[Mapping[str, Any]]):
@@ -133,8 +133,10 @@ def build(session: str, sources: Mapping[str, Any], bars: Mapping[str, Any], *, 
         ran = _after_move(_bars_for(bars, symbol, session), stamp, side)
         state = "measured" if ran is not None else "unmeasured no_bars"
         capture = str(row.get("capture_id") or row.get("event_id") or "")
-        matches = [trade for trade in trades if str(trade.get("symbol") or "").upper() == symbol and str(trade.get("direction") or trade.get("side") or "").upper() == side]
-        pref = _preference_state(preference, session, symbol, side, str(row.get("source") or ""), verdict)
+        pref_row = _preference_row(preference, session, symbol, side, str(row.get("source") or ""), verdict)
+        pref = str((pref_row or {}).get("match_state") or "")
+        wanted_trade_id = str((pref_row or {}).get("trade_id") or "")
+        matches = [trade for trade in trades if (str(trade.get("trade_id") or "") == wanted_trade_id if wanted_trade_id else True) and (_moment(trade.get("opened_at")) or datetime.min) > (stamp or datetime.min)]
         claimed = capture and capture in claimed_refs
         if verdict in REJECTS:
             rejected.append(WalkawayRow(ident, stamp, symbol, side, ident[3], verdict.replace("_", " "), ran_after_pct=ran, state=state))
