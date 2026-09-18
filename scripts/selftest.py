@@ -94,12 +94,22 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # R1 amendment: the AWAY day's return surface.
     "away_recap",
     "ui.panels.away_recap_panel",
-    # WS-DR: the Daily Recap that took the nav slot. `ui.panels.daily_recap_panel`
-    # is a top-level import in `ui.app` and needs no entry; the READER is
-    # imported by name inside `_RecapReadWorker.run`, which is the same lazy
-    # shape `away_recap` is listed for - a bundle missing it would launch and
-    # then fail the first time the trader opened the page.
+    # WS-DR: the Daily Recap that took the nav slot. TJ-1 merged that page and
+    # the Market Journal into `ui.panels.day_review_panel`, which is a top-level
+    # import in `ui.app` and needs no entry; the READER is imported by name
+    # inside the page's worker, which is the same lazy shape `away_recap` is
+    # listed for - a bundle missing it would launch and then fail the first time
+    # the trader opened the page. The two retired panel modules stay listed
+    # until TJ-8 deletes them.
     "daily_recap_reader",
+    # TJ-1: both are reached through FUNCTION-LEVEL imports - the page imports
+    # its service and `day_review_index` at call time, the index imports the
+    # reader, and the forecast reader is imported by the paste dialog and by the
+    # External forecast block. A frozen desk missing one would launch and fail at
+    # the first open or the first paste.
+    "ui.services.day_review_service",
+    "day_review_index",
+    "forecast_brief",
     # Phase 0.32: Daily Recap imports this inside its report worker for the
     # published next-test card. A frozen desk without it would launch and fail
     # only when Review opens, so make the reach explicit.

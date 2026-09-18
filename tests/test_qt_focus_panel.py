@@ -160,17 +160,13 @@ def test_focus_picks_is_top_level_app_page():
         # section under the Desk's Strength window instead of a page of its
         # own (trader request), so it has no nav button at all.
         "Journal",
-        # R10.H sits the Market Journal next to the trade/tax Journal, and the
-        # near-identical labels are deliberate: one records what you TRADED,
-        # the other what you THOUGHT. Merging them would turn the tax journal
-        # into a diary.
-        "Market Journal",
-        # R1 amendment 2026-08-24: the AWAY day's return surface, which
-        # replaced a 317-item chart review queue. WS-DR (WISHLIST 10F,
-        # 2026-09-13) took the slot for EVERY Auto mode and renamed it: the
-        # page now reads the day from the durable stores rather than from this
-        # process's alert list.
-        "Daily Recap",
+        # R10.H sat the Market Journal next to the trade/tax Journal and the
+        # AWAY day's return surface (R1 amendment 2026-08-24, renamed to Daily
+        # Recap by WS-DR) beside it. TJ-1 (trader, 2026-09-17; decision 0021)
+        # merged those two into ONE page in this slot. The near-identical labels
+        # rule still holds for the page above: `Journal` records what you
+        # TRADED, `Day Review` reads back the day you thought about.
+        "Day Review",
         # R8 registered Weekend Prep next to Journal: the weekend routine reads
         # the journal the walk-away and auto-tag steps depend on.
         "Weekend Prep",

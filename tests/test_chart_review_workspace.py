@@ -682,7 +682,12 @@ class NavigationRegistrationTests(unittest.TestCase):
         went is the left-nav row, and the Trading Desk is still page 0.
         """
         titles = [spec.title for spec in self._specs()]
-        self.assertEqual(titles[:3], ["Trading Desk", "Journal", "Market Journal"])
+        # TJ-1 (2026-09-17) merged Market Journal and Daily Recap into one
+        # `Day Review` page in that same third slot. What this test is about -
+        # the two RETIRED nav rows, and the first two pages staying where they
+        # are - is unchanged; the nav's full order is pinned in
+        # `tests/test_tj1_page_specs.py`.
+        self.assertEqual(titles[:3], ["Trading Desk", "Journal", "Day Review"])
         self.assertNotIn("Chart Review", titles)
         self.assertNotIn("Focus Picks", titles)
 

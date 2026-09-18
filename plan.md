@@ -153,7 +153,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 PACKETED 2026-09-17 (`.claude/packets/TJ-1.md`, branch `claude/tj1-day-review`); TJ-2 … TJ-8 PLANNED |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 BUILT 2026-09-17 (branch `claude/tj1-day-review`, live gate #145 owed); TJ-2 … TJ-8 PLANNED |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -192,11 +192,15 @@ section; the lag is on opening the tab and clicking an entry.
 
 #### 12.2 The shape
 
-Left nav before: Trading Desk · Journal · **Market Journal** · **Daily Recap** · Weekend
-Prep · Research · Auto Pilot · AI Summary · System Health · Settings.
+Left nav before (11 specs, verified in `ui/app.py` on 2026-09-17): Trading Desk · Journal ·
+**Market Journal** · **Daily Recap** · Weekend Prep · Universe · Research · Auto Pilot ·
+A.I. Summary · System Health · Settings.
 
-Left nav after: Trading Desk · Journal · **Day Review** · Weekend Prep (opens on **Week
-Review**) · Research · Auto Pilot · AI Summary · System Health · Settings.
+Left nav after (10 specs, as built by TJ-1): Trading Desk · Journal · **Day Review** ·
+Weekend Prep (opens on **Week Review**) · Universe · Research · Auto Pilot · A.I. Summary ·
+System Health · Settings. (`Universe` was missing from both lines when this section was
+written and `A.I. Summary` carries its dots in the spec; the nav is pinned title by title in
+`tests/test_tj1_page_specs.py`.)
 
 **Day Review** is one date at a time (a session picker, Today marked provisional until the
 close), read top to bottom:
@@ -276,6 +280,12 @@ steps are unchanged.
 #### 12.4 Packets
 
 ##### TJ-1 — Bones: one Day Review page, no machine rows, fast reads, the daily forecast
+
+**BUILT 2026-09-17** on `claude/tj1-day-review` (tester's 104 tests green without a weakened
+assertion, plus one builder test for the post-close index seam). Live gate **#145** below is
+what remains owed; TJ-8 still deletes the two retired panel modules. What landed, and what
+each number turned out to be, is in DESK_INTERNALS "Day Review - one page, no machine rows,
+a per-session index".
 
 *Goal:* the trader opens one page, sees their day, and nothing waits on the Qt thread.
 

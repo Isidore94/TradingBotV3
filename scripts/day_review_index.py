@@ -231,47 +231,58 @@ def build_index(
 def is_stale(index: Mapping[str, Any] | None, *, now: datetime | None = None) -> bool:
     """Could the answer in this file have changed since it was written?
 
-    Only one thing in it can: a horizon row that had not matured when it was
-    built. Once the session that row was waiting for has CLOSED, the stored
-    answer may be wrong and the page rebuilds rather than printing it. Before
-    that it is the same answer, and rebuilding on every open would give the
-    index no purpose.
+    Two things can change it, and only two:
+
+    * **The session had not closed when it was built.** Then the file it
+      describes is still being appended to, so the index is a snapshot of a
+      moving target and is always stale. (The post-close tick is what writes the
+      one that lasts.)
+    * **A horizon row that had not matured has since matured.** A pending row
+      matures when the session it was waiting for CLOSES, so the question is
+      narrow: did one of the sessions those rows named close SINCE this index
+      was built? A pending row whose target had already closed at build time is
+      unmeasured for some other reason and waiting will not change it -
+      rebuilding for that one would make every index stale the moment it was
+      written, which is how a cache ends up costing more than it saves.
 
     An index with nothing pending is never stale: the rows it holds are the last
-    append of a finished event and a closed session does not reopen.
+    append of a finished event, and a closed session does not reopen.
     """
     if not isinstance(index, Mapping):
         return True
     if not bool(index.get("pending")):
         return False
-    targets = [
-        str(value)[:10]
-        for value in (index.get("pending_target_sessions") or ())
-        if str(value or "").strip()
-    ]
+    built = _moment(index.get("built_at"))
+    if built is None:
+        return True
+    if built.tzinfo is not None:
+        built = built.astimezone().replace(tzinfo=None)
     try:
         import market_calendar
 
         completed = market_calendar.last_completed_session(now or datetime.now())
+        built_completed = market_calendar.last_completed_session(built)
     except Exception:  # noqa: BLE001 - an unreadable calendar rebuilds, never prints
         return True
-    if not targets:
-        # Nothing named a session to wait for, so the only honest rule left is
-        # "a session has closed since it was built".
-        built = _moment(index.get("built_at"))
-        if built is None:
-            return True
-        try:
-            built_completed = market_calendar.last_completed_session(
-                built.replace(tzinfo=None) if built.tzinfo is not None else built
-            )
-        except Exception:  # noqa: BLE001
-            return True
-        return completed > built_completed
+    session = str(index.get("session_date") or "")[:10]
     try:
-        return completed >= date.fromisoformat(min(targets))
+        if session and date.fromisoformat(session) > built_completed:
+            return True
     except ValueError:
         return True
+    if completed <= built_completed:
+        return False
+    targets: list[date] = []
+    for value in index.get("pending_target_sessions") or ():
+        try:
+            targets.append(date.fromisoformat(str(value)[:10]))
+        except ValueError:
+            return True
+    if not targets:
+        # Something was pending and a session has closed since; with no target
+        # named there is nothing narrower to ask.
+        return True
+    return any(built_completed < target <= completed for target in targets)
 
 
 # ---------------------------------------------------------------------------

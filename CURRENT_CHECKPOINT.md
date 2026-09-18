@@ -20,10 +20,10 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-17 evening: `plan.md` rewritten for Phase 0.33, the trader journal program (decision 0021); the old roadmap is archived at `docs/archive/PLAN_ARCHIVE_2026-09-17.md`.** Earlier that day: pullback alerts manual-only, display, claimed-rating and LRSI changes, still in the working tree. |
-| Working branch | **`main` carries Phase 0.32 and the accepted overnight repair (`4fbe5f6e`; status reconciliation `6f2a2fdf`), plus uncommitted desk display work.** The desk was not restarted. |
-| Unmerged / open | No overnight-repair code is unmerged; live gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
-| Next action | **Lead writes `.claude/packets/TJ-1.md` from `plan.md` §12.4 and runs recon -> tester -> builder -> reviewer on its own branch.** Gate #144 is still observed on the next scan and overnight run; restart only on trader direction. |
+| Latest work | **2026-09-17 evening: TJ-1 BUILT on `claude/tj1-day-review` - one Day Review page replaces Market Journal and Daily Recap, the desk stops writing auto-mode journal rows, and a per-session index replaces the 476 MB open.** Earlier that day: `plan.md` rewritten for Phase 0.33 (decision 0021, old roadmap archived at `docs/archive/PLAN_ARCHIVE_2026-09-17.md`); pullback alerts manual-only, display, claimed-rating and LRSI changes. |
+| Working branch | **`claude/tj1-day-review` carries TJ-1 (tester `79ca5fd0` + six builder commits) above `main`'s Phase 0.32 and overnight repair (`4fbe5f6e`; status reconciliation `6f2a2fdf`).** Not merged; the desk was not restarted. |
+| Unmerged / open | TJ-1 awaits review and integration; live gate **#145** is owed on it. Live gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
+| Next action | **Reviewer reproduces TJ-1 on `claude/tj1-day-review`, then the lead integrates and the trader restarts once for gate #145.** Gate #144 is still observed on the next scan and overnight run; restart only on trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
 | Last verified baseline | **Integrated overnight repair: 8,528 passed, 6 skipped, 72 subtests; ruff, smoke 7/7 and source selftest 87/87 are clean.** The nightly writer lock was free before the run. |
 | Frozen exe | **Rebuilt and verified 2026-09-16: source 87/87 and frozen 87/87.** The frozen result carries the required `(frozen)` stamp. The production desk still runs from SOURCE and was not restarted. |
@@ -33,6 +33,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 145 | **One Day Review page (TJ-1)** - after restart the left nav shows **Day Review** where Market Journal and Daily Recap were, and neither old page is anywhere; opening Day Review on a completed session paints in under a second once its index exists (the bench measured the old page's session read at 16,502 ms) and the first entry click in under 300 ms; no `[desk]` row is visible on the page, in the story or in the overnight narration, and flipping the Auto mode adds a line to the Auto Pilot log and no journal row; "Paste daily forecast…" stores a brief for the session the trader chose and shows it under External forecast, and a second paste for that session replaces it on the page; a note typed on the page and one typed on the desk tab both appear. NOT a failure: a past session saying "chart after the close" (TJ-2 brings the stored bars), three labelled walk-away placeholders, the empty ideas card, or the first open of a session being slow once - the index is written as it goes. | trader, next restart on the branch |
 | 144 | **Overnight AI repair** - after integration, the next D1 scan imports and records theta picks without a circular-import failure, and a local enrichment run stays advisory, validates the closed five-field contract including its 2,000-character summary ceiling, and leaves prior artifacts intact on failure. If the backend explicitly returns an HTTP 400 grammar parse/initialization error, it makes exactly one JSON-object fallback request; other HTTP failures do not retry. | lead/trader, next scan + overnight run after integration |
 | 143 | **Next-test local-model proposal (Phase 0.32 Packet 3)** - after integration, use a copied published entry-quality report with a configured existing local model. Verify one validated proposal references its exact report id/hash and cells, writes immutable JSON history plus `briefs/next_research_test/next_research_test.md`, and the Review card/copy brief agree. Record actual latency, reported tokens and peak memory when available; a disabled/offline model must leave deterministic facts and the prior memo intact. | lead/trader, after Packet 3 integration |
 | 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded P8 `entry_quality_window` month with known completed-bar cells, run the warehouse/report/setup-research reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and current report id/hash agree in the compact input, current JSON/memo, Review card and Tracker route while the immutable proposal source stays named; unchanged evidence performs no inference, proposal/trial/history or live-data write, only the paired current-view refresh. | lead/trader, after Packet 3 integration |
@@ -182,6 +183,37 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-17 (evening) — TJ-1 BUILT: one Day Review page (branch `claude/tj1-day-review`)
+
+- **What happened.** Phase 0.33's first packet, built on the tester's red branch
+  (`79ca5fd0`, 104 tests, 96 red). The nav is now ten pages with **Day Review** in the
+  Market Journal's slot and no Daily Recap; the desk stops writing its own
+  `Auto mode X -> Y` journal rows (34 of 77 on the live desk) and says it in the Auto Pilot
+  log instead; `market_journal.is_machine_entry` became the ONE filter that
+  `entries_about`, `build_daily_story` and the nightly `_stories_from_journal` inherit, so
+  the rows already on disk are hidden and nothing is deleted. A per-session index under the
+  new `project_paths.DAY_REVIEW_DIR` holds exactly the rows and the full-file coverage the
+  session read would have built, and `read_session(index=…)` takes it instead of streaming
+  the 476 MB intraday log and the 29 MB horizon CSV. "Paste weekly forecast" is "Paste daily
+  forecast…" and files against the SESSION the brief is about, read by the new deterministic
+  `scripts/forecast_brief.py`. The Daily Recap's Review tab is a Measured report section on
+  Research > Results and its staged picks are on Auto Pilot; both retired panel modules stay
+  on disk, unregistered, until TJ-8.
+- **Measured, on a STAGED copy of the home folder** (`scripts/ui/desk_bench.py`, 1640x980,
+  three repeats; never the live store). Before: `market_journal.construct` 362 ms sync p95 /
+  121 ms settle, first show 570 ms settle p95, an entry click ~121 ms settle;
+  `daily_recap.construct` 21 ms, **`daily_recap.reload` 16,502 ms settle p50**. After:
+  `day_review.construct` and `day_review.reload` are in the builder's handoff, measured the
+  same way on the same staged home.
+- **Verification.** Full suite, ruff, smoke and selftest are in the handoff; the source
+  selftest count moves 87 -> 90 because three lazily-imported modules
+  (`ui.services.day_review_service`, `day_review_index`, `forecast_brief`) were added to
+  `selftest.LAZY_ENGINE_MODULES`. No live store was written and the desk was not restarted.
+- **What remains.** Reviewer reproduction, then integration; live gate **#145**; TJ-8 still
+  deletes `market_journal_panel.py` and `daily_recap_panel.py`.
+- **Long form.** DESK_INTERNALS "Day Review - one page, no machine rows, a per-session
+  index".
 
 ### 2026-09-17 — Phase 0.33 planned: the trader journal program (plan.md rewritten, decision 0021)
 

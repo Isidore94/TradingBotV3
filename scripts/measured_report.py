@@ -23,9 +23,10 @@ before the results are read:
    sessions through `market_calendar`, never in calendar days.
 
 **Pure.** Nothing here writes, fetches, calls a model or opens a socket.
-`ai_jobs.measured_report_publish` publishes it; `ui/panels/daily_recap_panel.py`
-renders it; both read the SAME cells, so the page and the export can never
-disagree.
+`ai_jobs.measured_report_publish` publishes it; the **Measured report** section of
+`ui/panels/research_results_panel.py` renders it (it was the Daily Recap's Review
+tab until TJ-1 item 6(a) moved it there); both read the SAME cells, so the page
+and the export can never disagree.
 
 **One report id.** ``report_id`` is a sha1 over the sorted ``cell_id = value =
 state`` lines plus ``as_of`` alone, and ``as_of`` is the SESSION the evidence

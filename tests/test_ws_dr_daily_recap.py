@@ -1287,17 +1287,25 @@ def _row_of(table, symbol: str) -> int:
 
 
 @pytest.mark.qt
-def test_the_nav_shows_daily_recap_where_away_recap_was():
+def test_the_nav_shows_the_day_page_where_away_recap_was():
+    """Retargeted by TJ-1 (2026-09-17): the store-backed day page that replaced
+    AWAY Recap is now merged with the Market Journal into ONE `Day Review` page
+    in that same part of the nav, so the two titles this test named are both
+    gone. What it is about - the retired page is not in the nav, its successor
+    takes a SLOT rather than being appended at the end, and the spec is complete
+    - is asserted here unchanged."""
+    import ui.app as app_module
     from ui.app import PAGE_SPECS
 
     titles = [spec.title for spec in PAGE_SPECS]
     assert "AWAY Recap" not in titles
-    assert "Daily Recap" in titles
-    spec = PAGE_SPECS[titles.index("Daily Recap")]
-    assert spec.attribute == "daily_recap_panel"
+    assert "Daily Recap" not in titles
+    assert app_module.DAY_REVIEW_PAGE_TITLE in titles
+    spec = PAGE_SPECS[titles.index(app_module.DAY_REVIEW_PAGE_TITLE)]
+    assert spec.attribute == "day_review_panel"
     assert spec.icon.strip()
-    # It takes the retired page's place rather than being appended at the end.
-    assert titles.index("Daily Recap") == titles.index("Market Journal") + 1
+    # It takes a retired page's place rather than being appended at the end.
+    assert titles.index(app_module.DAY_REVIEW_PAGE_TITLE) == titles.index("Journal") + 1
 
 
 @pytest.mark.qt
@@ -1485,10 +1493,10 @@ def test_the_desk_charts_a_recap_row_through_the_board_door_and_requeues_nothing
             queued.append((alert, args)) if getattr(alert, "symbol", "") else None
         )
 
-        window.daily_recap_panel.chartRequested.emit("TSLA", "SHORT")
+        window.day_review_panel.chartRequested.emit("TSLA", "SHORT")
         application.processEvents()
 
-        assert charted, "the Daily Recap is not wired to the board chart door"
+        assert charted, "the Day Review page is not wired to the board chart door"
         assert charted[0][0][0] == "TSLA"
         assert not queued, "charting a recap row re-queued a review alert"
     finally:
@@ -1564,7 +1572,7 @@ def test_the_recap_chart_request_adds_nothing_to_the_waiting_list():
         center.show_board_symbol = lambda *args, **kwargs: charted.append((args, kwargs))
         before = len(center._review_queue)
 
-        window.daily_recap_panel.chartRequested.emit("TSLA", "SHORT")
+        window.day_review_panel.chartRequested.emit("TSLA", "SHORT")
         application.processEvents()
 
         assert charted and charted[0][0][0] == "TSLA"

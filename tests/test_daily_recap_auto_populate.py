@@ -377,13 +377,22 @@ def test_the_next_read_is_reported_on_the_traders_wall_clock(make_page):
 
 def test_the_desk_starts_the_timer_after_the_window_shows():
     """A source-level pin: the host starts it in `showEvent`, beside the
-    Trade Mentor's start, and never in the constructor."""
+    Trade Mentor's start, and never in the constructor.
+
+    Retargeted by TJ-1 item 3: the page the desk starts is `day_review_panel`,
+    which owns this same timer and these same two schedule functions. The RULE
+    being pinned - started by the host after the window shows, never in the
+    constructor - is unchanged, and it is the reason for the rule that matters:
+    a timer started during construction runs while a test is still monkeypatching
+    what it reads.
+    """
     source = (ROOT / "scripts" / "ui" / "app.py").read_text(encoding="utf-8")
     show_event = source[source.index("def showEvent(self, event)") :]
     show_event = show_event[: show_event.index("\n    def ")]
-    assert "self.daily_recap_panel.start()" in show_event
+    assert "self.day_review_panel.start()" in show_event
     constructor = source[source.index("def __init__(") : source.index("def showEvent(")]
-    assert "daily_recap_panel.start()" not in constructor
+    assert "day_review_panel.start()" not in constructor
+    assert "daily_recap_panel" not in source, "the retired page is not constructed"
 
 
 def test_the_selftest_can_reach_the_schedule_module():

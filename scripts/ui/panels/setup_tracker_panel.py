@@ -1071,20 +1071,50 @@ class SetupTrackerPanel(QFrame):
         return dict(self._entry_quality_proposal) if self._entry_quality_proposal else None
 
     def open_entry_quality_review(self) -> bool:
-        """Open Daily Recap's existing Review card with the same payload."""
+        """Open the HOST's existing review card with the same payload.
+
+        The host was the Daily Recap's Review tab; since TJ-1 item 6(a) it is the
+        Measured report section on Research > Results, which is a SECTION of a
+        page rather than a tab of one. So the tab hop is now conditional: a host
+        that has a `Review` tab still gets it (the retired panel, and the test
+        that drives it directly), and a host that is a flat section is simply
+        rendered and brought forward in its own parent tab strip. Display only:
+        nothing here reads, ranks or writes.
+        """
         recap = self._entry_quality_daily_recap
         if not self._entry_quality_proposal or recap is None:
             return False
         render = getattr(recap, "render_entry_quality_proposal", None)
-        tabs = getattr(recap, "tabs", None)
-        if not callable(render) or tabs is None:
+        if not callable(render):
             return False
         render(self._entry_quality_proposal)
-        for index in range(tabs.count()):
-            if tabs.tabText(index) == "Review":
-                tabs.setCurrentIndex(index)
-                return True
-        return False
+        tabs = getattr(recap, "tabs", None)
+        if tabs is not None:
+            for index in range(tabs.count()):
+                if tabs.tabText(index) == "Review":
+                    tabs.setCurrentIndex(index)
+                    return True
+            return False
+        return self._bring_host_forward(recap)
+
+    @staticmethod
+    def _bring_host_forward(host: Any) -> bool:
+        """Select the host's own tab in whatever tab strip holds it, if any.
+
+        Best effort and never an error: the payload is already rendered by the
+        time this runs, so failing to move the page costs the trader a click and
+        nothing else.
+        """
+        try:
+            parent = host.parentWidget()
+            while parent is not None:
+                if isinstance(parent, QTabWidget) and parent.indexOf(host) >= 0:
+                    parent.setCurrentWidget(host)
+                    return True
+                parent = parent.parentWidget()
+        except Exception:  # noqa: BLE001 - a nav hop never costs the render
+            logging.debug("The next-test host could not be brought forward.", exc_info=True)
+        return True
 
     def _make_table(
         self,

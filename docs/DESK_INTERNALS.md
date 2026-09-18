@@ -5919,3 +5919,109 @@ missing prior proposal, model outage, validation refusal or failed publish leave
 facts and the last good pair intact. Setup Tracker may route that exact published display object
 into Daily Recap > Review without tracker ranking, Qt I/O, a store read or a model call. The proposal is therefore
 not permission to change a detector, score, alert, ranking, watchlist, Focus, journal or policy.
+
+## Day Review - one page, no machine rows, a per-session index (2026-09-17, packet TJ-1)
+
+**The trader's words.** "daily recap and market journal feel less than ideal ... I feel
+like currently it's overcomplicated ... Market journal just sucks, it has information but
+it really should be compacting the days ... rename paste weekly forecast to paste daily
+forecast, that's where I paste the output from my scheduled chatgpt prompt ... i don't need
+to see the SPY auto modes pasted in there ... there's just too much shit in these tabs and
+it's laggy as all hell. this should be a simple 'what worked what didn't and what was your
+process'. ... if you think it's better to combine daily recap and market journal that's
+fine with me." Answers: `docs/decisions/0021-trader-journal-consolidation.md`.
+
+**What was measured, not assumed.** On a staged copy of the live home folder at 1640x980,
+three repeats (`scripts/ui/desk_bench.py`, which TJ-1 taught to build both sides of the
+swap): `daily_recap.reload` settled in **16,502 ms** (p50) because
+`daily_recap_reader._read_intraday_outcomes` streams the whole 476 MB
+`intraday_bounce_outcomes.csv` on every open with the 29 MB horizon CSV behind it, and
+every view then filters by session AFTERWARDS. `market_journal.construct` cost 362 ms
+(sync p95) and its first show settled 570 ms (p95). On the live desk the desk's OWN
+`Auto mode X -> Y` journal rows were **34 of 77**, and the 2026-09-16 nightly narration
+read them back as if the trader had written them.
+
+**The three rules the page is built to.**
+
+1. **One read, one payload.** `DayReviewService.read_day` returns one mapping with every
+   section in it and the page paints from that and nothing else, on ONE `QThread`. A
+   section that owned a read could start one on the Qt thread; a section that owns a
+   payload key cannot. Each store is read in its own guard, so one unreadable store costs
+   one section and names itself in `payload["error"]` - a blank section with no reason
+   reads as "nothing happened", which is a claim nobody measured.
+2. **One chart, built on first need.** The retired Market Journal page built FOUR
+   `CandleChart`s on the first entry click (299 ms, the G0 baseline). This page constructs
+   with ZERO, builds ONE when a payload carries SPY bars, and reuses it. A past session has
+   no bars in the running scanner's memory, so it says "chart after the close" rather than
+   drawing an empty axis; TJ-2 brings the stored bars.
+3. **No machine row, twice over.** `market_journal.is_machine_entry` is the ONE filter and
+   it is applied in `MarketJournalService.entries_about` (which is how `daily_story` and
+   `theses_for` select their rows), in `market_story.build_daily_story` (defensively, in
+   the pure function, so TJ-4's packs cannot forget it) and in
+   `market_story_rollups._stories_from_journal` (the nightly packs). The page filters again
+   because it is the surface the trader complained about. A Trade Mentor answer is NOT a
+   machine row: the trader wrote every word of it and the desk only chose the moment.
+   **Nothing is deleted** - the ledger is append-only and the 34 rows are still on disk.
+
+**The flip.** `MainWindow._record_auto_mode_flip` keeps its name and its caller and writes
+one Auto Pilot log line through the new public `AutopilotService.log`, which forwards to
+`_log` - still the one writer of the deque, the file, the `logging` line and `logMessage`.
+The sentence "Written by the desk, not the trader" is gone because it was written for a
+JOURNAL reader; in the Auto Pilot log every line is the desk's.
+`market_journal_capture.REASON_MODE_FLIP` stays defined: the old sidecars carry it.
+
+**The index.** `scripts/day_review_index.py` writes
+`DAY_REVIEW_DIR/sessions/<date>/outcomes.json` holding exactly the two `_Store`s
+`read_session` would have built for that session: the rows its views consult (latest append
+per `event_id`, in the streaming reader's own order), the **full-file** `SourceCoverage`
+carried forward unchanged, and `raw_rows_by_session`. Storing the kept-row count as
+coverage instead would quietly relabel a 476 MB file as a 40-row one, so the equality test
+is on the whole `RecapSession` dataclass, coverage included. `read_session(index=...)` uses a
+valid index for THIS session and THIS lookback and otherwise STREAMS - another session,
+another window, a corrupt file or a revival that fails all read the stores, because a cache
+may never change the answer. The eight small stores are always read live, so a note written
+since the index was built is still on the page. `is_stale` is the one staleness rule: only a
+horizon row that had not matured can change, so a pending index is stale once the session it
+was waiting for has CLOSED, and an index with nothing pending is never stale. The post-close
+tick builds it once, through ONE named seam, `DayReviewService.build_index_for`.
+
+**The forecast.** The button reads "Paste daily forecast..." and the dialog asks for the text,
+the SESSION it is about and the source model. `MarketJournalService.import_daily_forecast`
+files the entry against `target_session` and `market_thesis.record_forecast` records it
+beside `target_week`, which is kept and kept separate - a weekly forecast is not a daily one
+and writing one into the other's field would make both unreadable. A second paste for the
+same session SUPERSEDES the first, so the page shows one brief and both rows stay on disk.
+`import_weekly_forecast` survives one release as a deprecated alias.
+`scripts/forecast_brief.py` is the view over the text: heading match only,
+case-insensitive, no model, nothing fetched, and anything the document does not say stays
+empty. Two readings worth writing down, both from the brief the trader pasted on
+2026-09-17: `~8/10 through tomorrow, then potentially falling toward 6-7/10` is THREE
+scores (8, 6, 7) because a range scores both ends, and `around September 29-30` on a
+Turbulence line is NONE, because it carries no `/10`. The ranked-signals line is split on
+the arrow in the order written - a set would lose the ranking, which is the whole content of
+that line.
+
+**Move, not delete.** The Daily Recap's Review tab is a **Measured report** section at the
+foot of Research > Results, with the same cells, the same `report_id`, the same
+`review_cells` parity seam and the same `ReadWorker`; `latest_published(root)` with no
+session named answers "the newest session that has one", which is the right question for a
+page with no session picker. The Staged picks table and its verb are on the **Auto Pilot**
+page under the log, keeping `focusAddRequested` so the add is still performed by
+`FocusService`, the store's own owner - AWAY still STAGES and never adopts, the page still
+only ASKS, and the R2 adoption gate is SHOWN at click time and never enforced.
+`SetupTrackerPanel.open_entry_quality_review` learned that its host may be a SECTION rather
+than a tab: it renders, then hops the tab strip only if the host has one.
+
+**What is gone from the trader's screen** (plan.md 12.2): the environment timeline, "What
+the desk measured that session", the calendar overlay, the thesis drafting pane and "Save
+interpretation", the four capture panes and the five Daily Recap tabs. Every store stays;
+`market_journal_panel.py` and `daily_recap_panel.py` stay on disk, unregistered and no
+longer constructed, until TJ-8 deletes them - which is why the WS-RP and Sol proposal tests
+that construct the recap class directly still pass as written.
+
+**Tests:** the tester's `tests/test_tj1_machine_rows.py`,
+`tests/test_tj1_page_specs.py`, `tests/test_tj1_day_review_page.py`,
+`tests/test_tj1_day_review_index.py`, `tests/test_tj1_forecast_brief.py` and
+`tests/test_tj1_moves.py` (104 tests, 96 red at the tester's commit), plus the builder's
+`tests/test_tj1_day_review_post_close_index.py` for the one seam none of them pinned,
+proven red by removing it.
