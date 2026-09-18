@@ -164,7 +164,7 @@ hiddenimports += [
 # Both are top-level modules, for the same reason and with the same consequence as
 # the three above: package collection cannot see them, so a missing frozen import
 # has to fail here rather than at the first open.
-hiddenimports += ["day_review_index", "forecast_brief"]
+hiddenimports += ["day_review_index", "day_review_bars", "forecast_brief"]
 # The UI loads panels/services by name in places, and the engines import each
 # other lazily inside functions; collecting the first-party trees outright is
 # far cheaper than chasing ModuleNotFoundError one launch at a time.

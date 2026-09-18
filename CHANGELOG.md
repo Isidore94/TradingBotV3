@@ -53,6 +53,13 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Day Review durable session bars (TJ-2A, 2026-09-18, branch
+  `codex/tj2a-session-bars`).** Closed sessions fetch decided names plus four
+  benchmarks in batched Yahoo M5 requests, store completed regular-hours bars in
+  `DAY_REVIEW_DIR/bars/<session>.parquet`, and show the durable SPY tape on a past
+  Day Review. Index then bars work stays off the Qt thread; a missing past tape has a
+  single-flight worker backfill. TJ-2B's walk-away tables are still unbuilt.
+
 - **Overnight AI repair (2026-09-17, merged).**
   `master_avwap_lib.runner.record_theta_picks` is a module-level lazy forwarding
   seam, so a cold `theta_pick_tracker` import cannot cycle through the compatibility

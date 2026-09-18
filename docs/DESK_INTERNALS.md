@@ -6141,6 +6141,13 @@ sync. The POST-CLOSE tick: **slot 0.2 ms, index lands 11.0 s later on its worker
 22.8 s of frozen desk when the slot did the work itself. One index is 22.7 MB; reading it
 costs 92 ms.
 
+**TJ-2A session bars (2026-09-18).** After the post-close index build, its same worker
+fetches regular-hours Yahoo M5 bars for all decided/traded names plus SPY, QQQ, IWM and
+VXX in batches of 50. `day_review_bars.py` keeps completed bars only and atomically stores
+them under `DAY_REVIEW_DIR/bars/<session>.parquet`; a failed symbol is absent. Closed-day
+reads take SPY from this durable file, while today's tape remains the Qt-thread cache handoff.
+A missing past file starts one backfill worker and never fetches the in-progress session.
+
 **Layout: two columns, and tables that fill the width** (TJ-1L, 2026-09-18). The trader, the
 first time he read the page on a 3800 px screen: *"there's a lot of empty space horizontally
 that's not being efficiently used"* - and, offered three shapes, he chose two columns. The

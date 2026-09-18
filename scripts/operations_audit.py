@@ -73,6 +73,7 @@ from project_paths import (
     AUTOPILOT_REPORT_FILE,
     AUTOPILOT_STATE_FILE,
     CACHE_DIR,
+    DAY_REVIEW_DIR,
     INDUSTRY_BOARD_STATE_FILE,
     INTRADAY_BOUNCE_OUTCOMES_FILE,
     JOURNAL_DB_FILE,
@@ -85,6 +86,29 @@ from project_paths import (
     get_diagnostics_dir,
     get_local_setting,
 )
+
+
+def _day_review_bars_check(root: Path) -> dict[str, Any]:
+    """One compact inventory line for durable Day Review M5 session tapes."""
+    try:
+        import day_review_bars
+
+        files = sorted((Path(root) / "bars").glob("*.parquet"))
+        if not files:
+            return {"id": "day_review_bars", "label": "Day Review bars", "status": STATUS_UNKNOWN,
+                    "summary": "No Day Review session bars file yet.", "details": {},
+                    "source": str(Path(root) / "bars")}
+        session = files[-1].stem[:10]
+        stored = day_review_bars.read_session_bars(session) or {}
+        count = len(stored)
+        return {"id": "day_review_bars", "label": "Day Review bars", "status": STATUS_HEALTHY,
+                "summary": f"Last bars session {session}: {count} symbols.",
+                "details": {"last_session": session, "symbol_count": count},
+                "source": str(Path(root) / "bars")}
+    except Exception:
+        return {"id": "day_review_bars", "label": "Day Review bars", "status": STATUS_UNKNOWN,
+                "summary": "Day Review session bars could not be read.", "details": {},
+                "source": str(Path(root) / "bars")}
 
 
 AUDIT_SCHEMA = "operations_audit_v2"
@@ -2927,6 +2951,11 @@ def build_operations_audit(
         _universe_check(universe_files, market_probe, market_date, moment, local_tz),
         _disk_check(diagnostics, moment),
         _daily_bar_source_check(moment, local_tz, diagnostics / "run_manifests"),
+        *(
+            (_day_review_bars_check(DAY_REVIEW_DIR),)
+            if any((DAY_REVIEW_DIR / "bars").glob("*.parquet"))
+            else ()
+        ),
         _daily_bar_units_check(moment, local_tz, diagnostics),
         _outcome_sweep_check(moment, local_tz, diagnostics),
         _evidence_snapshot_check(

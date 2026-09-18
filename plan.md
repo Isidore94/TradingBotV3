@@ -153,7 +153,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 PACKETED 2026-09-18 (`.claude/packets/TJ-2.md`, two parts, for the Codex lead); TJ-3 … TJ-8 PLANNED |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2A BUILT 2026-09-18 on `codex/tj2a-session-bars` (durable session bars; gate #152 still owed); TJ-2B remains PLANNED; TJ-3 … TJ-8 PLANNED |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -388,6 +388,10 @@ it after a restart.
 ##### TJ-2 — Instant walk-away
 
 *Goal:* every decision the trader made that day, and what the name did after.
+
+**TJ-2A BUILT 2026-09-18 (`codex/tj2a-session-bars`):** a closed session now has a
+durable completed M5 parquet tape and the page reads its SPY bars. TJ-2B's four
+walk-away tables remain planned; TJ-2 as a whole is not built. Gate #152 remains live.
 
 What exists: `daily_recap_reader._decisions` / `_decision_rows` (`:1022-1320`, grain
 `(session_date, symbol, side, category, verdict, timeframe)`), `REJECT_VERDICTS`

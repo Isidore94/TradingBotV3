@@ -109,6 +109,7 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # the first open or the first paste.
     "ui.services.day_review_service",
     "day_review_index",
+    "day_review_bars",
     "forecast_brief",
     # Phase 0.32: Daily Recap imports this inside its report worker for the
     # published next-test card. A frozen desk without it would launch and fail
