@@ -394,13 +394,17 @@ class ResearchResultsPanel(QFrame):
         self._build_layout()
         self._apply_selection_to_buttons()
         self.refresh_reader_measure()
-        self.refresh()
-        #: The Measured report's read waits for the first SHOW (G7.1's rule for
-        #: this page: the desk builds nine Research children at startup and each
-        #: one loads when its tab is opened). Starting it here gave the desk a
-        #: thread at startup for a section nobody had looked at, and it outlived
-        #: the panel in a test that only called `deleteLater`.
+        # The Measured report's read waits for the first SHOW (G7.1's rule for
+        # this page: the desk builds nine Research children at startup and each
+        # one loads when its tab is opened). Starting it in the constructor gave
+        # the desk a thread for a section nobody had looked at, and it outlived
+        # the panel in a test that only called `deleteLater`.
+        #
+        # Set BEFORE `refresh()`: that call can reach a `showEvent` (a render
+        # that polishes or shows a child), and a `showEvent` that ran before this
+        # attribute existed would raise `AttributeError` inside a Qt slot.
         self._report_loaded_once = False
+        self.refresh()
 
     def refresh_reader_measure(self) -> None:
         """Recompute the reading measure from the CURRENT font (G3b item 3).

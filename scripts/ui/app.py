@@ -152,9 +152,13 @@ class MainWindow(QMainWindow):
         # worker and is handed no feed, which is the whole point of it. The one
         # thing the desk hands it is the Alert Center's memory-only bar accessor,
         # so the SPY section can draw today's tape without fetching anything.
+        # It goes to the PAGE, not to its service: that accessor mutates the
+        # Alert Center's cache and arms a `QTimer.singleShot`, so it may only be
+        # called on the Qt thread, and the page calls it in the slot that starts
+        # each read (reviewer, 2026-09-17).
         self.day_review_panel = DayReviewPanel()
         try:
-            self.day_review_panel.service.set_bars_reader(
+            self.day_review_panel.set_bars_reader(
                 self.trading_panel.alert_center.journal_chart_bars
             )
         except Exception:  # noqa: BLE001 - no bars is a note on the page, never a failure

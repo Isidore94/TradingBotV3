@@ -132,6 +132,10 @@ FORECAST_COLLAPSED_LINES = 6
 #: What the page says while its first read is in flight.
 LOADING_NOTE = "Reading the session…"
 
+#: What it says while the post-close index build runs on its worker. The build
+#: streams the big stores once, so it is worth a sentence rather than a silence.
+BUILDING_INDEX_NOTE = "Building {session}'s index in the background…"
+
 
 def _excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
     """The first line of a thought, cut at `limit`, with `…` when there is more.
@@ -170,10 +174,48 @@ class _DayReadWorker(QThread):
 
     It hands back ONE payload and never touches a widget: the page renders, and
     a page that is refreshing goes on showing what it already had.
+
+    The SPY bars are handed IN rather than read here. `journal_chart_bars` is the
+    Alert Center's own cache accessor: it mutates `_m5_bar_dicts` and arms a
+    `QTimer.singleShot`, and a `singleShot` armed from a thread with no event
+    loop never fires - which latched `_d1_prefetch_flush_armed` True and killed
+    D1 prefetch for the rest of the session (reviewer, 2026-09-17). It is a Qt
+    THREAD accessor, so the slot that starts this worker reads it.
     """
 
     loaded = Signal(dict)
     failed = Signal(str)
+
+    def __init__(self, service, session_date: str, parent=None, *, spy_m5_bars=None) -> None:
+        super().__init__(parent)
+        self._service = service
+        self._session = str(session_date)
+        self._spy_m5_bars = list(spy_m5_bars or ())
+
+    def run(self) -> None:  # pragma: no cover - exercised through its signals
+        try:
+            payload = self._service.read_day(
+                self._session,
+                lookback_sessions=LOOKBACK_SESSIONS,
+                spy_m5_bars=self._spy_m5_bars,
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed read never costs the page
+            self.failed.emit(str(exc))
+            return
+        self.loaded.emit(dict(payload or {}))
+
+
+class _IndexBuildWorker(QThread):
+    """One post-close index build, off the GUI thread.
+
+    Blocker 1 (reviewer, 2026-09-17): the build was called straight from the
+    60-second timer slot and froze the desk for **22.8 seconds** - it streams the
+    476 MB intraday log and three other stores. A timer slot must return in
+    milliseconds, so the slot starts this and the page says what is happening.
+    """
+
+    built = Signal(str)
+    failed = Signal(str, str)
 
     def __init__(self, service, session_date: str, parent=None) -> None:
         super().__init__(parent)
@@ -182,13 +224,13 @@ class _DayReadWorker(QThread):
 
     def run(self) -> None:  # pragma: no cover - exercised through its signals
         try:
-            payload = self._service.read_day(
+            self._service.build_index_for(
                 self._session, lookback_sessions=LOOKBACK_SESSIONS
             )
-        except Exception as exc:  # noqa: BLE001 - a failed read never costs the page
-            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - a cache never costs the page
+            self.failed.emit(self._session, str(exc))
             return
-        self.loaded.emit(dict(payload or {}))
+        self.built.emit(self._session)
 
 
 class DayReviewPanel(QFrame):
@@ -214,6 +256,12 @@ class DayReviewPanel(QFrame):
             service = DayReviewService()
         self.service = service
         self._worker: _DayReadWorker | None = None
+        self._index_worker: _IndexBuildWorker | None = None
+        self._building_index = ""
+        #: The desk's own M5 cache accessor (`alert_center.journal_chart_bars`).
+        #: Called ONLY on the Qt thread, by `reload`, and only for a session that
+        #: has not closed - see `_DayReadWorker` for what a worker call cost.
+        self._bars_reader: Callable[[str], Any] | None = None
         self._payload: dict[str, Any] = {}
         self._entries: list[dict[str, Any]] = []
         self._walkaway_rows: tuple[Any, ...] = ()
@@ -614,18 +662,55 @@ class DayReviewPanel(QFrame):
         return due
 
     def _build_index_for(self, session_date: str) -> None:
-        """Ask the service to write that session's index. Quiet on failure.
+        """Start that session's index build on a WORKER and return at once.
+
+        Never inline: the build streams the 476 MB intraday log and three other
+        stores, and called from the timer slot it froze the desk for 22.8 s
+        (reviewer, 2026-09-17). Single-flight - a second tick while one is in
+        flight is ignored rather than queued - and quiet on every failure path,
+        because the index is derived and rebuildable.
 
         `getattr` because the seam is the SERVICE's: a host that hands this page
         a reader without one still gets its read, just not the fast second one.
         """
+        session = str(session_date or "")[:10]
         builder = getattr(self.service, "build_index_for", None)
-        if not callable(builder):
+        if not callable(builder) or not session:
+            return
+        if self._index_worker is not None and self._index_worker.isRunning():
             return
         try:
-            builder(str(session_date), lookback_sessions=LOOKBACK_SESSIONS)
+            worker = _IndexBuildWorker(self.service, session, self)
+            worker.built.connect(self._on_index_built)
+            worker.failed.connect(self._on_index_failed)
+            self._index_worker = worker
+            self._building_index = session
+            self.status.setText(BUILDING_INDEX_NOTE.format(session=session))
+            self.statusChanged.emit(self.status.text())
+            worker.start()
         except Exception:  # noqa: BLE001 - a cache never costs the page
-            logging.debug("The Day Review index was not built.", exc_info=True)
+            self._index_worker = None
+            self._building_index = ""
+            logging.debug("The Day Review index build could not start.", exc_info=True)
+
+    def _on_index_built(self, session_date: str) -> None:
+        """The index landed. Repaint that session if it is the one on screen."""
+        self._index_worker = None
+        self._building_index = ""
+        self.status.setText(f"Day Review: {session_date} is indexed.")
+        self.statusChanged.emit(self.status.text())
+        if str(session_date) == self.session_date():
+            self.reload()
+
+    def _on_index_failed(self, session_date: str, reason: str) -> None:
+        self._index_worker = None
+        self._building_index = ""
+        logging.info("The Day Review index for %s was not built: %s", session_date, reason)
+        self.status.setText(
+            f"{session_date} could not be indexed ({reason}); the page reads the "
+            "stores directly."
+        )
+        self.statusChanged.emit(self.status.text())
 
     # -- reading -----------------------------------------------------------
     def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -639,6 +724,38 @@ class DayReviewPanel(QFrame):
             self._loaded_once = True
             self.reload()
 
+    def set_bars_reader(self, reader: Callable[[str], Any] | None) -> None:
+        """Hand the page the desk's own M5 cache accessor.
+
+        The PAGE holds it, not the service, because it may only be called on the
+        Qt thread: `alert_center.journal_chart_bars` mutates the Alert Center's
+        bar cache and arms a `QTimer.singleShot`, and a `singleShot` armed from a
+        worker never fires, which latched the D1 prefetch flag and killed prefetch
+        for the session (reviewer, 2026-09-17).
+        """
+        self._bars_reader = reader
+
+    def _spy_bars_for(self, session_date: str) -> list[dict[str, Any]]:
+        """Today's SPY M5 bars, read HERE, on the Qt thread. A cache read.
+
+        Only for a session that has not closed: the accessor holds the running
+        scanner's own chart, which is today's. TJ-2 brings the stored bars for a
+        past session, and until then the page says so.
+        """
+        if self._bars_reader is None:
+            return []
+        if str(session_date) != self._clock().date().isoformat():
+            return []
+        try:
+            bars = self._bars_reader("SPY")
+        except Exception:  # noqa: BLE001 - no bars is a note, never a failed page
+            logging.debug("The SPY bars could not be read.", exc_info=True)
+            return []
+        if isinstance(bars, tuple) and len(bars) == 2:
+            # `journal_chart_bars` answers `(m5, d1)`; this page draws the M5.
+            bars = bars[0]
+        return [dict(bar) for bar in (bars or ()) if isinstance(bar, Mapping)]
+
     def reload(self) -> None:
         """Ask the worker for the selected session. Never blocks the page."""
         if self._worker is not None and self._worker.isRunning():
@@ -646,7 +763,10 @@ class DayReviewPanel(QFrame):
         self._refresh_session_picker()
         self._sync_after_the_fact()
         self.status.setText(LOADING_NOTE)
-        self._worker = _DayReadWorker(self.service, self.session_date(), self)
+        session = self.session_date()
+        self._worker = _DayReadWorker(
+            self.service, session, self, spy_m5_bars=self._spy_bars_for(session)
+        )
         self._worker.loaded.connect(self.render)
         self._worker.failed.connect(self._render_failure)
         self._worker.start()
@@ -922,16 +1042,32 @@ class DayReviewPanel(QFrame):
         return self._chart
 
     def _render_chart(self, bars) -> None:
-        if not bars:
-            self.spy_note.setText(NO_CHART_NOTE)
+        # A bar with no `dt` cannot be placed on a time axis, so it is DROPPED
+        # and counted rather than drawn at an invented moment; the count is said
+        # once per render, not once per bar.
+        drawable = [bar for bar in bars or () if bar.get("dt") is not None]
+        dropped = len(bars or ()) - len(drawable)
+        if dropped:
+            logging.info(
+                "Day Review: %d SPY bar(s) carried no timestamp and are not drawn.",
+                dropped,
+            )
+        if not drawable:
+            self.spy_note.setText(
+                NO_CHART_NOTE
+                + (f" ({dropped} bar(s) carried no timestamp.)" if dropped else "")
+            )
             if self._chart is not None:
                 self._chart.set_data([])
                 self._chart.setVisible(False)
             return
         chart = self._ensure_chart()
         chart.setVisible(True)
-        chart.set_data(bars, timeframe="m5")
-        self.spy_note.setText(f"SPY M5 — {len(bars)} completed bar(s) the desk holds.")
+        chart.set_data(drawable, timeframe="m5")
+        self.spy_note.setText(
+            f"SPY M5 — {len(drawable)} completed bar(s) the desk holds."
+            + (f" {dropped} carried no timestamp and are not drawn." if dropped else "")
+        )
 
     def _activate_walkaway(self, item) -> None:
         """Ask the host for a BOARD chart of this row's name.
@@ -1088,9 +1224,11 @@ class DayReviewPanel(QFrame):
             self._auto_timer.stop()
         except RuntimeError:  # pragma: no cover - already torn down
             pass
-        worker = self._worker
-        if worker is not None and worker.isRunning():
-            worker.wait(2000)
+        for worker in (self._worker, self._index_worker):
+            if worker is not None and worker.isRunning():
+                # Bounded: a desk that will not close is worse than an index
+                # nobody collected, and the index is rebuildable.
+                worker.wait(2000)
 
 
 __all__ = [

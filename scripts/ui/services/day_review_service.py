@@ -18,20 +18,25 @@ Three rules this file keeps:
 * **Uncertainty is reported, never hidden.** A store that cannot be read costs
   its own section and nothing else, and the payload's `error` names it. A blank
   section with no reason reads as "nothing happened", which is a claim.
-* **The index, when there is one.** The two big outcome stores come from the
+* **The index, when there is one.** The big outcome stores come from the
   per-session index (`day_review_index`); a session opened without one is
-  streamed and leaves an index behind for next time.
+  streamed, and the post-close build leaves one behind for next time.
 
-No Qt: this is plain Python called from a `QThread`. The one thing it is HANDED
-by the desk is a bars reader (`alert_center.journal_chart_bars`), because the
-session's M5 bars live in the running scanner's memory and nowhere else yet.
+No Qt: this is plain Python called from a `QThread`, and there is one thing it
+deliberately CANNOT do. The desk's M5 cache accessor
+(`alert_center.journal_chart_bars`) mutates the Alert Center's bar cache and arms
+a `QTimer.singleShot`; armed from a worker with no event loop it never fires,
+which latched `_d1_prefetch_flush_armed` True and killed D1 prefetch for the
+session (reviewer, 2026-09-17). So this service holds no bars reader and asks for
+none: `read_day` takes `spy_m5_bars` as an INPUT, read by the Qt-thread slot that
+starts the worker.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 _log = logging.getLogger(__name__)
 
@@ -49,7 +54,8 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     "spy_m5_bars",
 )
 
-#: The benchmark whose tape the page draws. One name, the desk's own.
+#: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
+#: reads its bars (Qt thread only); this constant is what it reads them for.
 BENCHMARK_SYMBOL = "SPY"
 
 #: How many prior sessions the walk-away read looks back over. The page offers
@@ -80,14 +86,8 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
 class DayReviewService:
     """Reads one day for the Day Review page. Writes only through the journal."""
 
-    def __init__(
-        self,
-        journal_service: Any = None,
-        *,
-        bars_reader: Callable[[str], Any] | None = None,
-    ) -> None:
+    def __init__(self, journal_service: Any = None) -> None:
         self._journal = journal_service
-        self._bars_reader = bars_reader
 
     # -- seams the host wires ---------------------------------------------
     @property
@@ -99,16 +99,6 @@ class DayReviewService:
             self._journal = shared_journal_service()
         return self._journal
 
-    def set_bars_reader(self, reader: Callable[[str], Any] | None) -> None:
-        """Hand the service the desk's own bar accessor.
-
-        `alert_center.journal_chart_bars` is a memory-only read of the running
-        scanner's M5 chart (the Trade Mentor's context worker already calls the
-        same accessor off the Qt thread). Without it the page says so rather
-        than drawing an empty axis.
-        """
-        self._bars_reader = reader
-
     # -- the one read ------------------------------------------------------
     def read_day(
         self,
@@ -116,13 +106,21 @@ class DayReviewService:
         *,
         lookback_sessions: int = DEFAULT_LOOKBACK_SESSIONS,
         now: datetime | None = None,
+        spy_m5_bars: Any = None,
     ) -> dict[str, Any]:
         """Everything the page shows for one session, in one mapping.
 
-        Worker-thread call: it opens the journal ledger, the trade journal, the
-        per-session index (or the two outcome stores behind it) and the desk's
-        bar cache. Each in its own guard, so one unreadable store costs one
-        section.
+        Worker-thread call: it opens the journal ledger, the trade journal and
+        the per-session index (or the stores behind it). Each in its own guard,
+        so one unreadable store costs one section.
+
+        `spy_m5_bars` are HANDED IN, never read here. The desk's accessor for
+        them (`alert_center.journal_chart_bars`) mutates the Alert Center's bar
+        cache and arms a `QTimer.singleShot`; armed from a worker that has no
+        event loop it never fires, which latched `_d1_prefetch_flush_armed` True
+        and killed D1 prefetch for the session (reviewer, 2026-09-17). So the
+        Qt-thread slot that starts the read is what calls it - this service has
+        no reader and cannot acquire one.
         """
         session = str(session_date or "")[:10]
         payload = empty_payload(session)
@@ -168,7 +166,9 @@ class DayReviewService:
             problems.append(f"the day's trades could not be read: {exc}")
             _log.debug("Day Review trades unreadable.", exc_info=True)
 
-        payload["spy_m5_bars"] = self._spy_bars(session, payload["provisional"])
+        payload["spy_m5_bars"] = [
+            dict(bar) for bar in (spy_m5_bars or ()) if isinstance(bar, Mapping)
+        ]
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
@@ -192,12 +192,16 @@ class DayReviewService:
         if not session:
             return None
         try:
+            import daily_recap_reader
             import day_review_index
 
+            sources = daily_recap_reader.RecapSources()
             index = day_review_index.build_index(
-                session, lookback_sessions=lookback_sessions, now=now
+                session, lookback_sessions=lookback_sessions, sources=sources, now=now
             )
-            day_review_index.write_index(index)
+            # The write refuses a session that has not closed and skips a file
+            # whose content has not changed; both are 22-30 MB decisions.
+            day_review_index.write_index(index, now=now)
             return index
         except Exception:  # noqa: BLE001 - a cache never costs the page
             _log.debug("The Day Review index could not be built.", exc_info=True)
@@ -211,7 +215,12 @@ class DayReviewService:
         index: Mapping[str, Any] | None = None
         try:
             stored = day_review_index.read_index(session)
-            if stored is not None and not day_review_index.is_stale(stored, now=now):
+            # `sources` as well as the clock: an index whose stores have been
+            # rewritten since (a warehouse recompute) describes files that are
+            # no longer there, and no clause about pending horizons would see it.
+            if stored is not None and not day_review_index.is_stale(
+                stored, now=now, sources=daily_recap_reader.RecapSources()
+            ):
                 index = stored
         except Exception:  # noqa: BLE001
             _log.debug("The stored Day Review index was unreadable.", exc_info=True)
@@ -279,26 +288,6 @@ class DayReviewService:
         from ui.services.journal_feed import trades_on
 
         return list(trades_on(session))
-
-    def _spy_bars(self, session: str, provisional: bool) -> list[dict[str, Any]]:
-        """SPY's M5 bars for the session, when the desk has them in memory.
-
-        Only for a session that has not closed: the accessor is the running
-        scanner's own chart and it holds today. TJ-2 brings the stored bars for
-        a past session, and until then the page says so rather than drawing
-        nothing under a title.
-        """
-        if not provisional or self._bars_reader is None:
-            return []
-        try:
-            bars = self._bars_reader(BENCHMARK_SYMBOL)
-        except Exception:  # noqa: BLE001 - no bars is a note, never a failed page
-            _log.debug("The SPY bars were unreadable.", exc_info=True)
-            return []
-        if isinstance(bars, tuple) and len(bars) == 2:
-            # `journal_chart_bars` answers `(m5, d1)`; this page draws the M5.
-            bars = bars[0]
-        return [dict(bar) for bar in (bars or ()) if isinstance(bar, Mapping)]
 
     @staticmethod
     def _provisional(session: str, now: datetime) -> bool:

@@ -85,6 +85,11 @@ INDEXED_SOURCE_SPECS: dict[str, tuple[str, str, str]] = {
 #: The order they are declared in, and the set an index must carry to be usable.
 INDEXED_SOURCES: tuple[str, ...] = tuple(INDEXED_SOURCE_SPECS)
 
+#: How many sessions' indexes are kept on disk. One is 22-30 MB, the picker
+#: offers fifteen sessions, and every one of them is rebuildable - so the folder
+#: is pruned to the newest 40 on each write rather than growing for ever.
+KEEP_SESSIONS = 40
+
 
 # ---------------------------------------------------------------------------
 # paths
@@ -204,6 +209,27 @@ def read_store(name: str, sources: Any):
     return daily_recap_reader._read_csv(name, path, clock_field)
 
 
+def sources_stamp(sources: Any) -> dict[str, dict[str, Any]]:
+    """`name -> (size, mtime_ns)` for the indexed stores, as they are right now.
+
+    The cheapest honest answer to "is this index still describing those files".
+    A warehouse recompute REWRITES the outcome CSVs - the rows for a session that
+    closed weeks ago can change - and nothing else in the index would notice: the
+    session is closed, nothing is pending, and the stored answer would be printed
+    for ever. A missing file is stamped as absent rather than skipped, so a store
+    that comes back is a change too.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for name in INDEXED_SOURCES:
+        path = Path(getattr(sources, name))
+        try:
+            stat = path.stat()
+            out[name] = {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+        except OSError:
+            out[name] = {"size": -1, "mtime_ns": -1}
+    return out
+
+
 def _in_scope(value: Any, session: str, first: str, last: str, targets: set[str]) -> bool:
     """Does a row's own session belong to this read?
 
@@ -266,6 +292,7 @@ def build_index(
         else moment.isoformat(timespec="seconds"),
         "pending": bool(pending),
         "pending_target_sessions": sorted(set(pending_targets)),
+        "sources_stamp": sources_stamp(sources),
     }
     for name, store in stores.items():
         session_field = INDEXED_SOURCE_SPECS[name][2]
@@ -281,10 +308,23 @@ def build_index(
 # ---------------------------------------------------------------------------
 # staleness - ONE rule
 # ---------------------------------------------------------------------------
-def is_stale(index: Mapping[str, Any] | None, *, now: datetime | None = None) -> bool:
+def is_stale(
+    index: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+    sources: Any = None,
+) -> bool:
     """Could the answer in this file have changed since it was written?
 
-    Two things can change it, and only two:
+    With `sources` given, the first question is the blunt one: **are those files
+    still the files this index was built from** (`sources_stamp`)? A warehouse
+    recompute rewrites the outcome CSVs and can change the rows of a session that
+    closed weeks ago, which none of the clauses below would ever notice. Without
+    `sources` - a caller that has none, and every test that asks about the clock
+    alone - the stamp is not consulted, and an index written before this clause
+    existed carries no stamp and is not failed for it.
+
+    Then two things can change it, and only two:
 
     * **The session had not closed when it was built.** Then the file it
       describes is still being appended to, so the index is a snapshot of a
@@ -303,6 +343,13 @@ def is_stale(index: Mapping[str, Any] | None, *, now: datetime | None = None) ->
     """
     if not isinstance(index, Mapping):
         return True
+    if sources is not None:
+        stored = index.get("sources_stamp")
+        if isinstance(stored, Mapping) and stored:
+            if {
+                name: dict(value) for name, value in stored.items()
+            } != sources_stamp(sources):
+                return True
     if not bool(index.get("pending")):
         return False
     built = _moment(index.get("built_at"))
@@ -395,8 +442,76 @@ def read_index(session_date: str, *, root: Path | None = None) -> dict[str, Any]
     return dict(payload)
 
 
-def write_index(index: Mapping[str, Any], *, root: Path | None = None) -> Path | None:
-    """Temp-and-rename the index beside its session. `None` when it failed.
+def _session_has_closed(session: str, now: datetime | None = None) -> bool:
+    """Has the session this index describes finished producing rows?
+
+    An index for a session that is still trading describes files that are still
+    being appended to, so writing one spends 22-30 MB to cache an answer that is
+    already out of date (`is_stale` would refuse it anyway). Today's page streams
+    until the post-close tick builds the one that lasts. Unknown reads as NOT
+    closed: refusing to write costs a slow open, and writing costs a wrong page.
+    """
+    try:
+        import market_calendar
+
+        return date.fromisoformat(session) <= market_calendar.last_completed_session(
+            now or datetime.now()
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _prune(base: Path, keep: int | None = None) -> int:
+    """Keep the newest `keep` session folders. Rebuildable, so this is safe.
+
+    `KEEP_SESSIONS` is read at CALL time, not bound as a default, so a test can
+    redirect it - the idiom every other tunable in this repo uses.
+
+    Quiet on every failure: a folder that will not delete is a folder that stays,
+    never an index that was not written.
+    """
+    keep = KEEP_SESSIONS if keep is None else int(keep)
+    removed = 0
+    try:
+        sessions = sorted(
+            (child for child in (base / "sessions").iterdir() if child.is_dir()),
+            key=lambda child: child.name,
+            reverse=True,
+        )
+    except OSError:
+        return 0
+    for stale in sessions[keep:]:
+        try:
+            for child in stale.iterdir():
+                child.unlink()
+            stale.rmdir()
+            removed += 1
+        except OSError as exc:
+            _log.debug("The Day Review index %s was not pruned: %s", stale, exc)
+    return removed
+
+
+def _body(index: Mapping[str, Any]) -> str:
+    """The index as it is stored, WITHOUT the stamp of when it was built.
+
+    Two builds of a finished session differ only in `built_at`, and rewriting
+    22-30 MB to change one timestamp is churn on the shared home folder.
+    """
+    payload = {key: value for key, value in dict(index).items() if key != "built_at"}
+    return json.dumps(payload, default=str, sort_keys=True)
+
+
+def write_index(
+    index: Mapping[str, Any],
+    *,
+    root: Path | None = None,
+    now: datetime | None = None,
+) -> Path | None:
+    """Temp-and-rename the index beside its session. `None` when nothing was written.
+
+    Three refusals, all of them about a 22-30 MB file on the shared home folder:
+    a session that has NOT CLOSED is never indexed, an index whose content is
+    UNCHANGED is not rewritten, and the folder is pruned to `KEEP_SESSIONS`.
 
     A derived, rebuildable artefact may never cost the page that wanted it, so
     every failure is logged and swallowed - the page has already painted from
@@ -406,8 +521,21 @@ def write_index(index: Mapping[str, Any], *, root: Path | None = None) -> Path |
     if not session:
         _log.info("A Day Review index with no session was not written.")
         return None
+    if not _session_has_closed(session, now):
+        _log.info(
+            "The Day Review index for %s was not written: the session has not closed.",
+            session,
+        )
+        return None
     path = index_path(session, root=root)
     temp = path.with_suffix(".json.tmp")
+    try:
+        body = _body(index)
+        if path.is_file() and _body(json.loads(path.read_text(encoding="utf-8"))) == body:
+            _log.debug("The Day Review index for %s is unchanged.", session)
+            return path
+    except Exception:  # noqa: BLE001 - an unreadable old file is simply replaced
+        _log.debug("The stored Day Review index could not be compared.", exc_info=True)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp.write_text(
@@ -422,6 +550,9 @@ def write_index(index: Mapping[str, Any], *, root: Path | None = None) -> Path |
         except OSError:
             pass
         return None
+    # `index_path` is <base>/sessions/<date>/outcomes.json, so three parents up
+    # is the base whether or not a root was named.
+    _prune(path.parent.parent.parent)
     return path
 
 

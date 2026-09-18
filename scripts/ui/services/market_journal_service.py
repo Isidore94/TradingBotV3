@@ -241,9 +241,21 @@ class MarketJournalService(QObject):
         quietly replace it on the next refresh. Nothing is written here - a
         read that writes is how a store grows rows nobody asked for.
         """
+        import market_journal
         import market_thesis
 
-        entries = self.entries_about(session_date) if session_date else self.entries_for()
+        # TJ-1 item 2: the machine-row filter is inherited through
+        # `entries_about`, so the no-session path has to apply it itself - a
+        # thesis drafted from a row nobody thought is the defect either way.
+        entries = (
+            self.entries_about(session_date)
+            if session_date
+            else [
+                row
+                for row in self.entries_for()
+                if not market_journal.is_machine_entry(row)
+            ]
+        )
         try:
             stored = market_thesis.current_theses(market_thesis.read_rows())
         except Exception:  # noqa: BLE001

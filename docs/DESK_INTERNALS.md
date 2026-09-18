@@ -5986,6 +5986,35 @@ closed is always stale (that file is still being appended to), and an index with
 pending is never stale. The post-close tick builds it once, through ONE named seam,
 `DayReviewService.build_index_for`.
 
+**Two things that may NEVER happen on the Qt thread, both found by review (2026-09-17).**
+First, the post-close index build: it was called straight from the 60-second timer slot and
+froze the desk for **22.8 seconds** while it streamed the big stores. It runs on
+`_IndexBuildWorker` now - single-flight, the page says "Building <date>'s index in the
+background…", the slot returns in 0.2 ms, and the page repaints if the finished index is the
+session on screen. Second, `alert_center.journal_chart_bars`: it LOOKS like a cache read and
+is not one - it mutates `_m5_bar_dicts` and arms a `QTimer.singleShot`, and a `singleShot`
+armed from a thread with no event loop never fires, which latched
+`_d1_prefetch_flush_armed` True and killed D1 prefetch for the rest of the session. So the
+Qt-thread slot that starts a read calls it (once, and only for a session that has not
+closed) and hands the bars into the worker's inputs; `DayReviewService` holds no bars reader
+and `read_day` takes `spy_m5_bars` as an INPUT. `MainWindow` hands the accessor to the PAGE,
+never to the service, and a source-level test says so. The tests pin the THREAD IDs, because
+that is what was wrong: `tests/test_tj1_day_review_post_close_index.py` and
+`tests/test_tj1_day_review_bars_on_the_qt_thread.py`.
+
+**What an index costs the home folder.** One is 22.7 MB, it lives in the SHARED home, and
+it is rebuildable - so three rules bound the churn (`write_index`): a session that has NOT
+CLOSED is never indexed (its stores are still being appended to and `is_stale` would refuse
+the file anyway, so today's page streams until the post-close build), an index whose content
+is UNCHANGED is not rewritten (two builds of a finished session differ only in `built_at`,
+and 22.7 MB is not worth a timestamp), and the folder is pruned to the newest
+`KEEP_SESSIONS` (40) on each write. `is_stale` also compares a stored `sources_stamp` -
+`(size, mtime_ns)` per indexed store - because a warehouse recompute REWRITES those CSVs and
+can change the rows of a session that closed weeks ago, which no clause about pending
+horizons would ever notice; the stamp is only consulted when the caller passes `sources`, so
+a clock-only question, and an index written before the clause existed, are answered as
+before.
+
 **How wide the index is, and the line between fast and fresh.** The first cut covered the
 two biggest stores and left an indexed read at 2,217 ms, which did not meet the gate's
 "under one second". Measured store by store on the staged home (2026-09-17): intraday
@@ -6060,9 +6089,17 @@ that construct the recap class directly still pass as written.
 **What it cost, measured the same way each time** (`scripts/ui/desk_bench.py`, staged home,
 1640x980, three repeats). Retired page: `market_journal` construct 362 ms sync p95, first
 show 570 ms settle p95, entry click 121 ms; `daily_recap.reload` **16,502 ms** settle p50.
-Day Review: construct 17 ms sync p50 / 121 ms settle, **`reload` 550 ms settle p50 / 562 ms
-p95**, first open (which builds and writes the index) 1,099 ms settle p95, entry click
-121 ms settle / 0.6 ms sync. Building an index costs 8.6 s once; reading it costs 92 ms.
+Day Review, **cold and warm stated separately because they differ by 15x** (the first
+handoff printed 1,099 ms for the cold open, which was a warm bench figure and wrong -
+reviewer, 2026-09-17): construct 4-20 ms; **the Qt thread costs 0.2 ms either way** (a
+`reload` only starts a worker). COLD, with no index on disk: the page paints after
+**12,549 ms**, because that read streams the four big stores and builds the index behind
+it. WARM: the page paints after **607-677 ms**, `day_review.reload` settles at **820 ms p50
+/ 834 ms p95** on the bench (an earlier 550 ms p50 was measured in the process that had just
+written the index; 820 ms is the conservative number), entry click 121 ms settle / 0.6 ms
+sync. The POST-CLOSE tick: **slot 0.2 ms, index lands 11.0 s later on its worker** - it was
+22.8 s of frozen desk when the slot did the work itself. One index is 22.7 MB; reading it
+costs 92 ms.
 
 **Tests:** the tester's `tests/test_tj1_machine_rows.py`,
 `tests/test_tj1_page_specs.py`, `tests/test_tj1_day_review_page.py`,
