@@ -400,21 +400,41 @@ def test_a_filled_table_still_stretches_its_last_column(panel):
         assert table.horizontalHeader().stretchLastSection() is True
 
 
-def test_the_long_walkaway_headers_are_not_clipped(panel, qapp):
-    """"ainst me first" and "r the decisio" are what the clamp did to them."""
-    panel.render(_payload(rejected_that_worked=[_Row("NVDA"), _Row("AMD")]))
+@pytest.mark.parametrize("rows", ([], [_Row("NVDA"), _Row("AMD")]))
+def test_the_long_walkaway_headers_are_not_clipped(panel, qapp, rows):
+    """"ainst me first" and "r the decisio" are what the CEILING did to them.
+
+    Measured on 73d308a0 with the desk's own theme applied: "Against me first %"
+    hints 273 px and the shared width rule's `MAX_COLUMN_WIDTH` clamped it to
+    260, so the header was cut at both ends (it is centred, so a clip shows on
+    each side and there is no ellipsis to warn anyone). The stylesheet is not
+    applied inside the suite - it is global to the `QApplication` and would
+    follow every later test - so the header font is enlarged here instead,
+    which is the same fact: a title wider than the ceiling.
+
+    A section that measures its CONTENTS is never narrower than its own hint.
+    """
+    from PySide6.QtGui import QFont
+
+    table = panel.rejected_that_worked_table
+    header = table.horizontalHeader()
+    font = QFont(header.font())
+    font.setPointSize(16)
+    font.setBold(True)
+    header.setFont(font)
+
+    panel.render(_payload(rejected_that_worked=rows))
     panel.resize(1900, 1000)
     panel.show()
     qapp.processEvents()
     try:
-        table = panel.rejected_that_worked_table
-        header = table.horizontalHeader()
-        metrics = header.fontMetrics()
         for column in range(table.columnCount()):
             text = table.horizontalHeaderItem(column).text()
             if text not in {"Against me first %", "After the decision %"}:
                 continue
-            assert header.sectionSize(column) >= metrics.horizontalAdvance(text), text
+            assert header.sectionSize(column) >= header.sectionSizeHint(column), (
+                text, header.sectionSize(column), header.sectionSizeHint(column)
+            )
     finally:
         panel.hide()
 
@@ -430,11 +450,14 @@ def test_the_column_split_round_trips_through_the_saved_setting(
 
     first = _panel(qapp)
     try:
-        first.resize(1000, 800)
+        # Wide enough that the two columns HAVE freedom: at their combined
+        # minimum width a splitter ignores `setSizes`, which is Qt doing the
+        # right thing and not a drag anyone could make.
+        first.resize(1900, 1000)
         first.show()
         qapp.processEvents()
-        first.columns.setSizes([700, 300])
-        first.columns.splitterMoved.emit(700, 1)
+        first.columns.setSizes([1330, 570])
+        first.columns.splitterMoved.emit(1330, 1)
         timer = first._split_save_timers[COLUMN_SPLIT_KEY]
         timer.stop()
         timer.timeout.emit()  # the debounce, fired without waiting 400 ms
@@ -450,7 +473,7 @@ def test_the_column_split_round_trips_through_the_saved_setting(
 
     second = _panel(qapp)
     try:
-        second.resize(1000, 800)
+        second.resize(1900, 1000)
         second.show()
         qapp.processEvents()
         sizes = second.columns.sizes()
