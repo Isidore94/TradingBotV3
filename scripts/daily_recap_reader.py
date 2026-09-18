@@ -42,6 +42,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -129,6 +130,12 @@ def _working_lately_default() -> Path:
     return project_paths.LOCAL_SETTINGS_DIR / "working_lately" / "snapshot_latest.json"
 
 
+def _claimed_picks_default() -> Path:
+    """Resolve the staged home at RecapSources construction time."""
+    staged = os.environ.get("TRADINGBOTV3_DATA_DIR")
+    return Path(staged) / "claimed_picks.jsonl" if staged else project_paths.CLAIMED_PICKS_FILE
+
+
 def _environment_default() -> Path:
     import d1_environment_store
 
@@ -163,7 +170,9 @@ class RecapSources:
     working_lately: Path = field(default_factory=_working_lately_default)
     # TJ-2B reads claim history (not only live claims) to show a historical
     # placement and any later drop beside the session where it was made.
-    claimed_picks: Path = project_paths.CLAIMED_PICKS_FILE
+    # Resolve with the instance, not at module import: staged/restart readers
+    # set TRADINGBOTV3_DATA_DIR before constructing sources.
+    claimed_picks: Path = field(default_factory=_claimed_picks_default)
 
 
 def _preference_report_default() -> Path:
