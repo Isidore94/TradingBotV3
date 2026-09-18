@@ -1632,7 +1632,7 @@ They are evidence and must not be loaded as context.
   when its content changed, and the folder is pruned to the newest 40; the post-close build
   runs on a worker and the SPY bars are read on the Qt thread and handed into the read. `_d1_horizon_row` and `_outcome_for` became dict lookups built once per read
   (keyed by session and symbol, never by side), which is what took an indexed read from
-  2,217 ms to **820 ms settle p50** warm against the retired page's 16,502 ms; the
+  2,217 ms to **820 ms settle p50** warm against the retired page's 13,500-16,500 ms across runs; the
   post-close build runs on a worker (the slot returns in 0.2 ms) and a cold open, with no
   index yet, paints after 12.5 s while it builds. "Paste
   daily forecast..." files a brief against `target_session` through
@@ -2816,11 +2816,11 @@ now ten pages with **Day Review** where Market Journal and Daily Recap were; the
 writing its own `Auto mode X -> Y` journal rows (34 of 77 on the live desk) and says it in
 the Auto Pilot log instead; `is_machine_entry` becomes the one filter that every
 trader-facing and nightly reader inherits, and the rows already on disk are hidden rather
-than deleted. Opening a session was a 16,502 ms settle (measured on a staged home) because
+than deleted. Opening a session was a 13,500-16,500 ms across runs settle (measured on a staged home) because
 the reader streamed a 476 MB CSV on every open; a per-session index under `DAY_REVIEW_DIR`
 now holds exactly the rows and the full-file coverage that read would have built for every
 store over a megabyte, the small trader-written ones stay live, and two per-decision walks
-inside the reader became dict lookups - together 16,502 ms -> **820 ms** settle p50 warm
+inside the reader became dict lookups - together 13,500-16,500 ms across runs -> **820 ms** settle p50 warm
 (a cold open with no index paints after 12.5 s, and the post-close build runs on a worker). "Paste weekly forecast" is "Paste daily forecast..." and files
 against the SESSION the brief is about, read by the new deterministic `forecast_brief`.
 The Review tab moved to Research > Results as a Measured report section and the staged picks

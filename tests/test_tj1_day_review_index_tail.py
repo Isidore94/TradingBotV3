@@ -61,8 +61,9 @@ FAR_TARGET = "2026-10-01"
 #: A name one of the index's own windowed observations is measured INTO today: an
 #: appended row for it changes what the page prints.
 TODAY_REFERENCED_SYMBOL = "AAPL"
-#: A name none of them reference. This is the ordinary case all session long - the
-#: scanner logs hundreds of names the index has never heard of.
+#: A name none of them reference. Live, this is the RARE case: a session's index
+#: references about 1,198 names for the next session (review round 4), so most
+#: of the scanner's appends land on a referenced name and rebuild.
 TODAY_UNREFERENCED_SYMBOL = "ZZZZ"
 
 LOOKBACK = 3

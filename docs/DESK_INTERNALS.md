@@ -5933,7 +5933,7 @@ fine with me." Answers: `docs/decisions/0021-trader-journal-consolidation.md`.
 
 **What was measured, not assumed.** On a staged copy of the live home folder at 1640x980,
 three repeats (`scripts/ui/desk_bench.py`, which TJ-1 taught to build both sides of the
-swap): `daily_recap.reload` settled in **16,502 ms** (p50) because
+swap): `daily_recap.reload` settled in **13,500-16,500 ms across runs** (p50) because
 `daily_recap_reader._read_intraday_outcomes` streams the whole 476 MB
 `intraday_bounce_outcomes.csv` on every open with the 29 MB horizon CSV behind it, and
 every view then filters by session AFTERWARDS. `market_journal.construct` cost 362 ms
@@ -6128,7 +6128,7 @@ that construct the recap class directly still pass as written.
 
 **What it cost, measured the same way each time** (`scripts/ui/desk_bench.py`, staged home,
 1640x980, three repeats). Retired page: `market_journal` construct 362 ms sync p95, first
-show 570 ms settle p95, entry click 121 ms; `daily_recap.reload` **16,502 ms** settle p50.
+show 570 ms settle p95, entry click 121 ms; `daily_recap.reload` **13,500-16,500 ms across runs** settle p50.
 Day Review, **cold and warm stated separately because they differ by 15x** (the first
 handoff printed 1,099 ms for the cold open, which was a warm bench figure and wrong -
 reviewer, 2026-09-17): construct 4-20 ms; **the Qt thread costs 0.2 ms either way** (a

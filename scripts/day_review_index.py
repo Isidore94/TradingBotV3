@@ -33,7 +33,9 @@ built for it:
 
 So an indexed read is the SAME ANSWER off a small file, and that equality is the
 contract: `read_session(date, index=build_index(date))` equals
-`read_session(date)` on the whole `RecapSession` dataclass. It is ALL OR NOTHING -
+`read_session(date)` on the whole `RecapSession` dataclass, AT BUILD TIME; after an
+append the stamp judged out of scope, only the full-file `coverage` of that store
+lags the disk, and nothing the page renders reads it. It is ALL OR NOTHING -
 an index that carries some of `INDEXED_SOURCES` and not others reads as absent, so
 an index written by an earlier build simply causes one slow open and is replaced.
 

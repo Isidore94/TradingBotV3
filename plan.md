@@ -287,7 +287,7 @@ is what remains owed; TJ-8 still deletes the two retired panel modules. Two amen
 item 4 as built, both measured: the index covers every store over a megabyte (the two named
 here plus `tier_outcomes` and `human_focus_outcomes`, which `read_session` opens for their
 coverage line alone) while the six small trader-written stores stay live, and the two
-per-decision walks inside `daily_recap_reader` became dict lookups - 16,502 ms -> 820 ms
+per-decision walks inside `daily_recap_reader` became dict lookups - 13,500-16,500 ms across runs -> 820 ms
 settle p50 on a staged home, so the gate's "under one second" holds. What landed, and what
 each number turned out to be, is in DESK_INTERNALS "Day Review - one page, no machine rows,
 a per-session index".
