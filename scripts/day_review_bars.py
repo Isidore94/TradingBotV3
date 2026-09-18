@@ -24,6 +24,7 @@ _log = logging.getLogger(__name__)
 BENCHMARKS = ("SPY", "QQQ", "IWM", "VXX")
 CHUNK_SIZE = 50
 MARKET_ZONE = ZoneInfo("America/Los_Angeles")
+EXCHANGE_ZONE = ZoneInfo("America/New_York")
 
 
 def _session_text(session: str | date) -> str:
@@ -134,9 +135,12 @@ def _normalise(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
             stamp = row["dt"]
             if not isinstance(stamp, datetime):
                 stamp = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
-            stamp = stamp.replace(tzinfo=MARKET_ZONE) if stamp.tzinfo is None else stamp.astimezone(MARKET_ZONE)
-            if not (time(9, 30) <= stamp.timetz().replace(tzinfo=None) < time(16, 0)):
+            # Yahoo stamps its US tape at the exchange. Test regular hours
+            # THERE, then persist the common market-local representation.
+            exchange_stamp = stamp.replace(tzinfo=EXCHANGE_ZONE) if stamp.tzinfo is None else stamp.astimezone(EXCHANGE_ZONE)
+            if not (time(9, 30) <= exchange_stamp.timetz().replace(tzinfo=None) < time(16, 0)):
                 continue
+            stamp = exchange_stamp.astimezone(MARKET_ZONE)
             answer.append({"dt": stamp, "open": float(row["open"]), "high": float(row["high"]),
                            "low": float(row["low"]), "close": float(row["close"]),
                            "volume": int(row.get("volume", 0) or 0)})
@@ -176,6 +180,7 @@ def write_session_bars(session: str, bars: Mapping[str, Iterable[Mapping[str, An
     import pyarrow.parquet as pq
 
     rows = []
+    seen: set[tuple[str, datetime]] = set()
     for symbol, values in bars.items():
         for value in values:
             stamp = value.get("dt")
@@ -184,6 +189,10 @@ def write_session_bars(session: str, bars: Mapping[str, Iterable[Mapping[str, An
             if not isinstance(stamp, datetime):
                 continue
             stamp = stamp.replace(tzinfo=MARKET_ZONE) if stamp.tzinfo is None else stamp.astimezone(MARKET_ZONE)
+            key = (str(symbol).upper(), stamp)
+            if key in seen:
+                continue
+            seen.add(key)
             rows.append({"symbol": str(symbol).upper(), "dt": stamp, "open": float(value["open"]),
                          "high": float(value["high"]), "low": float(value["low"]), "close": float(value["close"]),
                          "volume": int(value.get("volume", 0) or 0)})

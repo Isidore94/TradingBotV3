@@ -26,6 +26,7 @@ if str(SCRIPTS) not in sys.path:
 SESSION = "2026-09-10"
 OPEN_SESSION = "2026-09-18"
 PACIFIC = ZoneInfo("America/Los_Angeles")
+EASTERN = ZoneInfo("America/New_York")
 
 
 def _bars_module():
@@ -109,6 +110,22 @@ def test_injected_downloader_means_pytest_never_calls_real_yfinance(monkeypatch)
     assert real_calls == []
 
 
+def test_exchange_open_bar_survives_and_is_stored_market_local():
+    bars = _bars_module()
+    eastern_open = {
+        **_bar(9, 30),
+        "dt": datetime(2026, 9, 10, 9, 30, tzinfo=EASTERN),
+    }
+
+    answer = bars.fetch_session_bars(
+        ["SPY"], SESSION, downloader=lambda *_a, **_k: {"SPY": [eastern_open]}
+    )
+
+    stamp = answer["SPY"][0]["dt"]
+    assert stamp == datetime(2026, 9, 10, 6, 30, tzinfo=PACIFIC)
+    assert stamp.tzinfo == PACIFIC
+
+
 def test_parquet_round_trip_preserves_each_bar_and_attached_market_zone(monkeypatch, tmp_path):
     bars = _bars_module()
     monkeypatch.setattr(bars, "DAY_REVIEW_DIR", tmp_path)
@@ -138,6 +155,17 @@ def test_write_refuses_an_open_session_before_any_file_is_written(monkeypatch, t
         bars.write_session_bars(OPEN_SESSION, {"SPY": [_bar(9, 30)]})
 
     assert not list(tmp_path.rglob("*.parquet"))
+
+
+def test_write_deduplicates_the_symbol_timestamp_grain(monkeypatch, tmp_path):
+    bars = _bars_module()
+    monkeypatch.setattr(bars, "DAY_REVIEW_DIR", tmp_path)
+    monkeypatch.setattr(bars, "session_is_closed", lambda *_a, **_k: True)
+    duplicate = _bar(9, 30)
+
+    bars.write_session_bars(SESSION, {"SPY": [duplicate, dict(duplicate)]})
+
+    assert bars.read_session_bars(SESSION) == {"SPY": [duplicate]}
 
 
 def test_closed_day_read_uses_spy_from_the_session_file_not_live_cache(monkeypatch):
