@@ -153,7 +153,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | PLANNED (2026-09-17) |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 PACKETED 2026-09-17 (`.claude/packets/TJ-1.md`, branch `claude/tj1-day-review`); TJ-2 … TJ-8 PLANNED |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -288,8 +288,9 @@ What exists (verified 2026-09-17):
   ("Auto mode desk entries were recorded on 2026-09-16").
 - `scripts/market_journal.py:56` `MACHINE_ORIGINS`, `:286` `is_machine_entry` — the flag
   exists; NO reader filters on it (grep on 2026-09-17: `market_story.py`,
-  `market_story_rollups.py`, `market_thesis.py`, `market_journal_service.py`,
-  `trade_mentor_context.py`, `ai_jobs/market_story_narration.py` all read machine rows).
+  `market_story_rollups.py`, `market_thesis.py`, `market_journal_service.py` all read
+  machine rows; the Mentor's previous-read, `MainWindow._previous_mentor_read`, filters to
+  `origin == "trade_mentor"` itself and needs nothing).
 - `scripts/daily_recap_reader.py:678-724` `_read_intraday_outcomes` streams the WHOLE
   `intraday_bounce_outcomes.csv` — **476 MB on the live desk** — on every open;
   `read_session` (`:1634`) opens nine files. `ui/panels/market_journal_panel.py:1120-1145`
@@ -310,8 +311,8 @@ Changes:
    method stays so the caller does not change.
 2. `market_journal.is_machine_entry` becomes the ONE filter, applied in
    `MarketJournalService.entries_about`, `market_story._entry_row` / `build_daily_story`,
-   `market_story_rollups._stories_from_journal`, `MarketJournalService.theses_for`,
-   `trade_mentor_context`, and every pack TJ-4 builds. A test walks each reader with a
+   `market_story_rollups._stories_from_journal`, `MarketJournalService.theses_for`, and
+   every pack TJ-4 builds. A test walks each reader with a
    fixture ledger holding one machine row and asserts absence.
 3. New `scripts/ui/panels/day_review_panel.py` + `scripts/ui/services/day_review_service.py`
    with the six sections of 12.2. In TJ-1 the sections hold: (1) the deterministic
