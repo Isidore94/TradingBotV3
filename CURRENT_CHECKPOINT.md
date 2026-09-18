@@ -25,7 +25,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | Unmerged / open | TJ-1 awaits review and integration; live gate **#145** is owed on it. Live gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. |
 | Next action | **Reviewer reproduces TJ-1 on `claude/tj1-day-review`, then the lead integrates and the trader restarts once for gate #145.** Gate #144 is still observed on the next scan and overnight run; restart only on trader direction. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
-| Last verified baseline | **Integrated overnight repair: 8,528 passed, 6 skipped, 72 subtests; ruff, smoke 7/7 and source selftest 87/87 are clean.** The nightly writer lock was free before the run. |
+| Last verified baseline | **TJ-1 on `claude/tj1-day-review`: 8,652 passed, 14 skipped, 72 subtests, pytest exit 0; ruff clean, smoke 7/7, source selftest 90/90** (87 before - three new lazily-imported modules joined `LAZY_ENGINE_MODULES`). The nightly writer lock was free before the run. `main`'s own baseline is the integrated overnight repair: 8,528 passed, 6 skipped, selftest 87/87. |
 | Frozen exe | **Rebuilt and verified 2026-09-16: source 87/87 and frozen 87/87.** The frozen result carries the required `(frozen)` stamp. The production desk still runs from SOURCE and was not restarted. |
 | Desk | **The shared checkout is on `main` with the overnight repair merged.** It stayed stopped; no agent restarted it or wrote a live store. |
 
@@ -33,7 +33,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 145 | **One Day Review page (TJ-1)** - after restart the left nav shows **Day Review** where Market Journal and Daily Recap were, and neither old page is anywhere; opening Day Review on a completed session paints in under a second once its index exists (the bench measured the old page's session read at 16,502 ms) and the first entry click in under 300 ms; no `[desk]` row is visible on the page, in the story or in the overnight narration, and flipping the Auto mode adds a line to the Auto Pilot log and no journal row; "Paste daily forecast…" stores a brief for the session the trader chose and shows it under External forecast, and a second paste for that session replaces it on the page; a note typed on the page and one typed on the desk tab both appear. NOT a failure: a past session saying "chart after the close" (TJ-2 brings the stored bars), three labelled walk-away placeholders, the empty ideas card, or the first open of a session being slow once - the index is written as it goes. | trader, next restart on the branch |
+| 145 | **One Day Review page (TJ-1)** - after restart the left nav shows **Day Review** where Market Journal and Daily Recap were, and neither old page is anywhere; opening Day Review on a completed session is quick once its index exists and the first entry click is under 300 ms (the bench measured the old page's session read at 16,502 ms settle, an indexed Day Review read at 2,217 ms and an entry click at 121 ms - so **the packet's "under one second" is not met and is the one number the trader is asked to judge on the real desk**; 70 ms of that 2.2 s is the index and the rest is the eight stores `read_session` still reads live); no `[desk]` row is visible on the page, in the story or in the overnight narration, and flipping the Auto mode adds a line to the Auto Pilot log and no journal row; "Paste daily forecast…" stores a brief for the session the trader chose and shows it under External forecast, and a second paste for that session replaces it on the page; a note typed on the page and one typed on the desk tab both appear. NOT a failure: a past session saying "chart after the close" (TJ-2 brings the stored bars), three labelled walk-away placeholders, the empty ideas card, or the first open of a session being slow once - the index is written as it goes. | trader, next restart on the branch |
 | 144 | **Overnight AI repair** - after integration, the next D1 scan imports and records theta picks without a circular-import failure, and a local enrichment run stays advisory, validates the closed five-field contract including its 2,000-character summary ceiling, and leaves prior artifacts intact on failure. If the backend explicitly returns an HTTP 400 grammar parse/initialization error, it makes exactly one JSON-object fallback request; other HTTP failures do not retry. | lead/trader, next scan + overnight run after integration |
 | 143 | **Next-test local-model proposal (Phase 0.32 Packet 3)** - after integration, use a copied published entry-quality report with a configured existing local model. Verify one validated proposal references its exact report id/hash and cells, writes immutable JSON history plus `briefs/next_research_test/next_research_test.md`, and the Review card/copy brief agree. Record actual latency, reported tokens and peak memory when available; a disabled/offline model must leave deterministic facts and the prior memo intact. | lead/trader, after Packet 3 integration |
 | 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded P8 `entry_quality_window` month with known completed-bar cells, run the warehouse/report/setup-research reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and current report id/hash agree in the compact input, current JSON/memo, Review card and Tracker route while the immutable proposal source stays named; unchanged evidence performs no inference, proposal/trial/history or live-data write, only the paired current-view refresh. | lead/trader, after Packet 3 integration |
@@ -204,12 +204,20 @@ Still owed and unchanged since they were written; nothing here was closed by mov
   three repeats; never the live store). Before: `market_journal.construct` 362 ms sync p95 /
   121 ms settle, first show 570 ms settle p95, an entry click ~121 ms settle;
   `daily_recap.construct` 21 ms, **`daily_recap.reload` 16,502 ms settle p50**. After:
-  `day_review.construct` and `day_review.reload` are in the builder's handoff, measured the
-  same way on the same staged home.
-- **Verification.** Full suite, ruff, smoke and selftest are in the handoff; the source
-  selftest count moves 87 -> 90 because three lazily-imported modules
-  (`ui.services.day_review_service`, `day_review_index`, `forecast_brief`) were added to
-  `selftest.LAZY_ENGINE_MODULES`. No live store was written and the desk was not restarted.
+  `day_review.construct` 20.7 ms sync p50 / 121 ms settle, first open (which builds and
+  writes the index) 11,140 ms settle p95, **an indexed session read 2,217 ms settle p50**,
+  an entry click 121 ms settle / 0.6 ms sync. A scratch probe on the same staged home
+  attributes that 2.2 s as: `read_index` 70 ms, `read_session` over the index 1,715 ms (the
+  eight stores it still reads live - a 10.5 MB review-events JSONL and the 13.6 MB tier CSV
+  that `read_session` opens only to report coverage), `daily_story` 446 ms. **Gate #145's
+  "under one second" is therefore not met yet** on the biggest session; widening the index
+  past the two big stores is TJ-2's question, not this packet's.
+- **Verification.** 8,652 passed, 14 skipped, 72 subtests, pytest exit 0; ruff clean, smoke
+  7/7, source selftest 90/90 (87 before: `ui.services.day_review_service`,
+  `day_review_index` and `forecast_brief` joined `selftest.LAZY_ENGINE_MODULES`, and the two
+  top-level ones are named in `packaging/tradingbotv3.spec`'s `hiddenimports` because
+  package collection cannot see a top-level module). The nightly AI lock was free before the
+  run. No live store was written and the desk was not restarted.
 - **What remains.** Reviewer reproduction, then integration; live gate **#145**; TJ-8 still
   deletes `market_journal_panel.py` and `daily_recap_panel.py`.
 - **Long form.** DESK_INTERNALS "Day Review - one page, no machine rows, a per-session
