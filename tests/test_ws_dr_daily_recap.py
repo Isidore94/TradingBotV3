@@ -86,6 +86,7 @@ REQUIRED_SOURCES = (
     "staged_picks",
     "environment_labels",
     "working_lately",
+    "claimed_picks",
 )
 
 #: A sort key that would be a RANKING BY RESULT rather than a declared measure.
@@ -546,6 +547,7 @@ def _write_stores(root: Path) -> dict[str, str]:
         "staged_picks": root / "auto_populate_pending.json",
         "environment_labels": root / "d1_environment.jsonl",
         "working_lately": root / "snapshot_latest.json",
+        "claimed_picks": root / "claimed_picks.jsonl",
     }
 
     paths["intraday_outcomes"].write_text(_intraday_csv(), encoding="utf-8")
@@ -560,6 +562,7 @@ def _write_stores(root: Path) -> dict[str, str]:
     _write_jsonl(paths["swing_favorites"], SWING_FAVORITE_ROWS)
     _write_jsonl(paths["review_events"], REVIEW_EVENT_ROWS)
     _write_jsonl(paths["environment_labels"], ENVIRONMENT_ROWS)
+    _write_jsonl(paths["claimed_picks"], ())
 
     paths["staged_picks"].write_text(json.dumps(STAGED_PICKS, indent=2), encoding="utf-8")
     paths["working_lately"].write_text(
@@ -682,6 +685,9 @@ def test_a_session_read_survives_a_restart_unchanged(stores, tmp_path):
     SEPARATE INTERPRETER must produce the identical session.
     """
     first = _read(stores)
+    claim_path = str(Path(stores["claimed_picks"]))
+    assert first.coverage["claimed_picks"].path == claim_path
+    assert first.coverage["claimed_picks"].unavailable_reason == ""
 
     script = tmp_path / "restart_read.py"
     script.write_text(_RESTART_SCRIPT, encoding="utf-8")

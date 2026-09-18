@@ -26,7 +26,8 @@ What this file pins:
   that is smaller than it;
 * all-or-nothing revival, which is how an index written by the previous build
   (two stores, same schema name) is treated as ABSENT rather than half-used;
-* that the six small stores are still opened on every read;
+* that the small stores, including TJ-2B claim history, are still opened on
+  every read;
 * the two lookups that were rewritten from a walk into a dict when the profile
   showed them to be the whole remaining cost - each checked against a
   brute-force reference walk, on rows with the blank sides and repeated names
@@ -198,9 +199,9 @@ def _human_focus_text() -> str:
 
 @pytest.fixture()
 def sources(tmp_path):
-    """A `RecapSources` whose twelve paths all live under `tmp_path`.
+    """A `RecapSources` whose thirteen paths all live under `tmp_path`.
 
-    The four indexed stores carry rows; the eight others are absent, which is a
+    The four indexed stores carry rows; the nine others are absent, which is a
     NAMED coverage reason and is what an index must reproduce exactly.
     """
     import daily_recap_reader
@@ -233,6 +234,7 @@ def sources(tmp_path):
         staged_picks=home / "auto_populate_pending.json",
         environment_labels=home / "d1_environment.jsonl",
         working_lately=home / "snapshot_latest.json",
+        claimed_picks=home / "claimed_picks.jsonl",
     )
 
 
@@ -363,7 +365,13 @@ def test_every_small_store_is_still_read_live(sources, monkeypatch):
 
     monkeypatch.setattr(daily_recap_reader, "_read_jsonl", _spy)
     _indexed(sources)
-    assert set(seen) == {"annotations", "pick_feedback", "swing_favorites", "review_events"}
+    assert set(seen) == {
+        "annotations",
+        "pick_feedback",
+        "swing_favorites",
+        "review_events",
+        "claimed_picks",
+    }
 
 
 # ---------------------------------------------------------------------------
