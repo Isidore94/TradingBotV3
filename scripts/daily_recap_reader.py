@@ -1777,6 +1777,10 @@ def read_session(
     feedback = _read_jsonl("pick_feedback", sources.pick_feedback, "ts")
     favorites = _read_jsonl("swing_favorites", sources.swing_favorites, "event_at")
     events = _read_jsonl("review_events", sources.review_events, "ts")
+    # TJ-2B reads the same durable claim history. It is included here even
+    # though Recap's older views do not project it, so source coverage remains
+    # an honest inventory of every declared RecapSources path.
+    claims = _read_jsonl("claimed_picks", sources.claimed_picks, "session_date")
 
     labels, environment_coverage = _environment_labels(sources.environment_labels)
     staged, staged_coverage = _staged_picks(sources.staged_picks, now)
@@ -1792,6 +1796,7 @@ def read_session(
         favorites,
         human_focus,
         events,
+        claims,
         preference_store,
     ):
         coverage[store.coverage.name] = store.coverage
