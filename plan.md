@@ -153,7 +153,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 BUILT 2026-09-17 (branch `claude/tj1-day-review`, live gate #145 owed); TJ-2 … TJ-8 PLANNED |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-2 … TJ-8 PLANNED |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
