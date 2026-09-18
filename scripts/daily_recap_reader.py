@@ -1589,6 +1589,20 @@ def _staged_picks(path: Path, now: datetime) -> tuple[dict[str, tuple[str, ...]]
     return staged, _coverage("staged_picks", target, rows, [_parse_moment(payload.get("date"))])
 
 
+def staged_picks(
+    *, path: Path | None = None, now: datetime | None = None
+) -> dict[str, tuple[str, ...]]:
+    """AWAY's staged picks for today, normalised. Worker-thread call.
+
+    Public because the table that shows them is on the Auto Pilot page since
+    TJ-1 item 6(b), and there is ONE normalisation of "which names are staged" -
+    this one. It reads; it never adopts.
+    """
+    target = Path(path) if path is not None else Path(RecapSources().staged_picks)
+    staged, _coverage_row = _staged_picks(target, now or datetime.now())
+    return staged
+
+
 def _environment_labels(path: Path) -> tuple[dict[str, str], SourceCoverage]:
     """WS-ENV's session labels. A session nobody labelled reads `unknown`."""
     target = Path(path)
