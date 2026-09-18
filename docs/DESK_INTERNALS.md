@@ -6141,6 +6141,65 @@ sync. The POST-CLOSE tick: **slot 0.2 ms, index lands 11.0 s later on its worker
 22.8 s of frozen desk when the slot did the work itself. One index is 22.7 MB; reading it
 costs 92 ms.
 
+**Layout: two columns, and tables that fill the width** (TJ-1L, 2026-09-18). The trader, the
+first time he read the page on a 3800 px screen: *"there's a lot of empty space horizontally
+that's not being efficiently used"* - and, offered three shapes, he chose two columns. The
+page is still ONE `QScrollArea` and still builds ONE chart on first need; what changed is
+where things sit. Row 1 is the session picker, full width. Row 2 is a horizontal `QSplitter`
+named `DayReviewColumns`, default 55/45, restored at construction and saved per machine on
+the drag through `ui.panels.desk_layout`'s three calls (`qt_day_review_columns_v1`) - the
+same seam the desk's D1 column split uses, because a split the trader drags and finds moved
+next morning is worse than no split. LEFT: *What happened* with *Open theses* directly UNDER
+it (not beside it - the theses are a short list ABOUT the story) and then *SPY, this session*
+with a 320 px floor, taking whatever slack the column has, because the chart is the one thing
+on this page that turns width into information. RIGHT: the entries list over the reader in
+their own 60/40 vertical splitter (`qt_day_review_said_split_v1`, a 300 px floor so the 40%
+half clears the reader's own 90 px minimum and the preset IS the preset), then *New entry*
+spanning the column, its Timeframe / Save / Paste row, the "filed under the session" note and
+*External forecast* collapsed to three lines. **Every box in that column spans the column**:
+the G3 100-character cap that used to hold the reader and the forecast at a readable measure
+is what put the empty space back once they sat in a 45% column - measured at 3800x2000 both
+stopped at about 420 px of an 890 px column while *New entry* under them ran the full width -
+so `refresh_reader_measure` keeps its name and its `MainWindow._apply_scaled_metrics` caller
+and now CLEARS the cap and sets `Expanding` instead of setting one. The column the trader
+drags is the measure. (The Market Journal's own reader keeps the G3 cap; that page is a
+different shape and `tests/test_g3_market_journal_reader.py` still pins it.) Row 3 is
+*Walk-away* as a 2 x 2 grid of equal
+COLUMNS with rows that fit their content: the one real table top-left and TJ-2's three
+populations as small titled frames, top-aligned, one title line and one note line each -
+three empty tables padded to a table's height would read as three tables that failed to load.
+Row 4 is *What you traded* beside *Ideas from the desk's AI*. There is no trailing stretch on
+the page: the slack belongs to the columns, and inside them to the chart.
+
+**Why the tables stopped clipping their own headers.** "Against me first %" printed as "ainst
+me first" and "After the decision %" as "r the decisio": the shared width rule
+(`ui.widgets.data_table.apply_width_rule`) clamps every measured column to `MAX_COLUMN_WIDTH`
+(260 px), and under the desk theme that header hints 273 px - a header is CENTRED, so a clip
+shows at both ends and there is no ellipsis to warn anyone. This page's two tables now use
+`_fill_the_width` instead: every column but the last is `ResizeToContents` (which is never
+narrower than the header's own hint) and the last section stretches, so the table fills its
+cell on a 3800 px screen instead of ending in the middle of it. It is set ONCE at
+construction - `ResizeToContents` re-measures itself when the rows change - so a repaint
+costs the rows and nothing else, and the measurement is bounded by the same
+`MEASURE_PRECISION_ROWS` cap the shared rule uses. The shared rule is untouched and still
+serves every other table on the desk; this page opts out because its tables hold one day.
+
+**What the shape cost** (`desk_bench.py`, staged home, 1900x1000, seven repeats): page
+construct settle p50 **33.6 -> 53.3 ms** and the whole panel 23.6 -> 38.4 ms in a direct
+profile, all of it in `_build_layout` (two splitters and about fifteen more widgets, once per
+desk start); first show settle p50 **900 -> 864 ms**, `day_review.reload` **876 -> 869 ms**,
+entry click **122 ms** either way. The two numbers the trader feels - opening the page and
+clicking an entry - did not move.
+
+**Tests:** `tests/test_tj1l_day_review_layout.py` (21, of which 17 failed and 1 errored on
+the pre-change panel) pins the shape: one horizontal splitter with exactly two widgets and
+what belongs in each, the theses above the chart, the 60/40 reader split, the four grid cells
+in their stated positions, a placeholder that is a frame with a title and a note, the two
+halves of row 4, `stretchLastSection` on every table, the split ratio round-tripping through
+the saved setting, and - re-asserted here because a layout rewrite is exactly the change that
+could quietly build two - ONE `CandleChart`, built on first need and reused. The three that
+pass either way are named as guards in the file.
+
 **Tests:** the tester's `tests/test_tj1_machine_rows.py`,
 `tests/test_tj1_page_specs.py`, `tests/test_tj1_day_review_page.py`,
 `tests/test_tj1_day_review_index.py`, `tests/test_tj1_forecast_brief.py` and

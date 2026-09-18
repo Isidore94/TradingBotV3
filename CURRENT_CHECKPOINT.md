@@ -20,9 +20,9 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | | |
 |---|---|
 | Agent settings | **2026-09-15, trader-directed: removed the project Astra model pin.** User defaults and explicit session choice select the lead; helper settings remain. TOML parsed and instruction files matched. |
-| Latest work | **2026-09-18 ~04:00 PT: TJ-1 MERGED into `main` (`claude/tj1-day-review`, reviewer GO after four rounds) - one Day Review page replaces Market Journal and Daily Recap, the desk stops writing auto-mode journal rows, a per-session index replaces the 476 MB open, "Paste daily forecast...".** Earlier: `plan.md` rewritten for Phase 0.33 (decision 0021) and the 2026-09-17 display work committed. |
-| Working branch | **`main` carries TJ-1 (merge `e00b734a` + the builder's baseline note), Phase 0.32, the overnight repair and the 2026-09-17 display work.** Pushed; the desk was NOT restarted. |
-| Unmerged / open | Nothing unmerged. Live gate **#145** (Day Review) is owed at the next restart; gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. Two known suite flakes, unowned: `test_ws_10a_scan_freshness` (manifest re-read while painting) and `test_g7_speed_pass` (Research first paint loads `price alerts`), each green standalone. |
+| Latest work | **2026-09-18: TJ-1L built on `claude/tj1l-day-review-layout` (not merged, not reviewed) - Day Review reads in TWO COLUMNS at the trader's word, the walk-away is a 2 x 2 grid, and every table fills its cell instead of clipping "Against me first %".** Presentation only; `DayReviewService`, `day_review_index` and every `tests/test_tj1_*.py` untouched. Earlier: **2026-09-18 ~04:00 PT: TJ-1 MERGED into `main` (`claude/tj1-day-review`, reviewer GO after four rounds) - one Day Review page replaces Market Journal and Daily Recap, the desk stops writing auto-mode journal rows, a per-session index replaces the 476 MB open, "Paste daily forecast...".** Earlier: `plan.md` rewritten for Phase 0.33 (decision 0021) and the 2026-09-17 display work committed. |
+| Working branch | **`claude/tj1l-day-review-layout` (TJ-1L, off `main` at `73d308a0`), pushed, awaiting the lead's diff check and a reviewer.** `main` carries TJ-1 (merge `e00b734a` + the builder's baseline note), Phase 0.32, the overnight repair and the 2026-09-17 display work. The desk was NOT restarted. |
+| Unmerged / open | **`claude/tj1l-day-review-layout` is unmerged** (TJ-1L, presentation only; its live check folds into gate #145). Live gate **#145** (Day Review) is owed at the next restart; gate #144, copied-data gates #140-#142, local-model gate #143 and all older gates remain owed. Two known suite flakes, unowned: `test_ws_10a_scan_freshness` (manifest re-read while painting) and `test_g7_speed_pass` (Research first paint loads `price alerts`), each green standalone. |
 | Next action | **Trader: restart the desk once, then judge gate #145 (Day Review). Lead: write `.claude/packets/TJ-2.md` (walk-away + session bars) from `plan.md` §12.4.** Gate #144 is still observed on the next scan and overnight run. |
 | Trader actions owed | After integration, restart once, leave the desk/IBKR running through one session and overnight, then use one raw Mentor answer and one trendline retest watch. |
 | Last verified baseline | **Merged `main` (post-merge run 2026-09-18 ~03:30 PT): 8,777 passed, 14 skipped, 72 subtests, 2 failed - `test_ws_10c_h1_retester` (its repo scan hit the agent worktrees under `.claude/worktrees/`, fixed in the same commit) and the `test_g7_speed_pass` flake (green 3/3 standalone).** On the branch after the nightly mutex freed: 8,779 passed, 0 failed, exit 0. ruff clean, smoke 7/7, source selftest 90/90. |
@@ -33,7 +33,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 145 | **One Day Review page (TJ-1)** - after restart the left nav shows **Day Review** where Market Journal and Daily Recap were, and neither old page is anywhere; opening Day Review on a completed session paints in under a second once its index exists and the first entry click is under 300 ms (bench on a staged home: the retired page's session read 13,500-16,500 ms across runs settle p50, Day Review's WARM read **820 ms p50 / 834 ms p95**, entry click 121 ms; **warm is the state after the close and outside trading hours (500-820 ms), which is when the page is read** - DURING a session an appended M5 row for one of the ~1,198 names that index's own observations reference (effectively the whole scanned universe) rebuilds it, 11,380 ms on the read worker with the Qt thread at 0.17 ms and the page still showing what it had, while an append for any other name is decided in 28 ms and keeps the open at 502 ms with the 22 MB body untouched; a COLD open of a session with no index yet paints after **12.5 s** while it builds one, and the post-close tick that normally builds it returns in **0.2 ms** and lands the index 11 s later on a worker - the desk must never freeze while it happens); no `[desk]` row is visible on the page, in the story or in the overnight narration, and flipping the Auto mode adds a line to the Auto Pilot log and no journal row; "Paste daily forecast…" stores a brief for the session the trader chose and shows it under External forecast, and a second paste for that session replaces it on the page; a note typed on the page and one typed on the desk tab both appear. NOT a failure: a past session saying "chart after the close" (TJ-2 brings the stored bars), three labelled walk-away placeholders, the empty ideas card, or the first open of a session being slow once - the index is written as it goes. | trader, next restart on the branch |
+| 145 | **One Day Review page (TJ-1)** - after restart the left nav shows **Day Review** where Market Journal and Daily Recap were, and neither old page is anywhere; opening Day Review on a completed session paints in under a second once its index exists and the first entry click is under 300 ms (bench on a staged home: the retired page's session read 13,500-16,500 ms across runs settle p50, Day Review's WARM read **820 ms p50 / 834 ms p95**, entry click 121 ms; **warm is the state after the close and outside trading hours (500-820 ms), which is when the page is read** - DURING a session an appended M5 row for one of the ~1,198 names that index's own observations reference (effectively the whole scanned universe) rebuilds it, 11,380 ms on the read worker with the Qt thread at 0.17 ms and the page still showing what it had, while an append for any other name is decided in 28 ms and keeps the open at 502 ms with the 22 MB body untouched; a COLD open of a session with no index yet paints after **12.5 s** while it builds one, and the post-close tick that normally builds it returns in **0.2 ms** and lands the index 11 s later on a worker - the desk must never freeze while it happens); no `[desk]` row is visible on the page, in the story or in the overnight narration, and flipping the Auto mode adds a line to the Auto Pilot log and no journal row; "Paste daily forecast…" stores a brief for the session the trader chose and shows it under External forecast, and a second paste for that session replaces it on the page; a note typed on the page and one typed on the desk tab both appear. NOT a failure: a past session saying "chart after the close" (TJ-2 brings the stored bars), three labelled walk-away placeholders, the empty ideas card, or the first open of a session being slow once - the index is written as it goes. **TJ-1L adds one clause: the page reads in two columns** - What happened / Open theses / the SPY pane on the left, the entries list over the reader with New entry and the forecast on the right, Walk-away as a 2 x 2 grid and What you traded beside the ideas card - **and every table fills its cell with its full headers ("Against me first %", not "ainst me first")**; the column split is the trader's to drag and it is still where he left it after a restart. | trader, next restart on the branch |
 | 144 | **Overnight AI repair** - after integration, the next D1 scan imports and records theta picks without a circular-import failure, and a local enrichment run stays advisory, validates the closed five-field contract including its 2,000-character summary ceiling, and leaves prior artifacts intact on failure. If the backend explicitly returns an HTTP 400 grammar parse/initialization error, it makes exactly one JSON-object fallback request; other HTTP failures do not retry. | lead/trader, next scan + overnight run after integration |
 | 143 | **Next-test local-model proposal (Phase 0.32 Packet 3)** - after integration, use a copied published entry-quality report with a configured existing local model. Verify one validated proposal references its exact report id/hash and cells, writes immutable JSON history plus `briefs/next_research_test/next_research_test.md`, and the Review card/copy brief agree. Record actual latency, reported tokens and peak memory when available; a disabled/offline model must leave deterministic facts and the prior memo intact. | lead/trader, after Packet 3 integration |
 | 142 | **Next-test deterministic progress (Phase 0.32 Packet 3)** - on a copied bounded P8 `entry_quality_window` month with known completed-bar cells, run the warehouse/report/setup-research reader twice without a model. Verify `narrated K of N`, coverage/no-trigger/missing counts and current report id/hash agree in the compact input, current JSON/memo, Review card and Tracker route while the immutable proposal source stays named; unchanged evidence performs no inference, proposal/trial/history or live-data write, only the paired current-view refresh. | lead/trader, after Packet 3 integration |
@@ -183,6 +183,49 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-18 — TJ-1L BUILT: Day Review in two columns (branch `claude/tj1l-day-review-layout`)
+
+- **What happened.** The trader read the new page on a 3800 px screen and said *"there's a
+  lot of empty space horizontally that's not being efficiently used"*; offered three shapes,
+  he chose two columns. Presentation only, inside the one `QScrollArea` the page already
+  was. Row 2 is a horizontal `QSplitter` named `DayReviewColumns` at 55/45, restored at
+  construction and saved per machine on the drag through `ui.panels.desk_layout`
+  (`qt_day_review_columns_v1`) - LEFT *What happened*, *Open theses* directly under it, then
+  the SPY pane with a 320 px floor taking the column's slack; RIGHT the entries list over the
+  reader in their own 60/40 splitter, then *New entry* spanning the column, its verb row and
+  the external forecast collapsed to three lines. Row 3 is *Walk-away* as a 2 x 2 grid of
+  equal columns (the real table top-left, TJ-2's three populations as small titled frames,
+  top-aligned). Row 4 is *What you traded* beside *Ideas from the desk's AI*.
+- **The right column's boxes span it** (lead's tweak on the same branch, after the first
+  3800x2000 render): the reader and *External forecast* stopped at about 420 px of an 890 px
+  column because of the G3 100-character cap. `refresh_reader_measure` keeps its name and its
+  `_apply_scaled_metrics` caller and now clears the cap instead of setting one; the Market
+  Journal's own reader is untouched and `test_g3_market_journal_reader.py` still pins it.
+- **The headers.** "Against me first %" printed as "ainst me first" because the shared width
+  rule clamps a column at 260 px and that header hints 273 px under the desk theme; a header
+  is centred, so it clipped at both ends with no ellipsis. Both tables on this page now
+  measure their columns (`ResizeToContents`, set once at construction) and stretch the last
+  section, so they fill their cell and print their headers whole. The shared rule is
+  untouched and still serves every other table on the desk.
+- **What did NOT change.** `day_review_service.py`, `day_review_index.py`, every reader,
+  worker, schedule and signal, and every `tests/test_tj1_*.py` (byte-identical, green). One
+  `CandleChart` built on first need and reused, re-asserted in the new test file.
+- **Proof.** `tests/test_tj1l_day_review_layout.py`, 21 tests, committed RED first
+  (`04cdca56`): 17 failed, 3 passed, 1 error with `day_review_panel.py` reverted to `main`'s
+  copy; 21 passed with it restored. The three that pass either way are named as guards.
+- **Bench** (`desk_bench.py`, staged copy of the home folder, 1900x1000, seven repeats):
+  construct settle p50 **33.6 -> 53.3 ms** (two splitters and ~15 more widgets, once per desk
+  start; a direct profile puts all of it in `_build_layout`, 23.6 -> 38.4 ms for the whole
+  panel), first show settle p50 **900 -> 864 ms**, `day_review.reload` **876 -> 869 ms**,
+  entry click **122 ms** unchanged. The two numbers the trader feels did not move; construct
+  is the one that did, and it is named here rather than rounded away.
+- **Renders** (offscreen, staged home): `day_review_after_1900x1000.png` and
+  `day_review_after_3800x2000.png`, with `..._before_...` beside them for comparison, in the
+  session scratchpad; the before pair shows the empty right-hand half and the clipped
+  headers the trader was looking at.
+- **What remains.** The lead's diff check, a reviewer, and the merge; the live check folds
+  into gate #145.
 
 ### 2026-09-17 (evening) — TJ-1 BUILT: one Day Review page (branch `claude/tj1-day-review`)
 

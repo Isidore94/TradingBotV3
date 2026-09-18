@@ -42,13 +42,17 @@ from PySide6.QtCore import QEvent, QThread, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -58,7 +62,8 @@ from PySide6.QtWidgets import (
 
 import daily_recap_schedule
 from ui import theme
-from ui.widgets.data_table import apply_width_rule_to_table_widget
+from ui.panels import desk_layout
+from ui.widgets.data_table import MEASURE_PRECISION_ROWS
 
 #: How often the page asks whether its automatic read is due (the Daily Recap's
 #: cadence, kept: the answer is a function of the clock, so a late tick reads the
@@ -108,14 +113,43 @@ WALKAWAY_COLUMNS: tuple[tuple[str, str | None], ...] = (
     ("Environment", None),
 )
 
-#: The three tables TJ-2 adds, named where they will appear. A labelled line
-#: rather than an empty widget: a table with no rows and no explanation reads as
-#: a table that failed.
-WALKAWAY_PLACEHOLDERS: tuple[str, ...] = (
-    "Liked but never traded - TJ-2.",
-    "Traded, then left early - TJ-2.",
-    "Claimed D1 picks - TJ-2.",
+#: The three tables TJ-2 adds, as (title, note) - each one a small titled frame
+#: holding its place in the 2 x 2 grid. A labelled cell rather than an empty
+#: widget: a table with no rows and no explanation reads as a table that failed,
+#: and a placeholder that is one title line and one note line is not a tall box.
+WALKAWAY_PLACEHOLDERS: tuple[tuple[str, str], ...] = (
+    ("Liked but never traded", "TJ-2 measures it."),
+    ("Traded, then left early", "TJ-2 measures it."),
+    ("Claimed D1 picks", "TJ-2 measures it."),
 )
+
+#: Where each placeholder sits, in grid order. The one real table is (0, 0):
+#: most-ran first (plan.md §12.2), reading left to right then down.
+WALKAWAY_PLACEHOLDER_CELLS: tuple[tuple[int, int], ...] = ((0, 1), (1, 0), (1, 1))
+
+#: The two columns (trader, 2026-09-18: *"there's a lot of empty space
+#: horizontally that's not being efficiently used"*, and, offered three shapes,
+#: he chose two columns). LEFT is what happened and the chart, RIGHT is what he
+#: said: a chart uses every pixel of width it is given, and a column of running
+#: text does not.
+COLUMNS_OBJECT_NAME = "DayReviewColumns"
+COLUMN_WEIGHTS = (55, 45)
+#: Per-machine, like every other `qt_*` setting and every other desk splitter -
+#: a 3800 px desk and a MacBook do not want the same split.
+COLUMN_SPLIT_KEY = "qt_day_review_columns_v1"
+
+#: The right column's own vertical split: the entries list over the reader. A
+#: splitter rather than two fixed heights, so an empty day is not 600 px of
+#: nothing and a long thought can be given the room to be read.
+SAID_SPLIT_WEIGHTS = (60, 40)
+SAID_SPLIT_KEY = "qt_day_review_said_split_v1"
+
+#: The SPY pane's floor. A candle chart in a 120 px strip is a smear.
+SPY_MIN_HEIGHT_PX = 320
+
+#: The story's floor. It GROWS with its text above this (TJ-4 writes paragraphs);
+#: below it, an empty story reads as a broken section.
+STORY_MIN_HEIGHT_PX = 120
 
 #: The trade line's columns. Read-only: the Journal page is still where a trade
 #: is tagged and corrected (decision 0021 consequences).
@@ -126,8 +160,10 @@ TRADE_COLUMNS: tuple[str, ...] = (
 #: What a cell reads when nobody measured it. Never a 0.00.
 UNMEASURED = "—"
 
-#: How many lines of a pasted forecast the block shows before "Show all".
-FORECAST_COLLAPSED_LINES = 6
+#: How many lines of a pasted forecast the block shows before "Show all". Three
+#: in the column layout: someone else's commentary is the smallest thing on the
+#: page and it sits under the trader's own words, never above them.
+FORECAST_COLLAPSED_LINES = 3
 
 #: What the page says while its first read is in flight.
 LOADING_NOTE = "Reading the session…"
@@ -158,6 +194,31 @@ def _clock_text(created_at: Any) -> str:
     if len(raw) >= 16 and raw[10] in {"T", " "}:
         return raw[11:16]
     return UNMEASURED
+
+
+def _fill_the_width(table: QTableWidget) -> None:
+    """Make one table fill its cell, and stop clipping its own headers.
+
+    Two rules, set ONCE at construction rather than on every render:
+
+    * every column but the last measures its CONTENTS, which includes the
+      header's own text - the shared width rule's 260 px ceiling cut "Against
+      me first %" (which hints 273 px under the desk theme) at both ends, and a
+      centred header clipped that way carries no ellipsis to say so;
+    * the last section stretches, so a table on a 3800 px screen fills its cell
+      instead of ending in the middle of it.
+
+    `ResizeToContents` re-measures itself when the rows change, so this is not
+    re-applied per paint. The measurement is bounded by the same row cap the
+    shared rule uses (`MEASURE_PRECISION_ROWS`); these tables hold one day.
+    """
+    header = table.horizontalHeader()
+    for side in (header, table.verticalHeader()):
+        if side.resizeContentsPrecision() != MEASURE_PRECISION_ROWS:
+            side.setResizeContentsPrecision(MEASURE_PRECISION_ROWS)
+    for column in range(max(0, table.columnCount() - 1)):
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+    header.setStretchLastSection(True)
 
 
 def _is_machine_row(row: Mapping[str, Any]) -> bool:
@@ -319,6 +380,11 @@ class DayReviewPanel(QFrame):
         self.story_facts = QLabel("")
         self.story_facts.setWordWrap(True)
         self.story_facts.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # A floor, never a ceiling: TJ-4's story is paragraphs and a wrapped
+        # QLabel grows with them. The floor is what stops an empty story from
+        # reading as a section that failed.
+        self.story_facts.setMinimumHeight(theme.px(STORY_MIN_HEIGHT_PX))
+        self.story_facts.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         # Read-only: the drafting pane and "Save interpretation" are gone from
         # the trader's screen (plan.md §12.2). The sidecar still holds them.
         self.theses = QListWidget()
@@ -335,9 +401,41 @@ class DayReviewPanel(QFrame):
         self.rejected_that_worked_table.setMinimumHeight(theme.px(120))
         self.rejected_that_worked_table.itemDoubleClicked.connect(self._activate_walkaway)
         self.rejected_that_worked_table.itemActivated.connect(self._activate_walkaway)
+        _fill_the_width(self.rejected_that_worked_table)
         self.walkaway_note = QLabel(LOADING_NOTE)
         self.walkaway_note.setObjectName("SectionSubtitle")
         self.walkaway_note.setWordWrap(True)
+        #: The three TJ-2 populations, by grid position. Built here so the grid
+        #: is the same four cells whether or not anything has been read yet.
+        self.walkaway_cells: dict[tuple[int, int], QWidget] = {
+            cell: self._placeholder_cell(title, note)
+            for cell, (title, note) in zip(
+                WALKAWAY_PLACEHOLDER_CELLS, WALKAWAY_PLACEHOLDERS
+            )
+        }
+
+    @staticmethod
+    def _placeholder_cell(title: str, note: str) -> QFrame:
+        """One empty population: a titled frame, one note line, nothing taller.
+
+        `Panel` is the theme's existing bordered-card object name, so this costs
+        a property set and not a stylesheet parse.
+        """
+        frame = QFrame()
+        frame.setObjectName("Panel")
+        body = QVBoxLayout(frame)
+        body.setContentsMargins(10, 8, 10, 8)
+        body.setSpacing(2)
+        heading = QLabel(title)
+        heading.setObjectName("SectionTitle")
+        heading.setWordWrap(True)
+        body.addWidget(heading)
+        subtitle = QLabel(note)
+        subtitle.setObjectName("SectionSubtitle")
+        subtitle.setWordWrap(True)
+        body.addWidget(subtitle)
+        frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        return frame
 
     def _build_said(self) -> None:
         self.entries = QListWidget()
@@ -392,6 +490,7 @@ class DayReviewPanel(QFrame):
         self.trades_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.trades_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.trades_table.setMinimumHeight(theme.px(80))
+        _fill_the_width(self.trades_table)
         self.trades_note = QLabel(
             "Read-only. The Journal page is where a trade is tagged and corrected."
         )
@@ -405,6 +504,7 @@ class DayReviewPanel(QFrame):
         # G7.3's rule: a `CandleChart` is a pyqtgraph plot and this page opens
         # without one. `_chart_holder` is where the first one goes.
         self._chart_holder = QWidget()
+        self._chart_holder.setMinimumHeight(theme.px(SPY_MIN_HEIGHT_PX))
         self._chart_layout = QVBoxLayout(self._chart_holder)
         self._chart_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -413,41 +513,76 @@ class DayReviewPanel(QFrame):
         self.ideas_note.setObjectName("SectionSubtitle")
         self.ideas_note.setWordWrap(True)
 
-    def _section(self, title: str, *widgets) -> QWidget:
+    def _section(self, title: str, *widgets, stretch_last: bool = False) -> QWidget:
         holder = QWidget()
         body = QVBoxLayout(holder)
         body.setContentsMargins(0, 0, 0, 0)
-        label = QLabel(title)
-        label.setObjectName("SectionTitle")
-        body.addWidget(label)
+        if title:
+            label = QLabel(title)
+            label.setObjectName("SectionTitle")
+            body.addWidget(label)
         for widget in widgets:
             if isinstance(widget, QWidget):
                 body.addWidget(widget)
             else:
                 body.addLayout(widget)
+        if stretch_last and widgets:
+            body.setStretch(body.count() - 1, 1)
         return holder
 
-    def _build_layout(self) -> None:
-        header = QHBoxLayout()
-        header.addWidget(QLabel("Session"))
-        header.addWidget(self.session_picker, 1)
-        header.addWidget(self.refresh_button)
+    def _left_column(self) -> QWidget:
+        """What happened, the open theses under it, then the chart.
 
-        story_row = QHBoxLayout()
-        story_side = QVBoxLayout()
-        story_side.addWidget(self.story_note)
-        story_side.addWidget(self.story_facts, 1)
-        story_holder = QWidget()
-        story_holder.setLayout(story_side)
-        theses_side = QVBoxLayout()
+        Under, not beside (the trader's option 1, 2026-09-18): the theses are a
+        short list ABOUT the story, and a chart is the one thing on this page
+        that turns extra width into more information, so it takes the room the
+        column has left.
+        """
+        self.story_section = self._section(
+            "What happened", self.story_note, self.story_facts
+        )
         theses_label = QLabel("Open theses")
         theses_label.setObjectName("SectionSubtitle")
-        theses_side.addWidget(theses_label)
-        theses_side.addWidget(self.theses, 1)
-        theses_holder = QWidget()
-        theses_holder.setLayout(theses_side)
-        story_row.addWidget(story_holder, 3)
-        story_row.addWidget(theses_holder, 2)
+        self.theses_section = self._section("", theses_label, self.theses)
+        self.spy_section = self._section(
+            "SPY, this session", self.spy_note, self._chart_holder, stretch_last=True
+        )
+
+        column = QWidget()
+        body = QVBoxLayout(column)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(10)
+        body.addWidget(self.story_section)
+        body.addWidget(self.theses_section)
+        body.addWidget(self.spy_section, 1)
+        return column
+
+    def _right_column(self) -> QWidget:
+        """What you said: the list over the reader, then the box you type in."""
+        list_holder = QWidget()
+        list_body = QVBoxLayout(list_holder)
+        list_body.setContentsMargins(0, 0, 0, 0)
+        list_body.addWidget(self.entries)
+        reader_holder = QWidget()
+        reader_body = QVBoxLayout(reader_holder)
+        reader_body.setContentsMargins(0, 0, 0, 0)
+        reader_body.addWidget(self.entry_meta)
+        reader_body.addWidget(self.entry_reader, 1)
+
+        self.said_split = QSplitter(Qt.Orientation.Vertical)
+        self.said_split.setObjectName("DayReviewSaid")
+        self.said_split.addWidget(list_holder)
+        self.said_split.addWidget(reader_holder)
+        self.said_split.setChildrenCollapsible(False)
+        # Enough room for the 60/40 to BE 60/40: the reader's own floor is
+        # 90 px plus its meta line, and a split whose smaller half is below a
+        # child's minimum is not the split the preset asked for.
+        self.said_split.setMinimumHeight(theme.px(300))
+        desk_layout.apply_saved_sizes(self.said_split, SAID_SPLIT_KEY, SAID_SPLIT_WEIGHTS)
+        desk_layout.track_preset(
+            self, self.said_split, SAID_SPLIT_KEY, lambda _extent: SAID_SPLIT_WEIGHTS
+        )
+        desk_layout.persist_sizes(self, self.said_split, SAID_SPLIT_KEY)
 
         compose = QHBoxLayout()
         compose.addWidget(QLabel("Timeframe"))
@@ -461,16 +596,87 @@ class DayReviewPanel(QFrame):
         forecast.addWidget(self.forecast_note)
         forecast.addWidget(self.forecast_box)
         forecast.addWidget(self.forecast_toggle, 0, Qt.AlignLeft)
-        forecast_holder = QWidget()
-        forecast_holder.setLayout(forecast)
+        self.forecast_section = QWidget()
+        self.forecast_section.setLayout(forecast)
 
-        placeholders = QVBoxLayout()
-        for line in WALKAWAY_PLACEHOLDERS:
-            label = QLabel(line)
-            label.setObjectName("SectionSubtitle")
-            placeholders.addWidget(label)
-        placeholder_holder = QWidget()
-        placeholder_holder.setLayout(placeholders)
+        self.said_section = self._section(
+            "What you said",
+            self.said_split,
+            QLabel("New entry"),
+            self.entry_text,
+            compose,
+            self.after_the_fact,
+        )
+
+        column = QWidget()
+        body = QVBoxLayout(column)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(10)
+        body.addWidget(self.said_section, 1)
+        body.addWidget(self.forecast_section)
+        return column
+
+    def _walkaway_row(self) -> QWidget:
+        """The four populations as a 2 x 2 grid of equal cells.
+
+        Equal COLUMNS, and rows that fit their content: three of the four are
+        empty until TJ-2, and an empty population padded to the height of a
+        table reads as a table that failed to load.
+        """
+        holder = QWidget()
+        self.walkaway_grid = QGridLayout(holder)
+        self.walkaway_grid.setContentsMargins(0, 0, 0, 0)
+        self.walkaway_grid.setHorizontalSpacing(12)
+        self.walkaway_grid.setVerticalSpacing(10)
+        self.walkaway_grid.addWidget(
+            self._section(WALKAWAY_TITLE, self.walkaway_note, self.rejected_that_worked_table),
+            0,
+            0,
+        )
+        for cell, widget in self.walkaway_cells.items():
+            self.walkaway_grid.addWidget(widget, cell[0], cell[1], Qt.AlignTop)
+        self.walkaway_grid.setColumnStretch(0, 1)
+        self.walkaway_grid.setColumnStretch(1, 1)
+        self.walkaway_grid.setRowStretch(0, 0)
+        self.walkaway_grid.setRowStretch(1, 0)
+        return holder
+
+    def _bottom_row(self) -> QWidget:
+        """What you traded, beside the desk's ideas. Two halves, full width."""
+        self.traded_section = self._section(
+            "What you traded", self.trades_note, self.trades_table
+        )
+        self.ideas_section = self._section("Ideas from the desk's AI", self.ideas_note)
+        self.bottom_row = QWidget()
+        row = QHBoxLayout(self.bottom_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        row.addWidget(self.traded_section, 1)
+        row.addWidget(self.ideas_section, 1)
+        return self.bottom_row
+
+    def _build_layout(self) -> None:
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Session"))
+        header.addWidget(self.session_picker, 1)
+        header.addWidget(self.refresh_button)
+
+        # Row 2: the two columns. The ratio is the trader's to drag and it is
+        # remembered per machine, like every other desk splitter.
+        self.left_column = self._left_column()
+        self.right_column = self._right_column()
+        self.columns = QSplitter(Qt.Orientation.Horizontal)
+        self.columns.setObjectName(COLUMNS_OBJECT_NAME)
+        self.columns.addWidget(self.left_column)
+        self.columns.addWidget(self.right_column)
+        self.columns.setChildrenCollapsible(False)
+        self.columns.setStretchFactor(0, 1)
+        self.columns.setStretchFactor(1, 1)
+        desk_layout.apply_saved_sizes(self.columns, COLUMN_SPLIT_KEY, COLUMN_WEIGHTS)
+        desk_layout.track_preset(
+            self, self.columns, COLUMN_SPLIT_KEY, lambda _extent: COLUMN_WEIGHTS
+        )
+        desk_layout.persist_sizes(self, self.columns, COLUMN_SPLIT_KEY)
 
         page = QWidget()
         body = QVBoxLayout(page)
@@ -480,33 +686,13 @@ class DayReviewPanel(QFrame):
         body.addWidget(self.subtitle)
         body.addLayout(header)
         body.addWidget(self.provisional_note)
-        body.addWidget(self._section("What happened", story_row))
-        body.addWidget(
-            self._section(
-                WALKAWAY_TITLE,
-                self.walkaway_note,
-                self.rejected_that_worked_table,
-                placeholder_holder,
-            )
-        )
-        body.addWidget(
-            self._section(
-                "What you said",
-                self.entries,
-                self.entry_meta,
-                self.entry_reader,
-                QLabel("New entry"),
-                self.entry_text,
-                compose,
-                self.after_the_fact,
-                forecast_holder,
-            )
-        )
-        body.addWidget(self._section("What you traded", self.trades_note, self.trades_table))
-        body.addWidget(self._section("SPY, this session", self.spy_note, self._chart_holder))
-        body.addWidget(self._section("Ideas from the desk's AI", self.ideas_note))
+        body.addWidget(self.columns, 1)
+        body.addWidget(self._walkaway_row())
+        body.addWidget(self._bottom_row())
         body.addWidget(self.status)
-        body.addStretch(1)
+        # No trailing stretch: the slack belongs to the two columns, and inside
+        # them to the chart. A stretch here is what left a 3800 px screen with
+        # 700 px of nothing under the last row.
 
         # ONE scroll area for the whole page (the Strength window's rule): every
         # section sized to its content, one scrollbar, nothing behind a tab.
@@ -519,16 +705,28 @@ class DayReviewPanel(QFrame):
         outer.addWidget(self.scroll)
 
     def refresh_reader_measure(self) -> None:
-        """Keep the reader's column at a readable measure (the G3 fix round).
+        """The reader and the forecast span the RIGHT column (TJ-1L).
 
-        A line of running text is readable at about 45-100 characters; the pane
-        keeps its width and the TEXT is capped inside it.
+        The G3 rule capped both at a 100-character measure, which was right
+        when they sat across a page WIDE enough to need one. In the 45% column
+        the cap is what puts the empty space back: measured at 3800x2000 both
+        boxes stopped at about 420 px of an 890 px column while `New entry`
+        under them ran the full width. The COLUMN is the measure now - the
+        trader drags it, and the splitter is the control.
+
+        The seam keeps its name and its caller: `MainWindow._apply_scaled_metrics`
+        calls it on a scale change, and both widgets must come back spanning.
         """
         try:
             for widget in (self.entry_reader, self.forecast_box):
                 widget.ensurePolished()
-                per_char = max(1, int(widget.fontMetrics().averageCharWidth()))
-                widget.setMaximumWidth(max(theme.px(240), min(per_char * 100, theme.px(1200))))
+                # `QWIDGETSIZE_MAX`, which PySide6 does not export: the value
+                # Qt uses for "no maximum", and what `setMaximumWidth` must be
+                # given to UNDO an earlier cap.
+                widget.setMaximumWidth(16_777_215)
+                widget.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, widget.sizePolicy().verticalPolicy()
+                )
         except Exception:  # noqa: BLE001 - a measure is never worth the page
             logging.debug("The Day Review reader measure failed.", exc_info=True)
 
@@ -858,7 +1056,9 @@ class DayReviewPanel(QFrame):
                 if tip:
                     item.setToolTip(tip)
                 table.setItem(index, column, item)
-        apply_width_rule_to_table_widget(table)
+        # No width call here: the columns measure themselves (`_fill_the_width`,
+        # set once at construction) and the last one stretches, so a repaint
+        # costs the rows and nothing else.
         self.walkaway_note.setText(
             f"{len(self._walkaway_rows)} refusal(s) whose later path went the way "
             "you turned down. Double-click a row to chart it."
@@ -1010,7 +1210,6 @@ class DayReviewPanel(QFrame):
             )
             for column, text in enumerate(values):
                 self.trades_table.setItem(index, column, QTableWidgetItem(str(text)))
-        apply_width_rule_to_table_widget(self.trades_table)
 
     @staticmethod
     def _number(value: Any, *, decimals: int = 2, signed: bool = False) -> str:
@@ -1233,14 +1432,24 @@ class DayReviewPanel(QFrame):
 
 __all__ = [
     "AUTO_POLL_INTERVAL_MS",
+    "COLUMNS_OBJECT_NAME",
+    "COLUMN_SPLIT_KEY",
+    "COLUMN_WEIGHTS",
     "DayReviewPanel",
     "EXCERPT_LIMIT",
+    "FORECAST_COLLAPSED_LINES",
     "LOOKBACK_SESSIONS",
     "NO_CHART_NOTE",
     "NO_IDEAS_YET",
     "NO_STORY_YET",
     "PICKER_SESSIONS",
+    "SAID_SPLIT_KEY",
+    "SAID_SPLIT_WEIGHTS",
+    "SPY_MIN_HEIGHT_PX",
+    "STORY_MIN_HEIGHT_PX",
     "TRADE_COLUMNS",
     "WALKAWAY_COLUMNS",
+    "WALKAWAY_PLACEHOLDERS",
+    "WALKAWAY_PLACEHOLDER_CELLS",
     "WALKAWAY_TITLE",
 ]
