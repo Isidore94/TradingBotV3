@@ -171,6 +171,7 @@ LOADING_NOTE = "Reading the session…"
 #: What it says while the post-close index build runs on its worker. The build
 #: streams the big stores once, so it is worth a sentence rather than a silence.
 BUILDING_INDEX_NOTE = "Building {session}'s index in the background…"
+FETCHING_BARS_NOTE = "Fetching that day's bars: {session}…"
 
 
 def _excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
@@ -288,6 +289,11 @@ class _IndexBuildWorker(QThread):
             self._service.build_index_for(
                 self._session, lookback_sessions=LOOKBACK_SESSIONS
             )
+            # The durable tape is second and non-fatal: the index still lands
+            # when yfinance is unavailable after the close.
+            self._service.build_session_bars_for(
+                self._session, lookback_sessions=LOOKBACK_SESSIONS
+            )
         except Exception as exc:  # noqa: BLE001 - a cache never costs the page
             self.failed.emit(self._session, str(exc))
             return
@@ -318,6 +324,7 @@ class DayReviewPanel(QFrame):
         self.service = service
         self._worker: _DayReadWorker | None = None
         self._index_worker: _IndexBuildWorker | None = None
+        self._bars_worker: _IndexBuildWorker | None = None
         self._building_index = ""
         #: The desk's own M5 cache accessor (`alert_center.journal_chart_bars`).
         #: Called ONLY on the Qt thread, by `reload`, and only for a session that
@@ -891,6 +898,36 @@ class DayReviewPanel(QFrame):
             self._building_index = ""
             logging.debug("The Day Review index build could not start.", exc_info=True)
 
+    def _backfill_bars_for(self, session_date: str) -> None:
+        """Single-flight past-session recovery, always outside the Qt thread."""
+        import day_review_bars
+
+        session = str(session_date or "")[:10]
+        if not session or not day_review_bars.session_is_backfillable(session, now=self._clock()):
+            return
+        if day_review_bars.read_session_bars(session) is not None:
+            return
+        if self._bars_worker is not None and self._bars_worker.isRunning():
+            return
+        method = getattr(self.service, "backfill_session_bars_for", None)
+        if not callable(method):
+            return
+
+        class _BarsWorker(QThread):
+            def __init__(self, callback, value, parent=None):
+                super().__init__(parent)
+                self.callback, self.value = callback, value
+            def run(self):  # pragma: no cover - asserted through worker seam
+                try:
+                    self.callback(self.value, lookback_sessions=LOOKBACK_SESSIONS)
+                except Exception:
+                    logging.info("Day Review bars backfill failed.", exc_info=True)
+
+        self._bars_worker = _BarsWorker(method, session, self)
+        self.status.setText(FETCHING_BARS_NOTE.format(session=session))
+        self.statusChanged.emit(self.status.text())
+        self._bars_worker.start()
+
     def _on_index_built(self, session_date: str) -> None:
         """The index landed. Repaint that session if it is the one on screen."""
         self._index_worker = None
@@ -962,6 +999,7 @@ class DayReviewPanel(QFrame):
         self._sync_after_the_fact()
         self.status.setText(LOADING_NOTE)
         session = self.session_date()
+        self._backfill_bars_for(session)
         self._worker = _DayReadWorker(
             self.service, session, self, spy_m5_bars=self._spy_bars_for(session)
         )
@@ -1423,7 +1461,7 @@ class DayReviewPanel(QFrame):
             self._auto_timer.stop()
         except RuntimeError:  # pragma: no cover - already torn down
             pass
-        for worker in (self._worker, self._index_worker):
+        for worker in (self._worker, self._index_worker, self._bars_worker):
             if worker is not None and worker.isRunning():
                 # Bounded: a desk that will not close is worse than an index
                 # nobody collected, and the index is rebuildable.

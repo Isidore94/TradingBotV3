@@ -155,9 +155,8 @@ class DayReviewService:
             problems.append(f"the walk-away tables could not be read: {exc}")
             _log.debug("Day Review walk-away unreadable.", exc_info=True)
         else:
-            payload["rejected_that_worked"] = tuple(
-                getattr(recap.rejected_that_worked, "rows", ()) or ()
-            )
+            rejected = getattr(recap, "rejected_that_worked", None)
+            payload["rejected_that_worked"] = tuple(getattr(rejected, "rows", ()) or ())
             payload["provisional"] = bool(getattr(recap, "provisional", False))
 
         try:
@@ -169,6 +168,17 @@ class DayReviewService:
         payload["spy_m5_bars"] = [
             dict(bar) for bar in (spy_m5_bars or ()) if isinstance(bar, Mapping)
         ]
+        # A closed day's tape is durable and is safe to read from this worker.
+        # Today's hand-off remains the Alert Center cache supplied by the Qt slot.
+        try:
+            import day_review_bars
+
+            if day_review_bars.session_is_closed(session, now=moment):
+                stored_bars = day_review_bars.read_session_bars(session)
+                if stored_bars is not None:
+                    payload["spy_m5_bars"] = [dict(bar) for bar in stored_bars.get(BENCHMARK_SYMBOL, ())]
+        except Exception:  # noqa: BLE001 - a missing chart file never costs the read
+            _log.debug("Day Review session bars were unreadable.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
@@ -199,13 +209,27 @@ class DayReviewService:
             index = day_review_index.build_index(
                 session, lookback_sessions=lookback_sessions, sources=sources, now=now
             )
-            # The write refuses a session that has not closed and skips a file
-            # whose content has not changed; both are 22-30 MB decisions.
             day_review_index.write_index(index, now=now)
             return index
         except Exception:  # noqa: BLE001 - a cache never costs the page
             _log.debug("The Day Review index could not be built.", exc_info=True)
             return None
+
+    def build_session_bars_for(self, session_date: str, **_kwargs) -> Any:
+        """Fetch and persist a closed session's M5 tape after its index exists."""
+        import daily_recap_reader
+        import day_review_bars
+
+        session = str(session_date or "")[:10]
+        if not session or not day_review_bars.session_is_closed(session):
+            return None
+        names = day_review_bars.decided_symbols(session, daily_recap_reader.RecapSources())
+        bars = day_review_bars.fetch_session_bars(names, session)
+        return day_review_bars.write_session_bars(session, bars)
+
+    def backfill_session_bars_for(self, session_date: str, **_kwargs) -> Any:
+        """The past-session recovery seam; never called for the live session."""
+        return self.build_session_bars_for(session_date)
 
     def _read_recap(self, session: str, lookback_sessions: int, now: datetime):
         """`read_session`, through the index when there is a usable one."""
