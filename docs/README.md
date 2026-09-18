@@ -1,7 +1,8 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-09-16** (Phase 0.32 plain-language trader test guide added;
-before that 2026-09-12, WISHLIST 11 added `MEMORY.md` and `memory/`; `CHANGELOG.md`'s 2026-09-03 to
+Last reconciled: **2026-09-17** (`plan.md` rewritten for the trader journal program, decision
+0021 added, the old roadmap archived at `archive/PLAN_ARCHIVE_2026-09-17.md`; before that
+2026-09-16, Phase 0.32 plain-language trader test guide added; before that 2026-09-12, WISHLIST 11 added `MEMORY.md` and `memory/`; `CHANGELOG.md`'s 2026-09-03 to
 2026-09-05 entries moved to `archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`).
 
 One line per file. Status and decisions live in the root control set, never here; if a
@@ -66,10 +67,12 @@ row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 
 ## Decision records — accepted constraints
 
-[`decisions/`](decisions/) holds 20 short records, 0001 (decision-support only) to
-[`0020`](decisions/0020-daytrade-watchlists-reset-after-close.md) (the day-trade
-lists `longs.txt` / `shorts.txt` are emptied whole after each session's close;
-the swing lists keep the never-auto-removed rule). Read one before
+[`decisions/`](decisions/) holds 21 short records, 0001 (decision-support only) to
+[`0021`](decisions/0021-trader-journal-consolidation.md) (the trader's twelve answers of
+2026-09-17 that shape the journal program: one Day Review page, Week Review first in
+Weekend Prep, no machine rows, an overnight day story, an AI ideas card; before it
+[`0020`](decisions/0020-daytrade-watchlists-reset-after-close.md), the day-trade lists
+emptied whole after each close). Read one before
 changing a library, storage or architecture choice; **0016** is the trader's vision and
 priorities and breaks every prioritisation tie. Numbering is chronological.
 
@@ -80,7 +83,9 @@ four changelog archives (the newest is
 [`archive/CHANGELOG_ARCHIVE_2026-09-06.md`](archive/CHANGELOG_ARCHIVE_2026-09-06.md),
 holding the ST6 entry of 2026-09-06; before it
 [`archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`](archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md)
-holds the 25 entries from 2026-09-05 back to 2026-09-03), the roadmap archives, the
+holds the 25 entries from 2026-09-05 back to 2026-09-03), the roadmap archives (the newest,
+[`archive/PLAN_ARCHIVE_2026-09-17.md`](archive/PLAN_ARCHIVE_2026-09-17.md), is the whole
+`plan.md` as it stood before the 2026-09-17 rewrite, Phases 0.5–0.32), the
 July GUI plans, the retired Desk Link design, the paste-ready
 build prompts for phases already built, and the frozen August reviews under
 `archive/analysis/`. Nothing in the code reads any of it. Open one file there to answer
