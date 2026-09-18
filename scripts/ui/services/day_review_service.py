@@ -49,6 +49,7 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     "theses",
     "entries",
     "rejected_that_worked",
+    "walkaway",
     "trades",
     "forecast",
     "spy_m5_bars",
@@ -77,6 +78,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "theses": [],
         "entries": [],
         "rejected_that_worked": (),
+        "walkaway": None,
         "trades": [],
         "forecast": {},
         "spy_m5_bars": [],
@@ -149,6 +151,7 @@ class DayReviewService:
             _log.debug("Day Review theses unreadable.", exc_info=True)
 
         payload["provisional"] = self._provisional(session, moment)
+        recap = None
         try:
             recap = self._read_recap(session, lookback_sessions, moment)
         except Exception as exc:  # noqa: BLE001
@@ -164,6 +167,68 @@ class DayReviewService:
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the day's trades could not be read: {exc}")
             _log.debug("Day Review trades unreadable.", exc_info=True)
+
+        # TJ-2B is another projection of the SAME worker payload.  It opens no
+        # live desk store and the page never starts a second read for a table.
+        try:
+            import claimed_picks
+            import daily_recap_reader
+            import walkaway_day
+
+            recap_sources = daily_recap_reader.RecapSources()
+            annotations = daily_recap_reader._read_jsonl("annotations", recap_sources.annotations, "created_at")
+            feedback = daily_recap_reader._read_jsonl("pick_feedback", recap_sources.pick_feedback, "ts")
+            favorites = daily_recap_reader._read_jsonl("swing_favorites", recap_sources.swing_favorites, "event_at")
+            events = daily_recap_reader._read_jsonl("review_events", recap_sources.review_events, "ts")
+            decisions = []
+            for decision in daily_recap_reader._decisions(session, annotations, feedback, favorites, events):
+                decisions.append({
+                    "session_date": session,
+                    "symbol": decision.symbol, "side": decision.side,
+                    "category": decision.category, "verdict": decision.verdict,
+                    "source": decision.source, "timeframe": decision.timeframe,
+                    "stamp": getattr(decision.observed_at, "isoformat", lambda: "")(),
+                    "capture_id": decision.capture_id,
+                })
+            claims = claimed_picks.load_rows(recap_sources.claimed_picks)
+            preference = daily_recap_reader._read_csv("preference_report", recap_sources.preference_report, "generated_at").rows
+            outcomes = daily_recap_reader._read_csv("session_horizon_outcomes", recap_sources.session_horizon_outcomes, "scan_date").rows
+            # A preference can match a later trade, so this is intentionally the
+            # journal's full read, not the visible session-only trades table.
+            from journal_store import JournalStore
+            all_trades = list(JournalStore().list_trades())
+            stored = {}
+            try:
+                import day_review_bars
+                stored = day_review_bars.read_session_bars(session) or {}
+                # A later matched trade is measured against its EXIT session,
+                # never against the decision day's tape. Reads are durable and
+                # stay on this worker; missing past tapes are backfilled by the
+                # page's existing worker door on the next open.
+                for trade in all_trades:
+                    if str(trade.get("status") or "").lower() != "closed":
+                        continue
+                    exit_day = str(trade.get("last_closing_leg_at") or trade.get("closed_at") or "")[:10]
+                    if exit_day and exit_day != session:
+                        exit_bars = day_review_bars.read_session_bars(exit_day)
+                        if exit_bars is not None:
+                            stored[exit_day] = exit_bars
+            except Exception:  # noqa: BLE001
+                _log.debug("Walk-away bars unreadable.", exc_info=True)
+            payload["walkaway"] = walkaway_day.build(
+                session, {"decisions": decisions, "preference": preference, "outcomes": outcomes}, stored,
+                trades=all_trades, claims=claims, now=moment,
+            )
+            payload["walkaway_backfill_sessions"] = tuple(
+                exit_day for trade in all_trades
+                if str(trade.get("status") or "").lower() == "closed"
+                and (exit_day := str(trade.get("last_closing_leg_at") or trade.get("closed_at") or "")[:10])
+                and exit_day != session and exit_day not in stored
+                and day_review_bars.session_is_backfillable(exit_day, now=moment)
+            )
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"the instant walk-away tables could not be built: {exc}")
+            _log.debug("Day Review instant walk-away unreadable.", exc_info=True)
 
         payload["spy_m5_bars"] = [
             dict(bar) for bar in (spy_m5_bars or ()) if isinstance(bar, Mapping)

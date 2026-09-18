@@ -53,6 +53,8 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Day Review instant walk-away (TJ-2B, 2026-09-18, built).** `walkaway_day` is a pure projection of the one Day Review worker payload: separate decision times survive source duplicates, claims replay their history, and missing bars or horizons state what was not measured. The four populations do not alter a detector, score, alert, store, or live desk state; gate #153 remains owed.
+
 - **Day Review durable session bars (TJ-2A, 2026-09-18, merged into local `main`
   `4dd99034`).** Closed sessions fetch decided names plus four
   benchmarks in batched Yahoo M5 requests, store completed regular-hours bars in

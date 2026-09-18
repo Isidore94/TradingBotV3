@@ -112,6 +112,18 @@ WALKAWAY_COLUMNS: tuple[tuple[str, str | None], ...] = (
     ("After the decision %", "favorable_pct_after_decision"),
     ("Environment", None),
 )
+TJ2B_WALKAWAY_COLUMNS = (
+    "Time", "Symbol", "Side", "What you did", "Ran after %", "Held at close %",
+    "Traded?", "You made", "Left on the table %", "State",
+)
+
+
+def _tj2_pct(value: object) -> str:
+    return UNMEASURED if value is None else f"{float(value):+.2f}%"
+
+
+def _tj2_number(value: object) -> str:
+    return UNMEASURED if value is None else f"{float(value):+.2f}"
 
 #: The three tables TJ-2 adds, as (title, note) - each one a small titled frame
 #: holding its place in the 2 x 2 grid. A labelled cell rather than an empty
@@ -325,6 +337,8 @@ class DayReviewPanel(QFrame):
         self._worker: _DayReadWorker | None = None
         self._index_worker: _IndexBuildWorker | None = None
         self._bars_worker: _IndexBuildWorker | None = None
+        self._bars_backfill_queue: list[str] = []
+        self._bars_backfill_queued: set[str] = set()
         self._building_index = ""
         #: The desk's own M5 cache accessor (`alert_center.journal_chart_bars`).
         #: Called ONLY on the Qt thread, by `reload`, and only for a session that
@@ -399,9 +413,9 @@ class DayReviewPanel(QFrame):
         self.theses.setMaximumHeight(theme.px(150))
 
     def _build_walkaway(self) -> None:
-        self.rejected_that_worked_table = QTableWidget(0, len(WALKAWAY_COLUMNS))
+        self.rejected_that_worked_table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
         self.rejected_that_worked_table.setHorizontalHeaderLabels(
-            [header for header, _measure in WALKAWAY_COLUMNS]
+            TJ2B_WALKAWAY_COLUMNS
         )
         self.rejected_that_worked_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.rejected_that_worked_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -420,6 +434,33 @@ class DayReviewPanel(QFrame):
                 WALKAWAY_PLACEHOLDER_CELLS, WALKAWAY_PLACEHOLDERS
             )
         }
+        self.walkaway_tables: dict[str, QTableWidget] = {}
+        self._walkaway_table_rows: dict[int, tuple[Any, ...]] = {}
+        for name in ("liked_not_traded",):
+            table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
+            table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
+            table.setEditTriggers(QTableWidget.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectRows)
+            table.itemActivated.connect(self._activate_walkaway)
+            table.itemDoubleClicked.connect(self._activate_walkaway)
+            _fill_the_width(table)
+            self.walkaway_tables[name] = table
+        self.walkaway_tables["rejected"] = self.rejected_that_worked_table
+        for name in ("traded_left_early", "claimed_d1"):
+            table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
+            table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
+            table.setEditTriggers(QTableWidget.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectRows)
+            table.itemActivated.connect(self._activate_walkaway)
+            table.itemDoubleClicked.connect(self._activate_walkaway)
+            _fill_the_width(table)
+            self.walkaway_tables[name] = table
+        for cell, name, title in (
+            ((0, 1), "liked_not_traded", "Liked but never traded"),
+            ((1, 0), "traded_left_early", "Traded, then left early"),
+            ((1, 1), "claimed_d1", "Claimed D1 picks"),
+        ):
+            self.walkaway_cells[cell] = self._table_cell(title, self.walkaway_tables[name])
 
     @staticmethod
     def _placeholder_cell(title: str, note: str) -> QFrame:
@@ -442,6 +483,20 @@ class DayReviewPanel(QFrame):
         subtitle.setWordWrap(True)
         body.addWidget(subtitle)
         frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        return frame
+
+    @staticmethod
+    def _table_cell(title: str, table: QTableWidget) -> QFrame:
+        """A labelled TJ-2 population, replacing the TJ-1 placeholder."""
+        frame = QFrame()
+        frame.setObjectName("Panel")
+        body = QVBoxLayout(frame)
+        body.setContentsMargins(10, 8, 10, 8)
+        body.setSpacing(2)
+        heading = QLabel(title)
+        heading.setObjectName("SectionTitle")
+        body.addWidget(heading)
+        body.addWidget(table)
         return frame
 
     def _build_said(self) -> None:
@@ -899,7 +954,7 @@ class DayReviewPanel(QFrame):
             logging.debug("The Day Review index build could not start.", exc_info=True)
 
     def _backfill_bars_for(self, session_date: str) -> None:
-        """Single-flight past-session recovery, always outside the Qt thread."""
+        """Queue past-session recovery; one off-Qt worker drains FIFO."""
         import day_review_bars
 
         session = str(session_date or "")[:10]
@@ -907,10 +962,21 @@ class DayReviewPanel(QFrame):
             return
         if day_review_bars.read_session_bars(session) is not None:
             return
+        if session not in self._bars_backfill_queued:
+            self._bars_backfill_queue.append(session)
+            self._bars_backfill_queued.add(session)
+        self._start_next_bars_backfill()
+
+    def _start_next_bars_backfill(self) -> None:
         if self._bars_worker is not None and self._bars_worker.isRunning():
             return
+        if not self._bars_backfill_queue:
+            return
+        session = self._bars_backfill_queue.pop(0)
         method = getattr(self.service, "backfill_session_bars_for", None)
         if not callable(method):
+            self._bars_backfill_queued.discard(session)
+            self._start_next_bars_backfill()
             return
 
         class _BarsWorker(QThread):
@@ -924,9 +990,14 @@ class DayReviewPanel(QFrame):
                     logging.info("Day Review bars backfill failed.", exc_info=True)
 
         self._bars_worker = _BarsWorker(method, session, self)
+        self._bars_worker.finished.connect(lambda: self._on_bars_backfill_finished(session))
         self.status.setText(FETCHING_BARS_NOTE.format(session=session))
         self.statusChanged.emit(self.status.text())
         self._bars_worker.start()
+
+    def _on_bars_backfill_finished(self, session: str) -> None:
+        self._bars_backfill_queued.discard(session)
+        self._start_next_bars_backfill()
 
     def _on_index_built(self, session_date: str) -> None:
         """The index landed. Repaint that session if it is the one on screen."""
@@ -1033,10 +1104,14 @@ class DayReviewPanel(QFrame):
         self._render_story(payload.get("story"))
         self._render_theses(payload.get("theses") or [])
         self._render_walkaway(tuple(payload.get("rejected_that_worked") or ()))
+        if payload.get("walkaway") is not None:
+            self._render_tj2b_walkaway(payload["walkaway"])
         self._render_entries(list(payload.get("entries") or []))
         self._render_forecast(dict(payload.get("forecast") or {}))
         self._render_trades(list(payload.get("trades") or []))
         self._render_chart(list(payload.get("spy_m5_bars") or []))
+        for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
+            self._backfill_bars_for(str(exit_session))
         error = str(payload.get("error") or "")
         self.status.setText(error or f"Day Review: {session}")
         self.statusChanged.emit(self.status.text())
@@ -1103,6 +1178,40 @@ class DayReviewPanel(QFrame):
             if self._walkaway_rows
             else "Nothing you passed on ran, on this session's measured rows."
         )
+
+    def _render_tj2b_walkaway(self, day) -> None:
+        for name in ("liked_not_traded", "traded_left_early", "claimed_d1"):
+            table = self.walkaway_tables[name]
+            rows = tuple(getattr(day, name, ()) or ())
+            values = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
+            middle = len(values) // 2
+            median = (values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2) if values else None
+            heading = table.parentWidget().findChild(QLabel) if table.parentWidget() else None
+            if heading is not None:
+                base = {"liked_not_traded": "Liked but never traded", "traded_left_early": "Traded, then left early", "claimed_d1": "Claimed D1 picks"}[name]
+                heading.setText(f"{base} — n={len(rows)}; median Ran after {_tj2_pct(median)}")
+            self._walkaway_table_rows[id(table)] = rows
+            table.setRowCount(len(rows))
+            for index, row in enumerate(rows):
+                values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
+                          row.what_you_did, _tj2_pct(row.ran_after_pct), _tj2_pct(row.held_at_close_pct),
+                          row.traded, _tj2_number(row.you_made), _tj2_pct(row.left_on_table_pct), row.state)
+                for column, value in enumerate(values):
+                    table.setItem(index, column, QTableWidgetItem(value))
+        rows = tuple(getattr(day, "rejected", ()) or ())
+        table = self.walkaway_tables["rejected"]
+        self._walkaway_rows = rows
+        self._walkaway_table_rows[id(table)] = rows
+        values = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
+        middle = len(values) // 2
+        median = (values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2) if values else None
+        self.walkaway_note.setText(f"n={len(rows)}; median Ran after {_tj2_pct(median)}. Double-click a row to chart it.")
+        table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
+                      row.what_you_did, "", _tj2_pct(row.ran_after_pct), "", "", "", "")
+            for column, value in enumerate(values):
+                table.setItem(index, column, QTableWidgetItem(value))
 
     def _walkaway_cell(self, row: Any, header: str, measure: str | None) -> tuple[str, str]:
         """One cell's text and its tooltip. `None` is a dash WITH its reason."""
@@ -1316,9 +1425,10 @@ class DayReviewPanel(QFrame):
         if item is None:
             return
         index = item.row()
-        if index < 0 or index >= len(self._walkaway_rows):
+        rows = self._walkaway_table_rows.get(id(item.tableWidget()), self._walkaway_rows)
+        if index < 0 or index >= len(rows):
             return
-        row = self._walkaway_rows[index]
+        row = rows[index]
         symbol = str(getattr(row, "symbol", "") or "").strip().upper()
         if not symbol:
             return

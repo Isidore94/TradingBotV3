@@ -165,6 +165,7 @@ STAGE_ALLOWLIST: tuple[str, ...] = (
     "data/runtime/rejection_cohort_*.csv",
     "data/runtime/weekend_prep_state.json",
     "pick_feedback.jsonl",
+    "claimed_picks.jsonl",
     "review_preference_state.json",
     "swing_favorites.jsonl",
     # -- the Market Journal --------------------------------------------
@@ -177,6 +178,7 @@ STAGE_ALLOWLIST: tuple[str, ...] = (
     # EMPTY store, which is the one thing a bench must not do: an absent file
     # is measured as a fast page.
     "data/runtime/master_avwap_session_horizon_outcomes.csv",
+    "day_review/bars/*.parquet",
     "data/runtime/auto_populate_pending.json",
     "d1_environment.jsonl",
     "output/preference_trade_outcomes.csv",
