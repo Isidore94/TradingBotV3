@@ -53,6 +53,34 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Day Review walk-away v2 (TJ-11, 2026-09-19, branch `claude/tj11-walkaway-v2`, merged
+  `a89ec7d5`).** `scripts/real_miss.py` holds `REAL_MISS_V1` (`RUN_ATR` 1.0, `ADVERSE_ATR`
+  0.5, one pure `verdict()`; the adverse extreme taken first inside a bar; a missing ATR or
+  no completed bar is `unmeasured:<reason>`; import-light so TJ-15's nightly slot calls the
+  same function). `market_calendar.decision_session` / `next_session` answer which exchange
+  session a stamp belongs to, or the next one, on memoized holidays. `walkaway_day` gains
+  the D1 ruler (daily bars from the decision session's CLOSE over 1/3/5 exchange sessions,
+  `pending <date>` until the horizon closes, point-in-time ATR(14)), against-you-first and
+  at-the-close in percent and ATR, the row's real-miss verdict and reason code, a fifth
+  `earlier_calls` population (the previous five sessions' D1 calls measured to the selected
+  session's close, most-ran first), the skill line (liked/claimed vs rejected vs untouched
+  names of the SAME scan, `n` + `measured` + `pending` + the ONE Wilson interval by side
+  and, where `n` allows, by family, overlaps stated, both the session and `LATELY_SESSIONS`
+  windows rendered), one deterministic sentence per table, instrument-aware trade rows
+  (option or held past five sessions -> `not judged here`, assignment read off the legs or
+  `unmeasured`), and one money line carrying its `n`. **A pooled rate counts a name only
+  when its horizon has CLOSED** - an early run inside an open one stays on its row and out
+  of the fraction, and open names print as `pending P`. `ui/annotations/store` writes the
+  ADDITIVE `decision_session` beside an UNCHANGED `session_date`, and
+  `load_annotations(..., by_decision_session=True)` is TJ-11's opt-in read; every other
+  reader on the desk is byte-identical to base, pinned for `pick_feedback`,
+  `review_learning`'s join, the three cohort graders and `daily_recap_reader._decisions`.
+  Day Review shows the fifth table, six new columns with full headers, a sentence above
+  each table and both skill lines above the grid; the daily-bar read is bounded by three
+  named SIZE caps (400 symbols, 150 earlier, 150 untouched, 60-bar tails) in name order and
+  never by a result, and the render suspends `ResizeToContents` while filling. Shadow and
+  report only: nothing here reaches a detector, score, alert, watchlist, Focus, the review
+  queue or `review_policy.json`. Gate #156 remains owed.
 - **Day Review instant walk-away (TJ-2B, 2026-09-18, merged into local `main`
   `d3ae3aff`).** `walkaway_day` is a pure projection of the one Day Review worker payload: separate decision times survive source duplicates, claims replay their history, and missing bars or horizons state what was not measured. Claim history resolves with each reader's staged home, so a restart reads the same durable source. The four populations do not alter a detector, score, alert, store, or live desk state; gate #153 remains owed.
 
@@ -2863,6 +2891,30 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-19 - TJ-11: Day Review walk-away v2 (branch `claude/tj11-walkaway-v2`, merged into `lead/p033-integration` `a89ec7d5`)
+
+The trader wants what he missed to be obvious, so a D1 call now gets a D1 ruler: daily bars
+from the decision session's close over 1/3/5 exchange sessions, `pending <date>` until the
+horizon closes and never a zero, beside TJ-2B's unchanged M5 tape. Measured on the live
+stores, 2026-09-17 carried 146 D1 decisions and 94 M5 ones and TJ-2B graded all 240 on the
+five-minute tape. `REAL_MISS_V1` decides what counts as a run (1.0 ATR in favour before 0.5
+ATR against, the adverse extreme taken first inside a bar, anything missing `unmeasured`),
+a fifth Earlier-calls table carries the previous five sessions forward, and each table gets
+one deterministic sentence and a skill line reading the trader's rejects against the same
+scan's liked and untouched names with `n`, `measured`, `pending` and one Wilson interval.
+Round 1 was NO-GO on two real defects, both fixed at `a744bec1` and re-reviewed GO by
+reproduction on copies of the live stores: the session stamp had leaked onto the LIVE desk
+(on Monday 2026-09-21 the branch would have hidden 12 setups rows base hid none and marked
+18 names Reviewed-today, and moved Friday-evening vetoes into the veto cohort), so
+`session_date` now keeps exactly its base meaning and the decision's session is the additive
+`decision_session` key on new rows only, read by TJ-11 alone; and the pooled skill rate was
+outcome-censored by an open horizon that kept an early run while dropping its no-runs
+(shipped 34% = 30/87 where the closed-horizon-only truth is 26% = 20/77), so a pooled rate
+now counts a name only when its horizon has closed. 18 Saturday-stamped D1 calls, 12 veto
+and 6 like cohort picks, were deliberately left as they are. Worst GUI stall on reload
+672.9 -> 92.4 ms. Full suite on the integration branch: BASELINE_PENDING_LEAD. Live gate
+#156 owed.
 
 ### 2026-09-19 - TJ-13A: nights only seven days, night slates, four overnight repairs (branch `claude/tj13a-night-slates`, merged into `lead/p033-integration` `9eaae1dd`)
 

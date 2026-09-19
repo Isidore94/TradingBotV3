@@ -6410,3 +6410,156 @@ files for the seams none of them pinned, each proven red first:
 `tests/test_tj1_day_review_index_staleness.py` (the two edges of the staleness rule, found
 by the bench) and `tests/test_tj1_day_review_index_wide.py` (the widened index's equality,
 its all-or-nothing revival, and the two rewritten lookups against a reference walk).
+
+## Day Review - walk-away v2: two rulers, a real-miss rule, and a base rate (2026-09-19, packet TJ-11)
+
+The long form behind the CLAUDE.md rules *"A real miss is a RULE, and the session a
+decision belongs to is an ADDITIVE field"* and *"A D1 call gets a D1 ruler, and a miss is
+read against a base rate."* Trader, 2026-09-19: *"if they said no to a bunch of stocks
+that went on to have great moves that day or the next day, then I want to know about it.
+… I want what I missed to be very apparent. I want what I did well with to also be very
+apparent."* Decision 0021 answers 22 and 24; plan.md §12.4 TJ-11. Branch
+`claude/tj11-walkaway-v2`, tip `a744bec1`, merged `a89ec7d5`.
+
+**What was measured** on the live stores, read-only, 2026-09-18/19: session 2026-09-17
+carried **146 D1 decisions and 94 M5 ones, 240 in all** - the packet's "6 M5" was wrong -
+and TJ-2B graded every one of them on that session's five-minute tape, which is the wrong
+ruler for 146 of them. The 18 D1 calls made on Friday evening at **21:04-21:07 Pacific**
+were stamped `session_date = 2026-09-19`, a **Saturday**: a session that never happened
+and a date Day Review could never show. 50 trades since 08-04: 8 options, and 15 of 37
+closed trades held past five sessions.
+
+**Two rulers, never mixed.**
+* An **M5 decision** is measured on the session's own tape, from the OPEN of the first
+  completed bar after the stamp (TJ-2B's rule, unchanged).
+* A **D1 decision** is measured on DAILY bars (`chart_snapshot.load_d1_bars`, the durable
+  parquet store, off the Qt thread) from the **CLOSE of the session it was made in**, over
+  1, 3 and 5 exchange sessions. Until the five-session horizon closes the row reads
+  `pending <date>` and every move is blank - **never zero**. The horizon dates come from
+  the exchange calendar, because the live horizon-outcomes file has no `maturity_date`
+  column.
+* ATR(14) is **point-in-time**: the bars up to and including the decision's own session.
+  An ATR that included the move being measured would shrink the yardstick for that move. A
+  missing ATR leaves the ATR columns empty and the percent columns alone.
+
+**`REAL_MISS_V1` (`scripts/real_miss.py`) is a rule, not a glance.** A real run reached
+`RUN_ATR` (1.0) x ATR in the decision's favour BEFORE it went `ADVERSE_ATR` (0.5) x ATR
+against. Inside ONE bar the order of the two extremes is unknown, so the **adverse one is
+taken first** - a bar that touches both is `no_run`. A missing ATR, or no completed bar
+after the stamp, is `unmeasured:<reason>`, never `no_run` and never zero. The module is
+import-light on purpose: TJ-15's nightly slot calls the SAME function under
+`requirements-core.txt`, so there is one rule and not two. A `no_run` over an UNFINISHED
+window is not a finding, so a D1 verdict is `unmeasured:horizon_open` until the window
+closes - while a `run`, once reached, cannot be taken back.
+
+**Against you first** is the worst adverse extreme up to and INCLUDING the bar that made
+the best favourable one - what the trader was up against before the move, not the
+give-back after it. It is never positive.
+
+**`market_calendar.decision_session(stamp)`** is the one session-stamp seam: the session
+the stamp falls in (a date at or before that session's close, so pre-market counts), else
+the NEXT exchange session. Evening, weekend and holiday all map forward. Zones are
+converted with `astimezone`, never stripped; a naive stamp is read as market-local, and a
+full ISO TIMESTAMP in text is parsed as a moment - reading its first ten characters as a
+date answered Friday for a call made at 21:04 that evening.
+
+**And the session a decision belongs to is an ADDITIVE field, never a new meaning for an
+old one** (reviewer NO-GO at `21ed0eb6`, closed at `a744bec1`). `session_date` is the join
+every live reader uses - `review_learning`'s veto cohort behind `review_policy.json`, the
+three cohort graders, `daily_recap_reader._decisions`, and `pick_feedback`, which feeds the
+setups-table hide, the chart-cycling skip and the review queue's "Reviewed today" mark.
+TJ-11's first build moved both the written value and `load_annotations`' DEFAULT join, and
+the reviewer reproduced it on a copy of the live stores: on Monday 2026-09-21 the branch
+would have hidden **12 setups rows where base hid none** and marked **18 names
+Reviewed-today**, and the writer change would have moved Friday-evening vetoes into
+`review_learning`'s veto cohort, the cohort graders and the recap.
+
+The lead's binding design: **`session_date` keeps EXACTLY its base meaning and value for
+every writer and reader.** The decision's session is a NEW ADDITIVE key,
+`decision_session` (`store.DECISION_SESSION_FIELD`), written on NEW rows only, empty rather
+than guessed when the calendar cannot answer, **never backfilled** - an old row simply
+lacks it. Only TJ-11's readers use it, taking the stored value when present and mapping the
+stamp forward when it is not (`store.row_decision_session`, `walkaway_day._row_session`),
+and `load_annotations(..., by_decision_session=True)` is the explicit opt-in that nothing
+outside TJ-11 passes. A cohort row is built from named fields, so the extra key adds no
+column to any grader. Parity with base is PINNED by tests for `pick_feedback`,
+`review_learning`'s join, the three cohort graders and `daily_recap_reader._decisions`.
+
+**The Saturday-stamped picks were left where they are** (lead decision (a)). The 18
+annotation rows carrying 2026-09-19 became **12 veto-cohort and 6 like-cohort picks** with
+a non-session `trade_date` and a Monday-close ruler, and **zero outcome rows**. The graders
+and those rows are deliberately untouched: nothing on the live desk changed, and only
+TJ-11's readers map forward.
+
+**The skill line: a miss is always read against a base rate** (decision 0021 answer 22).
+Three populations of the SAME scan - liked/claimed, rejected, untouched (shown by the scan,
+no verdict from the trader) - PARTITION the scan's rows, each with `n`, `measured`,
+`pending`, `runs`, the rate and the ONE Wilson interval (`swing_headline`'s z 1.96, both
+ends), cut by side and, where `measured >= MIN_REPORTABLE_N`, by setup family. `n` is the
+population (one row per name per session in the window - the label says **scan rows**);
+`measured` is the Wilson denominator. Both windows are rendered, each saying its window in
+SESSIONS, and every cell prints `n`, `measured` and `pending` ALWAYS, not only when they
+differ.
+
+**A POOLED RATE COUNTS A NAME ONLY WHEN ITS HORIZON HAS CLOSED** - runs and no-runs alike
+(the second reviewer NO-GO). The first build kept an early `run` inside an open
+five-session horizon while holding back that window's no-runs as `unmeasured:horizon_open`,
+so the numerator could grow where the denominator could not and every open-horizon cell
+read **100% by construction**: the lately LONG rejected cell shipped **34% (30/87)** where
+the closed-horizon-only truth was **26% (20/77)**. Open names are in neither half of the
+fraction and are printed as their own count, `pending P`; a session whose horizons are all
+open reads `measured 0, pending N` and names no rate. The ROW may still show its early run
+- a row is a fact about one name, a rate is a claim about a group - and `_D1Reading.pool`
+says which bucket a name is in so no reader infers it from a verdict string. Overlapping
+intervals are SAID to overlap. Size and name order the view - **no R statistic selects what
+is shown** (gate #43).
+
+**One deterministic sentence per table**, e.g. `You vetoed 92. 7 were real misses; 4 share
+the reason extended.` Only the VETO vocabulary is counted in the reason clause - a
+pick-feedback "not today" is a verdict with free text, not a code the trader chose - and
+overlapping codes are never summed (the top code needs at least two rows).
+
+**Instrument-aware rows** (decision 0021 answer 24). An option trade and a position held
+past `LONG_HOLD_SESSIONS` (5, counted in EXCHANGE sessions) keep their money figure and
+lose "left on the table today"; the row says `not judged here: <reason>` instead of a wrong
+number. Assignment is read off the LEGS (IBKR writes `Buy 100 … (Assignment)`); legs that
+say nothing leave it `unmeasured`, never "not assigned". Every money line carries its `n`
+and reads "too few to call" under `MIN_REPORTABLE_N`.
+
+**What the page costs, and the caps that bound it.** One worker, one payload, lists diff,
+no second read. `read_day` hands the builder the session's decisions WITH their reason
+code, every decision of the lately window, the session-and-lately scan rows (the
+horizon-outcomes read it was ALREADY doing - the 1.1 GB tracker is never opened by a page)
+and daily bars. **Daily bars are bounded by SIZE rules, never by a result**: the trader's
+own decisions in full, then `EARLIER_SYMBOL_CAP` (150) earlier names and
+`UNTOUCHED_SYMBOL_CAP` (150) untouched names in NAME order, `DAILY_BAR_SYMBOL_CAP` (400)
+in total, each trimmed to `DAILY_BAR_TAIL` (60) bars, and a symbol this read put into
+`chart_snapshot`'s process-wide cache is dropped from it again. Measured 2026-09-19: the
+daily-bar read at the caps is **3.37 s and 112 MB**, against a session scan of ~1,100
+distinct names that would cost ~5 s and ~340 MB unbounded. `read_day` as a whole measured
+**6.8-9.8 s per session on a staged home**. A name past a cap is `unmeasured` and every
+cell says `measured K of N`.
+
+**The render rule this packet learned the hard way.** `_fill_the_width` leaves every column
+but the last in `ResizeToContents`, and Qt re-measures those columns on EVERY `setItem`
+(bounded to 200 rows, through a styled delegate, on the GUI thread). Five tables and ~700
+rows spent **90 seconds inside one `processEvents`**. The mode is suspended for the fill
+and restored once. Reload's worst single GUI stall on the staged home: **672.9 ms before
+TJ-11, 92.4 ms after**, and settle-deadline hits went 2 -> 0.
+
+**Four reviewer advisories, recorded and not repaired.**
+* `load_annotations(by_decision_session=True)` and `row_decision_session` have **no
+  production caller yet** - the service maps through `_stamped_dates_for`. They exist for
+  TJ-15 and are pinned only by tests.
+* The stored `decision_session` and the service's tag **DISAGREE for a same-day after-close
+  call**: for a Friday 16:30 ET veto the stored field says Monday while the page shows it
+  on Friday. TJ-15's nightly slot must pick one of the two deliberately, and say which.
+* `market_calendar.session_close` is a flat 16:00 with no early-close modelling. This is
+  pre-existing and TJ-11 did not widen it.
+* On a fresh day the SESSION skill line honestly reads `measured 0, pending N` and names no
+  rate; the LATELY line is the one carrying content. That is the closed-horizon rule
+  working, not an empty page.
+
+**Open trader question** (not blocking): should a Friday-evening veto hide its setups row
+and count for the cohort on MONDAY? Today it is stamped with New York's Saturday date and
+nothing about that changed.
