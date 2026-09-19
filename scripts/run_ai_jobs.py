@@ -86,6 +86,17 @@ def _print_status() -> int:
         session_date = ""
         session_note = f"session calendar cannot answer: {exc}"
 
+    # TJ-13A item 2: --status reports TONIGHT'S slate, not the full slot list.
+    # An operator reading this at 21:00 wants to know what is about to run, and
+    # since the slate depends on the night, printing `default_slots()` would
+    # promise `ai_summary` on a Tuesday and omit `weekly_synthesis` on a
+    # Saturday. Both helpers fail safe, so --status still prints.
+    kind = _night_kind_or_weeknight()
+    try:
+        slate = runner.slots_for(kind, session_date=session_date)
+    except Exception as exc:  # --status prints state; it never crashes
+        slate = []
+        session_note = f"{session_note}; slate unavailable: {exc}".strip("; ")
     payload = {
         "session_date": session_date,
         "session_note": session_note,
@@ -93,10 +104,12 @@ def _print_status() -> int:
         "store_available": available,
         "store_reason": reason,
         "window": window.describe_window(),
+        "night_kind": kind,
         "slots": [
             {"name": slot.name, "reserve_minutes": slot.reserve_minutes,
-             "enabled": slot.enabled, "description": slot.description}
-            for slot in runner.default_slots()
+             "enabled": slot.enabled, "uses_model": slot.uses_model,
+             "description": slot.description}
+            for slot in slate
         ],
     }
     if available and session_date:
