@@ -762,9 +762,16 @@ def _real_miss_clause(rows: Sequence[WalkawayRow]) -> str:
 
 
 def _reason_clause(rows: Sequence[WalkawayRow]) -> str:
-    """The one code the most rows share. Overlapping codes are never summed."""
+    """The one code the most rows share. Overlapping codes are never summed.
+
+    Only the VETO vocabulary is counted. A pick-feedback "not today" carries a
+    free-text reason, and pooling it with coded vetoes would print a verdict as
+    though it were a reason the trader chose from a list.
+    """
     counts: dict[str, int] = {}
     for row in rows:
+        if row.what_you_did != "veto":
+            continue
         for code in str(row.reason or "").split(","):
             code = code.strip()
             if code:
