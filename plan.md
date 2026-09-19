@@ -162,7 +162,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-9 … TJ-13 PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-13A MERGED 2026-09-19** (`claude/tj13a-night-slates` → `lead/p033-integration` `9eaae1dd`; nights only seven days, night slates, four overnight repairs; gate #158 owed); **TJ-9 … TJ-13 otherwise PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -905,12 +905,24 @@ own process (a desk restart never kills it), but Saturday's and Sunday's firings
 slot, `weekly_synthesis` has never run (it needs a typed command), and
 `ai_local_model_large` (the 27B) is configured and used by nothing.
 
-5. `window.py` loses "weekends are open all day": the configured night window applies
+**TJ-13A — items 5, 6 (the slate machinery), 8, 9 and 10 are BUILT and MERGED**, branch
+`claude/tj13a-night-slates`, merged `9eaae1dd` into `lead/p033-integration` on 2026-09-19
+(reviewer GO by reproduction against a copy of the live 476-row ledger; the review round
+capped `ai_summary` at three attempts, made `--slot` resolve against every registered
+slot, and kept the rejected-reply log local). Decision 0018 carries the 2026-09-19
+amendment; long form in DESK_INTERNALS "Night kinds". **TJ-13B is what remains**: item 7
+(the 27B week story) and item 6's Sunday EXTRAS — suggested setup tags for old untagged
+trades, and the week-ahead note. Live gate #158 stays owed.
+
+5. **BUILT (TJ-13A), except that a daytime request is REFUSED, not QUEUED**: a forced
+   model slot records `skipped` and the page button refuses with the window's own reason.
+   The queue-for-tonight belongs to TJ-4. `window.py` loses "weekends are open all day": the configured night window applies
    seven days a week, so no run — scheduled, forced or from a page button — starts local
    inference by day. A daytime request is queued for tonight (TJ-4's rule, now general).
    The one standing exception stays the Trade Mentor's seconds-long draft on the trader's
    own reply (CLAUDE.md, quiet hours); the trader may remove it.
-6. **Weeknights** run only the short trader-facing slots plus the deterministic stage.
+6. **BUILT (TJ-13A) except the two Sunday extras named below, which are TJ-13B.**
+   **Weeknights** run only the short trader-facing slots plus the deterministic stage.
    **Saturday night** (the first night with no session behind it) runs the weekly slate:
    `ai_summary` once a week instead of nightly, `weekly_synthesis` without a typed command,
    `week_review_narration`, the month re-cut. **Sunday night** runs the backlog: a retry of
@@ -918,31 +930,38 @@ slot, `weekly_synthesis` has never run (it needs a typed command), and
    (suggestions only — `journal_bulk_tag`'s provisional rule, never a confirm), and a short
    week-ahead note ready before Monday's open. A slate that does not finish resumes the
    next night; nothing runs past the window's end.
-7. **The week story is written by the large LOCAL model** (trader, 2026-09-19, replacing
+7. **NOT BUILT — this is TJ-13B.** **The week story is written by the large LOCAL model** (trader, 2026-09-19, replacing
    TJ-5's OpenAI default): `ai_week_review_provider` defaults to `local_large`, falls back
    to local medium and says so in the ledger; `openai` remains a setting, off. It may only
    narrate measured rows (TJ-4's amendment applies). The builder first measures the 27B on
    this desk — load time, tokens per second, peak memory beside a running desk — on a copy
    of one week's packs, and the slot's `reserve_minutes` comes from that number.
 
-8. **Where `ai_summary` runs:** item 6 supersedes "then `ai_summary` last" in the paragraph
-   above — it leaves the weeknight slate entirely and runs on Saturday night.
-9. **One slot list, kept whole.** This program's new slots, by decision-0018 stage, for
+8. **BUILT (TJ-13A). Where `ai_summary` runs:** item 6 supersedes "then `ai_summary` last" in the paragraph
+   above — it leaves the weeknight slate entirely and runs on Saturday night, for ONE
+   session a week (Friday's), capped at three attempts.
+9. **BUILT (TJ-13A) as a RULE; each listed slot still arrives with its own packet.**
+   **One slot list, kept whole.** This program's new slots, by decision-0018 stage, for
    `EXPECTED_SLOT_ORDER`: Stage 1 (deterministic) `miss_contrast` (TJ-15),
    `prediction_contrast` (TJ-16), the day-pack build; Stage 2 `day_review_narration`
    (TJ-4), `observation_tags` (TJ-16), `week_review_narration` (TJ-5, Saturday night);
    Stage 3 `improvement_ideas` (TJ-6). Each packet appends its own slot inside its stage;
    recon places a new Stage 1 slot against `measured_report`, which today closes that
    stage.
-10. **The measured report's examples repeat one name** (audit, 2026-09-17 report: `ABCL`
+10. **BUILT (TJ-13A).** **The measured report's examples repeat one name** (audit, 2026-09-17 report: `ABCL`
     three times, `ERAS` three times, one swing id three times). Its best/worst lists
     de-duplicate by symbol before they take the top three; fail-before-fix.
 
 Live gate **#158**: the ledger shows the day story finished before 23:30 Pacific, the
 morning brief lists no membership-only name, `ai_summary` is either synthesized or failed
 fast and runs on Saturday night only, no ledger row starts between 06:00 and 22:00 Pacific
-on any day, and Sunday's Week Review shows a week story whose ledger row names the large
-local model.
+on any day, Sunday night's ledger shows only the deterministic stage plus whatever the
+weekend still owed, and Sunday's Week Review shows a week story whose ledger row names the
+large local model. Reading "failed fast": a REFUSED endpoint degrades in seconds (measured
+2.06 s), a HUNG one still costs ONE 900 s read timeout on the first slice — a ~15 minute
+degrade is the repair working, not a regression. The TJ-13A clauses are readable on the
+first weekend after the merge; the day-story clause belongs to TJ-4 and the large-local
+week-story clause to TJ-13B.
 
 ##### TJ-14 — The Mentor asks for what the desk is missing, and nothing else
 
@@ -1159,7 +1178,7 @@ full suite with the nightly AI lock free, ruff, smoke, selftest, and reconciles 
 
 | Wave | Packets (file in `.claude/packets/`) | Branch | Needs |
 |---|---|---|---|
-| 1 | TJ-9 (`TJ-9.md`) · TJ-11 (`TJ-11.md`) · TJ-13A (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` · `claude/tj13a-night-slates` | `main` |
+| 1 | TJ-9 (`TJ-9.md`) · TJ-11 (`TJ-11.md`) · **TJ-13A MERGED 2026-09-19** (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` · `claude/tj13a-night-slates` (merged `9eaae1dd` into `lead/p033-integration`) | `main` |
 | 2 | TJ-14A (`TJ-14A.md`) · TJ-3 (`TJ-3.md`) · TJ-15 (`TJ-15-16.md`) | `claude/tj14a-mentor-card` · `claude/tj3-note-markers` · `claude/tj15-miss-contrast` | TJ-9 · TJ-11 · TJ-11 |
 | 3 | TJ-14B (`TJ-14B.md`) · TJ-10 (`TJ-10.md`) | `claude/tj14b-mentor-questions` · `claude/tj10-read-grader` | TJ-14A (TJ-10 also rebases on TJ-3's page edits) |
 | 4 | TJ-4 (`TJ-4.md`) · TJ-16 (`TJ-15-16.md`) · TJ-13B (`TJ-5-6-7-13B.md`) | `claude/tj4-day-story` · `claude/tj16-prediction-contrast` · `claude/tj13b-large-local` | TJ-10, TJ-11 · TJ-10, TJ-14A, TJ-15 · TJ-13A |
@@ -1187,7 +1206,7 @@ TJ-10 → TJ-4 → TJ-12), `ui/widgets/trade_mentor_card.py` (TJ-9 → TJ-14A �
 | 6 | TJ-12 | Six-line report card heading Day Review (incl. How fresh) | TJ-10, TJ-11 | #157 |
 | 7 | TJ-15 | What the misses had in common (measured feature contrast) | TJ-11 | #160 |
 | 8 | TJ-16 | Prediction ledger, naive baselines, calibration, right-vs-wrong contrast, grounded word tags | TJ-10, TJ-14 | #161 |
-| 9 | TJ-13 | Nights only 7 days; weeknight vs Saturday vs Sunday slates; 27B week story; briefs / summary / enrichment repairs | TJ-4's slot | #158 |
+| 9 | TJ-13 | **TJ-13A MERGED 2026-09-19** (nights only 7 days; weeknight vs Saturday vs Sunday slates; briefs / summary / enrichment / examples repairs). TJ-13B remains: 27B week story, Sunday's suggested tags and week-ahead note | TJ-4's slot | #158 |
 | 10 | TJ-5 | Week Review: five day cards, week story, week + four-week + month strip | TJ-4, TJ-12 | #149 |
 | 11 | TJ-6 | Ideas card; a kept idea is checked before and after | TJ-5 | #150 |
 | 12 | TJ-7 | Mood / process fields (the Mentor asks them through `day_close`) | TJ-14 | #151 |

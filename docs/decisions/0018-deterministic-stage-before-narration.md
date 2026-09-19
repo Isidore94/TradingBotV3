@@ -127,3 +127,66 @@ edits one tuple rather than the six index assertions this change had to touch.
 * `docs/LOCAL_AI_AUTOMATION_PLAN.md` §3.4, §6.4c, §7 — the window, the
   journal-pull exception, the deterministic slots.
 * `docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md` findings 6 and 7.
+
+## Amendment 2026-09-19 — a night's slate, and which night it is (TJ-13A)
+
+Authorized by the trader on 2026-09-19 (decision 0021 answers 18-19; plan.md
+§12.4 TJ-13 items 5, 6 and 8). Built on `claude/tj13a-night-slates`, merged at
+`9eaae1dd`. It amends WHICH SLOTS a night holds. It moves no stage boundary and
+reorders no slot: `EXPECTED_SLOT_ORDER` is unchanged and every slate below is a
+subsequence of it. It changes ONE retry budget — `ai_summary` gains
+`max_attempts=3`, for the reason given at the end.
+
+**The order in this record is the order WITHIN a night.** A slate is a CHOICE of
+slots, made first; the three stages then order whatever was chosen.
+
+**Three night kinds**, named on the exchange calendar by
+`ai_jobs.runner.night_kind()` from the evening the night STARTED — noon ET splits
+one night from the next, so Saturday night's 02:00 firing is still Saturday's:
+
+* `weeknight` — the evening was a session.
+* `sunday` — it was not and the next day is. A Monday holiday moves this to
+  Monday night.
+* `saturday` — neither. A Friday holiday starts it a night early, and in that
+  week Friday AND Saturday night are both `saturday`; the second is the resume
+  night.
+
+**Their slates** (`ai_jobs.runner.slots_for()`):
+
+| night | slate |
+|---|---|
+| weeknight | the whole slate except `ai_summary` |
+| saturday | the whole slate, plus `weekly_synthesis` at the end of stage 3 |
+| sunday | stage 1, plus a retry of any slot this weekend ATTEMPTED, did not finish, and is still inside its cap |
+
+A slot that never ran is not "owed": Sunday is the backlog, not a second weekly
+slate. Both weekend nights key to the same session date — Friday's — which is
+what makes the ledger the honest record of what the weekend still owes.
+
+**Why `ai_summary` leaves the weeknight slate.** Measured on the live ledger
+2026-09-19: 12,453–18,540 s a night, ending `degraded_no_narrative` on 09-15,
+09-16, 09-17 and 09-18. It is the slot the night cannot afford five times a
+week; on Saturday it has the whole night in front of it. **It therefore runs for
+ONE session a week — Friday's, on Saturday night — so Monday through Thursday
+sessions get no AI summary at all.** Its new `max_attempts=3` is three attempts
+at that one session: fail-fast (below) made a failing summary cheap, and cheap
+plus unbounded is a loop — a weekend night's ~16 firings ran a degrading summary
+TEN times in one simulated Saturday before the cap.
+
+**Why `weekly_synthesis` stops needing a typed command.** This record's "What is
+NOT decided here" said it "remains in `optional_slots()`, never in the nightly
+slate". That clause is superseded FOR THE SATURDAY SLATE ONLY: in 476 ledger
+rows it had never run, because the only way to reach it was
+`run_ai_jobs.py --weekly-synthesis`. A safeguard nobody can reach past is not a
+safeguard. `optional_slots()` is still constructed per call and still absent
+from `default_slots()`, so it cannot leak onto a weeknight.
+
+**A typed `--slot` is not filtered by the slate.** It resolves against
+`default_slots() + optional_slots()` — every registered slot — and an unknown
+name is an error exit that lists the valid ones. A slate is what the night does
+UNATTENDED; naming a slot is the operator's explicit choice. This widens what
+can be NAMED and never what can RUN: a `uses_model` slot named by day is still
+refused by the night-only window.
+
+**One reopen trigger is added:** if a night kind is ever chosen by anything
+other than the exchange calendar, `night_kind` is the one place it changes.

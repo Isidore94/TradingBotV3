@@ -2291,6 +2291,40 @@ They are evidence and must not be loaded as context.
 - Separate off-hours `ai_jobs` process and scheduled task, job-ledger integration,
   deterministic evidence coverage, daily advisory summary, per-ticker briefs, full
   artifacts in `ai_store`, and bounded atomic `ai_morning_brief.txt` publication.
+- Local inference is night-only, SEVEN DAYS A WEEK, and the night picks the slate. The
+  configured ET off-hours window applies every day (the weekend "open all day" exemption
+  is removed; the market-session block keeps its own weekend short-circuit); `--force`
+  re-spends the attempt caps and the already-completed check but not the clock for a slot
+  that calls a local model, which each slot declares as `JobSlot.uses_model`.
+  `runner.night_kind()` names a night on the exchange calendar from the evening it
+  started, and `runner.slots_for()` builds its slate: a weeknight without `ai_summary`;
+  Saturday night with `ai_summary` and `weekly_synthesis` and no typed command; Sunday
+  night the deterministic stage plus a retry of any slot the weekend attempted, did not
+  finish and is still inside its cap. `ai_summary` therefore runs for ONE session a week -
+  Friday's, on Saturday night - and is capped at three attempts. The slate is chosen first
+  and decision 0018's stages then order it - `EXPECTED_SLOT_ORDER` is unchanged.
+  `run_ai_jobs.py --status` prints the night's own slate, and `--slot` resolves against
+  every registered slot (`default_slots() + optional_slots()`), an unknown name being an
+  error exit.
+- The nightly summary fails fast or finishes: an unreachable local endpoint ends the map
+  pass on its first call rather than after every slice's own read timeout (a REFUSED
+  endpoint degrades in about 2 s; a HUNG one still costs one 900 s read timeout on the
+  first slice; an ordinary slice failure still costs one slice), the synthesis package is
+  bounded by the existing local evidence budget, and what did not fit is counted in
+  `findings_dropped_to_fit` and stated in the coverage line. Every rejected model reply is
+  persisted locally under `project_paths.AI_REJECTED_REPLIES_DIR`, bounded at 20,000
+  characters and 200 files, one file per rejection, without ever raising into the slot. A
+  reply wrapped in the response schema's own name is unwrapped and validated; a reply that
+  echoes the schema stays rejected. The morning brief counts a membership-only name in its
+  header and prints no section for it, and the measured report's example lists name three
+  different symbols (or occurrence ids). A per-ticker projection's `truncated` flag is
+  re-derived from the projection itself rather than inherited from the session package, so
+  the model is no longer told that a source it received whole was cut. The A.I. Summary
+  page's Generate button asks the same off-hours window before a local run and refuses
+  with its reason; a cloud provider is unaffected. A forced daytime run of a slot that
+  declares model-free keywords (`daily_digest`'s `narrate=False`) writes its deterministic
+  facts pack - superseding, never overwriting last night's narrated digest - and records
+  what it left out.
 - Per-ticker briefs project each symbol out of a full-size base package and then
   ration the projection to the local context window; ticker-roster and bare-name
   lines are discarded as non-evidence, each symbol resolves independently, a symbol
@@ -2829,6 +2863,26 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-19 - TJ-13A: nights only seven days, night slates, four overnight repairs (branch `claude/tj13a-night-slates`, merged into `lead/p033-integration` `9eaae1dd`)
+
+The trader keeps the desk on at the weekend and wants it for market prep by day, so local
+inference now honours the configured ET night window every day of the week and each night
+picks its own slate on the exchange calendar: weeknight without `ai_summary`, Saturday
+night with `ai_summary` and `weekly_synthesis` (which had never run in 476 ledger rows
+because it needed a typed command), Sunday night the deterministic stage plus what the
+weekend still owes. `EXPECTED_SLOT_ORDER` and decision 0018's stage boundaries are
+unchanged - the slate is a choice of slots, the stages then order it. Four overnight
+repairs ride with it: the summary gives up on an unreachable endpoint at the first call
+and bounds its synthesis package to the local evidence budget (measured 119,677 characters
+against 78,119), the enrichment reply wrapped in its own schema name is unwrapped, the
+morning brief counts membership-only names instead of printing 259 empty sections, and the
+measured report's example lists name three different symbols. Reviewed GO by reproduction
+against a copy of the live 476-row ledger; the review round then capped `ai_summary` at
+three attempts, made `--slot` resolve against every registered slot with an unknown name an
+error exit, and moved the rejected-reply log to the local runtime tree. Full suite on the
+integration branch: BASELINE_PENDING_LEAD. Live gate #158's first read is owed after
+tonight's Saturday slate.
 
 ### 2026-09-18 - TJ-2: Day Review session bars and instant walk-away (local `main` `d3ae3aff`)
 

@@ -1291,6 +1291,198 @@ original closed schema, including the 2,000-character limit. Other HTTP failures
 The repair changes neither model nor timeout, never changes journal trade selection, and leaves
 prior artifacts intact on a failure.
 
+## Night kinds - the night picks the slate, and nothing runs by day (2026-09-19, TJ-13A)
+
+The long form behind the CLAUDE.md rule *"Local inference is night-only, seven days a
+week, and the NIGHT picks the slate."* Trader, 2026-09-19: *"I keep the computer on
+overnight in the weekends too. … I always want the bot to run overnight never during the
+day so I can restart it or use it for market prep."* Decision 0021 answer 19; plan.md
+§12.4 TJ-13 items 5, 6 and 8; decision 0018's 2026-09-19 amendment. Branch
+`claude/tj13a-night-slates`, merged `9eaae1dd`.
+
+**What was measured.** The `TradingBotV3 AI Jobs` task already fires 22:00-06:00 Pacific
+seven nights a week as its own process, but `window.is_weekend` short-circuited the
+configured clock, so the whole of Saturday and Sunday counted as inside the window - on
+the two days the trader is at the desk all afternoon. The weekend branch of
+`window_close_at` then walked forward to the next WEEKDAY morning, so a job starting
+23:00 Pacific Saturday was told it had until 09:00 ET Monday: 31 hours, and every
+`reserve_minutes` check passed on a number that was never true. The honest answer is 420
+minutes. `weekly_synthesis` had never run in 476 ledger rows because it needed a typed
+command, and `ai_summary` ran 12,453-18,540 s a night, ending `degraded_no_narrative`
+four nights running.
+
+**The rules.**
+* The configured ET window applies EVERY day. The market-session block keeps its own
+  weekend short-circuit - that is the sec 2 hard rule's fail-closed design, it must not
+  need the calendar on a day the exchange never opens, and TJ-13A did not touch it.
+* `--force` buys the attempt caps and the already-completed check. It does NOT buy the
+  clock for a `JobSlot.uses_model` slot. A deterministic slot is seconds of work and no
+  model, and stays forceable by day - that is the repair the flag exists for.
+* `uses_model` is DECLARED per slot, never inferred from a name, so a later packet that
+  adds a model to a slot says so in the same edit. `daily_digest` carries it: its facts
+  are deterministic, its second artifact is narrated.
+* A night is keyed to the EVENING IT STARTED. Noon ET is the split, which sits outside
+  both the live 01:00-09:00 ET window and the 18:30-08:00 default, so an evening firing
+  keeps its own date and a small-hours one belongs to the day before. In ET, Saturday
+  night's firings are already stamped Sunday - that is exactly the seam a date-only
+  reading gets wrong.
+* The kind comes from the exchange calendar, not the weekday number, so a Monday holiday
+  moves the Sunday slate to Monday night and a Friday holiday starts the weekend a night
+  early. In a Friday-holiday week Friday AND Saturday night are both `saturday`, and the
+  second is the resume night.
+* `night_kind` raises when the calendar cannot answer; `run_ai_jobs.py` catches it and
+  uses the WEEKNIGHT slate - the light one - because "we could not tell" must spend the
+  least, and `run_slots` still refuses outright a moment later rather than keying
+  artifacts to a guessed session date.
+* `EXPECTED_SLOT_ORDER` is the order WITHIN a night. Every slate is a subsequence of it.
+
+**A typed `--slot` is the operator's explicit choice.** It resolves against every
+registered slot - `default_slots() + optional_slots()` - and not against tonight's slate,
+because a slate is what the night does UNATTENDED. Filtering a typed name by the slate
+made `--slot ai_summary` on a weeknight a silent no-op that exited 0, while
+`run_ai_jobs.py`'s own docstring advertised that exact command; "I typed it wrong" and
+"it ran and found nothing" must not look alike, so an unknown name is an error that lists
+the valid ones. This widens what can be NAMED and never what can RUN: a model slot named
+by day is still refused by the night-only window, and its ledger row still says so.
+
+**The page button is gated too, and it was already shut.** `AiSummaryPanel
+.generate_summary` now asks `window.launch_allowed()` before a LOCAL run and refuses with
+the window's own reason ("Local AI runs at night only, seven days a week: …"), starting
+no thread. There is ONE window in the system, not a second one on the panel that could
+disagree. A CLOUD provider is untouched: the rule is about this desk's hardware, and a
+metered API call competes with nothing here.
+
+RECORDED rather than repaired: that door was already shut for a different reason.
+`AiCredentialVault` knows `openai` and `anthropic` only (`ai_credentials
+.PROVIDER_ENV_KEYS`), so the panel's local path has always stopped at "unsupported AI
+provider: local" before any thread was created - even though the combo box offers "Local
+(on this desk)" whenever `ai_local_endpoint_url` is set. The window gate is therefore
+defence in depth, and enabling the button to actually reach a local model is a
+capability, which is the trader's call and not this packet's.
+`tests/test_tj13a_panel_night_only.py` pins both facts, so whoever enables it finds the
+gate already in front of them.
+
+**A forced daytime run may still do a slot's DETERMINISTIC half.**
+`JobSlot.model_free_kwargs` declares the keyword arguments that make a slot's own `run`
+model-free. Only `daily_digest` has any - `{"narrate": False}`, a switch
+`run_daily_digest` carried before this packet - because its fact pack is deterministic
+and its narration is a second artifact that already degrades on its own. Marking the slot
+`uses_model` had taken the fact pack away from a forced daytime run; this gives it back
+without reopening the door. **The forced daytime run writes a superseding facts pack and
+never overwrites last night's narrated digest**, and the ledger row says what was left
+out, so it can never be read as the night's full digest. It is KEYWORDS rather than a
+second callable because the house test pattern is `dataclasses.replace(slot, run=<spy>)`,
+which would not replace a second callable and would reach the real job through it. A slot
+with no model-free half declares None and is still skipped - there is no summary without
+a model.
+
+## The synthesis call is the one nobody budgeted (2026-09-19, TJ-13A)
+
+TJ-13A item 3. Two defects sat in one ledger line, 2026-09-17: *"53 of 53 slice(s);
+completion=unsynthesized_fallback after RuntimeError: local AI endpoint … is unreachable:
+… Read timed out. (read timeout=900)"*.
+
+1. **A dead endpoint cost the whole night.** Every slice was attempted in turn and each
+   had to reach its own 900 s timeout, so an endpoint not answering at 22:00 was
+   discovered at 03:00. `ai_summary.LocalEndpointUnreachable` and
+   `is_endpoint_unreachable` name that failure - by class first, by the sentence second,
+   because a caller that wraps or re-raises it loses the type and keeps the words.
+   `run_map_reduce` gives up on it at once. It keys on UNREACHABLE and NEVER on any
+   failure at all: an ordinary bad slice still costs its own slice. The 30-minute re-fire
+   is the retry ladder for a transient blip.
+
+   **Say "on the first call", not "in seconds".** A REFUSED endpoint - nothing listening -
+   is measured at 2.06 s, and the slot degrades about that fast. A HUNG one still costs
+   ONE full 900 s read timeout on slice 1, because the timeout is what discovers it; what
+   the repair removes is the other 52. The difference is worth writing down so nobody
+   reads a 15-minute degrade as a regression.
+2. **Every map slice is chunked to fit; the reduce call was not.** The package that has
+   to hold the whole night was 119,677 characters against the local evidence budget -
+   **78,119 characters as this desk is configured today**, derived from the 64k context -
+   which is how a 900 s read timeout became the normal ending on 09-15, 09-16, 09-17 and
+   09-18. The bound is that setting, read at run time, so it tracks the context rather
+   than a number written down twice. `bounded_findings_package` binary-searches the
+   largest HIGHEST-CONFIDENCE prefix that fits `evidence_budget_for("local",
+   tier="medium")` - the existing setting, not a new number - rebuilding the package for
+   each measurement rather than estimating, because the skeleton, the aliases and the
+   hash all cost characters.
+
+**Bounding is not silent truncation.** `map_reduce.findings_dropped_to_fit` is ALWAYS
+PRESENT - 0 on a night where everything fit, so "0" cannot be read as "this build did not
+look" - and the coverage statement says the number in words, the way it already names a
+failed slice.
+
+**A rejected model reply is now kept.** `ai_summary.record_rejected_reply` writes one
+bounded JSON file per rejection under `project_paths.AI_REJECTED_REPLIES_DIR` - **LOCAL**,
+under the runtime tree, and never the AI store, which is the DAS and can be asleep: this
+runs inside a slot, and a ~20 s spin-up to file a diagnostic would make the record cost
+more than the thing it records. No DAS path is reachable from the slot. Temp-and-rename,
+bounded twice (`MAX_REJECTED_REPLY_CHARS` 20,000 chars per file,
+`MAX_REJECTED_REPLY_FILES` 200 files kept), pruned after the write, and it NEVER raises
+into the slot: an evidence store is never allowed to cost the thing it records, and this
+one records a failure the ledger is already reporting properly. It exists because three
+identical nights of `journal_enrichment` failure left only the validator's sentence, and
+the shape behind it had to be reconstructed by hand.
+
+**`ai_summary` is capped at three attempts per session, and runs for ONE session a week**
+(Friday's, on Saturday night - Monday through Thursday sessions get no AI summary).
+`max_attempts=0` was written when a failing summary was expensive enough that the
+30-minute firings could never repeat it inside one night. Fail-fast made it cheap, and
+cheap plus unbounded is a loop: over one simulated Saturday night's ~16 firings a
+degrading summary ran TEN times, writing ten `degraded_no_narrative` rows and ten export
+sets for a single session. A forced daytime run records `skipped`, which is not in
+`ledger.ATTEMPT_STATUSES`, so an operator trying at lunchtime does not burn the night's
+attempts.
+
+## The four overnight repairs TJ-13A carried - envelope, membership, examples, truncation (2026-09-19)
+
+**The envelope this code asked for** (TJ-13A item 5). `journal_enrichment` failed
+2026-09-15/16/17 with "tradingbot_trade_enrichment is missing required field(s):
+confidence, sources, summary, tags, unknowns" - ALL FIVE, which only an object carrying
+none of the contract's keys at the top level can give. The request is where that shape
+comes from: the payload sets `response_format.json_schema.name`, and a backend that
+echoes its own envelope key returns the complete answer one level down.
+`unwrap_schema_envelope` unwraps it only when the object has EXACTLY ONE key, that key is
+the schema name the request supplied, and its value is an object. A reply that echoes the
+SCHEMA has several top-level keys, carries no answer, and stays rejected - an
+answer-shaped hole is a failure, never a row.
+
+**A membership-only name is counted, not printed** (TJ-13A item 4). Measured on the live
+`ai_morning_brief.txt` 2026-09-19: `Analyzed 53 of 312. Membership-only 259.` - 259 of
+312 sections said only that the symbol is on a list, the one thing the reader of a
+watchlist already knows, and they pushed real briefs past the 48 KB ceiling into "omitted
+from this small summary file". The name stays in the header's `Membership-only` count,
+which is why that header carries three numbers rather than one. `_morning_section` keeps
+Q3.3's prefix rule for the one entry it renders; the morning file no longer reaches it.
+
+**An example list names three different things** (TJ-13A item 6). The 2026-09-17 measured
+report read `ABCL` three times at 6.1619 percent, `ERAS` three times at -7.5875 and one
+swing occurrence id three times at 4.4529 R, out of 19,045 and 309 measured observations:
+a symbol carries several observations in a session and `_example_tables` took the top
+three ROWS. It now de-duplicates by name (occurrence id for a swing row) first. The
+DENOMINATOR does not move - the label is about the full population - and a short list
+stays short rather than re-admitting a duplicate to reach three.
+
+**A truncation flag describes THIS package** (TJ-13A fix round). `build_ticker_evidence`
+builds a per-symbol package by copying each session source (`dict(raw)`) and replacing
+its content with the symbol's slice - so the session's own `truncated` flag rode along
+onto a projection that was never itself cut. Measured read-only over all 53 published
+packages of the 2026-09-18 night: **80 of the 133 per-ticker sources carried the flag**,
+packages ran 6,476-9,675 chars against a 22,000 per-item budget, and every flagged source
+was AT MOST 825 characters against a 16,000 `MAX_TICKER_SOURCE_CHARS`. Neither budget
+constant was the cut - all 80 were false. The live `ai_morning_brief.txt` says
+"truncated" dozens of times (`grep -c` gives 63 lines, `grep -o` 64 occurrences; the
+point is the order of magnitude, not the digit) and the model hedges accordingly -
+"truncated, limiting the scope of the analysis" - about a 107-character source it had
+received whole.
+
+`_projection_was_cut` re-derives the flag from the projection in hand: True when the
+mapping branch produced a `truncated_record`, or when the encoded projection reaches
+`MAX_TICKER_SOURCE_CHARS`. A projection that lands exactly ON the ceiling is reported as
+cut, which is the conservative direction - "you may be reading part of this" is safe to
+say wrongly and "you have all of it" is not. A symbol that genuinely has more rows than
+the ceiling holds still says True.
+
 ## M1 - a shadow that measured nothing for ten days (2026-09-05)
 
 The long form behind the CLAUDE.md rule *"The AVWAP band challenger is measured through
