@@ -781,6 +781,13 @@ def _morning_section(entry: Mapping[str, Any]) -> str:
         # no `result` - and a position claim is impossible here for the same
         # reason, on top of the Q3.2 rule that would drop one anyway (a
         # membership source is kind `watchlist`, never `journal`).
+        #
+        # Since TJ-13A item 4 the MORNING FILE does not reach this branch:
+        # `render_morning_file` counts a membership-only name in the header and
+        # leaves it out of the body. The rule stays here because this function
+        # renders ONE entry and is the only place that knows how a
+        # membership-only entry reads; a surface that does print one must print
+        # it prefixed.
         reason = str(entry.get("reason") or "no session evidence beyond membership")
         return f"{heading}\n{MEMBERSHIP_ONLY_PREFIX}{reason}\n"
     result = entry.get("result") if isinstance(entry.get("result"), Mapping) else {}
