@@ -1137,19 +1137,48 @@ alongside TJ-10 and TJ-3) → TJ-4 (now needs TJ-10) → TJ-12 → TJ-15 (needs 
 real-miss rule) → TJ-16 (needs TJ-10's graded rows and TJ-14's split card; its ledger's
 context snapshot ships WITH TJ-10 so no click is ever stored without one) → TJ-13 (independent; any time after TJ-4's slot exists) → TJ-5 → TJ-6 →
 TJ-7 (fields only; its strip is TJ-14's `day_close`) → TJ-8. The original chain below still
-orders TJ-3 … TJ-8 among themselves. **No packet after TJ-9 merges until the desk has been
-restarted once and gates #145, #152 and #153 have been read on a real session** — the new
-layers stand on those pages.
+orders TJ-3 … TJ-8 among themselves. ~~No packet after TJ-9 merges until the desk has been
+restarted once and gates #145, #152 and #153 have been read on a real session~~
+**SUPERSEDED 2026-09-19 (trader: "I'd prefer to build it all now while I have usage
+available … make sure the plan lets me build it all right away"):** nothing waits on a
+restart. Every packet is built, reviewed and merged to `main` in the wave order below; the
+live gates (#145, #152, #153 and #154–#161) are read afterwards, on the trader's first
+restart and the sessions after it. A gate that FAILS then outranks any unbuilt packet.
 
-**The build at a glance (2026-09-19), in order.** A new session starts at the first row that
-is not MERGED: write `.claude/packets/TJ-n.md` from that packet's section, then recon →
-tester (red) → builder → reviewer (12.3).
+**How to start (2026-09-19).** Say to a new lead session: *"Build Phase 0.33 from `plan.md`
+12.5, wave by wave, with the agent team."* Every packet below is ALREADY WRITTEN in
+`.claude/packets/` (machine-local; read `TJ-LOOP0_COMMON.md` first - it tells each agent
+which files it owns and that the LEAD reconciles all docs). No code exists yet for any of
+them: on 2026-09-19 three testers were started and stopped within minutes at the trader's
+word; their empty worktrees and branches were removed.
+
+**Waves - packets in one wave own unrelated files and run in PARALLEL; a wave starts when
+the packets it needs are merged.** Per packet: tester (red, and step 0 verifies the
+packet's premises) → builder → reviewer → the lead merges in a scratch worktree, runs the
+full suite with the nightly AI lock free, ruff, smoke, selftest, and reconciles the docs.
+
+| Wave | Packets (file in `.claude/packets/`) | Branch | Needs |
+|---|---|---|---|
+| 1 | TJ-9 (`TJ-9.md`) · TJ-11 (`TJ-11.md`) · TJ-13A (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` · `claude/tj13a-night-slates` | `main` |
+| 2 | TJ-14A (`TJ-14A.md`) · TJ-3 (`TJ-3.md`) · TJ-15 (`TJ-15-16.md`) | `claude/tj14a-mentor-card` · `claude/tj3-note-markers` · `claude/tj15-miss-contrast` | TJ-9 · TJ-11 · TJ-11 |
+| 3 | TJ-14B (`TJ-14B.md`) · TJ-10 (`TJ-10.md`) | `claude/tj14b-mentor-questions` · `claude/tj10-read-grader` | TJ-14A (TJ-10 also rebases on TJ-3's page edits) |
+| 4 | TJ-4 (`TJ-4.md`) · TJ-16 (`TJ-15-16.md`) · TJ-13B (`TJ-5-6-7-13B.md`) | `claude/tj4-day-story` · `claude/tj16-prediction-contrast` · `claude/tj13b-large-local` | TJ-10, TJ-11 · TJ-10, TJ-14A, TJ-15 · TJ-13A |
+| 5 | TJ-12 (`TJ-12.md`) | `claude/tj12-report-card` | TJ-9, TJ-10, TJ-11, TJ-4 |
+| 6 | TJ-5 → TJ-6 → TJ-7 (`TJ-5-6-7-13B.md`), one after the other | `claude/tj5-week-review` · `claude/tj6-ideas` · `claude/tj7-mood-fields` | TJ-4, TJ-12, TJ-13B, TJ-15, TJ-16 · TJ-5 · TJ-14B |
+| — | TJ-8 cleanup | — | every page gate read live |
+
+Known shared files, so merge in wave order and rebase the later branch:
+`ui/panels/day_review_panel.py` and `ui/services/day_review_service.py` (TJ-11 → TJ-3 →
+TJ-10 → TJ-4 → TJ-12), `ui/widgets/trade_mentor_card.py` (TJ-9 → TJ-14A → TJ-14B),
+`ai_jobs/runner.py` + `EXPECTED_SLOT_ORDER` (TJ-13A → TJ-15 → TJ-4 → TJ-16 → TJ-5 → TJ-6).
+
+**The build at a glance, by packet.**
 
 | # | Packet | One line | Needs | Gate |
 |---|---|---|---|---|
 | — | TJ-1L | Day Review in two columns (MERGED; verified an ancestor of `main` 2026-09-19) | TJ-1 | #145 |
 | 1 | TJ-9 | Yesterday's trades labelled at 09:00, forced; label provenance; planned vs unplanned; journal freshness | — | #154 |
-| — | *restart* | Trader restarts once; #145, #152, #153 read on a real session before anything below merges | TJ-1, TJ-2 | — |
+| — | *restart* | NOT a hold any more (superseded above): the trader restarts when the build is merged and the gates are read then | — | #145 #152 #153 |
 | 2 | TJ-14 | Mentor card split (What I see / What I expect), question registry with consumers, budget of three, same-session fills, internals v2 | TJ-9 | #159 |
 | 3 | TJ-10 | Read grader on the clicked prediction (+ context snapshot), congruence lines | TJ-14 | #155 |
 | 4 | TJ-11 | Walk-away v2: earlier calls, against-first, ATR, real-miss rule, skill line vs base rate, instrument-aware rows, session stamp | TJ-2 | #156 |

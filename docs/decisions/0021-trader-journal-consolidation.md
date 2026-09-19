@@ -152,3 +152,9 @@ what to change — the lead answered about 65% as written and named eight holes.
     rates, oil, sector leaders and laggards, offense vs defense), is SHOWN on the card,
     is rebuilt for any moment from the durable session tape, and enters every AI pack and
     the prediction ledger through ONE function. `plan.md` TJ-14 item 6.
+31. **Build it all now; read the gates after** (trader, 2026-09-19: *"I'd prefer to build it
+    all now while I have usage available … make sure the plan lets me build it all right
+    away"*). This supersedes the last sentence of answer 28: no packet waits on a restart.
+    The packets are built, reviewed and merged in the wave order of `plan.md` 12.5; the live
+    gates are read on the first restart after, and a gate that fails then outranks unbuilt
+    work.
