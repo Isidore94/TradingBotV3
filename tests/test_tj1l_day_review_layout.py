@@ -318,10 +318,14 @@ def test_the_entries_list_and_the_reader_share_a_vertical_splitter(panel, qapp):
 # ==========================================================================
 # 3. the walk-away grid
 # ==========================================================================
-def test_the_walkaway_is_a_two_by_two_grid_with_four_tables(panel):
+def test_the_walkaway_is_a_two_by_two_grid_with_a_full_width_fifth_row(panel):
+    """TJ-11: the four populations, and "Earlier calls, now" across the bottom."""
     grid = panel.walkaway_grid
     assert isinstance(grid, QGridLayout)
-    assert grid.rowCount() == 2 and grid.columnCount() == 2
+    assert grid.rowCount() == 3 and grid.columnCount() == 2
+    fifth = grid.itemAtPosition(2, 0)
+    assert fifth is not None
+    assert _is_descendant(panel.walkaway_tables["earlier_calls"], fifth.widget())
     top_left = grid.itemAtPosition(0, 0)
     assert top_left is not None
     assert _is_descendant(panel.walkaway_tables["rejected"], top_left.widget())
@@ -344,16 +348,18 @@ def test_the_three_tj2_tables_fill_the_other_three_cells_in_order(panel):
         assert _is_descendant(panel.walkaway_tables[name], cell)
 
 
-def test_each_walkaway_cell_is_a_titled_ten_column_table(panel):
+def test_each_walkaway_cell_is_a_titled_table_with_every_column(panel):
+    from ui.panels.day_review_panel import TJ2B_WALKAWAY_COLUMNS
+
     for (row, column), name in zip(
-        ((0, 1), (1, 0), (1, 1)),
-        ("liked_not_traded", "traded_left_early", "claimed_d1"),
+        ((0, 1), (1, 0), (1, 1), (2, 0)),
+        ("liked_not_traded", "traded_left_early", "claimed_d1", "earlier_calls"),
     ):
         cell = panel.walkaway_cells[(row, column)]
         assert isinstance(cell, QFrame), cell
         table = panel.walkaway_tables[name]
         assert _is_descendant(table, cell)
-        assert table.columnCount() == 10
+        assert table.columnCount() == len(TJ2B_WALKAWAY_COLUMNS)
 
 
 # ==========================================================================
@@ -377,7 +383,8 @@ def test_every_table_on_the_page_stretches_its_last_column(panel):
     from PySide6.QtWidgets import QHeaderView
 
     tables = panel.findChildren(QTableWidget)
-    assert len(tables) == 5, [table.objectName() for table in tables]
+    # Five walk-away populations (TJ-11 added the fifth) plus "What you traded".
+    assert len(tables) == 6, [table.objectName() for table in tables]
     for table in tables:
         header = table.horizontalHeader()
         assert header.stretchLastSection() is True, table

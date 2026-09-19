@@ -277,8 +277,14 @@ def test_every_section_is_painted_from_the_one_payload(panel):
     assert "Nothing yet" in NO_IDEAS_YET
 
 
-def test_the_walkaway_is_four_ten_column_tables_under_its_fixed_titles(panel):
-    """TJ-2B replaces TJ-1's one recap table and three placeholders."""
+def test_the_walkaway_is_five_tables_under_its_fixed_titles(panel):
+    """TJ-2B replaced TJ-1's placeholders; TJ-11 adds the fifth population.
+
+    The columns are spelled out here rather than read from the module so that a
+    silent rename of a header is a failing test: these are the words the trader
+    reads. TJ-11 (2026-09-19) added the three extra moves, each in percent and
+    in ATR, and the versioned real-miss verdict.
+    """
     from ui.panels.day_review_panel import WALKAWAY_TITLE
 
     assert WALKAWAY_TITLE == "Passed, and it ran"
@@ -288,15 +294,23 @@ def test_the_walkaway_is_four_ten_column_tables_under_its_fixed_titles(panel):
         "Side",
         "What you did",
         "Ran after %",
+        "Against you first %",
+        "At the close %",
+        "Ran after (ATR)",
+        "Against you first (ATR)",
+        "At the close (ATR)",
+        "Real miss",
         "Held at close %",
         "Traded?",
         "You made",
         "Left on the table %",
         "State",
     ]
-    assert tuple(panel.walkaway_tables) == ("liked_not_traded", "rejected", "traded_left_early", "claimed_d1")
+    assert tuple(panel.walkaway_tables) == (
+        "rejected", "liked_not_traded", "traded_left_early", "claimed_d1", "earlier_calls",
+    )
     for table in panel.walkaway_tables.values():
-        assert table.columnCount() == 10
+        assert table.columnCount() == len(expected)
         assert [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())] == expected
 
 

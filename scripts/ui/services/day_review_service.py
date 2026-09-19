@@ -35,7 +35,7 @@ starts the worker.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 
 _log = logging.getLogger(__name__)
@@ -63,6 +63,48 @@ BENCHMARK_SYMBOL = "SPY"
 #: no control for it (the Daily Recap's 1/2/3 picker is gone with the page); the
 #: reader's own default is the answer.
 DEFAULT_LOOKBACK_SESSIONS = 3
+
+#: How many symbols ONE Day Review open may read daily bars for (TJ-11).
+#: Measured 2026-09-19: `chart_snapshot.load_d1_bars` costs ~4.6 ms and ~310 KB
+#: per symbol, and a live session's scan holds ~1,100 distinct names - reading
+#: every one of them would spend ~5 s of the worker and leave ~340 MB in the
+#: reader's process-wide cache. The caps are SIZE rules and never rankings: the
+#: trader's OWN decisions are read first and in full, then a bounded slice of
+#: the earlier calls and a bounded slice of the untouched names, both in name
+#: order. A name past a cap is `unmeasured` and SAID to be - every skill cell
+#: carries `measured` beside `n` - and is never assumed into a rate.
+DAILY_BAR_SYMBOL_CAP = 400
+EARLIER_SYMBOL_CAP = 150
+UNTOUCHED_SYMBOL_CAP = 150
+
+#: How many daily bars a walk-away measurement can possibly need: ATR(14) at the
+#: decision plus the twenty sessions the "lately" window reaches back over plus
+#: the five-session horizon. Kept from each read so one open does not hold a
+#: symbol's whole history.
+DAILY_BAR_TAIL = 60
+
+
+def _stamped_dates_for(session: str) -> tuple[str, ...]:
+    """`session` plus the non-session dates that belong to it.
+
+    The weekend between Friday's close and Monday's open, or a holiday Monday:
+    a decision stamped on one of them was made FOR this session
+    (`market_calendar.decision_session`). Existing rows are never rewritten, so
+    the reader asks for their dates too.
+    """
+    try:
+        import market_calendar
+
+        day = date.fromisoformat(str(session)[:10])
+        previous = market_calendar.previous_session(day)
+    except Exception:  # noqa: BLE001 - an unanswerable calendar adds no dates
+        return (str(session)[:10],)
+    out = [day.isoformat()]
+    cursor = previous + timedelta(days=1)
+    while cursor < day:
+        out.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return tuple(out)
 
 
 def empty_payload(session_date: str = "") -> dict[str, Any]:
@@ -173,6 +215,7 @@ class DayReviewService:
         try:
             import claimed_picks
             import daily_recap_reader
+            import evidence_stats
             import walkaway_day
 
             recap_sources = daily_recap_reader.RecapSources()
@@ -180,16 +223,41 @@ class DayReviewService:
             feedback = daily_recap_reader._read_jsonl("pick_feedback", recap_sources.pick_feedback, "ts")
             favorites = daily_recap_reader._read_jsonl("swing_favorites", recap_sources.swing_favorites, "event_at")
             events = daily_recap_reader._read_jsonl("review_events", recap_sources.review_events, "ts")
-            decisions = []
-            for decision in daily_recap_reader._decisions(session, annotations, feedback, favorites, events):
-                decisions.append({
-                    "session_date": session,
-                    "symbol": decision.symbol, "side": decision.side,
-                    "category": decision.category, "verdict": decision.verdict,
-                    "source": decision.source, "timeframe": decision.timeframe,
-                    "stamp": getattr(decision.observed_at, "isoformat", lambda: "")(),
-                    "capture_id": decision.capture_id,
-                })
+            def _decisions_for(target: str) -> list[dict[str, Any]]:
+                """Every verdict that BELONGS to `target`, mapped forward.
+
+                `daily_recap_reader._decisions` filters `session_date` by exact
+                match, and the desk used to stamp an after-close call with New
+                York's next calendar date - so Friday evening's 18 D1 calls
+                carry a Saturday and would never reach Monday's page. The rows
+                are never rewritten: this asks the reader for the non-session
+                dates that map onto `target` as well as for `target` itself.
+                """
+                rows: list[dict[str, Any]] = []
+                for stamped in _stamped_dates_for(target):
+                    for decision in daily_recap_reader._decisions(
+                        stamped, annotations, feedback, favorites, events
+                    ):
+                        rows.append({
+                            "session_date": target,
+                            "symbol": decision.symbol, "side": decision.side,
+                            "category": decision.category, "verdict": decision.verdict,
+                            "source": decision.source, "timeframe": decision.timeframe,
+                            "stamp": getattr(decision.observed_at, "isoformat", lambda: "")(),
+                            "capture_id": decision.capture_id,
+                            # TJ-11 item 5 counts reasons in the table's own
+                            # sentence; without this the page would need a
+                            # second read of the same store to name one.
+                            "reason": decision.reason,
+                        })
+                return rows
+
+            decisions = _decisions_for(session)
+            earlier_decisions: list[dict[str, Any]] = []
+            for earlier in walkaway_day.earlier_sessions(
+                session, count=max(0, evidence_stats.LATELY_SESSIONS - 1)
+            ):
+                earlier_decisions.extend(_decisions_for(earlier))
             claims = claimed_picks.load_rows(recap_sources.claimed_picks)
             preference = daily_recap_reader._read_csv("preference_report", recap_sources.preference_report, "generated_at").rows
             outcomes = daily_recap_reader._read_csv("session_horizon_outcomes", recap_sources.session_horizon_outcomes, "scan_date").rows
@@ -215,9 +283,31 @@ class DayReviewService:
                             stored[exit_day] = exit_bars
             except Exception:  # noqa: BLE001
                 _log.debug("Walk-away bars unreadable.", exc_info=True)
+            # The scan's own rows are the base-rate population (TJ-11 item 4),
+            # and they are the SAME read the claim rows already use: the
+            # horizon-outcomes store, filtered to this session. The 1.1 GB
+            # tracker is never opened by a page.
+            scan_rows = [
+                row for row in outcomes
+                if str(row.get("scan_date") or "")[:10] == session
+            ]
+            daily = self._daily_bars_for(
+                session, decisions, earlier_decisions, claims, scan_rows
+            )
             payload["walkaway"] = walkaway_day.build(
-                session, {"decisions": decisions, "preference": preference, "outcomes": outcomes}, stored,
-                trades=all_trades, claims=claims, now=moment,
+                session,
+                {
+                    "decisions": decisions,
+                    "preference": preference,
+                    "outcomes": outcomes,
+                    "scan_rows": scan_rows,
+                    "earlier_decisions": earlier_decisions,
+                },
+                stored,
+                trades=all_trades,
+                claims=claims,
+                now=moment,
+                daily_bars=daily,
             )
             payload["walkaway_backfill_sessions"] = tuple(
                 exit_day for trade in all_trades
@@ -247,6 +337,85 @@ class DayReviewService:
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
+
+    # -- the daily ruler ---------------------------------------------------
+    @staticmethod
+    def _daily_bars_for(
+        session: str,
+        decisions,
+        earlier_decisions,
+        claims,
+        scan_rows,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Daily bars for the walk-away rulers, read ONCE per symbol.
+
+        `chart_snapshot.load_d1_bars` is the symbol-level DAILY reader the desk
+        already uses off the Qt thread: the durable parquet store, memoized on
+        the file's mtime, no network and no IB. It is NOT
+        `ui/journal_chart_bars.py`, which mutates the Alert Center's bar cache
+        and arms a `QTimer.singleShot` that never fires from a worker.
+
+        Two bounds, both stated rather than hidden:
+
+        * at most `DAILY_BAR_SYMBOL_CAP` symbols, in the priority order named on
+          that constant - a name past the cap is `unmeasured`, never assumed;
+        * only the last `DAILY_BAR_TAIL` bars are KEPT, and a symbol this read
+          put into the reader's process-wide cache is dropped from it again, so
+          one Day Review open cannot leave hundreds of megabytes of history
+          behind. A symbol the desk had already cached is left exactly as it was.
+        """
+        wanted: list[str] = []
+        seen: set[str] = set()
+
+        def _add(symbol: Any, *, budget: list[int] | None = None) -> None:
+            name = str(symbol or "").strip().upper()
+            if not name or name in seen:
+                return
+            if budget is not None:
+                if budget[0] <= 0:
+                    return
+                budget[0] -= 1
+            seen.add(name)
+            wanted.append(name)
+
+        # 1. What the trader did this session, in full: these are the rows the
+        #    page is about, and none of them may go unmeasured for a budget.
+        for row in decisions or ():
+            _add(row.get("symbol"))
+        for claim in claims or ():
+            if str(claim.get("session_date") or "")[:10] == session:
+                _add(claim.get("symbol"))
+        # 2. The earlier calls, then 3. the untouched names of this session's
+        #    scan - both in NAME order, both bounded, neither chosen by result.
+        earlier_budget = [EARLIER_SYMBOL_CAP]
+        for row in sorted(
+            earlier_decisions or (), key=lambda item: str(item.get("symbol") or "").upper()
+        ):
+            _add(row.get("symbol"), budget=earlier_budget)
+        untouched_budget = [UNTOUCHED_SYMBOL_CAP]
+        for row in sorted(
+            scan_rows or (), key=lambda item: str(item.get("symbol") or "").upper()
+        ):
+            _add(row.get("symbol"), budget=untouched_budget)
+
+        bars: dict[str, list[dict[str, Any]]] = {}
+        try:
+            import chart_snapshot
+        except Exception:  # noqa: BLE001 - no daily store is `unmeasured`, not an error
+            _log.debug("The durable daily store is unavailable.", exc_info=True)
+            return bars
+        cache = getattr(chart_snapshot, "_daily_bars_cache", None)
+        already = set(cache) if isinstance(cache, dict) else set()
+        for symbol in wanted[:DAILY_BAR_SYMBOL_CAP]:
+            try:
+                rows = chart_snapshot.load_d1_bars(symbol) or []
+            except Exception:  # noqa: BLE001 - one unreadable name costs one name
+                _log.debug("Daily bars unreadable for %s.", symbol, exc_info=True)
+                continue
+            bars[symbol] = list(rows[-DAILY_BAR_TAIL:])
+            if isinstance(cache, dict) and symbol not in already:
+                cache.pop(symbol, None)
+        return bars
 
     # -- the index ---------------------------------------------------------
     def build_index_for(
