@@ -315,7 +315,14 @@ def test_service_and_page_use_one_worker_payload_for_four_tables_and_emit_chart_
     seen: list[tuple[str, str]] = []
     panel.chartRequested.connect(lambda symbol, side: seen.append((symbol, side)))
     panel.render(payload)
-    assert [table.rowCount() for table in panel.walkaway_tables.values()] == [0, 1, 0, 0]
+    assert {name: table.rowCount() for name, table in panel.walkaway_tables.items()} == {
+        "rejected": 1,
+        "liked_not_traded": 0,
+        "traded_left_early": 0,
+        "claimed_d1": 0,
+        # TJ-11's fifth population; this fixture supplies no earlier decisions.
+        "earlier_calls": 0,
+    }
     panel.walkaway_tables["rejected"].itemActivated.emit(panel.walkaway_tables["rejected"].item(0, 1))
     assert seen == [("AAA", "LONG")]
     panel.shutdown()

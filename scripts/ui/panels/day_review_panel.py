@@ -112,9 +112,27 @@ WALKAWAY_COLUMNS: tuple[tuple[str, str | None], ...] = (
     ("After the decision %", "favorable_pct_after_decision"),
     ("Environment", None),
 )
+#: TJ-2B's columns plus TJ-11's three extra moves, each in percent and in ATR,
+#: and the versioned real-miss verdict. Spelled in FULL: the TJ-1L width rule
+#: exists because the shared 260 px ceiling clipped "Against me first %" at both
+#: ends, and a clipped header carries no ellipsis to say so.
 TJ2B_WALKAWAY_COLUMNS = (
-    "Time", "Symbol", "Side", "What you did", "Ran after %", "Held at close %",
+    "Time", "Symbol", "Side", "What you did",
+    "Ran after %", "Against you first %", "At the close %",
+    "Ran after (ATR)", "Against you first (ATR)", "At the close (ATR)",
+    "Real miss", "Held at close %",
     "Traded?", "You made", "Left on the table %", "State",
+)
+
+#: The five walk-away populations and the heading each one carries. TJ-11 adds
+#: the fifth: the D1 calls of the previous five sessions, measured to THIS
+#: session's close.
+TJ2B_WALKAWAY_TITLES: tuple[tuple[str, str], ...] = (
+    ("rejected", WALKAWAY_TITLE),
+    ("liked_not_traded", "Liked but never traded"),
+    ("traded_left_early", "Traded, then left early"),
+    ("claimed_d1", "Claimed D1 picks"),
+    ("earlier_calls", "Earlier calls, now"),
 )
 
 
@@ -436,17 +454,25 @@ class DayReviewPanel(QFrame):
         }
         self.walkaway_tables: dict[str, QTableWidget] = {}
         self._walkaway_table_rows: dict[int, tuple[Any, ...]] = {}
-        for name in ("liked_not_traded",):
-            table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
-            table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
-            table.setEditTriggers(QTableWidget.NoEditTriggers)
-            table.setSelectionBehavior(QTableWidget.SelectRows)
-            table.itemActivated.connect(self._activate_walkaway)
-            table.itemDoubleClicked.connect(self._activate_walkaway)
-            _fill_the_width(table)
-            self.walkaway_tables[name] = table
-        self.walkaway_tables["rejected"] = self.rejected_that_worked_table
-        for name in ("traded_left_early", "claimed_d1"):
+        #: One deterministic sentence per population, above its own table
+        #: (TJ-11 item 5). Built here so an empty population still has a line.
+        self.walkaway_sentences: dict[str, QLabel] = {}
+        #: Each population's heading, held by name so a render never has to
+        #: guess which child label of a frame is the title.
+        self._walkaway_headings: dict[str, QLabel] = {}
+        #: The base rate the whole grid is read against (TJ-11 item 4). ONE
+        #: label above the grid, never a cell inside it.
+        self.walkaway_skill = QLabel("")
+        self.walkaway_skill.setObjectName("SectionSubtitle")
+        self.walkaway_skill.setWordWrap(True)
+        for name, _title in TJ2B_WALKAWAY_TITLES:
+            sentence = QLabel("")
+            sentence.setObjectName("SectionSubtitle")
+            sentence.setWordWrap(True)
+            self.walkaway_sentences[name] = sentence
+            if name == "rejected":
+                self.walkaway_tables[name] = self.rejected_that_worked_table
+                continue
             table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
             table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
             table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -459,8 +485,15 @@ class DayReviewPanel(QFrame):
             ((0, 1), "liked_not_traded", "Liked but never traded"),
             ((1, 0), "traded_left_early", "Traded, then left early"),
             ((1, 1), "claimed_d1", "Claimed D1 picks"),
+            ((2, 0), "earlier_calls", "Earlier calls, now"),
         ):
-            self.walkaway_cells[cell] = self._table_cell(title, self.walkaway_tables[name])
+            heading = QLabel(title)
+            heading.setObjectName("SectionTitle")
+            heading.setWordWrap(True)
+            self._walkaway_headings[name] = heading
+            self.walkaway_cells[cell] = self._table_cell(
+                heading, self.walkaway_tables[name], self.walkaway_sentences[name]
+            )
 
     @staticmethod
     def _placeholder_cell(title: str, note: str) -> QFrame:
@@ -486,16 +519,20 @@ class DayReviewPanel(QFrame):
         return frame
 
     @staticmethod
-    def _table_cell(title: str, table: QTableWidget) -> QFrame:
-        """A labelled TJ-2 population, replacing the TJ-1 placeholder."""
+    def _table_cell(heading: QLabel, table: QTableWidget, sentence: QLabel | None = None) -> QFrame:
+        """A labelled TJ-2 population, replacing the TJ-1 placeholder.
+
+        TJ-11 puts the population's one deterministic sentence between the
+        heading and the table: the count is read before the rows are.
+        """
         frame = QFrame()
         frame.setObjectName("Panel")
         body = QVBoxLayout(frame)
         body.setContentsMargins(10, 8, 10, 8)
         body.setSpacing(2)
-        heading = QLabel(title)
-        heading.setObjectName("SectionTitle")
         body.addWidget(heading)
+        if sentence is not None:
+            body.addWidget(sentence)
         body.addWidget(table)
         return frame
 
@@ -679,11 +716,16 @@ class DayReviewPanel(QFrame):
         return column
 
     def _walkaway_row(self) -> QWidget:
-        """The four populations as a 2 x 2 grid of equal cells.
+        """The five populations as a grid, under ONE skill line.
 
-        Equal COLUMNS, and rows that fit their content: three of the four are
-        empty until TJ-2, and an empty population padded to the height of a
-        table reads as a table that failed to load.
+        Equal COLUMNS, and rows that fit their content: an empty population
+        padded to the height of a table reads as a table that failed to load.
+        TJ-11's fifth population spans the full width on its own row, because
+        "Earlier calls, now" is the one table whose rows come from other days.
+
+        The skill line is the base rate the whole grid is read against, so it
+        sits ABOVE the grid rather than inside one of its cells: a miss count
+        without a base rate is the number the trader would misread.
         """
         holder = QWidget()
         self.walkaway_grid = QGridLayout(holder)
@@ -691,17 +733,34 @@ class DayReviewPanel(QFrame):
         self.walkaway_grid.setHorizontalSpacing(12)
         self.walkaway_grid.setVerticalSpacing(10)
         self.walkaway_grid.addWidget(
-            self._section(WALKAWAY_TITLE, self.walkaway_note, self.rejected_that_worked_table),
+            self._section(
+                WALKAWAY_TITLE,
+                self.walkaway_note,
+                self.walkaway_sentences["rejected"],
+                self.rejected_that_worked_table,
+            ),
             0,
             0,
         )
         for cell, widget in self.walkaway_cells.items():
+            if cell[0] >= 2:
+                # The fifth population spans both columns on its own row.
+                self.walkaway_grid.addWidget(widget, cell[0], 0, 1, 2, Qt.AlignTop)
+                continue
             self.walkaway_grid.addWidget(widget, cell[0], cell[1], Qt.AlignTop)
         self.walkaway_grid.setColumnStretch(0, 1)
         self.walkaway_grid.setColumnStretch(1, 1)
         self.walkaway_grid.setRowStretch(0, 0)
         self.walkaway_grid.setRowStretch(1, 0)
-        return holder
+        self.walkaway_grid.setRowStretch(2, 0)
+
+        row = QWidget()
+        body = QVBoxLayout(row)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+        body.addWidget(self.walkaway_skill)
+        body.addWidget(holder)
+        return row
 
     def _bottom_row(self) -> QWidget:
         """What you traded, beside the desk's ideas. Two halves, full width."""
@@ -1179,39 +1238,123 @@ class DayReviewPanel(QFrame):
             else "Nothing you passed on ran, on this session's measured rows."
         )
 
-    def _render_tj2b_walkaway(self, day) -> None:
-        for name in ("liked_not_traded", "traded_left_early", "claimed_d1"):
-            table = self.walkaway_tables[name]
-            rows = tuple(getattr(day, name, ()) or ())
-            values = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
-            middle = len(values) // 2
-            median = (values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2) if values else None
-            heading = table.parentWidget().findChild(QLabel) if table.parentWidget() else None
-            if heading is not None:
-                base = {"liked_not_traded": "Liked but never traded", "traded_left_early": "Traded, then left early", "claimed_d1": "Claimed D1 picks"}[name]
-                heading.setText(f"{base} — n={len(rows)}; median Ran after {_tj2_pct(median)}")
-            self._walkaway_table_rows[id(table)] = rows
+    @staticmethod
+    def _walkaway_cells(row: Any) -> dict[str, str]:
+        """One row, keyed by HEADER text.
+
+        Keyed rather than positional: the five tables share one column list, and
+        a positional tuple is how the rejected table came to print its "Ran
+        after %" under "Held at close %".
+        """
+        return {
+            "Time": row.time.strftime("%H:%M") if row.time else UNMEASURED,
+            "Symbol": row.symbol,
+            "Side": row.side,
+            "What you did": row.what_you_did,
+            "Ran after %": _tj2_pct(row.ran_after_pct),
+            "Against you first %": _tj2_pct(getattr(row, "against_first_pct", None)),
+            "At the close %": _tj2_pct(getattr(row, "at_close_pct", None)),
+            "Ran after (ATR)": _tj2_number(getattr(row, "ran_after_atr", None)),
+            "Against you first (ATR)": _tj2_number(getattr(row, "against_first_atr", None)),
+            "At the close (ATR)": _tj2_number(getattr(row, "at_close_atr", None)),
+            "Real miss": str(getattr(row, "real_miss", "") or "") or UNMEASURED,
+            "Held at close %": _tj2_pct(row.held_at_close_pct),
+            "Traded?": row.traded,
+            "You made": _tj2_number(row.you_made),
+            "Left on the table %": (
+                str(getattr(row, "not_judged_reason", "") or "")
+                or _tj2_pct(row.left_on_table_pct)
+            ),
+            "State": row.state,
+        }
+
+    @staticmethod
+    def _fill_walkaway_table(table: QTableWidget, rows, cells_for) -> None:
+        """Fill one table without paying a column measurement per cell.
+
+        `_fill_the_width` leaves every column but the last in
+        `ResizeToContents`, and Qt re-measures those columns on EVERY
+        `setItem` - bounded by `MEASURE_PRECISION_ROWS` (200) rows, through a
+        styled delegate, on the GUI thread. Measured 2026-09-19 on a staged
+        home: TJ-11's five tables and ~700 rows spent **90 seconds** inside one
+        `processEvents`. The mode is suspended for the fill and restored once,
+        so the measurement happens a single time and the columns still measure
+        their own headers.
+        """
+        header = table.horizontalHeader()
+        columns = table.columnCount()
+        modes = [header.sectionResizeMode(index) for index in range(columns)]
+        for index, mode in enumerate(modes):
+            if mode == QHeaderView.ResizeMode.ResizeToContents:
+                header.setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+        table.setUpdatesEnabled(False)
+        try:
             table.setRowCount(len(rows))
             for index, row in enumerate(rows):
-                values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
-                          row.what_you_did, _tj2_pct(row.ran_after_pct), _tj2_pct(row.held_at_close_pct),
-                          row.traded, _tj2_number(row.you_made), _tj2_pct(row.left_on_table_pct), row.state)
-                for column, value in enumerate(values):
-                    table.setItem(index, column, QTableWidgetItem(value))
-        rows = tuple(getattr(day, "rejected", ()) or ())
-        table = self.walkaway_tables["rejected"]
-        self._walkaway_rows = rows
-        self._walkaway_table_rows[id(table)] = rows
-        values = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
-        middle = len(values) // 2
-        median = (values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2) if values else None
-        self.walkaway_note.setText(f"n={len(rows)}; median Ran after {_tj2_pct(median)}. Double-click a row to chart it.")
-        table.setRowCount(len(rows))
-        for index, row in enumerate(rows):
-            values = (row.time.strftime("%H:%M") if row.time else UNMEASURED, row.symbol, row.side,
-                      row.what_you_did, "", _tj2_pct(row.ran_after_pct), "", "", "", "")
-            for column, value in enumerate(values):
-                table.setItem(index, column, QTableWidgetItem(value))
+                cells = cells_for(row)
+                for column, name in enumerate(TJ2B_WALKAWAY_COLUMNS):
+                    table.setItem(index, column, QTableWidgetItem(cells.get(name, "")))
+        finally:
+            table.setUpdatesEnabled(True)
+            for index, mode in enumerate(modes):
+                if header.sectionResizeMode(index) != mode:
+                    header.setSectionResizeMode(index, mode)
+
+    def _render_tj2b_walkaway(self, day) -> None:
+        """Paint the five populations, their sentences and the skill line.
+
+        Formatting only: every number was measured on the worker, and a missing
+        one is a dash with its reason, never a 0.00.
+        """
+        sentences = dict(getattr(day, "sentences", {}) or {})
+        for name, base in TJ2B_WALKAWAY_TITLES:
+            table = self.walkaway_tables[name]
+            rows = tuple(getattr(day, name, ()) or ())
+            moves = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
+            middle = len(moves) // 2
+            median = (
+                (moves[middle] if len(moves) % 2 else (moves[middle - 1] + moves[middle]) / 2)
+                if moves
+                else None
+            )
+            heading = self._walkaway_headings.get(name)
+            if heading is not None:
+                heading.setText(f"{base} — n={len(rows)}; median Ran after {_tj2_pct(median)}")
+            self.walkaway_sentences[name].setText(str(sentences.get(name, "") or ""))
+            self._walkaway_table_rows[id(table)] = rows
+            if name == "rejected":
+                self._walkaway_rows = rows
+                self.walkaway_note.setText(
+                    f"n={len(rows)}; median Ran after {_tj2_pct(median)}. "
+                    "Double-click a row to chart it."
+                )
+            self._fill_walkaway_table(table, rows, self._walkaway_cells)
+        self.walkaway_skill.setText(self._skill_text(getattr(day, "skill", None)))
+
+    @staticmethod
+    def _skill_text(skill: Any) -> str:
+        """Both base-rate windows, each saying its own window in SESSIONS.
+
+        The session line alone is the one a fresh day cannot fill: its
+        five-session horizons are still open, so it reads `measured 0, pending
+        N` and names no rate. The lately line is what has actually closed.
+        """
+        if not isinstance(skill, Mapping):
+            return ""
+        lines: list[str] = []
+        for key, window in (("session", "this session"), ("lately", "lately")):
+            block = skill.get(key)
+            if not isinstance(block, Mapping):
+                continue
+            sentence = str(block.get("sentence") or "").strip()
+            if not sentence:
+                continue
+            sessions = block.get("window_sessions")
+            count = f"{int(sessions)} session{'s' if int(sessions) != 1 else ''}" if isinstance(
+                sessions, (int, float)
+            ) else window
+            lines.append(f"{count}: {sentence}")
+        return "\n".join(lines)
 
     def _walkaway_cell(self, row: Any, header: str, measure: str | None) -> tuple[str, str]:
         """One cell's text and its tooltip. `None` is a dash WITH its reason."""

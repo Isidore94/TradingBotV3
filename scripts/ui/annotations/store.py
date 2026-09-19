@@ -49,7 +49,7 @@ import os
 import uuid
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
 from project_paths import TRADER_ANNOTATIONS_FILE
@@ -184,7 +184,58 @@ class AnnotationError(ValueError):
     """
 
 
+#: The ADDITIVE field TJ-11 writes beside `session_date`: the exchange session
+#: the decision belongs to, which for a call made after the close is the NEXT
+#: one. `session_date` keeps its own meaning and its own value for every writer
+#: and every reader; an old row simply lacks this key and is never rewritten,
+#: and only TJ-11's own readers look at it.
+DECISION_SESSION_FIELD = "decision_session"
+
+
+def _forward_session(value: Any) -> str:
+    """The exchange session a stamp belongs to, or ``""`` when unanswerable.
+
+    One seam, `market_calendar.decision_session`. A date that IS a session comes
+    back unchanged, so this only ever moves a weekend, an evening or a holiday
+    forward. Answering ``""`` rather than guessing is the point: a row that
+    cannot be placed carries no claim about where it belongs.
+    """
+    try:
+        from market_calendar import decision_session
+
+        answer = decision_session(value)
+    except Exception:  # noqa: BLE001 - a calendar that cannot answer never guesses
+        return ""
+    return answer.isoformat() if answer is not None else ""
+
+
+def row_decision_session(row: Mapping[str, Any]) -> str:
+    """Which exchange session one annotation row's decision belongs to.
+
+    TJ-11's ONE reader-side seam, and nothing outside TJ-11 calls it. A new row
+    carries :data:`DECISION_SESSION_FIELD`; an old row does not, so its stamp
+    (`created_at`, else `session_date`) is mapped through the same calendar
+    function. The row is never rewritten either way.
+    """
+    stored = str(row.get(DECISION_SESSION_FIELD) or "").strip()
+    if stored:
+        return stored[:10]
+    return _forward_session(row.get("created_at") or row.get("session_date"))
+
+
 def _session_date_text(session_date: Any = None) -> str:
+    """New York's calendar date for this row. **Unchanged, and it stays that way.**
+
+    Every live reader of an annotation joins on `session_date` by EXACT match -
+    `review_learning` (the veto cohort behind `review_policy.json`), the three
+    cohort graders, `daily_recap_reader._decisions`, and `pick_feedback`, which
+    feeds the setups-table hide, the chart-cycling skip and the review queue's
+    "Reviewed today" mark. TJ-11 moved this value once and the reviewer caught
+    it hiding 12 symbols and marking 18 reviewed on a day the base desk hid
+    none (2026-09-19). The session a decision BELONGS to is a separate,
+    additive field (:data:`DECISION_SESSION_FIELD`); this one is the stamp the
+    desk has always written.
+    """
     if isinstance(session_date, datetime):
         return session_date.date().isoformat()
     if isinstance(session_date, date):
@@ -329,6 +380,15 @@ def build_annotation(
         "created_at": _created_at_text(created_at),
         "source": ANNOTATION_SOURCE,
     }
+    # ADDITIVE (TJ-11): the exchange session this decision belongs to, which for
+    # a call made after the close is the NEXT one - the 18 D1 calls made at
+    # 21:04 Pacific on Friday 2026-09-18 are Monday's decisions. `session_date`
+    # above is untouched and still says what it has always said; this key is
+    # extra, is read only by TJ-11's own readers, and is left EMPTY rather than
+    # guessed when the calendar cannot answer.
+    row[DECISION_SESSION_FIELD] = _forward_session(
+        _created_at_text(created_at)
+    ) or _forward_session(row["session_date"])
 
     if kind == EVENT_VETO:
         code = str(reason_code or "").strip().lower()
@@ -567,11 +627,21 @@ def load_annotations(
     session_date: Any = None,
     symbol: Any = None,
     event_types: tuple[str, ...] | None = None,
+    by_decision_session: bool = False,
 ) -> list[dict[str, Any]]:
     """Rows in file order (oldest first). Unreadable lines are skipped.
 
     A corrupt line is skipped rather than fatal: one torn row must never make
     the rest of the trader's decision history unreadable.
+
+    `session_date` matches the row's own `session_date` EXACTLY, which is what
+    every live caller means and what `pick_feedback`, the cohort graders and
+    `review_learning` have always been joined on. **This default never moves.**
+
+    `by_decision_session=True` is TJ-11's OPT-IN: match on the exchange session
+    the decision belongs to instead (:func:`row_decision_session`), so a call
+    made after Friday's close is read as Monday's. Nothing outside TJ-11 passes
+    it, and the file is never rewritten either way.
     """
     target = Path(path)
     try:
@@ -579,6 +649,11 @@ def load_annotations(
     except OSError:
         return []
     wanted_date = _session_date_text(session_date) if session_date is not None else None
+    wanted_session = (
+        (_forward_session(wanted_date) or wanted_date)
+        if (by_decision_session and wanted_date)
+        else None
+    )
     wanted_symbol = _clean_symbol(symbol) if symbol is not None else None
     rows: list[dict[str, Any]] = []
     for line in lines:
@@ -591,8 +666,12 @@ def load_annotations(
             continue
         if not isinstance(row, dict):
             continue
-        if wanted_date is not None and str(row.get("session_date") or "") != wanted_date:
-            continue
+        if wanted_date is not None:
+            if wanted_session is not None:
+                if row_decision_session(row) != wanted_session:
+                    continue
+            elif str(row.get("session_date") or "") != wanted_date:
+                continue
         if wanted_symbol is not None and _clean_symbol(row.get("symbol")) != wanted_symbol:
             continue
         if event_types is not None and str(row.get("event_type") or "") not in event_types:
