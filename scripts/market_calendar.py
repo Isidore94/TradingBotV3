@@ -123,12 +123,16 @@ def holidays_for_year(year: int) -> set[date]:
     A COPY of the memoized set, so a caller that mutates what it is given
     cannot corrupt the calendar for the rest of the process.
     """
+    return set(_observed_holidays(year))
+
+
+def _observed_holidays(year: int) -> frozenset[date]:
+    """The memoized set itself. Internal: callers must not mutate it."""
     cached = _holiday_cache.get(year)
-    if cached is not None:
-        return set(cached)
-    answer = _holidays_for_year(year)
-    _holiday_cache[year] = frozenset(answer)
-    return answer
+    if cached is None:
+        cached = frozenset(_holidays_for_year(year))
+        _holiday_cache[year] = cached
+    return cached
 
 
 def _holidays_for_year(year: int) -> set[date]:
@@ -174,7 +178,7 @@ def is_session(day: date) -> bool:
     _check_range(day)
     if day.weekday() >= 5:
         return False
-    return day not in holidays_for_year(day.year)
+    return day not in _observed_holidays(day.year)
 
 
 def previous_session(day: date) -> date:

@@ -174,12 +174,28 @@ def _day_of(bar: Mapping[str, Any]) -> date | None:
     return stamp.date() if stamp is not None else None
 
 
+#: One entry per distinct date TEXT, not per row: the horizon-outcomes store
+#: holds hundreds of thousands of rows carrying a few dozen dates between them,
+#: and the calendar answer for a date never changes.
+_session_text_cache: dict[str, str] = {}
+
+
 def _session_text(value: object) -> str:
     """The exchange session a stamp belongs to, as text, or ``""``.
 
     One seam for the whole module: a Saturday `session_date` and a Friday
     21:04 Pacific `created_at` both answer Monday.
     """
+    # Plain dates only: a full timestamp is unique per decision and caching one
+    # would grow a dict for the life of the desk to answer it once.
+    if isinstance(value, str) and len(value) <= 10:
+        cached = _session_text_cache.get(value)
+        if cached is not None:
+            return cached
+        answer = market_calendar.decision_session(value)
+        text = answer.isoformat() if answer is not None else ""
+        _session_text_cache[value] = text
+        return text
     answer = market_calendar.decision_session(value)
     return answer.isoformat() if answer is not None else ""
 
