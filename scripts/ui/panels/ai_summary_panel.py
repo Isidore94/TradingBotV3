@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from ai_credentials import AiCredentialVault
+from ai_jobs import window
 from ai_summary import (
     SCOPE_LABELS,
     build_evidence_package,
@@ -387,6 +388,24 @@ class AiSummaryPanel(QFrame):
     def generate_summary(self) -> None:
         if self._run_thread is not None and self._run_thread.is_alive():
             return
+        # TJ-13A item 1: local inference is night-only, seven days a week
+        # (trader, 2026-09-19; decision 0021 answer 19). The packet names three
+        # doors - the scheduled run, `--force`, and THIS BUTTON - and this was
+        # the one with no clock on it at all: a click at 14:00 on a Saturday
+        # started a model load on the desk the trader was using.
+        #
+        # The gate is the runner's own, so there is one window in the system
+        # rather than two that can disagree, and its reason is what the status
+        # line shows. A CLOUD provider is untouched: the rule is about this
+        # desk's hardware, and a metered API call competes with nothing here.
+        if self._provider() == "local":
+            allowed, reason = window.launch_allowed()
+            if not allowed:
+                self._set_status(
+                    f"Local AI runs at night only, seven days a week: {reason}. "
+                    "Nothing has been sent."
+                )
+                return
         typed_key = self.key_input.text().strip()
         try:
             saved_key, key_source = self.credential_vault.resolve(self._provider())

@@ -57,6 +57,24 @@ class JobSlot:
     #: Declared per slot rather than inferred from a name, so a later packet
     #: that adds a model to a slot says so here in the same edit.
     uses_model: bool = False
+    #: Keyword arguments that make this slot's OWN ``run`` model-free, or None
+    #: when there is no such thing (TJ-13A fix round, point 3).
+    #:
+    #: Only ``daily_digest`` has one today: its fact pack is deterministic and
+    #: its narration is a second artifact, and ``run_daily_digest`` already took
+    #: ``narrate=False`` before this packet existed. Marking the slot
+    #: ``uses_model`` took the fact pack away from a forced daytime run, which
+    #: is seconds of work and calls nothing; this gives it back without
+    #: reopening the door the flag closed.
+    #:
+    #: It is KEYWORDS rather than a second callable on purpose. A test that
+    #: swaps ``run`` for a spy - ``dataclasses.replace(slot, run=...)`` is the
+    #: house pattern - would not swap a second callable, and would reach the
+    #: real job through it. There is one callable per slot.
+    #:
+    #: A slot with no model-free half declares None and keeps being skipped:
+    #: there is no summary without a model.
+    model_free_kwargs: Mapping[str, Any] | None = None
 
 
 @dataclass
@@ -337,6 +355,10 @@ def _run_slots_locked(
         # A forced model slot still gets --force's other two meanings: the
         # attempt caps and the already-completed check above.
         session_block = window.market_session_block(moment)
+        #: Set when this run is the slot's DETERMINISTIC half only. It changes
+        #: what the slot is called with and what its ledger row says, never
+        #: whether the row counts as coverage.
+        model_free = False
         if session_block:
             allowed, reason = False, session_block
         elif force and not slot.uses_model:
@@ -345,6 +367,20 @@ def _run_slots_locked(
             allowed, reason = window.launch_allowed(
                 moment, reserve_minutes=slot.reserve_minutes
             )
+            if not allowed and force and slot.uses_model and slot.model_free_kwargs:
+                # TJ-13A fix round, point 3. The clock refused this slot because
+                # it can call a model - but this one has a deterministic half
+                # its own `run` already knows how to produce, so a forced
+                # daytime run gets THAT rather than nothing. The model stays
+                # unreachable by day; only the part that was never the problem
+                # runs.
+                allowed = True
+                model_free = True
+                reason = (
+                    "forced by day: deterministic half only "
+                    f"({', '.join(f'{k}={v!r}' for k, v in slot.model_free_kwargs.items())}); "
+                    "no local inference outside the night window"
+                )
         if not allowed:
             row = ledger.record(
                 job=slot.name,
@@ -360,7 +396,8 @@ def _run_slots_locked(
         started = datetime.now().astimezone()
         clock = time.perf_counter()
         try:
-            outcome = slot.run(session_date=session_date, now=moment) or {}
+            extra_kwargs = dict(slot.model_free_kwargs or {}) if model_free else {}
+            outcome = slot.run(session_date=session_date, now=moment, **extra_kwargs) or {}
             # A job may report that it published an honestly degraded document
             # rather than a trustworthy one. That is not "ok", and because
             # completed_jobs counts only STATUS_OK, the next firing retries it.
@@ -394,13 +431,21 @@ def _run_slots_locked(
                 # not the session's nightly brief and must not be counted as
                 # coverage. Degraded and failed keep their own meaning.
                 status = ledger.STATUS_MANUAL
+            row_reason = _failure_reason(slot.name, status, outcome)
+            if model_free:
+                # A reader of this row must never take it for the night's full
+                # digest. It says what ran and what was left out, in that order.
+                row_reason = (
+                    f"{row_reason} [forced daytime run: deterministic facts only, "
+                    "narration left out - local inference is night-only]"
+                ).strip()
             row = ledger.record(
                 job=slot.name,
                 status=status,
                 session_date=session_date,
                 started_at=started,
                 model=str(outcome.get("model") or ""),
-                reason=_failure_reason(slot.name, status, outcome),
+                reason=row_reason,
                 outputs=outcome.get("outputs") or (),
                 tokens=outcome.get("tokens") or {},
                 # WS-AI1: a slot may add fields of its own to its ledger row -
@@ -697,6 +742,12 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             # by the medium local model, so this slot CAN start inference and
             # --force must not buy it the daytime clock (TJ-13A item 1).
             uses_model=True,
+            # ...and it is the one slot with a real deterministic half:
+            # `run_daily_digest` already took `narrate=False` before this
+            # packet, and the fact pack is written even when the model is down.
+            # So a forced daytime run writes the facts and says so in its
+            # ledger row (TJ-13A fix round, point 3).
+            model_free_kwargs={"narrate": False},
         ),
         # Packet WS-TH (2026-09-12), APPENDED at the END of the deterministic
         # stage. A later phase appends INSIDE its stage and never reorders

@@ -562,6 +562,27 @@ def _extract_ticker_content(content: Any, symbol: str) -> Any | None:
     return None
 
 
+def _projection_was_cut(content: Any) -> bool:
+    """Did THIS symbol's projection lose anything on its way here?
+
+    Both of ``_extract_ticker_content``'s cuts are `MAX_TICKER_SOURCE_CHARS`:
+    the text branch slices the joined lines, and the mapping branch replaces an
+    oversized symbol record with a ``truncated_record`` string. A nested string
+    cut deeper in a projection still shows here, because a cut of that size
+    cannot leave the whole under the ceiling.
+
+    A projection that lands exactly ON the ceiling is reported as cut. That is
+    the conservative direction: "you may be reading part of this" is a safe
+    thing to say wrongly, and "you have all of it" is not.
+    """
+    if isinstance(content, Mapping) and "truncated_record" in content:
+        return True
+    encoded = content if isinstance(content, str) else json.dumps(
+        content, sort_keys=True, default=str
+    )
+    return len(encoded) >= MAX_TICKER_SOURCE_CHARS
+
+
 def build_ticker_evidence(
     base: Mapping[str, Any],
     symbol: str,
@@ -608,6 +629,20 @@ def build_ticker_evidence(
             continue
         source = dict(raw)
         source["content"] = content
+        # TJ-13A item 4. `dict(raw)` copies the SESSION package's `truncated`
+        # flag, and then the content under it is replaced by this symbol's
+        # slice - so a flag earned by the session's own budget rode along onto a
+        # projection that was never itself cut. Measured on the 53 published
+        # packages of 2026-09-18: every flagged source was at most 825
+        # characters against a 16,000 ceiling, and the live morning brief said
+        # "truncated" 63 times, with the model hedging accordingly about
+        # evidence it had received whole.
+        #
+        # The flag now describes THIS package. It is re-derived, not inherited,
+        # and it still says True whenever the projection really was cut - by the
+        # per-source ceiling or by the oversized-record branch - because a
+        # symbol that is genuinely reading part of its evidence must say so.
+        source["truncated"] = _projection_was_cut(content)
         source["evidence_pointer"] = {
             "source_id": str(raw.get("source_id") or ""),
             "path": str(raw.get("path") or ""),
