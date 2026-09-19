@@ -1268,6 +1268,38 @@ class DayReviewPanel(QFrame):
             "State": row.state,
         }
 
+    @staticmethod
+    def _fill_walkaway_table(table: QTableWidget, rows, cells_for) -> None:
+        """Fill one table without paying a column measurement per cell.
+
+        `_fill_the_width` leaves every column but the last in
+        `ResizeToContents`, and Qt re-measures those columns on EVERY
+        `setItem` - bounded by `MEASURE_PRECISION_ROWS` (200) rows, through a
+        styled delegate, on the GUI thread. Measured 2026-09-19 on a staged
+        home: TJ-11's five tables and ~700 rows spent **90 seconds** inside one
+        `processEvents`. The mode is suspended for the fill and restored once,
+        so the measurement happens a single time and the columns still measure
+        their own headers.
+        """
+        header = table.horizontalHeader()
+        columns = table.columnCount()
+        modes = [header.sectionResizeMode(index) for index in range(columns)]
+        for index, mode in enumerate(modes):
+            if mode == QHeaderView.ResizeMode.ResizeToContents:
+                header.setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+        table.setUpdatesEnabled(False)
+        try:
+            table.setRowCount(len(rows))
+            for index, row in enumerate(rows):
+                cells = cells_for(row)
+                for column, name in enumerate(TJ2B_WALKAWAY_COLUMNS):
+                    table.setItem(index, column, QTableWidgetItem(cells.get(name, "")))
+        finally:
+            table.setUpdatesEnabled(True)
+            for index, mode in enumerate(modes):
+                if header.sectionResizeMode(index) != mode:
+                    header.setSectionResizeMode(index, mode)
+
     def _render_tj2b_walkaway(self, day) -> None:
         """Paint the five populations, their sentences and the skill line.
 
@@ -1296,11 +1328,7 @@ class DayReviewPanel(QFrame):
                     f"n={len(rows)}; median Ran after {_tj2_pct(median)}. "
                     "Double-click a row to chart it."
                 )
-            table.setRowCount(len(rows))
-            for index, row in enumerate(rows):
-                cells = self._walkaway_cells(row)
-                for column, header in enumerate(TJ2B_WALKAWAY_COLUMNS):
-                    table.setItem(index, column, QTableWidgetItem(cells.get(header, "")))
+            self._fill_walkaway_table(table, rows, self._walkaway_cells)
         skill = getattr(day, "skill", None) or {}
         session = skill.get("session") if isinstance(skill, Mapping) else None
         self.walkaway_skill.setText(

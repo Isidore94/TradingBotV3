@@ -90,6 +90,11 @@ def eligible_bars(
             moment = datetime.fromisoformat(str(stamp))
         except (TypeError, ValueError):
             moment = None
+    if moment is None and not (now is not None and bar_minutes):
+        # Nothing to filter on. A caller that has already selected its window -
+        # the D1 ruler does - pays no timestamp parse per bar for an answer
+        # that cannot change.
+        return list(bars or ())
     out: list[Any] = []
     for bar in bars or ():
         start = bar_time(bar)

@@ -220,14 +220,25 @@ def earlier_sessions(session: str, *, count: int = EARLIER_SESSION_COUNT) -> tup
     return tuple(reversed(out))
 
 
+#: One entry per (decision day, horizon). A session's scan carries ~1,100 names
+#: that all ask the same three questions of the calendar.
+_nth_session_cache: dict[tuple[date, int], date | None] = {}
+
+
 def _nth_session_after(day: date, count: int) -> date | None:
+    key = (day, int(count))
+    if key in _nth_session_cache:
+        return _nth_session_cache[key]
     cursor = day
+    answer: date | None = day
     try:
         for _ in range(max(0, int(count))):
             cursor = market_calendar.next_session(cursor)
+        answer = cursor
     except market_calendar.SessionCalendarError:
-        return None
-    return cursor
+        answer = None
+    _nth_session_cache[key] = answer
+    return answer
 
 
 def _last_completed(now: datetime) -> date | None:
@@ -353,15 +364,21 @@ def _after_move(rows: Sequence[Mapping[str, Any]], stamp: datetime | None, side:
     return _excursions(eligible, start, side).ran
 
 
-def _completed_daily(rows: Sequence[Mapping[str, Any]], last_session: date | None) -> list[Mapping[str, Any]]:
-    """Daily bars up to the last COMPLETED session, oldest first.
+def _completed_daily(
+    rows: Sequence[Mapping[str, Any]], last_session: date | None
+) -> list[tuple[date, Mapping[str, Any]]]:
+    """Daily bars up to the last COMPLETED session, oldest first, DATED.
 
     `chart_snapshot.load_d1_bars` hands back today's forming bar during the
     session; a forming bar is preview, never a measurement (plan.md sec 5).
+
+    Each bar is paired with its date ONCE. A session's scan asks the same
+    symbol's bars the same question a hundred times, and re-parsing a timestamp
+    per question was 1.4 million parses on one Day Review open.
     """
     out: list[tuple[date, Mapping[str, Any]]] = []
     for bar in rows or ():
-        if not isinstance(bar, Mapping):
+        if not isinstance(bar, dict) and not isinstance(bar, Mapping):
             continue
         day = _day_of(bar)
         if day is None:
@@ -370,14 +387,14 @@ def _completed_daily(rows: Sequence[Mapping[str, Any]], last_session: date | Non
             continue
         out.append((day, bar))
     out.sort(key=lambda pair: pair[0])
-    return [bar for _day, bar in out]
+    return out
 
 
-def _daily_atr(rows: Sequence[Mapping[str, Any]]) -> float | None:
+def _daily_atr(rows: Sequence[tuple[date, Mapping[str, Any]]]) -> float | None:
     """Wilder ATR(14) on completed daily bars, or ``None`` when unmeasurable."""
     if len(rows) <= ATR_LENGTH:
         return None
-    return wilder_atr(rows, ATR_LENGTH)
+    return wilder_atr([bar for _day, bar in rows], ATR_LENGTH)
 
 
 @dataclass(frozen=True)
@@ -390,7 +407,7 @@ class _D1Reading:
 
 
 def _d1_reading(
-    daily: Sequence[Mapping[str, Any]],
+    daily: Sequence[tuple[date, Mapping[str, Any]]],
     decision_day: date,
     side: str,
     *,
@@ -401,22 +418,20 @@ def _d1_reading(
 ) -> _D1Reading:
     """The D1 ruler for one swing call: three moves, three horizons, one state.
 
+    ``daily`` is the DATED, completed daily history from :func:`_completed_daily`.
     ``window_end`` overrides the measured window's last session - the
     Earlier-calls table measures to the SELECTED session's close rather than to
     a five-session horizon.
     """
-    rows = _completed_daily(daily, last_session)
-    before = [bar for bar in rows if (_day_of(bar) or decision_day) <= decision_day]
+    rows = daily
+    before = [bar for day, bar in rows if day <= decision_day]
     reference = _number(before[-1].get("close")) if before else None
     horizon_end = window_end or _nth_session_after(decision_day, max(horizons or (0,)))
     if reference is None or horizon_end is None:
         return _D1Reading(state="unmeasured no_bars", verdict=real_miss.UNMEASURED_NO_BARS)
-    after = [
-        bar
-        for bar in rows
-        if (day := _day_of(bar)) is not None and decision_day < day <= horizon_end
-    ]
-    closes = {_day_of(bar): _number(bar.get("close")) for bar in after}
+    dated_after = [(day, bar) for day, bar in rows if decision_day < day <= horizon_end]
+    after = [bar for _day, bar in dated_after]
+    closes = {day: _number(bar.get("close")) for day, bar in dated_after}
     horizon_moves: list[tuple[int, float | None]] = []
     for step in horizons:
         target = _nth_session_after(decision_day, step)
@@ -679,8 +694,12 @@ def _overlaps(cells: Sequence[Mapping[str, Any]]) -> tuple[tuple[str, str], ...]
     return tuple(sorted(set(pairs)))
 
 
-def _cell_words(cell: Mapping[str, Any]) -> str:
+def _cell_words(cell: Mapping[str, Any], *, with_side: bool = False) -> str:
     word = POPULATION_WORDS.get(cell["population"], cell["population"])
+    if with_side and cell.get("side"):
+        # Two sides make six cells in one line; without the side on each, a
+        # reader cannot tell which base rate belongs to which.
+        word = f"{cell['side'].lower()} {word}"
     if not cell["reportable"] or cell["rate"] is None:
         return f"{word} too few to call (n {cell['n']}, measured {cell['measured']})"
     body = f"{word} {round(cell['rate'] * 100)}% (n {cell['n']}"
@@ -696,7 +715,8 @@ def _skill_sentence(cells: Sequence[Mapping[str, Any]], overlapping: Sequence[tu
         return f"{label}: no scan rows to compare against."
     order = {name: index for index, name in enumerate(POPULATIONS)}
     headline.sort(key=lambda cell: (cell["side"], order.get(cell["population"], 9)))
-    parts = ", ".join(_cell_words(cell) for cell in headline)
+    sides = {cell["side"] for cell in headline}
+    parts = ", ".join(_cell_words(cell, with_side=len(sides) > 1) for cell in headline)
     text = f"{label}: {parts}."
     if overlapping:
         joined = "; ".join(
@@ -830,9 +850,9 @@ def build(
         session_day = None
 
     atr_cache: dict[tuple[str, date | None], float | None] = {}
-    completed_cache: dict[str, list[Mapping[str, Any]]] = {}
+    completed_cache: dict[str, list[tuple[date, Mapping[str, Any]]]] = {}
 
-    def _daily(symbol: str) -> list[Mapping[str, Any]]:
+    def _daily(symbol: str) -> list[tuple[date, Mapping[str, Any]]]:
         if symbol not in completed_cache:
             completed_cache[symbol] = _completed_daily(daily_bars.get(symbol) or (), last_session)
         return completed_cache[symbol]
@@ -848,7 +868,7 @@ def build(
         if key not in atr_cache:
             rows = _daily(symbol)
             if as_of is not None:
-                rows = [bar for bar in rows if (_day_of(bar) or as_of) <= as_of]
+                rows = [pair for pair in rows if pair[0] <= as_of]
             atr_cache[key] = _daily_atr(rows)
         return atr_cache[key]
 
@@ -860,6 +880,21 @@ def build(
     for row in decisions:
         key = _identity(session, row)
         unique.setdefault(key, row)  # source duplicates are one decision; times are not.
+    outcome_index: dict[str, list[Mapping[str, Any]]] = {}
+
+    def _session_outcomes(sources: Mapping[str, Any], target: str) -> list[Mapping[str, Any]]:
+        """The horizon rows of ONE session, indexed once.
+
+        The store holds ~124,000 rows and a busy day carries ~90 claims: walked
+        per claim, this was a 26-million-row scan on the Day Review worker.
+        """
+        if not outcome_index:
+            for row in sources.get("outcomes") or ():
+                key = str(row.get("scan_date") or row.get("session_date") or "")[:10]
+                outcome_index.setdefault(key, []).append(row)
+            outcome_index.setdefault("", [])
+        return outcome_index.get(target, [])
+
     claim_events = _claim_events(tuple(claims))
     claimed_refs = {str(row.get("annotation_ref") or "") for row in claims if str(row.get("annotation_ref") or "")}
     preference = tuple(sources.get("preference") or ())
@@ -1043,9 +1078,8 @@ def build(
         outcome = next(
             (
                 row
-                for row in sources.get("outcomes") or ()
-                if str(row.get("scan_date") or row.get("session_date") or "")[:10] == session
-                and str(row.get("symbol") or "").upper() == symbol
+                for row in _session_outcomes(sources, session)
+                if str(row.get("symbol") or "").upper() == symbol
                 and str(row.get("side") or "").upper() == side
                 and (horizon_sessions is None or int(row.get("horizon_sessions") or horizon_sessions) == horizon_sessions)
             ),
@@ -1115,9 +1149,7 @@ def build(
         )
         at_close = None
         if session_day is not None:
-            closes = {
-                _day_of(bar): _number(bar.get("close")) for bar in _daily(symbol)
-            }
+            closes = {day: _number(bar.get("close")) for day, bar in _daily(symbol)}
             reference = reading.moves.reference
             if reference:
                 at_close = _side_pct(closes.get(session_day), reference, side)

@@ -287,9 +287,14 @@ class DayReviewService:
             # and they are the SAME read the claim rows already use: the
             # horizon-outcomes store, filtered to this session. The 1.1 GB
             # tracker is never opened by a page.
+            lately = set(
+                walkaway_day.earlier_sessions(
+                    session, count=max(0, evidence_stats.LATELY_SESSIONS - 1)
+                )
+            ) | {session}
             scan_rows = [
                 row for row in outcomes
-                if str(row.get("scan_date") or "")[:10] == session
+                if str(row.get("scan_date") or "")[:10] in lately
             ]
             daily = self._daily_bars_for(
                 session, decisions, earlier_decisions, claims, scan_rows
