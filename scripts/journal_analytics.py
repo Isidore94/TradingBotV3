@@ -495,7 +495,7 @@ class AutoTagger:
                 link_only = not claimed
             elif kind == "veto":
                 code = str(annotation.get("reason_code") or "").strip()
-                tag = f"vetoed:{code}" if code else "vetoed"
+                tag = f"{VETO_TAG_WORD}:{code}" if code else VETO_TAG_WORD
             elif kind == "pass":
                 codes = [
                     str(code or "").strip()
@@ -509,7 +509,7 @@ class AutoTagger:
                 # the one the trader made. The annotation writes its codes in
                 # vocabulary order already (never click order), so preserving
                 # the list preserves that too.
-                tag = f"passed:{','.join(codes)}" if codes else "passed"
+                tag = f"{PASS_TAG_WORD}:{','.join(codes)}" if codes else PASS_TAG_WORD
             else:
                 continue
             rows.append(
@@ -1326,6 +1326,33 @@ TAG_STATUS_PROVISIONAL = "provisional"
 #: says nothing about which setup it was. It is stored, it renders, it carries a
 #: `context_row_id` worth following, and it is NEVER a tag.
 LINK_TAG_PREFIX = "link:"
+
+#: The two words a REJECTION's tag starts with, and the `:` that carries its
+#: reason code. `_load_annotation_capture_rows` writes `vetoed:<code>` and
+#: `passed:<c1>,<c2>` - and the bare word when there is no code - *"prefixed so
+#: a rejection can never be mistaken for an endorsement in a Tags column"*.
+#:
+#: Named here, beside `LINK_TAG_PREFIX`, because TJ-9 gave that sentence a
+#: second reader: the Trade Mentor's one-click setup confirm, which offered
+#: `vetoed:too_extended_from_base` as a SETUP on a live trade and would have
+#: written it `confirmed`, where "My setups" counts it. A second list spelled
+#: out over there is the kind of copy that drifts.
+VETO_TAG_WORD = "vetoed"
+PASS_TAG_WORD = "passed"
+REJECTION_TAG_WORDS = (VETO_TAG_WORD, PASS_TAG_WORD)
+
+
+def is_rejection_tag(tag: Any) -> bool:
+    """Is this tag a REJECTION rather than a setup? The ONE predicate.
+
+    True for ``vetoed``, ``vetoed:<code>``, ``passed`` and ``passed:<codes>``.
+    A rejection is a statement about why the trader stayed OUT, and no reader
+    may ever count one as a setup they were in.
+    """
+    text = str(tag or "").strip().lower()
+    if not text:
+        return False
+    return text.split(":", 1)[0].strip() in REJECTION_TAG_WORDS
 
 
 def is_link_candidate(candidate: Any) -> bool:

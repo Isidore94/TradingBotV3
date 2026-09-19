@@ -177,7 +177,7 @@ class TradeMentorCard(QWidget):
         self.d1_label.setVisible(False)
         self.d1_box.setVisible(False)
 
-        # The 10:00 card's SECOND section, kept visually separate from the read
+        # The 09:00 card's SECOND section, kept visually separate from the read
         # above it. Two different questions on one card is the trader's own
         # design; merging them into one box would produce a paragraph that is
         # neither a market read nor a record of a trade.
@@ -196,7 +196,18 @@ class TradeMentorCard(QWidget):
         self._raw_trade_inputs: dict[str, QPlainTextEdit] = {}
         self._ai_draft_buttons: dict[str, QPushButton] = {}
         self._ai_drafts: dict[str, dict[str, dict[str, Any]]] = {}
+        self._setup_confirm_buttons: dict[str, QPushButton] = {}
+        #: trade_id -> the vocabulary list the confirm button sits beside.
+        self._setup_choice_boxes: dict[str, QComboBox] = {}
+        #: trade_ids whose setup the trader confirmed on THIS card. The combo
+        #: for that field disappears, so the Save gate must stop waiting on it.
+        self._setup_confirmed: set[str] = set()
         self._trade_store = None
+        #: Which session's trades the section is asking about. TJ-9 item 2: an
+        #: unanswered section RIDES on every later card of the same session and
+        #: is cleared only when the session changes - a question about Friday's
+        #: trades asked on Wednesday is a different question.
+        self._trade_check_session = ""
         self.save_answers_button = QPushButton("Save answers")
         self.save_answers_button.setToolTip(
             "Files what you remember as a labelled next-morning note. It never "
@@ -205,6 +216,7 @@ class TradeMentorCard(QWidget):
         )
         self.save_answers_button.clicked.connect(self.save_trade_check)
         self.save_answers_button.setVisible(False)
+        self.save_answers_button.setEnabled(False)
 
         self.submit_button = QPushButton("Submit")
         self.submit_button.setToolTip("File this read now (Ctrl+Enter).")
@@ -365,14 +377,16 @@ class TradeMentorCard(QWidget):
         show_d1 = kind == KIND_M5_D1
         self.d1_label.setVisible(show_d1)
         self.d1_box.setVisible(show_d1)
-        if kind != KIND_M5_TRADES:
-            # Only the 10:00 card carries the second section. It is cleared
-            # rather than hidden, so a stale question from an earlier hour can
-            # never be saved against the wrong morning.
+        if str(getattr(slot, "session", "") or "") != self._trade_check_session:
+            # TJ-9 item 2. The section RIDES on every later card of the same
+            # session - an unanswered card must not expire into silence - and
+            # is cleared the moment the session changes, so a stale question
+            # from Friday can never be saved against Wednesday's morning.
             self._clear_trade_check()
             self.trade_check_label.setVisible(False)
             self.trade_check_box.setVisible(False)
             self.save_answers_button.setVisible(False)
+            self._trade_check_session = ""
         if self._previous:
             self.previous_label.setText(
                 "Your last read: " + str(self._previous.get("text") or "")
@@ -415,6 +429,10 @@ class TradeMentorCard(QWidget):
         self._raw_trade_inputs = {}
         self._ai_draft_buttons = {}
         self._ai_drafts = {}
+        self._setup_confirm_buttons = {}
+        self._setup_choice_boxes = {}
+        self._setup_confirmed = set()
+        self.save_answers_button.setEnabled(False)
         while self._trade_check_layout.count():
             item = self._trade_check_layout.takeAt(0)
             widget = item.widget()
@@ -423,17 +441,23 @@ class TradeMentorCard(QWidget):
                 widget.deleteLater()
 
     def set_trade_check(self, task, store=None) -> None:
-        """Build the 10:00 card's second section from `build_task`'s answer.
+        """Build the 09:00 card's second section from `build_task`'s answer.
 
         Three states, all of them said out loud:
 
-        * the statement has not landed - one line saying so, and NO questions.
-          An empty questionnaire drawn from an incomplete list is a lie about
-          the session;
+        * the statement has not landed - one line that NAMES the date the fills
+          are current to, and NO questions. An empty questionnaire drawn from an
+          incomplete list is a lie about the session, and the line rides to the
+          next slot rather than asking nothing all day;
         * nothing is missing - one line saying so;
-        * something is missing - up to `TRADE_CAP_DEFAULT` trades, each with a
-          state combo and a free-text box per missing field, and the remainder
-          stated as a COUNT rather than dropped.
+        * something is missing - EVERY trade of the reviewed session, each with
+          a state combo and a free-text box per missing field, and a one-click
+          confirm beside the setup when the machine has a suggestion.
+
+        Save is disabled until every listed field holds one of the four
+        explicit answer states. That is the whole of "forced": the trader can
+        say `not remembered`, which is a complete answer, but they cannot leave
+        the morning blank by closing the card.
         """
         import trade_mentor_trade_check as check
 
@@ -443,11 +467,18 @@ class TradeMentorCard(QWidget):
             self.trade_check_label.setVisible(False)
             self.trade_check_box.setVisible(False)
             self.save_answers_button.setVisible(False)
+            self._trade_check_session = ""
             return
+        self._trade_check_session = str(
+            getattr(self._slot, "session", "") or ""
+        )
         if not getattr(task, "journal_ready", False):
             self.trade_check_label.setText(
-                f"Yesterday's trades ({task.reviewed_session}): {task.reason or check.REASON_NOT_READY} "
-                "- the broker statement has not landed, so nothing is asked."
+                f"Yesterday's trades ({task.reviewed_session}): "
+                f"{task.reason or check.REASON_NOT_READY} - "
+                f"{self._freshness_phrase(task)}. The broker statement has not "
+                "landed, so nothing is asked yet; this comes back on the next "
+                "card. The day pull is Questrade only - IBKR has no day leg."
             )
             self.trade_check_label.setVisible(True)
             self.trade_check_box.setVisible(False)
@@ -455,7 +486,8 @@ class TradeMentorCard(QWidget):
             return
         if not task.trades:
             self.trade_check_label.setText(
-                f"Yesterday's trades ({task.reviewed_session}): nothing is missing."
+                f"Yesterday's trades ({task.reviewed_session}): nothing is missing. "
+                f"{self._freshness_phrase(task).capitalize()}."
             )
             self.trade_check_label.setVisible(True)
             self.trade_check_box.setVisible(False)
@@ -469,7 +501,8 @@ class TradeMentorCard(QWidget):
             else ""
         )
         self.trade_check_label.setText(
-            f"Yesterday's trades ({task.reviewed_session}), missing fields only."
+            f"Yesterday's trades ({task.reviewed_session}), missing fields only - "
+            f"all {len(task.trades)}. Save stays off until each one is answered."
             + remainder
         )
         self.trade_check_label.setVisible(True)
@@ -481,6 +514,7 @@ class TradeMentorCard(QWidget):
             )
             heading.setObjectName("MutedLabel")
             self._trade_check_layout.addWidget(heading)
+            self._add_setup_confirm(question)
             raw_box = QPlainTextEdit(self.trade_check_box)
             raw_box.setMaximumHeight(72)
             raw_box.setPlaceholderText(
@@ -510,6 +544,10 @@ class TradeMentorCard(QWidget):
                 combo.addItem("-", "")
                 for state in check.ANSWER_STATES:
                     combo.addItem(state.replace("_", " "), state)
+                # The Save gate is a STATE, not a latch: going back to "-"
+                # closes it again, which is why this listens to the combo
+                # rather than counting clicks.
+                combo.currentIndexChanged.connect(self._refresh_save_gate)
                 text_input = QLineEdit(row)
                 text_input.setPlaceholderText("in your own words (optional)")
                 row_layout.addWidget(combo)
@@ -520,6 +558,159 @@ class TradeMentorCard(QWidget):
 
         self.trade_check_box.setVisible(True)
         self.save_answers_button.setVisible(True)
+        self._refresh_save_gate()
+
+    @staticmethod
+    def _freshness_phrase(task) -> str:
+        """"fills current to <date>" - the one line every surface prints.
+
+        The DATE comes from the task, never from the widget: the Journal and
+        the AWAY digest print the same sentence from the same number.
+        """
+        current = str(getattr(task, "fills_current_to", "") or "")
+        return f"fills current to {current}" if current else "no verified import yet"
+
+    def _add_setup_confirm(self, question) -> None:
+        """One click for the setup, when the machine has something to suggest.
+
+        The button is a SUGGESTION until it is pressed. Showing it writes
+        nothing - the row stays exactly as the bulk tagger left it - and
+        pressing it is the trader's write through the Journal's own writer. A
+        trade whose setup the trader already confirmed is never offered one.
+        """
+        import trade_mentor_trade_check as check
+
+        guess = str(getattr(question, "setup_guess", "") or "")
+        if not guess or "setup" not in tuple(question.missing or ()):
+            return
+        lane = str(getattr(question, "setup_guess_lane", "") or "")
+        row = QWidget(self.trade_check_box)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+        # The VOCABULARY LIST the confirm button sits beside. The guess is
+        # preselected, so one click is still one click - but a wrong guess is
+        # CORRECTED here rather than confirmed, and the list carries no
+        # rejection, so nothing outside it can be written from this card.
+        choice = QComboBox(row)
+        names = [guess]
+        for name in check.setup_vocabulary():
+            if name not in names:
+                names.append(name)
+        for name in names:
+            choice.addItem(name, name)
+        choice.setCurrentIndex(0)
+        button = QPushButton("Confirm setup", row)
+        button.setToolTip(
+            "The machine's best guess"
+            + (f", from {lane.replace('_', ' ')}" if lane else "")
+            + ". Nothing is written until you press this, and what is written "
+            "is whatever this list shows."
+        )
+        button.clicked.connect(
+            lambda _checked=False, trade_id=question.trade_id: self._confirm_setup(trade_id)
+        )
+        row_layout.addWidget(QLabel("setup"))
+        row_layout.addWidget(choice, 1)
+        row_layout.addWidget(button)
+        self._trade_check_layout.addWidget(row)
+        self._setup_confirm_buttons[str(question.trade_id)] = button
+        self._setup_choice_boxes[str(question.trade_id)] = choice
+
+    def setup_confirm_button(self, trade_id: str):
+        """The confirm button offered for one trade, or ``None``."""
+        return self._setup_confirm_buttons.get(str(trade_id))
+
+    def setup_choice_box(self, trade_id: str):
+        """The vocabulary list that button sits beside, or ``None``."""
+        return self._setup_choice_boxes.get(str(trade_id))
+
+    def trade_check_session(self) -> str:
+        """Which session's trade check is on the card in ANY form, or ``""``.
+
+        Includes the one-line states - `journal not ready`, `nothing is
+        missing`, `N field(s) filed` - which have no widgets to lose.
+        """
+        return self._trade_check_session if self._has_trade_check() else ""
+
+    def open_answers_session(self) -> str:
+        """Which session's trade check has ANSWER WIDGETS on the card, or ``""``.
+
+        The host asks this before rebuilding, and it is deliberately narrower
+        than :meth:`trade_check_session`: only a section the trader could
+        already have TOUCHED is worth protecting. A `journal not ready` line is
+        not - it carries a date that goes stale the moment the morning retry
+        lands the fills, and a card that refused to rebuild it never became the
+        questions at all that day.
+        """
+        return self._trade_check_session if self._answer_inputs else ""
+
+    def _has_trade_check(self) -> bool:
+        return bool(
+            self._answer_inputs
+            or self.trade_check_label.isVisibleTo(self)
+            or self.trade_check_box.isVisibleTo(self)
+        )
+
+    def _confirm_setup(self, trade_id: str) -> dict[str, Any]:
+        """The trader's click. The pure function decides the provenance."""
+        import trade_mentor_trade_check as check
+
+        question = self._trade_questions.get(str(trade_id))
+        store = self._trade_store
+        if question is None or store is None:
+            self._set_status("the trade journal is not available here")
+            return {"ok": False, "reason": "the trade journal is not available here"}
+        choice = self._setup_choice_boxes.get(str(trade_id))
+        chosen = str(choice.currentData() or choice.currentText() or "") if choice else ""
+        try:
+            result = check.confirm_setup(store, question, now=self._now(), setup=chosen)
+        except Exception as exc:  # noqa: BLE001 - journal writes fail loudly
+            self._set_status(f"the setup was NOT saved: {exc}")
+            return {"ok": False, "reason": str(exc)}
+        if not result.get("ok"):
+            self._set_status(str(result.get("reason") or "nothing to confirm"))
+            return result
+        button = self._setup_confirm_buttons.get(str(trade_id))
+        if button is not None:
+            button.setEnabled(False)
+            button.setText(f"Confirmed: {result.get('setup')}")
+        if choice is not None:
+            choice.setEnabled(False)
+        # The setup question is answered, so the Save gate stops waiting on it.
+        self._setup_confirmed.add(str(trade_id))
+        fields = self._answer_inputs.get(str(trade_id), {})
+        controls = fields.get("setup")
+        if controls is not None:
+            controls[0].setEnabled(False)
+            controls[1].setEnabled(False)
+        self._refresh_save_gate()
+        self._set_status(
+            f"{question.symbol} setup confirmed as {result.get('setup')} "
+            f"({result.get('label_provenance') or 'unrecorded'})."
+        )
+        return result
+
+    def _pending_answers(self) -> int:
+        """How many listed fields are still open. Zero means Save may arm."""
+        open_fields = 0
+        for trade_id, fields in self._answer_inputs.items():
+            confirmed = str(trade_id) in self._setup_confirmed
+            for name, (combo, _text_input) in fields.items():
+                if name == "setup" and confirmed:
+                    continue
+                if not str(combo.currentData() or ""):
+                    open_fields += 1
+        return open_fields
+
+    def _refresh_save_gate(self, *_args) -> None:
+        """Forced means the button is grey until every field is answered."""
+        try:
+            self.save_answers_button.setEnabled(
+                bool(self._answer_inputs) and self._pending_answers() == 0
+            )
+        except RuntimeError:  # pragma: no cover - widget already torn down
+            pass
 
     def _start_ai_draft(self, trade_id: str) -> None:
         """Save raw words, then let the local model prepare editable controls."""
@@ -647,6 +838,12 @@ class TradeMentorCard(QWidget):
         self._clear_trade_check()
         self.trade_check_box.setVisible(False)
         self.save_answers_button.setVisible(False)
+        # The section rides on later cards of the same session (TJ-9 item 2),
+        # so the heading has to stop describing questions that are now answered
+        # - a later hour no longer wipes it on its way in.
+        self.trade_check_label.setText(
+            f"Yesterday's trades: {saved} remembered field(s) filed, labelled as recalled."
+        )
         self._set_status(f"{saved} remembered field(s) filed, labelled as recalled.")
         return {"ok": True, "fields": saved}
 

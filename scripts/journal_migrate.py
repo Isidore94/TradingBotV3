@@ -254,6 +254,17 @@ NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     ("trade_annotations", "planned_stop", "REAL"),
     ("trade_annotations", "planned_risk", "REAL"),
     ("trade_annotations", "risk_source", "TEXT NOT NULL DEFAULT ''"),
+    # TJ-9 item 4 (decision 0021 answer 25). WHEN a confirmed label was made:
+    # `claimed_before_entry`, `same_session` or `recalled_after`, decided by
+    # `trade_origin.label_provenance`. A label written the next morning already
+    # knows how the trade ended, so every statistic over confirmed tags has to
+    # be able to report the three apart.
+    #
+    # The DEFAULT is what makes this safe on the live database's 185 existing
+    # annotation rows: they are PRESENT and EMPTY, never NULL and never absent,
+    # so a reader can say "unrecorded" without a schema check - and "" is not
+    # one of the three, so an old row can never be counted as any of them.
+    ("trade_annotations", "label_provenance", "TEXT NOT NULL DEFAULT ''"),
     # P6: the id of the trader statement a candidate came from - a veto, a
     # like+claim, a pass or a take-class review event. NULLABLE and empty for
     # every fuzzy candidate, because only the exact-id lane has one.

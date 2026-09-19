@@ -250,7 +250,16 @@ def test_confirming_changes_the_lane_and_not_the_words(tmp_path):
 
     assert store.confirm_tags(trade_id) is True
     state = store.annotation_state(trade_id)
-    assert state == {"setup_tags": "avwap-reclaim", "tag_status": "confirmed"}
+    # TJ-9 widened `annotation_state` by two additive keys. A machine confirm
+    # records NO provenance: `label_provenance` is the trader's own act, and a
+    # lane change is not one - so it stays "" (unrecorded), which is never any
+    # of the three named provenances.
+    assert state == {
+        "setup_tags": "avwap-reclaim",
+        "tag_status": "confirmed",
+        "notes": "",
+        "label_provenance": "",
+    }
     # And the audit row that explains where the words came from still stands.
     assert len(store.list_adjustments(limit=10)) == 1
 
@@ -278,9 +287,15 @@ def test_the_traders_save_confirms_the_row(tmp_path):
     bulk.apply_plan(store, bulk.build_plan(store, refresh=False))
 
     store.save_trade_annotation(trade_id, setup_tags="my own words", notes="")
+    # TJ-9: two additive keys. This caller passes no `label_provenance` and it
+    # CHANGED the tag (the tagger's guess -> the trader's words), so the age is
+    # recomputed from the trade's own stamps rather than left saying nothing.
+    # The fixture trade opened days before "now", so it is `recalled_after`.
     assert store.annotation_state(trade_id) == {
         "setup_tags": "my own words",
         "tag_status": "confirmed",
+        "notes": "",
+        "label_provenance": "recalled_after",
     }
 
 

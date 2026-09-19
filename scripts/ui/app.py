@@ -11,7 +11,7 @@ import sys
 import time
 
 import threading
-from datetime import datetime
+from datetime import date as _date, datetime
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
@@ -270,6 +270,11 @@ class MainWindow(QMainWindow):
             self.trade_mentor_context_service
         )
         self.trade_mentor_service = TradeMentorService(self)
+        # TJ-9 item 6. The journal importer is built on first need, and the
+        # date of the last morning retry lives here so the once-a-morning rule
+        # holds across every card of one session.
+        self._journal_importer = None
+        self._journal_retry_date = ""
         self.trade_mentor_service.promptDue.connect(self._show_trade_mentor_prompt)
         self.trade_mentor_service.promptExpired.connect(
             lambda _slot_id: self.trading_panel.alert_center.chart_review.hide_mentor_card()
@@ -1105,19 +1110,100 @@ class MainWindow(QMainWindow):
         # The Settings line says when the NEXT one is, so it moves every time a
         # prompt lands rather than telling the trader what was true at startup.
         self._sync_trade_mentor_label()
-        if str(getattr(slot, "kind", "")) != "m5_trades":
-            return
-        # The 10:00 second section. Two small queries against the journal DB,
-        # once a day, on the slot the trader is already being interrupted for.
+        # The 09:00 second section, and the RIDE. Everything from here down is
+        # inside one guard on purpose: a trade check that cannot be built must
+        # never cost the prompt above it, which is the read the trader is
+        # actually being interrupted for. The kind test used to sit OUTSIDE it
+        # and to read the constant off the wrong module, so every prompt raised
+        # `AttributeError` in a Qt slot and no trade section ever appeared.
         try:
             import trade_mentor_trade_check as check
             from journal_store import JournalStore
+            from trade_mentor_schedule import KIND_M5_TRADES
+
+            card = review.mentor_card
+            is_check_slot = str(getattr(slot, "kind", "")) == KIND_M5_TRADES
+            # ONLY a section with answer widgets is protected from a rebuild -
+            # that is the one the trader could already have touched. A visible
+            # LABEL is not: the `journal not ready` line has nothing to lose by
+            # being rebuilt, and it has a date in it that goes stale the moment
+            # the morning retry lands the fills. Gating on the label meant a
+            # journal that became ready after the 09:00 card was never asked
+            # about all day, while the card kept printing a false freshness
+            # date.
+            answers_open = str(card.open_answers_session() or "") == str(slot.session)
+            if not is_check_slot and answers_open:
+                return
+            if not is_check_slot and not self._trade_check_is_owed(check, slot):
+                return
 
             store = JournalStore()
             task = check.build_task(store, slot.scheduled_at.date())
-            review.mentor_card.set_trade_check(task, store=store)
+            if not task.journal_ready:
+                # TJ-9 item 6: the night ended without an OK import for the
+                # session the card is about, so the desk pulls once more before
+                # asking. On the import service's own QThread, Questrade only,
+                # no model, at most once a morning - and the card goes up now
+                # either way, saying what it has.
+                outcome = check.morning_import_retry(
+                    self._journal_import_service(),
+                    task,
+                    today=str(slot.session),
+                    last_retry=self._journal_retry_date,
+                )
+                self._journal_retry_date = str(outcome.get("last_retry") or "")
+                if outcome.get("retried"):
+                    logging.info(
+                        "Trade Mentor: retrying the Questrade import before the "
+                        "%s card (fills current to %s).",
+                        slot.slot_id,
+                        task.fills_current_to or "nothing yet",
+                    )
+            card.set_trade_check(task, store=store)
         except Exception:  # noqa: BLE001 - the read still stands without it
             logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
+
+    def _trade_check_is_owed(self, check, slot) -> bool:
+        """Does this ORDINARY slot have to carry the trade check?
+
+        TJ-9 item 2: *"AWAY still prompts nothing; the first DESK slot after it
+        carries the section."* The section used to be built only for the
+        `m5_trades` kind, and only the 09:00 slot has that kind - so a 09:00
+        that was away, idle, locked, skipped or expired took the whole day's
+        questions with it, and a trader who sat down at 11:00 was asked nothing
+        at all.
+
+        It is owed when the reviewed session still has an unlabelled trade, or
+        when its broker statement has not landed (item 6's line has to ride
+        too). A session whose trades are all answered brings nothing back.
+        AWAY needs no test here: the service records the absence and never
+        emits `promptDue`, so an ordinary slot in AWAY does not reach this.
+        """
+        try:
+            reviewed = check.previous_exchange_session(slot.scheduled_at.date())
+            if self.trade_mentor_service.unlabelled_trades(reviewed) > 0:
+                return True
+            from journal_store import JournalStore
+
+            return check.fills_current_to(JournalStore()) != _date.fromisoformat(reviewed)
+        except Exception:  # noqa: BLE001 - an unreadable journal asks nothing extra
+            logging.debug("Trade check ride undecidable.", exc_info=True)
+            return False
+
+    def _journal_import_service(self):
+        """The desk's ONE journal import owner, built on first need.
+
+        `JournalImportService` owns its own `QThread` and is the single caller
+        of the Questrade refresh chain; the Mentor's morning retry calls it and
+        never refreshes a token itself.
+        """
+        service = getattr(self, "_journal_importer", None)
+        if service is None:
+            from ui.services.journal_import_service import JournalImportService
+
+            service = JournalImportService(self)
+            self._journal_importer = service
+        return service
 
     def _pause_trade_mentor(self) -> None:
         self.trade_mentor_service.pause_today()
@@ -1193,6 +1279,12 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.trade_mentor_context_service.shutdown(timeout_ms=250)
+        except Exception:
+            pass
+        # TJ-9 item 6: the morning retry's worker, when one was ever built.
+        try:
+            if self._journal_importer is not None:
+                self._journal_importer.shutdown()
         except Exception:
             pass
         # Backstop for the shared writer lease: AutopilotService.shutdown

@@ -9,7 +9,8 @@ The packet names three modules and leaves a fourth unnamed. The names below are 
 contract the builder inherits; nothing here may be renamed away to make a test pass.
 
 ``scripts/trade_mentor_schedule.py`` (pure, no Qt, no I/O)
-    ``FIRST_HOUR = 7``, ``D1_HOURS = (8, 12)``, ``TRADES_HOUR = 10``,
+    ``FIRST_HOUR = 7``, ``D1_HOURS = (8, 12)``, ``TRADES_HOUR = 9`` (TJ-9; it was
+    10 until 2026-09-19),
     ``PACIFIC`` (``ZoneInfo("America/Los_Angeles")``),
     ``KIND_M5 = "m5"`` / ``KIND_M5_D1 = "m5_d1"`` / ``KIND_M5_TRADES = "m5_trades"``,
     ``MentorSlot(slot_id, session, scheduled_at, kind, expires_at, post_close)`` and
@@ -117,8 +118,9 @@ def _shape(slots) -> tuple[tuple[str, str, bool], ...]:
 
 def test_a_normal_session_asks_every_whole_hour_from_seven_until_before_the_close():
     """07:00 to 12:00 Pacific: six prompts, with D1 folded into 08 and 12 and the
-    previous session's trades folded into 10. The close is 13:00 PT, so there is no
-    13:00 read - "until before the close" is exclusive."""
+    previous session's trades folded into 09 (TJ-9, trader 2026-09-19: labelling is
+    forced "around 0900"). The close is 13:00 PT, so there is no 13:00 read -
+    "until before the close" is exclusive."""
     import trade_mentor_schedule as schedule
 
     slots = schedule.slots_for_session(NORMAL_SESSION)
@@ -126,17 +128,17 @@ def test_a_normal_session_asks_every_whole_hour_from_seven_until_before_the_clos
     assert _shape(slots) == (
         ("07:00", "m5", False),
         ("08:00", "m5_d1", False),
-        ("09:00", "m5", False),
-        ("10:00", "m5_trades", False),
+        ("09:00", "m5_trades", False),
+        ("10:00", "m5", False),
         ("11:00", "m5", False),
         ("12:00", "m5_d1", False),
     )
     assert schedule.FIRST_HOUR == 7
     assert schedule.D1_HOURS == (8, 12)
-    assert schedule.TRADES_HOUR == 10
+    assert schedule.TRADES_HOUR == 9
 
 
-def test_the_eight_ten_and_twelve_collisions_each_produce_one_combined_slot():
+def test_the_eight_nine_and_twelve_collisions_each_produce_one_combined_slot():
     """One card, not two. An hourly M5 read that lands on a D1 hour or on the trade
     hour is the SAME slot with a combined kind - two slots at 08:00 would stack two
     dialogs, which the trader's brief forbids."""
@@ -147,9 +149,9 @@ def test_the_eight_ten_and_twelve_collisions_each_produce_one_combined_slot():
     for slot in slots:
         by_hour.setdefault(slot.scheduled_at.hour, []).append(slot)
 
-    assert [len(by_hour[hour]) for hour in (8, 10, 12)] == [1, 1, 1]
+    assert [len(by_hour[hour]) for hour in (8, 9, 12)] == [1, 1, 1]
     assert by_hour[8][0].kind == schedule.KIND_M5_D1
-    assert by_hour[10][0].kind == schedule.KIND_M5_TRADES
+    assert by_hour[9][0].kind == schedule.KIND_M5_TRADES
     assert by_hour[12][0].kind == schedule.KIND_M5_D1
     # And the combined ones are still M5 reads: the kind carries both halves.
     assert by_hour[8][0].kind.startswith("m5")
@@ -158,8 +160,9 @@ def test_the_eight_ten_and_twelve_collisions_each_produce_one_combined_slot():
 def test_an_early_close_keeps_the_fixed_slots_and_drops_the_hourly_reads_after_it():
     """2026-11-27 closes at 10:00 Pacific. The hourly M5 window ends before that, so
     there is no 11:00 read at all - but the trader explicitly asked to keep the noon
-    D1 read, and the 10:00 trade check is about YESTERDAY, not about today's tape. Both
-    survive, labelled post-close."""
+    D1 read, and it survives labelled post-close. Since TJ-9 the trade check is the
+    09:00 slot, which is INSIDE the hourly window on this short day, so the session
+    loses its 10:00 slot rather than relabelling one."""
     import trade_mentor_schedule as schedule
 
     slots = schedule.slots_for_session(EARLY_CLOSE_SESSION)
@@ -167,8 +170,7 @@ def test_an_early_close_keeps_the_fixed_slots_and_drops_the_hourly_reads_after_i
     assert _shape(slots) == (
         ("07:00", "m5", False),
         ("08:00", "m5_d1", False),
-        ("09:00", "m5", False),
-        ("10:00", "m5_trades", True),
+        ("09:00", "m5_trades", False),
         ("12:00", "m5_d1", True),
     )
     # The regular calendar would say 16:00 ET here; only the early-close calendar
@@ -216,7 +218,7 @@ def test_a_slot_id_names_its_session_its_wall_time_and_its_kind():
     ids = [slot.slot_id for slot in slots]
 
     assert ids[0] == "2026-09-14-0700-m5"
-    assert ids[3] == "2026-09-14-1000-m5_trades"
+    assert ids[3] == "2026-09-14-1000-m5"
     assert len(set(ids)) == len(ids)
     assert all(slot.session == "2026-09-14" for slot in slots)
 
@@ -329,8 +331,8 @@ def test_a_present_trader_is_asked_once_for_the_hour(tmp_path, mentor_on):
     clock.set(_pacific(NORMAL_SESSION, 9, 40, 0))
     service.poll()
 
-    assert [slot.slot_id for slot in due] == ["2026-09-14-0900-m5"]
-    state = service.slot_state("2026-09-14-0900-m5")
+    assert [slot.slot_id for slot in due] == ["2026-09-14-0900-m5_trades"]
+    state = service.slot_state("2026-09-14-0900-m5_trades")
     assert state["delivered_at"] == _pacific(NORMAL_SESSION, 9, 0, 30).isoformat()
     assert not state["answered_at"]
     assert not state["skipped_reason"]
@@ -360,7 +362,7 @@ def test_away_paused_locked_and_idle_each_skip_with_their_own_reason(tmp_path, m
     """Four different absences, four different recorded reasons. A single boolean
     "present" would make the coverage gap unreadable later."""
     nine = _pacific(NORMAL_SESSION, 9, 0, 30)
-    slot_id = "2026-09-14-0900-m5"
+    slot_id = "2026-09-14-0900-m5_trades"
 
     _set_auto_mode("AWAY")
     away, away_due, _ = _service(tmp_path, _Clock(nine), name="away.json")
@@ -402,7 +404,7 @@ def test_a_trader_quietly_watching_charts_is_present(tmp_path, mentor_on):
     service, due, _ = _service(tmp_path, clock, idle=idle_secs, name="watching.json")
     service.poll()
 
-    assert [slot.slot_id for slot in due] == ["2026-09-14-0900-m5"]
+    assert [slot.slot_id for slot in due] == ["2026-09-14-0900-m5_trades"]
 
 
 def test_pause_today_silences_today_and_nothing_else(tmp_path, mentor_on):
@@ -416,7 +418,7 @@ def test_pause_today_silences_today_and_nothing_else(tmp_path, mentor_on):
     tuesday = date(2026, 9, 15)
     clock.set(_pacific(tuesday, 9, 0, 30))
     service.poll()
-    assert [slot.slot_id for slot in due] == ["2026-09-15-0900-m5"]
+    assert [slot.slot_id for slot in due] == ["2026-09-15-0900-m5_trades"]
 
 
 def test_a_missed_hour_is_recorded_and_the_next_hour_arrives_alone(tmp_path, mentor_on):
@@ -432,9 +434,9 @@ def test_a_missed_hour_is_recorded_and_the_next_hour_arrives_alone(tmp_path, men
     clock.set(_pacific(NORMAL_SESSION, 10, 0, 30))
     service.poll()
 
-    assert [slot.slot_id for slot in due] == ["2026-09-14-1000-m5_trades"]
-    assert service.slot_state("2026-09-14-0900-m5")["skipped_reason"] == "away"
-    assert not service.slot_state("2026-09-14-0900-m5")["delivered_at"]
+    assert [slot.slot_id for slot in due] == ["2026-09-14-1000-m5"]
+    assert service.slot_state("2026-09-14-0900-m5_trades")["skipped_reason"] == "away"
+    assert not service.slot_state("2026-09-14-0900-m5_trades")["delivered_at"]
 
 
 def test_an_unanswered_slot_expires_when_its_hour_runs_out(tmp_path, mentor_on):
@@ -447,11 +449,11 @@ def test_an_unanswered_slot_expires_when_its_hour_runs_out(tmp_path, mentor_on):
     clock.set(_pacific(NORMAL_SESSION, 10, 5, 0))
     service.poll()
 
-    assert expired == ["2026-09-14-0900-m5"], "expired once, not once per tick"
-    assert service.slot_state("2026-09-14-0900-m5")["skipped_reason"] == "expired"
+    assert expired == ["2026-09-14-0900-m5_trades"], "expired once, not once per tick"
+    assert service.slot_state("2026-09-14-0900-m5_trades")["skipped_reason"] == "expired"
     assert [slot.slot_id for slot in due] == [
-        "2026-09-14-0900-m5",
-        "2026-09-14-1000-m5_trades",
+        "2026-09-14-0900-m5_trades",
+        "2026-09-14-1000-m5",
     ]
 
 
@@ -469,24 +471,24 @@ def test_a_restart_mid_slot_reshows_the_card_without_writing_a_second_slot(tmp_p
     second, second_due, _ = _service(tmp_path, clock2, name="restart.json")
     second.poll()
 
-    assert [slot.slot_id for slot in second_due] == ["2026-09-14-0900-m5"]
-    assert second.slot_state("2026-09-14-0900-m5")["delivered_at"] == _pacific(
+    assert [slot.slot_id for slot in second_due] == ["2026-09-14-0900-m5_trades"]
+    assert second.slot_state("2026-09-14-0900-m5_trades")["delivered_at"] == _pacific(
         NORMAL_SESSION, 9, 0, 30
     ).isoformat()
-    assert path.read_text(encoding="utf-8").count("2026-09-14-0900-m5") == 1
+    assert path.read_text(encoding="utf-8").count("2026-09-14-0900-m5_trades") == 1
 
 
 def test_an_answered_slot_is_never_reshown(tmp_path, mentor_on):
     clock = _Clock(_pacific(NORMAL_SESSION, 9, 0, 30))
     service, due, _ = _service(tmp_path, clock)
     service.poll()
-    service.mark_answered("2026-09-14-0900-m5")
+    service.mark_answered("2026-09-14-0900-m5_trades")
 
     clock.set(_pacific(NORMAL_SESSION, 9, 30, 0))
     service.poll()
 
     assert len(due) == 1
-    assert service.slot_state("2026-09-14-0900-m5")["answered_at"]
+    assert service.slot_state("2026-09-14-0900-m5_trades")["answered_at"]
 
 
 def test_nothing_is_due_on_a_holiday(tmp_path, mentor_on):
@@ -564,8 +566,11 @@ def test_submit_files_one_market_journal_row_stamped_with_the_real_response_time
     row = rows[0]
     assert row["text"] == "SPY lost the 9:45 low; I expect a retest of VWAP."
     assert row["timeframe"] == "M5"
-    assert row["mentor"]["slot_id"] == "2026-09-14-0900-m5"
-    assert row["mentor"]["prompt_kind"] == "m5"
+    assert row["mentor"]["slot_id"] == "2026-09-14-0900-m5_trades"
+    # TJ-9 moved the trade check to 09:00, so this slot's kind is the combined
+    # one. The ROW is still a plain M5 read: the kind names the card, not the
+    # observation (`timeframe` above is what the read is about).
+    assert row["mentor"]["prompt_kind"] == "m5_trades"
     assert row["mentor"]["scheduled_at"] == slot.scheduled_at.isoformat()
     assert row["mentor"]["responded_at"] == _pacific(NORMAL_SESSION, 9, 12, 41).isoformat()
     # `created_at` is the ledger's own UTC stamp of the same moment, never the
@@ -1220,10 +1225,16 @@ def test_raw_trade_reply_is_saved_before_parsing(tmp_path):
     assert row["payload"]["recalled_after_session"] is True
 
 
-def test_an_ordinary_hour_carries_no_leftover_trade_questions(tmp_path):
-    """A stale question saved against the wrong morning is the one way this
-    section could write a falsehood, so the 11:00 card CLEARS it rather than
-    merely hiding it."""
+def test_a_later_hour_of_the_same_session_carries_the_trade_questions_on(tmp_path):
+    """TJ-9 item 2 REPLACED this test's original rule. It used to pin that the
+    11:00 card cleared the section; the trader then asked to be FORCED, so an
+    unanswered section must not expire into silence and rides on every later
+    card of the same session instead.
+
+    The falsehood the old rule guarded against - a stale question saved against
+    the wrong morning - is still impossible, because the clear now happens on
+    the SESSION boundary, which is the boundary that actually changes which
+    trades are being asked about."""
     import trade_mentor_schedule as schedule
     import trade_mentor_trade_check as check
 
@@ -1232,19 +1243,30 @@ def test_an_ordinary_hour_carries_no_leftover_trade_questions(tmp_path):
     _seed_trade(store, "T1", "AAPL")
 
     journal = _journal(tmp_path)
-    card = _card(tmp_path, journal, _Clock(_pacific(NORMAL_SESSION, 10, 6, 12)))
-    ten = [s for s in schedule.slots_for_session(NORMAL_SESSION) if s.scheduled_at.hour == 10][0]
-    card.show_slot(ten)
+    card = _card(tmp_path, journal, _Clock(_pacific(NORMAL_SESSION, 9, 6, 12)))
+    nine = [s for s in schedule.slots_for_session(NORMAL_SESSION) if s.scheduled_at.hour == 9][0]
+    card.show_slot(nine)
     card.set_trade_check(check.build_task(store, NORMAL_SESSION), store=store)
     assert card._answer_inputs
 
     eleven = [s for s in schedule.slots_for_session(NORMAL_SESSION) if s.scheduled_at.hour == 11][0]
     card.show_slot(eleven)
 
+    assert card._answer_inputs, "an unanswered section rides to the next hour"
+    assert card.trade_check_box.isVisibleTo(card)
+    assert card.save_answers_button.isVisibleTo(card)
+    # Nothing was answered, so Save is still grey and still files nothing.
+    assert card.save_answers_button.isEnabled() is False
+    assert card.save_trade_check()["ok"] is False
+
+    # The NEXT session is a different question, and it clears.
+    next_day = [
+        s for s in schedule.slots_for_session(date(2026, 9, 15)) if s.scheduled_at.hour == 7
+    ][0]
+    card.show_slot(next_day)
     assert card._answer_inputs == {}
     assert not card.trade_check_box.isVisible()
     assert not card.save_answers_button.isVisible()
-    assert card.save_trade_check()["ok"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -1422,9 +1444,13 @@ def test_no_fixed_target_is_a_complete_answer_and_no_stop_is_never_a_zero(tmp_pa
     assert planned_stop is None, "a missing stop is not a stop at zero"
 
 
-def test_the_morning_task_is_capped_and_the_rest_is_counted_not_forgotten(tmp_path):
-    """Five minutes or three trades. The remainder is a NUMBER the Journal's
-    completeness view shows, never a fourth question and never silence."""
+def test_the_reviewed_session_is_no_longer_capped_and_nothing_is_forgotten(tmp_path):
+    """TJ-9 item 2 REPLACED this test's original rule. It used to pin the cap of
+    three on the reviewed session; the trader asked to be FORCED, so every trade
+    of that session is listed and `remaining` is 0 by construction.
+
+    `TRADE_CAP_DEFAULT` is still 3 and is still asserted here: it remains the
+    rule for an older backlog, so deleting it is not a way to pass."""
     import trade_mentor_trade_check as check
 
     store = _store(tmp_path)
@@ -1435,9 +1461,10 @@ def test_the_morning_task_is_capped_and_the_rest_is_counted_not_forgotten(tmp_pa
     task = check.build_task(store, NORMAL_SESSION)
 
     assert check.TRADE_CAP_DEFAULT == 3
-    assert len(task.trades) == 3
-    assert task.remaining == 2
+    assert len(task.trades) == 5
+    assert task.remaining == 0
     assert task.incomplete_total == 5
+    assert len(task.incomplete_trade_ids) == 5
 
 
 def test_missing_broker_coverage_says_journal_not_ready_rather_than_no_trades(tmp_path):
