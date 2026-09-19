@@ -1123,11 +1123,16 @@ class MainWindow(QMainWindow):
 
             card = review.mentor_card
             is_check_slot = str(getattr(slot, "kind", "")) == KIND_M5_TRADES
-            already_up = str(card.trade_check_session() or "") == str(slot.session)
-            if not is_check_slot and already_up:
-                # The section is already on the card and the trader may have
-                # half-answered it. Rebuilding would throw that away; the ride
-                # is the widget staying exactly as it is.
+            # ONLY a section with answer widgets is protected from a rebuild -
+            # that is the one the trader could already have touched. A visible
+            # LABEL is not: the `journal not ready` line has nothing to lose by
+            # being rebuilt, and it has a date in it that goes stale the moment
+            # the morning retry lands the fills. Gating on the label meant a
+            # journal that became ready after the 09:00 card was never asked
+            # about all day, while the card kept printing a false freshness
+            # date.
+            answers_open = str(card.open_answers_session() or "") == str(slot.session)
+            if not is_check_slot and answers_open:
                 return
             if not is_check_slot and not self._trade_check_is_owed(check, slot):
                 return

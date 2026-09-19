@@ -265,6 +265,62 @@ def test_a_not_ready_journal_rides_to_a_later_slot_too(desk):
     assert fake.calls, "and the one morning Questrade retry was asked for"
 
 
+def test_a_journal_that_becomes_ready_after_the_nine_oclock_card_is_still_asked_about(desk):
+    """Re-review blocker. The 09:00 card printed `journal not ready` and asked
+    the morning retry for the fills; the statement then landed. Every later
+    slot returned early because the card still had a VISIBLE LABEL on it, so
+    the section never became the questions that day - and the card went on
+    printing a freshness date that was no longer true.
+
+    Only a section with ANSWER WIDGETS is protected from a rebuild. A
+    one-line state has nothing to lose."""
+    window, store, fake = desk
+    with store.connection() as conn:
+        conn.execute("DELETE FROM import_coverage")
+    mark_covered(store, "2026-09-10")
+    add_round_trip(store, "AAPL")
+
+    window._show_trade_mentor_prompt(slot_at(SESSION_TODAY, 9))
+    card = _card(window)
+    assert card._answer_inputs == {}
+    assert "journal not ready" in card.trade_check_label.text()
+    assert fake.calls == [3], "and the one morning retry was asked for"
+
+    # The retry lands the statement.
+    mark_covered(store, REVIEWED)
+
+    window._show_trade_mentor_prompt(slot_at(SESSION_TODAY, 10))
+
+    assert card._answer_inputs, "the 10:00 card carries the QUESTIONS"
+    assert "journal not ready" not in card.trade_check_label.text()
+    assert card.save_answers_button.isVisibleTo(card)
+    assert card.save_answers_button.isEnabled() is False, "and Save is still grey"
+
+
+def test_a_journal_still_not_ready_reprints_the_current_freshness_date(desk):
+    """The date is re-read every slot. A line that keeps yesterday's answer is
+    a report about the desk's memory, not about the journal."""
+    window, store, fake = desk
+    with store.connection() as conn:
+        conn.execute("DELETE FROM import_coverage")
+    mark_covered(store, "2026-09-09")
+    add_round_trip(store, "AAPL")
+
+    window._show_trade_mentor_prompt(slot_at(SESSION_TODAY, 9))
+    card = _card(window)
+    assert "fills current to 2026-09-09" in card.trade_check_label.text()
+
+    # A partial import lands one more day, and the session under review is
+    # still not covered.
+    mark_covered(store, "2026-09-10")
+    window._show_trade_mentor_prompt(slot_at(SESSION_TODAY, 10))
+
+    assert "journal not ready" in card.trade_check_label.text()
+    assert "fills current to 2026-09-10" in card.trade_check_label.text()
+    assert "2026-09-09" not in card.trade_check_label.text()
+    assert len(fake.calls) == 1, "still one retry a morning"
+
+
 def test_the_morning_retry_is_asked_for_once_across_two_slots(desk):
     window, store, fake = desk
     with store.connection() as conn:

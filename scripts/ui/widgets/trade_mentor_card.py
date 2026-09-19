@@ -626,12 +626,24 @@ class TradeMentorCard(QWidget):
         return self._setup_choice_boxes.get(str(trade_id))
 
     def trade_check_session(self) -> str:
-        """Which session's trade check is on the card, or ``""``.
+        """Which session's trade check is on the card in ANY form, or ``""``.
 
-        The host asks before rebuilding: a section the trader has half-answered
-        rides untouched, and rebuilding it would throw their combos away.
+        Includes the one-line states - `journal not ready`, `nothing is
+        missing`, `N field(s) filed` - which have no widgets to lose.
         """
         return self._trade_check_session if self._has_trade_check() else ""
+
+    def open_answers_session(self) -> str:
+        """Which session's trade check has ANSWER WIDGETS on the card, or ``""``.
+
+        The host asks this before rebuilding, and it is deliberately narrower
+        than :meth:`trade_check_session`: only a section the trader could
+        already have TOUCHED is worth protecting. A `journal not ready` line is
+        not - it carries a date that goes stale the moment the morning retry
+        lands the fills, and a card that refused to rebuild it never became the
+        questions at all that day.
+        """
+        return self._trade_check_session if self._answer_inputs else ""
 
     def _has_trade_check(self) -> bool:
         return bool(
