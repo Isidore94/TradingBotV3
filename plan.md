@@ -153,7 +153,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-9 … TJ-13 PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5) |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -473,6 +473,13 @@ pass marker on the right bar.
 
 *Goal:* every morning, "what happened yesterday, what I thought, was I right, did I chase."
 
+**AMENDED 2026-09-19 (trader): the model narrates verdicts, it never makes them.** TJ-10
+builds first. The pack gains `reads` (TJ-10's graded read rows) and `congruence` (its
+lines), each with a `source_id`; every `were_you_right[].verdict` must EQUAL the verdict of
+the read row its `evidence_id` names, and an output that disagrees with a measured row, or
+grades a claim no read row carries, is rejected whole like an unknown `source_id`. The
+report card (TJ-12) is the page's deterministic head; the story sits under it.
+
 What exists: `market_story.build_daily_story` (deterministic facts for SPY/QQQ/IWM/VXX/TLT/
 USO), `market_story_rollups` (weekly/monthly/quarterly packs, live on the desk),
 `ai_jobs/market_story_narration.py` (Stage 2 slot, local medium model, allowed-source-id
@@ -553,6 +560,11 @@ Changes:
    theses only), `sources`. Fewer than three narrated days → a deterministic scaffold and
    "narrated K of 5". One call per week; cost is logged in the job ledger.
 
+3. **AMENDED 2026-09-19 (trader): the week and the month.** Under the five cards, one
+   deterministic strip of TJ-12's report-card lines re-cut by exchange week for the last
+   four weeks and for the calendar month to date (same functions, longer window, `n` on
+   every cell, a week under its floor named and not ranked). No new page, no model.
+
 Tests: card count equals sessions in the week; a missing day is named; the slot refuses a
 week with fewer than three narrations; provider fallback to local when no key; slot order.
 
@@ -618,7 +630,167 @@ nothing else imports them (the phone digest path stays), their dead tests, and t
 pane capture reader; update `docs/DESK_INTERNALS.md`, `CLAUDE.md`/`AGENTS.md` rules that
 name the old pages, `docs/README.md`, and the packaging drift guard. No behaviour change.
 
+##### TJ-9 … TJ-13 — closing the review loop (trader, 2026-09-19)
+
+The 2026-09-18 read-only audit of the live stores found the loop *decide → say → trade →
+judge → tell* broken at three links. Measured that night: 215 journal trades with ONE
+confirmed setup tag, no note, no planned stop and one recalled answer ever; zero stored
+theses against seven Mentor reads a day; ~95% of ~140 daily decisions made on D1 charts
+while TJ-2 measures same-session M5 only; the local model's night spent ~5 of 8 hours on
+`ai_summary` (unsynthesized on its last four runs) and `ticker_briefs` (152 of 222
+membership-only). The trader approved every recommendation with one change: **trade
+labelling is FORCED at 09:00 Pacific through the Trade Mentor**, not an optional card at
+the close. Every premise below is recon's to re-verify (12.3).
+
+##### TJ-9 — Yesterday's trades are labelled at 09:00, and the desk insists
+
+*Goal:* every real trade carries a setup, a stop answer and one sentence by 09:05.
+
+What exists: `trade_mentor_schedule.TRADES_HOUR = 10` (kind `m5_trades`),
+`trade_mentor_trade_check` (`MATERIAL_FIELDS` thesis/stop/target/setup, the four
+`ANSWER_STATES`, `TRADE_CAP_DEFAULT = 3`, `REASON_NOT_READY`, RECALLED annotation rows that
+never touch `planned_*`), `journal_bulk_tag` provisional tags (33 live),
+`preference_trade_outcomes` matches (a trade matched to a claimed like already names a
+setup), the capped `journal_import` slot (three tries, all overnight).
+
+Changes:
+1. `TRADES_HOUR` moves to **9**; the 10:00 slot becomes a plain `m5` read.
+2. **Forced** (lead's reading of the trader's word, overrule if wanted): the card lists
+   EVERY trade of the previous session (no cap of three for that session; the cap stays for
+   older backlog, which remains "Tag this week"); Save is disabled until each material field
+   of each listed trade holds a value or one of the four explicit answer states; an
+   unanswered card does not expire into silence — its trade section rides on every later
+   hourly card that day and the Day Review head says `N trade(s) unlabelled`. AWAY still
+   prompts nothing; the first DESK hour after it carries the section.
+3. **One click per field.** Setup opens on the machine's best guess in lane order (the
+   claimed like it matched, else the provisional tag) as a confirm button beside the
+   vocabulary list; the confirm is the TRADER's write (`tag_status='confirmed'` through the
+   Journal's own writer), never the machine's. Stop/target stay RECALLED rows, labelled.
+4. **Journal freshness.** `journal_import` gains ONE post-open retry outside the model
+   window (deterministic, seconds) when the night ended without an OK; Day Review and the
+   Journal print `fills current to <date>`; when the journal is not ready at 09:00 the card
+   SAYS so and the section rides to the next hour instead of asking nothing all day.
+5. Questrade rows with `security_type = UNKNOWN` (18 of 18 in September) are classified by
+   the importer; recon finds the seam first.
+
+Tests: schedule tuple (09:00 `m5_trades`, 10:00 `m5`, early close, DST); Save disabled with
+one field open and enabled by an explicit `not remembered`; the section rides to the next
+slot exactly once per slot; a confirm writes `confirmed` and a machine guess alone writes
+nothing; not-ready rides instead of vanishing; AWAY prompts nothing. `CLAUDE.md`'s Trade
+Mentor rule changes WITH this packet (10:00 → 09:00, forced).
+
+Live gate **#154**: at 09:00 the card lists yesterday's trades with a suggested setup each;
+Save stays grey until all are answered; skipping it brings the section back at 10:00; the
+Journal then shows those trades confirmed.
+
+##### TJ-10 — The read grader and the congruence line (no model)
+
+*Goal:* *"if my thoughts about the market are incongruent with my D1 picture, I want to
+know."* Builds BEFORE TJ-4.
+
+What exists: `market_thesis.extract_thesis` (versioned stance vocabulary, exact source
+spans, `unstated` for a hedge), Mentor rows with `mentor.prompt_kind` and `timeframe`,
+`d1_environment.jsonl` (the desk's D1 label per benchmark), `market_story.build_daily_story`
+facts, `journal_exposure` (bias from the legs), the day's likes by side. The thesis store is
+empty (its only writer was the "Save interpretation" button TJ-1 retired).
+
+Changes:
+1. Pure `scripts/market_read_grades.py`: every non-machine journal entry of the session is
+   extracted automatically; each stated stance becomes ONE read row `{read_id, entry_id,
+   span, benchmark (SPY unless named), stance, clock}` with the clock set by kind — an M5
+   read is graded to that session's close, a D1 read at 1, 3 and 5 sessions. Verdict
+   `right | wrong | flat | pending <date> | unstated | unmeasured <reason>` against the
+   benchmark's measured move from the first completed bar after the entry stamp; `flat` is
+   a move inside a declared ATR band, recorded as a constant with its reason. Append-only
+   rows under `DAY_REVIEW_DIR`, written by the post-close tick and re-graded nightly as
+   horizons mature; a row is never rewritten, a matured grade is a new row naming the old.
+2. **Congruence** (same module, three lines, each with its counts): the trader's latest D1
+   stance vs the desk's D1 label; vs the long/short mix of that session's likes and claims;
+   vs the bias of that session's fills. A line with a missing side says which side is
+   missing. No threshold turns a line into an alert; it is printed, never pushed.
+3. Day Review's "What you said" shows each read's verdict chip beside the entry.
+
+Tests: span reproduces the stance word; a hedge is `unstated` and gets no grade; a D1 read
+is `pending` with its date until the fifth session closes; completed bars only; the
+congruence counts equal the annotation rows; opposite-benchmark notes never grade SPY.
+
+Live gate **#155**: the morning after a session each Mentor answer with a view shows
+right / wrong / flat, a D1 view shows pending with its date, and the congruence line's like
+counts match the day's likes.
+
+##### TJ-11 — Walk-away v2: a swing ruler for swing calls
+
+*Goal:* *"stocks I said no to that went on to have great moves that day or the next day."*
+
+What exists: `walkaway_day._after_move` (same-session best excursion only;
+`held_at_close_pct` filled for claims only), the nightly veto / like / pass / rejection
+cohort outcome rows at H1/H3/H5/H10, the durable daily store, `ui/annotations/store.
+_session_date_text` (New York calendar date, so a call after 21:00 Pacific is stamped the
+next calendar day — Friday evening's calls carry a Saturday).
+
+Changes:
+1. A fifth table **Earlier calls, now**: the D1 likes, claims and vetoes of the previous
+   five sessions with their side-adjusted move to the selected session's close, from daily
+   bars; most-ran first; `pending` never zero.
+2. Every row gains **Against you first** and **At the close**, and the three moves are
+   shown in ATR beside percent (ATR from the daily store; missing ATR is `unmeasured`).
+3. **A real miss is a rule, not a glance:** `REAL_MISS_V1` = ran ≥ 1.0 ATR before going
+   0.5 ATR against, completed bars only, versioned, one constant, reported never acted on.
+4. One deterministic sentence above each table: `You vetoed 92. 7 were real misses; 4 share
+   the reason extended.` Reasons come from the veto vocabulary; overlapping codes are never
+   summed.
+5. **Session stamp:** a decision made outside a session is stamped with the NEXT exchange
+   session from the calendar, never a weekend date. Recon first measures how the cohort
+   graders treat today's Saturday-stamped rows; existing rows are never rewritten (the
+   reader maps a non-session date forward).
+
+Tests: a pop-then-fade is not a real miss; an adverse-first name is not a miss; a Friday
+21:30 Pacific call reads as Monday's; five-session window on the exchange calendar across a
+holiday; totals still equal the decision count.
+
+Live gate **#156**: Monday's Day Review shows Friday evening's calls, a vetoed name that ran
+two ATR by Wednesday is on Wednesday's Earlier-calls table, and each table has its sentence.
+
+##### TJ-12 — The report card
+
+*Goal:* *"what I missed very apparent, what I did well very apparent."*
+
+Five deterministic lines at the head of Day Review, above the story, each with its `n` and
+each clickable to the table behind it: **Did well** (likes/claims that were real runs, best
+family by the ONE Wilson bound, none named under `MIN_REPORTABLE_N`), **Missed** (TJ-11's
+real misses and their shared reason), **Your reads** (TJ-10 tally), **Congruence** (TJ-10),
+**Process** (trades, labelled or not per TJ-9, left on the table). Pure
+`scripts/day_report_card.py` over the day pack; computes no new statistic; a line whose
+input is missing says so. TJ-5's strip re-cuts the same lines by week and month.
+
+Live gate **#157**: yesterday's Day Review opens on five lines whose numbers match the
+tables under them; with no trades the Process line says so rather than printing zero.
+
+##### TJ-13 — The night works for the trader first (amends decision 0018's slot order)
+
+What exists: `ai_summary` ~4 h nightly with a 900 s synthesis read timeout that ended four
+straight runs unsynthesized; `ticker_briefs` 64 min for 70 written briefs in which
+"truncated" appears 88 times; `journal_enrichment` rejecting its own schema on every try.
+
+Changes: inside Stage 2 the cheap trader-facing slots run FIRST (`market_story_narration`,
+`day_review_narration`, then `week_review_narration`), then `ticker_briefs`, then
+`ai_summary` last with the remaining window; `ticker_briefs` writes only names with session
+evidence and its evidence package stops truncating the two sources it cites most (recon
+measures which); `ai_summary`'s synthesis gets a bounded input and a timeout it can meet, or
+degrades at once instead of after four hours; the `journal_enrichment` schema failure is
+reproduced and fixed. `EXPECTED_SLOT_ORDER` and decision 0018 change together. Stage
+boundaries (deterministic → digest → narration → model-gated) do not move.
+
+Live gate **#158**: the ledger shows the day story finished before 23:30 Pacific, the
+morning brief lists no membership-only name, and `ai_summary` is either synthesized or
+failed fast.
+
 #### 12.5 Order and dependencies
+
+**AMENDED 2026-09-19:** TJ-9 (independent; first, because every personal statistic waits on
+labelled trades) → TJ-10 → TJ-11 (may run alongside TJ-10 and TJ-3) → TJ-4 (now needs
+TJ-10) → TJ-12 → TJ-13 (independent; any time after TJ-4's slot exists) → TJ-5 → TJ-6 →
+TJ-7 → TJ-8. The original chain below still orders TJ-3 … TJ-8 among themselves.
 
 TJ-1 → TJ-2 (needs the page and the index) → TJ-3 (needs the bars file) → TJ-4 (needs the
 pack inputs from TJ-1/2) → TJ-5 (needs day narrations) → TJ-6 (needs packs; may run
@@ -645,7 +817,9 @@ merging the two journal stores.
 Phase 0.33 is done when the trader can open Day Review on any past session and, without
 touching anything else, read what happened, what they thought, whether they were right,
 what they skipped that ran, what they traded and left early, see it on the SPY chart with
-their own notes on it, and find the same for the week on Saturday — with every sentence
+their own notes on it, read five measured lines that say what they did well, what they
+missed, whether their reads were right and whether their view matched their picks (TJ-9 …
+TJ-12), and find the same for the week and the month on Saturday — with every sentence
 the AI wrote traceable to a note, a bar or a row, and nothing the AI wrote having changed a
 detector, a score, an alert, a pick or a policy. The broader roadmap's definition of done
 (single reliable desk; point-in-time-correct data owned by one writer; champions promoted

@@ -71,3 +71,33 @@ The trader answered twelve questions on 2026-09-17. Each answer is binding:
 - Mood and process fields are added to the entry schema now (optional, tolerated by every
   reader) so the data starts accumulating; timed emotion prompts and mood statistics are a
   later, trader-directed phase.
+
+## Amendment 2026-09-19 — closing the review loop (trader)
+
+A read-only audit of the live stores on 2026-09-18 found three broken links in the loop
+*decide → say → trade → judge → tell*: real trades carry money and no meaning (215 trades,
+one confirmed setup tag, no stop, no note); nothing grades the trader's market reads or
+compares them with their picks (the thesis store is empty and its only writer left the
+screen in TJ-1); and ~95% of the day's decisions are D1 calls measured with a same-session
+M5 ruler. The trader, 2026-09-19: *"I agree with everything in this plan and want to build
+it with the exception of I want to be forced to label my trades around 0900 as per trade
+mentor."* Binding, as `plan.md` TJ-9 … TJ-13:
+
+13. **Trade labelling is forced at 09:00 Pacific through the Trade Mentor.** The previous
+    session's trades are all listed, Save waits for an answer or an explicit answer state
+    per field, and an unanswered section rides on the later cards that day. The confirm is
+    the trader's write; the machine only suggests. AWAY still prompts nothing.
+14. **"Were you right" is a measured row, never a model's opinion.** A pure grader extracts
+    each stated stance with its exact span and grades it against the benchmark's measured
+    move; the overnight story may only narrate those rows. This amends answer 8's reading
+    of the day story, not its shape.
+15. **Congruence is printed, never pushed and never acted on:** the trader's D1 view beside
+    the desk's D1 label, the side mix of their likes and the bias of their fills.
+16. **Swing calls get a swing ruler:** an Earlier-calls table over five sessions,
+    against-you-first beside ran-after, ATR units, one versioned real-miss rule, and a
+    decision made outside a session belongs to the NEXT exchange session.
+17. **A five-line deterministic report card heads Day Review**; the week and the month
+    re-cut the same lines. It computes no new statistic.
+18. **The night serves the trader first.** Inside decision 0018's narration/model stages
+    the cheap trader-facing slots run before `ticker_briefs` and `ai_summary`; the stage
+    boundaries themselves do not move. Decision 0018 is amended with TJ-13, not before.
