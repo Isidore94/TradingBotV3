@@ -108,3 +108,28 @@ mentor."* Binding, as `plan.md` TJ-9 … TJ-13:
 20. **The large local model writes the week story**, superseding answer 6's frontier
     default; OpenAI remains an off-by-default setting. The model still only narrates
     measured rows (answer 14).
+
+### Second look, 2026-09-19 (trader: "Yes add all of this")
+
+Asked how sure the lead was that the finished plan meets the goal — a bot that takes in
+what the trader does and thinks, works out which thinking pays, and says what to keep and
+what to change — the lead answered about 65% as written and named eight holes. Binding:
+
+21. **The graded read is a click.** Every Mentor card carries one forced prediction click;
+    words are context. (Measured: 21 of the trader's 42 notes carried no extractable stance.)
+22. **A miss is always read against a base rate:** liked vs rejected vs untouched names of
+    the same scan, each with `n` and the one Wilson interval.
+23. **Advice is checked:** a kept idea names one measurable and is shown before and after.
+24. **Money lines carry `n` and the right ruler:** options and long holds are judged by
+    their own labelled rule or marked `not judged here`.
+25. **A label knows when it was made** (`claimed_before_entry` / `same_session` /
+    `recalled_after`), and trades are counted planned vs unplanned.
+26. **The "why" is a measured contrast** of point-in-time chart features between real
+    misses and correct rejections — no chart pictures, no model verdict.
+27. **The report says how fresh it is**, and a failed night is named the next morning.
+28. **The Mentor asks only for what the desk is missing** (trader: *"if we need more data
+    make trade mentor ask me for it. I'm happy to click boxes or give my responses but then
+    I expect the AI to take it from there"*): the hourly card is one click plus optional
+    words; every other question comes from a registry where each kind names the reader
+    that consumes its answer, under a budget of three per card. No live gate is skipped:
+    nothing after TJ-9 merges before #145, #152 and #153 are read on a real session.

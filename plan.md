@@ -153,7 +153,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-9 … TJ-13 PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5) |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-9 … TJ-13 PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 / TJ-15 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -601,6 +601,14 @@ Changes:
 Tests: dedupe by normalised text; dismissed never re-emitted; no evidence → dropped; at most
 three per night; slot order; the card's Keep writes state and nothing else.
 
+**AMENDED 2026-09-19 (trader): advice is checked, not just given.** A `process` idea must
+name ONE measurable the desk already computes (a veto reason's count and real-miss rate, a
+report-card line, a TJ-14 question's answer mix) or it is dropped like an idea without
+evidence. Keeping it freezes a baseline — that measurable over the `LATELY_SESSIONS` before
+the keep — in `AI_IDEAS_STATE_FILE`. Week Review then prints, for every kept idea, before
+and after with both `n`, deterministically, until the trader retires it; under the floor it
+says "too few to call". The model never grades its own advice.
+
 Live gate **#150**: the morning after, Day Review shows up to three ideas each citing a
 note or a walk-away row; Dismiss hides one for good across a restart; Keep on a program
 idea shows it under For WISHLIST.
@@ -683,6 +691,15 @@ slot exactly once per slot; a confirm writes `confirmed` and a machine guess alo
 nothing; not-ready rides instead of vanishing; AWAY prompts nothing. `CLAUDE.md`'s Trade
 Mentor rule changes WITH this packet (10:00 → 09:00, forced).
 
+**AMENDED 2026-09-19 (trader, second look): a label knows when it was made.** A label
+written the next morning knows how the trade ended. Every confirmed tag carries
+`label_provenance`: `claimed_before_entry` (it matched a claim or like stamped before the
+first fill), `same_session` (answered on a card the day of the fill, TJ-14 item 4) or
+`recalled_after`. Every statistic over confirmed tags reports the three apart and pools
+them only in a row that says so. The Process line also counts **planned vs unplanned**
+trades — a trade with a like, claim, Focus pick or armed alert on that name and side
+before its first fill, against a trade from nowhere — with what each group made and `n`.
+
 Live gate **#154**: at 09:00 the card lists yesterday's trades with a suggested setup each;
 Save stays grey until all are answered; skipping it brings the section back at 10:00; the
 Journal then shows those trades confirmed.
@@ -718,6 +735,22 @@ Tests: span reproduces the stance word; a hedge is `unstated` and gets no grade;
 is `pending` with its date until the fifth session closes; completed bars only; the
 congruence counts equal the annotation rows; opposite-benchmark notes never grade SPY.
 
+**AMENDED 2026-09-19 (trader, second look): the graded thing is a CLICK, the words are
+context.** Measured that day with `extract_thesis` on the trader's 42 real notes: 21
+`unstated`, 8 bullish, 7 neutral, 6 bearish — and *"D1 SPY is still downtrending"* read as
+`unstated`. The trader describes the tape far more often than they predict it, so:
+4. Every Mentor card carries ONE forced prediction click (TJ-14 owns the card):
+   `Rest of day: Up / Down / Chop / No view`; the 08:00 and 12:00 D1 cards add `Next 5
+   sessions: Up / Down / Range / No view`. `No view` is a complete answer and is never
+   graded. The click is stored on the entry's `mentor` payload and is the read row's stance
+   whenever it exists; extraction grades only entries that have no click (the history, and
+   notes typed outside a card) and is labelled `extracted`.
+5. `Chop` / `Range` is right when the move stays inside the declared ATR band (item 1's
+   `flat` band, one constant).
+6. The vocabulary gains the trader's own trend words found `unstated` in the live notes
+   (*downtrending, rejecting, leaking, lower highs, holding lows* …) as a NEW extractor
+   version; old rows keep theirs.
+
 Live gate **#155**: the morning after a session each Mentor answer with a view shows
 right / wrong / flat, a D1 view shows pending with its date, and the congruence line's like
 counts match the day's likes.
@@ -752,6 +785,25 @@ Tests: a pop-then-fade is not a real miss; an adverse-first name is not a miss; 
 21:30 Pacific call reads as Monday's; five-session window on the exchange calendar across a
 holiday; totals still equal the decision count.
 
+**AMENDED 2026-09-19 (trader, second look): a miss needs a base rate, and a trade needs the
+right ruler.**
+6. **The skill line.** For the session, and for `LATELY_SESSIONS`, the real-run rate
+   (`REAL_MISS_V1`'s rule, same clock) of three populations of the SAME scan: names the
+   trader liked or claimed, names they rejected, and names the scan showed that they never
+   touched — each with `n` and the ONE Wilson interval, cut by side and, where `n` allows,
+   by setup family. "Likes 21% (n 55), vetoes 8% (n 92), untouched 9% (n 310)" is the
+   SHAPE of the sentence (invented numbers); overlapping intervals are SAID to overlap. The untouched population comes from
+   the session's scan rows through the day-review index, never the 1.1 GB tracker; recon
+   names the seam. Reported, never acted on; no R statistic selects what is shown.
+7. **Instrument-aware rows.** An option trade and a position held past five sessions are
+   never given "left on the table today". An option row shows premium kept, days held and
+   assigned or not, read from the legs (`journal_exposure`'s rule: a long option is never a
+   bullish setup); a long hold shows days held and its open or realised result. Anything
+   the desk cannot judge reads `not judged here: <reason>` — never a wrong number.
+8. **Every money line carries its `n`** and reads "too few to call" under
+   `MIN_REPORTABLE_N`. Measured 2026-09-19: 50 trades since 08-04, 8 of them options, and
+   15 of 37 closed trades held past five sessions.
+
 Live gate **#156**: Monday's Day Review shows Friday evening's calls, a vetoed name that ran
 two ATR by Wednesday is on Wednesday's Earlier-calls table, and each table has its sentence.
 
@@ -766,6 +818,12 @@ real misses and their shared reason), **Your reads** (TJ-10 tally), **Congruence
 **Process** (trades, labelled or not per TJ-9, left on the table). Pure
 `scripts/day_report_card.py` over the day pack; computes no new statistic; a line whose
 input is missing says so. TJ-5's strip re-cuts the same lines by week and month.
+
+**AMENDED 2026-09-19 (trader, second look):** the **Did well** and **Missed** lines quote
+TJ-11's skill line, so a count never stands without its base rate; and a sixth, smaller
+line **How fresh** states what the card rests on — story written when, fills current to
+which date, grades through which session, and any slot that failed last night by name (the
+job ledger's last row per slot). A failed night is said on the page the next morning.
 
 Live gate **#157**: yesterday's Day Review opens on five lines whose numbers match the
 tables under them; with no trades the Process line says so rather than printing zero.
@@ -819,12 +877,102 @@ fast and runs on Saturday night only, no ledger row starts between 06:00 and 22:
 on any day, and Sunday's Week Review shows a week story whose ledger row names the large
 local model.
 
+##### TJ-14 — The Mentor asks for what the desk is missing, and nothing else
+
+*Goal (trader, 2026-09-19):* *"We don't need to run every question every hour but if we need
+more data make trade mentor ask me for it. I'm happy to click boxes or give my responses
+but then I expect the AI to take it from there."*
+
+What exists: `trade_mentor_schedule` (hourly `m5`, `m5_d1` at 08:00 and 12:00, the trade
+check), `ui/widgets/trade_mentor_card.py`, `TradeMentorService` (slot state, pause, AWAY
+silence), `trade_mentor_trade_check`'s rule *only what is missing* and its four
+`ANSWER_STATES`, `market_story_narration`'s `mentor_question` (one AI question on the next
+card). Fills reach the journal only at night; by day the pull is a button.
+
+Changes:
+1. **The hourly card shrinks to one forced click** — TJ-10's prediction — **plus optional
+   words.** A card answered with one click is a complete answer (lead's reading of "we
+   don't need to run every question every hour"; overrule if wanted).
+2. **A question registry**, pure `scripts/mentor_questions.py`. Each kind declares its
+   TRIGGER (a measured gap, never a clock alone), its click options, the store it writes,
+   its cadence and expiry, its priority and its **CONSUMER** — the reader that uses the
+   answer. A kind with no consumer fails a test: nothing is asked that nothing reads. v1:
+   - `prediction_m5` / `prediction_d1` — every card / the two D1 cards → TJ-10.
+   - `trade_label` — TJ-9 at 09:00, and SAME SESSION when a new fill is seen (item 4), which
+     is the label made before the outcome is known → TJ-9 provenance.
+   - `trade_origin` — a trade with nothing before it: `Planned off the desk / An alert /
+     Impulse / Other` → the planned-vs-unplanned Process line.
+   - `open_position_check` — a position past five sessions, once a week per position:
+     `Thesis intact / Weakening / Exit planned` → TJ-11's long-hold rows.
+   - `quick_like_followup` — a QUICK like that was then traded or became a real run, once:
+     `Which setup was it?` from the claim vocabulary, stored as a recalled claim LINK, never
+     rewriting the like → like cohorts by family.
+   - `day_close` — the session's last card only: `Followed the plan: Yes / Partly / No` and
+     TJ-7's mood strip (TJ-7 builds the fields; the question lives here) → Process line.
+   - `grader_gap` — any deterministic reader may emit `unmeasured: needs_trader_input` with
+     a question id; the registry turns it into a click → the reader that raised it.
+   - `ai_question` — at most ONE a day from the overnight run (the existing
+     `mentor_question`, now with optional closed click options) → the next day's pack.
+3. **A budget.** Beyond the prediction click a card carries at most THREE questions, by
+   priority (`trade_label` first); the rest are counted on the card and carried, never
+   dropped and never a fourth. Every question offers the four answer states plus `Stop
+   asking this`, which retires that kind for that subject. AWAY asks nothing.
+4. **Fills by day.** Before each card one light journal pull runs on a worker: IBKR
+   executions through the existing connection; Questrade ONLY through the single
+   refresh-chain owner under `local_writer_lock`, capped per day. Recon rules on the token
+   chain first — if an hourly pull endangers it, Questrade trades stay next-morning and the
+   card says so. No pull ever blocks a card.
+5. **"The AI takes it from there."** After the clicks no manual step stands between an
+   answer and the report card. Removed or automated by this program: "Save interpretation"
+   (TJ-1), the typed `--weekly-synthesis` (TJ-13), "Tag this week" for any trade made after
+   TJ-9 ships (it remains for the backlog). Manual BY DESIGN and staying so: the
+   `review_policy` sign-off, `digest approve-audit`, the Questrade token repair.
+
+Tests: a kind without a consumer fails; budget of three with the remainder counted; `Stop
+asking this` retires one subject only; a same-session label carries `same_session`; AWAY
+asks nothing; a failed pull leaves the card on time; the quick-like follow-up writes a link
+and no tag.
+
+Live gate **#159**: an ordinary hourly card is one click; on a day with a new fill the next
+card asks its setup and stop; a trade from nowhere is asked its origin once; nothing is
+asked twice after `Stop asking this`.
+
+##### TJ-15 — What the misses had in common (no model, no chart pictures)
+
+*Goal:* the bot says WHY, not only what. The trader asked for an AI that "looks at each
+chart"; the desk already MEASURES each chart at the scan the decision was made on, and a
+measured contrast is evidence where a model's glance at a picture is not.
+
+What exists: `d1_features_history.csv` (one row per symbol per scan, ~700 MB — streamed by
+session, never loaded whole), the compression measure and `compression_calibration` (the
+precedent: one feature, AUC between vetoed-and-ran and the rest, a CSV, nothing modified),
+TJ-11's `REAL_MISS_V1`, the veto vocabulary.
+
+Changes: a deterministic Stage 1 slot `miss_contrast`, after the cohort graders. For each
+veto reason and for likes, over `LATELY_SESSIONS`, it compares the point-in-time features
+of **real misses** against **correct rejections** of the same reason (and real runs against
+duds among likes): per feature the two medians, `n` on both sides, and one rank statistic
+(AUC, the calibration tool's). It prints the few features that differ most and says how
+many were compared (`observational, top 3 of K`), names nothing under the floor, and
+writes one JSON pack beside the digest. Week Review shows it as a table under the misses;
+the week story may narrate it and may not add to it. Fundamentals stay what the desk has —
+earnings dates and the pasted forecast — and the page says so. Zero detector, score, alert
+or policy influence; a threshold change stays a separate, ask-first request.
+
+Live gate **#160**: Saturday's Week Review shows, for the veto reason with the most real
+misses, a table of what those misses measured differently, each row with both `n`.
+
 #### 12.5 Order and dependencies
 
-**AMENDED 2026-09-19:** TJ-9 (independent; first, because every personal statistic waits on
-labelled trades) → TJ-10 → TJ-11 (may run alongside TJ-10 and TJ-3) → TJ-4 (now needs
-TJ-10) → TJ-12 → TJ-13 (independent; any time after TJ-4's slot exists) → TJ-5 → TJ-6 →
-TJ-7 → TJ-8. The original chain below still orders TJ-3 … TJ-8 among themselves.
+**AMENDED 2026-09-19 (twice):** TJ-9 (independent; first, because every personal statistic
+waits on labelled trades) → TJ-14 (the card and the registry; TJ-9's section becomes its
+first kind, and the prediction click starts accumulating at once) → TJ-10 → TJ-11 (may run
+alongside TJ-10 and TJ-3) → TJ-4 (now needs TJ-10) → TJ-12 → TJ-15 (needs TJ-11's
+real-miss rule) → TJ-13 (independent; any time after TJ-4's slot exists) → TJ-5 → TJ-6 →
+TJ-7 (fields only; its strip is TJ-14's `day_close`) → TJ-8. The original chain below still
+orders TJ-3 … TJ-8 among themselves. **No packet after TJ-9 merges until the desk has been
+restarted once and gates #145, #152 and #153 have been read on a real session** — the new
+layers stand on those pages.
 
 TJ-1 → TJ-2 (needs the page and the index) → TJ-3 (needs the bars file) → TJ-4 (needs the
 pack inputs from TJ-1/2) → TJ-5 (needs day narrations) → TJ-6 (needs packs; may run
@@ -838,6 +986,10 @@ per branch off `main`, merged after review; the desk restarts only on trader dir
   (ChatGPT) API.
 - Restart the desk after TJ-1 merges; answer the 10:00 Mentor prompt on a normal day so
   TJ-4 has material; write notes from the desk tab as usual.
+- SUPERSEDED 2026-09-19: the week story is written by the large local model (TJ-13 item 7);
+  OpenAI stays a setting, off.
+- From TJ-14 on: one prediction click per Mentor card, and the few extra clicks the card
+  asks for. Everything after the click is the desk's job.
 
 #### 12.7 Deliberately not in Phase 0.33
 
@@ -852,8 +1004,9 @@ Phase 0.33 is done when the trader can open Day Review on any past session and, 
 touching anything else, read what happened, what they thought, whether they were right,
 what they skipped that ran, what they traded and left early, see it on the SPY chart with
 their own notes on it, read five measured lines that say what they did well, what they
-missed, whether their reads were right and whether their view matched their picks (TJ-9 …
-TJ-12), and find the same for the week and the month on Saturday — with every sentence
+missed against a base rate, whether their reads were right, whether their view matched
+their picks and what their misses had in common (TJ-9 … TJ-15), having given the desk
+nothing but clicks and a few words on the Mentor card, and find the same for the week and the month on Saturday — with every sentence
 the AI wrote traceable to a note, a bar or a row, and nothing the AI wrote having changed a
 detector, a score, an alert, a pick or a policy. The broader roadmap's definition of done
 (single reliable desk; point-in-time-correct data owned by one writer; champions promoted
