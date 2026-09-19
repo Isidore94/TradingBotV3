@@ -44,6 +44,7 @@ this calendar in them is a separate packet, not a side effect of this one.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -110,8 +111,27 @@ def _observed(day: date) -> date | None:
     return day
 
 
+#: Ten dates per year, computed from rules that include a Gregorian Easter. The
+#: answer for a year never changes, and TJ-11 maps every annotation row through
+#: :func:`decision_session`, so the set is computed once per year and copied.
+_holiday_cache: dict[int, frozenset[date]] = {}
+
+
 def holidays_for_year(year: int) -> set[date]:
-    """Every observed NYSE full-day closure in ``year``."""
+    """Every observed NYSE full-day closure in ``year``.
+
+    A COPY of the memoized set, so a caller that mutates what it is given
+    cannot corrupt the calendar for the rest of the process.
+    """
+    cached = _holiday_cache.get(year)
+    if cached is not None:
+        return set(cached)
+    answer = _holidays_for_year(year)
+    _holiday_cache[year] = frozenset(answer)
+    return answer
+
+
+def _holidays_for_year(year: int) -> set[date]:
     observed: set[date] = set()
 
     for fixed in (date(year, 1, 1), date(year, 7, 4), date(year, 12, 25)):
@@ -169,6 +189,64 @@ def previous_session(day: date) -> date:
     raise SessionCalendarError(
         f"no NYSE session found in the 30 days before {day.isoformat()}"
     )
+
+
+def next_session(day: date) -> date:
+    """The earliest session strictly after ``day``."""
+    cursor = day + timedelta(days=1)
+    for _ in range(30):
+        if is_session(cursor):
+            return cursor
+        cursor += timedelta(days=1)
+    raise SessionCalendarError(
+        f"no NYSE session found in the 30 days after {day.isoformat()}"
+    )
+
+
+def decision_session(stamp: Any) -> date | None:
+    """The exchange session a decision belongs to (TJ-11 item 7).
+
+    The desk stamps an annotation with New York's CALENDAR date, so the 18 D1
+    calls the trader made at 21:04 Pacific on Friday 2026-09-18 carry
+    ``session_date`` 2026-09-19 - a Saturday, a date on which no decision can be
+    acted on and no session was ever measured. The session those calls belong to
+    is Monday's.
+
+    The rule, once: the session the stamp falls IN - that calendar date when it
+    is a session and the stamp is at or before that session's close, so a
+    pre-market call still belongs to the day it was made for - or else the NEXT
+    exchange session. A weekend, an evening and a holiday all map forward.
+
+    Every shape the stores use is accepted: an aware ``datetime`` (converted
+    with ``astimezone``, never stripped), a naive one (read as market-local,
+    which is what the desk writes), a ``date``, or ``"YYYY-MM-DD"`` text. A date
+    with no time of day is read as being inside its session, because that is all
+    the row says.
+
+    Answers ``None`` rather than guessing when the stamp is unreadable or falls
+    outside the range these rules are a statement about. **Existing rows are
+    never rewritten**: this is what a READER maps them through.
+    """
+    if isinstance(stamp, datetime):
+        moment = stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=MARKET_TZ)
+        moment = moment.astimezone(MARKET_TZ)
+        day, at_or_before_close = moment.date(), None
+    elif isinstance(stamp, date):
+        day, at_or_before_close, moment = stamp, True, None
+    else:
+        text = str(stamp or "").strip()[:10]
+        try:
+            day = date.fromisoformat(text)
+        except ValueError:
+            return None
+        at_or_before_close, moment = True, None
+    try:
+        if is_session(day):
+            if at_or_before_close or (moment is not None and moment <= session_close(day)):
+                return day
+        return next_session(day)
+    except SessionCalendarError:
+        return None
 
 
 def trading_days_between(start: date, end: date) -> int:

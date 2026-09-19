@@ -184,7 +184,36 @@ class AnnotationError(ValueError):
     """
 
 
-def _session_date_text(session_date: Any = None) -> str:
+def _forward_session(value: Any) -> str:
+    """The exchange session a stamp belongs to, or ``""`` when unanswerable.
+
+    One seam, `market_calendar.decision_session`. A date that IS a session comes
+    back unchanged, so this only ever moves a weekend, an evening or a holiday
+    forward.
+    """
+    try:
+        from market_calendar import decision_session
+
+        answer = decision_session(value)
+    except Exception:  # noqa: BLE001 - a calendar that cannot answer never guesses
+        return ""
+    return answer.isoformat() if answer is not None else ""
+
+
+def _session_date_text(session_date: Any = None, created_at: datetime | None = None) -> str:
+    """Which session this row belongs to (TJ-11 item 7).
+
+    An explicit ``session_date`` is honoured exactly - a caller that names the
+    session has already decided. With none given the answer comes from the
+    STAMP, mapped through the exchange calendar: the desk used to write New
+    York's calendar date, so the 18 D1 calls made at 21:04 Pacific on Friday
+    2026-09-18 were stamped ``2026-09-19`` - a Saturday, a session that never
+    happened and a date the Day Review page could never show. Those calls are
+    Monday's.
+
+    **Existing rows are never rewritten.** This changes what a NEW row says;
+    every reader maps an old non-session date forward through the same function.
+    """
     if isinstance(session_date, datetime):
         return session_date.date().isoformat()
     if isinstance(session_date, date):
@@ -192,12 +221,18 @@ def _session_date_text(session_date: Any = None) -> str:
     text = str(session_date or "").strip()
     if text:
         return text[:10]
+    if created_at is not None:
+        answer = _forward_session(created_at)
+        if answer:
+            return answer
     try:
         from market_session import get_market_session_window
 
-        return get_market_session_window().market_date.isoformat()
+        market_date = get_market_session_window().market_date
+        return _forward_session(market_date) or market_date.isoformat()
     except Exception:
-        return datetime.now().date().isoformat()
+        today = datetime.now().astimezone()
+        return _forward_session(today) or today.date().isoformat()
 
 
 def _created_at_text(now: datetime | None = None) -> str:
@@ -325,7 +360,7 @@ def build_annotation(
         "event_id": str(event_id or "").strip() or uuid.uuid4().hex,
         "event_type": kind,
         "symbol": sym,
-        "session_date": _session_date_text(session_date),
+        "session_date": _session_date_text(session_date, created_at),
         "created_at": _created_at_text(created_at),
         "source": ANNOTATION_SOURCE,
     }
@@ -579,6 +614,12 @@ def load_annotations(
     except OSError:
         return []
     wanted_date = _session_date_text(session_date) if session_date is not None else None
+    # TJ-11: a row is asked for by the SESSION it belongs to. Friday evening's
+    # calls carry a Saturday `session_date` and are Monday's decisions; the row
+    # is mapped forward on READ and the file is not touched. A date that is
+    # already a session maps to itself, so nothing else moves.
+    wanted_session = _forward_session(wanted_date) if wanted_date else None
+    forward: dict[str, str] = {}
     wanted_symbol = _clean_symbol(symbol) if symbol is not None else None
     rows: list[dict[str, Any]] = []
     for line in lines:
@@ -591,8 +632,13 @@ def load_annotations(
             continue
         if not isinstance(row, dict):
             continue
-        if wanted_date is not None and str(row.get("session_date") or "") != wanted_date:
-            continue
+        if wanted_date is not None:
+            stamped = str(row.get("session_date") or "")
+            if stamped != wanted_date:
+                if stamped not in forward:
+                    forward[stamped] = _forward_session(stamped)
+                if not wanted_session or forward[stamped] != wanted_session:
+                    continue
         if wanted_symbol is not None and _clean_symbol(row.get("symbol")) != wanted_symbol:
             continue
         if event_types is not None and str(row.get("event_type") or "") not in event_types:
