@@ -1,6 +1,6 @@
-"""The 10:00 question: what is missing from yesterday's trades - WS-TM item 4.
+"""The 09:00 question: what is missing from yesterday's trades - WS-TM item 4.
 
-The Trade Mentor's 10:00 Pacific card has two sections. The first is an ordinary
+The Trade Mentor's 09:00 Pacific card has two sections. The first is an ordinary
 market read. The second is this: the PREVIOUS exchange session's trades, and for
 each one only the material fields it is actually missing.
 
@@ -8,6 +8,20 @@ each one only the material fields it is actually missing.
 compulsory questionnaire. A trade that already carries its thesis, its setup
 claim and its stop is asked ONE question, not four - otherwise the morning task
 becomes something the trader stops doing, and a task nobody does records nothing.
+
+**Forced, at 09:00** (TJ-9, trader 2026-09-19: *"I want to be forced to label my
+trades around 0900 as per trade mentor"*). Every trade of the reviewed session
+is listed - the cap of three was five minutes of questions and the trader asked
+for all of them - and the card's Save stays grey until each listed field holds a
+value or one of the four explicit answer states.
+
+**A machine guess is not an answer.** 33 live trades carry a `provisional` tag
+and exactly one carries a confirmed one. A provisional tag used to retire the
+setup question silently, which is how 215 trades reached one confirmed label.
+The setup is asked until the TRADER confirms it; the guess rides on the question
+as a suggestion, in lane order - the setup of a CLAIMED like stamped before the
+first fill, else the provisional tag - and a guess nobody clicked writes
+NOTHING.
 
 **Four answer states, kept distinct.**
 
@@ -34,13 +48,15 @@ the actual write time. Remembered risk must never be presented as a documented
 pre-entry plan - that is the same rule `written_after_the_session` enforces on
 the Market Journal, for the same reason.
 
-**Capped, and the remainder counted.** Three incomplete trades at a time
-(`TRADE_CAP_DEFAULT`); what is left over is a NUMBER the Journal's completeness
-view shows, never a fourth question and never silence.
+**The cap survives, for the backlog only.** `TRADE_CAP_DEFAULT` is still three
+and is still the rule for an OLDER backlog ("Tag this week"); it no longer caps
+the session the card is forcing, and no caller builds a backlog task yet.
 
 **No coverage, no questionnaire.** If the broker statement for that session has
 not landed, an empty list of trades is a lie about the session. It says
-`journal not ready` and asks nothing.
+`journal not ready` and NAMES THE DATE the fills are current to, and the card
+keeps the section up for the rest of the session instead of asking nothing all
+day.
 
 Storage is `journal_store`'s existing append-only `opportunity_events` table
 under the `RECALLED` event type - an annotation kind, not a schema migration.
@@ -53,6 +69,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Mapping
 
 #: The four material fields, in the order they are asked. `missing` is built in
@@ -92,24 +109,52 @@ _SESSION_STATUSES = ("CLOSED", "OPEN", "PARTIALLY_CLOSED")
 
 REASON_NOT_READY = "journal not ready"
 
+#: Which lane produced the machine's setup suggestion. Lane order, never
+#: confidence: what the trader NAMED when they claimed the like outranks what
+#: the bulk tagger guessed afterwards.
+LANE_CLAIMED_LIKE = "claimed_like"
+LANE_PROVISIONAL = "provisional"
+GUESS_LANES = (LANE_CLAIMED_LIKE, LANE_PROVISIONAL)
+
+#: How many days the ONE morning import retry asks for. Three, because a long
+#: weekend is three sessions and the importer is idempotent per day.
+MORNING_RETRY_DAYS = 3
+
 
 @dataclass(frozen=True)
 class TradeQuestion:
-    """One trade, and only the material fields it is missing."""
+    """One trade, the material fields it is missing, and the machine's guess.
+
+    `setup_guess` is a SUGGESTION and never an answer: it is offered as a
+    confirm button beside the vocabulary list, and until the trader clicks it
+    nothing is written. `opened_at` and `trade_date` travel with the question so
+    the provenance of a confirmed label can be decided from the trade's own
+    stamps without a second query.
+    """
 
     trade_id: str
     symbol: str
     direction: str
     missing: tuple[str, ...]
+    setup_guess: str = ""
+    setup_guess_lane: str = ""
+    opened_at: str = ""
+    trade_date: str = ""
 
 
 @dataclass(frozen=True)
 class TradeCheckTask:
-    """The 10:00 card's second section.
+    """The 09:00 card's second section.
 
-    `trades` is capped; `remaining` and `incomplete_total` are the whole truth
-    behind the cap, so the Journal's completeness view can say "N trades still
-    missing fields" rather than leaving the rest unmentioned.
+    `remaining` and `incomplete_total` are the whole truth behind any cap, so
+    the Journal's completeness view can say "N trades still missing fields"
+    rather than leaving the rest unmentioned. Since TJ-9 the reviewed session is
+    never capped, so `remaining` is 0 for it.
+
+    `fills_current_to` is the last session with verified import coverage, as an
+    ISO date or "". The TASK knows it - not the widget - so the card, the
+    Journal and the AWAY digest print one line built once (decision 0021
+    answer 27: the report says how fresh it is).
     """
 
     reviewed_session: str
@@ -120,6 +165,7 @@ class TradeCheckTask:
     reason: str = ""
     #: Every incomplete trade id, capped or not - the completeness view's list.
     incomplete_trade_ids: tuple[str, ...] = field(default=())
+    fills_current_to: str = ""
 
 
 def previous_exchange_session(session: date) -> str:
@@ -157,6 +203,37 @@ def _journal_ready(store: Any, day: str) -> bool:
     return any(str(row.get("status") or "").upper() == journal_coverage.COVERED for row in rows)
 
 
+def fills_current_to(store: Any) -> date | None:
+    """The last session the desk has VERIFIED import coverage for, or ``None``.
+
+    The newest COVERED day, never the newest ROW: a `FAILED` day and a
+    `NO_SESSION` day are both present in the ledger and neither one is a day
+    whose fills the trader has. ``None`` means no ledger and no claim - an
+    absence is not a date.
+    """
+    try:
+        import journal_coverage
+
+        rows = journal_coverage.coverage_rows(store)
+    except Exception:  # noqa: BLE001 - an unreadable ledger names no date
+        logging.debug("Journal coverage unreadable.", exc_info=True)
+        return None
+    best: date | None = None
+    for row in rows:
+        if str(row.get("status") or "").upper() != journal_coverage.COVERED:
+            continue
+        text = str(row.get("day") or "")[:10]
+        if len(text) < 10:
+            continue
+        try:
+            day = date.fromisoformat(text)
+        except ValueError:
+            continue
+        if best is None or day > best:
+            best = day
+    return best
+
+
 def _has_value(value: Any) -> bool:
     if value is None:
         return False
@@ -165,22 +242,140 @@ def _has_value(value: Any) -> bool:
     return True
 
 
+def _setup_is_answered(trade: Mapping[str, Any]) -> bool:
+    """Is the setup the TRADER's, rather than a machine's parked guess?
+
+    TJ-9. `list_trades` joins `setup_tags` whatever its `tag_status`, so before
+    this a `provisional` tag - written by `journal_bulk_tag`, clicked by nobody
+    - silently retired the one question this task exists to ask. The row
+    already carries `tag_status`, so telling the two apart costs no extra read.
+    A trade with no annotation row at all reads `confirmed` with empty tags,
+    which is correctly "still missing".
+    """
+    if not _has_value(trade.get("setup_tags")):
+        return False
+    status = str(trade.get("tag_status") or "").strip().lower()
+    # An absent status is the pre-P6a reading: nothing machine-written is on
+    # the row, so what is there is the trader's.
+    return status in ("", "confirmed")
+
+
 def missing_fields(trade: Mapping[str, Any], answered: set[str]) -> tuple[str, ...]:
     """Which material fields this trade still cannot answer.
 
     A field counts as answered either because the trade RECORDS it or because
     the trader already answered it in a recalled row - including "there was no
-    target", which is a complete answer and must stop being asked.
+    target", which is a complete answer and must stop being asked. The setup is
+    recorded only when the trader CONFIRMED it; a provisional tag is a
+    suggestion, not an answer.
     """
     result: list[str] = []
     for name in MATERIAL_FIELDS:
         if name in answered:
+            continue
+        if name == "setup":
+            if _setup_is_answered(trade):
+                continue
+            result.append(name)
             continue
         source = _FIELD_SOURCES.get(name) or ""
         if source and _has_value(trade.get(source)):
             continue
         result.append(name)
     return tuple(result)
+
+
+def claimed_setup_rows(session: str, path: Any = None) -> list[dict[str, Any]]:
+    """Every CLAIMED like in the annotation log that could name this session's
+    trades, read through the store that owns the file.
+
+    Bounded by the same window the preference report uses to decide that a
+    statement was acted on (`preference_trade_outcomes.statement_window_end`,
+    ten exchange sessions): a claim from three months ago is not what the
+    trader had in mind this morning. A quick like names no setup (P9) and is
+    skipped here for that reason, never as a judgement about it.
+    """
+    try:
+        from project_paths import TRADER_ANNOTATIONS_FILE
+        from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
+
+        rows = load_annotations(
+            Path(path or TRADER_ANNOTATIONS_FILE), event_types=(EVENT_LIKE_CLAIM,)
+        )
+    except Exception:  # noqa: BLE001 - a missing log is no suggestion
+        logging.debug("Claimed likes unreadable.", exc_info=True)
+        return []
+
+    try:
+        reviewed = date.fromisoformat(str(session)[:10])
+    except ValueError:
+        return []
+
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        if not str(row.get("claimed_setup_id") or "").strip():
+            continue
+        text = str(row.get("session_date") or "")[:10]
+        if len(text) < 10:
+            continue
+        try:
+            said_on = date.fromisoformat(text)
+        except ValueError:
+            continue
+        if said_on > reviewed:
+            continue
+        try:
+            from preference_trade_outcomes import statement_window_end
+
+            if statement_window_end(said_on) < reviewed:
+                continue
+        except Exception:  # noqa: BLE001 - a calendar that refuses keeps the row
+            logging.debug("Statement window unreadable.", exc_info=True)
+        kept.append(dict(row))
+    return kept
+
+
+def setup_guess_for(
+    trade: Mapping[str, Any], claims: Any = ()
+) -> tuple[str, str]:
+    """The machine's best setup suggestion for one trade, and its lane.
+
+    Lane order, never confidence:
+
+    1. the setup of a CLAIMED like on that name and side stamped BEFORE the
+       first fill - what the trader themselves named at the time;
+    2. the `provisional` tag the bulk tagger parked on the row.
+
+    ``("", "")`` when there is nothing to suggest - including for a trade whose
+    setup the trader already confirmed, which is never offered a guess at all.
+    """
+    if _setup_is_answered(trade):
+        return "", ""
+    try:
+        import trade_origin
+
+        best: tuple[Any, str] | None = None
+        for row in trade_origin.statements_before_entry(trade, claims or ()):
+            setup = str(row.get("claimed_setup_id") or "").strip()
+            if not setup:
+                continue
+            stamp = trade_origin.stamp_of(row)
+            if stamp is None:
+                continue
+            # The LATEST claim before the fill: a trader who renamed the
+            # setup twice meant the second one.
+            if best is None or stamp > best[0]:
+                best = (stamp, setup)
+        if best is not None:
+            return best[1], LANE_CLAIMED_LIKE
+    except Exception:  # noqa: BLE001 - a suggestion never costs the question
+        logging.debug("Claimed-like suggestion failed.", exc_info=True)
+
+    tags = str(trade.get("setup_tags") or "").strip()
+    status = str(trade.get("tag_status") or "").strip().lower()
+    if tags and status == "provisional":
+        return tags, LANE_PROVISIONAL
+    return "", ""
 
 
 def recalled_fields(store: Any, trade_id: str) -> list[dict[str, Any]]:
@@ -222,22 +417,24 @@ def answered_fields(store: Any, trade_id: str) -> set[str]:
     }
 
 
-def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> TradeCheckTask:
-    """The 10:00 question for the session before `session`."""
-    reviewed = previous_exchange_session(session)
-    if not _journal_ready(store, reviewed):
-        return TradeCheckTask(
-            reviewed_session=reviewed, journal_ready=False, reason=REASON_NOT_READY
-        )
+def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | None:
+    """One question per trade of `reviewed` that still cannot answer a field.
 
+    ``None`` - not ``[]`` - when the trade list could not be read: an empty
+    questionnaire drawn from an unreadable list is a lie about the session, and
+    the two have to stay distinguishable.
+
+    The annotation log is read ONCE for the whole session rather than once per
+    trade: it is a small append-only file, but a per-trade read would turn a
+    four-trade morning into four full-file walks on the Qt thread.
+    """
     try:
         trades = store.list_trades(trade_date=reviewed)
     except Exception:  # noqa: BLE001
         logging.debug("Trade list unreadable.", exc_info=True)
-        return TradeCheckTask(
-            reviewed_session=reviewed, journal_ready=False, reason=REASON_NOT_READY
-        )
+        return None
 
+    claims = claimed_setup_rows(reviewed)
     questions: list[TradeQuestion] = []
     for trade in trades:
         status = str(trade.get("status") or "").upper()
@@ -249,26 +446,177 @@ def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> Tr
         gaps = missing_fields(trade, answered_fields(store, trade_id))
         if not gaps:
             continue
+        guess, lane = setup_guess_for(trade, claims) if "setup" in gaps else ("", "")
         questions.append(
             TradeQuestion(
                 trade_id=trade_id,
                 symbol=str(trade.get("symbol") or ""),
                 direction=str(trade.get("direction") or ""),
                 missing=gaps,
+                setup_guess=guess,
+                setup_guess_lane=lane,
+                opened_at=str(trade.get("opened_at") or ""),
+                trade_date=str(trade.get("trade_date") or reviewed),
             )
         )
+    return questions
 
-    limit = max(0, int(cap))
-    asked = tuple(questions[:limit])
+
+def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> TradeCheckTask:
+    """The 09:00 question for the session before `session`.
+
+    Every trade of the reviewed session is listed - TJ-9 item 2, the trader's
+    own word. `cap` is kept because `TRADE_CAP_DEFAULT` is still the rule for
+    an older backlog, which no caller builds yet; it does not cap the session
+    being forced, so `remaining` is 0 here by construction.
+    """
+    reviewed = previous_exchange_session(session)
+    current = fills_current_to(store)
+    fresh_to = current.isoformat() if current else ""
+    if not _journal_ready(store, reviewed):
+        return TradeCheckTask(
+            reviewed_session=reviewed,
+            journal_ready=False,
+            reason=REASON_NOT_READY,
+            fills_current_to=fresh_to,
+        )
+
+    questions = questions_for_session(store, reviewed)
+    if questions is None:
+        return TradeCheckTask(
+            reviewed_session=reviewed,
+            journal_ready=False,
+            reason=REASON_NOT_READY,
+            fills_current_to=fresh_to,
+        )
+
+    asked = tuple(questions)
     return TradeCheckTask(
         reviewed_session=reviewed,
         journal_ready=True,
         trades=asked,
-        remaining=max(0, len(questions) - len(asked)),
+        remaining=0,
         incomplete_total=len(questions),
         reason="",
         incomplete_trade_ids=tuple(question.trade_id for question in questions),
+        fills_current_to=fresh_to,
     )
+
+
+def unlabelled_trade_count(store: Any, session: str) -> int:
+    """How many trades ON `session` still cannot answer a material field.
+
+    The number a later reader prints ("N trade(s) unlabelled"). It asks about
+    the session's OWN trades, so a caller does not have to know which morning
+    the card would have reviewed them on. An unreadable list answers 0 rather
+    than a guess: uncertainty is never a count.
+    """
+    return len(questions_for_session(store, str(session)[:10]) or ())
+
+
+def confirm_setup(
+    store: Any,
+    question: TradeQuestion,
+    *,
+    now: datetime | None = None,
+    setup: str = "",
+) -> dict[str, Any]:
+    """The trader's one click: the suggested setup becomes THEIR confirmed tag.
+
+    Written through the Journal's own writer (`save_trade_annotation`, which
+    sets `tag_status='confirmed'`), which is what makes it the trader's act -
+    the machine never confirms anything. The provenance comes from
+    `trade_origin.label_provenance`, a pure function of stamps; the button
+    decides nothing. An existing note is carried through unchanged: a confirm
+    is about the setup, and a note is the trader's prose.
+    """
+    chosen = str(setup or question.setup_guess or "").strip()
+    if not chosen:
+        return {"ok": False, "reason": "there is nothing to confirm"}
+    trade_id = str(question.trade_id)
+    state = {}
+    try:
+        state = store.annotation_state(trade_id)
+    except Exception:  # noqa: BLE001 - a missing row is an empty one
+        logging.debug("Annotation state unreadable.", exc_info=True)
+    if str(state.get("tag_status") or "") == "confirmed" and str(
+        state.get("setup_tags") or ""
+    ).strip():
+        # The trader already answered. Never offered, never overwritten.
+        return {"ok": False, "reason": "this trade already carries a confirmed tag"}
+
+    trade = {
+        "trade_id": trade_id,
+        "symbol": question.symbol,
+        "direction": question.direction,
+        "opened_at": question.opened_at,
+        "trade_date": question.trade_date,
+    }
+    moment = now or datetime.now().astimezone()
+    try:
+        import trade_origin
+
+        provenance = trade_origin.label_provenance(
+            trade, chosen, claimed_setup_rows(question.trade_date), moment
+        )
+    except Exception:  # noqa: BLE001 - an undecidable age is left unrecorded
+        logging.debug("Label provenance undecidable.", exc_info=True)
+        provenance = ""
+
+    store.save_trade_annotation(
+        trade_id,
+        setup_tags=chosen,
+        notes=str(state.get("notes") or ""),
+        label_provenance=provenance,
+    )
+    return {"ok": True, "setup": chosen, "label_provenance": provenance}
+
+
+def morning_import_retry(
+    service: Any,
+    task: TradeCheckTask,
+    *,
+    today: str,
+    last_retry: str = "",
+) -> dict[str, Any]:
+    """The ONE deterministic import retry the desk makes before the 09:00 card.
+
+    TJ-9 item 6. When last night ended without an OK import for the session the
+    card is about, the desk pulls once more before asking - seconds, no model.
+    Everything about it is a refusal to do more than that:
+
+    * it CALLS `ui/services/journal_import_service.JournalImportService`, which
+      owns its own `QThread` and is the desk's single Questrade refresh-chain
+      owner. Nothing here refreshes a token, opens a session or touches the
+      Qt thread beyond starting that worker;
+    * **Questrade only.** IBKR has no day leg at all - its fills arrive with
+      the overnight run - and the card says so rather than pretending a retry
+      could find them;
+    * at most ONCE per morning, keyed on the date the caller passes. A ready
+      task retries nothing, and a second card the same day retries nothing;
+    * a service that is already running, or that refuses, is not an error: the
+      pull it is already doing is the pull this wanted.
+
+    Returns ``{"retried", "reason", "last_retry"}``; the caller persists
+    ``last_retry`` so the once-a-morning rule survives a card being rebuilt.
+    """
+    day = str(today or "")[:10]
+    if getattr(task, "journal_ready", False):
+        return {"retried": False, "reason": "the journal is ready", "last_retry": last_retry}
+    if str(last_retry or "")[:10] == day and day:
+        return {"retried": False, "reason": "already retried today", "last_retry": last_retry}
+    if service is None:
+        return {"retried": False, "reason": "no import service", "last_retry": last_retry}
+    try:
+        started = bool(service.pull_recent_questrade(MORNING_RETRY_DAYS))
+    except Exception as exc:  # noqa: BLE001 - a retry never costs the card
+        logging.debug("Morning import retry failed to start.", exc_info=True)
+        return {"retried": False, "reason": str(exc), "last_retry": last_retry}
+    if not started:
+        # Already running. The attempt is spent either way: a second card an
+        # hour later must not queue a third pull behind it.
+        return {"retried": False, "reason": "an import is already running", "last_retry": day}
+    return {"retried": True, "reason": "", "last_retry": day}
 
 
 def save_answers(

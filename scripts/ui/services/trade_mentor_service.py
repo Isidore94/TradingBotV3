@@ -255,6 +255,30 @@ class TradeMentorService(QObject):
             return SKIP_IDLE
         return ""
 
+    def unlabelled_trades(self, session: str, *, store=None) -> int:
+        """How many trades ON `session` still cannot answer a material field.
+
+        TJ-9 item 2. The number a later reader prints ("N trade(s) unlabelled")
+        so a section the trader skipped is visible somewhere other than the
+        card it rode away from. It is a COUNT and nothing else: nothing here
+        writes, prompts, pushes or gates.
+
+        Deliberately not on the poll path - a caller asks for it when it is
+        about to show it - and an unreadable journal answers 0 rather than a
+        guess.
+        """
+        try:
+            import trade_mentor_trade_check as check
+
+            if store is None:
+                from journal_store import JournalStore
+
+                store = JournalStore()
+            return check.unlabelled_trade_count(store, str(session))
+        except Exception:  # noqa: BLE001 - a count never costs the desk
+            logging.debug("Unlabelled trade count unreadable.", exc_info=True)
+            return 0
+
     def slots_now(self, now: datetime | None = None) -> tuple[MentorSlot, ...]:
         return slots_for_session(self._local(now or self._clock()).date())
 

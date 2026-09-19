@@ -270,6 +270,11 @@ class MainWindow(QMainWindow):
             self.trade_mentor_context_service
         )
         self.trade_mentor_service = TradeMentorService(self)
+        # TJ-9 item 6. The journal importer is built on first need, and the
+        # date of the last morning retry lives here so the once-a-morning rule
+        # holds across every card of one session.
+        self._journal_importer = None
+        self._journal_retry_date = ""
         self.trade_mentor_service.promptDue.connect(self._show_trade_mentor_prompt)
         self.trade_mentor_service.promptExpired.connect(
             lambda _slot_id: self.trading_panel.alert_center.chart_review.hide_mentor_card()
@@ -1105,19 +1110,58 @@ class MainWindow(QMainWindow):
         # The Settings line says when the NEXT one is, so it moves every time a
         # prompt lands rather than telling the trader what was true at startup.
         self._sync_trade_mentor_label()
-        if str(getattr(slot, "kind", "")) != "m5_trades":
-            return
-        # The 10:00 second section. Two small queries against the journal DB,
-        # once a day, on the slot the trader is already being interrupted for.
         try:
             import trade_mentor_trade_check as check
+        except Exception:  # noqa: BLE001 - the read still stands without it
+            logging.debug("Trade check module unavailable.", exc_info=True)
+            return
+        if str(getattr(slot, "kind", "")) != check.KIND_M5_TRADES:
+            return
+        # The 09:00 second section. Two small queries against the journal DB,
+        # once a day, on the slot the trader is already being interrupted for.
+        try:
             from journal_store import JournalStore
 
             store = JournalStore()
             task = check.build_task(store, slot.scheduled_at.date())
+            if not task.journal_ready:
+                # TJ-9 item 6: the night ended without an OK import for the
+                # session the card is about, so the desk pulls once more before
+                # asking. On the import service's own QThread, Questrade only,
+                # no model, at most once a morning - and the card goes up now
+                # either way, saying what it has.
+                outcome = check.morning_import_retry(
+                    self._journal_import_service(),
+                    task,
+                    today=str(slot.session),
+                    last_retry=self._journal_retry_date,
+                )
+                self._journal_retry_date = str(outcome.get("last_retry") or "")
+                if outcome.get("retried"):
+                    logging.info(
+                        "Trade Mentor: retrying the Questrade import before the "
+                        "%s card (fills current to %s).",
+                        slot.slot_id,
+                        task.fills_current_to or "nothing yet",
+                    )
             review.mentor_card.set_trade_check(task, store=store)
         except Exception:  # noqa: BLE001 - the read still stands without it
             logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
+
+    def _journal_import_service(self):
+        """The desk's ONE journal import owner, built on first need.
+
+        `JournalImportService` owns its own `QThread` and is the single caller
+        of the Questrade refresh chain; the Mentor's morning retry calls it and
+        never refreshes a token itself.
+        """
+        service = getattr(self, "_journal_importer", None)
+        if service is None:
+            from ui.services.journal_import_service import JournalImportService
+
+            service = JournalImportService(self)
+            self._journal_importer = service
+        return service
 
     def _pause_trade_mentor(self) -> None:
         self.trade_mentor_service.pause_today()
@@ -1193,6 +1237,12 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.trade_mentor_context_service.shutdown(timeout_ms=250)
+        except Exception:
+            pass
+        # TJ-9 item 6: the morning retry's worker, when one was ever built.
+        try:
+            if self._journal_importer is not None:
+                self._journal_importer.shutdown()
         except Exception:
             pass
         # Backstop for the shared writer lease: AutopilotService.shutdown

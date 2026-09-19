@@ -2017,12 +2017,30 @@ class JournalStore:
                 return row
         return None
 
-    def save_trade_annotation(self, trade_id: str, *, setup_tags: str, notes: str) -> None:
+    def save_trade_annotation(
+        self,
+        trade_id: str,
+        *,
+        setup_tags: str,
+        notes: str,
+        label_provenance: str = "",
+    ) -> None:
+        """The trader's own write. TJ-9 adds WHEN the label was made.
+
+        ``label_provenance`` is one of ``trade_origin.LABEL_PROVENANCES`` and is
+        decided by that pure function, never by a widget. An EMPTY value leaves
+        whatever is already on the row alone rather than erasing it: a caller
+        that has nothing to say about the age of this label (the auto-tag
+        accept path, an older caller) must not be able to blank a provenance a
+        confirm already recorded, and "" stays readable as "unrecorded".
+        """
         with self.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO trade_annotations(trade_id, setup_tags, notes, updated_at, tag_status)
-                VALUES(?, ?, ?, ?, 'confirmed')
+                INSERT INTO trade_annotations(
+                    trade_id, setup_tags, notes, updated_at, tag_status, label_provenance
+                )
+                VALUES(?, ?, ?, ?, 'confirmed', ?)
                 ON CONFLICT(trade_id) DO UPDATE SET
                     setup_tags = excluded.setup_tags,
                     notes = excluded.notes,
@@ -2031,32 +2049,53 @@ class JournalStore:
                     -- bulk tagger left here stops being provisional (P6a). It is
                     -- set unconditionally rather than only when the tags changed:
                     -- saving the row unedited is the trader saying "yes, that one".
-                    tag_status = 'confirmed'
+                    tag_status = 'confirmed',
+                    label_provenance = CASE
+                        WHEN excluded.label_provenance <> '' THEN excluded.label_provenance
+                        ELSE trade_annotations.label_provenance
+                    END
                     -- planned_entry/stop/risk are absent on purpose: saving a
                     -- note must not erase the plan the trader typed earlier.
                 """,
-                (trade_id, str(setup_tags or "").strip(), str(notes or "").strip(), _now_iso()),
+                (
+                    trade_id,
+                    str(setup_tags or "").strip(),
+                    str(notes or "").strip(),
+                    _now_iso(),
+                    str(label_provenance or "").strip(),
+                ),
             )
 
     def annotation_state(self, trade_id: str) -> dict[str, str]:
-        """This trade's setup tags and which lane they came from (P6a).
+        """This trade's setup tags, the lane they came from (P6a) and the age
+        of the label (TJ-9).
 
         One row by primary key, so a caller on the Qt thread deciding whether to
         offer a Confirm button is not paying for ``list_trades``. A trade with no
         annotation row has never been written by anyone, so it answers
-        ``confirmed`` - there is nothing provisional about an absence.
+        ``confirmed`` - there is nothing provisional about an absence - and its
+        ``label_provenance`` is the empty string, which is "unrecorded" and is
+        never one of the three named provenances.
         """
         with self.connection() as conn:
             row = conn.execute(
-                "SELECT setup_tags, tag_status FROM trade_annotations WHERE trade_id = ?",
+                "SELECT setup_tags, tag_status, notes, label_provenance "
+                "FROM trade_annotations WHERE trade_id = ?",
                 (str(trade_id),),
             ).fetchone()
         if row is None:
-            return {"setup_tags": "", "tag_status": TAG_STATUS_CONFIRMED}
+            return {
+                "setup_tags": "",
+                "tag_status": TAG_STATUS_CONFIRMED,
+                "notes": "",
+                "label_provenance": "",
+            }
         found = _row_to_dict(row)
         return {
             "setup_tags": str(found.get("setup_tags") or ""),
             "tag_status": str(found.get("tag_status") or TAG_STATUS_CONFIRMED),
+            "notes": str(found.get("notes") or ""),
+            "label_provenance": str(found.get("label_provenance") or ""),
         }
 
     def apply_provisional_tags(self, trade_id: str, setup_tags: str) -> bool:

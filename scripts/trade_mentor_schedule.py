@@ -16,13 +16,14 @@ Three rules decide the tuple.
   `market_calendar.session_close`, which models every day as 16:00 ET by design.
 * **The two D1 hours and the trade-check hour are FIXED and survive the close.**
   The trader asked for the noon D1 read on a short day in as many words, and the
-  10:00 check asks about YESTERDAY's trades, not about today's tape. A slot at or
+  09:00 check asks about YESTERDAY's trades, not about today's tape. A slot at or
   after the close is kept and LABELLED `post_close`, so a later reader can tell a
   read of a live tape from a read of a closed one without re-deriving the
   calendar.
 * **A collision is ONE slot, never two.** 08:00 is both an hourly M5 read and a
-  D1 read; it produces a single `m5_d1` card. Two cards at one instant is two
-  dialogs over the chart, which the brief forbids.
+  D1 read; it produces a single `m5_d1` card; 09:00 is both an hourly read and
+  the trade check and produces a single `m5_trades` card. Two cards at one
+  instant is two dialogs over the chart, which the brief forbids.
 
 Pacific is `America/Los_Angeles` - a wall clock WITH daylight saving, not a
 fixed UTC-8. The 09:00 read is 09:00 in the trader's kitchen in March and in
@@ -47,7 +48,15 @@ FIRST_HOUR = 7
 #: The two D1 reads. Fixed: they are kept even after an early close.
 D1_HOURS = (8, 12)
 #: The previous session's trade check. Fixed for the same reason.
-TRADES_HOUR = 10
+#:
+#: TJ-9 (trader, 2026-09-19: *"I want to be forced to label my trades around
+#: 0900 as per trade mentor"*) moved this from 10 to 9. The hour is the whole
+#: change: `_kind_for` follows the constant, so 10:00 becomes an ordinary `m5`
+#: read and a short day no longer has a 10:00 slot forced into existence at
+#: all - on 2026-11-27 (a 10:00 Pacific close) the session now carries four
+#: slots rather than five, and the check sits INSIDE the hourly window instead
+#: of being labelled `post_close`.
+TRADES_HOUR = 9
 
 #: An hourly read of the tape.
 KIND_M5 = "m5"

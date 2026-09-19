@@ -89,16 +89,37 @@ def save_annotation(trade_id: str, *, setup_tags: str, notes: str) -> None:
     would raise that tag's confidence for that symbol forever on the strength of
     the tagger's own guess - the tagger teaching itself. A correction is
     feedback, so it needs the trader to have actually disagreed.
+
+    TJ-9 item 4: the row records WHEN the label was made. The same pure
+    function the 09:00 card uses decides it, from the trade's own stamps and
+    this moment - ``same_session`` when the trader is labelling a trade they
+    opened today, ``recalled_after`` otherwise. No claim lane is passed here:
+    ``claimed_before_entry`` is the card's finding, made against the claim that
+    preceded the fill, and this page has no claim in hand to make it with.
     """
     # Imported here, like every other `journal_store` name in this module:
     # the store is deliberately lazy so a headless import of the feed does
     # not open a database.
+    from datetime import datetime
+
     from journal_store import TAG_STATUS_PROVISIONAL
 
     store = _store()
     before = store.annotation_state(trade_id)
     tags = str(setup_tags or "").strip()
-    store.save_trade_annotation(trade_id, setup_tags=tags, notes=notes)
+    provenance = ""
+    if tags:
+        try:
+            import trade_origin
+
+            provenance = trade_origin.label_provenance(
+                store.get_trade(trade_id) or {}, tags, (), datetime.now().astimezone()
+            )
+        except Exception:  # noqa: BLE001 - an undecidable age never costs the save
+            provenance = ""
+    store.save_trade_annotation(
+        trade_id, setup_tags=tags, notes=notes, label_provenance=provenance
+    )
     if (
         before.get("tag_status") == TAG_STATUS_PROVISIONAL
         and tags
