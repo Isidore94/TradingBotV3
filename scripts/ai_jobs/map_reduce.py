@@ -345,6 +345,132 @@ def findings_package(
     return package
 
 
+def package_chars(package: Mapping[str, Any]) -> int:
+    """How big a package is, measured the way every budget in this file is."""
+    return len(json.dumps(package, sort_keys=True, default=str))
+
+
+def synthesis_budget_chars() -> int:
+    """The character ceiling on the REDUCE package (TJ-13A item 3).
+
+    The existing setting, not a new number: `evidence_budget_for("local",
+    tier="medium")` is the same ceiling a single-shot summary spends, and the
+    reduce call is one call with the whole context in front of it.
+
+    Why it was needed. On 2026-09-17 all 53 map slices succeeded and then the
+    synthesis call timed out - the reduce package was 119,677 characters
+    against a local budget of 11,066. Every map slice is chunked to fit; the
+    one call that has to hold the whole night was the only one nothing
+    budgeted, so `completion=unsynthesized_fallback` became the normal ending
+    (09-15, 09-16, 09-17, 09-18).
+
+    Falls back to the module's chunk size if the setting cannot be read: a
+    budget that raises would lose the night it is supposed to save.
+    """
+    try:
+        import ai_summary
+
+        value = int(ai_summary.evidence_budget_for("local", tier="medium"))
+    except Exception:  # pragma: no cover - defensive; see the docstring
+        _log.warning("local evidence budget unreadable; bounding the synthesis at the chunk size")
+        return DEFAULT_CHUNK_CHARS
+    return value if value > 0 else DEFAULT_CHUNK_CHARS
+
+
+def _finding_rows(
+    findings: Mapping[str, list[dict[str, Any]]]
+) -> list[tuple[str, dict[str, Any]]]:
+    """Every finding as ``(section, row)``, best-kept first.
+
+    Highest confidence first, and within a confidence the order the slices
+    produced them. The order is the DROP order when the package will not fit,
+    so it is the one place a judgement is made about which findings the
+    synthesis sees - and it is made on the model's own stated confidence, never
+    on what a finding says.
+    """
+    rows: list[tuple[str, dict[str, Any]]] = []
+    for section, section_rows in findings.items():
+        for position, row in enumerate(section_rows or []):
+            rows.append((section, dict(row), position))  # type: ignore[arg-type]
+    rows.sort(
+        key=lambda item: (
+            _CONFIDENCE_ORDER.get(str(item[1].get("confidence") or "low"), 3),
+            item[2],
+        )
+    )
+    return [(section, row) for section, row, _position in rows]
+
+
+def _regrouped(
+    kept: Sequence[tuple[str, dict[str, Any]]],
+    findings: Mapping[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Rebuild the section -> rows mapping from a kept subset, sections intact.
+
+    Every section key stays PRESENT even when it kept nothing: an absent
+    section reads as "this build did not look", and an empty one reads as
+    "nothing survived", which are different nights.
+    """
+    out: dict[str, list[dict[str, Any]]] = {section: [] for section in findings}
+    for section, row in kept:
+        out.setdefault(section, []).append(row)
+    return out
+
+
+def bounded_findings_package(
+    findings: Mapping[str, list[dict[str, Any]]],
+    base: Mapping[str, Any],
+    *,
+    read: int,
+    planned: int,
+    failed: Sequence[str],
+    budget: int,
+) -> tuple[dict[str, Any], int]:
+    """The reduce package, cut to ``budget``, plus how many findings it left out.
+
+    Bounding is not silent truncation. The count comes back and is published
+    beside the coverage line, because a synthesis over 30 of 74 findings is not
+    the same document as one over all 74 and the reader has to be able to tell.
+
+    The search is over a PREFIX of :func:`_finding_rows`, so the package is
+    always the highest-confidence findings and never an arbitrary subset, and
+    the package is rebuilt for the measurement rather than estimated - the
+    skeleton, the aliases and the hash all cost characters.
+    """
+    whole = findings_package(findings, base, read=read, planned=planned, failed=failed)
+    rows = _finding_rows(findings)
+    if budget <= 0 or package_chars(whole) <= budget:
+        return whole, 0
+
+    # Binary search for the largest prefix that fits. `low` always fits (0
+    # findings is the skeleton alone), `high` never does.
+    low, high = 0, len(rows)
+    best = findings_package(
+        _regrouped([], findings), base, read=read, planned=planned, failed=failed
+    )
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = findings_package(
+            _regrouped(rows[:middle], findings),
+            base,
+            read=read,
+            planned=planned,
+            failed=failed,
+        )
+        if package_chars(candidate) <= budget:
+            low, best = middle, candidate
+        else:
+            high = middle - 1
+    dropped = len(rows) - low
+    _log.warning(
+        "synthesis package trimmed to fit %s chars: %s of %s finding(s) carried",
+        budget,
+        low,
+        len(rows),
+    )
+    return best, dropped
+
+
 def _merge_findings(collected: list[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     import ai_summary
 
@@ -409,12 +535,27 @@ def unsynthesized_summary(
     return out
 
 
-def coverage_statement(*, planned: int, read: int, failed: Sequence[str], sources: int) -> str:
+def coverage_statement(
+    *,
+    planned: int,
+    read: int,
+    failed: Sequence[str],
+    sources: int,
+    findings_dropped: int = 0,
+) -> str:
     """The one line that keeps a partial read from reading as a whole one."""
     text = (
         f"Read in slices: {read} of {planned} slice(s) across {sources} source(s) were "
         "read in full, so no source was reduced to a sample of its rows."
     )
+    if int(findings_dropped or 0) > 0:
+        # TJ-13A item 3. The synthesis prompt has a ceiling, and a night that
+        # produced more findings than fit has to say so here rather than
+        # present the remainder as the whole.
+        text += (
+            f" {int(findings_dropped)} finding(s) did not fit the synthesis prompt "
+            "and were not carried into it; the highest-confidence findings were kept."
+        )
     if failed:
         shown = ", ".join(list(failed)[:6])
         more = f", +{len(failed) - 6} more" if len(failed) > 6 else ""
@@ -493,6 +634,25 @@ def run_map_reduce(
                 timeout_seconds=timeout_seconds,
             )
         except Exception as exc:  # one slice must not cost the night
+            # TJ-13A item 3. UNREACHABLE is the one exception to "one slice
+            # must not cost the night", because it is not a slice failure at
+            # all: the server is not there, it will not be there for the next
+            # slice either, and each remaining slice costs its own full read
+            # timeout to find that out. Measured on the live ledger: 53 slices
+            # at a 900 s timeout is over thirteen hours of window spent
+            # discovering what the first call already knew, and it ended
+            # `degraded_no_narrative` on 09-15, 09-16, 09-17 and 09-18.
+            #
+            # This keys on the endpoint being unreachable and NEVER on any
+            # failure: an ordinary bad answer still costs its own slice and
+            # nothing else (`test_a_failed_slice_is_counted_and_named_never_
+            # skipped_quietly`).
+            if ai_summary.is_endpoint_unreachable(exc):
+                raise RuntimeError(
+                    f"the local AI endpoint was unreachable on slice {position} of "
+                    f"{planned}; giving up now rather than spending the window "
+                    f"discovering it {planned - position} more times: {exc}"
+                ) from exc
             failed.append(f"{chunk.name}: {type(exc).__name__}")
             _log.warning("map slice %s/%s (%s) failed: %s", position, planned, chunk.name, exc)
             continue
@@ -511,7 +671,17 @@ def run_map_reduce(
             f"every one of the {planned} evidence slice(s) failed; nothing was read"
         )
 
-    package = findings_package(findings, evidence, read=read, planned=planned, failed=failed)
+    # TJ-13A item 3: the reduce call gets a BOUNDED package. Everything else in
+    # this module already fits one prompt by construction; this was the one
+    # call that did not, and it is the call that has to hold the whole night.
+    package, findings_dropped = bounded_findings_package(
+        findings,
+        evidence,
+        read=read,
+        planned=planned,
+        failed=failed,
+        budget=synthesis_budget_chars(),
+    )
     synthesis_error = ""
     synthesis_stop_reason = ""
     synthesis_retry = ""
@@ -598,8 +768,17 @@ def run_map_reduce(
             "synthesis_stop_reason": synthesis_stop_reason,
             "synthesis_retry": synthesis_retry,
             "slices_retried": retried,
+            # TJ-13A item 3. ALWAYS PRESENT, 0 on a night where everything
+            # fit - so "0" cannot be confused with "this build did not look".
+            # Bounding is not silent truncation: what the synthesis could not
+            # carry is counted here and stated in the coverage line.
+            "findings_dropped_to_fit": int(findings_dropped),
             "coverage_statement": coverage_statement(
-                planned=planned, read=read, failed=failed, sources=sources
+                planned=planned,
+                read=read,
+                failed=failed,
+                sources=sources,
+                findings_dropped=findings_dropped,
             ),
         },
     }
@@ -615,11 +794,14 @@ __all__ = [
     "DEFAULT_CHUNK_CHARS",
     "FINDINGS_SOURCE_ID",
     "MAP_REDUCE_SETTING_KEY",
+    "bounded_findings_package",
     "chunk_chars",
     "completion_word",
     "chunk_package",
     "coverage_statement",
     "findings_package",
+    "package_chars",
+    "synthesis_budget_chars",
     "map_reduce_enabled",
     "plan_chunks",
     "run_map_reduce",

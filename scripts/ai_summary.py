@@ -516,6 +516,43 @@ AI_SUMMARY_JSON_SCHEMA = {
 AI_SUMMARY_PROMPT_VERSION = "ai_summary_v1"
 
 
+#: The two halves of the sentence a dead endpoint writes. Kept as constants
+#: because `is_endpoint_unreachable` has to recognise the sentence as well as
+#: the class: a caller that wraps or re-raises the error (a slot boundary, a
+#: subprocess, a test fake built from the ledger's own text) loses the type and
+#: keeps the words.
+LOCAL_UNREACHABLE_PREFIX = "local AI endpoint at"
+LOCAL_UNREACHABLE_MARKER = "is unreachable"
+
+
+class LocalEndpointUnreachable(RuntimeError):
+    """The local model server did not answer at all.
+
+    TJ-13A item 3. This is a different fact from "the model gave a bad answer"
+    and it deserves a different reaction: a bad answer costs one slice, and a
+    server that is not there costs every remaining slice its full read timeout.
+    On 2026-09-15/16/17 that was 53 slices against a silent endpoint at a 900 s
+    timeout - most of the night spent discovering what the first call knew.
+    """
+
+
+def is_endpoint_unreachable(exc: BaseException | None) -> bool:
+    """Is this failure "the server is not answering" rather than a bad answer?
+
+    Recognised by CLASS first and by the sentence second, in that order - see
+    :data:`LOCAL_UNREACHABLE_MARKER`. A failure that is merely a bad answer
+    must NOT match: `test_a_failed_slice_is_counted_and_named_never_skipped_quietly`
+    is the rule that a slice failure costs its own slice and nothing else, and
+    giving up early on any failure at all would quietly repeal it.
+    """
+    if exc is None:
+        return False
+    if isinstance(exc, LocalEndpointUnreachable):
+        return True
+    text = str(exc)
+    return LOCAL_UNREACHABLE_PREFIX in text and LOCAL_UNREACHABLE_MARKER in text
+
+
 def unwrap_schema_envelope(parsed: Any, schema_name: str) -> Any:
     """Unwrap ``{"<schema_name>": {...}}`` and leave everything else alone.
 
@@ -3843,7 +3880,9 @@ def _request_local_summary(
                 timeout=max(10, min(LOCAL_REQUEST_TIMEOUT_CAP_SECONDS, int(timeout_seconds))),
             )
         except Exception as exc:  # unreachable endpoint is a clean error
-            raise RuntimeError(f"local AI endpoint at {url} is unreachable: {exc}") from exc
+            raise LocalEndpointUnreachable(
+                f"{LOCAL_UNREACHABLE_PREFIX} {url} {LOCAL_UNREACHABLE_MARKER}: {exc}"
+            ) from exc
         body = response.json() if hasattr(response, "json") else {}
         if not isinstance(body, Mapping):
             body = {}
