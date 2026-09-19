@@ -822,6 +822,17 @@ def render_morning_file(
     A night that briefed 94 of 95 names used to publish nothing at all. It now
     publishes what it has, and says so in the header before any brief, so a
     partial file can never be read as a complete one (TB-1).
+
+    **A membership-only name is COUNTED in the header and absent from the
+    body** (TJ-13A item 4). Measured on the live file 2026-09-19: 1,028 lines,
+    `Analyzed 53 of 312. Membership-only 259.` - so 259 of the 312 sections
+    said only that the symbol is on a list, which is the one thing the reader
+    of a watchlist already knows, and they pushed real briefs past this file's
+    48 KB ceiling into "omitted from this small summary file". The name does
+    not disappear: it is in the `Membership-only` count, which is why the
+    header carries three numbers rather than one. Missing data is stated, never
+    hidden - and a name with nothing to say is stated as a count, not as a
+    sentence repeated 259 times.
     """
     generated = (generated_at or datetime.now().astimezone()).isoformat(timespec="seconds")
     resolved = len(briefs)
@@ -852,12 +863,21 @@ def render_morning_file(
         f"{note_lines}"
         "This file cannot change scanners, scores, watchlists, alerts, or bot state.\n\n"
     )
+    # The BODY is the analysed names only (TJ-13A item 4). The counts above are
+    # over every entry, so nothing is lost by leaving a membership-only name
+    # out of the prose - and `omitted` now counts what the CEILING ate rather
+    # than what this rule did, which is the number the trailing line claims.
+    body = [
+        entry
+        for entry in briefs
+        if str((entry or {}).get("status") or "") != BRIEF_STATUS_MEMBERSHIP_ONLY
+    ]
     text = header
     omitted = 0
-    for index, item in enumerate(briefs):
+    for index, item in enumerate(body):
         section = _morning_section(item) + "\n"
         if len((text + section).encode("utf-8")) > MAX_MORNING_BRIEF_BYTES:
-            omitted = len(briefs) - index
+            omitted = len(body) - index
             break
         text += section
     if omitted:
