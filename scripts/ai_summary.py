@@ -516,6 +516,197 @@ AI_SUMMARY_JSON_SCHEMA = {
 AI_SUMMARY_PROMPT_VERSION = "ai_summary_v1"
 
 
+#: The two halves of the sentence a dead endpoint writes. Kept as constants
+#: because `is_endpoint_unreachable` has to recognise the sentence as well as
+#: the class: a caller that wraps or re-raises the error (a slot boundary, a
+#: subprocess, a test fake built from the ledger's own text) loses the type and
+#: keeps the words.
+LOCAL_UNREACHABLE_PREFIX = "local AI endpoint at"
+LOCAL_UNREACHABLE_MARKER = "is unreachable"
+
+
+class LocalEndpointUnreachable(RuntimeError):
+    """The local model server did not answer at all.
+
+    TJ-13A item 3. This is a different fact from "the model gave a bad answer"
+    and it deserves a different reaction: a bad answer costs one slice, and a
+    server that is not there costs every remaining slice its full read timeout.
+    On 2026-09-15/16/17 that was 53 slices against a silent endpoint at a 900 s
+    timeout - most of the night spent discovering what the first call knew.
+    """
+
+
+def is_endpoint_unreachable(exc: BaseException | None) -> bool:
+    """Is this failure "the server is not answering" rather than a bad answer?
+
+    Recognised by CLASS first and by the sentence second, in that order - see
+    :data:`LOCAL_UNREACHABLE_MARKER`. A failure that is merely a bad answer
+    must NOT match: `test_a_failed_slice_is_counted_and_named_never_skipped_quietly`
+    is the rule that a slice failure costs its own slice and nothing else, and
+    giving up early on any failure at all would quietly repeal it.
+    """
+    if exc is None:
+        return False
+    if isinstance(exc, LocalEndpointUnreachable):
+        return True
+    text = str(exc)
+    return LOCAL_UNREACHABLE_PREFIX in text and LOCAL_UNREACHABLE_MARKER in text
+
+
+def unwrap_schema_envelope(parsed: Any, schema_name: str) -> Any:
+    """Unwrap ``{"<schema_name>": {...}}`` and leave everything else alone.
+
+    TJ-13A item 5. `journal_enrichment` failed all three attempts on
+    2026-09-17, 09-16 and 09-15 with the same sentence:
+    ``tradingbot_trade_enrichment is missing required field(s): confidence,
+    sources, summary, tags, unknowns`` - ALL FIVE of them, which means the
+    reply WAS a JSON object and carried none of the contract's keys at the top
+    level. The request itself is where that shape comes from: the payload sets
+    ``response_format.json_schema.name = "tradingbot_trade_enrichment"``, and a
+    local backend that echoes its own envelope key returns the complete answer
+    one level down. Three nights of real answers were thrown away over a
+    wrapper this code asked for.
+
+    Deliberately narrow, because the OTHER shape that produces that same
+    sentence must stay rejected: ``_local_schema_prompt`` says *"return exactly
+    this JSON object"* and then prints the schema, so a literal-minded model
+    returns the CONTRACT. That object has several top-level keys, carries no
+    answer, and is not unwrapped here - an answer-shaped hole must stay a
+    failure, never a row.
+
+    So: unwrap only when the object has EXACTLY ONE key, that key is the schema
+    name the request supplied, and its value is itself an object. Anything else
+    is returned untouched and validated as before.
+    """
+    name = str(schema_name or "").strip()
+    if not name or not isinstance(parsed, Mapping):
+        return parsed
+    if list(parsed.keys()) != [name]:
+        return parsed
+    inner = parsed[name]
+    return inner if isinstance(inner, Mapping) else parsed
+
+
+#: How much of a rejected reply is kept. Enough to see the shape - the live
+#: failure was a wrapper key and would have been obvious in the first line -
+#: without a pathological answer filling the store.
+MAX_REJECTED_REPLY_CHARS = 20_000
+
+#: How many rejection files are kept. Each is already bounded by size, so the
+#: remaining unbounded thing is the COUNT: a backend that rejects on every
+#: trade, every night, appends for ever otherwise. 200 is many nights of the
+#: worst case, and the newest are the ones being debugged.
+MAX_REJECTED_REPLY_FILES = 200
+
+
+def rejected_replies_dir() -> Path:
+    """Where a rejected reply is filed. LOCAL, deliberately.
+
+    It was the AI store's `logs/` until TJ-13A's review round, and the AI store
+    is the DAS (`\\\\MINI-PC\\Trading Bot Data`). This function is called from
+    INSIDE an overnight slot, and the DAS can be asleep: a ~20 s spin-up to
+    file a diagnostic makes the record cost more than the thing it records,
+    which is the one thing an evidence store may never do. The house rule is
+    write local first; nothing here pushes to the DAS, and the existing cold
+    push can move it later if anyone ever wants it there.
+    """
+    from project_paths import AI_REJECTED_REPLIES_DIR
+
+    return AI_REJECTED_REPLIES_DIR
+
+
+def _prune_rejected_replies(target_dir: Path) -> None:
+    """Keep the newest :data:`MAX_REJECTED_REPLY_FILES`. Never raises.
+
+    Tidying is the least important thing this module does, so a directory that
+    changes under it, a locked file or a vanished path costs nothing at all.
+    """
+    try:
+        files = sorted(
+            target_dir.glob("rejected_*.json"), key=lambda path: path.name
+        )
+        for stale in files[:-MAX_REJECTED_REPLY_FILES]:
+            try:
+                stale.unlink()
+            except OSError:
+                continue
+    except Exception:  # pragma: no cover - defensive; see the docstring
+        logging.debug("could not prune the rejected-reply log", exc_info=True)
+
+
+def record_rejected_reply(
+    *,
+    schema_name: str,
+    text: str,
+    error: str,
+    logs_dir: Path | None = None,
+    now: datetime | None = None,
+) -> Path | None:
+    """Persist ONE rejected model reply, bounded, and never raise.
+
+    TJ-13A item 5, the lead's decision. The raw reply that failed validation
+    was held in a local variable and folded into ``str(last_error)``; nothing
+    under `ai_store/` carried it, so three identical nights of failure left
+    only the validator's complaint and the actual shape had to be
+    reconstructed by hand from the error text. A defect that repeats nightly
+    should cost one file, not an archaeology pass.
+
+    Contract, in order of importance:
+
+    * **It never raises into the slot.** Every failure here - no directory, a
+      full disk, a vanished path - returns ``None``. An evidence store is never
+      allowed to cost the thing it records, and this one records a failure that
+      is already being reported properly through the ledger.
+    * **Local**, never the DAS - see :func:`rejected_replies_dir`.
+    * **One file per rejection**, named for the moment and the schema, so two
+      rejections in one night are two files and neither overwrites the other.
+    * **Bounded twice**: each file at :data:`MAX_REJECTED_REPLY_CHARS`, which it
+      SAYS when it cuts, and the directory at
+      :data:`MAX_REJECTED_REPLY_FILES` files.
+    * **Written whole or not at all**: a temp file beside the target, then
+      ``os.replace``, so a reader never sees half a reply.
+    """
+    try:
+        target_dir = Path(logs_dir) if logs_dir is not None else rejected_replies_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        moment = now or datetime.now().astimezone()
+        raw = str(text or "")
+        kept = raw[:MAX_REJECTED_REPLY_CHARS]
+        payload = {
+            "schema_version": "ai_rejected_reply_v1",
+            "recorded_at": moment.isoformat(timespec="seconds"),
+            "schema_name": str(schema_name or ""),
+            "error": str(error or "")[:2_000],
+            "reply_chars": len(raw),
+            "reply_kept_chars": len(kept),
+            "reply_truncated": len(kept) < len(raw),
+            "reply": kept,
+        }
+        stamp = moment.strftime("%Y%m%d_%H%M%S_%f")
+        name = str(schema_name or "reply").strip() or "reply"
+        safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in name)
+        target = target_dir / f"rejected_{stamp}_{safe}.json"
+        # Windows' clock granularity is coarser than %f suggests, and the retry
+        # that produces the second rejection follows the first within
+        # milliseconds. Two rejections are two files or the repair records half
+        # of what it was built to record.
+        suffix = 0
+        while target.exists():
+            suffix += 1
+            target = target_dir / f"rejected_{stamp}_{safe}_{suffix}.json"
+        temp = target.with_suffix(".json.tmp")
+        temp.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8"
+        )
+        os.replace(temp, target)
+        # After the write, so a prune that goes wrong never costs the record.
+        _prune_rejected_replies(target_dir)
+        return target
+    except Exception:  # never into the slot - see the docstring
+        logging.debug("could not persist a rejected model reply", exc_info=True)
+        return None
+
+
 def validate_structured_output(
     payload: Any, schema: Mapping[str, Any], *, name: str = "response"
 ) -> dict[str, Any]:
@@ -3731,7 +3922,9 @@ def _request_local_summary(
                 timeout=max(10, min(LOCAL_REQUEST_TIMEOUT_CAP_SECONDS, int(timeout_seconds))),
             )
         except Exception as exc:  # unreachable endpoint is a clean error
-            raise RuntimeError(f"local AI endpoint at {url} is unreachable: {exc}") from exc
+            raise LocalEndpointUnreachable(
+                f"{LOCAL_UNREACHABLE_PREFIX} {url} {LOCAL_UNREACHABLE_MARKER}: {exc}"
+            ) from exc
         body = response.json() if hasattr(response, "json") else {}
         if not isinstance(body, Mapping):
             body = {}
@@ -3788,6 +3981,10 @@ def _request_local_summary(
         try:
             drops: list[dict[str, Any]] = []
             parsed = _parse_json_text(text)
+            # TJ-13A item 5: a backend that echoes the response_format's own
+            # schema name as an envelope key returns the answer one level down.
+            # Unwrapped here, before validation, and only for that exact shape.
+            parsed = unwrap_schema_envelope(parsed, schema_name)
             if own_contract:
                 summary = validate_structured_output(parsed, contract, name=schema_name)
             else:
@@ -3797,6 +3994,12 @@ def _request_local_summary(
             # Only malformed output is worth retrying, and only once -- and the
             # retry now carries the exact rejection back to the model rather
             # than re-asking the identical question and hoping.
+            #
+            # TJ-13A item 5: keep the raw reply. Three identical nights of
+            # `journal_enrichment` failures left only the validator's sentence,
+            # and the shape behind it had to be reconstructed by hand. This
+            # never raises, so a store that cannot take the file costs nothing.
+            record_rejected_reply(schema_name=schema_name, text=text, error=str(exc))
             last_error = exc
             if attempt >= LOCAL_JSON_RETRIES:
                 break

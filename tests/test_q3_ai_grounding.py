@@ -582,15 +582,34 @@ def test_the_three_counts_sum_to_the_requested_total():
 
 
 def test_a_membership_only_section_leads_with_its_reason_line():
+    """UPDATED by TJ-13A item 4 (plan.md §12.4 TJ-13, 2026-09-19).
+
+    Q3.3's rule is unchanged and is still asserted below: a membership-only
+    entry reads as its STATUS first, not as a sentence that could be mistaken
+    for a finding. What moved is WHERE it is read. Measured on the live morning
+    file that day: 259 of 312 sections were that one line, and they pushed real
+    briefs past the 48 KB ceiling - so the morning file now counts the name in
+    its header (`test_the_morning_header_counts_analyzed_membership_only_and_failed`
+    above, unchanged) and prints no section for it.
+
+    So this pins the rule at the SECTION renderer, which is the only place that
+    knows how a membership-only entry reads, and pins the morning file's new
+    answer beside it.
+    """
     from ai_jobs import briefs
 
-    text = briefs.render_morning_file(
-        SESSION, [_entry("BULL", briefs.BRIEF_STATUS_MEMBERSHIP_ONLY)], total=1
-    )
+    entry = _entry("BULL", briefs.BRIEF_STATUS_MEMBERSHIP_ONLY)
 
-    lines = [line for line in text.splitlines() if line.strip()]
+    section = briefs._morning_section(entry)
+    lines = [line for line in section.splitlines() if line.strip()]
     heading = next(index for index, line in enumerate(lines) if line.startswith("## BULL"))
     assert lines[heading + 1].startswith("membership only - no session evidence beyond")
+
+    # ...and the morning file counts it instead of printing it.
+    text = briefs.render_morning_file(SESSION, [entry], total=1)
+    assert "Analyzed 0 of 1. Membership-only 1." in text
+    assert "## BULL" not in text
+    assert briefs.MEMBERSHIP_ONLY_PREFIX not in text
 
 
 # ---------------------------------------------------------------------------

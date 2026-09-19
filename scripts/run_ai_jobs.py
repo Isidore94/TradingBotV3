@@ -19,11 +19,21 @@ Exit codes: 0 = nothing to do or everything succeeded; 1 = at least one job
 failed; 2 = the AI store was unreachable, so nothing ran.
 
 Usage:
-    python scripts/run_ai_jobs.py              # run every due slot, then exit
+    python scripts/run_ai_jobs.py              # run TONIGHT'S slate, then exit
     python scripts/run_ai_jobs.py --status     # print state, run nothing
     python scripts/run_ai_jobs.py --slot ai_summary
     python scripts/run_ai_jobs.py --slot ticker_briefs
-    python scripts/run_ai_jobs.py --force      # ignore window + already-done
+    python scripts/run_ai_jobs.py --force      # re-spend the caps + already-done
+
+Which slate runs is THE NIGHT'S decision, not the operator's (TJ-13A item 2):
+`runner.night_kind()` names the night on the exchange calendar and
+`runner.slots_for()` builds its slate. A weeknight runs the deterministic stage
+plus the short narration; Saturday night carries `ai_summary` and
+`weekly_synthesis`; Sunday night is the backlog. Nothing needs typing.
+
+`--force` re-spends the attempt caps and the already-completed check. It does
+NOT buy the clock for a slot that calls a local model: inference is night-only,
+seven days a week (trader, 2026-09-19).
 """
 
 from __future__ import annotations
@@ -76,6 +86,17 @@ def _print_status() -> int:
         session_date = ""
         session_note = f"session calendar cannot answer: {exc}"
 
+    # TJ-13A item 2: --status reports TONIGHT'S slate, not the full slot list.
+    # An operator reading this at 21:00 wants to know what is about to run, and
+    # since the slate depends on the night, printing `default_slots()` would
+    # promise `ai_summary` on a Tuesday and omit `weekly_synthesis` on a
+    # Saturday. Both helpers fail safe, so --status still prints.
+    kind = _night_kind_or_weeknight()
+    try:
+        slate = runner.slots_for(kind, session_date=session_date)
+    except Exception as exc:  # --status prints state; it never crashes
+        slate = []
+        session_note = f"{session_note}; slate unavailable: {exc}".strip("; ")
     payload = {
         "session_date": session_date,
         "session_note": session_note,
@@ -83,10 +104,12 @@ def _print_status() -> int:
         "store_available": available,
         "store_reason": reason,
         "window": window.describe_window(),
+        "night_kind": kind,
         "slots": [
             {"name": slot.name, "reserve_minutes": slot.reserve_minutes,
-             "enabled": slot.enabled, "description": slot.description}
-            for slot in runner.default_slots()
+             "enabled": slot.enabled, "uses_model": slot.uses_model,
+             "description": slot.description}
+            for slot in slate
         ],
     }
     if available and session_date:
@@ -104,15 +127,61 @@ def _print_status() -> int:
     return 0
 
 
+def _night_kind_or_weeknight() -> str:
+    """The night's kind, failing toward the LIGHT slate.
+
+    An unanswerable calendar must not choose a four-hour model job: the
+    weeknight slate is the one without `ai_summary` or `weekly_synthesis` on
+    it, so "we could not tell" spends the least. The run itself still fails
+    closed a moment later - `run_slots` refuses outright rather than keying
+    artifacts to a guessed session date.
+    """
+    from ai_jobs import runner
+
+    try:
+        return runner.night_kind()
+    except Exception as exc:
+        # Deliberately broad: this is slate SELECTION, and any failure here
+        # must cost the heavy slots rather than the whole night. The calendar's
+        # own SessionCalendarError is the expected one.
+        logging.warning(
+            "AI jobs: could not name tonight (%s); using the weeknight slate, "
+            "which carries no weekly model job.",
+            exc,
+        )
+        return runner.NIGHT_WEEKNIGHT
+
+
+def _session_date_or_blank() -> str:
+    """Friday's session for a weekend night, or "" when the calendar cannot say.
+
+    Only the Sunday slate reads it, and a blank means "no backlog to resume" -
+    the deterministic stage still runs.
+    """
+    from ai_jobs import runner
+    from market_calendar import SessionCalendarError
+
+    try:
+        return runner.session_date_for()
+    except SessionCalendarError:
+        return ""
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--status", action="store_true", help="print state and exit without running anything")
     parser.add_argument("--slot", default="", help="run only this named slot")
     parser.add_argument("--force", action="store_true",
-                        help="manual run: skip the off-hours window timing and the "
-                             "already-completed check. Never skips the market-session "
-                             "block or its pre-open reserve, and its ledger row is "
-                             "manual_test, which never counts as session coverage")
+                        help="manual run: spend the attempt caps and the "
+                             "already-completed check again. It does NOT buy the "
+                             "clock for a slot that calls a local model - local "
+                             "inference is night-only, seven days a week, so a "
+                             "forced model slot outside the night window records "
+                             "skipped. A deterministic slot (seconds, no model) is "
+                             "still forceable by day. Never skips the "
+                             "market-session block or its pre-open reserve, and its "
+                             "ledger row is manual_test, which never counts as "
+                             "session coverage")
     parser.add_argument(
         "--scopes",
         default="",
@@ -125,11 +194,11 @@ def main(argv: list[str] | None = None) -> int:
         "--weekly-synthesis",
         action="store_true",
         help="run ONLY the weekly trader-judgement synthesis (LOCAL-AI sec 7.3). "
-             "Registered but never nightly, like the trader_judgement scope: the "
-             "unattended slate cannot reach it. Below its two-week graded-cohort "
-             "gate it writes deterministic scaffolding and calls no model. On a "
-             "weekend morning pair it with --force, which skips the window timing "
-             "and never the market-session block.",
+             "Since TJ-13A the SATURDAY-night slate runs it with no typed "
+             "command, so this flag is the operator's way to run it alone. Below "
+             "its two-week graded-cohort gate it writes deterministic "
+             "scaffolding and calls no model. It calls a model above that gate, "
+             "so --force will not start it by day.",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -152,12 +221,37 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(
                 f"unknown scope(s) {unknown}; known: {sorted(ai_summary.SCOPE_LABELS)}"
             )
-    if args.weekly_synthesis:
-        # Constructed per call and ONLY here, so the opt-in slot cannot leak
-        # into the unattended slate.
+    if args.slot:
+        # TJ-13A review round. A TYPED slot is the operator's explicit choice
+        # and resolves against every registered slot, not against tonight's
+        # slate. It used to be filtered by the slate, so `--slot ai_summary` on
+        # a weeknight matched nothing, ran nothing and exited 0 - silently,
+        # while this module's own docstring advertised that exact command. "I
+        # typed it wrong" and "it ran and found nothing" must not look alike.
+        #
+        # This widens what can be NAMED, never what can RUN: a model slot named
+        # by day is still refused by the night-only window inside `run_slots`,
+        # and its ledger row still says so.
+        registered = runner.default_slots(summary_scopes=scopes or None) + runner.optional_slots()
+        known = [slot.name for slot in registered]
+        if args.slot not in known:
+            parser.error(
+                f"unknown slot {args.slot!r}; known slots: {', '.join(sorted(known))}"
+            )
+        slots = registered
+    elif args.weekly_synthesis:
+        # Constructed per call and ONLY here when it is asked for by name.
         slots = runner.optional_slots()
     else:
-        slots = runner.default_slots(summary_scopes=scopes or None)
+        # TJ-13A item 2: THE NIGHT picks the slate, not the operator. A
+        # weeknight runs the deterministic stage plus the short narration;
+        # Saturday night carries `ai_summary` and `weekly_synthesis`; Sunday
+        # night is the backlog. Nothing needs typing for any of it.
+        slots = runner.slots_for(
+            _night_kind_or_weeknight(),
+            summary_scopes=scopes or None,
+            session_date=_session_date_or_blank(),
+        )
     report = runner.run_slots(slots, force=args.force, only=args.slot)
     logging.info("%s", report.summary())
 

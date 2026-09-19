@@ -754,8 +754,15 @@ def test_a_symbol_with_no_evidence_is_answered_without_a_model_call(tmp_path, mo
     # beyond a list it is on. One total counted it as a brief; three counts
     # cannot.
     assert "Analyzed 1 of 2. Membership-only 1. Failed 0." in text
-    assert "## TSLA  [swing_longs]" in text
-    assert "no session evidence beyond membership in swing_longs" in text
+    # UPDATED by TJ-13A item 4 (plan.md §12.4 TJ-13, 2026-09-19). These two
+    # lines used to assert "## TSLA  [swing_longs]" and its membership sentence
+    # IN the file. Measured on the live brief that day: 259 of 312 sections
+    # were that sentence and nothing else, and they pushed real briefs past the
+    # 48 KB ceiling. The name is now COUNTED in the header - the assertion
+    # above, unchanged, is where it is counted - and absent from the body. TB-2
+    # is untouched: the symbol still costs no model call (`calls == ["NVDA"]`).
+    assert "## TSLA" not in text
+    assert "no session evidence beyond membership in swing_longs" not in text
     # No artifact set for a symbol nothing was said about.
     assert not list((tmp_path / "ai_store" / "briefs").rglob("*TSLA*"))
 

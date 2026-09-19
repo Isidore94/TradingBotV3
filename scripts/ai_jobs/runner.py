@@ -21,10 +21,11 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping
 
 from ai_jobs import ledger, store, window
+from ai_jobs.window import market_now
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,37 @@ class JobSlot:
     #: finished for the night. 0 means unlimited, which is the historical
     #: behaviour and still correct for a slot that costs seconds to retry.
     max_attempts: int = 0
+    #: Whether running this slot can start LOCAL INFERENCE (TJ-13A item 1).
+    #:
+    #: It is what ``--force`` may not buy. *"I always want the bot to run
+    #: overnight never during the day so I can restart it or use it for market
+    #: prep"* (trader, 2026-09-19; decision 0021 answer 19): a 14 GB model load
+    #: by day is the thing the rule is about, so a forced daytime run of a slot
+    #: marked here records SKIPPED instead. A deterministic slot costs seconds,
+    #: calls no model, and stays forceable by day - which is the repair
+    #: ``--force`` exists for.
+    #:
+    #: Declared per slot rather than inferred from a name, so a later packet
+    #: that adds a model to a slot says so here in the same edit.
+    uses_model: bool = False
+    #: Keyword arguments that make this slot's OWN ``run`` model-free, or None
+    #: when there is no such thing (TJ-13A fix round, point 3).
+    #:
+    #: Only ``daily_digest`` has one today: its fact pack is deterministic and
+    #: its narration is a second artifact, and ``run_daily_digest`` already took
+    #: ``narrate=False`` before this packet existed. Marking the slot
+    #: ``uses_model`` took the fact pack away from a forced daytime run, which
+    #: is seconds of work and calls nothing; this gives it back without
+    #: reopening the door the flag closed.
+    #:
+    #: It is KEYWORDS rather than a second callable on purpose. A test that
+    #: swaps ``run`` for a spy - ``dataclasses.replace(slot, run=...)`` is the
+    #: house pattern - would not swap a second callable, and would reach the
+    #: real job through it. There is one callable per slot.
+    #:
+    #: A slot with no model-free half declares None and keeps being skipped:
+    #: there is no summary without a model.
+    model_free_kwargs: Mapping[str, Any] | None = None
 
 
 @dataclass
@@ -313,15 +345,42 @@ def _run_slots_locked(
         # rule off is not a hard rule (checkpoint review 2026-08-08 second
         # review, which found --force bypassing it here and at the post-job
         # break below).
+        #
+        # TJ-13A item 1 narrows what it buys. It still skips the window for a
+        # DETERMINISTIC slot - seconds of work, no model, and that is the
+        # repair the flag exists for - but it no longer skips the clock for a
+        # slot that starts local inference. "Run it now, I know it is 14:00 on
+        # a Saturday" is how a 14 GB model load lands in front of the trader's
+        # own market prep on the one day they are at the desk all afternoon.
+        # A forced model slot still gets --force's other two meanings: the
+        # attempt caps and the already-completed check above.
         session_block = window.market_session_block(moment)
+        #: Set when this run is the slot's DETERMINISTIC half only. It changes
+        #: what the slot is called with and what its ledger row says, never
+        #: whether the row counts as coverage.
+        model_free = False
         if session_block:
             allowed, reason = False, session_block
-        elif force:
+        elif force and not slot.uses_model:
             allowed, reason = True, "forced (window checks skipped; session block still enforced)"
         else:
             allowed, reason = window.launch_allowed(
                 moment, reserve_minutes=slot.reserve_minutes
             )
+            if not allowed and force and slot.uses_model and slot.model_free_kwargs:
+                # TJ-13A fix round, point 3. The clock refused this slot because
+                # it can call a model - but this one has a deterministic half
+                # its own `run` already knows how to produce, so a forced
+                # daytime run gets THAT rather than nothing. The model stays
+                # unreachable by day; only the part that was never the problem
+                # runs.
+                allowed = True
+                model_free = True
+                reason = (
+                    "forced by day: deterministic half only "
+                    f"({', '.join(f'{k}={v!r}' for k, v in slot.model_free_kwargs.items())}); "
+                    "no local inference outside the night window"
+                )
         if not allowed:
             row = ledger.record(
                 job=slot.name,
@@ -337,7 +396,8 @@ def _run_slots_locked(
         started = datetime.now().astimezone()
         clock = time.perf_counter()
         try:
-            outcome = slot.run(session_date=session_date, now=moment) or {}
+            extra_kwargs = dict(slot.model_free_kwargs or {}) if model_free else {}
+            outcome = slot.run(session_date=session_date, now=moment, **extra_kwargs) or {}
             # A job may report that it published an honestly degraded document
             # rather than a trustworthy one. That is not "ok", and because
             # completed_jobs counts only STATUS_OK, the next firing retries it.
@@ -371,13 +431,21 @@ def _run_slots_locked(
                 # not the session's nightly brief and must not be counted as
                 # coverage. Degraded and failed keep their own meaning.
                 status = ledger.STATUS_MANUAL
+            row_reason = _failure_reason(slot.name, status, outcome)
+            if model_free:
+                # A reader of this row must never take it for the night's full
+                # digest. It says what ran and what was left out, in that order.
+                row_reason = (
+                    f"{row_reason} [forced daytime run: deterministic facts only, "
+                    "narration left out - local inference is night-only]"
+                ).strip()
             row = ledger.record(
                 job=slot.name,
                 status=status,
                 session_date=session_date,
                 started_at=started,
                 model=str(outcome.get("model") or ""),
-                reason=_failure_reason(slot.name, status, outcome),
+                reason=row_reason,
                 outputs=outcome.get("outputs") or (),
                 tokens=outcome.get("tokens") or {},
                 # WS-AI1: a slot may add fields of its own to its ledger row -
@@ -670,6 +738,16 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=10.0,
             description="Deterministic daily fact pack, plus medium-tier narration",
             max_attempts=3,
+            # Its FACTS are deterministic, but its second artifact is narrated
+            # by the medium local model, so this slot CAN start inference and
+            # --force must not buy it the daytime clock (TJ-13A item 1).
+            uses_model=True,
+            # ...and it is the one slot with a real deterministic half:
+            # `run_daily_digest` already took `narrate=False` before this
+            # packet, and the fact pack is written even when the model is down.
+            # So a forced daytime run writes the facts and says so in its
+            # ledger row (TJ-13A fix round, point 3).
+            model_free_kwargs={"narrate": False},
         ),
         # Packet WS-TH (2026-09-12), APPENDED at the END of the deterministic
         # stage. A later phase appends INSIDE its stage and never reorders
@@ -764,6 +842,22 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             # a chunked run is a ~170-minute job, not a 20-minute one.
             reserve_minutes=briefs.summary_reserve_minutes(),
             description="Advisory evidence summary over the day's artifacts",
+            uses_model=True,
+            # Unbounded until TJ-13A's review round. `max_attempts=0` was
+            # written when a failing summary was EXPENSIVE: it spent hours, so
+            # the 30-minute firings could not repeat it inside one night and
+            # the missing cap never showed. Item 3 made a dead endpoint cheap -
+            # it now gives up on the first call - and cheap plus unbounded is a
+            # loop: driven over a weekend night's ~16 firings, a degrading
+            # summary RAN TEN TIMES, writing ten `degraded_no_narrative` rows
+            # and ten export sets for one session, and Sunday would repeat it.
+            #
+            # Three, like every other capped slot, and for the same reason: a
+            # fault that survives three attempts is deterministic, not
+            # transient. It is now a weekly slot, so three attempts is three
+            # attempts at ONE session a week. plan.md §12.3: set max_attempts,
+            # never 0.
+            max_attempts=3,
         ),
         JobSlot(
             name="ticker_briefs",
@@ -771,6 +865,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=120.0,
             description="Medium-tier advisory briefs for Focus/watchlist tickers",
             max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
+            uses_model=True,
         ),
         # Phase 0.31 / WISHLIST 10D step 3. Appended at the end of the
         # narration stage. It reads only the deterministic story packs above,
@@ -784,6 +879,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "and one Trade Mentor coaching question"
             ),
             max_attempts=3,
+            uses_model=True,
         ),
         # ------------------------------------------------------------------
         # STAGE 3: the model-gated slots. Unchanged, and still last.
@@ -802,6 +898,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=20.0,
             description="Advisory summaries and setup tags for the night's journal rows (gated)",
             max_attempts=3,
+            uses_model=True,
         ),
         # LOCAL-AI Phase 4, APPENDED last.
         #
@@ -817,6 +914,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=10.0,
             description="Draft review policy (ranks and annotates only; never the live file)",
             max_attempts=3,
+            uses_model=True,
         ),
         # SETUP DATABASE Phase 6.1, APPENDED last.  The deterministic layer
         # computes every number.  The medium local model only narrates after
@@ -827,8 +925,189 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=20.0,
             description="Stop/target recipe research with five-timeframe market context",
             max_attempts=3,
+            uses_model=True,
         ),
     ]
+
+
+#: The three night kinds (TJ-13A item 2, plan.md §12.4 TJ-13 item 6).
+NIGHT_WEEKNIGHT = "weeknight"
+NIGHT_SATURDAY = "saturday"
+NIGHT_SUNDAY = "sunday"
+NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
+
+#: The slot that leaves the weeknight slate entirely (plan.md TJ-13 item 8).
+#: Measured on the live ledger, 2026-09-19: `ai_summary` ran 12,453-18,540 s a
+#: night and ended `degraded_no_narrative` on 09-15, 09-16, 09-17 and 09-18. It
+#: is the slot the night cannot afford five times a week, so it runs once, on
+#: the Saturday slate, with the whole weekend night in front of it.
+WEEKEND_ONLY_SLOTS = ("ai_summary",)
+
+#: The deterministic stage (decision 0018 stage 1), which every night runs. It
+#: ENDS at `measured_report`, which closes that stage today; a later packet
+#: appending inside stage 1 lands inside this set automatically because the set
+#: is derived from the slate, not written out twice.
+_STAGE_ONE_LAST_SLOT = "measured_report"
+
+
+def _night_evening_date(moment: datetime):
+    """The calendar date of the EVENING this night started, in ET.
+
+    A night is one night. The scheduled task fires every 30 minutes from 22:00
+    to 06:00 Pacific, so most of a night's firings happen on the FOLLOWING
+    calendar date - and in ET, where the window is stored, Saturday night's
+    firings are already stamped Sunday. Reading the date off the clock is
+    exactly the seam that would file Saturday night's heavy slate under Sunday.
+
+    Noon ET is the split. It sits outside every plausible night window (the
+    live one is 01:00-09:00 ET and the shipped default 18:30-08:00), so an
+    evening firing keeps its own date and a small-hours one belongs to the day
+    before, under either shape.
+    """
+    moment = market_now(moment)
+    if moment.hour >= 12:
+        return moment.date()
+    return moment.date() - timedelta(days=1)
+
+
+def night_kind(now: datetime | None = None) -> str:
+    """Which of the three nights this moment belongs to. Pure.
+
+    Named on the EXCHANGE CALENDAR, never on the weekday number, so the weekend
+    slate follows the sessions:
+
+    * ``weeknight`` - the evening it started was a session.
+    * ``sunday``    - it was not, and the next day is. This is the last night
+      before trading resumes, so it is the backlog night; a Monday holiday
+      moves it to Monday night.
+    * ``saturday``  - neither. The first night with no session behind it, which
+      a Friday holiday starts a night early. In a Friday-holiday week Friday
+      AND Saturday night are both ``saturday``; the second is the resume night
+      for anything the first did not finish.
+
+    It decides nothing and writes nothing: it names a night. Raises
+    :class:`market_calendar.SessionCalendarError` when the calendar cannot
+    answer, because guessing a night kind would guess a slate.
+    """
+    from market_calendar import is_session
+
+    evening = _night_evening_date(now)
+    if is_session(evening):
+        return NIGHT_WEEKNIGHT
+    if is_session(evening + timedelta(days=1)):
+        return NIGHT_SUNDAY
+    return NIGHT_SATURDAY
+
+
+def _deterministic_stage(slots: list[JobSlot]) -> list[JobSlot]:
+    """Stage 1, up to and including the slot that closes it."""
+    out: list[JobSlot] = []
+    for slot in slots:
+        out.append(slot)
+        if slot.name == _STAGE_ONE_LAST_SLOT:
+            return out
+    return out
+
+
+def _owed_slot_names(
+    slots: list[JobSlot], session_date: str, ledger_path=None
+) -> set[str]:
+    """Slots this weekend ATTEMPTED and did not finish, still inside their cap.
+
+    Both weekend nights key to the same session date - Friday's - which is what
+    makes the ledger the honest record of what the weekend still owes.
+
+    A slot that never ran is NOT owed: the Sunday slate is the backlog, not a
+    second weekly slate, so `ai_summary` skipped on a night nobody tried it is
+    not resumed here. A slot that answered (`ok`, or a manual run's
+    `manual_test`) is done. A slot that burned its attempts, or whose terminal
+    marker is already written, is not re-offered to spend the night re-earning
+    the same marker.
+    """
+    session = str(session_date or "").strip()
+    if not session:
+        return set()
+    try:
+        finished = ledger.completed_jobs(session, path=ledger_path)
+    except (OSError, ValueError):
+        return set()
+    owed: set[str] = set()
+    for slot in slots:
+        if slot.name in finished:
+            continue
+        try:
+            attempts = ledger.attempt_rows(slot.name, session, path=ledger_path)
+            if not attempts:
+                continue
+            if ledger.has_terminal_marker(slot.name, session, path=ledger_path):
+                continue
+            if slot.max_attempts and ledger.attempt_cap_reason(
+                slot.name, session, max_attempts=slot.max_attempts, path=ledger_path
+            ):
+                continue
+        except (OSError, ValueError):
+            continue
+        owed.add(slot.name)
+    return owed
+
+
+def slots_for(
+    kind: str,
+    *,
+    summary_scopes: tuple[str, ...] | None = None,
+    session_date: str = "",
+    ledger_path=None,
+) -> list[JobSlot]:
+    """The slate for one night kind (TJ-13A item 2; plan.md TJ-13 item 6).
+
+    `EXPECTED_SLOT_ORDER` stays the order WITHIN a night and decision 0018's
+    stage boundaries do not move: this function CHOOSES which slots a night
+    holds and never reorders them. Every slate it returns is a subsequence of
+    `default_slots()`.
+
+    * **weeknight** - everything except the weekend-only slot. The deterministic
+      stage, the short trader-facing narration, `ticker_briefs` and the
+      model-gated stage, exactly as they were.
+    * **saturday** - the whole slate plus `weekly_synthesis`, which in 476
+      ledger rows had never run because it needed a typed
+      ``--weekly-synthesis``. It is a model-gated slot, so it joins the end of
+      stage 3.
+    * **sunday** - the deterministic stage, plus a retry of any slot this
+      weekend attempted, did not finish, and is still inside its cap. Nothing
+      heavy is offered a second time just for being heavy.
+
+    An unknown kind RAISES rather than running a guess: a typo that silently
+    fell back to a full slate would put a four-hour model job on a weeknight.
+    """
+    name = str(kind or "").strip().lower()
+    if name not in NIGHT_KINDS:
+        raise ValueError(
+            f"unknown night kind {kind!r}; known kinds are {', '.join(NIGHT_KINDS)}"
+        )
+    slate = default_slots(summary_scopes=summary_scopes)
+
+    if name == NIGHT_WEEKNIGHT:
+        return [slot for slot in slate if slot.name not in WEEKEND_ONLY_SLOTS]
+
+    if name == NIGHT_SATURDAY:
+        return slate + optional_slots()
+
+    stage_one = _deterministic_stage(slate)
+    owed = _owed_slot_names(
+        slate + optional_slots(), session_date, ledger_path=ledger_path
+    )
+    kept = {slot.name for slot in stage_one}
+    out = list(stage_one)
+    for slot in slate + optional_slots():
+        if slot.name in owed and slot.name not in kept:
+            out.append(slot)
+            kept.add(slot.name)
+    # Keep the night's own order: stage 1 first, then whatever it owes, each in
+    # the slate's order. `optional_slots()` sits after stage 3, where it does on
+    # the Saturday slate.
+    order = {slot.name: index for index, slot in enumerate(slate + optional_slots())}
+    out.sort(key=lambda slot: order.get(slot.name, len(order)))
+    return out
 
 
 def optional_slots() -> list[JobSlot]:
@@ -854,5 +1133,6 @@ def optional_slots() -> list[JobSlot]:
             reserve_minutes=15.0,
             description="Weekly rollup over both graded cohorts (gated; medium tier only)",
             max_attempts=3,
+            uses_model=True,
         ),
     ]

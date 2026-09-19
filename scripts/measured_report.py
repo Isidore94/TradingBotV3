@@ -1451,6 +1451,22 @@ def _example_tables(
 
     Picking the three biggest moves out of a measured set says nothing about
     the set. The label is on every table for that reason.
+
+    **One NAME appears at most once** (TJ-13A item 6). The published report for
+    2026-09-17 read `ABCL` three times at 6.1619 percent, `ERAS` three times at
+    -7.5875 and one swing occurrence id three times at 4.4529 R, out of 19,045
+    and 309 measured observations: a symbol carries several observations in a
+    session, and taking the top three ROWS took the same observation three
+    times as often as not. An example list of one name is not an example list.
+
+    The de-duplication is a PRESENTATION rule on three rows and nothing else.
+    `denominator` is still the full measured population - the label is about
+    that population, and shrinking it to the distinct names would make the
+    sentence under the table false.
+
+    Fewer than three distinct names means fewer than three rows. A duplicate is
+    never re-admitted to reach three: a repeat says nothing the row above it
+    did not already say.
     """
     tables: list[dict[str, Any]] = []
 
@@ -1458,7 +1474,15 @@ def _example_tables(
                denominator: int, unit: str, reverse: bool) -> None:
         if not rows or denominator <= 0:
             return
-        ordered = sorted(rows, key=lambda item: item[1], reverse=reverse)[:3]
+        ordered: list[tuple[str, float]] = []
+        seen: set[str] = set()
+        for name, value in sorted(rows, key=lambda item: item[1], reverse=reverse):
+            if name in seen:
+                continue
+            seen.add(name)
+            ordered.append((name, value))
+            if len(ordered) >= 3:
+                break
         tables.append({
             "table_id": table_id,
             "title": title,

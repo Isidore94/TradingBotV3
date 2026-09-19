@@ -358,9 +358,18 @@ def test_default_slate_runs_the_deterministic_stage_before_narration():
     assert names == EXPECTED_SLOT_ORDER
     assert all(slot.enabled for slot in slots)
     by_name = {slot.name: slot for slot in slots}
-    # The long slot is capped; the cheap one keeps retrying all window.
+    # Both long slots are capped.
     assert by_name["ticker_briefs"].max_attempts == 3
-    assert by_name["ai_summary"].max_attempts == 0
+    # UPDATED by TJ-13A's review round (2026-09-19). This line asserted 0 with
+    # the comment "the cheap one keeps retrying all window", and that comment
+    # had it backwards by then: `ai_summary` was the EXPENSIVE slot, and it was
+    # uncapped precisely because spending hours per attempt meant the 30-minute
+    # firings could never repeat it inside one night. TJ-13A item 3 made a dead
+    # endpoint give up on its first call, which turned the missing cap into a
+    # loop - a degrading summary ran 10 times over one weekend night's firings,
+    # writing 10 ledger rows and 10 export sets for a single session. plan.md
+    # §12.3: every slot sets `max_attempts`, never 0.
+    assert by_name["ai_summary"].max_attempts == 3
     # Seconds of work, so it reserves almost nothing - and it is capped, because
     # a broker that is down stays down and should not spend the whole window.
     assert by_name["journal_import"].reserve_minutes == 5.0
@@ -510,6 +519,18 @@ def test_entry_point_reports_store_failure_as_exit_2():
         assert run_ai_jobs.main([]) == 2
 
 
+#: TJ-13A item 2 made the slate depend on WHICH NIGHT it is, so the two
+#: entry-point tests below pin the night rather than inheriting the day the
+#: suite happens to run on. Without the pin a Saturday-evening suite run would
+#: build the Saturday slate, whose `weekly_synthesis` comes from
+#: `optional_slots()` and is therefore NOT covered by the `default_slots` patch
+#: - the test would call the real job. The slot is named `journal_import`
+#: because `ai_summary` is not on a weeknight slate any more; nothing else
+#: about either assertion changed.
+def _weeknight(runner):
+    return mock.patch.object(runner, "night_kind", return_value="weeknight")
+
+
 def test_entry_point_reports_job_failure_as_exit_1(tmp_path):
     import run_ai_jobs
     from ai_jobs import runner
@@ -517,8 +538,10 @@ def test_entry_point_reports_job_failure_as_exit_1(tmp_path):
     def boom(*, session_date, now):
         raise RuntimeError("nope")
 
-    with _store_ok(tmp_path), _window_open(), _no_session_block(), mock.patch.object(
-        runner, "default_slots", return_value=[_slot("ai_summary", boom)]
+    with _store_ok(tmp_path), _window_open(), _no_session_block(), _weeknight(
+        runner
+    ), mock.patch.object(
+        runner, "default_slots", return_value=[_slot("journal_import", boom)]
     ), mock.patch.object(runner.ledger, "ledger_path", return_value=tmp_path / "l.jsonl"):
         assert run_ai_jobs.main([]) == 1
 
@@ -527,10 +550,16 @@ def test_entry_point_success_is_exit_0(tmp_path):
     import run_ai_jobs
     from ai_jobs import runner
 
-    with _store_ok(tmp_path), _window_open(), _no_session_block(), mock.patch.object(
-        runner, "default_slots", return_value=[_slot("ai_summary", lambda **k: {})]
+    ran = []
+    with _store_ok(tmp_path), _window_open(), _no_session_block(), _weeknight(
+        runner
+    ), mock.patch.object(
+        runner,
+        "default_slots",
+        return_value=[_slot("journal_import", lambda **k: ran.append(1) or {})],
     ), mock.patch.object(runner.ledger, "ledger_path", return_value=tmp_path / "l.jsonl"):
         assert run_ai_jobs.main([]) == 0
+    assert ran, "the slate must actually have held the slot it was given"
 
 
 # ---------------------------------------------------------------------------

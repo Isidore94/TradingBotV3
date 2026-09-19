@@ -562,6 +562,27 @@ def _extract_ticker_content(content: Any, symbol: str) -> Any | None:
     return None
 
 
+def _projection_was_cut(content: Any) -> bool:
+    """Did THIS symbol's projection lose anything on its way here?
+
+    Both of ``_extract_ticker_content``'s cuts are `MAX_TICKER_SOURCE_CHARS`:
+    the text branch slices the joined lines, and the mapping branch replaces an
+    oversized symbol record with a ``truncated_record`` string. A nested string
+    cut deeper in a projection still shows here, because a cut of that size
+    cannot leave the whole under the ceiling.
+
+    A projection that lands exactly ON the ceiling is reported as cut. That is
+    the conservative direction: "you may be reading part of this" is a safe
+    thing to say wrongly, and "you have all of it" is not.
+    """
+    if isinstance(content, Mapping) and "truncated_record" in content:
+        return True
+    encoded = content if isinstance(content, str) else json.dumps(
+        content, sort_keys=True, default=str
+    )
+    return len(encoded) >= MAX_TICKER_SOURCE_CHARS
+
+
 def build_ticker_evidence(
     base: Mapping[str, Any],
     symbol: str,
@@ -608,6 +629,20 @@ def build_ticker_evidence(
             continue
         source = dict(raw)
         source["content"] = content
+        # TJ-13A item 4. `dict(raw)` copies the SESSION package's `truncated`
+        # flag, and then the content under it is replaced by this symbol's
+        # slice - so a flag earned by the session's own budget rode along onto a
+        # projection that was never itself cut. Measured on the 53 published
+        # packages of 2026-09-18: every flagged source was at most 825
+        # characters against a 16,000 ceiling, and the live morning brief said
+        # "truncated" 63 times, with the model hedging accordingly about
+        # evidence it had received whole.
+        #
+        # The flag now describes THIS package. It is re-derived, not inherited,
+        # and it still says True whenever the projection really was cut - by the
+        # per-source ceiling or by the oversized-record branch - because a
+        # symbol that is genuinely reading part of its evidence must say so.
+        source["truncated"] = _projection_was_cut(content)
         source["evidence_pointer"] = {
             "source_id": str(raw.get("source_id") or ""),
             "path": str(raw.get("path") or ""),
@@ -781,6 +816,13 @@ def _morning_section(entry: Mapping[str, Any]) -> str:
         # no `result` - and a position claim is impossible here for the same
         # reason, on top of the Q3.2 rule that would drop one anyway (a
         # membership source is kind `watchlist`, never `journal`).
+        #
+        # Since TJ-13A item 4 the MORNING FILE does not reach this branch:
+        # `render_morning_file` counts a membership-only name in the header and
+        # leaves it out of the body. The rule stays here because this function
+        # renders ONE entry and is the only place that knows how a
+        # membership-only entry reads; a surface that does print one must print
+        # it prefixed.
         reason = str(entry.get("reason") or "no session evidence beyond membership")
         return f"{heading}\n{MEMBERSHIP_ONLY_PREFIX}{reason}\n"
     result = entry.get("result") if isinstance(entry.get("result"), Mapping) else {}
@@ -822,6 +864,17 @@ def render_morning_file(
     A night that briefed 94 of 95 names used to publish nothing at all. It now
     publishes what it has, and says so in the header before any brief, so a
     partial file can never be read as a complete one (TB-1).
+
+    **A membership-only name is COUNTED in the header and absent from the
+    body** (TJ-13A item 4). Measured on the live file 2026-09-19: 1,028 lines,
+    `Analyzed 53 of 312. Membership-only 259.` - so 259 of the 312 sections
+    said only that the symbol is on a list, which is the one thing the reader
+    of a watchlist already knows, and they pushed real briefs past this file's
+    48 KB ceiling into "omitted from this small summary file". The name does
+    not disappear: it is in the `Membership-only` count, which is why the
+    header carries three numbers rather than one. Missing data is stated, never
+    hidden - and a name with nothing to say is stated as a count, not as a
+    sentence repeated 259 times.
     """
     generated = (generated_at or datetime.now().astimezone()).isoformat(timespec="seconds")
     resolved = len(briefs)
@@ -852,12 +905,21 @@ def render_morning_file(
         f"{note_lines}"
         "This file cannot change scanners, scores, watchlists, alerts, or bot state.\n\n"
     )
+    # The BODY is the analysed names only (TJ-13A item 4). The counts above are
+    # over every entry, so nothing is lost by leaving a membership-only name
+    # out of the prose - and `omitted` now counts what the CEILING ate rather
+    # than what this rule did, which is the number the trailing line claims.
+    body = [
+        entry
+        for entry in briefs
+        if str((entry or {}).get("status") or "") != BRIEF_STATUS_MEMBERSHIP_ONLY
+    ]
     text = header
     omitted = 0
-    for index, item in enumerate(briefs):
+    for index, item in enumerate(body):
         section = _morning_section(item) + "\n"
         if len((text + section).encode("utf-8")) > MAX_MORNING_BRIEF_BYTES:
-            omitted = len(briefs) - index
+            omitted = len(body) - index
             break
         text += section
     if omitted:
