@@ -388,17 +388,13 @@ def _finding_rows(
     synthesis sees - and it is made on the model's own stated confidence, never
     on what a finding says.
     """
-    rows: list[tuple[str, dict[str, Any]]] = []
+    rows: list[tuple[int, int, str, dict[str, Any]]] = []
     for section, section_rows in findings.items():
         for position, row in enumerate(section_rows or []):
-            rows.append((section, dict(row), position))  # type: ignore[arg-type]
-    rows.sort(
-        key=lambda item: (
-            _CONFIDENCE_ORDER.get(str(item[1].get("confidence") or "low"), 3),
-            item[2],
-        )
-    )
-    return [(section, row) for section, row, _position in rows]
+            confidence = _CONFIDENCE_ORDER.get(str(row.get("confidence") or "low"), 3)
+            rows.append((confidence, position, section, dict(row)))
+    rows.sort(key=lambda item: (item[0], item[1]))
+    return [(section, row) for _confidence, _position, section, row in rows]
 
 
 def _regrouped(
