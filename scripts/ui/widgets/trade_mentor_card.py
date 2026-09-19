@@ -197,6 +197,8 @@ class TradeMentorCard(QWidget):
         self._ai_draft_buttons: dict[str, QPushButton] = {}
         self._ai_drafts: dict[str, dict[str, dict[str, Any]]] = {}
         self._setup_confirm_buttons: dict[str, QPushButton] = {}
+        #: trade_id -> the vocabulary list the confirm button sits beside.
+        self._setup_choice_boxes: dict[str, QComboBox] = {}
         #: trade_ids whose setup the trader confirmed on THIS card. The combo
         #: for that field disappears, so the Save gate must stop waiting on it.
         self._setup_confirmed: set[str] = set()
@@ -428,6 +430,7 @@ class TradeMentorCard(QWidget):
         self._ai_draft_buttons = {}
         self._ai_drafts = {}
         self._setup_confirm_buttons = {}
+        self._setup_choice_boxes = {}
         self._setup_confirmed = set()
         self.save_answers_button.setEnabled(False)
         while self._trade_check_layout.count():
@@ -575,25 +578,67 @@ class TradeMentorCard(QWidget):
         pressing it is the trader's write through the Journal's own writer. A
         trade whose setup the trader already confirmed is never offered one.
         """
+        import trade_mentor_trade_check as check
+
         guess = str(getattr(question, "setup_guess", "") or "")
         if not guess or "setup" not in tuple(question.missing or ()):
             return
         lane = str(getattr(question, "setup_guess_lane", "") or "")
-        button = QPushButton(f"Setup: {guess}  (confirm)", self.trade_check_box)
+        row = QWidget(self.trade_check_box)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+        # The VOCABULARY LIST the confirm button sits beside. The guess is
+        # preselected, so one click is still one click - but a wrong guess is
+        # CORRECTED here rather than confirmed, and the list carries no
+        # rejection, so nothing outside it can be written from this card.
+        choice = QComboBox(row)
+        names = [guess]
+        for name in check.setup_vocabulary():
+            if name not in names:
+                names.append(name)
+        for name in names:
+            choice.addItem(name, name)
+        choice.setCurrentIndex(0)
+        button = QPushButton("Confirm setup", row)
         button.setToolTip(
             "The machine's best guess"
             + (f", from {lane.replace('_', ' ')}" if lane else "")
-            + ". Nothing is written until you press this."
+            + ". Nothing is written until you press this, and what is written "
+            "is whatever this list shows."
         )
         button.clicked.connect(
             lambda _checked=False, trade_id=question.trade_id: self._confirm_setup(trade_id)
         )
-        self._trade_check_layout.addWidget(button)
+        row_layout.addWidget(QLabel("setup"))
+        row_layout.addWidget(choice, 1)
+        row_layout.addWidget(button)
+        self._trade_check_layout.addWidget(row)
         self._setup_confirm_buttons[str(question.trade_id)] = button
+        self._setup_choice_boxes[str(question.trade_id)] = choice
 
     def setup_confirm_button(self, trade_id: str):
         """The confirm button offered for one trade, or ``None``."""
         return self._setup_confirm_buttons.get(str(trade_id))
+
+    def setup_choice_box(self, trade_id: str):
+        """The vocabulary list that button sits beside, or ``None``."""
+        return self._setup_choice_boxes.get(str(trade_id))
+
+    def trade_check_session(self) -> str:
+        """Which session's trade check is on the card, or ``""``.
+
+        The host asks before rebuilding: a section the trader has half-answered
+        rides untouched, and rebuilding it would throw their combos away.
+        """
+        return self._trade_check_session if self._has_trade_check() else ""
+
+    def _has_trade_check(self) -> bool:
+        return bool(
+            self._answer_inputs
+            or self.trade_check_label.isVisibleTo(self)
+            or self.trade_check_box.isVisibleTo(self)
+        )
 
     def _confirm_setup(self, trade_id: str) -> dict[str, Any]:
         """The trader's click. The pure function decides the provenance."""
@@ -604,8 +649,10 @@ class TradeMentorCard(QWidget):
         if question is None or store is None:
             self._set_status("the trade journal is not available here")
             return {"ok": False, "reason": "the trade journal is not available here"}
+        choice = self._setup_choice_boxes.get(str(trade_id))
+        chosen = str(choice.currentData() or choice.currentText() or "") if choice else ""
         try:
-            result = check.confirm_setup(store, question, now=self._now())
+            result = check.confirm_setup(store, question, now=self._now(), setup=chosen)
         except Exception as exc:  # noqa: BLE001 - journal writes fail loudly
             self._set_status(f"the setup was NOT saved: {exc}")
             return {"ok": False, "reason": str(exc)}
@@ -615,7 +662,9 @@ class TradeMentorCard(QWidget):
         button = self._setup_confirm_buttons.get(str(trade_id))
         if button is not None:
             button.setEnabled(False)
-            button.setText(f"Setup: {result.get('setup')}  (confirmed)")
+            button.setText(f"Confirmed: {result.get('setup')}")
+        if choice is not None:
+            choice.setEnabled(False)
         # The setup question is answered, so the Save gate stops waiting on it.
         self._setup_confirmed.add(str(trade_id))
         fields = self._answer_inputs.get(str(trade_id), {})

@@ -156,6 +156,14 @@ def _is_midnight(moment: datetime) -> bool:
     normalised before storing - states the same "no clock time" fact in its own
     zone, so both are read as date-only. Both directions are the safe one here:
     the answer is ``unmeasured``, never a guess.
+
+    **This is deliberately WIDER than ``journal_trade_shape.is_date_only``**,
+    and the live journal is why: the DRAM assignment row is stored
+    ``2026-07-16T00:00:00-07:00``, which is 03:00 in New York and which that
+    function therefore reads as a real fill at three in the morning. Midnight
+    in the stamp's own zone is the same statement - "the time is not known" -
+    and a plan the desk invented for a time that never happened would be worse
+    than saying ``unmeasured``.
     """
     if (moment.hour, moment.minute, moment.second, moment.microsecond) == (0, 0, 0, 0):
         return True
@@ -181,19 +189,35 @@ def first_fill_at(trade: Mapping[str, Any]) -> datetime | None:
 
 
 def trade_session(trade: Mapping[str, Any]) -> date | None:
-    """The exchange session the trade was OPENED on, market-local."""
+    """The exchange session of the trade's FIRST FILL, market-local.
+
+    Deliberately NOT ``trade_date``. ``journal_store.rebuild_trades`` writes
+    ``trade_date = closed_at or opened_at``, so on a position held across
+    sessions that column names the day it was CLOSED. A live example: SMPL
+    opened 2026-08-27 and closed 2026-09-18, and 116 of the journal's 216
+    trades have an opened date that differs from ``trade_date``. Reading it
+    here would have called a label written on the closing day ``same_session``
+    - the one thing `label_provenance` exists to make impossible - and a label
+    written on the opening day ``recalled_after``.
+
+    Falls back to ``trade_date`` only when no fill stamp can be read at all, so
+    a trade with nothing but a date still answers something rather than
+    nothing. A date-only OPEN stamp is still a real session even though it is
+    not a real time; refusing to name a TIME is :func:`first_fill_at`'s
+    separate job.
+    """
     if not isinstance(trade, Mapping):
         return None
+    for key in _FILL_KEYS:
+        moment = _moment(trade.get(key))
+        if moment is not None:
+            return moment.astimezone(MARKET_TZ).date()
     text = _text(trade.get("trade_date"))
     if len(text) >= 10:
         try:
             return date.fromisoformat(text[:10])
         except ValueError:
-            pass
-    for key in _FILL_KEYS:
-        moment = _moment(trade.get(key))
-        if moment is not None:
-            return moment.astimezone(MARKET_TZ).date()
+            return None
     return None
 
 

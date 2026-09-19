@@ -11,7 +11,7 @@ import sys
 import time
 
 import threading
-from datetime import datetime
+from datetime import date as _date, datetime
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
@@ -1110,17 +1110,27 @@ class MainWindow(QMainWindow):
         # The Settings line says when the NEXT one is, so it moves every time a
         # prompt lands rather than telling the trader what was true at startup.
         self._sync_trade_mentor_label()
+        # The 09:00 second section, and the RIDE. Everything from here down is
+        # inside one guard on purpose: a trade check that cannot be built must
+        # never cost the prompt above it, which is the read the trader is
+        # actually being interrupted for. The kind test used to sit OUTSIDE it
+        # and to read the constant off the wrong module, so every prompt raised
+        # `AttributeError` in a Qt slot and no trade section ever appeared.
         try:
             import trade_mentor_trade_check as check
-        except Exception:  # noqa: BLE001 - the read still stands without it
-            logging.debug("Trade check module unavailable.", exc_info=True)
-            return
-        if str(getattr(slot, "kind", "")) != check.KIND_M5_TRADES:
-            return
-        # The 09:00 second section. Two small queries against the journal DB,
-        # once a day, on the slot the trader is already being interrupted for.
-        try:
             from journal_store import JournalStore
+            from trade_mentor_schedule import KIND_M5_TRADES
+
+            card = review.mentor_card
+            is_check_slot = str(getattr(slot, "kind", "")) == KIND_M5_TRADES
+            already_up = str(card.trade_check_session() or "") == str(slot.session)
+            if not is_check_slot and already_up:
+                # The section is already on the card and the trader may have
+                # half-answered it. Rebuilding would throw that away; the ride
+                # is the widget staying exactly as it is.
+                return
+            if not is_check_slot and not self._trade_check_is_owed(check, slot):
+                return
 
             store = JournalStore()
             task = check.build_task(store, slot.scheduled_at.date())
@@ -1144,9 +1154,36 @@ class MainWindow(QMainWindow):
                         slot.slot_id,
                         task.fills_current_to or "nothing yet",
                     )
-            review.mentor_card.set_trade_check(task, store=store)
+            card.set_trade_check(task, store=store)
         except Exception:  # noqa: BLE001 - the read still stands without it
             logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
+
+    def _trade_check_is_owed(self, check, slot) -> bool:
+        """Does this ORDINARY slot have to carry the trade check?
+
+        TJ-9 item 2: *"AWAY still prompts nothing; the first DESK slot after it
+        carries the section."* The section used to be built only for the
+        `m5_trades` kind, and only the 09:00 slot has that kind - so a 09:00
+        that was away, idle, locked, skipped or expired took the whole day's
+        questions with it, and a trader who sat down at 11:00 was asked nothing
+        at all.
+
+        It is owed when the reviewed session still has an unlabelled trade, or
+        when its broker statement has not landed (item 6's line has to ride
+        too). A session whose trades are all answered brings nothing back.
+        AWAY needs no test here: the service records the absence and never
+        emits `promptDue`, so an ordinary slot in AWAY does not reach this.
+        """
+        try:
+            reviewed = check.previous_exchange_session(slot.scheduled_at.date())
+            if self.trade_mentor_service.unlabelled_trades(reviewed) > 0:
+                return True
+            from journal_store import JournalStore
+
+            return check.fills_current_to(JournalStore()) != _date.fromisoformat(reviewed)
+        except Exception:  # noqa: BLE001 - an unreadable journal asks nothing extra
+            logging.debug("Trade check ride undecidable.", exc_info=True)
+            return False
 
     def _journal_import_service(self):
         """The desk's ONE journal import owner, built on first need.

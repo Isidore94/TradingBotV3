@@ -103,9 +103,10 @@ def test_the_page_agrees_with_the_pure_function(feed, monkeypatch):
     assert trade.get("trade_date") == REVIEWED
 
 
-def test_clearing_the_tag_records_nothing_and_erases_nothing(feed, monkeypatch):
-    """An empty save has nothing to say about the age of a label, and a caller
-    with nothing to say must not be able to blank what a confirm wrote."""
+def test_clearing_the_tag_clears_the_provenance_with_it(feed, monkeypatch):
+    """There is no label left to date. A provenance that outlived the label it
+    was about would say `claimed_before_entry` over an empty setup, which every
+    reader of the three would count."""
     from ui.services import journal_feed
 
     trade_id = add_round_trip(feed, "AAPL")
@@ -118,4 +119,37 @@ def test_clearing_the_tag_records_nothing_and_erases_nothing(feed, monkeypatch):
 
     state = feed.annotation_state(trade_id)
     assert state["setup_tags"] == ""
+    assert state["label_provenance"] == ""
+
+
+def test_an_unchanged_tag_and_a_silent_caller_cannot_blank_the_provenance(feed):
+    """The rule that still holds: a caller with nothing to say about the age of
+    a label, saving the SAME label, leaves what the confirm recorded."""
+    trade_id = add_round_trip(feed, "AAPL")
+    feed.save_trade_annotation(
+        trade_id, setup_tags="earnings_gap", notes="", label_provenance="claimed_before_entry"
+    )
+
+    feed.save_trade_annotation(trade_id, setup_tags="earnings_gap", notes="a later note")
+
+    state = feed.annotation_state(trade_id)
+    assert state["notes"] == "a later note"
     assert state["label_provenance"] == "claimed_before_entry"
+
+
+def test_a_changed_tag_and_a_silent_caller_recomputes_rather_than_keeping_a_lie(feed):
+    """`accept_auto_tags` adding a tag is this case. The old provenance was
+    about the OLD label; keeping it would date a label that never existed."""
+    from ui.services import journal_feed
+
+    trade_id = add_round_trip(feed, "AAPL")
+    feed.save_trade_annotation(
+        trade_id, setup_tags="earnings_gap", notes="", label_provenance="claimed_before_entry"
+    )
+
+    journal_feed.accept_auto_tags(trade_id, ["avwap_breakout"])
+
+    state = feed.annotation_state(trade_id)
+    assert "avwap_breakout" in state["setup_tags"]
+    assert state["label_provenance"] != "claimed_before_entry"
+    assert state["label_provenance"] in ("same_session", "recalled_after")

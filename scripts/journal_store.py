@@ -2028,13 +2028,35 @@ class JournalStore:
         """The trader's own write. TJ-9 adds WHEN the label was made.
 
         ``label_provenance`` is one of ``trade_origin.LABEL_PROVENANCES`` and is
-        decided by that pure function, never by a widget. An EMPTY value leaves
-        whatever is already on the row alone rather than erasing it: a caller
-        that has nothing to say about the age of this label (the auto-tag
-        accept path, an older caller) must not be able to blank a provenance a
-        confirm already recorded, and "" stays readable as "unrecorded".
+        decided by that pure function, never by a widget. When the caller says
+        nothing there are THREE cases, and they are not the same case:
+
+        * the confirmed setup is UNCHANGED - keep what is there. A caller with
+          nothing to say about the age of this label (an older caller, a note
+          edit) must not be able to blank a provenance a confirm recorded.
+        * the confirmed setup CHANGED - the old provenance was about the OLD
+          label and is now a falsehood, so it is recomputed by the same pure
+          function from this trade's own stamps. ``accept_auto_tags`` adding a
+          tag is exactly this case.
+        * the setup is now EMPTY - there is no label left to date, so the
+          provenance goes with it rather than outliving what it described.
         """
+        tags = str(setup_tags or "").strip()
+        supplied = str(label_provenance or "").strip()
         with self.connection() as conn:
+            row = conn.execute(
+                "SELECT setup_tags, label_provenance FROM trade_annotations WHERE trade_id = ?",
+                (str(trade_id),),
+            ).fetchone()
+            before = _row_to_dict(row) if row is not None else {}
+            if supplied:
+                provenance = supplied
+            elif not tags:
+                provenance = ""
+            elif tags == str(before.get("setup_tags") or "").strip():
+                provenance = str(before.get("label_provenance") or "")
+            else:
+                provenance = self._recomputed_label_provenance(conn, trade_id, tags)
             conn.execute(
                 """
                 INSERT INTO trade_annotations(
@@ -2050,21 +2072,42 @@ class JournalStore:
                     -- set unconditionally rather than only when the tags changed:
                     -- saving the row unedited is the trader saying "yes, that one".
                     tag_status = 'confirmed',
-                    label_provenance = CASE
-                        WHEN excluded.label_provenance <> '' THEN excluded.label_provenance
-                        ELSE trade_annotations.label_provenance
-                    END
+                    -- Already decided in Python above: the three cases it
+                    -- separates need the OLD tag string, and by the time a CASE
+                    -- here could look, this statement has overwritten it.
+                    label_provenance = excluded.label_provenance
                     -- planned_entry/stop/risk are absent on purpose: saving a
                     -- note must not erase the plan the trader typed earlier.
                 """,
-                (
-                    trade_id,
-                    str(setup_tags or "").strip(),
-                    str(notes or "").strip(),
-                    _now_iso(),
-                    str(label_provenance or "").strip(),
-                ),
+                (trade_id, tags, str(notes or "").strip(), _now_iso(), provenance),
             )
+
+    def _recomputed_label_provenance(self, conn, trade_id: str, tags: str) -> str:
+        """The age of a label the caller CHANGED but did not date.
+
+        Read straight off ``trades`` on the open connection rather than through
+        ``get_trade``, which walks every trade in the journal - this runs on a
+        save the trader is waiting for. An unreadable trade leaves the
+        provenance unrecorded rather than guessing at one.
+        """
+        try:
+            row = conn.execute(
+                "SELECT trade_id, symbol, direction, opened_at, trade_date "
+                "FROM trades WHERE trade_id = ?",
+                (str(trade_id),),
+            ).fetchone()
+            if row is None:
+                return ""
+            import trade_origin
+
+            return trade_origin.label_provenance(
+                _row_to_dict(row), tags, (), datetime.now().astimezone()
+            )
+        except Exception:  # noqa: BLE001 - an undecidable age never costs the save
+            import logging
+
+            logging.debug("Label provenance not recomputed.", exc_info=True)
+            return ""
 
     def annotation_state(self, trade_id: str) -> dict[str, str]:
         """This trade's setup tags, the lane they came from (P6a) and the age

@@ -287,13 +287,15 @@ def test_the_traders_save_confirms_the_row(tmp_path):
     bulk.apply_plan(store, bulk.build_plan(store, refresh=False))
 
     store.save_trade_annotation(trade_id, setup_tags="my own words", notes="")
-    # TJ-9: two additive keys. This caller passes no `label_provenance`, and an
-    # empty one never overwrites - here there was nothing to overwrite.
+    # TJ-9: two additive keys. This caller passes no `label_provenance` and it
+    # CHANGED the tag (the tagger's guess -> the trader's words), so the age is
+    # recomputed from the trade's own stamps rather than left saying nothing.
+    # The fixture trade opened days before "now", so it is `recalled_after`.
     assert store.annotation_state(trade_id) == {
         "setup_tags": "my own words",
         "tag_status": "confirmed",
         "notes": "",
-        "label_provenance": "",
+        "label_provenance": "recalled_after",
     }
 
 

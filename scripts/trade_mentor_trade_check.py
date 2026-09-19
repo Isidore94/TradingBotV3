@@ -335,6 +335,104 @@ def claimed_setup_rows(session: str, path: Any = None) -> list[dict[str, Any]]:
     return kept
 
 
+def setup_vocabulary() -> tuple[str, ...]:
+    """The setup names the card LISTS beside the confirm button.
+
+    The capture rail's own claim registry (`ui.annotations.setup_claims`, the
+    ids a `claimed_setup_id` may legally carry) plus the family names the setup
+    documents state (`ai_jobs.enrichment.setup_vocabulary`). Read from those
+    two, never restated here: a vocabulary written twice drifts, and the copy
+    nobody edits becomes a falsehood shipped as data.
+    """
+    names: list[str] = []
+    for loader in (_registry_claim_ids, _document_family_names):
+        try:
+            for name in loader():
+                slug = str(name or "").strip().lower()
+                if slug and slug not in names and not is_rejection_or_link(slug):
+                    names.append(slug)
+        except Exception:  # noqa: BLE001 - a missing vocabulary is a short list
+            logging.debug("Setup vocabulary partly unreadable.", exc_info=True)
+    return tuple(sorted(names))
+
+
+def _registry_claim_ids():
+    from ui.annotations.setup_claims import valid_setup_claim_ids
+
+    return valid_setup_claim_ids()
+
+
+def _document_family_names():
+    from ai_jobs.enrichment import setup_vocabulary as document_vocabulary
+
+    return document_vocabulary()
+
+
+def is_rejection_or_link(tag: Any) -> bool:
+    """Is this tag something that may NEVER be offered as a setup?
+
+    Two families, each decided by the module that owns it: a REJECTION
+    (`vetoed:<code>` / `passed:<codes>` - `journal_analytics.is_rejection_tag`)
+    and a LINK (`link:<kind>` - `journal_analytics.is_link_candidate`, a
+    pointer that is explicitly never a tag). An unreadable rule refuses rather
+    than offers: the cost of a missing suggestion is a click, and the cost of a
+    wrong one is a rejection counted forever as a setup.
+    """
+    text = str(tag or "").strip()
+    if not text:
+        return True
+    try:
+        from journal_analytics import is_link_candidate, is_rejection_tag
+
+        return bool(is_rejection_tag(text) or is_link_candidate(text))
+    except Exception:  # noqa: BLE001
+        logging.debug("Rejection/link rule unreadable.", exc_info=True)
+        return True
+
+
+def eligible_setup_names(tags: Any) -> tuple[str, ...]:
+    """The parts of a tag string that could honestly be offered as a setup.
+
+    A trade's `setup_tags` is a LIST in one column, so `;` - the journal's
+    top-level separator - is split first. Each top-level tag is then tested
+    WHOLE, because a pass writes all of its reason codes inside one tag as
+    `passed:thin,extended` and `split_tags` splits on the comma: filtering
+    after that split would leave `extended` standing alone as an eligible setup
+    name, and `extended` is a reason the trader stayed OUT.
+
+    Two refusals, and no third:
+
+    * a rejection or a link is never a setup (:func:`is_rejection_or_link`);
+    * a part carrying a `:` is a `<prefix>:<code>` shape from some store, not a
+      setup name, so it is refused on SHAPE rather than against a second list.
+
+    Membership of :func:`setup_vocabulary` is offered to the trader as the list
+    beside the button, not enforced here: the provisional lane's names come
+    from the scanner's own `setup_family` values, which that vocabulary does
+    not contain, and refusing them would silently delete the lane.
+    """
+    whole = str(tags or "").strip()
+    if not whole:
+        return ()
+    try:
+        from journal_analytics import split_tags
+    except Exception:  # noqa: BLE001 - an unreadable splitter offers nothing
+        logging.debug("Tag splitter unreadable.", exc_info=True)
+        return ()
+
+    kept: list[str] = []
+    for tag in (part.strip() for part in whole.split(";")):
+        if not tag or is_rejection_or_link(tag):
+            continue
+        for part in split_tags(tag):
+            slug = str(part or "").strip()
+            if not slug or ":" in slug or is_rejection_or_link(slug):
+                continue
+            if slug not in kept:
+                kept.append(slug)
+    return tuple(kept)
+
+
 def setup_guess_for(
     trade: Mapping[str, Any], claims: Any = ()
 ) -> tuple[str, str]:
@@ -356,8 +454,10 @@ def setup_guess_for(
 
         best: tuple[Any, str] | None = None
         for row in trade_origin.statements_before_entry(trade, claims or ()):
-            setup = str(row.get("claimed_setup_id") or "").strip()
-            if not setup:
+            # The claim lane gets the same filter as the tag lane: the guess
+            # must not depend on a validation two stores away.
+            eligible = eligible_setup_names(row.get("claimed_setup_id"))
+            if not eligible:
                 continue
             stamp = trade_origin.stamp_of(row)
             if stamp is None:
@@ -365,16 +465,20 @@ def setup_guess_for(
             # The LATEST claim before the fill: a trader who renamed the
             # setup twice meant the second one.
             if best is None or stamp > best[0]:
-                best = (stamp, setup)
+                best = (stamp, eligible[0])
         if best is not None:
             return best[1], LANE_CLAIMED_LIKE
     except Exception:  # noqa: BLE001 - a suggestion never costs the question
         logging.debug("Claimed-like suggestion failed.", exc_info=True)
 
-    tags = str(trade.get("setup_tags") or "").strip()
     status = str(trade.get("tag_status") or "").strip().lower()
-    if tags and status == "provisional":
-        return tags, LANE_PROVISIONAL
+    if status == "provisional":
+        # The column holds a LIST, and on the live journal it holds rejections:
+        # APTV carried `vetoed:too_extended_from_base`, which this used to
+        # offer as a one-click confirmed SETUP.
+        eligible = eligible_setup_names(trade.get("setup_tags"))
+        if eligible:
+            return eligible[0], LANE_PROVISIONAL
     return "", ""
 
 
@@ -533,6 +637,15 @@ def confirm_setup(
     chosen = str(setup or question.setup_guess or "").strip()
     if not chosen:
         return {"ok": False, "reason": "there is nothing to confirm"}
+    # The SECOND line of defence, after `eligible_setup_names` filtered the
+    # guess. `setup` also arrives from the card's vocabulary list, so the
+    # refusal lives at the WRITER too: a rejection confirmed as a setup is
+    # counted by "My setups" forever, and `trade_annotations` is trader-owned.
+    if eligible_setup_names(chosen) != (chosen,):
+        return {
+            "ok": False,
+            "reason": f"{chosen!r} is not a setup name - a rejection is never confirmed as one",
+        }
     trade_id = str(question.trade_id)
     state = {}
     try:
