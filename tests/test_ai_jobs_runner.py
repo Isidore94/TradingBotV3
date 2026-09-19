@@ -510,6 +510,18 @@ def test_entry_point_reports_store_failure_as_exit_2():
         assert run_ai_jobs.main([]) == 2
 
 
+#: TJ-13A item 2 made the slate depend on WHICH NIGHT it is, so the two
+#: entry-point tests below pin the night rather than inheriting the day the
+#: suite happens to run on. Without the pin a Saturday-evening suite run would
+#: build the Saturday slate, whose `weekly_synthesis` comes from
+#: `optional_slots()` and is therefore NOT covered by the `default_slots` patch
+#: - the test would call the real job. The slot is named `journal_import`
+#: because `ai_summary` is not on a weeknight slate any more; nothing else
+#: about either assertion changed.
+def _weeknight(runner):
+    return mock.patch.object(runner, "night_kind", return_value="weeknight")
+
+
 def test_entry_point_reports_job_failure_as_exit_1(tmp_path):
     import run_ai_jobs
     from ai_jobs import runner
@@ -517,8 +529,10 @@ def test_entry_point_reports_job_failure_as_exit_1(tmp_path):
     def boom(*, session_date, now):
         raise RuntimeError("nope")
 
-    with _store_ok(tmp_path), _window_open(), _no_session_block(), mock.patch.object(
-        runner, "default_slots", return_value=[_slot("ai_summary", boom)]
+    with _store_ok(tmp_path), _window_open(), _no_session_block(), _weeknight(
+        runner
+    ), mock.patch.object(
+        runner, "default_slots", return_value=[_slot("journal_import", boom)]
     ), mock.patch.object(runner.ledger, "ledger_path", return_value=tmp_path / "l.jsonl"):
         assert run_ai_jobs.main([]) == 1
 
@@ -527,10 +541,16 @@ def test_entry_point_success_is_exit_0(tmp_path):
     import run_ai_jobs
     from ai_jobs import runner
 
-    with _store_ok(tmp_path), _window_open(), _no_session_block(), mock.patch.object(
-        runner, "default_slots", return_value=[_slot("ai_summary", lambda **k: {})]
+    ran = []
+    with _store_ok(tmp_path), _window_open(), _no_session_block(), _weeknight(
+        runner
+    ), mock.patch.object(
+        runner,
+        "default_slots",
+        return_value=[_slot("journal_import", lambda **k: ran.append(1) or {})],
     ), mock.patch.object(runner.ledger, "ledger_path", return_value=tmp_path / "l.jsonl"):
         assert run_ai_jobs.main([]) == 0
+    assert ran, "the slate must actually have held the slot it was given"
 
 
 # ---------------------------------------------------------------------------

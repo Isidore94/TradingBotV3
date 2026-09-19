@@ -179,14 +179,29 @@ def test_default_window_wraps_past_midnight(monkeypatch):
         assert not window.in_offhours_window(datetime(2026, 8, 12, 12, 0, tzinfo=ET))
 
 
-def test_weekends_are_open_all_day(monkeypatch):
+def test_the_night_window_applies_at_the_weekend_too(monkeypatch):
+    """UPDATED by TJ-13A item 1 (decision 0021 answer 19, 2026-09-19).
+
+    This test used to be ``test_weekends_are_open_all_day`` and asserted that
+    Saturday noon was INSIDE the window, because ``is_weekend`` short-circuited
+    the configured clock. The trader's rule replaced that premise: *"I always
+    want the bot to run overnight never during the day so I can restart it or
+    use it for market prep"* - and the desk stays on through the weekend. So
+    the same clock applies seven days a week: Saturday noon is outside the
+    window and Saturday night is inside it.
+
+    Kept rather than deleted because the weekend is still the case worth
+    pinning; only the expected answer moved.
+    """
     from ai_jobs import window
 
     _no_session(monkeypatch)
     with _settings(ai_offhours_start="01:00", ai_offhours_end="09:00"):
         saturday_noon = datetime(2026, 8, 8, 12, 0, tzinfo=ET)
         assert saturday_noon.weekday() == 5
-        assert window.in_offhours_window(saturday_noon)
+        assert window.in_offhours_window(saturday_noon) is False
+        # 02:00 ET Sunday IS Saturday night on a Pacific desk, and it is open.
+        assert window.in_offhours_window(datetime(2026, 8, 9, 2, 0, tzinfo=ET)) is True
 
 
 def test_market_session_blocks_inference_whatever_the_window_says(monkeypatch):

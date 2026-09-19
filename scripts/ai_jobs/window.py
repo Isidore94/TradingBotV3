@@ -3,9 +3,17 @@
 Two independent gates, deliberately not one:
 
 1. **The configured window.** ``ai_offhours_start`` / ``ai_offhours_end``, ET
-   wall clock, trader-adjustable. Weekends are open all day. Holidays are
-   treated as normal weekdays, which is the conservative choice: the window
-   still applies rather than opening up a day nobody validated.
+   wall clock, trader-adjustable. It applies **every day of the week**.
+   Holidays are treated as normal weekdays, which is the conservative choice:
+   the window still applies rather than opening up a day nobody validated.
+
+   Weekends used to be "open all day" (``is_weekend`` short-circuited this
+   gate), on the reasoning that the desk was idle. It is not: the trader keeps
+   the machine on through the weekend and uses it. *"I always want the bot to
+   run overnight never during the day so I can restart it or use it for market
+   prep"* (2026-09-19, decision 0021 answer 19, plan.md §12.4 TJ-13 item 5). So
+   the night window is the night window, seven days a week, and a Saturday
+   afternoon firing is outside it exactly as a Tuesday afternoon one is.
 2. **The market-session block.** "No local inference during market hours" is a
    plan sec 2 hard rule, not a preference -- during the session the desk runs
    the full trading complement and only ~10GB of RAM is free. So the session
@@ -99,10 +107,12 @@ def is_weekend(moment: datetime) -> bool:
 
 
 def in_offhours_window(now: datetime | None = None) -> bool:
-    """Is the configured window open? Weekends are open all day."""
+    """Is the configured window open? The same clock every day of the week.
+
+    TJ-13A item 1: the weekend short-circuit is gone. See this module's
+    docstring for why - the desk is in use at the weekend, by the trader.
+    """
     moment = market_now(now)
-    if is_weekend(moment):
-        return True
     start, end = offhours_bounds()
     current = moment.time()
     if start <= end:
@@ -112,19 +122,17 @@ def in_offhours_window(now: datetime | None = None) -> bool:
 
 
 def window_close_at(now: datetime | None = None) -> datetime | None:
-    """When the current window closes, or None if it is not open."""
+    """When the current window closes, or None if it is not open.
+
+    TJ-13A item 1 removed the weekend branch, which walked forward to the next
+    WEEKDAY morning: a job starting at 23:00 Pacific on a Saturday was told it
+    had until 09:00 ET Monday - 31 hours - so every ``reserve_minutes`` check
+    passed on a number that was never true. The honest answer is this night's
+    own end, the same as any other night.
+    """
     moment = market_now(now)
     if not in_offhours_window(moment):
         return None
-    if is_weekend(moment):
-        # Open until the window's weekday end on the next weekday morning.
-        _start, end = offhours_bounds()
-        cursor = moment
-        while is_weekend(cursor) or cursor.time() >= end:
-            cursor = (cursor + timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-        return cursor.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
     start, end = offhours_bounds()
     close = moment.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
     if start > end and moment.time() >= start:
