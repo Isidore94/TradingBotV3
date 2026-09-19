@@ -706,6 +706,8 @@ the close. Every premise below is recon's to re-verify (12.3).
 
 ##### TJ-9 — Yesterday's trades are labelled at 09:00, and the desk insists
 
+**Items 1-6 BUILT and MERGED 2026-09-19**, branch `claude/tj9-forced-trade-labels` (tip `ee35ae54`), merged into `lead/p033-integration` as `8077a758` after three review rounds (NO-GO, NO-GO, GO). What shipped differs from the text below in two places: the section rides on ANY later delivered slot of the session while still owed (not only after a shown card), and the setup guess is filtered by SHAPE (rejection word, link, any `<prefix>:<code>`), not by a closed vocabulary. Live gate **#154** retained, plus a first-morning check of the not-ready -> ready path. **Item 7 is NOT built here: it became packet TJ-9Q** (`.claude/packets/TJ-9Q.md`, branch `claude/tj9q-questrade-instrument` holding the tester's parked tests) because the Questrade executions payload carries no `securityType`, `journal_identity.group_key` and `journal_store._contract_multiplier` read the type (a forward-only classifier splits every open position from its closing fill; a backfill multiplies option P&L by 100), and `normalize_side` does not map `STO` / `BTC` / `Cov` (the trader's four sold puts read `LONG`, three stuck `OPEN`). TJ-9Q builds the classifier, the side map and a dry-run-by-default reclassify CLI; the live `--apply` is the TRADER's act. Needs TJ-9; gate: the trader reads the dry run.
+
 *Goal:* every real trade carries a setup, a stop answer and one sentence by 09:05.
 
 What exists: `trade_mentor_schedule.TRADES_HOUR = 10` (kind `m5_trades`),
@@ -1201,7 +1203,7 @@ full suite with the nightly AI lock free, ruff, smoke, selftest, and reconciles 
 
 | Wave | Packets (file in `.claude/packets/`) | Branch | Needs |
 |---|---|---|---|
-| 1 | TJ-9 (`TJ-9.md`) · **TJ-11 MERGED 2026-09-19** (`TJ-11.md`) · **TJ-13A MERGED 2026-09-19** (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` (merged `a89ec7d5`) · `claude/tj13a-night-slates` (merged `9eaae1dd`), both into `lead/p033-integration` | `main` |
+| 1 | **TJ-9 MERGED 2026-09-19** (`TJ-9.md`, merged `8077a758`; item 7 -> `TJ-9Q.md`, not started) · **TJ-11 MERGED 2026-09-19** (`TJ-11.md`) · **TJ-13A MERGED 2026-09-19** (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` (merged `a89ec7d5`) · `claude/tj13a-night-slates` (merged `9eaae1dd`), both into `lead/p033-integration` | `main` |
 | 2 | TJ-14A (`TJ-14A.md`) · **TJ-3 and TJ-15 are UNBLOCKED** by TJ-11's merge (`TJ-3.md`, `TJ-15-16.md`) | `claude/tj14a-mentor-card` · `claude/tj3-note-markers` · `claude/tj15-miss-contrast` | TJ-9 · TJ-11 ✓ · TJ-11 ✓ |
 | 3 | TJ-14B (`TJ-14B.md`) · TJ-10 (`TJ-10.md`) | `claude/tj14b-mentor-questions` · `claude/tj10-read-grader` | TJ-14A (TJ-10 also rebases on TJ-3's page edits) |
 | 4 | TJ-4 (`TJ-4.md`) · TJ-16 (`TJ-15-16.md`) · TJ-13B (`TJ-5-6-7-13B.md`) | `claude/tj4-day-story` · `claude/tj16-prediction-contrast` · `claude/tj13b-large-local` | TJ-10, TJ-11 · TJ-10, TJ-14A, TJ-15 · TJ-13A |
@@ -1219,7 +1221,7 @@ TJ-10 → TJ-4 → TJ-12), `ui/widgets/trade_mentor_card.py` (TJ-9 → TJ-14A �
 | # | Packet | One line | Needs | Gate |
 |---|---|---|---|---|
 | — | TJ-1L | Day Review in two columns (MERGED; verified an ancestor of `main` 2026-09-19) | TJ-1 | #145 |
-| 1 | TJ-9 | Yesterday's trades labelled at 09:00, forced; label provenance; planned vs unplanned; journal freshness | — | #154 |
+| 1 | TJ-9 | **MERGED 2026-09-19** (item 7 split into TJ-9Q, not started) - yesterday's trades labelled at 09:00, forced; label provenance; planned vs unplanned; journal freshness | — | #154 |
 | — | *restart* | NOT a hold any more (superseded above): the trader restarts when the build is merged and the gates are read then | — | #145 #152 #153 |
 | 2 | TJ-14 | Mentor card split (What I see / What I expect), question registry with consumers, budget of three, same-session fills, internals v2 | TJ-9 | #159 |
 | 3 | TJ-10 | Read grader on the clicked prediction (+ context snapshot), congruence lines | TJ-14 | #155 |

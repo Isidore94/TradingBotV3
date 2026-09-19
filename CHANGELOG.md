@@ -2892,6 +2892,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 
 ## Recent changes (the last two build days)
 
+### 2026-09-19 - TJ-9: forced 09:00 trade labels (branch `claude/tj9-forced-trade-labels`, tip `ee35ae54`, merged into `lead/p033-integration` `8077a758`)
+
+The Trade Mentor's trade check moved to the 09:00 slot and is FORCED: every trade of the previous session is listed, Save stays grey until each material field holds a value or one of the four answer states, and a check still owed RIDES on any later delivered slot of that session (after an AWAY, idle or expired 09:00 too); a section with answer widgets is never rebuilt, a one-line state always is, so `journal not ready - fills current to <date>` becomes the questions as soon as the fills land. A `provisional` tag no longer answers the setup question; the machine's guess (a CLAIMED like stamped before the first fill, else the provisional tag) is a confirm button that writes nothing until pressed, and a rejection tag (`journal_analytics.is_rejection_tag`, the ONE definition of `vetoed:` / `passed:`) is never offered and is refused at `confirm_setup`. New additive `trade_annotations.label_provenance` (`claimed_before_entry` / `same_session` / `recalled_after`; old rows present and empty) from the pure `scripts/trade_origin.py`, whose session is the FIRST FILL's, never `trade_date` (wrong for 116 of 216 live trades); the same module supplies `planned_state` over likes, claims, Focus adds and armed alerts, a date-only fill `unmeasured`. `fills_current_to` is the newest COVERED day and a not-ready journal earns ONE Questrade retry through `JournalImportService`. Three review rounds by reproduction on a copy of the live journal (NO-GO, NO-GO, GO): a wrong-module constant outside its `try` would have raised on EVERY Mentor prompt while 8,873 tests passed. **Item 7 (Questrade `security_type`) was refuted as an additive change and split into packet TJ-9Q**: the executions payload carries no type (226 of 226 live fills `UNKNOWN`), `group_key` and `_contract_multiplier` read it, and `normalize_side` does not map `STO` / `BTC` / `Cov`, so the trader's four sold puts read `LONG` and three sit stuck `OPEN`. Full suite: 9,062 passed, 14 skipped, 72 subtests, 1 failed - the known unowned flake `test_ws_10a_scan_freshness` (20/20 green standalone) - on the merged wave-1 code `8077a758` (TJ-9 + TJ-11 + TJ-13A), nightly AI lock free, 2026-09-19; ruff clean, smoke 7/7, source selftest 92/92. Live gate #154 owed, plus a first-morning check of the not-ready -> ready path.
+
 ### 2026-09-19 - TJ-11: Day Review walk-away v2 (branch `claude/tj11-walkaway-v2`, merged into `lead/p033-integration` `a89ec7d5`)
 
 The trader wants what he missed to be obvious, so a D1 call now gets a D1 ruler: daily bars
@@ -2913,7 +2917,7 @@ outcome-censored by an open horizon that kept an early run while dropping its no
 (shipped 34% = 30/87 where the closed-horizon-only truth is 26% = 20/77), so a pooled rate
 now counts a name only when its horizon has closed. 18 Saturday-stamped D1 calls, 12 veto
 and 6 like cohort picks, were deliberately left as they are. Worst GUI stall on reload
-672.9 -> 92.4 ms. Full suite on the integration branch: BASELINE_PENDING_LEAD. Live gate
+672.9 -> 92.4 ms. Full suite on the integration branch: 9,062 passed, 14 skipped, 72 subtests, 1 failed - the known unowned flake `test_ws_10a_scan_freshness` (20/20 green standalone) - on the merged wave-1 code `8077a758` (TJ-9 + TJ-11 + TJ-13A), nightly AI lock free, 2026-09-19; ruff clean, smoke 7/7, source selftest 92/92. Live gate
 #156 owed.
 
 ### 2026-09-19 - TJ-13A: nights only seven days, night slates, four overnight repairs (branch `claude/tj13a-night-slates`, merged into `lead/p033-integration` `9eaae1dd`)
@@ -2933,7 +2937,7 @@ measured report's example lists name three different symbols. Reviewed GO by rep
 against a copy of the live 476-row ledger; the review round then capped `ai_summary` at
 three attempts, made `--slot` resolve against every registered slot with an unknown name an
 error exit, and moved the rejected-reply log to the local runtime tree. Full suite on the
-integration branch: BASELINE_PENDING_LEAD. Live gate #158's first read is owed after
+integration branch: 9,062 passed, 14 skipped, 72 subtests, 1 failed - the known unowned flake `test_ws_10a_scan_freshness` (20/20 green standalone) - on the merged wave-1 code `8077a758` (TJ-9 + TJ-11 + TJ-13A), nightly AI lock free, 2026-09-19; ruff clean, smoke 7/7, source selftest 92/92. Live gate #158's first read is owed after
 tonight's Saturday slate.
 
 ### 2026-09-18 - TJ-2: Day Review session bars and instant walk-away (local `main` `d3ae3aff`)

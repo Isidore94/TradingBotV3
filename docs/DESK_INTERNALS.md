@@ -4535,6 +4535,136 @@ Phase 0.31 adds raw-first, validation and persistent-size coverage.
 **Reopen trigger.** The trader asks for a different hour, a different grace, or for a
 prompt to survive being away.
 
+**TJ-9 (2026-09-19): the 09:00 card insists** - and it fired two of the three reopen
+triggers above at once, a different hour and a prompt that survives being away. Branch
+`claude/tj9-forced-trade-labels`, tip `ee35ae54`, merged `8077a758`. The live journal on
+2026-09-18 held 215 trades, ONE confirmed setup tag, 151 `needs_review`, 33 `provisional`,
+zero notes, zero planned stops and ONE `RECALLED` answer ever - every "which of my setups
+pays" question was waiting on data nobody was being asked for. The trader: *"I want to be
+forced to label my trades around 0900 as per trade mentor."* `TRADES_HOUR` moved 10 -> 9;
+`_kind_for` follows the constant, so an early close (2026-11-27, 10:00 PT) now carries four
+slots rather than five - the check sits inside the hourly window instead of being forced
+into existence after the close. The 10:00 read went back to being an ordinary `m5` card.
+
+Six rules bite, and five of them were written by reviews that reproduced the defect first.
+
+**(a) A machine guess is not an answer.** `_FIELD_SOURCES["setup"]` read `setup_tags`
+whatever its `tag_status`, so a bulk-tagger guess silently retired the one question the
+task exists to ask; `_setup_is_answered` now reads the `tag_status` that `list_trades`
+already joins.
+
+**(b) A rejection is never a setup.** `journal_analytics` writes `vetoed:<code>` and
+`passed:<codes>` *"prefixed so a rejection can never be mistaken for an endorsement in a
+Tags column"*, and TJ-9 gave that sentence a second reader. On a copy of the live journal
+the card offered `Setup: vetoed:too_extended_from_base (confirm)` on APTV, and one click
+would have written it `confirmed`, where "My setups" counts it. The prefixes now have ONE
+definition (`VETO_TAG_WORD`, `PASS_TAG_WORD`, `REJECTION_TAG_WORDS`, `is_rejection_tag`,
+beside `LINK_TAG_PREFIX`) which both writers and the guess filter use, and `confirm_setup`
+refuses a rejection at the WRITER as well, because that is what touches the trader-owned
+table. `eligible_setup_names` splits the column on `;` and tests each top-level tag WHOLE
+before splitting further - a pass writes all its reason codes inside one tag as
+`passed:thin,extended` and `split_tags` splits on the comma, so filtering after that split
+would have left `extended` standing alone as an eligible setup name. The auto-tagger's
+output was proven byte-identical across the change: 1,198 rows, same sha256.
+
+**The guess is filtered by SHAPE, not by a closed vocabulary.** Rejections, links and every
+`<prefix>:<code>` shape are dropped, and if nothing survives there is no guess. A
+closed-vocabulary filter was considered and refused: the provisional lane's names come from
+the scanner's own `setup_family` values and the tester's fixtures pin `opening_drive` and
+`earnings_gap`, none of which are in `valid_setup_claim_ids()` (28 ids) or
+`ai_jobs.enrichment.setup_vocabulary()` (33 families), so enforcing one would have deleted
+the lane and failed the tester's own assertions. What shipped instead: the card LISTS the
+53-name vocabulary in a NON-EDITABLE combo with the guess preselected, so nothing outside
+it can be written unless the trader leaves the guess as it is. **Showing the card writes
+NOTHING** - the database's sha256 is identical before and after. Tighten to
+closed-vocabulary only if the tester's fixtures are updated with it.
+
+**(c) The session is the FIRST FILL's.** `rebuild_trades` writes `trade_date = closed_at or
+opened_at`, so on a position held across sessions that column names the day it was CLOSED.
+The live SMPL trade opened 2026-08-27 and closed 2026-09-18: reading `trade_date` called a
+label written three weeks after the entry `same_session` - the one reading
+`label_provenance` exists to make impossible - and a label written on the entry day
+`recalled_after`. **116 of the journal's 216 trades** have an opened date that differs from
+`trade_date`.
+
+**(d) The ride is keyed on the SESSION, and it survives an absence.** Clearing on the hour
+was what made an unanswered card expire into silence; clearing on the session boundary
+keeps the old protection (a question about Friday can never be saved against Wednesday) and
+drops the silence. The section was also built only for kind `m5_trades`, and only 09:00
+carries that kind, so a 09:00 that was away, idle, locked or expired took the whole day's
+questions with it and a trader who sat down at 11:00 was asked nothing. Any delivered slot
+of the session now carries it while the check is owed - an unlabelled trade on the reviewed
+session, or its statement not landed - and an answered check brings nothing back. AWAY needs
+no test at that seam: the service records the absence and never emits `promptDue`.
+
+What is protected from a rebuild is a section with ANSWER WIDGETS, so combos the trader had
+already set survive; a one-line state is NOT, and that distinction is itself a defect the
+second review found. Gating on label visibility meant that once the 09:00 card printed
+`journal not ready`, every later slot returned early: the section never became the questions
+that day - even after the morning retry had landed the fills - and the card went on printing
+a freshness date that was no longer true. A not-ready line has nothing to lose by being
+rebuilt, and its date is re-read every slot.
+
+**(e) A label knows when it was made.** `claimed_before_entry` / `same_session` /
+`recalled_after` come from one pure function over aware stamps; the cases that matter are
+exactly the ones where the naive strings compare the wrong way round (a like written
+`14:15+00:00` is sixteen minutes BEFORE a fill written `07:31-07:00`). The upsert rule, in
+full: a caller with nothing to say and an UNCHANGED tag keeps the provenance a confirm
+recorded; a caller that CHANGES the tag and says nothing gets a RECOMPUTED one through
+`trade_origin.label_provenance` rather than a stale one; a save that CLEARS the tags clears
+the provenance with them. **The known lossy case, to be named wherever the three
+provenances are reported:** `accept_auto_tags` APPENDING a tag changes the tag, so it
+downgrades a `claimed_before_entry` to `recalled_after`. `trade_origin._is_midnight` is
+deliberately WIDER than `journal_trade_shape.is_date_only`, which asks the market-local
+question only: the live DRAM assignment row is stored `2026-07-16T00:00:00-07:00`, which is
+03:00 in New York. The wider test can only push a row toward `unmeasured`, and a plan
+invented for a time that never happened is worse than `unmeasured`.
+
+**(f) The morning retry CALLS the one owner.** `JournalImportService` - its own `QThread`,
+Questrade only, already the desk's single refresh-chain owner - at most once a morning and
+only when the night ended without an OK import. IBKR has no day leg and the card says so.
+**The whole trade-check build sits inside ONE guard**, because the read above it is what
+the trader is actually being interrupted for. Before the first review the kind test sat
+OUTSIDE that guard and read `KIND_M5_TRADES` off the wrong module, so every Trade Mentor
+prompt would have raised `AttributeError` in a Qt slot and no trade section had ever
+appeared on a running desk - while 8,873 tests passed, because no test drove
+`_show_trade_mentor_prompt`.
+
+**Three advisories, batched and NOT repaired.** `_trade_check_is_owed` reads the 390 KB
+annotation log plus two `JournalStore` opens on the Qt thread on every prompt (~50 ms
+today); it wants a per-session cache before the log grows. `_journal_retry_date` is
+in-memory only, so a restart before 10:00 allows a second morning pull. And one guard test
+passes on un-fixed code.
+
+**Item 7 left this packet.** The Questrade instrument work became packet TJ-9Q - see
+"TJ-9Q - a sold put is recorded backwards" below.
+
+---
+
+## TJ-9Q - a sold put is recorded backwards, and the type is never read (2026-09-19, split out of TJ-9)
+
+Measured by the TJ-9 tester on a READ-ONLY copy of `trade_journal.sqlite3`, which refuted
+the packet's premise that item 7 was additive, so it was removed from TJ-9 and written as
+its own packet (`.claude/packets/TJ-9Q.md`, branch `claude/tj9q-questrade-instrument`,
+which holds the tester's parked tests). Nothing below is built.
+
+**The type is never sent.** Questrade's executions endpoint carries no `securityType` or
+`symbolType`, so **226 of 226 live Questrade fills are `security_type='UNKNOWN'`**. The
+instrument IS readable from the payload's own symbol (`AAOI18Jun26P120.00`) and side
+(`STO` / `BTO` / `BTC` / `STC`).
+
+**Why it is not additive.** `journal_identity.group_key` and
+`journal_store._contract_multiplier` both READ the type. A forward-only classifier would
+split every open position from its closing fill, and a backfill alone would multiply option
+P&L by 100. Classify, backfill and rebuild are therefore ONE tested CLI step, dry run by
+default - **and the live `--apply` is the TRADER's act**, never an agent's.
+
+**And the side map is wrong today.** `journal_importers.normalize_side` does not map
+`STO` / `BTC` / `Cov`, so `_signed_quantity` reads a sold put as `+qty`: the trader's four
+sold puts read `direction='LONG'` and three of them (AAOI, BE, QBTS) sit stuck `OPEN`. For a
+put-seller whose whole strategy is selling premium, the journal currently records the
+opposite of what he does.
+
 ---
 
 ## 10C - a watch is entry timing, never a claim (2026-09-13, WISHLIST sweep)
