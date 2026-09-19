@@ -53,7 +53,7 @@ the checkpoint until validated.
 - The working tree at the time of writing also carries other uncommitted desk display work
   (Phase 0.32 follow-ups, in the checkpoint's 2026-09-17 entries). This plan does not touch it.
 - **2026-09-19:** TJ-1 and TJ-2 are MERGED and not yet live (the desk has not been
-  restarted; gates #145, #152, #153 owed); TJ-1L is BUILT and unmerged. A read-only audit of
+  restarted; gates #145, #152, #153 owed); TJ-1L is MERGED too (its branch tip is an ancestor of `main`). A read-only audit of
   the live stores on 2026-09-18 and a day of trader decisions on 2026-09-19 added TJ-9 …
   TJ-16 and dated amendments to TJ-4, TJ-5, TJ-6, TJ-7 (see 12.4; decision 0021 answers
   13–30). The trader's one-line definition of the product, 2026-09-19: a bot that *"takes
@@ -162,7 +162,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-9 … TJ-13 PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-9 … TJ-13 PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -1147,7 +1147,7 @@ tester (red) → builder → reviewer (12.3).
 
 | # | Packet | One line | Needs | Gate |
 |---|---|---|---|---|
-| — | TJ-1L | Day Review in two columns (BUILT, unmerged — merge first) | TJ-1 | #145 |
+| — | TJ-1L | Day Review in two columns (MERGED; verified an ancestor of `main` 2026-09-19) | TJ-1 | #145 |
 | 1 | TJ-9 | Yesterday's trades labelled at 09:00, forced; label provenance; planned vs unplanned; journal freshness | — | #154 |
 | — | *restart* | Trader restarts once; #145, #152, #153 read on a real session before anything below merges | TJ-1, TJ-2 | — |
 | 2 | TJ-14 | Mentor card split (What I see / What I expect), question registry with consumers, budget of three, same-session fills, internals v2 | TJ-9 | #159 |
