@@ -144,3 +144,11 @@ what to change — the lead answered about 65% as written and named eight holes.
     jobs are to tag the trader's words with a closed, span-grounded vocabulary (never
     seeing a verdict) and to narrate the tables. A tendency worth acting on becomes a
     checked idea (answer 23). `plan.md` TJ-14 item 1 and TJ-16.
+30. **The desk reads the internals so the trader does not type them** (trader, 2026-09-19:
+    *"trade mentor should automatically be processing what's going on with the internals
+    we watch. RSP VXX USO TLT and the sector ETFs XLK XLE etc. so the AI already has
+    that"*). The Phase 0.31 `mentor.context` capture already stores 17 symbols on every
+    answered read; it becomes `trade_mentor_context_v2` with derived lines (breadth, fear,
+    rates, oil, sector leaders and laggards, offense vs defense), is SHOWN on the card,
+    is rebuilt for any moment from the durable session tape, and enters every AI pack and
+    the prediction ledger through ONE function. `plan.md` TJ-14 item 6.

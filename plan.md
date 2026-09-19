@@ -941,6 +941,35 @@ Changes:
    TJ-9 ships (it remains for the backlog). Manual BY DESIGN and staying so: the
    `review_policy` sign-off, `digest approve-audit`, the Questrade token repair.
 
+6. **The desk already knows the internals, so the trader never types them** (trader,
+   2026-09-19: *"trade mentor should automatically be processing what's going on with the
+   internals we watch. RSP VXX USO TLT and the sector ETFs XLK XLE etc. so the AI already
+   has that"*). What exists (Phase 0.31, measured live that day): every Mentor answer
+   already stores `mentor.context` (`trade_mentor_context_v1`) with 17 symbols — VXX, RSP,
+   USO, TLT, IWM, QQQ, SPY and ten sector ETFs — each with four facts (30-minute change,
+   side of session VWAP, five-day change, side of the 20-SMA); 99-119 of 119 readings a day
+   were measured. What is missing: only `ai_summary` reads it; the card keeps it silent;
+   it exists only for hours the trader ANSWERED; the facts are thin; `XLRE` is absent
+   although the desk's own `sector_etf_map.json` carries it. Changes:
+   - `trade_mentor_context_v2` (pure, completed bars only, v1 rows stay readable): per
+     symbol adds the day's change, place in the day's range, and side of the prior day's
+     high and low; and a small DERIVED block of the reads the trader now types by hand —
+     breadth (`RSP` minus `SPY` on the day), fear (`VXX` direction against `SPY`'s, a
+     divergence said as one), rates (`TLT`), oil (`USO`), sector leaders and laggards (top
+     and bottom three, on the day and over 30 minutes), offense against defense
+     (`XLK`/`XLY`/`XLC` vs `XLP`/`XLU`/`XLV`), and how many sectors sit above session VWAP.
+     Each derived line names the readings it rests on; a missing input makes the line
+     `unmeasured`, never a guess. `XLRE` joins the list.
+   - **The card SHOWS it**: a compact internals strip above **What I see**, so the trader
+     reads what the desk already has and writes only what it cannot see.
+   - **It is kept for every hour, answered or not.** TJ-2's session bars add these symbols
+     to their one batched post-close download, and `internals_at(session, stamp)` rebuilds
+     the same block from the durable tape for any moment — so a skipped hour, a note typed
+     on the desk tab and a prediction's context (TJ-16) all read ONE function.
+   - **Every AI input gets it:** the day pack (TJ-4) gains `internals` — the open, each
+     Mentor hour and the close, each with a `source_id` — and `market_story_narration`, the
+     week story and TJ-16's tagger read it from there.
+
 Tests: a kind without a consumer fails; budget of three with the remainder counted; `Stop
 asking this` retires one subject only; a same-session label carries `same_session`; AWAY
 asks nothing; a failed pull leaves the card on time; the quick-like follow-up writes a link
@@ -989,7 +1018,11 @@ method, TJ-6's checked ideas.
 Changes:
 1. **The prediction ledger** (pure, append-only, under `DAY_REVIEW_DIR`): each graded
    prediction is stored with a point-in-time CONTEXT snapshot taken at its stamp from
-   completed bars only — hour of day, SPY vs session VWAP and vs the prior day's range, gap
+   completed bars only. **The market half of that snapshot is TJ-14 item 6's
+   `trade_mentor_context_v2` block, never a second builder** — so breadth, fear, rates,
+   oil, sector leadership and offense-vs-defense are contrast fields from the first day
+   ("you call Up well when breadth leads and badly when VXX is rising with SPY"). Around
+   it: hour of day, SPY vs session VWAP and vs the prior day's range, gap
    size, the D1 environment label, VXX direction, the last hour's SPY direction, whether
    this call agrees with the trader's own latest D1 click, the previous call's verdict
    (right / wrong / none — the after-a-miss question), confidence, direction, and, when
