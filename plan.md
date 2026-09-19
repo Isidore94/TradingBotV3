@@ -153,7 +153,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-9 … TJ-13 PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 / TJ-15 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) BUILT 2026-09-18 on `claude/tj1l-day-review-layout`, unmerged; TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-9 … TJ-13 PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -744,7 +744,9 @@ context.** Measured that day with `extract_thesis` on the trader's 42 real notes
    sessions: Up / Down / Range / No view`. `No view` is a complete answer and is never
    graded. The click is stored on the entry's `mentor` payload and is the read row's stance
    whenever it exists; extraction grades only entries that have no click (the history, and
-   notes typed outside a card) and is labelled `extracted`.
+   notes typed outside a card) and is labelled `extracted`. The card's full shape — the
+   separate **What I see** / **What I expect** parts, `How sure` and `Because…` — is TJ-14
+   item 1; each graded row is stored with TJ-16's context snapshot from its first day.
 5. `Chop` / `Range` is right when the move stays inside the declared ATR band (item 1's
    `flat` band, one constant).
 6. The vocabulary gains the trader's own trend words found `unstated` in the live notes
@@ -893,6 +895,17 @@ Changes:
 1. **The hourly card shrinks to one forced click** — TJ-10's prediction — **plus optional
    words.** A card answered with one click is a complete answer (lead's reading of "we
    don't need to run every question every hour"; overrule if wanted).
+   **AMENDED 2026-09-19 (trader): a description is not a prediction, and the card keeps
+   them apart.** *"Make sure we differentiate predictions from just 'describe the market
+   and your thoughts'."* The card has two labelled parts that never share a field:
+   **What I see** — the description and thoughts, free text, optional, about NOW; and
+   **What I expect** — the prediction: the forced direction click with its horizon printed
+   on the button row (`Rest of day` / `Next 5 sessions`), a `How sure: Low / Medium / High`
+   click (skipped on `No view`), and an optional one-line `Because…`. They are stored as
+   separate keys on the `mentor` payload (`observation`, `prediction{direction, horizon,
+   confidence, because}`); no reader may build a prediction out of `observation` once a
+   card has the split, and every row written before it stays `extracted` and is never
+   pooled with a clicked prediction.
 2. **A question registry**, pure `scripts/mentor_questions.py`. Each kind declares its
    TRIGGER (a measured gap, never a clock alone), its click options, the store it writes,
    its cadence and expiry, its priority and its **CONSUMER** — the reader that uses the
@@ -962,13 +975,65 @@ or policy influence; a threshold change stays a separate, ask-first request.
 Live gate **#160**: Saturday's Week Review shows, for the veto reason with the most real
 misses, a table of what those misses measured differently, each row with both `n`.
 
+##### TJ-16 — What leads to a good call, and what leads to a bad one
+
+*Goal (trader, 2026-09-19):* *"The hope is an AI can pick up on my tendencies and what leads
+to good predictions and what leads to wrong ones."* The math finds the tendency; the model
+labels the words and tells the story; neither may do the other's job.
+
+What exists after TJ-10 and TJ-14: one graded row per clicked prediction, the separate
+`observation` text, `d1_environment.jsonl`, `market_story.build_daily_story` facts, the
+session tape in the TJ-2 bars file, `evidence_stats` (the ONE Wilson), TJ-15's contrast
+method, TJ-6's checked ideas.
+
+Changes:
+1. **The prediction ledger** (pure, append-only, under `DAY_REVIEW_DIR`): each graded
+   prediction is stored with a point-in-time CONTEXT snapshot taken at its stamp from
+   completed bars only — hour of day, SPY vs session VWAP and vs the prior day's range, gap
+   size, the D1 environment label, VXX direction, the last hour's SPY direction, whether
+   this call agrees with the trader's own latest D1 click, the previous call's verdict
+   (right / wrong / none — the after-a-miss question), confidence, direction, and, when
+   TJ-7 exists, mood. A field the desk cannot measure is `unmeasured`, never guessed.
+2. **Skill against naive baselines, never a bare hit rate.** Every accuracy cell is shown
+   beside what `always Up`, `same as the last hour` and `with the D1 environment` would
+   have scored on the SAME stamps; "right 58% (n 64); always-Up 61%" is the honest
+   sentence. **Calibration:** accuracy by `How sure` — High must beat Low or the page says
+   it does not.
+3. **The contrast** (deterministic Stage 1 slot `prediction_contrast`, after
+   `miss_contrast`): right against wrong over `LATELY_SESSIONS` and over the whole ledger,
+   per context field — counts, the Wilson interval, `observational, top 3 of K`, nothing
+   named under the floor, separately for `Rest of day` and `Next 5 sessions`. No model.
+4. **The model labels the WORDS, grounded** (Stage 2 slot `observation_tags`, local medium,
+   weeknights, seconds per note): each `observation` and `because` gets codes from a
+   closed, versioned vocabulary (`ui/annotations/vocabularies/observation_tags_v1.json`:
+   cites a level, cites volatility, cites news, cites breadth or sectors, cites the D1
+   picture, hedged wording, reacting to the last bar, no reason given …), each code with
+   the exact source span that must reproduce it (`market_thesis`'s rule) or it is rejected.
+   The codes become context fields in item 3 on the NEXT run. The model never sees a
+   verdict while tagging, so a tag cannot be derived from the outcome.
+5. **The voice.** The Saturday-night week story (large local model) gets the contrast
+   tables and may narrate at most three tendencies, each citing its cell and its `n`; a
+   tendency it wants acted on becomes a `process` idea (TJ-6) and is therefore CHECKED
+   before and after. Week Review shows the tables under the story; Day Review's **Your
+   reads** line shows yesterday's tally beside its baseline.
+
+Tests: a description can never become a prediction once the split exists; a context
+snapshot uses completed bars only and nothing after the stamp; baselines are computed on
+the identical stamps; a tag whose span does not reproduce is rejected whole; the tagger's
+input contains no verdict; pooling `extracted` with clicked rows raises.
+
+Live gate **#161**: after two weeks of clicks, Saturday's Week Review shows accuracy beside
+the three baselines, accuracy by confidence, and a right-vs-wrong table by hour and by
+environment, every cell with `n`; the week story's tendencies each point at a cell.
+
 #### 12.5 Order and dependencies
 
 **AMENDED 2026-09-19 (twice):** TJ-9 (independent; first, because every personal statistic
 waits on labelled trades) → TJ-14 (the card and the registry; TJ-9's section becomes its
 first kind, and the prediction click starts accumulating at once) → TJ-10 → TJ-11 (may run
 alongside TJ-10 and TJ-3) → TJ-4 (now needs TJ-10) → TJ-12 → TJ-15 (needs TJ-11's
-real-miss rule) → TJ-13 (independent; any time after TJ-4's slot exists) → TJ-5 → TJ-6 →
+real-miss rule) → TJ-16 (needs TJ-10's graded rows and TJ-14's split card; its ledger's
+context snapshot ships WITH TJ-10 so no click is ever stored without one) → TJ-13 (independent; any time after TJ-4's slot exists) → TJ-5 → TJ-6 →
 TJ-7 (fields only; its strip is TJ-14's `day_close`) → TJ-8. The original chain below still
 orders TJ-3 … TJ-8 among themselves. **No packet after TJ-9 merges until the desk has been
 restarted once and gates #145, #152 and #153 have been read on a real session** — the new

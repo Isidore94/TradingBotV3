@@ -133,3 +133,14 @@ what to change — the lead answered about 65% as written and named eight holes.
     words; every other question comes from a registry where each kind names the reader
     that consumes its answer, under a budget of three per card. No live gate is skipped:
     nothing after TJ-9 merges before #145, #152 and #153 are read on a real session.
+29. **A description is not a prediction** (trader, 2026-09-19: *"make sure we differentiate
+    predictions from just 'describe the market and your thoughts'! The hope is an AI can
+    pickup on my tendencies and what leads to good predictions and what leads to wrong
+    ones"*). The Mentor card keeps **What I see** and **What I expect** in separate fields;
+    only a clicked prediction (direction, horizon, confidence, optional because) is graded,
+    and older extracted rows are never pooled with it. Tendencies are found by MATH — a
+    prediction ledger with a point-in-time context snapshot, accuracy shown beside naive
+    baselines, calibration by confidence, a right-vs-wrong contrast — and the model's two
+    jobs are to tag the trader's words with a closed, span-grounded vocabulary (never
+    seeing a verdict) and to narrate the tables. A tendency worth acting on becomes a
+    checked idea (answer 23). `plan.md` TJ-14 item 1 and TJ-16.
