@@ -158,3 +158,11 @@ what to change — the lead answered about 65% as written and named eight holes.
     The packets are built, reviewed and merged in the wave order of `plan.md` 12.5; the live
     gates are read on the first restart after, and a gate that fails then outranks unbuilt
     work.
+32. **A time-boxed grant: the lead may restart the desk and read gates itself** (trader,
+    2026-09-19 ~07:35 PDT: *"If the bot wants to do its own restarts and live checks on the
+    bot for a few minutes / hours, let it control all of that on its own I don't use the bot
+    at all for the next 32 hours"*). Valid until **2026-09-20 15:35 PDT** and no longer; the
+    lead only, graceful stops, the checkout updated only while the desk is down, revert on a
+    failed start, no pretend trader input on the live home folder (a click-gate is read on a
+    staged copy and recorded `staged-pass`, never live-validated), the desk left running as
+    found. Rules: `plan.md` 12.6a.

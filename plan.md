@@ -1143,10 +1143,10 @@ restarted once and gates #145, #152 and #153 have been read on a real session~~
 available … make sure the plan lets me build it all right away"):** nothing waits on a
 restart. Every packet is built, reviewed and merged to `main` in the wave order below; the
 live gates (#145, #152, #153 and #154–#161) are read afterwards, on the trader's first
-restart and the sessions after it. A gate that FAILS then outranks any unbuilt packet.
+restart and the sessions after it. A gate that FAILS then outranks any unbuilt packet. Until 2026-09-20 15:35 PDT the lead may restart the desk and read what a weekend can prove by itself - rules in 12.6a.
 
 **How to start (2026-09-19).** Say to a new lead session: *"Build Phase 0.33 from `plan.md`
-12.5, wave by wave, with the agent team."* Every packet below is ALREADY WRITTEN in
+12.5, wave by wave, with the agent team. You may restart the desk and read gates yourself until 2026-09-20 15:35 PDT - plan.md 12.6a."* Every packet below is ALREADY WRITTEN in
 `.claude/packets/` (machine-local; read `TJ-LOOP0_COMMON.md` first - it tells each agent
 which files it owns and that the LEAD reconciles all docs). No code exists yet for any of
 them: on 2026-09-19 three testers were started and stopped within minutes at the trader's
@@ -1209,6 +1209,62 @@ per branch off `main`, merged after review; the desk restarts only on trader dir
   OpenAI stays a setting, off.
 - From TJ-14 on: one prediction click per Mentor card, and the few extra clicks the card
   asks for. Everything after the click is the desk's job.
+
+#### 12.6a The unattended window: the lead may restart the desk and read gates itself
+
+**Trader, 2026-09-19 ~07:35 PDT:** *"If the bot wants to do its own restarts and live checks
+on the bot for a few minutes / hours, let it control all of that on its own I don't use the
+bot at all for the next 32 hours."* This is the trader's word for the restart rule in
+`docs/AGENT_TEAM.md`, and it is TIME-BOXED: **from 2026-09-19 07:35 PDT to 2026-09-20 15:35
+PDT.** After that instant a restart is the trader's call again, whatever is unfinished. The
+whole window is a weekend: no exchange session, no Mentor slot, no scan of a live tape.
+(Measured at the grant: no desk process was running.)
+
+Inside the window the LEAD (never a builder, tester or reviewer) may:
+
+1. **Stop and start the desk** from the main checkout (`trading_desk.cmd` /
+   `launch_gui.py`, the production launch) as often as the build needs. Stop it
+   GRACEFULLY (close the window / a plain terminate request) and wait for the process and
+   its `bouncebot-scanner` child to exit; never force-kill unless it has been unresponsive
+   for ten minutes AND no writer lock is held (`local_writer_lock` probes: the tracker
+   save, the journal, `ai_jobs_runner`). Never stop it while a scan or a tracker save is
+   running - wait.
+2. **Update the main checkout only while the desk is DOWN**: merge in a scratch worktree
+   first (full suite with the AI lock free, ruff, smoke, source selftest), then
+   fast-forward `main`, then `launch_gui.py --selftest`, then start the desk. Record the
+   commit the desk was last running BEFORE the first update as `last good`. If a start
+   fails or the desk crashes inside ten minutes, `git revert` the offending merge (never
+   `reset`, never force-push), start the desk on the reverted `main`, and write down what
+   failed.
+3. **Read live gates by looking, not by pretending to be the trader.** Allowed on the live
+   desk: opening pages, selecting past sessions, reading logs, ledgers and files, timing a
+   page, rendering a screenshot, letting the post-close / back-fill workers and the
+   overnight AI task do their own writes. **Never on the live home folder:** a like, veto,
+   pass, claim, note, Mentor answer, forecast paste, tag, confirm, watchlist edit, Focus
+   add, alert arm, settings change or phone push made to test something. Any gate that
+   needs a trader's click is read on a STAGED copy of the home folder
+   (`TRADINGBOTV3_DATA_DIR` = scratch, `--allow-second-instance`, no IBKR connection on the
+   live client ids, no ntfy topic) and is recorded as **`staged-pass`**, which is NOT
+   `LIVE_VALIDATED`: the trader still owes the real read.
+4. **What a weekend can honestly prove:** the desk starts and stays up; the selftest count;
+   Day Review opens on past sessions inside its budget with no `[desk]` row (#145, the
+   reading parts); Friday's bars file is back-filled with one batched download and the SPY
+   tape draws (#152); the walk-away tables, the fifth table, the sentences and the skill
+   line render on Friday's real decisions (#153, #156 in part); Friday evening's
+   Saturday-stamped calls read as Monday's; the Saturday-night slate (#158: no ledger row
+   by day, `ai_summary` Saturday only, the day story before `ticker_briefs`) IF TJ-13A is
+   merged and the desk machine is left alone before 22:00 PDT Saturday. **What it cannot
+   prove** and stays owed to the trader: anything needing a live session, a Mentor slot or
+   the trader's own click - #154, #155, #159, #161 and the clicked halves of the rest.
+5. **Leave it as found, or better.** At the end of the window the desk is RUNNING on
+   `main`, in the Auto mode it was found in, scheduled tasks untouched (never edit,
+   disable or re-register `TradingBotV3 AI Jobs` or the DAS pushes), the working tree
+   clean, every worktree the lead made removed. Every restart is one line in the
+   checkpoint's dated entry: time, commit, why, result. A gate read in the window moves in
+   the checkpoint to `weekend-read` or `staged-pass` with what was seen, never to passed.
+
+Everything else in `docs/AGENT_TEAM.md` and CLAUDE.md still binds: agents' scripts never
+write a live store, ask-first files stay ask-first, no detector / score / alert change.
 
 #### 12.7 Deliberately not in Phase 0.33
 
