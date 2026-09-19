@@ -398,10 +398,10 @@ class DayReviewService:
         ):
             _add(row.get("symbol"), budget=earlier_budget)
         untouched_budget = [UNTOUCHED_SYMBOL_CAP]
-        for row in sorted(
-            scan_rows or (), key=lambda item: str(item.get("symbol") or "").upper()
-        ):
-            _add(row.get("symbol"), budget=untouched_budget)
+        # The distinct NAMES, sorted - not the rows: the lately window holds
+        # ~90,000 horizon rows carrying a few thousand names between them.
+        for name in sorted({str(row.get("symbol") or "").upper() for row in scan_rows or ()}):
+            _add(name, budget=untouched_budget)
 
         bars: dict[str, list[dict[str, Any]]] = {}
         try:
