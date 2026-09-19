@@ -560,6 +560,10 @@ Changes:
    theses only), `sources`. Fewer than three narrated days → a deterministic scaffold and
    "narrated K of 5". One call per week; cost is logged in the job ledger.
 
+   **AMENDED 2026-09-19 (trader):** the provider default in item 2 is superseded — the
+   large LOCAL model writes the week story on Saturday night, OpenAI stays a setting that
+   is off, and live gate #149's "one frontier call" reads "one large-local call" (TJ-13
+   item 7).
 3. **AMENDED 2026-09-19 (trader): the week and the month.** Under the five cards, one
    deterministic strip of TJ-12's report-card lines re-cut by exchange week for the last
    four weeks and for the calendar month to date (same functions, longer window, `n` on
@@ -781,9 +785,39 @@ degrades at once instead of after four hours; the `journal_enrichment` schema fa
 reproduced and fixed. `EXPECTED_SLOT_ORDER` and decision 0018 change together. Stage
 boundaries (deterministic → digest → narration → model-gated) do not move.
 
+**AMENDED 2026-09-19 (trader): nights only, every day of the week, and the weekend nights
+do the heavy work.** *"I always want the bot to run overnight never during the day so I can
+restart it or use it for market prep."* The desk stays on through the weekend. Measured:
+the `TradingBotV3 AI Jobs` task already fires 22:00–06:00 Pacific seven nights a week as its
+own process (a desk restart never kills it), but Saturday's and Sunday's firings skip every
+slot, `weekly_synthesis` has never run (it needs a typed command), and
+`ai_local_model_large` (the 27B) is configured and used by nothing.
+
+5. `window.py` loses "weekends are open all day": the configured night window applies
+   seven days a week, so no run — scheduled, forced or from a page button — starts local
+   inference by day. A daytime request is queued for tonight (TJ-4's rule, now general).
+   The one standing exception stays the Trade Mentor's seconds-long draft on the trader's
+   own reply (CLAUDE.md, quiet hours); the trader may remove it.
+6. **Weeknights** run only the short trader-facing slots plus the deterministic stage.
+   **Saturday night** (the first night with no session behind it) runs the weekly slate:
+   `ai_summary` once a week instead of nightly, `weekly_synthesis` without a typed command,
+   `week_review_narration`, the month re-cut. **Sunday night** runs the backlog: a retry of
+   any day story that failed that week, SUGGESTED setup tags for old untagged trades
+   (suggestions only — `journal_bulk_tag`'s provisional rule, never a confirm), and a short
+   week-ahead note ready before Monday's open. A slate that does not finish resumes the
+   next night; nothing runs past the window's end.
+7. **The week story is written by the large LOCAL model** (trader, 2026-09-19, replacing
+   TJ-5's OpenAI default): `ai_week_review_provider` defaults to `local_large`, falls back
+   to local medium and says so in the ledger; `openai` remains a setting, off. It may only
+   narrate measured rows (TJ-4's amendment applies). The builder first measures the 27B on
+   this desk — load time, tokens per second, peak memory beside a running desk — on a copy
+   of one week's packs, and the slot's `reserve_minutes` comes from that number.
+
 Live gate **#158**: the ledger shows the day story finished before 23:30 Pacific, the
-morning brief lists no membership-only name, and `ai_summary` is either synthesized or
-failed fast.
+morning brief lists no membership-only name, `ai_summary` is either synthesized or failed
+fast and runs on Saturday night only, no ledger row starts between 06:00 and 22:00 Pacific
+on any day, and Sunday's Week Review shows a week story whose ledger row names the large
+local model.
 
 #### 12.5 Order and dependencies
 

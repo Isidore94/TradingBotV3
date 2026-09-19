@@ -101,3 +101,10 @@ mentor."* Binding, as `plan.md` TJ-9 … TJ-13:
 18. **The night serves the trader first.** Inside decision 0018's narration/model stages
     the cheap trader-facing slots run before `ticker_briefs` and `ai_summary`; the stage
     boundaries themselves do not move. Decision 0018 is amended with TJ-13, not before.
+19. **Local inference runs at night only, seven days a week** (trader, 2026-09-19: *"I
+    always want the bot to run overnight never during the day so I can restart it or use
+    it for market prep"*; the desk stays on through the weekend). The weekend is not an
+    all-day window. Saturday night carries the weekly slate and Sunday night the backlog.
+20. **The large local model writes the week story**, superseding answer 6's frontier
+    default; OpenAI remains an off-by-default setting. The model still only narrates
+    measured rows (answer 14).
