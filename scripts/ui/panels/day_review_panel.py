@@ -1329,11 +1329,32 @@ class DayReviewPanel(QFrame):
                     "Double-click a row to chart it."
                 )
             self._fill_walkaway_table(table, rows, self._walkaway_cells)
-        skill = getattr(day, "skill", None) or {}
-        session = skill.get("session") if isinstance(skill, Mapping) else None
-        self.walkaway_skill.setText(
-            str((session or {}).get("sentence") or "") if isinstance(session, Mapping) else ""
-        )
+        self.walkaway_skill.setText(self._skill_text(getattr(day, "skill", None)))
+
+    @staticmethod
+    def _skill_text(skill: Any) -> str:
+        """Both base-rate windows, each saying its own window in SESSIONS.
+
+        The session line alone is the one a fresh day cannot fill: its
+        five-session horizons are still open, so it reads `measured 0, pending
+        N` and names no rate. The lately line is what has actually closed.
+        """
+        if not isinstance(skill, Mapping):
+            return ""
+        lines: list[str] = []
+        for key, window in (("session", "this session"), ("lately", "lately")):
+            block = skill.get(key)
+            if not isinstance(block, Mapping):
+                continue
+            sentence = str(block.get("sentence") or "").strip()
+            if not sentence:
+                continue
+            sessions = block.get("window_sessions")
+            count = f"{int(sessions)} session{'s' if int(sessions) != 1 else ''}" if isinstance(
+                sessions, (int, float)
+            ) else window
+            lines.append(f"{count}: {sentence}")
+        return "\n".join(lines)
 
     def _walkaway_cell(self, row: Any, header: str, measure: str | None) -> tuple[str, str]:
         """One cell's text and its tooltip. `None` is a dash WITH its reason."""

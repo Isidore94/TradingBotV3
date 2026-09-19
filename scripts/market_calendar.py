@@ -223,9 +223,11 @@ def decision_session(stamp: Any) -> date | None:
 
     Every shape the stores use is accepted: an aware ``datetime`` (converted
     with ``astimezone``, never stripped), a naive one (read as market-local,
-    which is what the desk writes), a ``date``, or ``"YYYY-MM-DD"`` text. A date
-    with no time of day is read as being inside its session, because that is all
-    the row says.
+    which is what the desk writes), a ``date``, ``"YYYY-MM-DD"`` text, or a full
+    ISO TIMESTAMP in text - which is how every stored stamp arrives, and reading
+    one as a bare date would answer Friday for a call made at 21:04 that
+    evening. A date with no time of day is read as being inside its session,
+    because that is all the row says.
 
     Answers ``None`` rather than guessing when the stamp is unreadable or falls
     outside the range these rules are a statement about. **Existing rows are
@@ -238,12 +240,23 @@ def decision_session(stamp: Any) -> date | None:
     elif isinstance(stamp, date):
         day, at_or_before_close, moment = stamp, True, None
     else:
-        text = str(stamp or "").strip()[:10]
-        try:
-            day = date.fromisoformat(text)
-        except ValueError:
+        text = str(stamp or "").strip()
+        if not text:
             return None
-        at_or_before_close, moment = True, None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            moment = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=MARKET_TZ)
+            moment = moment.astimezone(MARKET_TZ)
+            day, at_or_before_close = moment.date(), None
+        else:
+            try:
+                day = date.fromisoformat(text[:10])
+            except ValueError:
+                return None
+            at_or_before_close, moment = True, None
     try:
         if is_session(day):
             if at_or_before_close or (moment is not None and moment <= session_close(day)):

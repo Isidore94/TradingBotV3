@@ -180,6 +180,22 @@ def _day_of(bar: Mapping[str, Any]) -> date | None:
 _session_text_cache: dict[str, str] = {}
 
 
+def _row_session(row: Mapping[str, Any]) -> str:
+    """The exchange session ONE decision row belongs to.
+
+    A row written since TJ-11 carries the additive `decision_session` field and
+    that is the answer; an older row carries only the stamp the desk has always
+    written, which is mapped forward here. Either way `session_date` keeps its
+    own value and its own meaning for every other reader on the desk - the
+    reviewer's 2026-09-19 blocker was exactly that this module's convenience
+    became the whole desk's join key.
+    """
+    stored = str(row.get("decision_session") or "").strip()
+    if stored:
+        return stored[:10]
+    return _session_text(row.get("stamp") or row.get("created_at") or row.get("session_date"))
+
+
 def _session_text(value: object) -> str:
     """The exchange session a stamp belongs to, as text, or ``""``.
 
@@ -397,6 +413,18 @@ def _daily_atr(rows: Sequence[tuple[date, Mapping[str, Any]]]) -> float | None:
     return wilder_atr([bar for _day, bar in rows], ATR_LENGTH)
 
 
+#: What a name may contribute to a POOLED rate. A rate counts a name only when
+#: its horizon has CLOSED - a run and a no-run alike. An early run inside an
+#: open horizon is a fact about that ROW and is shown on it, but pooling it
+#: while the no-runs of the same window are still waiting censors the rate by
+#: its own outcome: every open-horizon cell came out 100% by construction
+#: (reviewer, 2026-09-19 - shipped 34% (30/87) where the closed-only truth was
+#: 26% (20/77)).
+POOL_MEASURED = "measured"
+POOL_PENDING = "pending"
+POOL_UNMEASURED = "unmeasured"
+
+
 @dataclass(frozen=True)
 class _D1Reading:
     moves: _Moves = _Moves()
@@ -404,6 +432,9 @@ class _D1Reading:
     verdict: str = ""
     state: str = "unmeasured no_bars"
     complete: bool = False
+    #: Which of the three buckets above this name belongs to when a rate is
+    #: pooled. Said here, once, so no caller has to infer it from the verdict.
+    pool: str = POOL_UNMEASURED
 
 
 def _d1_reading(
@@ -456,6 +487,9 @@ def _d1_reading(
             verdict=verdict,
             state=f"pending {horizon_end.isoformat()}",
             complete=False,
+            # The clock has not run out. Whatever this row shows - including an
+            # early run - it is OUT of both halves of a pooled rate.
+            pool=POOL_PENDING,
         )
     moves = _excursions(after, reference, side) if after else _Moves(reference=reference)
     return _D1Reading(
@@ -464,6 +498,11 @@ def _d1_reading(
         verdict=verdict,
         state="measured" if moves.ran is not None else "unmeasured no_bars",
         complete=True,
+        pool=(
+            POOL_MEASURED
+            if verdict in (real_miss.RUN, real_miss.NO_RUN)
+            else POOL_UNMEASURED
+        ),
     )
 
 
@@ -630,9 +669,14 @@ def _scan_names(
 def _skill_cells(
     names: Mapping[tuple[str, str, str], str],
     decided: Mapping[tuple[str, str, str], str],
-    verdicts: Mapping[tuple[str, str, str], str],
+    verdicts: Mapping[tuple[str, str, str], tuple[str, str]],
 ) -> tuple[dict[str, Any], ...]:
-    """One cell per (population, side, family cut). Sizes only - no ranking."""
+    """One cell per (population, side, family cut). Sizes only - no ranking.
+
+    ``verdicts`` maps a name to ``(verdict, pool)``. Only a CLOSED horizon
+    enters the rate, a run and a no-run alike; an open one is counted and
+    printed as `pending` and is in neither half of the fraction.
+    """
     members: dict[tuple[str, str, str], list[tuple[str, str, str]]] = {}
     for key, family in names.items():
         population = decided.get(key, "untouched")
@@ -641,13 +685,20 @@ def _skill_cells(
             members.setdefault((population, key[2], family), []).append(key)
     sides = sorted({key[2] for key in names})
     families = sorted({family for family in names.values() if family})
+
+    def _pool_of(key: tuple[str, str, str]) -> str:
+        return verdicts.get(key, ("", POOL_UNMEASURED))[1]
+
+    def _verdict_of(key: tuple[str, str, str]) -> str:
+        return verdicts.get(key, ("", POOL_UNMEASURED))[0]
+
     cuts: list[tuple[str, str]] = [(side, "") for side in sides]
     for side in sides:
         for family in families:
             measured = 0
             for population in POPULATIONS:
                 for key in members.get((population, side, family), ()):
-                    if verdicts.get(key, "") in (real_miss.RUN, real_miss.NO_RUN):
+                    if _pool_of(key) == POOL_MEASURED:
                         measured += 1
             # A family cut is shown only where `n` allows it; the floor is the
             # same MIN_REPORTABLE_N every other trader-facing surface uses.
@@ -657,9 +708,9 @@ def _skill_cells(
     for side, family in cuts:
         for population in POPULATIONS:
             keys = members.get((population, side, family), [])
-            answers = [verdicts.get(key, "") for key in keys]
-            measured = [answer for answer in answers if answer in (real_miss.RUN, real_miss.NO_RUN)]
-            runs = sum(1 for answer in measured if answer == real_miss.RUN)
+            measured = [key for key in keys if _pool_of(key) == POOL_MEASURED]
+            pending = sum(1 for key in keys if _pool_of(key) == POOL_PENDING)
+            runs = sum(1 for key in measured if _verdict_of(key) == real_miss.RUN)
             low, high = _wilson(runs, len(measured))
             cells.append(
                 {
@@ -668,7 +719,8 @@ def _skill_cells(
                     "setup_family": family,
                     "n": len(keys),
                     "measured": len(measured),
-                    "unmeasured": len(keys) - len(measured),
+                    "pending": pending,
+                    "unmeasured": len(keys) - len(measured) - pending,
                     "runs": runs,
                     "rate": (runs / len(measured)) if measured else None,
                     "low": low,
@@ -700,12 +752,13 @@ def _cell_words(cell: Mapping[str, Any], *, with_side: bool = False) -> str:
         # Two sides make six cells in one line; without the side on each, a
         # reader cannot tell which base rate belongs to which.
         word = f"{cell['side'].lower()} {word}"
+    # `measured K of N` and `pending P` are printed ALWAYS, not only when they
+    # differ: what a rate was computed over is part of the rate, and a reader
+    # who has to notice an absent clause has not been told.
+    base = f"n {cell['n']}, measured {cell['measured']}, pending {cell.get('pending', 0)}"
     if not cell["reportable"] or cell["rate"] is None:
-        return f"{word} too few to call (n {cell['n']}, measured {cell['measured']})"
-    body = f"{word} {round(cell['rate'] * 100)}% (n {cell['n']}"
-    if cell["measured"] != cell["n"]:
-        body += f", measured {cell['measured']}"
-    return body + ")"
+        return f"{word} too few to call ({base})"
+    return f"{word} {round(cell['rate'] * 100)}% ({base})"
 
 
 def _skill_sentence(cells: Sequence[Mapping[str, Any]], overlapping: Sequence[tuple[str, str]], label: str) -> str:
@@ -881,7 +934,7 @@ def build(
 
     decisions = [
         row for row in (sources.get("decisions") or ())
-        if _session_text(row.get("session_date") or row.get("stamp")) == session
+        if _row_session(row) == session
     ]
     unique: dict[tuple[str, str, str, str, str, str, str], Mapping[str, Any]] = {}
     for row in decisions:
@@ -1134,7 +1187,7 @@ def build(
     window = set(earlier_sessions(session))
     earlier_rows: list[WalkawayRow] = []
     for row in sources.get("earlier_decisions") or ():
-        day_text = _session_text(row.get("session_date") or row.get("stamp"))
+        day_text = _row_session(row)
         if day_text not in window:
             continue
         if str(row.get("timeframe") or "M5").upper() != "D1":
@@ -1193,33 +1246,34 @@ def build(
     lately = set(earlier_sessions(session, count=max(0, LATELY_SESSIONS - 1))) | {session}
     names = _scan_names(scan_rows, lately)
     for row in sources.get("earlier_decisions") or ():
-        day_text = _session_text(row.get("session_date") or row.get("stamp"))
+        day_text = _row_session(row)
         verdict_name = str(row.get("verdict") or "")
         key = (day_text, str(row.get("symbol") or "").upper(), str(row.get("side") or "").upper())
         if verdict_name in LIKES or verdict_name == "claim":
             decided[key] = "liked_or_claimed"
         elif verdict_name in REJECTS:
             decided.setdefault(key, "rejected")
-    verdicts: dict[tuple[str, str, str], str] = {}
+    verdicts: dict[tuple[str, str, str], tuple[str, str]] = {}
     for key in names:
         day_text, symbol, side = key
         try:
             scan_day = date.fromisoformat(day_text)
         except ValueError:
             continue
-        verdicts[key] = _d1_reading(
+        reading = _d1_reading(
             _daily(symbol), scan_day, side, atr=_atr(symbol, scan_day), last_session=last_session
-        ).verdict
+        )
+        verdicts[key] = (reading.verdict, reading.pool)
     session_names = {key: family for key, family in names.items() if key[0] == session}
     skill = {
         "session": _skill_window(
             session_names, decided, verdicts,
-            window_sessions=1, label="Real runs this session",
+            window_sessions=1, label="Real runs over this session's scan rows",
         ),
         "lately": _skill_window(
             names, decided, verdicts,
             window_sessions=LATELY_SESSIONS,
-            label=f"Real runs over {LATELY_SESSIONS} sessions",
+            label=f"Real runs over {LATELY_SESSIONS} sessions of scan rows",
         ),
     }
 

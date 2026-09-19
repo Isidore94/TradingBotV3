@@ -249,6 +249,12 @@ class DayReviewService:
                             # sentence; without this the page would need a
                             # second read of the same store to name one.
                             "reason": decision.reason,
+                            # The session this decision BELONGS to, decided here
+                            # because this loop is what asked the exact-match
+                            # reader for `stamped`. `session_date` on the stored
+                            # row is untouched and still means what it always
+                            # meant to every other reader on the desk.
+                            "decision_session": target,
                         })
                 return rows
 
@@ -410,15 +416,19 @@ class DayReviewService:
             _log.debug("The durable daily store is unavailable.", exc_info=True)
             return bars
         cache = getattr(chart_snapshot, "_daily_bars_cache", None)
-        already = set(cache) if isinstance(cache, dict) else set()
         for symbol in wanted[:DAILY_BAR_SYMBOL_CAP]:
+            # Decided PER SYMBOL, immediately before the read: a snapshot taken
+            # before the loop could not tell an entry this read inserted from
+            # one another thread put there while the loop ran, and evicting
+            # someone else's cache entry is not this read's business.
+            held_before = isinstance(cache, dict) and symbol in cache
             try:
                 rows = chart_snapshot.load_d1_bars(symbol) or []
             except Exception:  # noqa: BLE001 - one unreadable name costs one name
                 _log.debug("Daily bars unreadable for %s.", symbol, exc_info=True)
                 continue
             bars[symbol] = list(rows[-DAILY_BAR_TAIL:])
-            if isinstance(cache, dict) and symbol not in already:
+            if isinstance(cache, dict) and not held_before:
                 cache.pop(symbol, None)
         return bars
 

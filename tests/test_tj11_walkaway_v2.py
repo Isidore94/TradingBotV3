@@ -835,7 +835,17 @@ def test_a_saturday_stamped_row_never_lands_on_the_friday_before_it():
 
 
 def test_reading_a_saturday_row_forward_leaves_the_annotation_file_byte_identical(tmp_path):
-    """Existing rows are NEVER rewritten - the reader maps, the file does not move."""
+    """Existing rows are NEVER rewritten - the reader maps, the file does not move.
+
+    AMENDED by the lead, 2026-09-19 (reviewer NO-GO, blocker 1): this test used
+    to ask for the forward mapping through `load_annotations`' DEFAULT, which
+    the packet never granted. That default is what `pick_feedback` - and so the
+    setups-table hide, the chart-cycling skip and the review queue's "Reviewed
+    today" mark - joins on, and moving it hid 12 symbols the base desk showed.
+    TJ-11's mapping is now an explicit OPT-IN (`by_decision_session=True`) and
+    the default path is byte-identical to base. The byte-identical FILE
+    assertion below is the tester's and is unchanged.
+    """
     from ui.annotations import store
 
     target = tmp_path / "trader_annotations.jsonl"
@@ -852,9 +862,16 @@ def test_reading_a_saturday_row_forward_leaves_the_annotation_file_byte_identica
     target.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
     before = target.read_bytes()
 
-    found = store.load_annotations(target, session_date="2026-09-21")
+    found = store.load_annotations(
+        target, session_date="2026-09-21", by_decision_session=True
+    )
 
     assert sorted(row["symbol"] for row in found) == ["EEE", "FFF"]
+    assert target.read_bytes() == before
+    # And the DEFAULT still answers exactly what base answered: the Saturday
+    # row is not Monday's for anybody but TJ-11.
+    base = store.load_annotations(target, session_date="2026-09-21")
+    assert [row["symbol"] for row in base] == ["FFF"]
     assert target.read_bytes() == before
 
 
@@ -864,6 +881,13 @@ def test_a_new_annotation_written_after_the_close_carries_the_next_sessions_date
     The wall clock is pinned to a DIFFERENT date so the answer cannot come from
     `get_market_session_window()` being accidentally right on the day the suite
     happens to run: the stamp decides the session, not `now`.
+
+    AMENDED by the lead, 2026-09-19 (reviewer NO-GO, blocker 1): the session a
+    decision belongs to is an ADDITIVE field, `decision_session`. `session_date`
+    keeps exactly the value and the meaning base writes, because
+    `review_learning` (the veto cohort behind `review_policy.json`), the three
+    cohort graders, `daily_recap_reader` and `pick_feedback` all join on it by
+    exact match. Both halves are asserted here.
     """
     import market_session
     from ui.annotations import store
@@ -882,7 +906,12 @@ def test_a_new_annotation_written_after_the_close_carries_the_next_sessions_date
         created_at=datetime(2026, 9, 18, 21, 4, 28, tzinfo=PACIFIC),
     )
 
-    assert row["session_date"] == "2026-09-21"
+    assert row["decision_session"] == "2026-09-21"
+    # EXACTLY what base writes, which is the market session WINDOW's date and
+    # never the stamp - pinned to 2026-09-18 by the monkeypatch above. The
+    # stamp decides `decision_session` and nothing else, so every live reader
+    # joining on `session_date` sees what it has always seen.
+    assert row["session_date"] == "2026-09-18"
     assert row["created_at"].startswith("2026-09-18T21:04:28")
 
 

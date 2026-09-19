@@ -52,6 +52,8 @@ NO_RUN = "no_run"
 UNMEASURED_ATR = "unmeasured:atr_unreadable"
 UNMEASURED_NO_BARS = "unmeasured:no_completed_bar_after_the_stamp"
 UNMEASURED_NO_REFERENCE = "unmeasured:no_reference_price"
+#: Bars were there; not one carried a readable high AND low.
+UNMEASURED_NO_PRICES = "unmeasured:no_readable_prices"
 
 
 def _number(value: Any) -> float | None:
@@ -143,12 +145,14 @@ def verdict(
     short = str(side or "").strip().upper() == "SHORT"
     run_at = RUN_ATR * size
     adverse_at = ADVERSE_ATR * size
+    readable = 0
     for bar in rows:
         high = _price(bar, "high")
         low = _price(bar, "low")
         if high is None or low is None:
             # A bar nobody can read is not evidence in either direction.
             continue
+        readable += 1
         adverse = (high - start) if short else (start - low)
         favourable = (start - low) if short else (high - start)
         # The adverse extreme first: inside one bar the order is unknown.
@@ -156,6 +160,11 @@ def verdict(
             return NO_RUN
         if favourable >= run_at:
             return RUN
+    if not readable:
+        # Bars existed but not one of them had a readable high and low. That is
+        # missing data, and missing data is uncertainty - never a verdict that
+        # the name did not run.
+        return UNMEASURED_NO_PRICES
     return NO_RUN
 
 
@@ -167,6 +176,7 @@ __all__ = [
     "RUN_ATR",
     "UNMEASURED_ATR",
     "UNMEASURED_NO_BARS",
+    "UNMEASURED_NO_PRICES",
     "UNMEASURED_NO_REFERENCE",
     "eligible_bars",
     "verdict",
