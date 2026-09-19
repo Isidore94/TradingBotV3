@@ -843,6 +843,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=briefs.summary_reserve_minutes(),
             description="Advisory evidence summary over the day's artifacts",
             uses_model=True,
+            # Unbounded until TJ-13A's review round. `max_attempts=0` was
+            # written when a failing summary was EXPENSIVE: it spent hours, so
+            # the 30-minute firings could not repeat it inside one night and
+            # the missing cap never showed. Item 3 made a dead endpoint cheap -
+            # it now gives up on the first call - and cheap plus unbounded is a
+            # loop: driven over a weekend night's ~16 firings, a degrading
+            # summary RAN TEN TIMES, writing ten `degraded_no_narrative` rows
+            # and ten export sets for one session, and Sunday would repeat it.
+            #
+            # Three, like every other capped slot, and for the same reason: a
+            # fault that survives three attempts is deterministic, not
+            # transient. It is now a weekly slot, so three attempts is three
+            # attempts at ONE session a week. plan.md §12.3: set max_attempts,
+            # never 0.
+            max_attempts=3,
         ),
         JobSlot(
             name="ticker_briefs",

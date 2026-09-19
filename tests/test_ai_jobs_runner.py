@@ -358,9 +358,18 @@ def test_default_slate_runs_the_deterministic_stage_before_narration():
     assert names == EXPECTED_SLOT_ORDER
     assert all(slot.enabled for slot in slots)
     by_name = {slot.name: slot for slot in slots}
-    # The long slot is capped; the cheap one keeps retrying all window.
+    # Both long slots are capped.
     assert by_name["ticker_briefs"].max_attempts == 3
-    assert by_name["ai_summary"].max_attempts == 0
+    # UPDATED by TJ-13A's review round (2026-09-19). This line asserted 0 with
+    # the comment "the cheap one keeps retrying all window", and that comment
+    # had it backwards by then: `ai_summary` was the EXPENSIVE slot, and it was
+    # uncapped precisely because spending hours per attempt meant the 30-minute
+    # firings could never repeat it inside one night. TJ-13A item 3 made a dead
+    # endpoint give up on its first call, which turned the missing cap into a
+    # loop - a degrading summary ran 10 times over one weekend night's firings,
+    # writing 10 ledger rows and 10 export sets for a single session. plan.md
+    # §12.3: every slot sets `max_attempts`, never 0.
+    assert by_name["ai_summary"].max_attempts == 3
     # Seconds of work, so it reserves almost nothing - and it is capped, because
     # a broker that is down stays down and should not spend the whole window.
     assert by_name["journal_import"].reserve_minutes == 5.0

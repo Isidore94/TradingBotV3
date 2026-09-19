@@ -592,6 +592,47 @@ def unwrap_schema_envelope(parsed: Any, schema_name: str) -> Any:
 #: without a pathological answer filling the store.
 MAX_REJECTED_REPLY_CHARS = 20_000
 
+#: How many rejection files are kept. Each is already bounded by size, so the
+#: remaining unbounded thing is the COUNT: a backend that rejects on every
+#: trade, every night, appends for ever otherwise. 200 is many nights of the
+#: worst case, and the newest are the ones being debugged.
+MAX_REJECTED_REPLY_FILES = 200
+
+
+def rejected_replies_dir() -> Path:
+    """Where a rejected reply is filed. LOCAL, deliberately.
+
+    It was the AI store's `logs/` until TJ-13A's review round, and the AI store
+    is the DAS (`\\\\MINI-PC\\Trading Bot Data`). This function is called from
+    INSIDE an overnight slot, and the DAS can be asleep: a ~20 s spin-up to
+    file a diagnostic makes the record cost more than the thing it records,
+    which is the one thing an evidence store may never do. The house rule is
+    write local first; nothing here pushes to the DAS, and the existing cold
+    push can move it later if anyone ever wants it there.
+    """
+    from project_paths import AI_REJECTED_REPLIES_DIR
+
+    return AI_REJECTED_REPLIES_DIR
+
+
+def _prune_rejected_replies(target_dir: Path) -> None:
+    """Keep the newest :data:`MAX_REJECTED_REPLY_FILES`. Never raises.
+
+    Tidying is the least important thing this module does, so a directory that
+    changes under it, a locked file or a vanished path costs nothing at all.
+    """
+    try:
+        files = sorted(
+            target_dir.glob("rejected_*.json"), key=lambda path: path.name
+        )
+        for stale in files[:-MAX_REJECTED_REPLY_FILES]:
+            try:
+                stale.unlink()
+            except OSError:
+                continue
+    except Exception:  # pragma: no cover - defensive; see the docstring
+        logging.debug("could not prune the rejected-reply log", exc_info=True)
+
 
 def record_rejected_reply(
     *,
@@ -612,22 +653,21 @@ def record_rejected_reply(
 
     Contract, in order of importance:
 
-    * **It never raises into the slot.** Every failure here - no store, a
-      sleeping NAS, a full disk - returns ``None``. An evidence store is never
+    * **It never raises into the slot.** Every failure here - no directory, a
+      full disk, a vanished path - returns ``None``. An evidence store is never
       allowed to cost the thing it records, and this one records a failure that
       is already being reported properly through the ledger.
+    * **Local**, never the DAS - see :func:`rejected_replies_dir`.
     * **One file per rejection**, named for the moment and the schema, so two
       rejections in one night are two files and neither overwrites the other.
-    * **Bounded**, at :data:`MAX_REJECTED_REPLY_CHARS`, and it SAYS when it cut.
+    * **Bounded twice**: each file at :data:`MAX_REJECTED_REPLY_CHARS`, which it
+      SAYS when it cuts, and the directory at
+      :data:`MAX_REJECTED_REPLY_FILES` files.
     * **Written whole or not at all**: a temp file beside the target, then
       ``os.replace``, so a reader never sees half a reply.
     """
     try:
-        from ai_jobs import store as _store
-
-        target_dir = Path(logs_dir) if logs_dir is not None else (
-            _store.store_logs_dir() / "rejected_replies"
-        )
+        target_dir = Path(logs_dir) if logs_dir is not None else rejected_replies_dir()
         target_dir.mkdir(parents=True, exist_ok=True)
         moment = now or datetime.now().astimezone()
         raw = str(text or "")
@@ -659,6 +699,8 @@ def record_rejected_reply(
             json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8"
         )
         os.replace(temp, target)
+        # After the write, so a prune that goes wrong never costs the record.
+        _prune_rejected_replies(target_dir)
         return target
     except Exception:  # never into the slot - see the docstring
         logging.debug("could not persist a rejected model reply", exc_info=True)

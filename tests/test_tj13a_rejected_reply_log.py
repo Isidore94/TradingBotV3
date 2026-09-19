@@ -91,17 +91,19 @@ def test_a_huge_reply_is_bounded_and_says_that_it_was_cut(tmp_path):
     assert payload["reply_truncated"] is True
 
 
-def test_an_unwritable_store_costs_nothing(tmp_path):
+def test_an_unwritable_directory_costs_nothing(tmp_path):
     """The rule that outranks the feature: a failed append loses the event.
 
-    No AI store configured is the ordinary case on a fresh machine, and it must
-    not turn a reported model failure into an unhandled exception inside the
-    slot.
+    UPDATED by TJ-13A's review round (2026-09-19). It used to patch
+    `ai_jobs.store.store_logs_dir` to raise, because the log was written into
+    the AI store - which is the DAS. It is written LOCAL now (the reviewer's
+    third advisory: this runs inside a slot, and a sleeping NAS would make the
+    record cost more than the thing it records), so the seam that can fail is
+    the local directory. The assertion is unchanged: a failure returns None and
+    never reaches the slot.
     """
-    from ai_jobs import store
-
     with mock.patch.object(
-        store, "store_logs_dir", side_effect=ValueError("No AI store configured")
+        ai_summary, "rejected_replies_dir", side_effect=OSError("no such directory")
     ):
         assert (
             ai_summary.record_rejected_reply(
@@ -109,6 +111,27 @@ def test_an_unwritable_store_costs_nothing(tmp_path):
             )
             is None
         )
+
+
+def test_the_das_is_never_consulted_for_a_rejected_reply():
+    """Reviewer advisory 3, as a tripwire.
+
+    The AI store lives on `\\\\MINI-PC\\Trading Bot Data` and can be asleep.
+    Nothing on this path may reach for it.
+    """
+    from ai_jobs import store
+
+    def _must_not_be_called(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("the rejected-reply log must not touch the AI store")
+
+    with mock.patch.object(store, "store_logs_dir", _must_not_be_called):
+        with mock.patch.object(store, "get_ai_store_dir", _must_not_be_called):
+            path = ai_summary.record_rejected_reply(
+                schema_name=SCHEMA_NAME, text='{"a": 1}', error="boom"
+            )
+
+    assert path is not None
+    path.unlink(missing_ok=True)
 
 
 def test_the_provider_path_persists_what_it_rejected(tmp_path, monkeypatch):

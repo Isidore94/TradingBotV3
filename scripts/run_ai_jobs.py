@@ -221,7 +221,25 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(
                 f"unknown scope(s) {unknown}; known: {sorted(ai_summary.SCOPE_LABELS)}"
             )
-    if args.weekly_synthesis:
+    if args.slot:
+        # TJ-13A review round. A TYPED slot is the operator's explicit choice
+        # and resolves against every registered slot, not against tonight's
+        # slate. It used to be filtered by the slate, so `--slot ai_summary` on
+        # a weeknight matched nothing, ran nothing and exited 0 - silently,
+        # while this module's own docstring advertised that exact command. "I
+        # typed it wrong" and "it ran and found nothing" must not look alike.
+        #
+        # This widens what can be NAMED, never what can RUN: a model slot named
+        # by day is still refused by the night-only window inside `run_slots`,
+        # and its ledger row still says so.
+        registered = runner.default_slots(summary_scopes=scopes or None) + runner.optional_slots()
+        known = [slot.name for slot in registered]
+        if args.slot not in known:
+            parser.error(
+                f"unknown slot {args.slot!r}; known slots: {', '.join(sorted(known))}"
+            )
+        slots = registered
+    elif args.weekly_synthesis:
         # Constructed per call and ONLY here when it is asked for by name.
         slots = runner.optional_slots()
     else:

@@ -458,6 +458,14 @@ MARKET_STORY_ROLLUPS_DIR = RUNTIME_DATA_DIR / "market_story_rollups"
 # replaceable; a failed model call keeps the last verified file untouched.
 MARKET_STORY_NARRATIONS_DIR = RUNTIME_DATA_DIR / "market_story_narrations"
 
+# Raw model replies that failed schema validation, one bounded JSON per
+# rejection (TJ-13A item 5). LOCAL, deliberately: it is written from inside an
+# overnight slot, and the DAS can be asleep - a ~20 s spin-up to file a
+# diagnostic would make the record cost more than the thing it records. Pure
+# diagnostics, pruned to the newest few hundred, and nothing reads it but a
+# human debugging last night.
+AI_REJECTED_REPLIES_DIR = RUNTIME_DATA_DIR / "ai_rejected_replies"
+
 TRADE_MENTOR_SLOTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_slots.json"
 TRADE_MENTOR_DRAFTS_FILE = PERSISTENT_DATA_DIR / "trade_mentor_drafts.json"
 # Append-only JSONL of every add and remove on the four plain watchlists
