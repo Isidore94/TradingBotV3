@@ -886,7 +886,16 @@ def test_one_click_confirms_the_tag_and_the_badge_goes_away(panel, populated, qa
     qapp.processEvents()
 
     state = populated.annotation_state(trade_id)
-    assert state == {"setup_tags": "avwap-reclaim", "tag_status": "confirmed"}
+    # TJ-9 widened `annotation_state` by two additive keys. A one-click lane
+    # change records NO provenance: `label_provenance` says when the LABEL was
+    # made, and confirming a tag the tagger wrote is not making one - so it
+    # stays "" (unrecorded), which is never any of the three named values.
+    assert state == {
+        "setup_tags": "avwap-reclaim",
+        "tag_status": "confirmed",
+        "notes": "",
+        "label_provenance": "",
+    }
     panel.trades_tab.tag_filter.setCurrentIndex(0)
     cells = {
         panel.trades_tab.table.item(row, 1).text(): panel.trades_tab.table.item(row, 7).text()

@@ -777,6 +777,12 @@ class TradeMentorCard(QWidget):
         self._clear_trade_check()
         self.trade_check_box.setVisible(False)
         self.save_answers_button.setVisible(False)
+        # The section rides on later cards of the same session (TJ-9 item 2),
+        # so the heading has to stop describing questions that are now answered
+        # - a later hour no longer wipes it on its way in.
+        self.trade_check_label.setText(
+            f"Yesterday's trades: {saved} remembered field(s) filed, labelled as recalled."
+        )
         self._set_status(f"{saved} remembered field(s) filed, labelled as recalled.")
         return {"ok": True, "fields": saved}
 
