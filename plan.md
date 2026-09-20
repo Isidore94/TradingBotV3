@@ -1000,9 +1000,27 @@ slot, `weekly_synthesis` has never run (it needs a typed command), and
 (reviewer GO by reproduction against a copy of the live 476-row ledger; the review round
 capped `ai_summary` at three attempts, made `--slot` resolve against every registered
 slot, and kept the rejected-reply log local). Decision 0018 carries the 2026-09-19
-amendment; long form in DESK_INTERNALS "Night kinds". **TJ-13B is what remains**: item 7
-(the 27B week story) and item 6's Sunday EXTRAS — suggested setup tags for old untagged
-trades, and the week-ahead note. Live gate #158 stays owed.
+amendment; long form in DESK_INTERNALS "Night kinds". Live gate #158 stays owed.
+
+**TJ-13B — item 7's MEASURING half is BUILT and MERGED 2026-09-19, fix round 2026-09-20**
+(branch `claude/tj13b-large-local`, tip `800ecb8c`, merged `e54c8203` into
+`lead/p033-integration2`; not on `main`). It ships as a COMMAND, never a slot:
+`scripts/ai_jobs/model_probe.py` (`--probe-model large`, one `manual_test` ledger row per
+measurement, `latest_measurement` / `reserve_minutes_from_probe`) and
+`scripts/ai_jobs/provider.py` (`local_large`, `ai_week_review_provider`,
+`week_review_plan`, `request_with_fallback`, ledger field `model_attribution`). The probe
+is night-only with `--force` never buying the clock (it re-spends only the
+already-measured check), holds the AI-jobs machine lock BY DEFAULT and refuses when it is
+not free, reads a deleted copy of one week's fact packs, and records load seconds, tokens
+per second, peak memory in use and the context the SERVER accepted, each labelled with its
+basis. The review round was NO-GO because `--force` never reached the probe; the fix was
+verified with the real AI lock free (340 AI-jobs tests green). **The measurement itself is
+owed: the 27B has still never run.** Until a probe row exists, `week_review_plan` answers
+`may_run_large: False` and TJ-5's week story runs on the medium local model and says why.
+No slate changed; `openai` remains a setting, off. **Still TJ-13B and NOT built**: item
+6's Sunday EXTRAS — suggested setup tags for old untagged trades, and the week-ahead note.
+Owed: the trader's first Saturday-night probe (gate #158's TJ-13B clause), and TJ-5
+reading `week_review_plan` when the week slot lands. Long form: DESK_INTERNALS "TJ-13B".
 
 5. **BUILT (TJ-13A), except that a daytime request is REFUSED, not QUEUED**: a forced
    model slot records `skipped` and the page button refuses with the window's own reason.
@@ -1020,12 +1038,17 @@ trades, and the week-ahead note. Live gate #158 stays owed.
    (suggestions only — `journal_bulk_tag`'s provisional rule, never a confirm), and a short
    week-ahead note ready before Monday's open. A slate that does not finish resumes the
    next night; nothing runs past the window's end.
-7. **NOT BUILT — this is TJ-13B.** **The week story is written by the large LOCAL model** (trader, 2026-09-19, replacing
+7. **The MEASURING half is BUILT (TJ-13B); the week STORY that uses it is TJ-5's.**
+   **The week story is written by the large LOCAL model** (trader, 2026-09-19, replacing
    TJ-5's OpenAI default): `ai_week_review_provider` defaults to `local_large`, falls back
-   to local medium and says so in the ledger; `openai` remains a setting, off. It may only
-   narrate measured rows (TJ-4's amendment applies). The builder first measures the 27B on
-   this desk — load time, tokens per second, peak memory beside a running desk — on a copy
-   of one week's packs, and the slot's `reserve_minutes` comes from that number.
+   to local medium and says so in the ledger under `model_attribution`; `openai` remains a
+   setting, off, and `request_with_fallback` RAISES for it — TJ-5's slot must catch that
+   and record a FAILED row. It may only narrate measured rows (TJ-4's amendment applies).
+   The 27B is measured on this desk — load time, tokens per second, peak memory beside a
+   running desk, the context the server accepted — by `--probe-model large` on a deleted
+   copy of one week's packs, and the slot's `reserve_minutes` comes from that number
+   (`reserve_minutes_from_probe`, `None` when the tier was never measured). **The
+   measurement is the trader's, and it has not happened yet.**
 
 8. **BUILT (TJ-13A). Where `ai_summary` runs:** item 6 supersedes "then `ai_summary` last" in the paragraph
    above — it leaves the weeknight slate entirely and runs on Saturday night, for ONE
@@ -1052,6 +1075,22 @@ large local model. Reading "failed fast": a REFUSED endpoint degrades in seconds
 degrade is the repair working, not a regression. The TJ-13A clauses are readable on the
 first weekend after the merge; the day-story clause belongs to TJ-4 and the large-local
 week-story clause to TJ-13B.
+
+**Gate #158, TJ-13B clause (the trader's own run).** On a Saturday night inside the
+off-hours window and before ~05:15 PDT, with no AI job running, the trader types
+`.venv\Scripts\python.exe scripts\run_ai_jobs.py --probe-model large` and it exits 0 with
+a measurement. On the live ledger: exactly ONE new row with `job="model_probe"`,
+`status="manual_test"`, `model` = the 27B tag, and a `model_probe` block whose
+`load_seconds`, `tokens_per_second`, `peak_memory_mb` and `context_tokens_accepted` are
+all > 0 with `basis` naming how they were measured. Confirm `peak_memory_mb` stayed inside
+this box's 32 GB beside the running desk, that the desk did not stall, that
+`context_tokens_accepted` is close to what was sent (a much smaller number means the
+server sheared the prompt), and that `--status` still reports the night's slate unchanged.
+With the measurement recorded, `ai_jobs.provider.week_review_plan()` must answer
+`may_run_large: True` with a `reserve_minutes` derived from that row. A refused probe —
+daytime, an AI job already running, or this session already measured — must exit 1, print
+why, and leave every prior ledger row untouched; adding `--force` must re-measure (a
+second row, newest wins) and must NOT get past the window or a held lock.
 
 ##### TJ-14 — The Mentor asks for what the desk is missing, and nothing else
 
@@ -1353,7 +1392,7 @@ full suite with the nightly AI lock free, ruff, smoke, selftest, and reconciles 
 | 1F | **TJ-11F MERGED 2026-09-19 (evening)** - trader reversal of TJ-11 item 5: an after-close, weekend or holiday decision belongs to the session it JUDGED | `claude/tj11f-decision-session` (tip `67143e3e`, merged `f00ec302` into `lead/p033-integration2`) | TJ-11 |
 | 2 | **TJ-14A MERGED 2026-09-19 (night)** (`TJ-14A.md`) · **TJ-3 MERGED 2026-09-19 (evening)** (`TJ-3.md`) · **TJ-15 MERGED 2026-09-19 (night)** (`TJ-15-16.md`) — wave 2 complete | `claude/tj14a-mentor-card` (tip `6808abd9`, merged `e8c04f88`) · `claude/tj3-note-markers` (tip `58ee11f4`, merged `72647104` into `lead/p033-integration2`) · `claude/tj15-miss-contrast` (tip `8547c4a5`, merged `fb3f55e9`, slot position fixed `1f260ffa`) | TJ-9 · TJ-11 ✓ · TJ-11 ✓ |
 | 3 | TJ-14B (`TJ-14B.md`) · TJ-10 (`TJ-10.md`) | `claude/tj14b-mentor-questions` · `claude/tj10-read-grader` | TJ-14A (TJ-10 also rebases on TJ-3's page edits) |
-| 4 | TJ-4 (`TJ-4.md`) · TJ-16 (`TJ-15-16.md`) · TJ-13B (`TJ-5-6-7-13B.md`) | `claude/tj4-day-story` · `claude/tj16-prediction-contrast` · `claude/tj13b-large-local` | TJ-10, TJ-11 · TJ-10, TJ-14A, TJ-15 · TJ-13A |
+| 4 | TJ-4 (`TJ-4.md`) · TJ-16 (`TJ-15-16.md`) · **TJ-13B MERGED 2026-09-20** (`TJ-5-6-7-13B.md`) | `claude/tj4-day-story` · `claude/tj16-prediction-contrast` · `claude/tj13b-large-local` (tip `800ecb8c`, merged `e54c8203` into `lead/p033-integration2`) | TJ-10, TJ-11 · TJ-10, TJ-14A, TJ-15 · TJ-13A |
 | 5 | TJ-12 (`TJ-12.md`) | `claude/tj12-report-card` | TJ-9, TJ-10, TJ-11, TJ-4 |
 | 6 | TJ-5 → TJ-6 → TJ-7 (`TJ-5-6-7-13B.md`), one after the other | `claude/tj5-week-review` · `claude/tj6-ideas` · `claude/tj7-mood-fields` | TJ-4, TJ-12, TJ-13B, TJ-15, TJ-16 · TJ-5 · TJ-14B |
 | — | TJ-8 cleanup | — | every page gate read live |
@@ -1379,7 +1418,7 @@ TJ-10 → TJ-4 → TJ-12), `ui/widgets/trade_mentor_card.py` (TJ-9 → TJ-14A �
 | 6 | TJ-12 | Six-line report card heading Day Review (incl. How fresh) | TJ-10, TJ-11 | #157 |
 | 7 | TJ-15 | **MERGED 2026-09-19 (night)** - what the misses had in common: a pure `evidence_contrast` with TWO floors, a deterministic `miss_contrast` slot inside stage 1 above the pair that closes it, D1 decisions only, the point-in-time join reaching one session back | TJ-11 | #160 |
 | 8 | TJ-16 | Prediction ledger, naive baselines, calibration, right-vs-wrong contrast, grounded word tags | TJ-10, TJ-14 | #161 |
-| 9 | TJ-13 | **TJ-13A MERGED 2026-09-19** (nights only 7 days; weeknight vs Saturday vs Sunday slates; briefs / summary / enrichment / examples repairs). TJ-13B remains: 27B week story, Sunday's suggested tags and week-ahead note | TJ-4's slot | #158 |
+| 9 | TJ-13 | **TJ-13A MERGED 2026-09-19** (nights only 7 days; weeknight vs Saturday vs Sunday slates; briefs / summary / enrichment / examples repairs) · **TJ-13B MERGED 2026-09-20** (the `--probe-model` command and the `local_large` provider seam - the measurement itself is the trader's and is owed). Still open in TJ-13B: Sunday's suggested tags and week-ahead note; the week STORY is TJ-5's | TJ-4's slot | #158 |
 | 10 | TJ-5 | Week Review: five day cards, week story, week + four-week + month strip | TJ-4, TJ-12 | #149 |
 | 11 | TJ-6 | Ideas card; a kept idea is checked before and after | TJ-5 | #150 |
 | 12 | TJ-7 | Mood / process fields (the Mentor asks them through `day_close`) | TJ-14 | #151 |

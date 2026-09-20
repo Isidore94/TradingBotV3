@@ -1434,6 +1434,86 @@ sets for a single session. A forced daytime run records `skipped`, which is not 
 `ledger.ATTEMPT_STATUSES`, so an operator trying at lunchtime does not burn the night's
 attempts.
 
+## TJ-13B - a model nobody has ever run has no reserve (2026-09-19/20)
+
+The long form behind the CLAUDE.md clause *"A model nobody measured has no reserve"*.
+plan.md §12.4 TJ-13 item 7, decision 0021 answer 20. Branch `claude/tj13b-large-local`
+(tip `800ecb8c`), **merged into `lead/p033-integration2` as `e54c8203`** - not on `main`
+yet, so nothing below is live on the desk.
+
+**What was measured.** In the 476 live ledger rows read on 2026-09-19 the only models
+named were `gemma3:12b`, `gemma3:12b-tbv3ctx` and `gemma3:12b-tbv3ctx-64k`.
+`ai_local_model_large` - a Gemma-3 27B Q3_K_M GGUF tag - was configured and had **never
+run**. The week story is supposed to be written by it, and `plan.md` §12.3 says a slot
+declares a `reserve_minutes`; so the one number that decides whether the week story may
+start at all could not be written down by anybody. Guessing it is the failure mode the
+reserve exists to prevent: a slot with an invented reserve either skips a window it would
+have fitted in, or runs a 27B into the opening bell. (The `RETIRED (2026-08-10)` line the
+CHANGELOG carried for this tier was a judgement, never a measurement; TJ-13B replaces it
+with one - and the 27B has STILL never run, so nothing here claims it fits.)
+
+So the number is MEASURED, once, by the trader, and read back from the ledger.
+
+* **The probe is a model LOAD, and every rule about model loads applies to it.**
+  `scripts/ai_jobs/model_probe.run_model_probe`, reached as
+  `run_ai_jobs.py --probe-model large`, is a COMMAND and never a slot: it builds no
+  slate, runs no other job, and exits 0 when it measured, 1 when it refused with a
+  printed reason. There are exactly THREE refusals - it is not night; an AI job is
+  running; this session was already measured. `PROBE_RESERVE_MINUTES` is 45, so it
+  refuses from about 05:15 PDT.
+* **The lock is the DEFAULT guard, not a caller's option.** `lock` defaults to the
+  sentinel `USE_RUNNER_LOCK`, and `None` resolves to the same `runner_lock` - there is
+  deliberately **no value of `lock` that means "unguarded"**, because for one day the
+  guard was a caller-supplied parameter, which made the most dangerous call in the
+  package the one that named nothing. The guard is HELD across the whole measurement, so
+  a 22:30 firing under it stands down cleanly. Where `ai_jobs.runner` runs unguarded on a
+  box with no exclusion primitive (what that protects is a night of cheap deterministic
+  work), the probe REFUSES instead: uncertainty is not confirmation when the cost of
+  being wrong is a second model load beside a working 12B on a 32 GB box.
+* **`--force` re-spends ONE check.** Only "already measured for this session". It does
+  not buy the clock and does not beat a held lock. Round 1 of the review was NO-GO
+  because the flag never reached the probe at all, so the probe's own refusal - *"pass
+  --force to measure it again"* - was advice the command could not take.
+* **It reads a COPY.** The newest week of fact packs is copied to a temp folder, read
+  from there, and deleted. The live store is read once, to list and copy, never written.
+* **The row is `manual_test`.** ONE ledger row per measurement, `job="model_probe"`,
+  carrying load seconds, tokens per second, `peak_memory_mb` (the MACHINE's in-use
+  memory, with `baseline_memory_mb` beside it, never a delta) and
+  `context_tokens_accepted` (the SERVER's own `prompt_tokens`, beside what the desk
+  CONFIGURED - the gap between the two is the finding). `manual_test` never counts as
+  session coverage, and the row's `session_date` is the LAST session, so a Saturday-night
+  probe is filed under Friday. That is right, not a bug.
+* **The numbers say what they are.** One call cannot split the weight load from the
+  prompt evaluation and the generation, so every row names its `basis`:
+  `single_call_end_to_end` (load an upper bound, throughput a lower bound - a reserve
+  derived from them is conservative by construction) or `server_reported_timings`.
+* **No measurement means no large model, never a default reserve.**
+  `reserve_minutes_from_probe` is `(load + 3,500 tokens / measured rate) x 1.25` - 600 s
+  at 10 tok/s gives 19.8 min - and returns `None` when the tier was never measured; a
+  MEDIUM probe never answers for LARGE, and the newest row wins.
+  `provider.week_review_plan` then answers `may_run_large: False` with its reason and
+  names the MEDIUM model: the trader wants a week story every Saturday, so a missing
+  measurement costs the large model, not the story. It writes no row.
+* **A fallback that cannot be read is a silent downgrade.** The ledger's `model` column
+  is one string, so a row reading `gemma3:12b-tbv3ctx-64k` cannot otherwise be told apart
+  from a night the large model was never attempted. `provider.request_with_fallback`
+  sends the IDENTICAL closed schema to both tiers, rejects an invented `source_id` whole,
+  publishes NOTHING when both fail, and returns asked / answered / why for the SLOT to
+  write under `model_attribution`. It writes no ledger row itself (`ledger_path` is
+  accepted and unused by design), and it RAISES `ValueError` for `openai` before anything
+  is sent - TJ-5's week slot must catch that and record a FAILED row. `local_large` is a
+  name in this seam only, never in `ai_summary.normalize_provider` nor `ai_credentials`,
+  whose vault knows openai and anthropic and raises on anything else.
+
+**Two lessons from the integration, both about tests rather than models.** A guard pinned
+"byte-for-byte to the branch's base" (`test_tj13b_local_large_provider.py`'s weeknight
+slate test) went red the moment the lead's `1f260ffa` fixed slot order on `main`; it was
+re-pinned to main's order on the lead's authority - same 20 names, positions 12-14 - and
+**TJ-10's coming `read_grades_mature` slot must be added to that tuple at integration.**
+And while the `ai_jobs_runner` lock is held, about 42 tests that call the real
+`runner.run_slots` FAIL rather than skip, so a suite run inside the AI window is neither a
+baseline nor proof that a branch is red (`docs/AGENT_TEAM.md`, "The nightly AI lock").
+
 ## The four overnight repairs TJ-13A carried - envelope, membership, examples, truncation (2026-09-19)
 
 **The envelope this code asked for** (TJ-13A item 5). `journal_enrichment` failed

@@ -89,7 +89,7 @@ The lead's Claude auto-memory is machine-local scratch, not the shared record.
    reviewer's blockers verbatim). Advisories are batched into a later packet.
 7. **Integrate.** The lead merges to `main` in a SCRATCH WORKTREE, never in the desk's
    checkout while the desk is up, then runs the full suite with the nightly AI lock
-   FREE (probe it; 32 tests stand down while it is held), ruff, smoke and the source
+   FREE (probe it; about 42 tests FAIL while it is held), ruff, smoke and the source
    selftest, and refreshes the checkpoint block. Merge order is the packet order.
 8. **The desk.** A merged commit reaches the desk only at its next restart, and the
    restart is the trader's call. The lead says in one line that it is owed and why.
@@ -101,9 +101,13 @@ The lead's Claude auto-memory is machine-local scratch, not the shared record.
   the main checkout's branch while the desk is running: on 2026-09-02 the desk died
   during the after-close wrap-up with the working tree mid-merge under it.
 - **The nightly AI lock.** From ~22:00 until the run finishes (it took six hours on
-  2026-09-01) `test_ai_jobs_runner.py`, `test_ai_evidence_coverage.py` and
-  `test_ai_jobs_store_window.py` stand down. A suite run with the lock held is not a
-  baseline. Probe: `local_writer_lock('ai_jobs_runner', timeout_seconds=0.0)`.
+  2026-09-01) every test that calls the real `runner.run_slots` **FAILS - it does not
+  skip**: about 42 of them, measured 2026-09-20 (29 in `test_ai_jobs_runner.py`, the
+  rest across `test_tj13a_*`, `test_tj13b_*`, `test_ai_evidence_coverage.py` and
+  `test_ai_jobs_store_window.py`). A full suite inside the AI window therefore shows
+  ~42 extra failures, is not a baseline, and is not a red branch either - re-run it
+  with the lock free before calling anything broken. Probe:
+  `local_writer_lock('ai_jobs_runner', timeout_seconds=0.0)`.
 - **Fail-before-fix is proven, not claimed.** The builder restores the pre-change file
   and watches the new test fail; the reviewer does it again independently.
 - **Old rows have the key PRESENT and EMPTY, not absent.** A test that models an old

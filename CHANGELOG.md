@@ -2421,10 +2421,11 @@ They are evidence and must not be loaded as context.
   validation, immutable evidence packages, and export-only results.
 - Config-gated local OpenAI-compatible provider through Ollama, default off; small and
   medium model tiers verified on the Ryzen main desk with no market-hours inference.
-  The local large tier is `RETIRED` (2026-08-10): 27B-class models no longer load
-  beside the running desk on the 780M, so its jobs belong to the frontier model. Local
-  calls are capped to the tier's context window and fail loudly on server-side prompt
-  truncation.
+  The local large tier was declared `RETIRED` on 2026-08-10 (27B-class models were held
+  not to load beside the running desk on the 780M) — **that was a judgement, not a
+  measurement, and TJ-13B replaces it with one** (see the probe entry below); the tier
+  has still never run. Local calls are capped to the tier's context window and fail
+  loudly on server-side prompt truncation.
 - Separate off-hours `ai_jobs` process and scheduled task, job-ledger integration,
   deterministic evidence coverage, daily advisory summary, per-ticker briefs, full
   artifacts in `ai_store`, and bounded atomic `ai_morning_brief.txt` publication.
@@ -2443,6 +2444,61 @@ They are evidence and must not be loaded as context.
   `run_ai_jobs.py --status` prints the night's own slate, and `--slot` resolves against
   every registered slot (`default_slots() + optional_slots()`), an unknown name being an
   error exit.
+- **The large local model is MEASURED before anything uses it (TJ-13B, 2026-09-19/20;
+  merged into `lead/p033-integration2` `e54c8203`, not on `main`).**
+  `scripts/ai_jobs/model_probe.py` adds `python scripts/run_ai_jobs.py --probe-model
+  large` — a COMMAND, never a slot: it builds no slate, runs no other job, and exits 0
+  when it measured, 1 when it refused with a printed reason (exactly three refusals: not
+  night, a job is running, already measured this session). A probe is a model LOAD and is
+  treated as one — night-only seven days a week with `--force` never buying the clock
+  (`PROBE_RESERVE_MINUTES` 45, so it refuses from ~05:15 PDT), refused while the
+  `ai_jobs_runner` machine lock is held and refused on a box with no exclusion primitive
+  at all, and run against a COPY of one week's fact packs (`evidence_stats.WEEK_SESSIONS`
+  = 5) that is deleted afterwards. **The lock is the DEFAULT guard**, resolved through
+  `model_probe.runner_lock` at call time, and there is no value of `lock` that means
+  "unguarded", so a bare call cannot load a 27B beside a running 12B; it is HELD across
+  the measurement, so the next 30-minute firing stands down. `--force` re-spends ONLY the
+  already-measured check. It writes ONE `manual_test` ledger row under `job="model_probe"`
+  carrying `model_probe = {model, tier, packs, load_seconds, tokens_per_second,
+  peak_memory_mb, baseline_memory_mb, context_tokens_accepted, basis, …}`; `manual_test`
+  never counts as session coverage (a Saturday probe never tells the next firing that
+  Friday was served) and the row's `session_date` is the LAST session.
+  `context_tokens_accepted` is the SERVER's reported `prompt_tokens`, never the configured
+  `ai_local_context_tokens`; `peak_memory_mb` is peak memory in USE on the machine beside
+  the running desk, not a delta. One call cannot split a weight load from prompt
+  evaluation and generation, so every row names its BASIS: `single_call_end_to_end` (load
+  an upper bound, throughput a lower bound — a reserve derived from them is conservative
+  by construction) or `server_reported_timings`. An unreachable endpoint costs ONE call,
+  is recognised by `ai_summary.is_endpoint_unreachable`, and leaves every prior artifact
+  and ledger row intact. `latest_measurement` reads the NEWEST row back and averages
+  nothing; `reserve_minutes_from_probe` derives `(load + 3,500 tokens ÷ measured rate) ×
+  1.25` (600 s at 10 tok/s → 19.8 min), floored by the load itself, and returns `None` —
+  never a default — when the tier has never been measured; a MEDIUM probe never answers
+  for LARGE. **The 27B has still never run**: the live 476-row ledger names only 12B tags,
+  and the measurement is the trader's first Saturday night (gate #158's TJ-13B clause).
+- **`local_large`, and a fallback that says so (TJ-13B, 2026-09-19/20).**
+  `scripts/ai_jobs/provider.py` owns the week story's provider vocabulary:
+  `ai_week_review_provider` defaults to `local_large`, `openai` stays a setting and is
+  refused by `request_with_fallback` without sending anything, and an unknown value falls
+  back to `local_large` with a warning. `week_review_plan()` is a REPORT that writes no
+  row: with a measurement it names the large tag and its derived `reserve_minutes`; with
+  none it answers `may_run_large: False`, names the MEDIUM model and says to run the probe
+  — the trader gets a week story every Saturday either way (lead decision, 2026-09-19).
+  `request_with_fallback` asks the large model, falls back to the medium one on the
+  IDENTICAL closed schema (`AI_SUMMARY_JSON_SCHEMA`, citations enforced by the shared
+  validator, an invented `source_id` rejected whole) and returns `attribution = {provider,
+  model_asked, model_answered, fallback_reason}` for the SLOT to write on its ledger row
+  under `model_attribution`; both models failing publishes nothing (`result is None`), and
+  it writes no ledger row itself (`ledger_path` accepted and unused by design). It RAISES
+  `ValueError` for `openai` and for any name that is not a local tier, before anything is
+  sent, so the calling slot must catch it and record a FAILED row. `local_large` lives in
+  this seam and deliberately NOT in `ai_summary.normalize_provider`, whose vocabulary
+  `ai_credentials.PROVIDER_ENV_KEYS` shares and which raises outside openai/anthropic.
+  Underneath, every call is an ordinary `provider="local"` request: one provider path, two
+  tiers. No slate changed. Tests: `tests/test_tj13b_model_probe.py`,
+  `tests/test_tj13b_probe_guards.py`, `tests/test_tj13b_week_reserve.py`,
+  `tests/test_tj13b_local_large_provider.py`. Rule: DESK_INTERNALS "TJ-13B". Gate #158's
+  TJ-13B clause owed.
 - The nightly summary fails fast or finishes: an unreachable local endpoint ends the map
   pass on its first call rather than after every slice's own read timeout (a REFUSED
   endpoint degrades in about 2 s; a HUNG one still costs one 900 s read timeout on the
@@ -3000,6 +3056,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-20 - TJ-13B: the large local model is measured, then used (branch `claude/tj13b-large-local`, tip `800ecb8c`, merged into `lead/p033-integration2` `e54c8203`)
+
+TJ-13 item 7's measuring half. The week story is supposed to be written by the 27B (decision 0021 answer 20), and a slot declares a `reserve_minutes` - but in 476 live ledger rows the only models ever named were 12B tags, so the one number that decides whether the week story may start at all could not be written down by anybody. It is now MEASURED, once, by the trader, and read back from the ledger. `scripts/ai_jobs/model_probe.py` adds `python scripts/run_ai_jobs.py --probe-model large`: a COMMAND, never a slot, exit 0 measured / 1 refused with a printed reason, and exactly THREE refusals - it is not night, an AI job is running, this session was already measured. Because a probe is a model LOAD, every rule about model loads applies: night-only seven days a week with `--force` never buying the clock (`PROBE_RESERVE_MINUTES` 45, so it refuses from ~05:15 PDT), a deleted COPY of one week's fact packs and never the live store, and **the `ai_jobs_runner` machine lock as the DEFAULT guard** - the sentinel `USE_RUNNER_LOCK`, with `None` meaning the same thing, so there is deliberately no value of `lock` that means "unguarded" and a bare call cannot load a 27B beside a working 12B on this 32 GB box; the guard is HELD across the measurement, so a 22:30 firing under it stands down cleanly, and a box with no exclusion primitive gets a REFUSAL rather than a guess. One `manual_test` ledger row per measurement (`job="model_probe"`) carries load seconds, tokens per second, `peak_memory_mb` (the machine's in-use memory, with `baseline_memory_mb` beside it) and the context length the SERVER accepted, each labelled with the `basis` it was measured on; `manual_test` never counts as session coverage and the row's `session_date` is the LAST session, so a Saturday-night probe files under Friday. `reserve_minutes_from_probe` is `(load + 3,500 tokens ÷ rate) × 1.25` and returns `None` - never a default - when the tier was never measured. `scripts/ai_jobs/provider.py` then owns the week story's vocabulary: `ai_week_review_provider` (default `local_large`), `week_review_plan()` as a REPORT that writes no row and answers `may_run_large: False` with its reason while naming the MEDIUM model, and `request_with_fallback`, which sends the IDENTICAL closed schema to both tiers, publishes nothing when both fail, writes no ledger row itself, RAISES `ValueError` for `openai` before anything is sent, and returns asked / answered / why for the publishing SLOT to record under `model_attribution` - the ledger's `model` column being one string, a silent downgrade is otherwise unreadable. `local_large` lives in this seam and never in `ai_summary.normalize_provider`. **The review was NO-GO on one blocker:** `--force` never reached the probe, so its own refusal ("pass --force to measure it again") was advice the command could not take; the fix round was then verified by the lead with the real AI lock FREE - 340 AI-jobs tests green. No slate changed by TJ-13B; the one slate edit on the branch is the lead-authorised re-pin of a tester's byte-pinned weeknight tuple to main's order after `1f260ffa` moved `miss_contrast` (same 20 names, positions 12-14) - **TJ-10's coming `read_grades_mature` slot must join that tuple at integration.** **The 27B has still never run**: the measurement is the trader's first Saturday night (gate #158's TJ-13B clause, and the trader action in the checkpoint). `openai` remains a setting, off. Merged into `lead/p033-integration2`; not on `main`. Long form: DESK_INTERNALS "TJ-13B".
 
 ### 2026-09-19 (night) - TJ-14A: the Mentor card asks two different questions, and the desk reads the internals (branch `claude/tj14a-mentor-card`, tip `6808abd9`, merged into `lead/p033-integration2` `e8c04f88`)
 
