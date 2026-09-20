@@ -65,6 +65,10 @@ class _GatedService:
 
     def __init__(self, gate, *, built=True, raises=False) -> None:
         self.calls: list[tuple[str, int]] = []
+        # LEAD AMENDMENT 2026-09-20 (review round 4): set once a build has
+        # STARTED on the worker thread, so a test can wait for that instead of
+        # counting `calls` while the worker is still on its way to the append.
+        self.started = threading.Event()
         self._gate = gate
         self._built = built
         self._raises = raises
@@ -74,6 +78,7 @@ class _GatedService:
 
     def build_pack_for(self, session_date, **_kwargs):
         self.calls.append((str(session_date), threading.get_ident()))
+        self.started.set()
         self._gate.wait(5.0)
         if self._raises:
             raise RuntimeError("the session's stores were unreadable")
@@ -347,6 +352,12 @@ def test_a_session_switch_mid_build_neither_frees_nor_strands_the_button(
 
         assert panel.redo_story_button.isEnabled() is False
         panel.redo_story()
+        # LEAD AMENDMENT 2026-09-20 (review round 4): this count raced the
+        # worker thread (2 failures in 8 runs, reading 0 before the append).
+        # Wait until the ONE build has started, then count: a second build
+        # would have appended a second call by the time the gate opens, and
+        # the exact-list assertion after the drain catches a late one.
+        assert service.started.wait(5.0), "the first build never started"
         assert len(service.calls) == 1, service.calls
 
         gate.set()
