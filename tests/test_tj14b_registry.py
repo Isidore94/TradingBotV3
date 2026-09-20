@@ -50,12 +50,23 @@ def test_every_registered_kind_names_a_consumer_that_reads_its_answer():
     report = {row["kind"]: row for row in mentor_questions.consumer_report()}
 
     assert report, "the registry is empty"
+    # AMENDED by the builder under the lead's decision of 2026-09-19 (TJ-14B
+    # decision 1): three kinds ship DORMANT because the reader that will consume
+    # them is another packet's (`trade_origin` / `open_position_check` -> TJ-12,
+    # `grader_gap` -> TJ-10). `pending()` never puts a dormant kind on a live
+    # card, so the rule this test pins - nothing ASKED that nothing reads - is
+    # unchanged; a dormant kind is excluded here instead of being given a shim
+    # reader nobody calls, which is the lie the walk exists to catch.
     broken = {
         kind: row.get("reason") or row
         for kind, row in report.items()
-        if not (row.get("imports") and row.get("reads"))
+        if not row.get("dormant") and not (row.get("imports") and row.get("reads"))
     }
     assert broken == {}, f"kinds whose consumer cannot use the answer: {broken}"
+    dormant = {kind for kind, row in report.items() if row.get("dormant")}
+    assert dormant == {"trade_origin", "open_position_check", "grader_gap"}
+    for kind in dormant:
+        assert report[kind]["dormant_until"], f"{kind} is dormant with no packet named"
 
 
 def test_the_registry_covers_every_kind_the_packet_names():

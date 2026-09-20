@@ -34,6 +34,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 if str(ROOT_DIR / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT_DIR / "tests"))
 
+from tj14b_lift_dormancy import lift_dormancy  # noqa: E402,F401
 from tj14b_support import (  # noqa: E402
     EARLY_CLOSE,
     SESSION,

@@ -284,7 +284,13 @@ def test_a_journal_that_becomes_ready_after_the_nine_oclock_card_is_still_asked_
     card = _card(window)
     assert card._answer_inputs == {}
     assert "journal not ready" in card.trade_check_label.text()
-    assert fake.calls == [3], "and the one morning retry was asked for"
+    # TJ-14B: every card now also makes ONE light pre-card pull
+    # (`mentor_questions.PRE_CARD_PULL_DAYS`), so the total number of pulls
+    # is no longer the number of morning RETRIES. The retry is counted by the
+    # days it asks for - `MORNING_RETRY_DAYS`, which the pre-card pull never
+    # uses - so this assertion says exactly what it always meant, and now
+    # tells the two pulls apart instead of adding them up.
+    assert fake.calls.count(check.MORNING_RETRY_DAYS) == 1, "and the one morning retry was asked for"
 
     # The retry lands the statement.
     mark_covered(store, REVIEWED)
@@ -318,7 +324,13 @@ def test_a_journal_still_not_ready_reprints_the_current_freshness_date(desk):
     assert "journal not ready" in card.trade_check_label.text()
     assert "fills current to 2026-09-10" in card.trade_check_label.text()
     assert "2026-09-09" not in card.trade_check_label.text()
-    assert len(fake.calls) == 1, "still one retry a morning"
+    # TJ-14B: every card now also makes ONE light pre-card pull
+    # (`mentor_questions.PRE_CARD_PULL_DAYS`), so the total number of pulls
+    # is no longer the number of morning RETRIES. The retry is counted by the
+    # days it asks for - `MORNING_RETRY_DAYS`, which the pre-card pull never
+    # uses - so this assertion says exactly what it always meant, and now
+    # tells the two pulls apart instead of adding them up.
+    assert fake.calls.count(check.MORNING_RETRY_DAYS) == 1, "still one retry a morning"
 
 
 def test_the_morning_retry_is_asked_for_once_across_two_slots(desk):
@@ -329,4 +341,10 @@ def test_the_morning_retry_is_asked_for_once_across_two_slots(desk):
     window._show_trade_mentor_prompt(slot_at(SESSION_TODAY, 9))
     window._show_trade_mentor_prompt(slot_at(date(2026, 9, 14), 10))
 
-    assert len(fake.calls) == 1
+    # TJ-14B: every card now also makes ONE light pre-card pull
+    # (`mentor_questions.PRE_CARD_PULL_DAYS`), so the total number of pulls
+    # is no longer the number of morning RETRIES. The retry is counted by the
+    # days it asks for - `MORNING_RETRY_DAYS`, which the pre-card pull never
+    # uses - so this assertion says exactly what it always meant, and now
+    # tells the two pulls apart instead of adding them up.
+    assert fake.calls.count(check.MORNING_RETRY_DAYS) == 1

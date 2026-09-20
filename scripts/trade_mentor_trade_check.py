@@ -166,6 +166,14 @@ class TradeCheckTask:
     #: Every incomplete trade id, capped or not - the completeness view's list.
     incomplete_trade_ids: tuple[str, ...] = field(default=())
     fills_current_to: str = ""
+    #: TJ-14B item 2/4: the trade ids filled on the card's OWN session. They sit
+    #: in `trades` beside the reviewed session's, because the label made before
+    #: the outcome is known is the one worth the most - and the three label ages
+    #: are only worth reporting apart if the desk actually produces the middle
+    #: one. Coverage is deliberately NOT required for these: today's statement
+    #: never lands mid-session, and a fill the desk has already SEEN is a fill
+    #: the trader can label.
+    same_session_trade_ids: tuple[str, ...] = field(default=())
 
 
 def previous_exchange_session(session: date) -> str:
@@ -574,15 +582,28 @@ def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> Tr
     an older backlog, which no caller builds yet; it does not cap the session
     being forced, so `remaining` is 0 here by construction.
     """
+    if isinstance(session, datetime):
+        session = session.date()
     reviewed = previous_exchange_session(session)
     current = fills_current_to(store)
     fresh_to = current.isoformat() if current else ""
+    # TJ-14B item 4. Today's own fills, whether or not last night's statement
+    # landed: the desk asks about what it has SEEN. Never gated on coverage -
+    # today's statement does not exist yet, and waiting for it is exactly how
+    # every live label came to be `recalled_after`.
+    today = tuple(questions_for_session(store, session.isoformat()) or ())
+    today_ids = tuple(question.trade_id for question in today)
+
     if not _journal_ready(store, reviewed):
         return TradeCheckTask(
             reviewed_session=reviewed,
             journal_ready=False,
+            trades=today,
+            incomplete_total=len(today),
             reason=REASON_NOT_READY,
+            incomplete_trade_ids=today_ids,
             fills_current_to=fresh_to,
+            same_session_trade_ids=today_ids,
         )
 
     questions = questions_for_session(store, reviewed)
@@ -590,20 +611,29 @@ def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> Tr
         return TradeCheckTask(
             reviewed_session=reviewed,
             journal_ready=False,
+            trades=today,
+            incomplete_total=len(today),
             reason=REASON_NOT_READY,
+            incomplete_trade_ids=today_ids,
             fills_current_to=fresh_to,
+            same_session_trade_ids=today_ids,
         )
 
-    asked = tuple(questions)
+    # The reviewed session first, today's fills after it. A trade that somehow
+    # answers to both dates is listed ONCE: two sections for one trade is two
+    # Save gates on the same fields.
+    seen = {question.trade_id for question in questions}
+    asked = tuple(questions) + tuple(q for q in today if q.trade_id not in seen)
     return TradeCheckTask(
         reviewed_session=reviewed,
         journal_ready=True,
         trades=asked,
         remaining=0,
-        incomplete_total=len(questions),
+        incomplete_total=len(asked),
         reason="",
-        incomplete_trade_ids=tuple(question.trade_id for question in questions),
+        incomplete_trade_ids=tuple(question.trade_id for question in asked),
         fills_current_to=fresh_to,
+        same_session_trade_ids=tuple(q.trade_id for q in today if q.trade_id not in seen),
     )
 
 
@@ -691,6 +721,7 @@ def morning_import_retry(
     *,
     today: str,
     last_retry: str = "",
+    tally: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The ONE deterministic import retry the desk makes before the 09:00 card.
 
@@ -720,16 +751,61 @@ def morning_import_retry(
         return {"retried": False, "reason": "already retried today", "last_retry": last_retry}
     if service is None:
         return {"retried": False, "reason": "no import service", "last_retry": last_retry}
+    # TJ-14B lead decision 3: the desk's day-time Questrade attempts have ONE
+    # owner, and this retry goes THROUGH it rather than beside it. The
+    # once-a-morning rule above is still this function's; the per-DAY cap, the
+    # failure cap and the tally are `pre_card_pull`'s.
+    import mentor_questions
+
+    outcome = mentor_questions.pre_card_pull(
+        service, today=day, tally=tally, days=MORNING_RETRY_DAYS
+    )
+    reason = str(outcome.get("reason") or "")
+    if outcome.get("pulled"):
+        return {"retried": True, "reason": "", "last_retry": day, "tally": outcome["tally"]}
+    if reason == "an import is already running":
+        # The attempt is spent either way: a second card an hour later must not
+        # queue a third pull behind it.
+        return {"retried": False, "reason": reason, "last_retry": day, "tally": outcome["tally"]}
+    return {
+        "retried": False,
+        "reason": reason,
+        "last_retry": last_retry,
+        "tally": outcome["tally"],
+    }
+
+
+def _answer_provenance(
+    trade: Mapping[str, Any],
+    trade_id: str,
+    trade_date: str,
+    moment: datetime,
+) -> tuple[str, bool]:
+    """How OLD this answer is, decided by `trade_origin.label_provenance`.
+
+    TJ-14B lead decision 4: the flag comes from the pure rule over the trade's
+    own stamps, never from a constant. `label_provenance` is asked with NO
+    setup, so only its two reachable answers here are possible - `same_session`
+    for an answer given on the session of the first fill, `recalled_after` for
+    everything else. `claimed_before_entry` belongs to a CONFIRMED SETUP and is
+    :func:`confirm_setup`'s to decide, not a remembered stop's.
+
+    An unreadable rule keeps the old, conservative claim (`recalled_after`):
+    calling a next-morning answer a same-session one would present remembered
+    risk as a documented pre-entry plan, which is the one thing this module
+    exists to make impossible.
+    """
+    row = dict(trade or {})
+    if not row:
+        row = {"trade_id": str(trade_id), "trade_date": str(trade_date or "")}
     try:
-        started = bool(service.pull_recent_questrade(MORNING_RETRY_DAYS))
-    except Exception as exc:  # noqa: BLE001 - a retry never costs the card
-        logging.debug("Morning import retry failed to start.", exc_info=True)
-        return {"retried": False, "reason": str(exc), "last_retry": last_retry}
-    if not started:
-        # Already running. The attempt is spent either way: a second card an
-        # hour later must not queue a third pull behind it.
-        return {"retried": False, "reason": "an import is already running", "last_retry": day}
-    return {"retried": True, "reason": "", "last_retry": day}
+        import trade_origin
+
+        provenance = trade_origin.label_provenance(row, "", (), moment)
+        return provenance, provenance != trade_origin.SAME_SESSION
+    except Exception:  # noqa: BLE001 - an undecidable age keeps the old claim
+        logging.debug("Answer provenance undecidable.", exc_info=True)
+        return "", True
 
 
 def save_answers(
@@ -750,12 +826,15 @@ def save_answers(
     things stop meaning anything the moment a fifth can be invented by a caller.
     """
     moment = now or datetime.now().astimezone()
+    trade: Mapping[str, Any] = {}
+    try:
+        trade = store.get_trade(str(trade_id)) or {}
+    except Exception:  # noqa: BLE001 - a missing row still stores the answer
+        logging.debug("Trade row unreadable for a recalled answer.", exc_info=True)
+        trade = {}
     if not trade_date:
-        try:
-            trade = store.get_trade(str(trade_id)) or {}
-            trade_date = str(trade.get("trade_date") or "")
-        except Exception:  # noqa: BLE001
-            trade_date = ""
+        trade_date = str(trade.get("trade_date") or "")
+    provenance, recalled_after = _answer_provenance(trade, trade_id, trade_date, moment)
     written: list[dict[str, Any]] = []
     for name, answer in (answers or {}).items():
         if name not in MATERIAL_FIELDS:
@@ -772,7 +851,13 @@ def save_answers(
             "value": value if value is not None else None,
             "unit": str((answer or {}).get("unit") or ""),
             "source_span": str((answer or {}).get("source_span") or ""),
-            "recalled_after_session": True,
+            # TJ-14B. The BOOLEAN that matches the provenance, never the
+            # hard-coded `True` this used to stamp on every row: since the card
+            # lists today's fills, a label made on the fill's own session is
+            # reachable, and "remembered the next morning" would be a false
+            # claim about it. The provenance itself travels beside it.
+            "recalled_after_session": recalled_after,
+            "label_provenance": provenance,
             "trade_date": str(trade_date or ""),
         }
         row = store.record_opportunity_event(
