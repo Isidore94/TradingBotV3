@@ -6,7 +6,7 @@ vocabulary and its version only.
 
 The fixture
 -----------
-``tests/fixtures/tj10_live_notes.json`` holds the **49** Market Journal notes
+``tests/fixtures/day_review/tj10_live_notes.json`` holds the **49** Market Journal notes
 the trader had written by 2026-09-19 21:40 PDT - TEXT and entry id only, copied
 off a read-only copy of the live ledger. Every row carries ``stance_before``:
 what ``extract_thesis`` read on the branch point (``e8c04f88``), pinned BEFORE

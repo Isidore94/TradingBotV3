@@ -227,7 +227,7 @@ def live_notes() -> list[dict[str, Any]]:
     import json
 
     payload = json.loads(
-        (ROOT_DIR / "tests" / "fixtures" / "tj10_live_notes.json").read_text(
+        (ROOT_DIR / "tests" / "fixtures" / "day_review" / "tj10_live_notes.json").read_text(
             encoding="utf-8"
         )
     )
