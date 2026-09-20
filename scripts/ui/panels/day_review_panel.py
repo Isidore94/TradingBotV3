@@ -111,6 +111,11 @@ STORY_BUILDING_PACK_NOTE = "Building {session}'s facts before queuing the storyâ
 #: session folders and zero packs).
 REDO_NO_PACK_NOTE = "No pack could be built for {session} - nothing queued."
 
+#: What it says when the session cannot be redone at all - a day the exchange
+#: never opened, or one that has not CLOSED yet. Said on BOTH branches: by day
+#: the marker is refused, and by night the process is too (reviewer round 3).
+REDO_REFUSED_NOTE = "{session} cannot be redone: {reason}"
+
 #: The slot the Redo button runs, by name. One spelling, used by the argv and
 #: by the CLI that receives it.
 REDO_SLOT = "day_review_narration"
@@ -536,8 +541,12 @@ class DayReviewPanel(QFrame):
         #: assert the click without spawning a process.
         self._redo_launcher: Callable[[str], Any] = redo_launcher or launch_redo_process
         #: The Redo's own pack builds, held while they run (a QThread nobody
-        #: holds is collected mid-run). One per click; short-lived.
+        #: holds is collected mid-run). ONE at a time; short-lived.
         self._redo_workers: list[_RedoPackWorker] = []
+        #: Is a redo already in flight? Three clicks used to start three full
+        #: `read_day` builds racing on one `pack.json` and three child
+        #: processes (reviewer round 3, 2026-09-20).
+        self._redo_busy = False
         self._auto_fired_session: str | None = None
         self._auto_post_close_session: str | None = None
         self._auto_timer = QTimer(self)
@@ -1573,10 +1582,21 @@ class DayReviewPanel(QFrame):
         5, TJ-4 change 4): outside the window this writes the `redo_requested`
         marker the nightly slot honours and SAYS it is queued; inside it, it
         starts one child process per click and writes no marker.
+
+        ONE redo is in flight at a time. The click starts a full `read_day`
+        and, at night, a child process; three impatient clicks used to start
+        three of each, racing on one `pack.json` (reviewer round 3,
+        2026-09-20). While a build is running this is a no-op that leaves the
+        "Buildingâ€¦" note exactly as it is, and the button is grey from the
+        click until the answer - every answer, including a build that raised.
         """
+        if self._redo_busy:
+            return
         session = self.session_date()
         if not session:
             return
+        self._redo_busy = True
+        self.redo_story_button.setEnabled(False)
         builder = getattr(self.service, "build_pack_for", None)
         if not callable(builder):
             # A host that hands this page a reader with no builder cannot build
@@ -1597,18 +1617,53 @@ class DayReviewPanel(QFrame):
             self._redo_after_pack(session, False)
 
     def _drop_redo_worker(self, worker) -> None:
-        """Let a finished build go. Held until then so Qt does not collect it."""
+        """Let a finished build go. Held until then so Qt does not collect it.
+
+        It also RELEASES the button, as a backstop: a worker that ended without
+        its `done` reaching this page must not leave the verb grey for ever.
+        """
         try:
             self._redo_workers.remove(worker)
         except ValueError:
             pass
+        self._release_redo()
         worker.deleteLater()
 
+    def _release_redo(self) -> None:
+        """One redo has answered: let the next click through. Idempotent."""
+        self._redo_busy = False
+        try:
+            self.redo_story_button.setEnabled(True)
+        except RuntimeError:  # pragma: no cover - the panel is being destroyed
+            pass
+
     def _redo_after_pack(self, session_date: str, built: bool) -> None:
-        """Queue it for tonight, or start it - now that the facts exist."""
+        """Queue it for tonight, or start it - now that the facts exist.
+
+        Every ending releases the button: queued, launched, no pack, refused,
+        and a launcher that raised.
+        """
+        try:
+            self._redo_outcome(session_date, built)
+        finally:
+            self._release_redo()
+
+    def _redo_outcome(self, session_date: str, built: bool) -> None:
+        import day_review_pack
+
         session = str(session_date or "")[:10]
         if not built:
             self.status.setText(REDO_NO_PACK_NOTE.format(session=session))
+            self.statusChanged.emit(self.status.text())
+            return
+        # Checked on BOTH branches. A day the exchange never opened, or one
+        # that has not closed, has no story to redo - and by night the launch
+        # branch used to start a process for it and report it as under way
+        # (reviewer round 3).
+        try:
+            session = day_review_pack.validated_session(session, now=self._clock())
+        except ValueError as exc:
+            self.status.setText(REDO_REFUSED_NOTE.format(session=session, reason=exc))
             self.statusChanged.emit(self.status.text())
             return
         try:
@@ -1616,14 +1671,12 @@ class DayReviewPanel(QFrame):
         except Exception as exc:  # noqa: BLE001 - an unreadable window queues
             allowed, reason = False, f"the night window could not be read ({exc})"
         if not allowed:
-            import day_review_pack
-
             try:
-                day_review_pack.request_redo(session)
+                day_review_pack.request_redo(session, now=self._clock())
                 text = f"{STORY_QUEUED_NOTE} {reason}".strip()
             except Exception as exc:  # noqa: BLE001 - a marker never costs the page
                 logging.debug("The story redo could not be queued.", exc_info=True)
-                text = f"{session} could not be queued for tonight: {exc}"
+                text = REDO_REFUSED_NOTE.format(session=session, reason=exc)
             self.status.setText(text)
             self.statusChanged.emit(self.status.text())
             return

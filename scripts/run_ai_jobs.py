@@ -43,7 +43,6 @@ import argparse
 import json
 import logging
 import sys
-from datetime import date
 from pathlib import Path
 
 #: The ONE slot `--session` may name (TJ-4 change 4). Spelled once.
@@ -288,29 +287,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"--session is accepted only with --slot {DAY_REVIEW_SLOT}; it "
                 "names the one day that slot narrates and reaches no other job"
             )
-        try:
-            asked = date.fromisoformat(session_override)
-        except ValueError:
-            parser.error(
-                f"--session {session_override!r} is not a YYYY-MM-DD session date"
-            )
-        else:
-            # A day the exchange never opened has no pack and no story. The
-            # calendar is asked, and an UNANSWERABLE calendar fails OPEN here:
-            # the slot itself answers `skipped` when there is no pack, which is
-            # a truthful ledger row, while refusing at the parser would make a
-            # redo impossible outside the calendar's known range.
-            try:
-                from market_calendar import is_session
+        # ONE rule for what a redo may name, shared with the Day Review page's
+        # own button: exactly `YYYY-MM-DD`, a real exchange session, and one
+        # that has CLOSED. The CLI used to check only the first two, so the
+        # picker's provisional Today entry parsed here and the slot then
+        # answered `skipped` - true, but the operator was told nothing at the
+        # door (reviewer round 3, 2026-09-20).
+        import day_review_pack
 
-                a_session = is_session(asked)
-            except Exception:  # noqa: BLE001 - a refusal is not a verdict
-                a_session = True
-            if not a_session:
-                parser.error(
-                    f"--session {session_override} is not a trading session; there "
-                    "is no day to narrate"
-                )
+        try:
+            session_override = day_review_pack.validated_session(session_override)
+        except ValueError as exc:
+            parser.error(f"--session: {exc}")
 
     if args.status:
         return _print_status()
