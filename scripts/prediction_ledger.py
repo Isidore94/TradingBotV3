@@ -298,7 +298,13 @@ def _percent(rate: Any) -> str:
 # ---------------------------------------------------------------------------
 # the readout
 # ---------------------------------------------------------------------------
-def _horizon_of(row: Mapping[str, Any]) -> str:
+def horizon_of(row: Mapping[str, Any]) -> str:
+    """Which horizon a grade row answers, or ``""``. The ONE mapping.
+
+    Read off the grade and then off the read inside it, because the two are
+    written by the same function and a reader that guessed from the timeframe
+    would answer differently for a D1 row with a rest-of-day call on it.
+    """
     horizon = str(row.get("horizon") or "")
     if horizon in HORIZONS:
         return horizon
@@ -346,7 +352,7 @@ def build_readout(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         )
     by_horizon: dict[str, list[dict[str, Any]]] = {name: [] for name in HORIZONS}
     for row in listed:
-        name = _horizon_of(row)
+        name = horizon_of(row)
         if name:
             by_horizon[name].append(row)
 
@@ -438,6 +444,7 @@ __all__ = [
     "available_sessions",
     "baseline_cell",
     "build_readout",
+    "horizon_of",
     "read_ledger",
     "your_reads",
 ]

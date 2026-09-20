@@ -277,10 +277,6 @@ def _window(session: str, count: int) -> tuple[str, ...]:
     return tuple(walkaway_day.earlier_sessions(session, count=size - 1)) + (session,)
 
 
-def _horizon_of(row: Mapping[str, Any]) -> str:
-    return prediction_ledger._horizon_of(row)
-
-
 def build_pack(
     session_date: str,
     *,
@@ -331,7 +327,7 @@ def build_pack(
 
     horizons: dict[str, Any] = {}
     for name in prediction_ledger.HORIZONS:
-        mine = [row for row in clicked if _horizon_of(row) == name]
+        mine = [row for row in clicked if prediction_ledger.horizon_of(row) == name]
         lately = [row for row in mine if str(row.get("session") or "")[:10] in inside]
         cell = grades.accuracy(mine)
         horizons[name] = {
