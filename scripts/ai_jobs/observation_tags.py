@@ -76,8 +76,21 @@ FIELDS = (FIELD_OBSERVATION, FIELD_BECAUSE)
 #: a code is a column name, a filename fragment and a context-feature suffix.
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{2,47}$")
 
-#: How many tags one night may return. A bound, not a target.
+#: How many tags one night may return. A bound, not a target - and it is
+#: re-checked in :func:`verify_reply`, because the copy of it in
+#: :data:`TAGS_JSON_SCHEMA` is a GRAMMAR HINT to the provider and nothing else.
+#: `ai_summary._request_local_summary` already ships a documented fallback for a
+#: backend that refuses to compile the grammar, and
+#: `ai_summary.validate_structured_output` walks the TOP level only, so an array
+#: of objects arrives untouched. Reviewer, 2026-09-20: a 10,000-row reply was
+#: published `ok`. A bound the verifier does not re-check is not a bound.
 MAX_TAGS = 60
+
+#: The only keys a reply may carry, at each of its two levels. They mirror
+#: :data:`TAGS_JSON_SCHEMA`'s `additionalProperties: false`, which for the same
+#: reason cannot be relied on.
+REPLY_KEYS = frozenset({"tags"})
+TAG_KEYS = frozenset({"note_id", "code", "span", "quote"})
 
 #: THE ONLY REPLY ACCEPTED. No `maxLength` of exactly 2,000 anywhere in it -
 #: that is the grammar-compile defect behind gate #144.
@@ -229,6 +242,15 @@ def notes_for(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     is_machine_entry` is the ONE filter (TJ-1) - and an empty text is not a
     note either: a clicks-only row stores ``""`` and the desk does not write a
     sentence for it.
+
+    Each note carries the entry's own ``written_after_the_session``, which the
+    writer COMPUTES and never backdates. It is a LABEL and it stays out of the
+    payload: a `because` written in the evening can say "in hindsight the 50 day
+    failed and I lost on this call" (reviewer, 2026-09-20), and a later reader
+    must be able to partition those words - but telling the tagger a note was
+    written after the close would be telling it something about the outcome,
+    which is the one thing this slot may never do. The note is never dropped
+    and nothing it produces is re-weighted.
     """
     import market_journal
 
@@ -264,6 +286,9 @@ def notes_for(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
                     "entry_id": entry_id,
                     "field": field,
                     "text": text,
+                    "written_after_the_session": bool(
+                        entry.get("written_after_the_session")
+                    ),
                 }
             )
     return out
@@ -320,9 +345,31 @@ class ReplyRejected(ValueError):
 def verify_reply(
     reply: Any, notes: Sequence[Mapping[str, Any]], vocabulary: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
-    """Every tag, or :class:`ReplyRejected`. One bad row rejects the whole reply."""
+    """Every tag, or :class:`ReplyRejected`. One bad row rejects the whole reply.
+
+    It re-checks the SHAPE of the answer as well as the grounding of each row,
+    because the contract in :data:`TAGS_JSON_SCHEMA` is a hint the provider may
+    or may not honour (see :data:`MAX_TAGS`). Four shape rules, and each one
+    throws the whole reply away:
+
+    * more than :data:`MAX_TAGS` rows;
+    * a key outside :data:`REPLY_KEYS` at the top or :data:`TAG_KEYS` on a row;
+    * a byte-identical duplicate row - same note, same code, same span. **A
+      model that repeats itself has not been verified** (lead decision,
+      2026-09-20): de-duping silently would store a file that does not say what
+      the model returned, and `codes_by_entry` collapses codes per entry, so no
+      number would move and nobody would ever notice.
+
+    Two rows on ONE note with OVERLAPPING spans and DIFFERENT codes are kept:
+    one sentence can cite a level and be hedged, and that is the finding.
+    """
     if not isinstance(reply, Mapping):
         raise ReplyRejected("the model returned no tags object")
+    stray = sorted(str(key) for key in reply if str(key) not in REPLY_KEYS)
+    if stray:
+        raise ReplyRejected(
+            f"the reply carries key(s) the contract forbids: {', '.join(stray)}"
+        )
     by_id = {str(note.get("note_id") or ""): note for note in notes or ()}
     codes = set(vocabulary.get("codes") or ())
     rows = reply.get("tags")
@@ -330,10 +377,20 @@ def verify_reply(
         raise ReplyRejected("the reply carries no `tags` list")
     if not isinstance(rows, (list, tuple)):
         raise ReplyRejected("`tags` is not a list")
+    if len(rows) > MAX_TAGS:
+        raise ReplyRejected(
+            f"the reply carries {len(rows)} tags, over the cap of {MAX_TAGS}"
+        )
+    seen: set[tuple[str, str, int, int]] = set()
     out: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, Mapping):
             raise ReplyRejected("a tag row is not an object")
+        extra = sorted(str(key) for key in row if str(key) not in TAG_KEYS)
+        if extra:
+            raise ReplyRejected(
+                f"a tag row carries key(s) the contract forbids: {', '.join(extra)}"
+            )
         note_id = str(row.get("note_id") or "")
         note = by_id.get(note_id)
         if note is None:
@@ -361,6 +418,13 @@ def verify_reply(
                 f"a span on {note_id!r} does not reproduce its quote: the note "
                 f"reads {text[start:end]!r} where the answer said {quote!r}"
             )
+        identity = (note_id, code, start, end)
+        if identity in seen:
+            raise ReplyRejected(
+                f"the reply repeats one tag: {code!r} on {note_id!r} at "
+                f"{[start, end]}"
+            )
+        seen.add(identity)
         out.append(
             {
                 "note_id": note_id,
@@ -369,6 +433,12 @@ def verify_reply(
                 "code": code,
                 "span": [start, end],
                 "quote": quote,
+                # Advisory 1: a LABEL, never a filter. The trader's own words
+                # are the artifact under study and a hindsight note is tagged
+                # like any other; this is what lets a later reader partition.
+                "written_after_the_session": bool(
+                    note.get("written_after_the_session")
+                ),
             }
         )
     return out
@@ -434,10 +504,16 @@ def read_latest(session_date: str, *, root: Any = None) -> dict[str, Any] | None
     return newest
 
 
-def codes_by_entry(session_date: str, *, root: Any = None) -> dict[str, list[str]]:
-    """`{entry_id: [code, ...]}` for one session - what the contrast reads."""
+def tagged_entries(session_date: str, *, root: Any = None) -> dict[str, dict[str, Any]]:
+    """`{entry_id: {"codes": [...], "written_after_the_session": bool}}`.
+
+    ONE read of the session's tags file answering both questions the contrast
+    asks of it: which codes a note carried, and whether the note was written
+    after the bell. A code appears once per entry however many spans carried it;
+    the contrast is about whether a note cited a thing, not how often.
+    """
     stored = read_latest(session_date, root=root)
-    out: dict[str, list[str]] = {}
+    out: dict[str, dict[str, Any]] = {}
     if not isinstance(stored, Mapping):
         return out
     for tag in stored.get("tags") or ():
@@ -447,10 +523,22 @@ def codes_by_entry(session_date: str, *, root: Any = None) -> dict[str, list[str
         code = str(tag.get("code") or "").strip()
         if not entry_id or not code:
             continue
-        codes = out.setdefault(entry_id, [])
-        if code not in codes:
-            codes.append(code)
+        row = out.setdefault(
+            entry_id, {"codes": [], "written_after_the_session": False}
+        )
+        if code not in row["codes"]:
+            row["codes"].append(code)
+        if tag.get("written_after_the_session"):
+            row["written_after_the_session"] = True
     return out
+
+
+def codes_by_entry(session_date: str, *, root: Any = None) -> dict[str, list[str]]:
+    """`{entry_id: [code, ...]}` for one session - the codes half of the above."""
+    return {
+        entry_id: list(row["codes"])
+        for entry_id, row in tagged_entries(session_date, root=root).items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -467,8 +555,20 @@ def _read_entries(session: str) -> tuple[list[dict[str, Any]], str]:
     journal at all - `day_review_index.INDEXED_SOURCES` is the recap stores - so
     it could not have answered this.
 
-    The session is selected the ONE way this desk selects it
-    (`market_journal.session_of_entry`) and a machine row never becomes a note.
+    **The WINDOW is asked of the ledger, not applied after it.**
+    `EvidenceLedger.read` filters by `session_date` WHILE STREAMING, and the
+    packet's rule is "never stream the whole journal unbounded". Measured by the
+    reviewer on a copy of the live stream (2026-09-20): 84 rows unwindowed
+    against 7 for one session, the same answer either way. It is safe because a
+    CORRECTION carries the ORIGINAL `session_date` (`market_journal.build_entry`:
+    *"session_date is what the entry is ABOUT"*), so both halves of a supersede
+    pair stay inside a one-session window and `resolve_entries` can still hide
+    the older one.
+
+    The session is then selected the ONE way this desk selects it
+    (`market_journal.session_of_entry`) - a row whose `session_date` and
+    `session_of_entry` disagree is not silently kept - and a machine row never
+    becomes a note.
     """
     try:
         import market_journal
@@ -478,7 +578,8 @@ def _read_entries(session: str) -> tuple[list[dict[str, Any]], str]:
             stream=market_journal.STREAM,
             schema=market_journal.SCHEMA_MARKET_JOURNAL_ENTRY,
         )
-        result = ledger.read()
+        window = str(session or "")[:10]
+        result = ledger.read(start=window, end=window)
         rows = [
             row
             for row in market_journal.resolve_entries(result.rows)
@@ -606,6 +707,17 @@ def run_observation_tags(
         "generated_at": moment.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "inputs_hash": evidence["evidence_hash"],
         "notes_offered": len(notes),
+        # Advisory 1, as a COUNT in the header: how many of the entries that got
+        # a tag were written after the session closed. Present and zero, never
+        # absent - a reader that has to tell "none" from "this build did not
+        # measure it" is reading two different absences as one.
+        "entries_written_after": len(
+            {
+                str(tag["entry_id"])
+                for tag in verified
+                if tag.get("written_after_the_session")
+            }
+        ),
         "tags": verified,
     }
     try:
@@ -634,6 +746,8 @@ def run_observation_tags(
 
 __all__ = [
     "FIELDS",
+    "REPLY_KEYS",
+    "TAG_KEYS",
     "MAX_TAGS",
     "PROMPT_VERSION",
     "SCHEMA",
@@ -648,6 +762,7 @@ __all__ = [
     "notes_for",
     "read_latest",
     "run_observation_tags",
+    "tagged_entries",
     "tags_path",
     "verify_reply",
 ]

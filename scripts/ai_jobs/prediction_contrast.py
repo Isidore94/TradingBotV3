@@ -283,6 +283,7 @@ def build_pack(
     now: datetime | None = None,
     rows: Iterable[Mapping[str, Any]] | None = None,
     tags: Mapping[str, Any] | None = None,
+    written_after: Iterable[str] = (),
     window_sessions: int = evidence_stats.LATELY_SESSIONS,
     min_side: int | None = None,
     min_total: int | None = None,
@@ -295,6 +296,14 @@ def build_pack(
     previous night's :mod:`ai_jobs.observation_tags` file - tonight's tags can
     never be in tonight's pack, because the tagger is a stage 2 slot and this is
     a stage 1 one.
+
+    ``written_after`` names the tagged entries whose note was written AFTER the
+    session closed (`market_journal`'s computed `written_after_the_session`). It
+    is COUNTED and nothing else: no feature is dropped, no row is re-weighted
+    and no ranked number moves. The trader's own words are the artifact under
+    study and a hindsight `because` is still their reasoning - but a reader has
+    to be able to partition it, and a count nobody can see is not a partition
+    (reviewer advisory 1, 2026-09-20).
 
     ``min_side`` and ``min_total`` are the FEATURE floor, defaulted to the
     desk's constants and passed straight to `evidence_contrast.contrast`. They
@@ -324,6 +333,7 @@ def build_pack(
     inside = set(window)
     tag_map = {str(key): list(value or ()) for key, value in (tags or {}).items()}
     codes = _tag_codes(tag_map)
+    hindsight = {str(value) for value in written_after or ()} & set(tag_map)
 
     horizons: dict[str, Any] = {}
     for name in prediction_ledger.HORIZONS:
@@ -392,6 +402,11 @@ def build_pack(
             "entries_tagged": len(tag_map),
             "reads_matched": matched,
             "codes": list(codes),
+            # A LABEL, never a filter: how many of the tagged notes were written
+            # after the bell. Present and zero, never absent - a reader that has
+            # to tell "none" from "this build did not measure it" is reading two
+            # different absences as one.
+            "entries_written_after": len(hindsight),
             # NAMED even when no read carried one, so "nobody has tagged a note
             # yet" and "the tags do not join these reads" are different states a
             # reader can tell apart.
@@ -542,25 +557,34 @@ def _read_ledger(reads_root: Any) -> tuple[list[dict[str, Any]], str]:
         return [], f"read ledger unreadable: {type(exc).__name__}: {exc}"
 
 
-def _read_tags(sessions: Iterable[str], root: Any = None) -> tuple[dict[str, list[str]], str]:
-    """`{entry_id: [code, ...]}` from the nights that have already tagged. Never raises."""
+def _read_tags(
+    sessions: Iterable[str], root: Any = None
+) -> tuple[dict[str, list[str]], set[str], str]:
+    """`({entry_id: [code, ...]}, hindsight entry ids, reason)`. Never raises.
+
+    ONE read of each night's tags file answers both questions: which codes a
+    note carried, and whether that note was written after the session closed.
+    """
     try:
         from ai_jobs import observation_tags
     except Exception as exc:  # noqa: BLE001
-        return {}, f"tags unreadable: {type(exc).__name__}: {exc}"
+        return {}, set(), f"tags unreadable: {type(exc).__name__}: {exc}"
     out: dict[str, list[str]] = {}
+    hindsight: set[str] = set()
     for session in sorted({str(value or "")[:10] for value in sessions if str(value or "").strip()}):
         try:
-            found = observation_tags.codes_by_entry(session, root=root)
+            found = observation_tags.tagged_entries(session, root=root)
         except Exception:  # noqa: BLE001 - one unreadable night costs one night
             _log.debug("prediction_contrast: a tag file was unreadable.", exc_info=True)
             continue
-        for entry_id, codes in found.items():
+        for entry_id, row in found.items():
             held = out.setdefault(str(entry_id), [])
-            for code in codes:
+            for code in row.get("codes") or ():
                 if code not in held:
                     held.append(code)
-    return out, ""
+            if row.get("written_after_the_session"):
+                hindsight.add(str(entry_id))
+    return out, hindsight, ""
 
 
 def run_prediction_contrast(
@@ -571,6 +595,7 @@ def run_prediction_contrast(
     reads_root: Any = None,
     rows: Iterable[Mapping[str, Any]] | None = None,
     tags: Mapping[str, Any] | None = None,
+    written_after: Iterable[str] | None = None,
     window_sessions: int | None = None,
     min_side: int | None = None,
     min_total: int | None = None,
@@ -610,9 +635,11 @@ def run_prediction_contrast(
     listed = [dict(row) for row in rows or () if isinstance(row, Mapping)]
 
     if tags is None:
-        tags, note = _read_tags(
+        tags, hindsight, note = _read_tags(
             (str(row.get("session") or "") for row in listed), root=root
         )
+        if written_after is None:
+            written_after = hindsight
         if note:
             notes.append(note)
 
@@ -622,6 +649,7 @@ def run_prediction_contrast(
             now=moment,
             rows=listed,
             tags=tags,
+            written_after=written_after or (),
             window_sessions=size,
             min_side=min_side,
             min_total=min_total,
