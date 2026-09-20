@@ -55,6 +55,27 @@ from tj9q_support import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _the_applied_convention(monkeypatch):
+    """ADDED BY THE BUILDER, 2026-09-19. No assertion in this file was changed.
+
+    The three RED tests below drive the real Questrade import seam and ask what
+    the CORRECTED convention stores - an `OPT` row with a multiplier of 100, a
+    cover that takes cash out - which is what the desk stores once the trader
+    has run `python -m journal_reclassify --apply`. The switch that convention
+    lives behind ships OFF, and the OFF behaviour is pinned unchanged by
+    `tests/test_tj9q_reclassify_cli.py::
+    test_with_the_switch_off_a_new_fill_is_stored_exactly_as_it_is_today`.
+    The two GUARDS in this file write their rows by hand and do not care either
+    way. See the same note in `test_tj9q_questrade_sides.py`.
+    """
+    import journal_importers
+
+    monkeypatch.setattr(
+        journal_importers, "questrade_instrument_from_symbol_enabled", lambda: True
+    )
+
+
 def _stored(store, execution_uid: str) -> dict:
     with store.connection() as conn:
         row = conn.execute(

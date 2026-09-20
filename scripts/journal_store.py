@@ -826,6 +826,73 @@ class JournalStore:
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def reclassify_executions(
+        self, updates: Iterable[Mapping[str, Any]], *, refresh_tags: bool = False
+    ) -> dict[str, Any]:
+        """Move what a stored fill IS - and nothing about what it was worth.
+
+        TJ-9Q's one maintenance seam, and the only way stored rows move onto the
+        corrected Questrade vocabulary. Each update names an ``execution_uid``
+        and any of ``security_type``, ``side`` and ``multiplier``; the three
+        travel TOGETHER because they are read together:
+        ``journal_identity.group_key`` reads the type,
+        ``journal_store._signed_quantity`` reads the side, and
+        ``journal_file_authority._multiplier_for`` reads the stored multiplier
+        COLUMN before it will look at the type - so moving the type alone leaves
+        an option fill priced at a multiplier of one in the comparison that
+        decides whether a broker file takes a day over.
+
+        What it never touches: ``gross_amount``, ``net_amount``, ``commission``
+        (whose SIGN the importer owns - a broker CREDIT stays a credit),
+        ``fees``, ``quantity``, ``price``, ``symbol``, ``raw_json`` and
+        ``execution_uid``. The tax number is the broker's and is summed from
+        ``net_amount``; nothing here can reach it.
+
+        The UPDATEs are one transaction. The rebuild that follows owns its own
+        (``rebuild_trades`` opens its own connections, and a second connection
+        inside an open write transaction would deadlock on the same file), so
+        the caller takes a byte-exact backup first: that, not a shared
+        transaction, is what makes the whole pass undoable.
+
+        Returns what moved, including ``rebuild_trades``' own re-key report, so
+        a caller can REFUSE rather than leave a trader's annotation pointing at
+        a trade id that no longer exists.
+        """
+        rows = [dict(item) for item in updates]
+        updated = 0
+        if rows:
+            with self.connection() as conn:
+                for row in rows:
+                    uid = str(row.get("execution_uid") or "")
+                    if not uid:
+                        continue
+                    assignments: list[str] = []
+                    params: list[Any] = []
+                    if "security_type" in row:
+                        assignments.append("security_type = ?")
+                        params.append(str(row.get("security_type") or "").upper())
+                    if "side" in row:
+                        assignments.append("side = ?")
+                        params.append(str(row.get("side") or "").upper())
+                    if "multiplier" in row:
+                        assignments.append("multiplier = ?")
+                        params.append(float(row.get("multiplier") or 1.0))
+                    if not assignments:
+                        continue
+                    params.append(uid)
+                    cursor = conn.execute(
+                        f"UPDATE raw_executions SET {', '.join(assignments)} WHERE execution_uid = ?",
+                        params,
+                    )
+                    updated += int(cursor.rowcount or 0)
+        trades = self.rebuild_trades(refresh_tags=refresh_tags)
+        return {
+            "executions_updated": updated,
+            "executions_requested": len(rows),
+            "trades": trades,
+            "rekey": {key: list(value) for key, value in (self.last_rekey or {}).items()},
+        }
+
     def _load_raw_executions(self) -> list[dict[str, Any]]:
         """Every execution, ordered so each position's fills arrive in time order.
 

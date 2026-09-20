@@ -55,6 +55,31 @@ from tj9q_support import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _the_applied_convention(monkeypatch):
+    """ADDED BY THE BUILDER, 2026-09-19. No assertion in this file was changed.
+
+    Every test below drives the real import seam and asks what the CORRECTED
+    convention produces - which is what the desk stores once the trader has run
+    `python -m journal_reclassify --apply`. TJ-9Q ships that convention behind a
+    switch that is OFF (`journal_importers.QUESTRADE_INSTRUMENT_FROM_SYMBOL`,
+    effective value read at call time from `local_settings`), because 29
+    Questrade positions are open under the old one and a journal may never hold
+    both: a closing fill classified `OPT` cannot close a position grouped
+    `UNKNOWN`. So the seam has to be told which convention it is in, and with
+    the key absent the answer is "the old one" - which is exactly what
+    `tests/test_tj9q_reclassify_cli.py::
+    test_with_the_switch_off_a_new_fill_is_stored_exactly_as_it_is_today` pins,
+    unchanged and still green. The effective reader is patched rather than the
+    settings file so that nothing in this module can leak into another test.
+    """
+    import journal_importers
+
+    monkeypatch.setattr(
+        journal_importers, "questrade_instrument_from_symbol_enabled", lambda: True
+    )
+
+
 # --------------------------------------------------------------------------
 # The side map itself
 # --------------------------------------------------------------------------

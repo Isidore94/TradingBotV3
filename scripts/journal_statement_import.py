@@ -95,6 +95,8 @@ from journal_importers import (
     _cash_txn_uid,
     classify_activity_type,
     normalize_side,
+    normalize_side_pre_tj9q,
+    questrade_instrument_from_symbol_enabled,
 )
 
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -481,7 +483,19 @@ def _execution_from_row(row: StatementRow, *, ordinal: int = 0) -> NormalizedExe
     counts within the fill signature rather than across the file, so it is the
     same number in every export that contains this trade.
     """
-    side = normalize_side(row.action)
+    # The side map is SHARED with the live sync, so it moves with the same
+    # switch (TJ-9Q). A statement line whose action is `STO`, `BTC` or `Cov` is
+    # dropped here today because it normalizes to neither BUY nor SELL; once the
+    # trader's `--apply` run has moved the stored rows onto the corrected
+    # vocabulary, the same line is a real fill and is imported. Both conventions
+    # cannot be live at once: `fill_signature` carries the normalized side, so a
+    # row imported under one spelling would re-import as a second execution
+    # under the other.
+    side = (
+        normalize_side(row.action)
+        if questrade_instrument_from_symbol_enabled()
+        else normalize_side_pre_tj9q(row.action)
+    )
     if side not in {"BUY", "SELL"} or not row.quantity:
         return None
 
