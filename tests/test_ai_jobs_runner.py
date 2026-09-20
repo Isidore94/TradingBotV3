@@ -322,6 +322,13 @@ EXPECTED_SLOT_ORDER = (
     # slate. Nothing here reads the measured report and nothing there reads this
     # pack, so only the position is a choice - and only one of the two runs on a
     # Sunday.
+    # TJ-10 (2026-09-20): close the market reads whose horizon has matured.
+    # Deterministic, no model. Beside the cohort graders in kind - a decision
+    # measured after the fact - and INSIDE stage 1 for the same reason
+    # `miss_contrast` is: `_STAGE_ONE_LAST_SLOT` is `measured_report` and a slot
+    # appended after that name leaves the Sunday slate. Nothing below it reads
+    # the read ledger and it reads nothing above it.
+    "read_grades_mature",
     "miss_contrast",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar

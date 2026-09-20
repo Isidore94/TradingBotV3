@@ -356,6 +356,19 @@ class _IndexBuildWorker(QThread):
         except Exception as exc:  # noqa: BLE001 - a cache never costs the page
             self.failed.emit(self._session, str(exc))
             return
+        # TJ-10: the session's reads are graded HERE, on this worker, after the
+        # tape it measures them against has landed. Through `getattr` because
+        # this worker is handed a service by its host and a host that has no
+        # grader must still get its index - and in its own guard, because a
+        # failed grade costs the verdicts and nothing else.
+        grade = getattr(self._service, "build_reads_for", None)
+        if callable(grade):
+            try:
+                grade(self._session)
+            except Exception:  # noqa: BLE001 - a verdict never costs the index
+                logging.debug(
+                    "The session's reads could not be graded.", exc_info=True
+                )
         self.built.emit(self._session)
 
 
@@ -393,6 +406,9 @@ class DayReviewPanel(QFrame):
         self._bars_reader: Callable[[str], Any] | None = None
         self._payload: dict[str, Any] = {}
         self._entries: list[dict[str, Any]] = []
+        #: TJ-10: `entry_id -> the read row the worker graded`. The page reads
+        #: this and computes no verdict of its own.
+        self._reads: dict[str, dict[str, Any]] = {}
         self._walkaway_rows: tuple[Any, ...] = ()
         self._forecast_expanded = False
         self._loaded_once = False
@@ -457,6 +473,13 @@ class DayReviewPanel(QFrame):
         # reading as a section that failed.
         self.story_facts.setMinimumHeight(theme.px(STORY_MIN_HEIGHT_PX))
         self.story_facts.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        # TJ-10: the three congruence lines, UNDER the story. Printed, never
+        # pushed and never acted on (decision 0021 answer 15) - this label is
+        # the whole surface. The worker builds the sentences; this shows them.
+        self.congruence_note = QLabel("")
+        self.congruence_note.setObjectName("CongruenceLines")
+        self.congruence_note.setWordWrap(True)
+        self.congruence_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
         # Read-only: the drafting pane and "Save interpretation" are gone from
         # the trader's screen (plan.md §12.2). The sidecar still holds them.
         self.theses = QListWidget()
@@ -581,6 +604,12 @@ class DayReviewPanel(QFrame):
         self.entry_meta = QLabel("")
         self.entry_meta.setObjectName("ThoughtMeta")
         self.entry_meta.setWordWrap(True)
+        # TJ-10: the selected read's MEASURED verdict. Styled in `theme.qss` by
+        # object name and a `verdict` dynamic property - never a widget
+        # stylesheet, which is expensive on the Qt thread.
+        self.verdict_chip = QLabel("")
+        self.verdict_chip.setObjectName("VerdictChip")
+        self.verdict_chip.setVisible(False)
 
         self.entry_text = QPlainTextEdit()
         self.entry_text.setPlaceholderText(
@@ -692,7 +721,7 @@ class DayReviewPanel(QFrame):
         column has left.
         """
         self.story_section = self._section(
-            "What happened", self.story_note, self.story_facts
+            "What happened", self.story_note, self.story_facts, self.congruence_note
         )
         theses_label = QLabel("Open theses")
         theses_label.setObjectName("SectionSubtitle")
@@ -720,6 +749,7 @@ class DayReviewPanel(QFrame):
         reader_body = QVBoxLayout(reader_holder)
         reader_body.setContentsMargins(0, 0, 0, 0)
         reader_body.addWidget(self.entry_meta)
+        reader_body.addWidget(self.verdict_chip)
         reader_body.addWidget(self.entry_reader, 1)
 
         self.said_split = QSplitter(Qt.Orientation.Vertical)
@@ -1224,7 +1254,15 @@ class DayReviewPanel(QFrame):
             if payload.get("provisional")
             else f"Session {session}, closed and measured."
         )
+        # TJ-10, BEFORE the entries: the list shows each read's verdict beside
+        # the words it graded, and both come from this one payload.
+        self._reads = {
+            str(row.get("entry_id") or ""): dict(row)
+            for row in (payload.get("reads") or ())
+            if isinstance(row, Mapping) and row.get("entry_id")
+        }
         self._render_story(payload.get("story"))
+        self._render_congruence(tuple(payload.get("congruence") or ()))
         self._render_theses(payload.get("theses") or [])
         self._render_walkaway(tuple(payload.get("rejected_that_worked") or ()))
         if payload.get("walkaway") is not None:
@@ -1277,6 +1315,79 @@ class DayReviewPanel(QFrame):
         for note in tuple(getattr(story, "notes", ()) or ()):
             lines.append(str(note))
         self.story_facts.setText("\n".join(lines))
+
+    def _render_congruence(self, lines) -> None:
+        """The three lines, under the story. Formatting only (TJ-10 item 6).
+
+        Printed, never pushed and never acted on: there is no button here, no
+        threshold and no colour that means "do something". A line the desk could
+        not measure SAYS which side was missing rather than going quiet.
+        """
+        rendered: list[str] = []
+        for line in lines or ():
+            if not isinstance(line, Mapping):
+                continue
+            text = str(line.get("text") or "").strip()
+            if not text:
+                continue
+            verdict = str(line.get("verdict") or "")
+            missing = str(line.get("missing") or "")
+            if missing:
+                text = f"{text} — missing: {missing}"
+            elif verdict:
+                text = f"{text} — {verdict}"
+            rendered.append(f"· {text}")
+        self.congruence_note.setText("\n".join(rendered))
+        self.congruence_note.setVisible(bool(rendered))
+
+    def congruence_text(self) -> str:
+        """What the congruence block is showing. Read by tests and by nothing else."""
+        return self.congruence_note.text()
+
+    def verdict_chips(self) -> dict[str, str]:
+        """`entry_id -> the MEASURED verdict` currently on the page.
+
+        Only a read the worker actually graded is in it: a `No view` answer and
+        an entry with no read carry no chip, because the page never shows a
+        verdict nobody measured.
+        """
+        return {
+            entry_id: str(row.get("verdict") or "")
+            for entry_id, row in self._reads.items()
+            if str(row.get("verdict") or "").strip()
+        }
+
+    @staticmethod
+    def _verdict_text(verdict: str) -> str:
+        """One short chip. `unmeasured:<reason>` reads as English, not a key."""
+        text = str(verdict or "").strip()
+        if text.startswith("unmeasured:"):
+            return "unmeasured — " + text.split(":", 1)[1].replace("_", " ")
+        return text
+
+    @staticmethod
+    def _read_chip(read: Mapping[str, Any] | None) -> str:
+        """The chip beside an entry: WHAT was graded, then how it turned out.
+
+        Live clicks are 0 and every live read row is an EXTRACTION, so a chip
+        that said only "right" would present a stance the desk inferred from a
+        sentence as the trader's own stated call (reviewer, 2026-09-20). The
+        source is named in plain words, on every chip, always.
+        """
+        if not read:
+            return ""
+        verdict = DayReviewPanel._verdict_text(str(read.get("verdict") or ""))
+        if not verdict:
+            return ""
+        direction = str(read.get("direction") or "")
+        if str(read.get("source") or "") == "click":
+            said = f"your call: {direction}" if direction else "your call"
+        else:
+            said = (
+                f"we read your note as {direction}" if direction
+                else "read from your note"
+            )
+        return f"{said} — {verdict}"
 
     def _render_theses(self, rows) -> None:
         self.theses.clear()
@@ -1483,9 +1594,17 @@ class DayReviewPanel(QFrame):
                 # shows the call rather than a blank line, and nothing invents
                 # a sentence the trader did not write.
                 body = str(entry.get("text") or "") or _prediction_text(entry)
+                # TJ-10: the verdict the WORKER measured, beside the words it
+                # graded, and SAYING which it graded - a clicked call or a
+                # stance the desk read out of the note. Nothing is computed
+                # here and an ungraded row shows no chip at all.
+                verdict = self._read_chip(
+                    self._reads.get(str(entry.get("entry_id") or ""))
+                )
                 label = (
                     f"{_clock_text(entry.get('created_at'))}"
                     f"  ·  {entry.get('timeframe') or ''}{marker}"
+                    f"{('  ·  ' + verdict) if verdict else ''}"
                     f"  ·  {_excerpt(body)}"
                 )
                 item = QListWidgetItem(label)
@@ -1522,7 +1641,9 @@ class DayReviewPanel(QFrame):
         if not entry:
             self.entry_meta.setText("")
             self.entry_reader.setPlainText("")
+            self._show_verdict_chip(None)
             return
+        self._show_verdict_chip(self._reads.get(str(entry.get("entry_id") or "")))
         origin = str(entry.get("origin") or "")
         stamp = _clock_text(entry.get("created_at"))
         meta = f"written {stamp}  ·  {entry.get('timeframe') or ''}  ·  {origin}"
@@ -1536,6 +1657,26 @@ class DayReviewPanel(QFrame):
         self.entry_reader.setPlainText(
             "\n\n".join(part for part in (words, call) if part)
         )
+
+    def _show_verdict_chip(self, read: Mapping[str, Any] | None) -> None:
+        """One chip for the selected read, styled by a DYNAMIC PROPERTY.
+
+        `theme.qss` keys on `#VerdictChip[verdict="right"]` and friends, so no
+        stylesheet is built on the Qt thread (CLAUDE.md: "expensive" includes a
+        stylesheet). A property change needs an explicit repolish; that is one
+        widget, not a page.
+        """
+        verdict = str((read or {}).get("verdict") or "")
+        text = self._read_chip(read)
+        kind = verdict.split(":", 1)[0].split(" ", 1)[0]
+        self.verdict_chip.setText(text)
+        self.verdict_chip.setVisible(bool(text))
+        if self.verdict_chip.property("verdict") == kind:
+            return
+        self.verdict_chip.setProperty("verdict", kind)
+        style = self.verdict_chip.style()
+        style.unpolish(self.verdict_chip)
+        style.polish(self.verdict_chip)
 
     def _render_forecast(self, forecast: Mapping[str, Any]) -> None:
         text = str(forecast.get("text") or "")

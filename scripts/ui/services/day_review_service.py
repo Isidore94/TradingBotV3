@@ -60,6 +60,12 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # How many of those marks the tape could not carry, counted on the worker so
     # the page can SAY it without counting anything on the Qt thread.
     "spy_marker_placements",
+    # TJ-10: what the trader SAID the market would do, and what it did. One row
+    # per read with its measured verdict, plus the three congruence lines. Both
+    # are built ON THIS WORKER and both are written on EVERY path - a payload
+    # that omitted them on a failure would make the page's own key check lie.
+    "reads",
+    "congruence",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -153,6 +159,8 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "spy_markers": (),
         "name_charts": {},
         "spy_marker_placements": {},
+        "reads": (),
+        "congruence": (),
     }
 
 
@@ -418,6 +426,27 @@ class DayReviewService:
             )
         except Exception:  # noqa: BLE001 - a marker never costs the day
             _log.debug("Day Review markers could not be built.", exc_info=True)
+        # TJ-10, and last for the same reason the markers are: it is measured
+        # against what the payload ENDED UP with. Pure arithmetic over rows this
+        # read already opened, on this worker - the page formats and computes
+        # nothing. A grading failure costs the verdicts and nothing else, and
+        # both keys are already present from `empty_payload`, so every path -
+        # including this one's failure path - hands the page the same shape.
+        try:
+            reads, congruence, _grades = self._graded_reads(
+                session,
+                entries=entries,
+                decisions=decisions,
+                claims=claims,
+                trades=payload["trades"],
+                spy_m5_bars=payload["spy_m5_bars"],
+                tapes=stored,
+                now=moment,
+            )
+            payload["reads"] = reads
+            payload["congruence"] = congruence
+        except Exception:  # noqa: BLE001 - a verdict never costs the day
+            _log.debug("Day Review reads could not be graded.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
@@ -548,6 +577,344 @@ class DayReviewService:
         names = day_review_bars.decided_symbols(session, daily_recap_reader.RecapSources())
         bars = day_review_bars.fetch_session_bars(names, session)
         return day_review_bars.write_session_bars(session, bars)
+
+    # -- the read grader ---------------------------------------------------
+    def build_reads_for(self, session_date: str, **kwargs) -> list[dict[str, Any]]:
+        """Grade the session's reads and APPEND them to the ledger. One seam.
+
+        The named seam the post-close tick calls (`_IndexBuildWorker`, on the
+        worker thread) and the only place a grade is WRITTEN. `read_day` builds
+        the same rows to show them and writes nothing: a page open is a read.
+
+        Append-only and idempotent: a read whose current stored verdict already
+        says what this pass measured is not written again, and a verdict that
+        MOVED is a new row naming the old one (`supersedes`). A failure here
+        costs the grades and nothing else.
+        """
+        import market_read_grades as grader
+
+        session = str(session_date or "")[:10]
+        if not session:
+            return []
+        now = kwargs.get("now") or datetime.now()
+        entries: list[dict[str, Any]] = []
+        try:
+            entries = list(self.journal.entries_about(session))
+        except Exception:  # noqa: BLE001 - an unreadable ledger grades nothing
+            _log.debug("The journal could not be read for grading.", exc_info=True)
+            return []
+        decisions, claims = self._decisions_and_claims(session)
+        trades: list[dict[str, Any]] = []
+        try:
+            trades = self._trades(session)
+        except Exception:  # noqa: BLE001
+            _log.debug("The day's trades were unreadable for grading.", exc_info=True)
+        spy_bars: list[dict[str, Any]] = []
+        tapes: dict[str, Any] = {}
+        try:
+            import day_review_bars
+
+            tapes = day_review_bars.read_session_bars(session) or {}
+            spy_bars = list(tapes.get(BENCHMARK_SYMBOL) or ())
+        except Exception:  # noqa: BLE001 - a missing tape is `unmeasured`
+            _log.debug("The session tape was unreadable for grading.", exc_info=True)
+        _reads, _lines, grades = self._graded_reads(
+            session,
+            entries=entries,
+            decisions=decisions,
+            claims=claims,
+            trades=trades,
+            spy_m5_bars=spy_bars,
+            tapes=tapes,
+            now=now,
+        )
+        stored = grader.current_grades(grader.read_grades(session))
+        by_read = {str(row.get("read_id") or ""): row for row in stored}
+        fresh: list[dict[str, Any]] = []
+        for grade in self._storable_grades(grades):
+            previous = by_read.get(str(grade.get("read_id") or ""))
+            if previous is None:
+                fresh.append(grade)
+                continue
+            was = str(previous.get("verdict") or "")
+            if was == str(grade.get("verdict") or ""):
+                continue
+            # The same rule the nightly re-grade keeps: a verdict may only move
+            # UP, so an absent store can never retire a correct `pending` row.
+            if grader.verdict_rank(str(grade.get("verdict") or "")) <= grader.verdict_rank(was):
+                continue
+            fresh.append({**grade, "supersedes": str(previous.get("grade_id") or "")})
+        if fresh:
+            grader.append_grades(session, fresh)
+        return fresh
+
+    @staticmethod
+    def _decisions_and_claims(session: str):
+        """The day's verdicts and claims, read the way `read_day` reads them."""
+        import claimed_picks
+        import daily_recap_reader
+
+        rows: list[dict[str, Any]] = []
+        claims: list[dict[str, Any]] = []
+        try:
+            sources = daily_recap_reader.RecapSources()
+            annotations = daily_recap_reader._read_jsonl(
+                "annotations", sources.annotations, "created_at"
+            )
+            feedback = daily_recap_reader._read_jsonl(
+                "pick_feedback", sources.pick_feedback, "ts"
+            )
+            favorites = daily_recap_reader._read_jsonl(
+                "swing_favorites", sources.swing_favorites, "event_at"
+            )
+            events = daily_recap_reader._read_jsonl(
+                "review_events", sources.review_events, "ts"
+            )
+            for stamped in _stamped_dates_for(session):
+                for decision in daily_recap_reader._decisions(
+                    stamped, annotations, feedback, favorites, events
+                ):
+                    rows.append({
+                        "session_date": session, "symbol": decision.symbol,
+                        "side": decision.side, "category": decision.category,
+                        "verdict": decision.verdict, "source": decision.source,
+                        "timeframe": decision.timeframe,
+                        "capture_id": decision.capture_id,
+                        "decision_session": session,
+                    })
+            claims = list(claimed_picks.load_rows(sources.claimed_picks))
+        except Exception:  # noqa: BLE001 - an unreadable store names no side
+            _log.debug("The day's decisions were unreadable.", exc_info=True)
+        return rows, claims
+
+    def _graded_reads(
+        self,
+        session: str,
+        *,
+        entries,
+        decisions,
+        claims,
+        trades,
+        spy_m5_bars,
+        tapes,
+        now: datetime,
+    ):
+        """`(reads, congruence, grades)` for one session. Worker-thread only.
+
+        One row per read with the verdict the BARS give it, each gradable grade
+        carrying the point-in-time context snapshot TJ-16 item 1 requires, and
+        the three congruence lines beside them. Nothing here writes.
+        """
+        import market_read_grades as grader
+
+        rows = grader.read_rows(entries, session=session)
+        by_entry = {
+            str(entry.get("entry_id") or ""): entry for entry in entries or ()
+        }
+        tape_of: dict[str, list[dict[str, Any]]] = {}
+        daily_of: dict[str, list[dict[str, Any]]] = {}
+
+        def tape_for(symbol: str) -> list[dict[str, Any]]:
+            if symbol not in tape_of:
+                if symbol == BENCHMARK_SYMBOL:
+                    tape_of[symbol] = list(spy_m5_bars or ())
+                else:
+                    rows_for = (tapes or {}).get(symbol)
+                    tape_of[symbol] = list(rows_for or ())
+            return tape_of[symbol]
+
+        def daily_for(symbol: str) -> list[dict[str, Any]]:
+            """The benchmark's daily history, through the ONE shared loader.
+
+            `market_read_grades.daily_bars_for_symbol` is what the nightly
+            re-grade uses too. A page and a night that read different stores
+            grade different markets - which is exactly what happened before the
+            fix round (reviewer, 2026-09-20).
+            """
+            if symbol not in daily_of:
+                try:
+                    daily_of[symbol] = list(grader.daily_bars_for_symbol(symbol) or ())
+                except Exception:  # noqa: BLE001 - `unmeasured`, never an error
+                    _log.debug("Daily bars unreadable for %s.", symbol, exc_info=True)
+                    daily_of[symbol] = []
+            return daily_of[symbol]
+
+        labels = self._d1_labels()
+        prior_grades = self._prior_grades(session)
+        internals_bars = self._internals_bars(session, rows)
+        # The ONE read per timeframe a congruence line may be compared with: a
+        # CLICK outranks an extraction, and contradictory extracted stances name
+        # themselves instead of one of them being picked (`select_read`).
+        latest_d1, d1_note = grader.select_read(rows, timeframe="D1")
+        latest_m5, m5_note = grader.select_read(rows, timeframe="M5")
+
+        reads: list[dict[str, Any]] = []
+        grades: list[dict[str, Any]] = []
+        for row in rows:
+            symbol = str(row.get("benchmark") or BENCHMARK_SYMBOL)
+            daily = daily_for(symbol)
+            context: dict[str, Any] = {}
+            context_gap = ""
+            try:
+                context = grader.context_for(
+                    by_entry.get(str(row.get("entry_id") or "")) or {},
+                    row=row,
+                    bars=internals_bars,
+                    spy_m5_bars=tape_for(BENCHMARK_SYMBOL),
+                    prior_daily_bar=self._prior_daily_bar(daily, session),
+                    d1_labels=labels,
+                    prior_grades=prior_grades,
+                    latest_d1_click=latest_d1 if latest_d1 is not row else None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # A CLICK whose snapshot cannot be built is NOT stored this pass
+                # (`_storable_grades` drops it) and the row says why, so the next
+                # pass tries again. Degrading it to a named absence would make a
+                # stated call permanently context-less (lead, 2026-09-20).
+                context_gap = f"context_unbuildable: {type(exc).__name__}: {exc}"
+                _log.debug("A read's context could not be built.", exc_info=True)
+            grade = grader.grade_read(
+                row,
+                m5_bars=tape_for(symbol),
+                daily_bars=daily,
+                atr=grader.daily_atr(daily, through=session),
+                now=now,
+                context=context,
+            )
+            if context_gap:
+                grade["grader_gap"] = context_gap
+            grades.append(grade)
+            entry = by_entry.get(str(row.get("entry_id") or "")) or {}
+            mentor = entry.get("mentor") if isinstance(entry.get("mentor"), Mapping) else {}
+            reads.append({
+                **{key: value for key, value in row.items() if key != "context"},
+                "verdict": grade["verdict"],
+                "move_atr": grade["move_atr"],
+                "checkpoints": grade["checkpoints"],
+                "flat_band_rule": grade["flat_band_rule"],
+                "grader_gap": grade["grader_gap"],
+                # What the trader SAW, kept visibly apart from what they
+                # EXPECTED (TJ-14A's rule, and the packet's item 7).
+                "observation": str((mentor or {}).get("observation") or ""),
+            })
+        label = ""
+        try:
+            import d1_environment_store
+
+            label = d1_environment_store.label_for_session(session, BENCHMARK_SYMBOL)
+        except Exception:  # noqa: BLE001 - an unread label is a missing side
+            _log.debug("The desk's D1 label was unreadable.", exc_info=True)
+        lines = grader.congruence_lines(
+            session=session,
+            d1_read=latest_d1,
+            # "unknown" is "nobody labelled it", which is a MISSING side and
+            # never a label with no direction.
+            d1_label="" if label in ("", "unknown") else label,
+            decisions=decisions or (),
+            claims=claims or (),
+            trades=trades or (),
+            d1_note=d1_note,
+            # Lead decision 6's M5 half: a rest-of-day read belongs with the
+            # session's M5 likes, never with its D1 ones.
+            m5_read=latest_m5,
+            m5_note=m5_note,
+        )
+        return reads, lines, grades
+
+    @staticmethod
+    def _storable_grades(grades) -> list[dict[str, Any]]:
+        """The grades this pass may WRITE.
+
+        A clicked grade whose context could not be built is held back rather
+        than stored with a named absence: the ledger refuses it anyway
+        (`ContextMissingError`), and a row written once can never be given a
+        snapshot afterwards. The next pass builds it again.
+        """
+        import market_read_grades as grader
+
+        keep: list[dict[str, Any]] = []
+        for grade in grades or ():
+            clicked = str(grade.get("source") or "") == grader.SOURCE_CLICK
+            gap = str(grade.get("grader_gap") or "")
+            if clicked and gap.startswith("context_unbuildable"):
+                _log.debug(
+                    "A clicked grade was held back: %s", gap
+                )
+                continue
+            keep.append(grade)
+        return keep
+
+    @staticmethod
+    def _prior_daily_bar(daily_bars, session: str):
+        """The last daily bar BEFORE this session - the gap's other half."""
+        day = str(session or "")[:10]
+        prior = None
+        for bar in daily_bars or ():
+            stamp = str(bar.get("dt") or bar.get("date") or "")[:10]
+            if stamp and stamp < day:
+                prior = bar
+        return prior
+
+    @staticmethod
+    def _d1_labels() -> dict[str, str]:
+        """Every session the desk has labelled, for the point-in-time read.
+
+        Measured 2026-09-19: `d1_environment.jsonl` holds 15 rows over five
+        sessions and none for 2026-09-18, so this honestly answers `unmeasured`
+        most days rather than reaching for the nearest label.
+        """
+        try:
+            import d1_environment_store
+
+            return dict(d1_environment_store.labels_by_session(benchmark=BENCHMARK_SYMBOL))
+        except Exception:  # noqa: BLE001
+            _log.debug("The D1 environment labels were unreadable.", exc_info=True)
+            return {}
+
+    @staticmethod
+    def _prior_grades(session: str) -> list[dict[str, Any]]:
+        """This session's and the previous session's grades, for "what did you
+        know at the stamp?". Two small files, never the whole ledger."""
+        import market_read_grades as grader
+
+        days = [str(session or "")[:10]]
+        try:
+            import market_calendar
+
+            days.insert(0, market_calendar.previous_session(date.fromisoformat(days[0])).isoformat())
+        except Exception:  # noqa: BLE001 - one session is still an answer
+            _log.debug("The previous session could not be read.", exc_info=True)
+        rows: list[dict[str, Any]] = []
+        for day in days:
+            try:
+                rows.extend(grader.current_grades(grader.read_grades(day)))
+            except Exception:  # noqa: BLE001
+                _log.debug("The read ledger was unreadable.", exc_info=True)
+        for row in rows:
+            read = row.get("read")
+            if isinstance(read, Mapping) and not row.get("stamp"):
+                row["stamp"] = read.get("stamp")
+        return rows
+
+    @staticmethod
+    def _internals_bars(session: str, rows) -> dict[str, Any]:
+        """The bars `trade_mentor_context.internals_at` rebuilds a block from.
+
+        Read ONCE per session, not once per read: the loader hands over the
+        session's whole tape and the daily history, and the ONE builder cuts it
+        to each read's own stamp. A session with no read reads nothing at all.
+        """
+        if not rows:
+            return {}
+        try:
+            import trade_mentor_context
+
+            stamp = rows[0].get("stamp")
+            moment = datetime.fromisoformat(str(stamp)) if stamp else None
+            return trade_mentor_context.internals_bars_at(session, moment) or {}
+        except Exception:  # noqa: BLE001 - no bars is `unmeasured`, not an error
+            _log.debug("The internals bars were unreadable.", exc_info=True)
+            return {}
 
     def backfill_session_bars_for(self, session_date: str, **_kwargs) -> Any:
         """The past-session recovery seam; never called for the live session."""

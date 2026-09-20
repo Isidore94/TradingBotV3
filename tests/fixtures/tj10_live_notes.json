@@ -1,0 +1,351 @@
+{
+ "what": "Every Market Journal note the trader had written by 2026-09-19 21:40 PDT, TEXT and entry id only. `stance_before` is what `market_thesis.extract_thesis` read on the branch point (e8c04f88), pinned BEFORE the TJ-10 item 5 vocabulary bump.",
+ "measured_at": "2026-09-19T21:40:00-07:00",
+ "source": "market_journal-202608.jsonl + market_journal-202609.jsonl (copies)",
+ "excluded": "the one pasted external_forecast entry (not a note)",
+ "notes": [
+  {
+   "entry_id": "mj-2026-08-27-5acc5062ce77",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "Gap up open on strong NVDA earnings. weak first candle indicates caution for now. may just be a bid test",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-08-27-f98404f980e7",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "Market is just chopping. No claer direction yet. IWM quite weak selling off of highs. USO higher TLT lower but not by much. RSP lower. VXX lower too though. market still digesting I think.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-08-27-bdbe4db937c7",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "Wicks off the HOD. This is not a strong market unable to commit to anything that isnt very high rvol on its own.",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-08-27-4d59edca21f6",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market moving higher. choppy upward trend. waiting for a pullback",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-08-27-b8a81149c3a1",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "choppy day. made for a higher high and rejected. still higher but more tenous. buyers are not in control here. I do like how we are above hte 15ema now but anothjer bid test seems likely now",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-08-31-39493a9cca63",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "weak market this morning through yesterdays low. still above some mild L+ from the recent build up. LPTE for now",
+   "stance_before": "bearish"
+  },
+  {
+   "entry_id": "mj-2026-08-31-15bba08fc88f",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "choppy market. at EOD avwap unlikely to follow through",
+   "stance_before": "neutral"
+  },
+  {
+   "entry_id": "mj-2026-09-01-e81e7b7409b3",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "gap down followed by a nice bounce. market unable to even get to EOD avwap and nolw we are testing vwap on SPY. QQQ is strong. VXX is not that elevated. T2104 is bearish. TLT is bearish. bonds focused day. not the best volume seems choppy but so far the PA is good. not a lot of confidence to trade this.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-02-acfc5b1c319a",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market made a small move higehr now is just chopping around vwap. staying below the 15ema. expecting a retest of the 50sma in the near future",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-03-f8b69d229813",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "weak market. gapped up and ran for a bit but now its double topped. holding its lows at vwap but not a lot of conviction either way to start the day",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-03-53242d49f356",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market able to break out choppy move higher now over the last few hours",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-09-03-446ebc424c2c",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market D1 looks nice but the intraday action is not that tradeable. choppy moves. but overall a nice wedge forming market has an H- above it can break out from",
+   "stance_before": "neutral"
+  },
+  {
+   "entry_id": "mj-2026-09-03-f85b769f70d7",
+   "timeframe": "D1",
+   "written_after_the_session": true,
+   "text": "Market gapped up, took a bit then made its move higher. held its gains. has an H- aheadb ut looks potent to breakout",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-09-04-64a524193df0",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "bearish trend day. we shorted with success today on paper taking that vwap rejection on SPY with puts and a SNOW lotto. tried DKNG in my questrade account but that rejected the L+.",
+   "stance_before": "bearish"
+  },
+  {
+   "entry_id": "mj-2026-09-08-4e971dd93e82",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "weakness off the open. AI trade holdong up but a lot of red candles. SPY now attemptingto bouince but the bounce is much lower volume and much weaker than a buyer would like. settin up for another leg lower itnraday.",
+   "stance_before": "bearish"
+  },
+  {
+   "entry_id": "mj-2026-09-08-da6ed2f00e7e",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market chopping around vwap. no direction now but some now strength in some sectors like AI, space ane crypto",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-09-09-81c3610a35b2",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "gap down adn chop day. a nic D1 hammer supports buyers stepping in eventually.",
+   "stance_before": "neutral"
+  },
+  {
+   "entry_id": "mj-2026-09-10-290d684ab180",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "gap down and now chop. buyers look weaker than sellers now with the lack of a good bounce. we are at the 50sma on SPY we need to see as trong bounce here to justify support otherewise SPY will test the 100sma over the coming weeks",
+   "stance_before": "neutral"
+  },
+  {
+   "entry_id": "mj-2026-09-11-28b8b805c44d",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "gap up. not much folllow through. IWM rejecting the 100sma. VXX lower tho and QQQ is strong. SPY might be pulled up with it",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-11-d2928a084c55",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "thjis is neutral chop. lots of profit taking here for buyers. supportign the gap up so far but can break if we dont get a move hgiher.",
+   "stance_before": "neutral"
+  },
+  {
+   "entry_id": "mj-2026-09-11-964dc1a99a78",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "mnarket retested EOD avwap moving to the top of its range. no trade in here yet. 15ema on the D1 above.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-14-e33bcbdd84cc",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "big gap down in the market. market has responded with some green candles on some decent volume rejecitng the 50sma. QQQ quite strong off lows as wwell held the 702 level. VXX declining in support. issue is USO is still trending up and TLT is down.",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-09-14-78ddcbb41544",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market is holding lows but unable to bounce. many tails below. means we either chop all day or we make a sharp move lower at some point when the bid faisl. very unlikely to make a move higher",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-14-61d51d4f1d71",
+   "timeframe": "D1",
+   "written_after_the_session": false,
+   "text": "D1 on SPY shows a bearish channel. rejected off the highs laast week, probably room to the downside now. main issue for bears is the 50sma. once that clears theres some room to short. TLT at a new 52wk low while USO moves higher.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-14-c5e295e4ee59",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market attempting to bounce off some Ukraine news. was quite strong for a while, starting to soften a bit now. holding the 8ema for now. I am short RMBS looking for it to fail. TLT making new highs as VXX declines. still dont believe ae breakout to the upside is possible.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-14-2d4147cc7c52",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market making new highs to my surprise. QQQ retaking the 50/100sma. looks like an undercut and a retest of the high of the D1 bearish channel seems likely.",
+   "stance_before": "bearish"
+  },
+  {
+   "entry_id": "mj-2026-09-14-427d26c4c46c",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market stallingo out here. VXX at lows. sort of dead now",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-14-c3c32261486d",
+   "timeframe": "M5",
+   "written_after_the_session": true,
+   "text": "the day ended bearish below vwap. SPY did hold the 50sma for now. expecting more downside tomorrow.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-15-5abdeab55e7a",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "weak market getting below yesterdays low and the 50sma",
+   "stance_before": "bearish"
+  },
+  {
+   "entry_id": "mj-2026-09-15-8dc43e11acf5",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market continues to leak heavily on hte M5 maker lower highs and lows on the M30. reachjing some key support levels now as well as a major fib level. volume has been high as well. very bearish",
+   "stance_before": "bearish"
+  },
+  {
+   "entry_id": "mj-2026-09-15-3cdf743499f7",
+   "timeframe": "D1",
+   "written_after_the_session": false,
+   "text": "bearish channel intact. likely to test the bottom today or tomorrow. we hjave FOMC tomorrow that skyrocket the market if thigns go well. but right now I am planning for a test of the 100sma. TLT at lows USO climbing. VXX moving higher. all point to lower prices.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-15-7148a672b8cc",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market trying to bounce but failing. downwaard trend intract expecting a new LOD but we are at some resistance. also may jsut chop till tmr as we wait for news",
+   "stance_before": "neutral"
+  },
+  {
+   "entry_id": "mj-2026-09-15-14a6ffc69d1e",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market boaunced back up to vwap slowly now rejecting it. LPTE no real direction here. USO higher TLT big red candle. probably going lower",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-15-219bcd10d4ad",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "choppy market stuck between vwpa and lower 1stdev. waiting on FOMC i think.",
+   "stance_before": "bearish"
+  },
+  {
+   "entry_id": "mj-2026-09-15-b8e7cde0d059",
+   "timeframe": "D1",
+   "written_after_the_session": false,
+   "text": "breakdown of the 50sma but not of the relative low. the market is in wait and see mode. most likely next step is a breakdown to the 100sma. I am mostly short with a few longs that I can hold forever.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-17-28ca2a3c7555",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "big gap up that is holdingon QQQ but not on SPY. ot yet testing EOD avwap still a ways to go which will give time for this selling to accelerate. Still a wait and see if the gap will hold",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-09-17-6b4d41697aca",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "double top but the lows are holding for now. certainly seems like they will fail. holding off on longs for now outside of DRAM which is quitre strong. VXX and USO tiking higher but not with any gusto. TLT lower. stale enviro no excitement will take some time for bulls to regain momentum I think",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-17-d0cfc36063b5",
+   "timeframe": "D1",
+   "written_after_the_session": false,
+   "text": "D1 SPY is still downtrending. this changes little we are still rejecting the 20sma and holding the 15ema on SPY keeping the bear channel intact. QQQ at a key trendline an H- i susspect this will look more beraish by EOD. taking profits on longs while they are there.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-17-ead64f66f6ad",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "still trapped in the range now on the top end. VXX stuck at lows. USO stuck at vwap. compressed",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-17-f4ce38df1b73",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "still in upward chop. no trade thesis yet till EOD and even then its tough to say to do anything right now",
+   "stance_before": "neutral"
+  },
+  {
+   "entry_id": "mj-2026-09-17-91c7d32cf4f7",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "still chop.",
+   "stance_before": "neutral"
+  },
+  {
+   "entry_id": "mj-2026-09-17-94a721441ecc",
+   "timeframe": "D1",
+   "written_after_the_session": false,
+   "text": "SPY holding the 15ema for now and is above the m30 75sma. some chance here that it holds need a new LRSI reversal but overall the market looks ready to test the top of the range around 770 on SPY",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-09-18-b840efea94d8",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "gap down on SPY with follow through to the 50sma. holding there for now. VXX up USO up TLT down RSP down t2104 down. very bad combo for bulls. its also triple witching so large chance of running into issues",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-18-9b76844a2b1b",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "compressed. gap down then compress",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-18-391abb770b5d",
+   "timeframe": "D1",
+   "written_after_the_session": false,
+   "text": "stuck below the 15ema and above the 50sma. no direction currently.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-18-452cb767b44f",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "market still stuck above the 50sma. making some cracks at it. LPTE.",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-18-934f666c1485",
+   "timeframe": "M5",
+   "written_after_the_session": false,
+   "text": "SPY bouncing off lows. USO down on the day. VXX retreating off highs. SPY looking to reclai the 50sma. still LPTE",
+   "stance_before": "unstated"
+  },
+  {
+   "entry_id": "mj-2026-09-18-58e474ce8d23",
+   "timeframe": "M5",
+   "written_after_the_session": true,
+   "text": "strong way to end the day. trip,e wtiching provided a nice boost to many stocks",
+   "stance_before": "bullish"
+  },
+  {
+   "entry_id": "mj-2026-09-18-14e36c61cc8b",
+   "timeframe": "D1",
+   "written_after_the_session": true,
+   "text": "SPY has now held the 50sma twice and QQQ is looking ready to test it H-. hard to not think we test the upside now",
+   "stance_before": "bullish"
+  }
+ ]
+}

@@ -626,6 +626,9 @@ def test_the_scope_can_be_selected_on_demand():
         # it. WS-RP appends its measured fact report immediately after the
         # rollups, still inside the deterministic stage, before narration.
         # Neither slot moves a prior job or crosses a decision-0018 boundary.
+        # TJ-10 (2026-09-20): the read ledger's nightly close, inside stage 1
+        # and ahead of the three slots that close it.
+        "read_grades_mature",
         # TJ-15 (2026-09-19): the deterministic miss contrast, inside stage 1 and
         # ahead of the pair that closes it.
         "miss_contrast",

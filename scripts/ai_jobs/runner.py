@@ -573,6 +573,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         miss_contrast,
         note_vocabulary_audit,
         policy_draft,
+        read_grades_mature,
         setup_research,
         theta_grading,
     )
@@ -786,6 +787,35 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # Deterministic: no model, seconds of work, one JSON pack beside the
         # digest, and a missing input is a recorded reason on an `ok` row.
         # Hence `journal_import`'s attempt budget rather than the briefs'.
+        # TJ-10 (2026-09-20), APPENDED INSIDE stage 1, after the cohort graders
+        # and BEFORE `miss_contrast` / `market_story_rollups` / `measured_report`.
+        #
+        # It closes the market reads whose horizon has matured - a five-session
+        # call made on Friday cannot be graded until the fifth session closes,
+        # and this is what comes back for it. Beside the cohort graders because
+        # it is the same kind of work (a decision, measured after the fact) and
+        # ahead of the three closers for the same reason TJ-15 sits there:
+        # `_STAGE_ONE_LAST_SLOT` is `measured_report` and `_deterministic_stage`
+        # walks up to and INCLUDING it, so a slot appended after that name
+        # silently leaves the Sunday slate however deterministic it is. Nothing
+        # below reads the ledger and the ledger reads nothing above it, so only
+        # the position is a choice.
+        #
+        # Deterministic: no model, seconds of work, append-only rows in the Day
+        # Review read ledger, and an unreachable store is a recorded reason on
+        # an `ok` row - never an exception into the runner, and never a verdict.
+        # A night that cannot measure writes NOTHING: an `unmeasured` result may
+        # not supersede a `pending` row (plan.md sec 5).
+        JobSlot(
+            name="read_grades_mature",
+            run=read_grades_mature.run_read_grades_mature,
+            reserve_minutes=2.0,
+            description=(
+                "Close the market reads whose horizon has matured - re-measure "
+                "every open read and append the new verdict (deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
         JobSlot(
             name="miss_contrast",
             run=miss_contrast.run_miss_contrast,

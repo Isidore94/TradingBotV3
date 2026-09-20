@@ -391,6 +391,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "evidence_report",
         "daily_digest",
         "theta_pick_grading",
+        # LEAD AMENDMENT 2026-09-20 (TJ-10 integration): the read grader's nightly
+        # re-grade, a deterministic slot TJ-10 registered after this packet was built.
+        "read_grades_mature",
         "miss_contrast",
         "market_story_rollups",
         "measured_report",
