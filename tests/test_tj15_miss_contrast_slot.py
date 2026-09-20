@@ -300,7 +300,12 @@ def test_a_forced_run_outside_the_window_still_does_the_contrast_and_never_fails
     assert len(report.results) == 1, report.results
     row = report.results[0]
     assert row["job"] == SLOT
-    assert row["status"] == "ok", row
+    # LEAD AMENDMENT 2026-09-19: the tester wrote "ok", but the runner records every
+    # successful FORCED run as `manual_test` (`manual = bool(force)`), pinned by
+    # tests/test_ai_jobs_runner.py - a forced row never counts as session coverage.
+    # What this test is about is that the forced deterministic slot RAN.
+    assert row["status"] == "manual_test", row
+    assert not str(row.get("error") or ""), row
     assert not str(row.get("model") or ""), "a deterministic slot names no model"
 
 

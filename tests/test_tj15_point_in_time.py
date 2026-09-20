@@ -331,7 +331,9 @@ def test_the_history_file_is_streamed_by_session_and_never_materialised(tmp_path
     finally:
         tracemalloc.stop()
 
-    assert len(kept) == 6, [row["run_date"] for row in kept]
+    # LEAD AMENDMENT 2026-09-19: the tester wrote 6, but range(4000) holds SEVEN
+    # multiples of 666 (0, 666, ..., 3996); the fixture is the fact.
+    assert len(kept) == 7, [row["run_date"] for row in kept]
     assert all(row["run_date"] == DECIDED for row in kept)
     assert peak < 1_000_000, f"peak {peak} bytes over a {size} byte file"
 
