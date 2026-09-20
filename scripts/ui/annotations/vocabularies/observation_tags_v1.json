@@ -1,0 +1,62 @@
+{
+  "vocabulary_id": "observation_tags",
+  "vocab_version": 1,
+  "description": "What the trader's own words DID - never whether they turned out to be right. TJ-16 item 4: the nightly tagger reads `mentor.observation` (What I see) and `mentor.prediction.because` (Because), and labels each with codes from this closed list, every code carrying the exact span it was read from. The model never sees a verdict, a grade, a price or a bar while tagging, so a tag can never be derived from the outcome. Codes are permanent identifiers: a code is never renamed and never reused for a different meaning, because rows already written carry it, and a later vocabulary ships as observation_tags_v2.json beside this file. These codes become point-in-time context fields for the NEXT prediction contrast, so each one describes the REASONING, not the market and not the result.",
+  "tags": [
+    {
+      "code": "cites_a_level",
+      "label": "Cites a level",
+      "hint": "Names a specific price, moving average, band, VWAP, prior high or low - something on the chart with a number behind it."
+    },
+    {
+      "code": "cites_volatility",
+      "label": "Cites volatility",
+      "hint": "Talks about range, ATR, how fast or how choppy the tape is, or volatility coming in or going out."
+    },
+    {
+      "code": "cites_news",
+      "label": "Cites news or an event",
+      "hint": "Names an earnings report, an economic print, a headline, a Fed event or any scheduled catalyst."
+    },
+    {
+      "code": "cites_breadth_or_sectors",
+      "label": "Cites breadth or sectors",
+      "hint": "Talks about how many names are participating, or about a sector or group leading or lagging."
+    },
+    {
+      "code": "cites_the_d1_picture",
+      "label": "Cites the D1 picture",
+      "hint": "Refers to the daily chart, the swing structure, the trend of the last few sessions, or the desk's D1 environment."
+    },
+    {
+      "code": "cites_volume_or_liquidity",
+      "label": "Cites volume or liquidity",
+      "hint": "Talks about volume, relative volume, thin or heavy trade, or how easy the name is to get out of."
+    },
+    {
+      "code": "cites_the_internals",
+      "label": "Cites the internals",
+      "hint": "Refers to session VWAP position, the prior session's range, the gap, or another desk internals reading."
+    },
+    {
+      "code": "hedged_wording",
+      "label": "Hedged wording",
+      "hint": "Softens the call in the words themselves - 'maybe', 'probably', 'if it holds', 'could go either way'."
+    },
+    {
+      "code": "reacting_to_the_last_bar",
+      "label": "Reacting to the last bar",
+      "hint": "The reason given is what just happened in the last few minutes rather than anything that was true before it."
+    },
+    {
+      "code": "cites_a_previous_call",
+      "label": "Cites a previous call",
+      "hint": "Refers back to an earlier read of their own - staying with it, changing it, or answering it."
+    },
+    {
+      "code": "no_reason_given",
+      "label": "No reason given",
+      "hint": "The words state a view and nothing that supports it. Quote the words that stand in place of a reason - 'gut', 'feels heavy', 'just does not look right'."
+    }
+  ]
+}

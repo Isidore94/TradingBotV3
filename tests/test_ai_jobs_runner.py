@@ -330,6 +330,13 @@ EXPECTED_SLOT_ORDER = (
     # the read ledger and it reads nothing above it.
     "read_grades_mature",
     "miss_contrast",
+    # TJ-16 (2026-09-20): what leads to a good call - the trader's right reads
+    # against their wrong ones, through the same `evidence_contrast.contrast`.
+    # Deterministic, no model. DIRECTLY after `miss_contrast` (the same question
+    # asked of the other half of the record) and after `read_grades_mature`,
+    # which closes the reads it counts - and still ahead of `measured_report`
+    # for the Sunday-slate reason above it.
+    "prediction_contrast",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.
@@ -342,6 +349,12 @@ EXPECTED_SLOT_ORDER = (
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.
     "ai_summary",
+    # TJ-16 item 4 (2026-09-20): grounded codes for the trader's own words.
+    # A local MEDIUM model slot, so it is in stage 2 - after `ai_summary`
+    # because WS-10D pins `measured_report` directly before that name, and
+    # before `ticker_briefs`, whose two hours of reserve it must not queue
+    # behind for seconds of work.
+    "observation_tags",
     "ticker_briefs",
     "market_story_narration",
     # stage 3 - the model-gated slots, unchanged

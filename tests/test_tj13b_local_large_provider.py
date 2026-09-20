@@ -395,8 +395,16 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # re-grade, a deterministic slot TJ-10 registered after this packet was built.
         "read_grades_mature",
         "miss_contrast",
+        # LEAD AMENDMENT 2026-09-20 (TJ-16): the right-against-wrong contrast,
+        # a deterministic stage 1 slot registered DIRECTLY after `miss_contrast`
+        # after this packet was built.
+        "prediction_contrast",
         "market_story_rollups",
         "measured_report",
+        # LEAD AMENDMENT 2026-09-20 (TJ-16 item 4): the grounded word tagger, a
+        # stage 2 model slot. A weeknight has no `ai_summary`, so it sits
+        # directly before `ticker_briefs` here.
+        "observation_tags",
         "ticker_briefs",
         "market_story_narration",
         "journal_enrichment",
