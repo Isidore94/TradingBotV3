@@ -78,6 +78,11 @@ PAYLOAD_KEYS = (
     "trades",
     "forecast",
     "spy_m5_bars",
+    # TJ-10: the graded reads and the congruence lines are built on the same
+    # worker and are part of the ONE payload, so the page's key check covers
+    # them too.
+    "reads",
+    "congruence",
 )
 
 
