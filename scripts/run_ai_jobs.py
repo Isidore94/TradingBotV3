@@ -24,6 +24,7 @@ Usage:
     python scripts/run_ai_jobs.py --slot ai_summary
     python scripts/run_ai_jobs.py --slot ticker_briefs
     python scripts/run_ai_jobs.py --force      # re-spend the caps + already-done
+    python scripts/run_ai_jobs.py --probe-model large   # MEASURE the big model
 
 Which slate runs is THE NIGHT'S decision, not the operator's (TJ-13A item 2):
 `runner.night_kind()` names the night on the exchange calendar and
@@ -127,6 +128,48 @@ def _print_status() -> int:
     return 0
 
 
+def _run_model_probe(tier: str, *, force: bool = False) -> int:
+    """TJ-13B: measure one local tier on this desk and print what it cost.
+
+    A COMMAND, not a slot. It builds no slate, runs no other job, and exits
+    non-zero when it refused - "it printed something and exited 0" and "it
+    measured the model" must not look alike to whoever typed it.
+
+    The real machine lock is handed to the probe here, because this is the one
+    caller that actually loads a model: while the nightly runner is working,
+    the probe stands down rather than loading a second model beside it.
+
+    ``--force`` is passed through (2026-09-20 review): the probe's own refusal
+    says "pass --force to measure it again", and until the flag reached it that
+    sentence was false - a desk with one measurement on the session could never
+    be re-measured from the command line. Here as everywhere else, --force
+    re-spends ONLY the already-measured check. It never buys the clock and
+    never beats a held lock.
+    """
+    from ai_jobs import ledger, model_probe
+
+    try:
+        outcome = model_probe.run_model_probe(
+            tier=tier, force=force, lock=model_probe.runner_lock
+        )
+    except ValueError as exc:
+        print(f"model probe refused: {exc}")
+        return 1
+
+    measurement = outcome.get("measurement")
+    if measurement:
+        print(json.dumps(measurement, indent=2, default=str))
+    print(f"model probe [{outcome.get('status')}]: {outcome.get('reason')}")
+    if outcome.get("status") != ledger.STATUS_MANUAL:
+        return 1
+    reserve = model_probe.reserve_minutes_from_probe(tier=tier)
+    print(
+        "week story reserve derived from this measurement: "
+        + (f"{reserve} min" if reserve is not None else "not derivable (throughput unmeasured)")
+    )
+    return 0
+
+
 def _night_kind_or_weeknight() -> str:
     """The night's kind, failing toward the LIGHT slate.
 
@@ -200,6 +243,20 @@ def main(argv: list[str] | None = None) -> int:
              "scaffolding and calls no model. It calls a model above that gate, "
              "so --force will not start it by day.",
     )
+    parser.add_argument(
+        "--probe-model",
+        default="",
+        metavar="TIER",
+        help="MEASURE one local model tier on this desk and record the numbers "
+             "in the job ledger, then exit. It runs no slate and no other job. "
+             "A probe is a model LOAD, so it runs only inside the night window "
+             "and only when no AI job holds the machine lock; it reads a COPY "
+             "of one week's fact packs and never the live store. Exit code 0 "
+             "means it measured, 1 means it refused and says why - it is not "
+             "night, a job is already running, or this session was measured "
+             "already, which is the one --force re-spends. Tiers: large, "
+             "medium.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -207,6 +264,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.status:
         return _print_status()
+
+    if args.probe_model:
+        return _run_model_probe(str(args.probe_model).strip(), force=args.force)
 
     from ai_jobs import runner
 
