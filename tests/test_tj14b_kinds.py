@@ -309,7 +309,15 @@ def test_a_quick_like_answer_writes_a_link_that_names_the_like(tmp_path):
     assert links, f"no link row names the like: {written}"
 
     # Nothing the trader did not click reaches `trade_annotations`.
-    assert str(store.annotation_state("T-1").get("tag_status") or "") != "confirmed"
+    # LEAD AMENDMENT 2026-09-20: the tester asserted `annotation_state("T-1")
+    # ["tag_status"] != "confirmed"`, but `JournalStore.annotation_state` answers
+    # `confirmed` for a trade with NO annotation row at all (journal_store.py:
+    # "there is nothing provisional about an absence"; TJ-9's `_setup_is_answered`
+    # depends on it), so that line could only pass by WRITING a row - the thing
+    # this comment forbids. The intent is pinned on the table itself.
+    with store.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM trade_annotations").fetchone()[0] == 0
+    assert str(store.annotation_state("T-1").get("setup_tags") or "") == ""
 
 
 def test_the_quick_like_options_come_from_the_claim_vocabulary():
