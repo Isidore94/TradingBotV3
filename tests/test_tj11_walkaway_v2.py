@@ -805,11 +805,30 @@ def test_the_money_line_reports_its_n_above_the_floor():
     assert "30" in day.money["line"]
 
 
-# -- item 7: the session stamp, read forward, files untouched ----------------
+# -- item 7: the session stamp, read back, files untouched -------------------
+#
+# UPDATED by TJ-11F on the trader's word (2026-09-19): *"a veto on friday night
+# (after the market close) should not be considered monday since we have new
+# information then."* These four pinned the FORWARD rule TJ-11 built.
 
 
-def test_a_saturday_stamped_decision_is_read_as_the_next_sessions():
+def test_a_saturday_stamped_decision_is_read_as_the_previous_sessions():
     """Friday 21:04 Pacific carries `session_date` 2026-09-19, a Saturday."""
+    saturday = _d1_veto(symbol="EEE") | {
+        "session_date": "2026-09-19",
+        "stamp": "2026-09-18T21:04:28-07:00",
+    }
+    day = _build(
+        session="2026-09-18",
+        decisions=[saturday],
+        daily_bars={"EEE": _flat_daily("2026-09-18")},
+        now=datetime(2026, 9, 21, 8, 0, tzinfo=EASTERN),
+    )
+
+    assert [row.symbol for row in day.rejected] == ["EEE"]
+
+
+def test_a_saturday_stamped_row_never_lands_on_the_monday_after_it():
     saturday = _d1_veto(symbol="EEE") | {
         "session_date": "2026-09-19",
         "stamp": "2026-09-18T21:04:28-07:00",
@@ -821,20 +840,10 @@ def test_a_saturday_stamped_decision_is_read_as_the_next_sessions():
         now=datetime(2026, 9, 21, 8, 0, tzinfo=EASTERN),
     )
 
-    assert [row.symbol for row in day.rejected] == ["EEE"]
-
-
-def test_a_saturday_stamped_row_never_lands_on_the_friday_before_it():
-    saturday = _d1_veto(symbol="EEE") | {
-        "session_date": "2026-09-19",
-        "stamp": "2026-09-18T21:04:28-07:00",
-    }
-    day = _build(session=SESSION, decisions=[saturday], daily_bars={"EEE": _flat_daily()})
-
     assert day.rejected == ()
 
 
-def test_reading_a_saturday_row_forward_leaves_the_annotation_file_byte_identical(tmp_path):
+def test_reading_a_saturday_row_backward_leaves_the_annotation_file_byte_identical(tmp_path):
     """Existing rows are NEVER rewritten - the reader maps, the file does not move.
 
     AMENDED by the lead, 2026-09-19 (reviewer NO-GO, blocker 1): this test used
@@ -866,7 +875,14 @@ def test_reading_a_saturday_row_forward_leaves_the_annotation_file_byte_identica
         target, session_date="2026-09-21", by_decision_session=True
     )
 
-    assert sorted(row["symbol"] for row in found) == ["EEE", "FFF"]
+    # UPDATED by TJ-11F: the Saturday row is FRIDAY's judgement, so Monday's
+    # opt-in read holds only the row actually made on Monday.
+    assert sorted(row["symbol"] for row in found) == ["FFF"]
+    assert target.read_bytes() == before
+    friday = store.load_annotations(
+        target, session_date="2026-09-18", by_decision_session=True
+    )
+    assert [row["symbol"] for row in friday] == ["EEE"]
     assert target.read_bytes() == before
     # And the DEFAULT still answers exactly what base answered: the Saturday
     # row is not Monday's for anybody but TJ-11.
@@ -875,7 +891,7 @@ def test_reading_a_saturday_row_forward_leaves_the_annotation_file_byte_identica
     assert target.read_bytes() == before
 
 
-def test_a_new_annotation_written_after_the_close_carries_the_next_sessions_date(monkeypatch):
+def test_a_new_annotation_written_after_the_close_carries_the_judged_sessions_date(monkeypatch):
     """The 18 live rows stamped 2026-09-19 are the defect this closes.
 
     The wall clock is pinned to a DIFFERENT date so the answer cannot come from
@@ -906,7 +922,8 @@ def test_a_new_annotation_written_after_the_close_carries_the_next_sessions_date
         created_at=datetime(2026, 9, 18, 21, 4, 28, tzinfo=PACIFIC),
     )
 
-    assert row["decision_session"] == "2026-09-21"
+    # UPDATED by TJ-11F: the 21:04 Pacific stamp is Friday's judgement.
+    assert row["decision_session"] == "2026-09-18"
     # EXACTLY what base writes, which is the market session WINDOW's date and
     # never the stamp - pinned to 2026-09-18 by the monkeypatch above. The
     # stamp decides `decision_session` and nothing else, so every live reader

@@ -208,26 +208,34 @@ def next_session(day: date) -> date:
 
 
 def decision_session(stamp: Any) -> date | None:
-    """The exchange session a decision belongs to (TJ-11 item 7).
+    """The exchange session a decision JUDGED (TJ-11 item 7, reversed by TJ-11F).
 
     The desk stamps an annotation with New York's CALENDAR date, so the 18 D1
     calls the trader made at 21:04 Pacific on Friday 2026-09-18 carry
-    ``session_date`` 2026-09-19 - a Saturday, a date on which no decision can be
-    acted on and no session was ever measured. The session those calls belong to
-    is Monday's.
+    ``session_date`` 2026-09-19 - a Saturday, a date on which no session was
+    ever measured. TJ-11 mapped those forward to Monday. The trader reversed
+    that on 2026-09-19: *"a veto on friday night (after the market close) should
+    not be considered monday since we have new information then."* A call made
+    after Friday's close is a judgement on FRIDAY's scan and Friday's close;
+    Monday's scan is new information and the decision does not carry to it.
 
-    The rule, once: the session the stamp falls IN - that calendar date when it
-    is a session and the stamp is at or before that session's close, so a
-    pre-market call still belongs to the day it was made for - or else the NEXT
-    exchange session. A weekend, an evening and a holiday all map forward.
+    The rule, once: **the exchange session whose New York calendar date the
+    stamp falls on** when that date is a session day - pre-market, in-session
+    and after the close all stay on that day - **else the most recent PRIOR
+    session** (a weekend, a holiday, and the small hours of a non-session date:
+    21:04 Pacific on the Friday is 00:04 Eastern on the Saturday, and it is
+    Friday's judgement). The close is no longer a boundary, so nothing here
+    needs :func:`session_close`; :func:`next_session` stays as its own helper.
+
+    The edge, stated because it is not obvious: 23:00 Pacific on a Sunday is
+    02:00 Eastern on the Monday, a session date before its open, so it answers
+    Monday - the same date the base ``session_date`` carries. Only a NON-session
+    New York date walks back. (Measured 2026-09-19: 0 live rows fall there.)
 
     Every shape the stores use is accepted: an aware ``datetime`` (converted
     with ``astimezone``, never stripped), a naive one (read as market-local,
     which is what the desk writes), a ``date``, ``"YYYY-MM-DD"`` text, or a full
-    ISO TIMESTAMP in text - which is how every stored stamp arrives, and reading
-    one as a bare date would answer Friday for a call made at 21:04 that
-    evening. A date with no time of day is read as being inside its session,
-    because that is all the row says.
+    ISO TIMESTAMP in text - which is how every stored stamp arrives.
 
     Answers ``None`` rather than guessing when the stamp is unreadable or falls
     outside the range these rules are a statement about. **Existing rows are
@@ -235,10 +243,9 @@ def decision_session(stamp: Any) -> date | None:
     """
     if isinstance(stamp, datetime):
         moment = stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=MARKET_TZ)
-        moment = moment.astimezone(MARKET_TZ)
-        day, at_or_before_close = moment.date(), None
+        day = moment.astimezone(MARKET_TZ).date()
     elif isinstance(stamp, date):
-        day, at_or_before_close, moment = stamp, True, None
+        day = stamp
     else:
         text = str(stamp or "").strip()
         if not text:
@@ -249,19 +256,16 @@ def decision_session(stamp: Any) -> date | None:
             parsed = None
         if parsed is not None:
             moment = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=MARKET_TZ)
-            moment = moment.astimezone(MARKET_TZ)
-            day, at_or_before_close = moment.date(), None
+            day = moment.astimezone(MARKET_TZ).date()
         else:
             try:
                 day = date.fromisoformat(text[:10])
             except ValueError:
                 return None
-            at_or_before_close, moment = True, None
     try:
         if is_session(day):
-            if at_or_before_close or (moment is not None and moment <= session_close(day)):
-                return day
-        return next_session(day)
+            return day
+        return previous_session(day)
     except SessionCalendarError:
         return None
 

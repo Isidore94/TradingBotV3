@@ -85,23 +85,26 @@ DAILY_BAR_TAIL = 60
 
 
 def _stamped_dates_for(session: str) -> tuple[str, ...]:
-    """`session` plus the non-session dates that belong to it.
+    """`session` plus the non-session dates that belong to it - the ones AFTER.
 
     The weekend between Friday's close and Monday's open, or a holiday Monday:
-    a decision stamped on one of them was made FOR this session
-    (`market_calendar.decision_session`). Existing rows are never rewritten, so
-    the reader asks for their dates too.
+    a decision stamped on one of them JUDGED this session's scan and this
+    session's close (`market_calendar.decision_session`, reversed by TJ-11F on
+    the trader's word, 2026-09-19 - *"a veto on friday night ... should not be
+    considered monday since we have new information then"*). Friday owns its
+    Saturday and Sunday; Monday owns only itself. Existing rows are never
+    rewritten, so the reader asks for their dates too.
     """
     try:
         import market_calendar
 
         day = date.fromisoformat(str(session)[:10])
-        previous = market_calendar.previous_session(day)
+        following = market_calendar.next_session(day)
     except Exception:  # noqa: BLE001 - an unanswerable calendar adds no dates
         return (str(session)[:10],)
     out = [day.isoformat()]
-    cursor = previous + timedelta(days=1)
-    while cursor < day:
+    cursor = day + timedelta(days=1)
+    while cursor < following:
         out.append(cursor.isoformat())
         cursor += timedelta(days=1)
     return tuple(out)
@@ -224,14 +227,14 @@ class DayReviewService:
             favorites = daily_recap_reader._read_jsonl("swing_favorites", recap_sources.swing_favorites, "event_at")
             events = daily_recap_reader._read_jsonl("review_events", recap_sources.review_events, "ts")
             def _decisions_for(target: str) -> list[dict[str, Any]]:
-                """Every verdict that BELONGS to `target`, mapped forward.
+                """Every verdict that JUDGED `target`, mapped back onto it.
 
                 `daily_recap_reader._decisions` filters `session_date` by exact
-                match, and the desk used to stamp an after-close call with New
-                York's next calendar date - so Friday evening's 18 D1 calls
-                carry a Saturday and would never reach Monday's page. The rows
-                are never rewritten: this asks the reader for the non-session
-                dates that map onto `target` as well as for `target` itself.
+                match, and the desk stamps an after-close call with New York's
+                next calendar date - so Friday evening's 18 D1 calls carry a
+                Saturday and would never reach Friday's own page. The rows are
+                never rewritten: this asks the reader for the non-session dates
+                that map onto `target` as well as for `target` itself.
                 """
                 rows: list[dict[str, Any]] = []
                 for stamped in _stamped_dates_for(target):
@@ -249,12 +252,16 @@ class DayReviewService:
                             # sentence; without this the page would need a
                             # second read of the same store to name one.
                             "reason": decision.reason,
-                            # The session this decision BELONGS to, decided here
+                            # The session this decision JUDGED, decided here
                             # because this loop is what asked the exact-match
                             # reader for `stamped`. `session_date` on the stored
                             # row is untouched and still means what it always
-                            # meant to every other reader on the desk.
+                            # meant to every other reader on the desk. The rule
+                            # marker travels with the value (TJ-11F): a stored
+                            # session with no marker came from the forward rule
+                            # and every reader recomputes it instead.
                             "decision_session": target,
+                            "decision_session_rule": walkaway_day.DECISION_SESSION_RULE,
                         })
                 return rows
 

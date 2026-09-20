@@ -31,9 +31,10 @@ Four rules worth keeping in mind while reading:
   ``n`` (the population) and ``measured`` (the Wilson denominator) separately.
 * **Size and name order the view, never a result** (gate #43). No R statistic is
   computed here or used to choose what is shown.
-* **A stamp outside a session belongs to the NEXT session**
-  (`market_calendar.decision_session`). Existing rows are never rewritten; this
-  reader maps them forward.
+* **A stamp outside a session belongs to the session BEFORE it** - the one it
+  judged (`market_calendar.decision_session`, reversed by TJ-11F on the
+  trader's word, 2026-09-19). Existing rows are never rewritten; this reader
+  maps them back.
 """
 
 from __future__ import annotations
@@ -180,27 +181,34 @@ def _day_of(bar: Mapping[str, Any]) -> date | None:
 _session_text_cache: dict[str, str] = {}
 
 
-def _row_session(row: Mapping[str, Any]) -> str:
-    """The exchange session ONE decision row belongs to.
+#: The rule marker a row must carry before its stored `decision_session` is
+#: believed (TJ-11F). Wave 1 wrote a FORWARD-mapped value with no marker, and
+#: no row is ever rewritten, so an unmarked value is recomputed from the stamp.
+DECISION_SESSION_RULE = "judged_session_v2"
 
-    A row written since TJ-11 carries the additive `decision_session` field and
-    that is the answer; an older row carries only the stamp the desk has always
-    written, which is mapped forward here. Either way `session_date` keeps its
-    own value and its own meaning for every other reader on the desk - the
-    reviewer's 2026-09-19 blocker was exactly that this module's convenience
-    became the whole desk's join key.
+
+def _row_session(row: Mapping[str, Any]) -> str:
+    """The exchange session ONE decision row JUDGED.
+
+    A stored `decision_session` is believed only when the row also carries
+    `decision_session_rule: "judged_session_v2"`; without the marker the value
+    came from the forward rule TJ-11F reversed, so the row's own stamp decides.
+    Either way `session_date` keeps its own value and its own meaning for every
+    other reader on the desk - the reviewer's 2026-09-19 blocker was exactly
+    that this module's convenience became the whole desk's join key.
     """
     stored = str(row.get("decision_session") or "").strip()
-    if stored:
+    rule = str(row.get("decision_session_rule") or "").strip()
+    if stored and rule == DECISION_SESSION_RULE:
         return stored[:10]
     return _session_text(row.get("stamp") or row.get("created_at") or row.get("session_date"))
 
 
 def _session_text(value: object) -> str:
-    """The exchange session a stamp belongs to, as text, or ``""``.
+    """The exchange session a stamp judged, as text, or ``""``.
 
     One seam for the whole module: a Saturday `session_date` and a Friday
-    21:04 Pacific `created_at` both answer Monday.
+    21:04 Pacific `created_at` both answer FRIDAY.
     """
     # Plain dates only: a full timestamp is unique per decision and caching one
     # would grow a dict for the life of the desk to answer it once.
