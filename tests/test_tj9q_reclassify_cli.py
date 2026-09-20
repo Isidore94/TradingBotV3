@@ -274,7 +274,14 @@ def test_apply_leaves_every_broker_stated_amount_and_the_tax_number_alone(
 
     after_report = journal_tax_report.build_tax_report(store, year=2026)
     assert amounts() == before_amounts
-    assert after_report["reported"] == before_report["reported"]
+    # LEAD AMENDMENT 2026-09-19: the tester wrote `["reported"]`, a key
+    # `journal_tax_report.build_tax_report` has never returned (its keys are
+    # `positions`, `positions_reported`, `by_account`, `realised_cad`,
+    # `positions_excluded`, `excluded`, `source`). The intent - the tax number does
+    # not move - is pinned through the keys that exist, and more of them.
+    assert after_report["positions_reported"] == before_report["positions_reported"]
+    assert after_report["realised_cad"] == before_report["realised_cad"]
+    assert after_report["positions_excluded"] == before_report["positions_excluded"]
     assert after_report["by_account"] == before_report["by_account"]
     # And the IBKR commission credit is still a credit.
     with store.connection() as conn:
