@@ -626,6 +626,9 @@ def test_the_scope_can_be_selected_on_demand():
         # it. WS-RP appends its measured fact report immediately after the
         # rollups, still inside the deterministic stage, before narration.
         # Neither slot moves a prior job or crosses a decision-0018 boundary.
+        # TJ-15 (2026-09-19): the deterministic miss contrast, inside stage 1 and
+        # ahead of the pair that closes it.
+        "miss_contrast",
         "market_story_rollups",
         "measured_report",
         # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
