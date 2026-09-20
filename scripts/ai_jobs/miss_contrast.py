@@ -381,6 +381,8 @@ def build_pack(
     daily_bars: Mapping[str, Any] | None = None,
     features: Any = None,
     window_sessions: int = evidence_stats.LATELY_SESSIONS,
+    min_side: int = evidence_contrast.MIN_CONTRAST_SIDE_N,
+    min_total: int = evidence_stats.MIN_REPORTABLE_N,
     notes: Sequence[str] = (),
 ) -> dict[str, Any]:
     """The contrast pack for one session's window. Pure: no store, no clock.
@@ -388,6 +390,12 @@ def build_pack(
     ``features`` is a path to a file in `d1_features_history.csv` shape or an
     iterable of row mappings. ``daily_bars`` is ``{symbol: [daily bar, ...]}``
     from the durable daily store; a symbol that is absent is ``unmeasured``.
+
+    ``min_side`` and ``min_total`` are the FEATURE floor, defaulted to the
+    desk's constants and passed straight to `evidence_contrast.contrast`. They
+    exist so a test can pin the ranking mechanics on a small fixture without
+    restating them; no production caller passes either, and the values actually
+    used are recorded in the pack's ``feature_floor``.
     """
     session = str(session_date or "")[:10]
     moment = now or datetime.now()
@@ -470,7 +478,12 @@ def build_pack(
         bucket = groups[key]
         labels = LIKE_LABELS if key[0] in walkaway_day.LIKES else VETO_LABELS
         comparison = evidence_contrast.contrast(
-            bucket.pop("_a"), bucket.pop("_b"), label_a=labels[0], label_b=labels[1]
+            bucket.pop("_a"),
+            bucket.pop("_b"),
+            label_a=labels[0],
+            label_b=labels[1],
+            min_side=min_side,
+            min_total=min_total,
         )
         cell = evidence_contrast.rate(
             bucket["misses"], bucket["measured"], pending=bucket["pending"]
@@ -533,7 +546,7 @@ def build_pack(
             f"observational, not causal: top {len(leaders)} of {len(eligible)} group(s) "
             f"with both a reportable rate ({evidence_stats.MIN_REPORTABLE_N} measured "
             f"decisions) and at least one feature over the feature floor "
-            f"({evidence_contrast.MIN_CONTRAST_SIDE_N} rows a side) - " + ", ".join(leaders)
+            f"({min_side} rows a side) - " + ", ".join(leaders)
         )
     elif over_floor:
         headline = (
@@ -568,10 +581,7 @@ def build_pack(
         "excluded_by_timeframe": dict(sorted(excluded_by_timeframe.items())),
         "no_timeframe": int(no_timeframe),
         "max_scan_age_sessions": MAX_SCAN_AGE_SESSIONS,
-        "feature_floor": {
-            "min_side": evidence_contrast.MIN_CONTRAST_SIDE_N,
-            "min_total": evidence_stats.MIN_REPORTABLE_N,
-        },
+        "feature_floor": {"min_side": int(min_side), "min_total": int(min_total)},
         "pooling": (
             "VETO reason codes are pooled ACROSS vocabulary versions: a code is "
             "never reused, so a code means one thing. Every other verdict groups "
@@ -784,6 +794,8 @@ def run_miss_contrast(
     features: Any = None,
     daily_bars: Mapping[str, Any] | None = None,
     window_sessions: int | None = None,
+    min_side: int | None = None,
+    min_total: int | None = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
     """The nightly slot. Deterministic, model-free, and never fails the night.
@@ -852,6 +864,14 @@ def run_miss_contrast(
             daily_bars=daily_bars,
             features=features,
             window_sessions=size,
+            # The nightly path passes neither, so the floor is the desk's
+            # constants; a test may pin a small fixture without restating them.
+            min_side=(
+                evidence_contrast.MIN_CONTRAST_SIDE_N if min_side is None else int(min_side)
+            ),
+            min_total=(
+                evidence_stats.MIN_REPORTABLE_N if min_total is None else int(min_total)
+            ),
             notes=notes,
         )
     except Exception as exc:  # noqa: BLE001 - arithmetic must not cost the night

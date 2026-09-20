@@ -189,9 +189,12 @@ def test_the_features_come_from_the_last_scan_at_or_before_the_decision(tmp_path
         _scan("BBB", at="06:40:00", vwap=1.0), _scan("BBB", at="07:30:00", vwap=9.9),
     ])
 
+    # LEAD AMENDMENT 2026-09-19 (floor): 1 v 1 pins which SCAN was joined, not
+    # the fix round's 10-a-side feature floor.
     pack = miss_contrast.build_pack(
         SESSION, now=NOW, decisions=decisions, features=features,
         daily_bars={"AAA": _daily(run=True), "BBB": _daily(run=False)},
+        min_side=1, min_total=2,
     )
 
     group = _group(pack)
@@ -249,9 +252,11 @@ def test_the_same_decision_written_in_another_zone_picks_the_same_scan_row(tmp_p
     bars = {"AAA": _daily(run=True), "BBB": _daily(run=False)}
 
     def _pack(stamp: str):
+        # LEAD AMENDMENT 2026-09-19 (floor): 1 v 1 pins the ZONE, not the floor.
         return miss_contrast.build_pack(
             SESSION, now=NOW, features=features, daily_bars=bars,
             decisions=[_decision("AAA", stamp=stamp), _decision("BBB", stamp=stamp)],
+            min_side=1, min_total=2,
         )
 
     local = _feature(_group(_pack(f"{DECIDED}T07:05:00-07:00")))
@@ -284,9 +289,12 @@ def test_a_scan_from_a_later_session_never_reaches_an_earlier_decision(tmp_path)
         _scan("BBB", at="06:40:00", vwap=9.9, run_date=later),
     ])
 
+    # LEAD AMENDMENT 2026-09-19 (floor): 1 v 1 pins that a LATER scan is never
+    # read back, not the fix round's feature floor.
     pack = miss_contrast.build_pack(
         SESSION, now=NOW, decisions=decisions, features=features,
         daily_bars={"AAA": _daily(run=True), "BBB": _daily(run=False)},
+        min_side=1, min_total=2,
     )
 
     row = _feature(_group(pack))

@@ -83,8 +83,11 @@ def test_a_feature_that_separates_the_groups_reports_both_counts_two_medians_and
         spy_five_day_return_pct=[1.0, 1.0, 1.0],
     )
 
+    # LEAD AMENDMENT 2026-09-19 (floor): the fix round's feature floor is 10 a
+    # side and 30 across both; this 3 v 3 fixture pins the AUC, not the floor.
     out = evidence_contrast.contrast(
-        misses, correct, label_a="real_miss", label_b="correct_rejection"
+        misses, correct, label_a="real_miss", label_b="correct_rejection",
+        min_side=3, min_total=6,
     )
 
     assert (out["n_a"], out["n_b"]) == (3, 3)
@@ -122,7 +125,11 @@ def test_only_the_top_three_features_are_shown_and_the_number_compared_is_stated
         recent_band_extension_days=same, spy_one_day_return_pct=same,
     )
 
-    out = evidence_contrast.contrast(misses, correct, label_a="a", label_b="b")
+    # LEAD AMENDMENT 2026-09-19 (floor): 3 v 3 pins top-K and the count, not the
+    # fix round's 10-a-side floor.
+    out = evidence_contrast.contrast(
+        misses, correct, label_a="a", label_b="b", min_side=3, min_total=6
+    )
 
     assert out["compared"] == 7
     assert out["top"] == 3
@@ -148,7 +155,10 @@ def test_a_tie_breaks_by_feature_name_and_never_by_how_big_the_group_is():
         mid=[5.0, 5.0, 5.0, 5.0],
     )
 
-    out = evidence_contrast.contrast(misses, correct, label_a="a", label_b="b", top=3)
+    # LEAD AMENDMENT 2026-09-19 (floor): 4 v 4 pins the tie-break, not the floor.
+    out = evidence_contrast.contrast(
+        misses, correct, label_a="a", label_b="b", top=3, min_side=4, min_total=8
+    )
 
     names = [row["feature"] for row in out["features"]]
     assert names == ["z_strongest", "a_tied", "b_tied"], names
@@ -175,7 +185,11 @@ def test_a_blank_cell_is_left_out_of_the_median_and_is_never_read_as_zero():
         mid_earnings_zone_streak_days=[None, None, "", ""],
     )
 
-    out = evidence_contrast.contrast(misses, correct, label_a="a", label_b="b")
+    # LEAD AMENDMENT 2026-09-19 (floor): `atr20` is measured 2 v 4 here and this
+    # fixture pins the blank-cell rule, not the fix round's floor.
+    out = evidence_contrast.contrast(
+        misses, correct, label_a="a", label_b="b", min_side=2, min_total=6
+    )
 
     assert (out["n_a"], out["n_b"]) == (4, 4)
     assert out["compared"] == 1
