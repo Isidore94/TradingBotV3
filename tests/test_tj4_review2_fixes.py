@@ -392,7 +392,11 @@ def test_the_schema_the_model_is_given_carries_this_packs_own_numbers(root):
 
 def test_grading_one_read_twice_is_rejected_whole(root):
     """One read, one verdict. Two claims on one row would print as two
-    measurements of a single measured thing."""
+    measurements of a single measured thing.
+
+    TWO claims on an eight-read pack, so neither the per-pack cap nor any
+    older fixed cap can be what rejects it: only the uniqueness rule can.
+    """
     from ai_jobs.day_review_narration import narration_path
 
     pack = _full_day_pack(root)
@@ -402,7 +406,9 @@ def test_grading_one_read_twice_is_rejected_whole(root):
     before = path.read_bytes()
 
     reply = _grade_everything(pack)
-    reply["summary"]["were_you_right"][1] = dict(reply["summary"]["were_you_right"][0])
+    first = reply["summary"]["were_you_right"][0]
+    reply["summary"]["were_you_right"] = [first, dict(first)]
+    assert len(reply["summary"]["were_you_right"]) == 2 < len(pack["reads"])
 
     outcome = _run(root, lambda **_k: reply)
 
@@ -411,20 +417,35 @@ def test_grading_one_read_twice_is_rejected_whole(root):
 
 
 def test_more_claims_than_the_pack_has_reads_is_rejected_whole(root):
-    """The per-pack cap is a real gate, not a hint in the prompt."""
+    """The per-pack cap is a real gate, not a hint in the prompt.
+
+    ONE read in the pack and TWO claims in the reply - both citing that read
+    with its measured verdict, so every other rule is satisfied and the number
+    is the only thing wrong with it.
+    """
+    import day_review_pack
     from ai_jobs.day_review_narration import narration_path
 
-    pack = _pack_for(SESSION, root=root)          # no reads at all
+    entry = fx.observing_and_predicting_entry()
+    reads, _grades = fx.graded_reads([entry])
+    assert len(reads) == 1
+    pack = day_review_pack.build_pack(
+        SESSION, entries=[entry], reads=reads, now=fx.AFTER_THE_CLOSE
+    )
+    day_review_pack.write_pack(pack, root=root)
     path = narration_path(SESSION, root=root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"verified":"last night"}\n', encoding="utf-8")
     before = path.read_bytes()
 
+    read = pack["reads"][0]
+    said = next(item for item in pack["trader_said"] if item["kind"] == "prediction")
+    claim = {
+        "claim": "Rest of day: up", "source_id": said["source_id"],
+        "verdict": read["verdict"], "evidence_id": read["source_id"],
+    }
     reply = _reply_for(pack, headline="one claim too many")
-    reply["summary"]["were_you_right"] = [{
-        "claim": "x", "source_id": "said:whatever", "verdict": "right",
-        "evidence_id": "read:whatever",
-    }]
+    reply["summary"]["were_you_right"] = [claim, dict(claim)]
 
     outcome = _run(root, lambda **_k: reply)
 
