@@ -70,6 +70,14 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 EASTERN = ZoneInfo("America/New_York")
 
 
+# LEAD AMENDMENT 2026-09-20: `_read()` builds a CLICKED read, and the lead's review
+# decision made the store refuse a gradable CLICK whose context is only the named
+# absence (a clicked read is the only evidence TJ-16 will ever have). Three tests
+# below store a first grade built with no context at all; they now hand
+# `grade_read` a real snapshot. Not one assertion in them moved.
+_A_REAL_SNAPSHOT = {"internals": {}, "direction": "up"}
+
+
 def _read(direction: str, horizon: str = "rest_of_day", timeframe: str = "M5"):
     import market_read_grades as grades
 
@@ -423,6 +431,7 @@ def test_a_matured_grade_is_a_new_row_naming_the_old_and_rewrites_nothing(tmp_pa
 
     pending = grades.grade_read(
         row, daily_bars=partial, atr=fx.atr_for(9.0, 3.0),
+        context=_A_REAL_SNAPSHOT,
         now=datetime(2026, 9, 21, 17, 0, tzinfo=PACIFIC),
     )
     grades.append_grades(fx.SESSION, [pending], root=tmp_path)
@@ -463,6 +472,7 @@ def test_the_nightly_hook_matures_a_pending_row_into_a_new_superseding_row(tmp_p
     pending = grades.grade_read(
         row,
         daily_bars=fx.daily_bars({fx.SESSION: 100.0, fx.NEXT_SESSIONS[0]: 104.0}),
+        context=_A_REAL_SNAPSHOT,
         atr=fx.atr_for(9.0, 3.0),
         now=datetime(2026, 9, 21, 17, 0, tzinfo=PACIFIC),
     )
@@ -499,6 +509,7 @@ def test_the_nightly_hook_is_idempotent_and_never_re_supersedes_a_closed_row(tmp
     closed = grades.grade_read(
         row,
         m5_bars=fx.session_tape(),
+        context=_A_REAL_SNAPSHOT,
         atr=fx.atr_for(fx.SESSION_MOVE, 3.0),
         now=fx.AFTER_THE_CLOSE,
     )
