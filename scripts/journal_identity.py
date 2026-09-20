@@ -89,8 +89,16 @@ SECURITY_TYPE_ALIASES: dict[str, str] = {
 #: Listing exchanges that reached ``security_type`` only through Questrade's
 #: ``listingExchange`` fallback. A value from this set never described an
 #: instrument type; it described where the instrument trades, and the row it
-#: came from is an equity - Questrade sends a real ``securityType`` for options
-#: and futures, so the fallback only ever fired for plain stock.
+#: came from is an equity - ``get_positions`` sends a real ``securityType`` for
+#: options and futures, so the fallback only ever fired for plain stock.
+#:
+#: Corrected 2026-09-19 (TJ-9Q): that sentence used to say "Questrade sends a
+#: real ``securityType``" without naming the endpoint, and it is NOT true of
+#: ``v1/accounts/{id}/executions`` - 226 of 226 recorded execution payloads
+#: carry exactly 20 keys and neither ``securityType`` nor ``symbolType``, which
+#: is why every Questrade fill in the journal was ``UNKNOWN``. That endpoint's
+#: type is read from the broker's own symbol and side words instead
+#: (``journal_importers.classify_questrade_security_type``).
 #:
 #: This is the entry that actually reunites the trader's split positions, so it
 #: is an explicit auditable list rather than a "does it look like an exchange?"

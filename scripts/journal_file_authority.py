@@ -59,7 +59,15 @@ TOLERANCE_BASE = 0.02
 TOLERANCE_PER_FILL = 0.01
 
 #: Sides that take cash out of the account.
-_BUY_SIDES = frozenset({"BUY", "BOT", "BTO", "BTC", "COVER"})
+#:
+#: ``COV`` is here because Questrade spells a cover that way and this set held
+#: only ``COVER``: measured 2026-09-19 on a copy of the live journal, each of
+#: the trader's 25 covers was counted as cash coming IN, so SMPL 2026-09-18 read
+#: +366.98 where the broker's own ``totalCost`` says -366.98 - a day wrong by
+#: twice the cover, inside the comparison whose whole job is to decide whether
+#: the broker's file disagrees with us. Correcting the word is a correction to
+#: the money (TJ-9Q).
+_BUY_SIDES = frozenset({"BUY", "BOT", "BTO", "BTC", "COV", "COVER"})
 
 
 @dataclass

@@ -826,6 +826,259 @@ class JournalStore:
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def reclassify_executions(
+        self, updates: Iterable[Mapping[str, Any]], *, refresh_tags: bool = False
+    ) -> dict[str, Any]:
+        """Move what a stored fill IS - and nothing about what it was worth.
+
+        TJ-9Q's one maintenance seam, and the only way stored rows move onto the
+        corrected Questrade vocabulary. Each update names an ``execution_uid``
+        and any of ``security_type``, ``side`` and ``multiplier``; the three
+        travel TOGETHER because they are read together:
+        ``journal_identity.group_key`` reads the type,
+        ``journal_store._signed_quantity`` reads the side, and
+        ``journal_file_authority._multiplier_for`` reads the stored multiplier
+        COLUMN before it will look at the type - so moving the type alone leaves
+        an option fill priced at a multiplier of one in the comparison that
+        decides whether a broker file takes a day over.
+
+        What it never touches: ``gross_amount``, ``net_amount``, ``commission``
+        (whose SIGN the importer owns - a broker CREDIT stays a credit),
+        ``fees``, ``quantity``, ``price``, ``symbol``, ``raw_json`` and
+        ``execution_uid``. The tax number is the broker's and is summed from
+        ``net_amount``; nothing here can reach it.
+
+        The UPDATEs are one transaction. The rebuild that follows owns its own
+        (``rebuild_trades`` opens its own connections, and a second connection
+        inside an open write transaction would deadlock on the same file), so
+        the caller takes a byte-exact backup first: that, not a shared
+        transaction, is what makes the whole pass undoable.
+
+        It refuses a row that is not a QUESTRADE fill rather than trusting its
+        caller: this vocabulary is one broker's, and the SQL is constrained as
+        well as the check, so a caller that builds its update list wrongly gets
+        an exception before anything moves instead of an IBKR option quietly
+        re-typed.
+
+        The re-key that follows the rebuild carries the MACHINE rows too
+        (``ai_trade_enrichment`` and ``note_lane_verdicts``, plus a
+        ``trade_aliases`` row for every other reference) by the same rule
+        ``_rekey_annotations`` uses on the trader's own: largest execution
+        overlap, and a tie is REFUSED, never guessed. Without it a reclassify
+        left 23 of 24 enrichment rows and 98 of 216 note verdicts pointing at
+        trade ids that no longer existed and the Journal page silently lost that
+        narration (measured on a copy of the live journal, 2026-09-19).
+
+        Returns what moved, including ``rebuild_trades``' own re-key report and
+        a per-table carried / left / already-dead count, so a caller can REFUSE
+        rather than leave a trader's annotation pointing at a trade id that no
+        longer exists.
+        """
+        rows = [dict(item) for item in updates]
+        updated = 0
+        if rows:
+            self._refuse_foreign_reclassification(rows)
+            with self.connection() as conn:
+                for row in rows:
+                    uid = str(row.get("execution_uid") or "")
+                    if not uid:
+                        continue
+                    assignments: list[str] = []
+                    params: list[Any] = []
+                    if "security_type" in row:
+                        assignments.append("security_type = ?")
+                        params.append(str(row.get("security_type") or "").upper())
+                    if "side" in row:
+                        assignments.append("side = ?")
+                        params.append(str(row.get("side") or "").upper())
+                    if "multiplier" in row:
+                        assignments.append("multiplier = ?")
+                        params.append(float(row.get("multiplier") or 1.0))
+                    if not assignments:
+                        continue
+                    params.append(uid)
+                    cursor = conn.execute(
+                        f"UPDATE raw_executions SET {', '.join(assignments)} "
+                        "WHERE execution_uid = ? AND broker = 'QUESTRADE'",
+                        params,
+                    )
+                    updated += int(cursor.rowcount or 0)
+        with self.connection() as conn:
+            legs_before = self._legs_by_trade(conn)
+            symbols_before = {
+                str(row[0]): str(row[1] or "")
+                for row in conn.execute("SELECT trade_id, symbol FROM trades")
+            }
+        trades = self.rebuild_trades(refresh_tags=refresh_tags)
+        with self.connection() as conn:
+            carried = self._carry_machine_rows(conn, legs_before, symbols_before)
+        return {
+            "executions_updated": updated,
+            "executions_requested": len(rows),
+            "trades": trades,
+            "rekey": {key: list(value) for key, value in (self.last_rekey or {}).items()},
+            "machine_rows": carried,
+        }
+
+    def _refuse_foreign_reclassification(self, rows: list[dict[str, Any]]) -> None:
+        """Nothing but a Questrade fill may be re-typed by this vocabulary."""
+        uids = [str(row.get("execution_uid") or "") for row in rows if row.get("execution_uid")]
+        if not uids:
+            return
+        found: dict[str, str] = {}
+        with self.connection() as conn:
+            for start in range(0, len(uids), 400):
+                chunk = uids[start : start + 400]
+                slots = ",".join("?" for _ in chunk)
+                for uid, broker in conn.execute(
+                    f"SELECT execution_uid, broker FROM raw_executions WHERE execution_uid IN ({slots})",
+                    chunk,
+                ):
+                    found[str(uid)] = str(broker or "").upper()
+        foreign = sorted(uid for uid, broker in found.items() if broker != "QUESTRADE")
+        if foreign:
+            raise ValueError(
+                "reclassify_executions is the Questrade vocabulary and was handed "
+                f"{len(foreign)} row(s) from another broker: {foreign[:5]}"
+            )
+
+    @staticmethod
+    def _legs_by_trade(conn: sqlite3.Connection) -> dict[str, set[str]]:
+        legs: dict[str, set[str]] = {}
+        for trade_id, uid in conn.execute("SELECT trade_id, execution_uid FROM trade_legs"):
+            legs.setdefault(str(trade_id), set()).add(str(uid))
+        return legs
+
+    def _carry_machine_rows(
+        self,
+        conn: sqlite3.Connection,
+        legs_before: dict[str, set[str]],
+        symbols_before: dict[str, str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Move the MACHINE's rows onto the rebuilt trades, or leave them alone.
+
+        The trader's annotations are carried by ``_rekey_annotations``; these
+        three tables were not, and a re-key silently emptied them:
+
+        * ``ai_trade_enrichment`` - the overnight narration the Journal page
+          shows, and nothing regenerates it. Re-keyed; a row that cannot be
+          mapped is LEFT where it is (never deleted) and reported.
+        * ``note_lane_verdicts`` - DERIVED, keyed by trade, and
+          ``refresh_auto_tags`` already DELETEs a verdict whose trade is gone
+          ("nothing downstream may read a row whose trade is gone"). Re-keyed
+          where it can be; where it cannot - a tie, or a rebuilt trade that
+          already carries one - the row is DROPPED under that same rule rather
+          than left to rot, and the drop is counted and printed. The note lane
+          writes it again from the trader's own note.
+        * ``opportunity_events`` - immutable by design and NEVER rewritten and
+          never deleted. A ``trade_aliases`` row is written instead, which is
+          the documented way an event reaches the trade it belongs to
+          (``resolve_trade_id``). Where the mapping is ambiguous the event stays
+          exactly as it is and is COUNTED, so an unreachable event is a number
+          on the report rather than a silence.
+
+        The mapping is the same one the annotations use - largest execution
+        overlap, a tie refused, never guessed. Counted per table, with the
+        symbols named, so the caller can print it and refuse a run that would
+        strand a row it did not account for.
+        """
+        symbols_before = dict(symbols_before or {})
+        new_by_trade = self._legs_by_trade(conn)
+        live = set(new_by_trade)
+        summary: dict[str, dict[str, int]] = {}
+        alias_targets: dict[str, str] = {}
+
+        def _mapped(old_id: str) -> str:
+            if old_id in live:
+                return old_id
+            if old_id in alias_targets:
+                return alias_targets[old_id]
+            old_uids = legs_before.get(old_id, set())
+            if not old_uids:
+                return ""
+            scored = sorted(
+                ((len(old_uids & uids), new_id) for new_id, uids in new_by_trade.items() if old_uids & uids),
+                reverse=True,
+            )
+            if not scored:
+                return ""
+            best_score, best_id = scored[0]
+            if len([item for item in scored if item[0] == best_score]) > 1:
+                return ""
+            alias_targets[old_id] = best_id
+            return best_id
+
+        for table, kind in (
+            ("ai_trade_enrichment", "rekey"),
+            ("note_lane_verdicts", "derived"),
+            ("opportunity_events", "immutable"),
+        ):
+            counts: dict[str, Any] = {
+                "carried": 0,
+                "left": 0,
+                "dropped": 0,
+                "already_dead": 0,
+                "symbols": [],
+                "left_trade_ids": [],
+            }
+            referenced = [
+                str(row[0])
+                for row in conn.execute(
+                    f"SELECT DISTINCT trade_id FROM {table} WHERE COALESCE(trade_id, '') != ''"
+                )
+            ]
+            for old_id in referenced:
+                if old_id in live:
+                    continue
+                if old_id not in legs_before:
+                    # It was already pointing at nothing before this run; this
+                    # pass did not strand it and will not invent a home for it.
+                    counts["already_dead"] += 1
+                    continue
+                new_id = _mapped(old_id)
+                symbol = symbols_before.get(old_id, "")
+                if new_id:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO trade_aliases(old_trade_id, new_trade_id, reason, created_at)
+                        VALUES(?, ?, ?, ?)
+                        """,
+                        (old_id, new_id, "reclassify re-key (machine rows)", _now_iso()),
+                    )
+                if kind == "immutable":
+                    # The alias IS the carry; the row itself is never touched.
+                    if new_id:
+                        counts["carried"] += 1
+                    else:
+                        counts["left"] += 1
+                        counts["left_trade_ids"].append(old_id)
+                        counts["symbols"].append(symbol or old_id)
+                    continue
+                taken = (
+                    conn.execute(
+                        f"SELECT 1 FROM {table} WHERE trade_id = ?", (new_id,)
+                    ).fetchone()
+                    if new_id
+                    else None
+                )
+                if new_id and taken is None:
+                    conn.execute(
+                        f"UPDATE {table} SET trade_id = ? WHERE trade_id = ?", (new_id, old_id)
+                    )
+                    counts["carried"] += 1
+                    continue
+                if kind == "derived":
+                    conn.execute(f"DELETE FROM {table} WHERE trade_id = ?", (old_id,))
+                    counts["dropped"] += 1
+                else:
+                    counts["left"] += 1
+                    counts["left_trade_ids"].append(old_id)
+                counts["symbols"].append(symbol or old_id)
+            counts["symbols"] = sorted(set(counts["symbols"]))
+            counts["left_trade_ids"] = sorted(set(counts["left_trade_ids"]))
+            summary[table] = counts
+        return summary
+
     def _load_raw_executions(self) -> list[dict[str, Any]]:
         """Every execution, ordered so each position's fills arrive in time order.
 

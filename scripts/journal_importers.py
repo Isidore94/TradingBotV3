@@ -6,6 +6,7 @@ import hashlib
 import logging
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -295,17 +296,148 @@ def parse_broker_datetime(value: Any, *, strict: bool = False) -> datetime:
     return parsed
 
 
+#: The three words Questrade spells that this vocabulary did not know before
+#: TJ-9Q. They fell through :func:`normalize_side` and were stored verbatim, and
+#: ``journal_store._signed_quantity`` reads anything outside its SELL set as a
+#: buy - so ``STO`` opened the trader's sold puts LONG and ``BTC`` added to them
+#: instead of closing them. ``COV`` came out right by accident there and wrong in
+#: ``journal_file_authority``, whose buy set holds ``COVER`` and not ``COV``.
+EXTENDED_SIDE_WORDS = frozenset({"STO", "BTC", "COV"})
+
+
 def normalize_side(value: Any) -> str:
+    """One broker side word as ``BUY`` or ``SELL``.
+
+    Since TJ-9Q this map knows the three option/cover words above. It is a PURE
+    function and it always answers with the corrected vocabulary; the seams that
+    must keep storing today's rows exactly as they are (the Questrade import and
+    the CSV statement import, while
+    :data:`QUESTRADE_INSTRUMENT_FROM_SYMBOL` is off) call
+    :func:`normalize_side_pre_tj9q` instead, so a journal is never half in one
+    convention and half in the other.
+    """
     text = str(value or "").strip().upper()
-    if text in {"BUY", "BOT", "BTO", "COVER", "BUYTOCOVER"}:
+    if text in {"BUY", "BOT", "BTO", "BTC", "COV", "COVER", "BUYTOCOVER"}:
         return "BUY"
-    if text in {"SELL", "SLD", "STC", "SSHORT", "SELLSHORT"}:
+    if text in {"SELL", "SLD", "STO", "STC", "SSHORT", "SELLSHORT"}:
         return "SELL"
     if text in {"LONG"}:
         return "BUY"
     if text in {"SHORT"}:
         return "SELL"
     return text or "BUY"
+
+
+def normalize_side_pre_tj9q(value: Any) -> str:
+    """The map the desk shipped BEFORE TJ-9Q, kept so the switch can be off.
+
+    ``STO``, ``BTC`` and ``COV`` come back as the broker spelled them, which is
+    what is in ``raw_executions.side`` on all 226 of the trader's Questrade rows
+    today. Everything else answers exactly as :func:`normalize_side` does.
+    """
+    text = str(value or "").strip().upper()
+    if text in EXTENDED_SIDE_WORDS:
+        return text
+    return normalize_side(text)
+
+
+# ---------------------------------------------------------------------------
+# TJ-9Q: a Questrade fill says what instrument it is, in the broker's own words
+# ---------------------------------------------------------------------------
+
+#: The shipped default, and it is OFF. Measured 2026-09-19 on a read-only copy
+#: of the live journal: 226 of 226 Questrade rows are ``security_type =
+#: 'UNKNOWN'`` and **29 of their positions are open** (24 OPEN + 5
+#: CLOSED_PARTIAL). Classifying new fills while those are open would file a
+#: closing fill into a different group from the position it closes - one
+#: convention per journal is the whole point. ``scripts/journal_reclassify.py
+#: --apply`` moves the stored rows and only then writes
+#: :data:`QUESTRADE_INSTRUMENT_SETTING`, which is how this turns on.
+QUESTRADE_INSTRUMENT_FROM_SYMBOL = False
+
+#: The ``local_settings`` key that overrides the default. Absent = the default.
+QUESTRADE_INSTRUMENT_SETTING = "questrade_instrument_from_symbol"
+
+#: Questrade's four option side words. The payload's own independent statement
+#: of what the fill is, checked against the symbol rather than trusted alone.
+QUESTRADE_OPTION_SIDES = frozenset({"BTO", "STO", "BTC", "STC"})
+
+#: Questrade's equity side words, including the ``Cov`` it spells for a cover.
+QUESTRADE_EQUITY_SIDES = frozenset(
+    {"BUY", "SELL", "SHORT", "COV", "COVER", "BOT", "SLD", "LONG", "SSHORT", "SELLSHORT", "BUYTOCOVER"}
+)
+
+#: Questrade's own option symbol spelling: root, day, month, 2-digit year,
+#: right, strike - ``AAOI18Jun26P120.00``, ``BE2Jul26P260.00``. The root is
+#: letters only, which is what keeps the day's digits out of it; nothing here
+#: infers an option from a ticker's LENGTH.
+_QUESTRADE_OPTION_SYMBOL = re.compile(
+    r"^(?P<root>[A-Z][A-Z.]{0,5}?)"
+    r"(?P<day>0?[1-9]|[12][0-9]|3[01])"
+    r"(?P<month>JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)"
+    r"(?P<year>[0-9]{2})"
+    r"(?P<right>[CP])"
+    r"(?P<strike>[0-9]+(?:\.[0-9]+)?)$"
+)
+
+#: A plain listed ticker. Letters first, then letters, digits, dot or dash.
+_PLAIN_TICKER = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+
+
+def questrade_instrument_from_symbol_enabled() -> bool:
+    """The EFFECTIVE switch, read at call time so ``--apply`` takes effect now.
+
+    ``local_settings`` first (the CLI writes it as its last step, after the
+    rebuild verified), then the shipped default. Never cached here:
+    ``project_paths`` caches on the settings file's own stamp and invalidates on
+    every write, so a read costs nothing and a stale answer is impossible.
+    """
+    value = get_local_setting(QUESTRADE_INSTRUMENT_SETTING, None)
+    if value is None:
+        return QUESTRADE_INSTRUMENT_FROM_SYMBOL
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def is_questrade_option_symbol(symbol: Any) -> bool:
+    """Whether the broker's own symbol spells a contract."""
+    text = re.sub(r"\s+", "", str(symbol or "").strip().upper())
+    return bool(text) and _QUESTRADE_OPTION_SYMBOL.fullmatch(text) is not None
+
+
+def classify_questrade_security_type(raw: dict[str, Any]) -> str:
+    """What this Questrade fill is, from the broker's OWN fields.
+
+    ``v1/accounts/{id}/executions`` carries neither ``securityType`` nor
+    ``symbolType`` - 226 of 226 recorded payloads carry exactly 20 keys and
+    neither of those - so the type has to come from the two fields that do say
+    it, and both have to agree:
+
+    * the **symbol**: ``AAOI18Jun26P120.00`` is Questrade's own spelling of a
+      contract; ``MARA`` is a listed ticker;
+    * the **side**: ``BTO``/``STO``/``BTC``/``STC`` on an option fill,
+      ``Buy``/``Sell``/``Short``/``Cov`` on an equity one.
+
+    A payload that DOES state a type is believed over both (``get_positions``
+    sends one, and a future endpoint may). Disagreement, an unreadable symbol or
+    anything else stays ``UNKNOWN``: uncertainty is never confirmation, and an
+    ``UNKNOWN`` position is visible and fixable while a wrong one is silent.
+    """
+    stated = normalize_security_type(raw.get("securityType") or raw.get("symbolType"))
+    if stated != "UNKNOWN":
+        return stated
+    symbol = re.sub(r"\s+", "", str(raw.get("symbol") or raw.get("symbolName") or "").strip().upper())
+    if not symbol:
+        return "UNKNOWN"
+    side = str(raw.get("side") or raw.get("action") or "").strip().upper()
+    if _QUESTRADE_OPTION_SYMBOL.fullmatch(symbol):
+        if not side or side in QUESTRADE_OPTION_SIDES:
+            return "OPT"
+        return "UNKNOWN"
+    if _PLAIN_TICKER.fullmatch(symbol) and side in QUESTRADE_EQUITY_SIDES:
+        return "STK"
+    return "UNKNOWN"
 
 
 @dataclass
@@ -557,7 +689,22 @@ class QuestradeImporter:
             rows.extend(dict(item) for item in activities if isinstance(item, dict))
         return rows
 
-    def normalize_execution(self, raw: dict[str, Any], account: dict[str, Any]) -> NormalizedExecution:
+    def normalize_execution(
+        self,
+        raw: dict[str, Any],
+        account: dict[str, Any],
+        *,
+        instrument_from_symbol: bool = True,
+    ) -> NormalizedExecution:
+        """One payload as a normalized execution.
+
+        ``instrument_from_symbol`` is the CONVENTION, not a feature flag: True
+        reads the broker's own symbol and side words (TJ-9Q), False reproduces
+        byte for byte what the desk stored before it. The seam
+        (:meth:`_append_normalized`) decides which, from the effective switch,
+        at call time; the function itself always classifies by default because a
+        pure function that consults a machine setting cannot be tested.
+        """
         timestamp = parse_broker_datetime(
             raw.get("timestamp") or raw.get("executionTime") or raw.get("time") or raw.get("tradeDate"),
             strict=True,
@@ -572,15 +719,24 @@ class QuestradeImporter:
         # `listingExchange` is deliberately not a fallback either. It is where
         # the instrument trades, never what it is, and using it split one AMZN
         # position into a "STOCK" half and a "NASDAQ" half that could never net.
-        security_type = normalize_security_type(raw.get("securityType") or raw.get("symbolType"))
+        stated_type = normalize_security_type(raw.get("securityType") or raw.get("symbolType"))
+        # The symbol is spelled from the type the PAYLOAD stated, never from the
+        # classified one. `canonical_option_symbol` rewrites a symbol into OCC
+        # form as soon as the type is OPT, and this endpoint carries no root,
+        # expiry, strike or right to rewrite it from - so classifying must not
+        # be able to move the stored symbol, which is half of the group key.
         symbol = canonical_option_symbol(
-            symbol, security_type, underlying=raw.get("underlyingSymbol"),
+            symbol, stated_type, underlying=raw.get("underlyingSymbol"),
             expiry=raw.get("expiryDate") or raw.get("expiry"),
             strike=raw.get("strikePrice") or raw.get("strike"),
             right=raw.get("optionType") or raw.get("putCall"),
         )
+        security_type = (
+            classify_questrade_security_type(raw) if instrument_from_symbol else stated_type
+        )
         currency = str(raw.get("currency") or account.get("currency") or "USD").strip().upper()
-        side = normalize_side(raw.get("side") or raw.get("action"))
+        side_word = raw.get("side") or raw.get("action")
+        side = normalize_side(side_word) if instrument_from_symbol else normalize_side_pre_tj9q(side_word)
         quantity = abs(_coerce_float(raw.get("quantity") or raw.get("shares")))
         price = _coerce_float(raw.get("price") or raw.get("executionPrice"))
         commission = abs(_coerce_float(raw.get("commission")))
@@ -644,9 +800,21 @@ class QuestradeImporter:
     def _append_normalized(
         self, executions: list[NormalizedExecution], raw: dict[str, Any], account: dict[str, Any]
     ) -> None:
-        """Normalize one row, or quarantine it. One bad row is not a bad day."""
+        """Normalize one row, or quarantine it. One bad row is not a bad day.
+
+        This is the SEAM the TJ-9Q switch gates - every Questrade import path
+        (a day, a chunk, a range) reaches the store through here, and the
+        effective value is read per row, at call time, so the trader's
+        ``--apply`` run takes effect on the very next import without a restart.
+        """
         try:
-            executions.append(self.normalize_execution(raw, account))
+            executions.append(
+                self.normalize_execution(
+                    raw,
+                    account,
+                    instrument_from_symbol=questrade_instrument_from_symbol_enabled(),
+                )
+            )
         except BrokerTimestampError as exc:
             self.quarantined.append(_quarantine_record("QUESTRADE", str(exc), raw))
 
