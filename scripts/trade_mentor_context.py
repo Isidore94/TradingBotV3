@@ -320,18 +320,21 @@ def _direction(value: float) -> str:
     return "up" if value > 0 else "down" if value < 0 else "flat"
 
 
-def _line(inputs: Sequence[str], missing: Sequence[str], **extra: Any) -> dict[str, Any]:
+def _line(inputs: Sequence[str], missing: Sequence[str], *, needs: str = "day reading", **extra: Any) -> dict[str, Any]:
     """One derived line, which always NAMES the readings it rests on.
 
     A missing input makes THIS line `unmeasured` and says which reading was
     absent; it never poisons a line that rests on other readings, and it is
-    never a zero (plan.md §5: missing data is uncertainty).
+    never a zero (plan.md §5: missing data is uncertainty). `needs` names the
+    reading that is actually missing - `sectors_above_vwap` rests on the
+    session VWAP, not on the day's change, and saying "day reading" there sent
+    a reader looking for the wrong hole.
     """
     row: dict[str, Any] = {
         "status": "unmeasured" if missing else "measured",
         "inputs": [str(name) for name in inputs],
         "reason": (
-            "no completed day reading for " + ", ".join(sorted(set(missing)))
+            f"no completed {needs} for " + ", ".join(sorted(set(missing)))
             if missing
             else ""
         ),
@@ -427,7 +430,9 @@ def _derived_block(readings: Sequence[Mapping[str, Any]]) -> dict[str, dict[str,
         for name in SECTORS
         if str((by_symbol.get(name) or {}).get("m5_vs_session_vwap") or "") not in ("above", "below", "at")
     ]
-    above = _line(SECTORS, vwap_absent, count=None, denominator=None)
+    above = _line(
+        SECTORS, vwap_absent, needs="session VWAP reading", count=None, denominator=None
+    )
     if not vwap_absent:
         # A COUNT WITH ITS DENOMINATOR, never a bare number: "nine" means
         # nothing without "of eleven".
@@ -514,25 +519,73 @@ def internals_at(session: Any, stamp: datetime, bars: Mapping[str, Any]) -> dict
     return context
 
 
+#: How many completed sessions before the rebuilt one the loader will read a
+#: tape for when the daily cache cannot answer. One is enough for the day facts
+#: (they rest on the PRIOR session alone); the extra two cost one parquet read
+#: each and cover a symbol whose previous session was never downloaded.
+_TAPE_D1_LOOKBACK = 3
+
+
+def _session_bar_from_tape(rows: Sequence[Any], day: date) -> dict[str, Any] | None:
+    """One completed session's OHLC, built from its own completed M5 bars.
+
+    RSP, USO and TLT have no file in the machine's daily-bar cache - the scan
+    universe never fetches them, and the live card only ever escaped through
+    Yahoo. Without this the rebuild could never measure breadth, rates or oil,
+    which are three of the eight derived lines. The bar is not a download and
+    not a guess: it is the session's own tape, which `day_review_bars` already
+    holds now that it carries the internals symbols.
+    """
+    prices: list[tuple[datetime, dict[str, float]]] = []
+    for row in rows or ():
+        stamp = _stamp(_field(row, "dt") or _field(row, "timestamp") or _field(row, "time"))
+        if stamp is None or stamp.tzinfo is None:
+            continue
+        market_stamp = stamp.astimezone(MARKET_TZ)
+        if market_stamp.date() != day:
+            continue
+        values = {name: _number(_field(row, name)) for name in ("open", "high", "low", "close")}
+        if any(value is None or value <= 0 for value in values.values()):
+            continue
+        prices.append((market_stamp, values))
+    if not prices:
+        return None
+    prices.sort(key=lambda item: item[0])
+    return {
+        "dt": day.isoformat(),
+        "open": prices[0][1]["open"],
+        "high": max(item[1]["high"] for item in prices),
+        "low": min(item[1]["low"] for item in prices),
+        "close": prices[-1][1]["close"],
+    }
+
+
 def internals_bars_at(session: Any, stamp: datetime) -> dict[str, Any]:
     """Read the bars :func:`internals_at` needs, cut point-in-time.
 
     The thin loader, and the only part of this module that touches a store. M5
     comes from TJ-2A's durable session tape (which is why `day_review_bars`
     downloads these symbols); D1 comes from the SAME daily cache the live
-    context service already reads. Both are cut to completed observations at or
-    before `stamp` by the builder itself, so no caller can widen the cut. A
-    symbol with nothing there has its facts `unmeasured`, never guessed.
+    context service already reads, and - for a symbol that cache has never
+    heard of - from the PRIOR sessions' tapes, one daily bar each. Both are cut
+    to completed observations at or before `stamp` by the builder itself, so no
+    caller can widen the cut. A symbol with nothing in either store has its
+    facts `unmeasured`, never guessed; a symbol answered from the tape has its
+    DAY facts measured while its five-session and SMA20 facts stay `unmeasured`
+    and say why (too few completed daily bars).
     """
     day = str(session or "")[:10]
-    m5: dict[str, Any] = {}
-    try:
-        from day_review_bars import read_session_bars
 
-        tape = read_session_bars(day) or {}
-        m5 = {symbol: tape.get(symbol) or [] for symbol in SYMBOLS if tape.get(symbol)}
-    except Exception:  # noqa: BLE001 - a missing tape is unmeasured, never an error
-        m5 = {}
+    def tape_for(target: str) -> dict[str, Any]:
+        try:
+            from day_review_bars import read_session_bars
+
+            return read_session_bars(target) or {}
+        except Exception:  # noqa: BLE001 - a missing tape is unmeasured, never an error
+            return {}
+
+    tape = tape_for(day)
+    m5 = {symbol: tape.get(symbol) or [] for symbol in SYMBOLS if tape.get(symbol)}
     d1: dict[str, Any] = {}
     try:
         from d1_environment_store import _cached_daily_bars
@@ -543,7 +596,40 @@ def internals_bars_at(session: Any, stamp: datetime) -> dict[str, Any]:
                 d1[symbol] = rows
     except Exception:  # noqa: BLE001
         d1 = {}
-    return {"m5": m5, "d1": d1, "sources": {"m5": "day_review_tape", "d1": "daily_cache"}}
+
+    missing = [symbol for symbol in SYMBOLS if not d1.get(symbol)]
+    from_tape = False
+    if missing:
+        try:
+            cursor = date.fromisoformat(day)
+        except ValueError:
+            cursor = None
+        for _ in range(_TAPE_D1_LOOKBACK if cursor else 0):
+            try:
+                cursor = previous_session(cursor)
+            except Exception:  # noqa: BLE001 - a calendar refusal ends the walk
+                break
+            earlier = tape_for(cursor.isoformat())
+            if not earlier:
+                continue
+            for symbol in missing:
+                bar = _session_bar_from_tape(earlier.get(symbol) or (), cursor)
+                if bar is not None:
+                    d1.setdefault(symbol, [])
+                    d1[symbol].append(bar)
+                    from_tape = True
+    for symbol in missing:
+        # Oldest first, the shape every D1 reader here expects.
+        if d1.get(symbol):
+            d1[symbol].sort(key=lambda row: str(row.get("dt") or ""))
+    return {
+        "m5": m5,
+        "d1": d1,
+        "sources": {
+            "m5": "day_review_tape",
+            "d1": "daily_cache+day_review_tape" if from_tape else "daily_cache",
+        },
+    }
 
 
 def compact_for_ai(context: Any) -> Any:

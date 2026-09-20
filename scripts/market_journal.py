@@ -97,11 +97,44 @@ DIRECTIONS = {
 #: Forced whenever the direction is not `no_view` (decision 0021 answer 29: a
 #: prediction IS direction, horizon and confidence; only `because` is optional).
 CONFIDENCE_LEVELS = ("low", "medium", "high")
-#: Which horizon one stored entry's timeframe carries.
+#: Which horizon one stored entry's timeframe carries. A row's `timeframe` and
+#: its prediction's `horizon` ALWAYS agree, and the rule is enforced at the
+#: WRITER (:func:`build_entry` raises, :func:`is_publishable` refuses) rather
+#: than trusted at each call site. The defect that made it a rule: a
+#: `Read unchanged` on the 09:00 card, handed the 08:00 D1 row as "your last
+#: read", filed a D1-timeframe entry carrying a `rest_of_day` call - a row that
+#: is true of neither timeframe, permanent in an append-only ledger, and
+#: poison for TJ-16's calibration.
 HORIZON_FOR_TIMEFRAME = {
     TIMEFRAME_M5: HORIZON_REST_OF_DAY,
     TIMEFRAME_D1: HORIZON_NEXT_5_SESSIONS,
 }
+
+
+class PredictionTimeframeError(ValueError):
+    """A row whose timeframe and prediction horizon disagree. Never stored."""
+
+
+def _check_prediction_timeframe(timeframe: str, prediction: Any) -> str:
+    """`""` when the pair agrees, otherwise the sentence that says why not."""
+    if not isinstance(prediction, Mapping):
+        return ""
+    horizon = str(prediction.get("horizon") or "").strip().lower()
+    if not horizon:
+        return ""
+    expected = HORIZON_FOR_TIMEFRAME.get(str(timeframe or "").strip().upper())
+    if expected is None:
+        return (
+            f"a {timeframe} entry carries no prediction horizon; only "
+            f"{TIMEFRAME_M5} and {TIMEFRAME_D1} rows may hold a call"
+        )
+    if horizon != expected:
+        return (
+            f"a {timeframe} entry may only carry a {expected} call, not "
+            f"{horizon}; a row whose timeframe and horizon disagree is true of "
+            "neither"
+        )
+    return ""
 
 
 @dataclass(frozen=True)
@@ -268,6 +301,12 @@ def build_entry(
     # Only a WORDLESS row is salted, and only by the two facts that tell two
     # such rows apart: which timeframe it is about and which call it carries.
     clicked = (mentor or {}).get("prediction") if isinstance(mentor, Mapping) else None
+    # Loud, at the writer: a caller that would file a row whose timeframe and
+    # horizon disagree gets an exception, not a stored row. An append-only
+    # ledger has no second chance at this.
+    mismatch = _check_prediction_timeframe(timeframe_text, clicked)
+    if mismatch:
+        raise PredictionTimeframeError(mismatch)
     salt = (
         ""
         if body
@@ -416,6 +455,16 @@ def is_publishable(entry: Mapping[str, Any]) -> tuple[bool, str]:
     must carry a clicked `mentor.prediction` - so every other empty-text entry
     is refused exactly as before.
     """
+    mentor = entry.get("mentor")
+    mismatch = _check_prediction_timeframe(
+        str(entry.get("timeframe") or ""),
+        mentor.get("prediction") if isinstance(mentor, Mapping) else None,
+    )
+    if mismatch:
+        # The same rule as `build_entry`'s raise, asked again at the gate every
+        # write passes through - a row assembled as a dict literal reaches here
+        # without ever calling `build_entry`.
+        return False, mismatch
     if not str(entry.get("text") or "").strip() and prediction_of(entry) is None:
         return False, "an empty entry is not a thought; nothing is stored"
     if not str(entry.get("session_date") or "").strip():

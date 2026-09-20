@@ -275,6 +275,84 @@ def test_the_thin_loader_reads_the_tape_and_the_daily_cache_and_nothing_else(
     ), "tomorrow's daily bar may not reach a rebuild of today"
 
 
+def test_the_rebuild_measures_breadth_when_the_daily_cache_never_heard_of_rsp(
+    tmp_path, monkeypatch
+):
+    """RSP, USO and TLT have NO file in the machine's daily-bar cache - the scan
+    universe never fetches them, and the live card only ever escaped through
+    Yahoo. So with an EMPTY cache the rebuild could measure neither breadth nor
+    rates nor oil: three of the eight derived lines, dark for every hour the
+    trader never answered.
+
+    The fix is not a download. The prior session's own tape is already durable
+    now that `day_review_bars` carries these symbols, so one daily bar per
+    symbol is built from it. Two sessions staged here, the cache empty: the day
+    facts are MEASURED on the second, and the five-session and SMA20 facts stay
+    unmeasured and say why.
+    """
+    import day_review_bars
+    import project_paths
+    import trade_mentor_context as context_module
+
+    monkeypatch.setattr(day_review_bars, "DAY_REVIEW_DIR", tmp_path / "day_review")
+    monkeypatch.setattr(project_paths, "DAILY_BARS_CACHE_DIR", tmp_path / "no-daily-cache")
+
+    # Friday: a flat 100.00 session for every symbol, so Monday's day change is
+    # the fixture's own `d - 100` and the numbers below are checkable by hand.
+    flat = [fixture.PRIOR_CLOSE] * 12
+    friday = {
+        symbol: [
+            dict(bar, dt=bar["dt"] - timedelta(days=3))
+            for bar in fixture.m5_bars_from(flat)
+        ]
+        for symbol in context_module.SYMBOLS
+    }
+    day_review_bars.write_session_bars(fixture.PRIOR_SESSION.isoformat(), friday)
+    day_review_bars.write_session_bars(SESSION.isoformat(), fixture.bars()["m5"])
+
+    loaded = context_module.internals_bars_at(SESSION.isoformat(), fixture.NOW)
+    assert loaded["sources"]["d1"] == "daily_cache+day_review_tape"
+    rebuilt = context_module.internals_at(SESSION.isoformat(), fixture.NOW, loaded)
+
+    breadth = rebuilt["derived"]["breadth"]
+    assert breadth["status"] == "measured"
+    assert breadth["value"] == pytest.approx(0.50, abs=1e-6)
+    assert rebuilt["derived"]["rates"]["value"] == pytest.approx(0.80, abs=1e-6)
+    assert rebuilt["derived"]["oil"]["value"] == pytest.approx(-2.10, abs=1e-6)
+
+    spy = next(row for row in rebuilt["readings"] if row["symbol"] == "SPY")
+    assert spy["day_change_pct"] == pytest.approx(0.50, abs=1e-6)
+    assert spy["vs_prior_low"] == "above"
+    # One completed daily bar is enough for the DAY facts and honestly not
+    # enough for the five-session change or the SMA20.
+    assert spy["d1_status"] == "unavailable"
+    assert "enough" in spy["d1_reason"]
+    assert spy["d1_change_5d_pct"] is None
+
+
+def test_an_unmeasured_vwap_count_names_the_reading_that_is_missing(tmp_path, monkeypatch):
+    """`sectors_above_vwap` rests on the session VWAP, not on the day's change.
+    Saying "no completed day reading" there sent a reader looking for the wrong
+    hole - the day reading is present and it is the VWAP that is not."""
+    import trade_mentor_context as context_module
+
+    payload = fixture.bars()
+    # A session whose first bars are missing: the day's change is still
+    # measurable, the session VWAP is not (a tail is never called VWAP).
+    payload["m5"]["XLK"] = fixture.m5_bars("XLK")[4:]
+    snapshot = context_module.build_context(
+        now=fixture.NOW, m5_bars=payload["m5"], d1_bars=payload["d1"]
+    )
+    xlk = next(row for row in snapshot["readings"] if row["symbol"] == "XLK")
+    assert xlk["day_change_pct"] is not None
+    assert xlk["m5_vs_session_vwap"] is None
+
+    line = snapshot["derived"]["sectors_above_vwap"]
+    assert line["status"] == "unmeasured"
+    assert line["reason"] == "no completed session VWAP reading for XLK"
+    assert snapshot["derived"]["sector_leaders"]["status"] == "measured"
+
+
 def test_a_symbol_missing_from_both_stores_is_unmeasured_not_guessed(tmp_path, monkeypatch):
     """Nothing staged at all: every reading is `unavailable` and every derived
     line `unmeasured`. Missing data is uncertainty, never zero."""

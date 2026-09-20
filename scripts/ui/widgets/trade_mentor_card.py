@@ -59,7 +59,6 @@ from market_journal import (
     CONFIDENCE_LEVELS,
     DIRECTION_NO_VIEW,
     DIRECTIONS,
-    HORIZON_FOR_TIMEFRAME,
     HORIZON_NEXT_5_SESSIONS,
     HORIZON_REST_OF_DAY,
     TIMEFRAME_D1,
@@ -114,6 +113,28 @@ _DIRECTION_LABELS = {
     "range": "Range",
     DIRECTION_NO_VIEW: "No view",
 }
+
+
+def _previous_by_timeframe(previous: Any) -> dict[str, Mapping[str, Any]]:
+    """`{timeframe: row}` from whatever the host handed the card.
+
+    The host now supplies the latest read of EACH timeframe the card can ask
+    about (`MainWindow._previous_mentor_read`). A single row is still accepted
+    - the manual door and every existing caller pass one - and is filed under
+    its own timeframe, never under the one the card happens to be showing.
+    """
+    if not isinstance(previous, Mapping) or not previous:
+        return {}
+    if previous.get("entry_id") or previous.get("event_type") or previous.get("text"):
+        row = dict(previous)
+        timeframe = str(row.get("timeframe") or TIMEFRAME_M5).strip().upper()
+        return {timeframe: row} if timeframe in TIMEFRAME_FOR_HORIZON.values() else {}
+    answer: dict[str, Mapping[str, Any]] = {}
+    for key, row in previous.items():
+        timeframe = str(key or "").strip().upper()
+        if isinstance(row, Mapping) and timeframe in TIMEFRAME_FOR_HORIZON.values():
+            answer[timeframe] = dict(row)
+    return answer
 
 
 class _MentorAIWorkerSignals(QObject):
@@ -175,7 +196,8 @@ class TradeMentorCard(QWidget):
         self._drafts: dict[str, str] = {}
         self._load_drafts()
         self._slot: MentorSlot | None = None
-        self._previous: Mapping[str, Any] | None = None
+        #: timeframe -> the latest read of THAT timeframe this session.
+        self._previous: dict[str, Mapping[str, Any]] = {}
         self._submitted: set[str] = set()
         self._context_service = None
         self._context_slot_id = ""
@@ -508,11 +530,36 @@ class TradeMentorCard(QWidget):
             because=self._prediction_rows[horizon]["because"].text(),
         )
 
-    def _previous_horizon(self) -> str:
-        """Which horizon a `Read unchanged` restates - the previous row's own."""
-        timeframe = str((self._previous or {}).get("timeframe") or TIMEFRAME_M5)
-        horizon = HORIZON_FOR_TIMEFRAME.get(timeframe, HORIZON_REST_OF_DAY)
-        return horizon if horizon in self._horizons_on_this_card() else HORIZON_REST_OF_DAY
+    def _previous_for(self, horizon: str) -> Mapping[str, Any] | None:
+        """The last read of THIS horizon's timeframe, or ``None``.
+
+        There is no fallback. A silent one is what filed a D1-timeframe row
+        carrying a rest-of-day call: `Read unchanged` on the 09:00 card was
+        handed the 08:00 card's D1 row as "your last read", kept its timeframe,
+        and took the only horizon the 09:00 card shows.
+        """
+        row = self._previous.get(TIMEFRAME_FOR_HORIZON[horizon])
+        return row if isinstance(row, Mapping) and str(row.get("text") or "").strip() else None
+
+    def _unchanged_refusal(self) -> str:
+        """Why `Read unchanged` is unavailable, in the trader's own terms."""
+        horizons = self._horizons_on_this_card()
+        if not horizons:
+            return "nothing is being asked"
+        missing = [
+            TIMEFRAME_FOR_HORIZON[horizon]
+            for horizon in horizons
+            if self._previous_for(horizon) is None
+        ]
+        if missing:
+            # Never a partial file and never a substitute: the trader has
+            # nothing to reaffirm for that timeframe, so they write it.
+            return (
+                "there is no earlier "
+                + " or ".join(missing)
+                + " read this session to reaffirm - Submit files this one"
+            )
+        return self._missing_prediction_reason(horizons)
 
     def _refresh_prediction_gate(self) -> None:
         """The file verbs stay grey until this hour's call has been clicked."""
@@ -521,8 +568,13 @@ class TradeMentorCard(QWidget):
             self.submit_button.setEnabled(
                 bool(horizons) and all(self._prediction_complete(h) for h in horizons)
             )
-            self.unchanged_button.setEnabled(
-                bool(self._previous) and self._prediction_complete(self._previous_horizon())
+            refusal = self._unchanged_refusal()
+            self.unchanged_button.setEnabled(not refusal)
+            self.unchanged_button.setToolTip(
+                refusal
+                or "Files a NEW observation at this time that restates your "
+                "previous read, with THIS hour's call. The earlier one stays "
+                "exactly as you wrote it."
             )
         except RuntimeError:  # pragma: no cover - widget already torn down
             pass
@@ -687,7 +739,7 @@ class TradeMentorCard(QWidget):
                 self._current_context = self._unavailable_context(
                     moment, "context request failed"
                 )
-        self._previous = dict(previous) if previous else None
+        self._previous = _previous_by_timeframe(previous)
         kind = str(getattr(slot, "kind", "") or "")
         self.prompt_label.setText(_QUESTIONS.get(kind, _QUESTIONS[KIND_MANUAL]))
         restored = self.draft_for(slot.slot_id)
@@ -714,14 +766,17 @@ class TradeMentorCard(QWidget):
             self.trade_check_box.setVisible(False)
             self.save_answers_button.setVisible(False)
             self._trade_check_session = ""
-        if self._previous:
-            self.previous_label.setText(
-                "Your last read: " + str(self._previous.get("text") or "")
-            )
-            self.previous_label.setVisible(True)
-        else:
-            self.previous_label.setText("")
-            self.previous_label.setVisible(False)
+        # One line per timeframe this card asks about, each naming its own
+        # earlier read: "your last read" on a card with two timeframes was one
+        # sentence that could only be true of one of them.
+        lines = []
+        for horizon in self._horizons_on_this_card():
+            row = self._previous_for(horizon)
+            if row is not None:
+                timeframe = TIMEFRAME_FOR_HORIZON[horizon]
+                lines.append(f"Your last {timeframe} read: {row.get('text') or ''}")
+        self.previous_label.setText("\n".join(lines))
+        self.previous_label.setVisible(bool(lines))
         self._refresh_prediction_gate()
         try:
             from ai_jobs.market_story_narration import latest_coaching_question
@@ -1289,47 +1344,55 @@ class TradeMentorCard(QWidget):
         return {"ok": True, "entries": written}
 
     def read_unchanged(self) -> dict[str, Any]:
-        """File a NEW row restating the previous read, at this time."""
+        """File a NEW row per timeframe, restating THAT timeframe's last read.
+
+        "My view has not changed" is a statement about the WORDS, and it is a
+        statement about one timeframe: the M5 words are reaffirmed with this
+        hour's rest-of-day call as an M5 row, the D1 words with this card's
+        five-session call as a D1 row. A row's timeframe and its prediction's
+        horizon always agree, and there is no fallback when a timeframe has no
+        earlier read - the trader writes that one instead.
+        """
         slot = self._slot
         if slot is None:
             return {"ok": False, "reason": "nothing is being asked"}
-        previous = self._previous or {}
-        body = str(previous.get("text") or "").strip()
-        if not body:
-            return {"ok": False, "reason": "there is no earlier read to reaffirm"}
         if slot.slot_id in self._submitted:
             return {"ok": False, "reason": "this read is already filed"}
-        # "My view has not changed" is a statement about the WORDS. Copying the
-        # 09:00 call onto the 11:00 row would manufacture a graded prediction
-        # the trader never made - and the two hours would always agree.
-        horizon = self._previous_horizon()
-        missing = self._missing_prediction_reason((horizon,))
-        if missing:
-            self._set_status(missing)
-            return {"ok": False, "reason": missing}
+        refusal = self._unchanged_refusal()
+        if refusal:
+            self._set_status(refusal)
+            return {"ok": False, "reason": refusal}
         moment = self._now()
-        result = self._service().write_entry(
-            text=body,
-            session_date=self._session_for(slot, moment),
-            timeframe=str(previous.get("timeframe") or "M5"),
-            origin="trade_mentor",
-            now=moment,
-            mentor=self._mentor_payload(
-                slot, moment, observation=body, horizon=horizon
-            ),
-            # Names the read it restates, and deliberately NOT `supersedes`:
-            # superseding would hide the 09:00 read behind the 11:00 one.
-            reaffirms=str(previous.get("entry_id") or ""),
-        )
-        if not result.get("ok"):
-            self._set_status(str(result.get("reason") or "entry NOT saved"))
-            return result
+        session = self._session_for(slot, moment)
+        written: list[dict[str, Any]] = []
+        for horizon in self._horizons_on_this_card():
+            previous = self._previous_for(horizon)
+            body = str(previous.get("text") or "").strip()
+            result = self._service().write_entry(
+                text=body,
+                session_date=session,
+                timeframe=TIMEFRAME_FOR_HORIZON[horizon],
+                origin="trade_mentor",
+                now=moment,
+                mentor=self._mentor_payload(
+                    slot, moment, observation=body, horizon=horizon
+                ),
+                # Names the read it restates, and deliberately NOT `supersedes`:
+                # superseding would hide the 09:00 read behind the 11:00 one.
+                reaffirms=str(previous.get("entry_id") or ""),
+            )
+            if not result.get("ok"):
+                self._set_status(str(result.get("reason") or "entry NOT saved"))
+                return result
+            written.append(result.get("entry") or {})
         self._submitted.add(slot.slot_id)
         self._drop_draft(slot.slot_id)
+        self._reset_predictions()
+        self._refresh_prediction_gate()
         self._set_status(f"Read unchanged, filed at {moment.strftime('%H:%M')}.")
         self.answered.emit(slot.slot_id)
         self.setVisible(False)
-        return result
+        return {"ok": True, "entries": written}
 
     def skip(self) -> dict[str, Any]:
         """Dismiss without filing. Whatever was typed is kept as a draft."""
