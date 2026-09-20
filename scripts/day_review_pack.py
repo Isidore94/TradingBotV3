@@ -1,0 +1,602 @@
+"""The day pack — one session's deterministic evidence, hash-stable (TJ-4 item 1).
+
+`plan.md` §12.4 TJ-4 change 1, as amended 2026-09-19. This module is what the
+overnight day story is allowed to read, and nothing else: twelve sections, every
+item naming its own `source_id`, and a hash over the INPUTS so the same session
+built twice is the same pack.
+
+Three rules hold it together:
+
+* **PURE.** It opens no store, starts no thread, has no clock of its own and
+  reads no detector, score or tracker file. Everything it needs is handed in by
+  the caller that already read it on a worker (`DayReviewService.build_pack_for`)
+  or by the nightly slot. A builder that read its own inputs would be a second
+  reader of the day, and the two would disagree on the first rounding decision.
+* **A machine row is never in it.** `market_journal.is_machine_entry` is the ONE
+  filter (TJ-1 item 2), and the pasted forecast is somebody ELSE's words, so it
+  has its own section and never appears under `trader_said`.
+* **An observation and a prediction are SEPARATE items.** TJ-14A keeps what the
+  trader SAW apart from what they CALLED at the writer; folding them here would
+  let the night's story quote a description as a call, which is the one thing
+  TJ-4's amendment forbids. An EMPTY observation emits no item at all - an empty
+  quote is a source id the model can cite and say nothing about.
+
+Where it is stored: `DAY_REVIEW_DIR/sessions/<date>/pack.json`, beside that
+session's index. `day_review_index._prune` deletes every child of a session
+folder older than `KEEP_SESSIONS` (40) - including this file - and that is safe
+precisely because the pack is REBUILDABLE from durable inputs, which
+`tests/test_tj4_day_pack.py::test_two_builds_of_the_same_session_hash_equal_...`
+is what proves. Never put anything unrebuildable in that folder.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import json
+import logging
+import os
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+import project_paths
+
+_log = logging.getLogger(__name__)
+
+SCHEMA = "day_review_pack_v1"
+
+#: The twelve sections, in the order `plan.md` TJ-4 change 1 names them.
+#: `report_card` (TJ-12) and `mood` (TJ-7) are HOOKS: present and empty, so a
+#: reader has one shape whether or not those packets have landed.
+SECTIONS: tuple[str, ...] = (
+    "trader_said",
+    "forecast",
+    "environment",
+    "measured",
+    "internals",
+    "walkaway",
+    "skill",
+    "reads",
+    "congruence",
+    "trades",
+    "report_card",
+    "mood",
+)
+
+#: The sections that are a LIST of items, each of which names its source.
+LIST_SECTIONS: tuple[str, ...] = (
+    "trader_said",
+    "environment",
+    "measured",
+    "internals",
+    "reads",
+    "congruence",
+)
+
+#: The walk-away populations, in the order the page shows them.
+WALKAWAY_POPULATIONS: tuple[str, ...] = (
+    "liked_not_traded",
+    "rejected",
+    "traded_left_early",
+    "claimed_d1",
+    "earlier_calls",
+)
+
+#: How many walk-away rows the pack carries. A SIZE rule, ordered by how far the
+#: name ran after the decision - never a ranking that decides anything.
+WALKAWAY_TOP_N = 3
+
+#: The `forecast_brief` fields the story may cite one by one.
+FORECAST_FIELDS: tuple[str, ...] = (
+    "playbook_bullish",
+    "playbook_bearish",
+    "bottom_line",
+    "turbulence",
+)
+
+KIND_OBSERVATION = "observation"
+KIND_PREDICTION = "prediction"
+
+
+# ---------------------------------------------------------------------------
+# plain values
+# ---------------------------------------------------------------------------
+def _plain(value: Any) -> Any:
+    """A JSON-safe copy of `value`, deterministic for the same input.
+
+    The pack is hashed and written; a `datetime` or a frozen dataclass in it
+    would hash by `repr` in one place and by `str` in another.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _plain(dataclasses.asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        rows = list(value)
+        if isinstance(value, (set, frozenset)):
+            rows = sorted(rows, key=str)
+        return [_plain(item) for item in rows]
+    return str(value)
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None
+
+
+# ---------------------------------------------------------------------------
+# the sections
+# ---------------------------------------------------------------------------
+def _entry_rows(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The trader's own entries, oldest first, with the machine's dropped."""
+    import market_journal
+
+    rows: list[dict[str, Any]] = []
+    for entry in entries or ():
+        if not isinstance(entry, Mapping):
+            continue
+        if str(entry.get("event_type") or "entry") != "entry":
+            continue
+        if market_journal.is_machine_entry(entry):
+            continue
+        if str(entry.get("origin") or "") == market_journal.ORIGIN_EXTERNAL_FORECAST:
+            continue
+        rows.append(dict(entry))
+    rows.sort(key=lambda row: str(row.get("created_at") or ""))
+    return rows
+
+
+def _trader_said(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One item per observation AND one per prediction (TJ-14A's rule, kept)."""
+    import market_journal
+
+    items: list[dict[str, Any]] = []
+    for entry in _entry_rows(entries):
+        entry_id = _text(entry.get("entry_id"))
+        timeframe = _text(entry.get("timeframe")).upper()
+        stamp = _text(entry.get("created_at"))
+        mentor = entry.get("mentor") if isinstance(entry.get("mentor"), Mapping) else {}
+        words = _text((mentor or {}).get("observation")) or _text(entry.get("text"))
+        if words:
+            items.append({
+                "kind": KIND_OBSERVATION,
+                "entry_id": entry_id,
+                "timeframe": timeframe,
+                "at": stamp,
+                "text": words,
+                "direction": "",
+                "horizon": "",
+                "source_id": f"said:{entry_id}:{KIND_OBSERVATION}",
+            })
+        call = market_journal.prediction_of(entry)
+        if call is not None:
+            items.append({
+                "kind": KIND_PREDICTION,
+                "entry_id": entry_id,
+                "timeframe": timeframe,
+                "at": stamp,
+                "text": "",
+                "direction": call.direction,
+                "horizon": call.horizon,
+                "confidence": call.confidence,
+                "because": call.because,
+                "source_id": f"said:{entry_id}:{KIND_PREDICTION}",
+            })
+    return items
+
+
+def _brief_field(brief: Any, name: str) -> Any:
+    if isinstance(brief, Mapping):
+        return brief.get(name)
+    return getattr(brief, name, None)
+
+
+def _forecast_section(forecast: Any) -> dict[str, Any]:
+    """The pasted brief, verbatim, with each parsed field citable on its own.
+
+    `chased_against_news` is judged against what the brief STATED, so the
+    bearish playbook has to be a source of its own rather than a sentence buried
+    in 4 KB of somebody else's markdown.
+    """
+    if not isinstance(forecast, Mapping) or not forecast:
+        return {}
+    entry_id = _text(forecast.get("entry_id"))
+    text = str(forecast.get("text") or "")
+    if not entry_id and not text.strip():
+        return {}
+    brief = forecast.get("brief")
+    fields: dict[str, Any] = {}
+    for name in FORECAST_FIELDS:
+        fields[name] = {
+            "value": _plain(_brief_field(brief, name)),
+            "source_id": f"forecast:{entry_id}:{name}",
+        }
+    return {
+        "entry_id": entry_id,
+        "text": text,
+        "created_at": _text(forecast.get("created_at")),
+        "source_model": _text(forecast.get("source_model")),
+        "fields": fields,
+    }
+
+
+def _environment(environment: Iterable[Mapping[str, Any]], d1_label: str) -> list[dict[str, Any]]:
+    """The day's regime shifts, whole, then the desk's D1 label for the session."""
+    items: list[dict[str, Any]] = []
+    for index, row in enumerate(environment or ()):
+        if not isinstance(row, Mapping):
+            continue
+        items.append({
+            **_plain(dict(row)),
+            "kind": "regime_shift",
+            "source_id": f"env:regime_shift:{index}",
+        })
+    label = _text(d1_label)
+    if label:
+        items.append({
+            "kind": "d1_label",
+            "label": label,
+            "source_id": "env:d1_label",
+        })
+    return items
+
+
+def _measured(story: Any) -> list[dict[str, Any]]:
+    """`market_story.build_daily_story`'s own cells. The pack measures nothing."""
+    cells = getattr(story, "measured", None)
+    if cells is None and isinstance(story, Mapping):
+        cells = story.get("measured")
+    items: list[dict[str, Any]] = []
+    for index, cell in enumerate(cells or ()):
+        if not isinstance(cell, Mapping):
+            continue
+        symbol = _text(cell.get("symbol")) or str(index)
+        items.append({**_plain(dict(cell)), "source_id": f"measured:{symbol}"})
+    return items
+
+
+def _internals(marks: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The open, each Mentor hour and the close, in time order.
+
+    The context travels COMPACTED (`trade_mentor_context.compact_for_ai`), so
+    `common.internals` - the one SCALAR that survives the evidence package's
+    depth cut - is what the model reads. Measured 2026-09-19: `ai_summary._bounded`
+    stops six levels down, exactly where a derived line's inputs sit, so the raw
+    v2 block reaches the model as "[nested content omitted]".
+    """
+    import trade_mentor_context
+
+    items: list[dict[str, Any]] = []
+    for mark in marks or ():
+        if not isinstance(mark, Mapping):
+            continue
+        kind = _text(mark.get("kind"))
+        at = _text(mark.get("at"))
+        items.append({
+            "kind": kind,
+            "at": at,
+            "context": _plain(trade_mentor_context.compact_for_ai(mark.get("context"))),
+            "source_id": f"internals:{kind}:{at}",
+        })
+    items.sort(key=lambda item: str(item.get("at") or ""))
+    return items
+
+
+def _walkaway(walkaway: Any) -> dict[str, Any]:
+    """Counts per population, and the three rows that ran furthest after.
+
+    A SIZE rule with an order, never a ranking that decides anything: the story
+    needs the names it can talk about, and three is what one paragraph holds.
+    """
+    counts: dict[str, int] = {}
+    rows: list[dict[str, Any]] = []
+    for population in WALKAWAY_POPULATIONS:
+        found = getattr(walkaway, population, None)
+        if found is None and isinstance(walkaway, Mapping):
+            found = walkaway.get(population)
+        found = tuple(found or ())
+        counts[population] = len(found)
+        for index, row in enumerate(found):
+            plain = _plain(row)
+            if not isinstance(plain, Mapping):
+                continue
+            rows.append({**plain, "population": population, "_order": (population, index)})
+    rows.sort(
+        key=lambda row: (
+            -(_number(row.get("ran_after_pct")) if _number(row.get("ran_after_pct")) is not None else float("-inf")),
+            str(row.get("symbol") or ""),
+            str(row.get("_order")),
+        )
+    )
+    top: list[dict[str, Any]] = []
+    for index, row in enumerate(rows[:WALKAWAY_TOP_N]):
+        body = {key: value for key, value in row.items() if key != "_order"}
+        body["source_id"] = f"walkaway:{index}:{_text(body.get('symbol'))}"
+        top.append(body)
+    return {"counts": counts, "top": top}
+
+
+def _skill(walkaway: Any, session: str) -> dict[str, Any]:
+    """TJ-11's own skill block, whole. The pack computes no rate of its own."""
+    skill = getattr(walkaway, "skill", None)
+    if skill is None and isinstance(walkaway, Mapping):
+        skill = walkaway.get("skill")
+    body = _plain(skill) if isinstance(skill, Mapping) else {}
+    if not isinstance(body, dict):
+        body = {}
+    return {**body, "source_id": f"skill:{session}"}
+
+
+def _reads(reads: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for index, row in enumerate(reads or ()):
+        if not isinstance(row, Mapping):
+            continue
+        read_id = _text(row.get("read_id")) or str(index)
+        items.append({**_plain(dict(row)), "source_id": f"read:{read_id}"})
+    return items
+
+
+def _congruence(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for index, line in enumerate(lines or ()):
+        if not isinstance(line, Mapping):
+            continue
+        kind = _text(line.get("kind")) or str(index)
+        items.append({**_plain(dict(line)), "source_id": f"congruence:{kind}"})
+    return items
+
+
+def _trades(trades: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """The day's closed money, counted once per row and never recomputed."""
+    rows: list[dict[str, Any]] = []
+    wins = losses = 0
+    net = 0.0
+    for index, trade in enumerate(trades or ()):
+        if not isinstance(trade, Mapping):
+            continue
+        trade_id = _text(trade.get("trade_id")) or str(index)
+        pnl = _number(trade.get("realized_pnl"))
+        if pnl is not None:
+            net += pnl
+            if pnl > 0:
+                wins += 1
+            elif pnl < 0:
+                losses += 1
+        rows.append({**_plain(dict(trade)), "source_id": f"trade:{trade_id}"})
+    return {
+        "n": len(rows),
+        "wins": wins,
+        "losses": losses,
+        "net_pnl": round(net, 6),
+        "rows": rows,
+    }
+
+
+# ---------------------------------------------------------------------------
+# the pack
+# ---------------------------------------------------------------------------
+def build_pack(
+    session_date: str,
+    *,
+    entries: Iterable[Mapping[str, Any]] = (),
+    forecast: Any = None,
+    story: Any = None,
+    environment: Iterable[Mapping[str, Any]] = (),
+    d1_label: str = "",
+    internals: Iterable[Mapping[str, Any]] = (),
+    walkaway: Any = None,
+    reads: Iterable[Mapping[str, Any]] = (),
+    congruence: Iterable[Mapping[str, Any]] = (),
+    trades: Iterable[Mapping[str, Any]] = (),
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """One session's evidence, as the night's story is allowed to see it.
+
+    `inputs_hash` is over the SECTIONS and never over the clock: the post-close
+    tick and the nightly slot build the same pack hours apart, and a clock in
+    the hash would make change 2's skip unreachable and pay the model every
+    night for a session that had not moved.
+    """
+    session = str(session_date or "")[:10]
+    moment = now or datetime.now().astimezone()
+    body: dict[str, Any] = {
+        "schema": SCHEMA,
+        "session_date": session,
+        "trader_said": _trader_said(entries),
+        "forecast": _forecast_section(forecast),
+        "environment": _environment(environment, d1_label),
+        "measured": _measured(story),
+        "internals": _internals(internals),
+        "walkaway": _walkaway(walkaway),
+        "skill": _skill(walkaway, session),
+        "reads": _reads(reads),
+        "congruence": _congruence(congruence),
+        "trades": _trades(trades),
+        # TJ-12 and TJ-7's hooks. Present and falsy, never absent.
+        "report_card": {},
+        "mood": {},
+    }
+    body["inputs_hash"] = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+    body["built_at"] = moment.isoformat()
+    return body
+
+
+def allowed_source_ids(pack: Mapping[str, Any]) -> tuple[str, ...]:
+    """Every id a narration of this pack may cite, once each, in pack order."""
+    seen: list[str] = []
+
+    def _add(value: Any) -> None:
+        text = _text(value)
+        if text and text not in seen:
+            seen.append(text)
+
+    for name in LIST_SECTIONS:
+        for item in (pack or {}).get(name) or ():
+            if isinstance(item, Mapping):
+                _add(item.get("source_id"))
+    forecast = (pack or {}).get("forecast")
+    if isinstance(forecast, Mapping):
+        for cell in (forecast.get("fields") or {}).values():
+            if isinstance(cell, Mapping):
+                _add(cell.get("source_id"))
+    walkaway = (pack or {}).get("walkaway")
+    if isinstance(walkaway, Mapping):
+        for row in walkaway.get("top") or ():
+            if isinstance(row, Mapping):
+                _add(row.get("source_id"))
+    skill = (pack or {}).get("skill")
+    if isinstance(skill, Mapping):
+        _add(skill.get("source_id"))
+    trades = (pack or {}).get("trades")
+    if isinstance(trades, Mapping):
+        for row in trades.get("rows") or ():
+            if isinstance(row, Mapping):
+                _add(row.get("source_id"))
+    return tuple(seen)
+
+
+def said_items(pack: Mapping[str, Any], *, kind: str = "", timeframe: str = "") -> list[dict[str, Any]]:
+    """`trader_said` items, optionally narrowed by kind and timeframe."""
+    wanted_kind = _text(kind)
+    wanted_timeframe = _text(timeframe).upper()
+    out: list[dict[str, Any]] = []
+    for item in (pack or {}).get("trader_said") or ():
+        if not isinstance(item, Mapping):
+            continue
+        if wanted_kind and _text(item.get("kind")) != wanted_kind:
+            continue
+        if wanted_timeframe and _text(item.get("timeframe")).upper() != wanted_timeframe:
+            continue
+        out.append(dict(item))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# where it lives
+# ---------------------------------------------------------------------------
+def default_root() -> Path:
+    """`DAY_REVIEW_DIR`, read at CALL time so a test can redirect it."""
+    return Path(project_paths.DAY_REVIEW_DIR)
+
+
+def session_dir(session_date: str, *, root: Path | None = None) -> Path:
+    base = Path(root) if root is not None else default_root()
+    return base / "sessions" / str(session_date or "").strip()[:10]
+
+
+def pack_path(session_date: str, *, root: Path | None = None) -> Path:
+    """`<root>/sessions/<date>/pack.json`, beside that session's index.
+
+    `day_review_index._prune` deletes every child of a session folder older than
+    its `KEEP_SESSIONS` and removes the folder, so this file goes with it. That
+    is safe because the pack is REBUILDABLE from durable inputs and nothing
+    unrebuildable may be written here.
+    """
+    return session_dir(session_date, root=root) / "pack.json"
+
+
+def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(dict(payload), indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def write_pack(pack: Mapping[str, Any], *, root: Path | None = None) -> Path:
+    path = pack_path(str((pack or {}).get("session_date") or ""), root=root)
+    _atomic_write(path, pack)
+    return path
+
+
+def read_pack(session_date: str, *, root: Path | None = None) -> dict[str, Any] | None:
+    """The stored pack, or `None`. A page and a night both ask for one that may
+    not exist yet, and neither may be costed an exception for asking."""
+    path = pack_path(session_date, root=root)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# Redo, queued for tonight
+# ---------------------------------------------------------------------------
+def redo_path(session_date: str, *, root: Path | None = None) -> Path:
+    return session_dir(session_date, root=root) / "redo_requested.json"
+
+
+def request_redo(
+    session_date: str, *, root: Path | None = None, now: datetime | None = None
+) -> Path:
+    """Ask the night to narrate this session again (plan TJ-4 change 4).
+
+    Without this the daytime "queued for tonight" would be a lie: the pack's
+    hash has not moved, so the night would skip the very session the trader
+    asked to have redone.
+    """
+    path = redo_path(session_date, root=root)
+    moment = now or datetime.now().astimezone()
+    _atomic_write(path, {
+        "session_date": str(session_date or "")[:10],
+        "requested_at": moment.isoformat(),
+    })
+    return path
+
+
+def redo_requested(session_date: str, *, root: Path | None = None) -> bool:
+    return redo_path(session_date, root=root).exists()
+
+
+def clear_redo(session_date: str, *, root: Path | None = None) -> bool:
+    """Drop the marker after a successful run. Quiet on every failure path."""
+    path = redo_path(session_date, root=root)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        _log.debug("The Day Review redo marker could not be cleared.", exc_info=True)
+        return False
+    return True
+
+
+__all__ = [
+    "FORECAST_FIELDS",
+    "KIND_OBSERVATION",
+    "KIND_PREDICTION",
+    "LIST_SECTIONS",
+    "SCHEMA",
+    "SECTIONS",
+    "WALKAWAY_POPULATIONS",
+    "allowed_source_ids",
+    "build_pack",
+    "clear_redo",
+    "default_root",
+    "pack_path",
+    "read_pack",
+    "redo_path",
+    "redo_requested",
+    "request_redo",
+    "said_items",
+    "session_dir",
+    "write_pack",
+]
