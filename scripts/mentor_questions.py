@@ -28,6 +28,11 @@ kind                          dormant until   why
 ``trade_origin``              TJ-12           the planned-vs-unplanned Process line
 ``open_position_check``       TJ-12           the long-hold rows
 ``grader_gap``                TJ-10           no deterministic reader emits a gap yet
+``quick_like_followup``       TJ-14C          its answer is an ``opportunity_events``
+                                              row and ``like_cohort.like_pick_rows``
+                                              reads ``claimed_setup_id`` only off
+                                              ``trader_annotations.jsonl`` rows - the
+                                              join does not exist yet
 ============================  ==============  =========================================
 
 :func:`pending` never returns a dormant kind on a live card and
@@ -55,10 +60,11 @@ watchlist, Focus, the review queue or ``review_policy.json`` (plan.md sec 5).
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 import logging
-import re
+import textwrap
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -638,6 +644,13 @@ REGISTRY: tuple[QuestionKind, ...] = (
         cadence=CADENCE_ONCE,
         expiry="never - the like already happened",
         priority=30,
+        # TJ-14B review, blocker 2. The answer is filed as an append-only
+        # `opportunity_events` row; `like_pick_rows` reads `claimed_setup_id`
+        # off `trader_annotations.jsonl` rows, and the tester's own test forbids
+        # appending to that file. The KEY is genuinely read - the STORE is not
+        # joined - so the question waits for the packet that joins them. The
+        # live log holds 46 quick likes, so this would really have been asked.
+        dormant_until="TJ-14C",
     ),
     QuestionKind(
         kind="day_close",
@@ -758,13 +771,30 @@ def _resolve(dotted: str) -> tuple[Any, bool, str]:
     return target, True, ""
 
 
+def _key_constant(node: Any, key: str) -> bool:
+    return isinstance(node, ast.Constant) and node.value == key
+
+
 def _reads_key(target: Any, answer_key: str) -> bool:
     """Does this reader actually TOUCH the key the answer is filed under?
 
-    A static read of the reader's own source, as a whole word. It is
-    deliberately not a call: a probe that called the consumer and looked for the
-    value in its output would pass for `json.dumps`, which imports, is callable,
-    and will never read a Mentor answer.
+    A static read of the reader's own source, PARSED - not a text search and not
+    a call.
+
+    * not a call, because a probe that called the consumer and looked for the
+      value in its output would pass for `json.dumps`, which imports, is
+      callable, and will never read a Mentor answer;
+    * not a text search, because the word also appears in comments, docstrings
+      and bare strings. TJ-14B's review planted both foolers: a function whose
+      only mention of the key is `# claimed_setup_id` in a comment, and one
+      whose body is `return "trade_origin"`. A `grep`-shaped probe passes both,
+      and a registry whose check can be satisfied by a comment is not a check.
+
+    The key counts only as a string CONSTANT used in code: a subscript
+    (``row["state"]``), an argument (``row.get("state")``), a comparison
+    (``name == "state"``) or a keyword value. A docstring and a bare string
+    statement are `ast.Expr` wrapping the constant and are never reached,
+    because nothing here looks at `ast.Expr`.
     """
     key = _text(answer_key)
     if not key:
@@ -773,7 +803,26 @@ def _reads_key(target: Any, answer_key: str) -> bool:
         source = inspect.getsource(target)
     except (OSError, TypeError):
         return False
-    return bool(re.search(rf"(?<![\w]){re.escape(key)}(?![\w])", source))
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            if _key_constant(node.slice, key):
+                return True
+        elif isinstance(node, ast.Call):
+            if any(_key_constant(arg, key) for arg in node.args):
+                return True
+        elif isinstance(node, ast.keyword):
+            if _key_constant(node.value, key):
+                return True
+        elif isinstance(node, ast.Compare):
+            if _key_constant(node.left, key) or any(
+                _key_constant(item, key) for item in node.comparators
+            ):
+                return True
+    return False
 
 
 def consumer_report(kinds: Sequence[QuestionKind] | None = None) -> tuple[dict[str, Any], ...]:
@@ -1001,24 +1050,91 @@ def _record_in_journal(
 # ---------------------------------------------------------------------------
 
 
+def pull_slot_ids(session: Any, slots: Sequence[Any] | None = None) -> tuple[str, ...]:
+    """Which of the session's cards are allowed to start a pre-card pull.
+
+    TJ-14B review, blocker 3. First-come spent the whole day's budget by the
+    08:00 card, so every fill after 11:00 ET went unimported and `same_session`
+    - the label this packet exists to make reachable - was unreachable all
+    afternoon while the card went on asking.
+
+    The attempts are SPACED and RESERVED: the 09:00 card (the trade check's own
+    hour), the middle card between it and the close, and the LAST card of the
+    session. The hours are read off the session's REAL slot list, so an early
+    close simply has fewer of them - a missing slot forfeits its attempt and
+    never rolls it earlier.
+    """
+    if slots is None:
+        if isinstance(session, datetime):
+            session = session.date()
+        elif not isinstance(session, date):
+            text = _text(session)[:10]
+            try:
+                session = date.fromisoformat(text)
+            except ValueError:
+                return ()
+        try:
+            from trade_mentor_schedule import slots_for_session
+
+            slots = slots_for_session(session)
+        except Exception:  # noqa: BLE001 - an unreadable calendar pulls nothing
+            logging.debug("Pull schedule unreadable.", exc_info=True)
+            return ()
+    ordered = tuple(slots or ())
+    if not ordered:
+        return ()
+    last = ordered[-1]
+    try:
+        from trade_mentor_schedule import TRADES_HOUR
+    except Exception:  # noqa: BLE001
+        TRADES_HOUR = 9
+    anchor = next(
+        (slot for slot in ordered if getattr(slot, "scheduled_at").hour == TRADES_HOUR),
+        None,
+    )
+    chosen: list[Any] = []
+    if anchor is not None and anchor is not last:
+        chosen.append(anchor)
+    start = ordered.index(anchor) + 1 if anchor is not None else 0
+    between = list(ordered[start:-1])
+    if between:
+        chosen.append(between[len(between) // 2])
+    chosen.append(last)
+    seen: list[str] = []
+    for slot in chosen:
+        slot_id = _text(getattr(slot, "slot_id", ""))
+        if slot_id and slot_id not in seen:
+            seen.append(slot_id)
+    return tuple(seen)
+
+
 def _tally_for(today: str, tally: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Today's tally. A tally from another day resets - the cap is per DAY."""
+    """Today's tally. A tally from another day resets - the cap is per DAY.
+
+    A tally that cannot be read is read as EMPTY and rewritten clean: a corrupt
+    state file must not be able to stop the desk pulling for a day, and it must
+    not be able to raise inside a Qt slot either (TJ-14B review, item B).
+    """
     day = _text(today)[:10]
-    current = dict(tally or {})
+    if not isinstance(tally, Mapping):
+        return {"day": day, "pulls": 0, "failures": 0}
+    current = dict(tally)
     if _text(current.get("day"))[:10] != day:
         return {"day": day, "pulls": 0, "failures": 0}
     # Anything else the caller parked in here (the desk keeps TJ-9's
     # `last_retry` beside the counts, so the once-a-morning rule survives a
     # restart too) travels through untouched - and is dropped by the day reset,
     # which is exactly what a per-DAY note should do.
-    current.update(
-        {
-            "day": day,
-            "pulls": max(0, int(current.get("pulls") or 0)),
-            "failures": max(0, int(current.get("failures") or 0)),
-        }
-    )
+    current.update({"day": day, "pulls": _count(current.get("pulls")), "failures": _count(current.get("failures"))})
     return current
+
+
+def _count(value: Any) -> int:
+    """A counter that refuses to raise. `"three"` is not a number of pulls."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def pre_card_pull(
@@ -1028,6 +1144,8 @@ def pre_card_pull(
     tally: Mapping[str, Any] | None = None,
     days: int = PRE_CARD_PULL_DAYS,
     auto_mode: str = "",
+    slot: Any = None,
+    counts_against_cap: bool = True,
 ) -> dict[str, Any]:
     """The ONE owner of the desk's day-time Questrade attempts.
 
@@ -1057,13 +1175,24 @@ def pre_card_pull(
             ),
             "tally": current,
         }
-    if current["pulls"] >= PULLS_PER_DAY_CAP:
-        return {
-            "pulled": False,
-            "reason": f"the day's pull cap is reached ({current['pulls']})",
-            "tally": current,
-        }
-    current["pulls"] += 1
+    if counts_against_cap:
+        # TJ-14B review, blocker 3: the day's three attempts are RESERVED for
+        # three spaced cards, never handed to whoever asks first.
+        if slot is not None:
+            reserved = pull_slot_ids(_text(getattr(slot, "session", "")) or today)
+            if reserved and _text(getattr(slot, "slot_id", "")) not in reserved:
+                return {
+                    "pulled": False,
+                    "reason": "this card is not one of the day's reserved pulls",
+                    "tally": current,
+                }
+        if current["pulls"] >= PULLS_PER_DAY_CAP:
+            return {
+                "pulled": False,
+                "reason": f"the day's pull cap is reached ({current['pulls']})",
+                "tally": current,
+            }
+        current["pulls"] += 1
     try:
         started = bool(service.pull_recent_questrade(int(days)))
     except Exception as exc:  # noqa: BLE001 - a pull never costs the card
@@ -1096,5 +1225,6 @@ __all__ = [
     "kind_named",
     "pending",
     "pre_card_pull",
+    "pull_slot_ids",
     "record_answer",
 ]

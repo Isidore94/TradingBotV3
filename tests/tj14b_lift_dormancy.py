@@ -8,21 +8,26 @@ carry `dormant_until`:
 * `trade_origin` and `open_position_check` -> TJ-12 (the Process line and the
   long-hold rows);
 * `grader_gap` -> TJ-10 (no deterministic reader emits `needs_trader_input`
-  yet).
+  yet);
+* `quick_like_followup` -> TJ-14C (review blocker 2: its answer is filed as an
+  `opportunity_events` row and `like_cohort.like_pick_rows` reads
+  `claimed_setup_id` off `trader_annotations.jsonl` rows - the key is read, the
+  store is not joined).
 
 `mentor_questions.pending()` never returns a dormant kind on a live card, so a
 tester test that needs one to FIRE lifts the dormancy for that test only, with
 `dataclasses.replace(kind, dormant_until="")` - exactly the amendment the lead
 authorised. Nothing else in those files moves.
 
-**Only `trade_origin` and `open_position_check` are lifted**, and deliberately
-not `grader_gap`: `tests/test_tj14b_budget.py::_seven_budgeted_subjects` counts
-"two unplanned trades, two long-held open positions, one traded quick like, one
-grader gap and one AI question = 7 budgeted subjects", and its three trade rows
-are byte-identical apart from their ids, so a rule-based trigger fires
-`trade_origin` on all THREE. Lifting these two and leaving the (still unemitted)
-grader gap dormant is what makes the fixture's own arithmetic - seven owed,
-three asked, four carried - hold.
+**Three of the four are lifted**, and deliberately not `grader_gap`:
+`tests/test_tj14b_budget.py::_seven_budgeted_subjects` counts "two unplanned
+trades, two long-held open positions, one traded quick like, one grader gap and
+one AI question = 7 budgeted subjects", and its three trade rows are
+byte-identical apart from their ids, so a rule-based trigger fires
+`trade_origin` on all THREE. Lifting `trade_origin` (3) +
+`open_position_check` (2) + `quick_like_followup` (1) + `ai_question` (1) and
+leaving the still-unemitted grader gap dormant is what keeps the fixture's own
+arithmetic - seven owed, three asked, four carried - TRUE.
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 #: The kinds whose dormancy is lifted for these tests, and nothing else.
-LIFTED = ("trade_origin", "open_position_check")
+LIFTED = ("trade_origin", "open_position_check", "quick_like_followup")
 
 
 @pytest.fixture(autouse=True)

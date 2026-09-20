@@ -39,6 +39,7 @@ if str(ROOT_DIR / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT_DIR / "tests"))
 
 from tj14b_desk_isolation import fresh_mentor_pull_tally  # noqa: E402,F401
+from tj14b_lift_dormancy import LIFTED  # noqa: E402
 from tj14b_support import (  # noqa: E402
     SESSION,
     keys_of,
@@ -49,6 +50,29 @@ from tj14b_support import (  # noqa: E402
     state,
     trade_row,
 )
+
+
+@pytest.fixture()
+def lifted(monkeypatch):
+    """Lift dormancy for ONE test, never for the whole module.
+
+    The dormancy tests below are this file's whole point, so the lifting
+    fixture is explicitly requested rather than autouse - the same
+    `dataclasses.replace(kind, dormant_until="")` the lead authorised, over the
+    same three kinds `tests/tj14b_lift_dormancy.py` lifts.
+    """
+    import dataclasses
+
+    import mentor_questions
+
+    monkeypatch.setattr(
+        mentor_questions,
+        "REGISTRY",
+        tuple(
+            dataclasses.replace(kind, dormant_until="") if kind.kind in LIFTED else kind
+            for kind in mentor_questions.REGISTRY
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +96,15 @@ def test_a_dormant_kind_never_reaches_a_live_card_however_loudly_it_triggers():
         grader_gaps=[
             {"question_id": "gap-1", "subject_id": "gap-1", "options": ("yes", "no")}
         ],
+        likes=[
+            like_row(
+                "like-quick-traded",
+                symbol="AMD",
+                day="2026-09-11",
+                like_mode="quick",
+                matched_trade_id="T-1",
+            )
+        ],
     )
 
     result = mentor_questions.pending(payload, slot_at(SESSION, 11))
@@ -81,6 +114,7 @@ def test_a_dormant_kind_never_reaches_a_live_card_however_loudly_it_triggers():
         "trade_origin",
         "open_position_check",
         "grader_gap",
+        "quick_like_followup",
     } == set()
 
 
@@ -97,6 +131,8 @@ def test_a_dormant_kind_is_still_fully_described_and_names_its_packet():
         ("trade_origin", "TJ-12"),
         ("open_position_check", "TJ-12"),
         ("grader_gap", "TJ-10"),
+        # Review blocker 2: the key IS read, but off another store's rows.
+        ("quick_like_followup", "TJ-14C"),
     ):
         kind = mentor_questions.kind_named(name)
         assert report[name]["dormant"] is True
@@ -133,11 +169,100 @@ def test_a_dormant_kinds_trigger_still_answers_so_the_seam_stays_testable():
 
 
 # ---------------------------------------------------------------------------
+# 1b. the consumer probe's teeth, after the review sharpened them
+# ---------------------------------------------------------------------------
+
+
+def reader_that_only_mentions_the_key_in_a_comment(row):
+    # claimed_setup_id
+    """A reader that names the key in a docstring: claimed_setup_id."""
+    return row
+
+
+def reader_that_only_returns_the_key_as_a_string(row):
+    return "trade_origin"
+
+
+def reader_that_actually_subscripts_the_key(row):
+    return row["trade_origin"]
+
+
+def test_the_probe_refuses_a_key_that_only_appears_in_a_comment_or_a_docstring():
+    """The reviewer's first fooler. A text search passes it; a registry whose
+    check can be satisfied by a comment is not a check."""
+    import dataclasses
+
+    import mentor_questions
+
+    real = mentor_questions.kind_named("quick_like_followup")
+    planted = dataclasses.replace(
+        real,
+        consumer=f"{__name__}.reader_that_only_mentions_the_key_in_a_comment",
+        answer_key="claimed_setup_id",
+    )
+
+    row = mentor_questions.consumer_report([planted])[0]
+
+    assert row["imports"] is True
+    assert row["reads"] is False
+
+
+def test_the_probe_refuses_a_key_that_is_only_a_bare_string_the_reader_returns():
+    """The reviewer's second fooler: the body is `return "trade_origin"`. The
+    key is in the source and nothing reads an answer with it."""
+    import dataclasses
+
+    import mentor_questions
+
+    real = mentor_questions.kind_named("trade_origin")
+    planted = dataclasses.replace(
+        real, consumer=f"{__name__}.reader_that_only_returns_the_key_as_a_string"
+    )
+
+    row = mentor_questions.consumer_report([planted])[0]
+
+    assert row["imports"] is True
+    assert row["reads"] is False
+
+
+def test_the_probe_still_accepts_a_reader_that_really_subscripts_the_key():
+    """And the sharper probe must not refuse a real reader - a check that
+    cannot pass is as useless as one that cannot fail."""
+    import dataclasses
+
+    import mentor_questions
+
+    real = mentor_questions.kind_named("trade_origin")
+    planted = dataclasses.replace(
+        real, consumer=f"{__name__}.reader_that_actually_subscripts_the_key"
+    )
+
+    row = mentor_questions.consumer_report([planted])[0]
+
+    assert row["imports"] is True
+    assert row["reads"] is True
+
+
+def test_every_live_kind_still_passes_the_sharper_probe():
+    """The probe was tightened after the registry was written, so the live
+    kinds are re-walked here rather than assumed."""
+    import mentor_questions
+
+    broken = {
+        row["kind"]: row["reason"]
+        for row in mentor_questions.consumer_report()
+        if not row["dormant"] and not (row["imports"] and row["reads"])
+    }
+
+    assert broken == {}
+
+
+# ---------------------------------------------------------------------------
 # 2. the quick-like follow-up writes no tag
 # ---------------------------------------------------------------------------
 
 
-def test_a_quick_like_answer_writes_no_annotation_row_at_all(tmp_path):
+def test_a_quick_like_answer_writes_no_annotation_row_at_all(lifted, tmp_path):
     """The invariant behind the tester's last line, pinned the way the store
     can actually answer it.
 
@@ -175,7 +300,7 @@ def test_a_quick_like_answer_writes_no_annotation_row_at_all(tmp_path):
     assert rows == 0, "a machine wrote into trade_annotations, which the trader owns"
 
 
-def test_stop_asking_this_is_never_stored_as_an_answer(tmp_path):
+def test_stop_asking_this_is_never_stored_as_an_answer(lifted, tmp_path):
     """A retirement is a statement about the QUESTION, not about the subject.
     Filing it as the answer would put `stop_asking_this` where a setup name
     belongs and count it forever."""
@@ -275,7 +400,7 @@ def _three_questions():
 
 
 @pytest.mark.qt
-def test_the_card_draws_at_most_three_questions_and_says_what_is_waiting(card, tmp_path):
+def test_the_card_draws_at_most_three_questions_and_says_what_is_waiting(lifted, card, tmp_path):
     """Five owed, three drawn, the rest counted. Never a fourth widget."""
     import mentor_questions
 
@@ -292,7 +417,7 @@ def test_the_card_draws_at_most_three_questions_and_says_what_is_waiting(card, t
 
 
 @pytest.mark.qt
-def test_stop_asking_this_goes_to_the_service_and_stores_no_answer(card, tmp_path):
+def test_stop_asking_this_goes_to_the_service_and_stores_no_answer(lifted, card, tmp_path):
     """The service is the single writer of what the trader silenced, and a
     retirement leaves the answer stores untouched."""
     import mentor_questions
@@ -314,7 +439,7 @@ def test_stop_asking_this_goes_to_the_service_and_stores_no_answer(card, tmp_pat
 
 
 @pytest.mark.qt
-def test_one_click_files_the_answer_under_the_key_the_registry_declares(card, tmp_path):
+def test_one_click_files_the_answer_under_the_key_the_registry_declares(lifted, card, tmp_path):
     """*"I'm happy to click boxes ... but then I expect the AI to take it from
     there"*. One click, one stored row, no manual step."""
     import json
@@ -351,7 +476,7 @@ def test_one_click_files_the_answer_under_the_key_the_registry_declares(card, tm
 
 
 @pytest.mark.qt
-def test_a_question_left_on_the_dash_files_nothing(card, tmp_path):
+def test_a_question_left_on_the_dash_files_nothing(lifted, card, tmp_path):
     """A card the trader closed without touching is not four answers."""
     import mentor_questions
 

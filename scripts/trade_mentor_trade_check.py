@@ -109,6 +109,11 @@ _SESSION_STATUSES = ("CLOSED", "OPEN", "PARTIALLY_CLOSED")
 
 REASON_NOT_READY = "journal not ready"
 
+#: Why a label made on the fill's own DATE is still not `same_session`: a broker
+#: file is authoritative for money and BLIND TO TIME, so a date-only fill has no
+#: moment for a label to have been made before.
+REASON_DATE_ONLY_FILL = "the fill is date-only; there is no time to be before"
+
 #: Which lane produced the machine's setup suggestion. Lane order, never
 #: confidence: what the trader NAMED when they claimed the like outranks what
 #: the bulk tagger guessed afterwards.
@@ -722,6 +727,7 @@ def morning_import_retry(
     today: str,
     last_retry: str = "",
     tally: Mapping[str, Any] | None = None,
+    auto_mode: str = "",
 ) -> dict[str, Any]:
     """The ONE deterministic import retry the desk makes before the 09:00 card.
 
@@ -749,24 +755,42 @@ def morning_import_retry(
         return {"retried": False, "reason": "the journal is ready", "last_retry": last_retry}
     if str(last_retry or "")[:10] == day and day:
         return {"retried": False, "reason": "already retried today", "last_retry": last_retry}
+    if str(auto_mode or "").upper() == "AWAY":
+        # Defence in depth: `pre_card_pull` refuses AWAY too, and both seams
+        # say so, because the trader who is not there cannot be interrupted by
+        # a broker call made on their behalf either.
+        return {
+            "retried": False,
+            "reason": "AWAY asks nothing and pulls nothing",
+            "last_retry": last_retry,
+        }
     if service is None:
         return {"retried": False, "reason": "no import service", "last_retry": last_retry}
     # TJ-14B lead decision 3: the desk's day-time Questrade attempts have ONE
     # owner, and this retry goes THROUGH it rather than beside it. The
-    # once-a-morning rule above is still this function's; the per-DAY cap, the
-    # failure cap and the tally are `pre_card_pull`'s.
+    # once-a-morning rule above is still this function's; the failure cap and
+    # the tally are `pre_card_pull`'s. It does NOT spend the pre-card cap
+    # (review blocker 1): the three spaced pre-card attempts and the ONE
+    # morning catch-up answer different questions, and the catch-up reaches
+    # further back (`MORNING_RETRY_DAYS`), so a day that spent one on the other
+    # would lose Friday's fills on a Monday.
     import mentor_questions
 
     outcome = mentor_questions.pre_card_pull(
-        service, today=day, tally=tally, days=MORNING_RETRY_DAYS
+        service,
+        today=day,
+        tally=tally,
+        days=MORNING_RETRY_DAYS,
+        auto_mode=auto_mode,
+        counts_against_cap=False,
     )
     reason = str(outcome.get("reason") or "")
     if outcome.get("pulled"):
         return {"retried": True, "reason": "", "last_retry": day, "tally": outcome["tally"]}
-    if reason == "an import is already running":
-        # The attempt is spent either way: a second card an hour later must not
-        # queue a third pull behind it.
-        return {"retried": False, "reason": reason, "last_retry": day, "tally": outcome["tally"]}
+    # `last_retry` is stamped ONLY when an import actually STARTED (review
+    # blocker 1). A service that was already busy, or that refused, did not do
+    # the pull this wanted: marking the morning spent there is how a Monday
+    # whose Friday-night import failed lost its three-day catch-up entirely.
     return {
         "retried": False,
         "reason": reason,
@@ -780,7 +804,7 @@ def _answer_provenance(
     trade_id: str,
     trade_date: str,
     moment: datetime,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, str]:
     """How OLD this answer is, decided by `trade_origin.label_provenance`.
 
     TJ-14B lead decision 4: the flag comes from the pure rule over the trade's
@@ -802,10 +826,19 @@ def _answer_provenance(
         import trade_origin
 
         provenance = trade_origin.label_provenance(row, "", (), moment)
-        return provenance, provenance != trade_origin.SAME_SESSION
+        if provenance == trade_origin.SAME_SESSION and trade_origin.first_fill_at(row) is None:
+            # A BROKER FILE IS AUTHORITATIVE FOR MONEY AND BLIND TO TIME. The
+            # statement importer writes every date-only fill at MIDNIGHT
+            # market-local, and `trade_session` still names a real DATE for it -
+            # so a label typed at 11:00 on the day a date-only fill is dated
+            # would read `same_session`, which claims the trader labelled it
+            # before the outcome was known. It cannot be known: there is no
+            # time to be before. `recalled_after`, with the reason recorded.
+            return trade_origin.RECALLED_AFTER, True, REASON_DATE_ONLY_FILL
+        return provenance, provenance != trade_origin.SAME_SESSION, ""
     except Exception:  # noqa: BLE001 - an undecidable age keeps the old claim
         logging.debug("Answer provenance undecidable.", exc_info=True)
-        return "", True
+        return "", True, "provenance undecidable"
 
 
 def save_answers(
@@ -834,7 +867,9 @@ def save_answers(
         trade = {}
     if not trade_date:
         trade_date = str(trade.get("trade_date") or "")
-    provenance, recalled_after = _answer_provenance(trade, trade_id, trade_date, moment)
+    provenance, recalled_after, provenance_reason = _answer_provenance(
+        trade, trade_id, trade_date, moment
+    )
     written: list[dict[str, Any]] = []
     for name, answer in (answers or {}).items():
         if name not in MATERIAL_FIELDS:
@@ -858,6 +893,9 @@ def save_answers(
             # claim about it. The provenance itself travels beside it.
             "recalled_after_session": recalled_after,
             "label_provenance": provenance,
+            # Why a same-session label was REFUSED, when it was. Empty when
+            # nothing was refused: an absence is never a reason.
+            "label_provenance_reason": provenance_reason,
             "trade_date": str(trade_date or ""),
         }
         row = store.record_opportunity_event(

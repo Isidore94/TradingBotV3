@@ -64,7 +64,15 @@ def test_every_registered_kind_names_a_consumer_that_reads_its_answer():
     }
     assert broken == {}, f"kinds whose consumer cannot use the answer: {broken}"
     dormant = {kind for kind, row in report.items() if row.get("dormant")}
-    assert dormant == {"trade_origin", "open_position_check", "grader_gap"}
+    assert dormant == {
+        "trade_origin",
+        "open_position_check",
+        "grader_gap",
+        # Review blocker 2: its named consumer reads `claimed_setup_id` off
+        # `trader_annotations.jsonl` rows, and the answer is filed as an
+        # `opportunity_events` row - the KEY is read, the STORE is not joined.
+        "quick_like_followup",
+    }
     for kind in dormant:
         assert report[kind]["dormant_until"], f"{kind} is dormant with no packet named"
 

@@ -1128,21 +1128,25 @@ class MainWindow(QMainWindow):
         # and to read the constant off the wrong module, so every prompt raised
         # `AttributeError` in a Qt slot and no trade section ever appeared.
         try:
-            # TJ-14B item 4, FIRST inside the guard: one light journal pull
-            # before EVERY card, not only the 09:00 one and not only when last
-            # night failed. A fill from this morning is only askable if somebody
-            # looked. It never blocks, never waits and never raises.
-            self._pre_card_journal_pull(slot)
-            # TJ-14B item 3: the few questions the desk cannot work out on its
-            # own, at most three, on EVERY card - the trade section below has
-            # its own ride rule and its own early returns.
-            self._show_mentor_questions(slot)
-
             import trade_mentor_trade_check as check
             from journal_store import JournalStore
             from trade_mentor_schedule import KIND_M5_TRADES
 
             card = review.mentor_card
+            store = JournalStore()
+            # The TASK is built FIRST and the pulls come after it (TJ-14B review,
+            # item B): a raise anywhere in the pull path used to lose the forced
+            # trade section that is built further down, which is the one thing on
+            # this card the trader is not allowed to skip.
+            task = check.build_task(store, slot.scheduled_at.date())
+            # TJ-14B item 4: ONE card starts AT MOST ONE import. Everything
+            # inside is guarded and returns rather than raises.
+            self._mentor_journal_pull(slot, task)
+            # TJ-14B item 3: the few questions the desk cannot work out on its
+            # own, at most three, on EVERY card - the trade section below has
+            # its own ride rule and its own early returns.
+            self._show_mentor_questions(slot, store=store)
+
             is_check_slot = str(getattr(slot, "kind", "")) == KIND_M5_TRADES
             # ONLY a section with answer widgets is protected from a rebuild -
             # that is the one the trader could already have touched. A visible
@@ -1158,39 +1162,6 @@ class MainWindow(QMainWindow):
             if not is_check_slot and not self._trade_check_is_owed(check, slot):
                 return
 
-            store = JournalStore()
-            task = check.build_task(store, slot.scheduled_at.date())
-            if not task.journal_ready:
-                # TJ-9 item 6: the night ended without an OK import for the
-                # session the card is about, so the desk pulls once more before
-                # asking. On the import service's own QThread, Questrade only,
-                # no model, at most once a morning - and the card goes up now
-                # either way, saying what it has.
-                service = self.trade_mentor_service
-                tally = service.pull_tally()
-                outcome = check.morning_import_retry(
-                    self._journal_import_service(),
-                    task,
-                    today=str(slot.session),
-                    # TJ-14B lead decision 3: the once-a-morning date is kept
-                    # in the PERSISTED tally too, so a restart before 10:00 no
-                    # longer allows a second morning pull (TJ-9's advisory).
-                    last_retry=self._journal_retry_date
-                    or str(tally.get("last_retry") or ""),
-                    tally=tally,
-                )
-                self._journal_retry_date = str(outcome.get("last_retry") or "")
-                if "tally" in outcome:
-                    persisted = dict(outcome.get("tally") or {})
-                    persisted["last_retry"] = self._journal_retry_date
-                    service.set_pull_tally(persisted)
-                if outcome.get("retried"):
-                    logging.info(
-                        "Trade Mentor: retrying the Questrade import before the "
-                        "%s card (fills current to %s).",
-                        slot.slot_id,
-                        task.fills_current_to or "nothing yet",
-                    )
             card.set_trade_check(task, store=store)
         except Exception:  # noqa: BLE001 - the read still stands without it
             logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
@@ -1222,7 +1193,7 @@ class MainWindow(QMainWindow):
             logging.debug("Trade check ride undecidable.", exc_info=True)
             return False
 
-    def _show_mentor_questions(self, slot) -> None:
+    def _show_mentor_questions(self, slot, store=None) -> None:
         """Put this card's budgeted questions on it (TJ-14B item 3).
 
         Everything `mentor_questions.pending` needs arrives already loaded - the
@@ -1235,10 +1206,12 @@ class MainWindow(QMainWindow):
         """
         try:
             import mentor_questions
-            from journal_store import JournalStore
 
             card = self.trading_panel.alert_center.chart_review.mentor_card
-            store = JournalStore()
+            if store is None:
+                from journal_store import JournalStore
+
+                store = JournalStore()
             state = self._mentor_question_state(slot, store)
             result = mentor_questions.pending(state, slot)
             self._mentor_carried = tuple(result.carried)
@@ -1289,20 +1262,32 @@ class MainWindow(QMainWindow):
         The join is by name and SIDE against the same two sessions' trades - a
         LONG like says nothing about a SHORT entry - and it is done here rather
         than in the registry so the trigger stays pure.
+
+        **Bounded to the sessions a question can be about** (TJ-14B review, item
+        E): the store's own `session_date` filter is asked once per session
+        rather than the whole append-only log being walked on the Qt thread
+        every prompt - 3.5 ms today and unbounded, which is the shape that grew
+        every other log-walking read into a stall.
         """
+        wanted = [str(day)[:10] for day in days if str(day or "").strip()]
+        rows: list[dict] = []
         try:
             from pathlib import Path
 
             from project_paths import TRADER_ANNOTATIONS_FILE
             from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
 
-            rows = load_annotations(
-                Path(TRADER_ANNOTATIONS_FILE), event_types=(EVENT_LIKE_CLAIM,)
-            )
+            for day in wanted:
+                rows.extend(
+                    load_annotations(
+                        Path(TRADER_ANNOTATIONS_FILE),
+                        session_date=day,
+                        event_types=(EVENT_LIKE_CLAIM,),
+                    )
+                )
         except Exception:  # noqa: BLE001 - a missing log asks nothing
             logging.debug("Like lane unreadable.", exc_info=True)
             return []
-        wanted = {str(day)[:10] for day in days if str(day or "").strip()}
         traded: set[tuple[str, str]] = set()
         for trade in trades:
             symbol = str(trade.get("symbol") or "").strip().upper()
@@ -1311,8 +1296,6 @@ class MainWindow(QMainWindow):
                 traded.add((symbol, side))
         lane: list[dict] = []
         for row in rows:
-            if str(row.get("session_date") or "")[:10] not in wanted:
-                continue
             symbol = str(row.get("symbol") or "").strip().upper()
             side = str(row.get("side") or "").strip().upper()
             side = "LONG" if side.startswith("LONG") else "SHORT" if side.startswith("SHORT") else ""
@@ -1421,32 +1404,77 @@ class MainWindow(QMainWindow):
             logging.debug("Auto mode unreadable for the pre-card pull.", exc_info=True)
             return ""
 
-    def _pre_card_journal_pull(self, slot) -> dict:
+    def _mentor_journal_pull(self, slot, task) -> dict:
         """The ONE owner of the desk's day-time Questrade attempts (TJ-14B).
 
-        `mentor_questions.pre_card_pull` holds the whole policy - the per-DAY
-        cap, the failure cap, AWAY, and a service that is already running - and
-        the tally is persisted beside the Mentor's slot state so a restart
-        cannot spend the day's attempts twice. The pull itself runs on
-        `JournalImportService`'s own `QThread`, which is the desk's single
-        caller of the Questrade refresh chain; nothing here refreshes a token.
+        **One card starts AT MOST ONE import** (review blocker 1). Two calls in
+        one synchronous slot cannot both start: `JournalImportService.running`
+        refuses the second, and the one that lost was the THREE-day morning
+        catch-up, marked spent and never fired again that morning - so a Monday
+        whose Friday-night import had failed never reached back to Friday.
 
-        **The card never waits for it.** A fill a late pull lands is asked
-        about on the NEXT card, and a pull that raises or refuses costs the
-        card nothing.
+        So they are ordered, never stacked:
+
+        * when the morning catch-up is OWED - the reviewed session's statement
+          has not landed and nothing has been retried today - it goes FIRST and
+          the pre-card pull is skipped on this card. Its three days cover today
+          too, and it does not spend the pre-card cap;
+        * otherwise the pre-card pull runs, and only on one of the day's three
+          RESERVED cards (`mentor_questions.pull_slot_ids`: the 09:00 card, the
+          middle card, and the last one).
+
+        The tally is persisted beside the Mentor's slot state, so a restart
+        cannot spend the day's attempts twice; a corrupt one is read as empty
+        and rewritten clean. The pull runs on `JournalImportService`'s own
+        `QThread`, the desk's single caller of the Questrade refresh chain, and
+        nothing here refreshes a token. **The card never waits for it**: a fill
+        a late pull lands is asked about on the NEXT card, and a pull that
+        raises, refuses or is busy costs the card nothing.
         """
         try:
             import mentor_questions
+            import trade_mentor_trade_check as check
 
             service = self.trade_mentor_service
+            tally = service.pull_tally()
+            day = str(getattr(slot, "session", "") or "")
+            auto_mode = self._auto_mode_now()
+            last_retry = self._journal_retry_date or str(tally.get("last_retry") or "")
+            if not getattr(task, "journal_ready", False) and str(last_retry)[:10] != day[:10]:
+                outcome = check.morning_import_retry(
+                    self._journal_import_service(),
+                    task,
+                    today=day,
+                    # The once-a-morning date is kept in the PERSISTED tally
+                    # too, so a restart before 10:00 no longer allows a second
+                    # morning pull (TJ-9's advisory).
+                    last_retry=last_retry,
+                    tally=tally,
+                    auto_mode=auto_mode,
+                )
+                self._journal_retry_date = str(outcome.get("last_retry") or "")
+                persisted = dict(outcome.get("tally") or tally)
+                persisted["last_retry"] = self._journal_retry_date
+                service.set_pull_tally(persisted)
+                if outcome.get("retried"):
+                    logging.info(
+                        "Trade Mentor: retrying the Questrade import before the "
+                        "%s card (fills current to %s).",
+                        getattr(slot, "slot_id", ""),
+                        getattr(task, "fills_current_to", "") or "nothing yet",
+                    )
+                return outcome
             outcome = mentor_questions.pre_card_pull(
                 self._journal_import_service(),
-                today=str(getattr(slot, "session", "") or ""),
-                tally=service.pull_tally(),
-                auto_mode=self._auto_mode_now(),
+                today=day,
+                tally=tally,
+                auto_mode=auto_mode,
+                slot=slot,
             )
-            if "tally" in outcome:
-                service.set_pull_tally(outcome.get("tally") or {})
+            persisted = dict(outcome.get("tally") or {})
+            if last_retry:
+                persisted["last_retry"] = last_retry
+            service.set_pull_tally(persisted)
             if outcome.get("pulled"):
                 logging.info(
                     "Trade Mentor: pulling the Questrade journal before the %s card.",
@@ -1454,7 +1482,7 @@ class MainWindow(QMainWindow):
                 )
             return outcome
         except Exception:  # noqa: BLE001 - a pull never costs the card
-            logging.debug("Pre-card journal pull failed.", exc_info=True)
+            logging.debug("Mentor journal pull failed.", exc_info=True)
             return {}
 
     def _journal_import_service(self):

@@ -234,12 +234,20 @@ class TradeMentorService(QObject):
         return tuple(sorted(self._retired))
 
     def pull_tally(self) -> dict[str, object]:
-        """The day's journal-pull tally, as `mentor_questions.pre_card_pull` reads it."""
+        """The day's journal-pull tally, as `mentor_questions.pre_card_pull` reads it.
+
+        A tally that is not a mapping reads as EMPTY rather than raising: a
+        corrupt state file must not be able to stop the desk pulling for a day,
+        and this is called inside a Qt slot (TJ-14B review, item B). The next
+        `set_pull_tally` rewrites it clean.
+        """
+        if not isinstance(self._pull_tally, dict):
+            return {}
         return dict(self._pull_tally)
 
     def set_pull_tally(self, tally) -> None:
         """Persist the tally the pull owner handed back. One owner, one number."""
-        self._pull_tally = dict(tally or {})
+        self._pull_tally = dict(tally) if isinstance(tally, dict) else {}
         self._save()
 
     def pause_today(self, *, now: datetime | None = None) -> str:
