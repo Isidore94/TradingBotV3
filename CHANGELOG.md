@@ -1672,6 +1672,50 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **The read grader, the prediction ledger and the congruence lines (TJ-10, 2026-09-20,
+  branch `claude/tj10-read-grader`, merged into `lead/p033-integration2` `57b44ca9`).**
+  `scripts/market_read_grades.py` grades what the trader said the market would do against
+  what it did, with no model anywhere: a CLICK (`market_journal.prediction_of`) is the read
+  and the words are never consulted for a row that has one; an extraction
+  (`market_thesis.extract_thesis`) is labelled `extracted` and is never pooled with a click
+  (`PoolingError`); `no_view` and an `unstated` note are recorded and never graded.
+  `rest_of_day` anchors on the OPEN of the first completed M5 bar that starts AFTER the
+  stamp and ends at the last completed bar at or before `session_close` (half days
+  included); `next_5_sessions` anchors on the DECISION session's own daily close
+  (`market_calendar.decision_session`) - `None` while that session is still trading, never
+  a forming close - reports 1 and 3 sessions and is JUDGED at 5. Verdicts are
+  `right / wrong / flat / pending <date> / unmeasured:<reason>`; the flat band is
+  `FLAT_BAND_ATR` 0.25 of the point-in-time daily ATR(14), edge inclusive, stamped
+  `flat_band_rule: "atr_0.25_v1"` on every row, with `flat` IN the accuracy denominator.
+  A verdict may only ever move UP (`verdict_rank`: measured > pending > unmeasured-for-data
+  > final), so an `unmeasured` result never supersedes a `pending` row, an open read is
+  revisited on every later run, a measured verdict is final and a re-grade appends a NEW row
+  carrying the original context; `daily_bars_for_symbol` / `session_bars_for` /
+  `atr_for_session` are the ONE loader set the page and the night share. Every gradable
+  grade carries its point-in-time `trade_mentor_context_v2` snapshot built through the ONE
+  internals builder (`trade_mentor_context.internals_at`); `append_grades` refuses a blank
+  context and refuses a gradable CLICKED grade carrying the named absence
+  `CONTEXT_UNMEASURED` (`ContextMissingError`), in which case the grade is held back and the
+  payload row says `grader_gap: "context_unbuildable: ..."`. `grader_gap` is now on every
+  row (never set for `not_a_call`) and nothing reads it yet. The store is append-only JSONL
+  at `project_paths.DAY_REVIEW_READS_DIR`. `congruence_lines` prints the three D1 lines
+  (`CONGRUENCE_KINDS`: the read against the desk's D1 label, the session's like/claim side
+  mix and the bias of its fills, read from the LEGS) plus `CONGRUENCE_M5_KIND`
+  (`m5_picks_side_mix`, the rest-of-day read against that session's M5 likes, `not today`
+  counted apart, D1 picks never entering it); each names its source in plain words
+  (`your call: up (clicked 10:02)` vs `we read your note as up`, `select_read` preferring a
+  click and refusing contradictory extracted notes), its timeframe, its `n`, its source ids
+  and its missing side; a side mix under `MIN_REPORTABLE_N` reads `VERDICT_TOO_FEW`; a tie
+  names no side; printed, never pushed, never acted on. `baseline_reads` scores `always_up`,
+  `same_as_the_last_hour` and `with_the_d1_environment` out of each row's own context (feed
+  it GRADE rows). `market_thesis.EXTRACTOR_VERSION` is `market_thesis_vocab_v2` (whole-token
+  trend words, `rejecting`/`rejected` scoped: 18 -> 20 of the 49 live notes read as a
+  direction, none reverses). The Day Review payload gains `reads` and `congruence`, both
+  built on the worker inside the one read; `DayReviewService.build_reads_for` is the named
+  post-close seam and the only writer; the page shows a verdict chip per graded entry
+  (`verdict_chips`, `theme.qss` `#VerdictChip[verdict=…]`) and the congruence lines under
+  the story, and computes nothing. Shadow to every detector, score, alert and watchlist.
+  Live gate #155 owed. Long form: DESK_INTERNALS "TJ-10".
 - **One Day Review page, no machine rows, a per-session index (TJ-1, 2026-09-17,
   branch `claude/tj1-day-review`).** `Day Review`
   (`scripts/ui/panels/day_review_panel.py` + `scripts/ui/services/day_review_service.py`)
@@ -2444,6 +2488,18 @@ They are evidence and must not be loaded as context.
   calls a model, uploads, changes a live decision or writes a live store. Tests:
   `tests/test_ws_rp_shared_report.py` (44 behavior checks plus two unchanged N3 guards) and
   `tests/test_ai_jobs_runner.py` (deterministic-slot order). Gate #133.
+- **`read_grades_mature` - the matured read is closed by arithmetic (TJ-10, 2026-09-20).**
+  `scripts/ai_jobs/read_grades_mature.py` re-measures every OPEN market read and appends the
+  new verdict. Deterministic: `uses_model=False`, `max_attempts=3`, `reserve_minutes=2.0`,
+  registered directly after `theta_pick_grading` and before `miss_contrast` /
+  `market_story_rollups` / `measured_report` so it stays inside `_deterministic_stage` and
+  runs on the weeknight, Saturday AND Sunday slates. A missing reads directory, an
+  unreadable ledger or a missing daily store each give an `ok` row with a reason in under a
+  second and never raise; idempotent across the task's 30-minute re-firings; a night that
+  cannot measure writes NOTHING, because an `unmeasured` result may not supersede a
+  `pending` row. The only file it writes is `DAY_REVIEW_READS_DIR/<session>.jsonl`. Tests:
+  `tests/test_tj10_read_grades_slot.py`, `tests/test_ai_jobs_runner.py`
+  (`EXPECTED_SLOT_ORDER`). Slot position: decision 0018 addendum 2026-09-20.
 - **`miss_contrast` - what the misses had in common (TJ-15, 2026-09-19).**
   `scripts/evidence_contrast.py` is pure: per feature two counts, two medians and ONE rank
   statistic through `compression_calibration.auc` (called, never re-derived), rank key
@@ -3112,6 +3168,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-20 - TJ-10: the read grader, the prediction ledger and the congruence lines - objective Python, no model (branch `claude/tj10-read-grader`, tip `2967e4a6`, merged into `lead/p033-integration2` `57b44ca9`, integration fix `3e52d94f`)
+
+Decision 0021 answer 14 - *"'Were you right' is a MEASURED row, never a model's opinion"* - built as `scripts/market_read_grades.py`: pure, no thread, no clock of its own, no notifier and **no model anywhere**. A READ is a CLICKED prediction (`market_journal.prediction_of`) or a stance EXTRACTED from the trader's prose, and the two are NEVER pooled (`PoolingError`); `no_view` is recorded and never graded. `rest_of_day` anchors on the OPEN of the first completed M5 bar that STARTS after the stamp and ends at the last completed bar at or before `session_close` (half days included; the tape is Pacific-local and the stamp UTC, converted with `astimezone`); `next_5_sessions` anchors on the DECISION session's own daily close (`market_calendar.decision_session`, so a Friday 21:04 PT or a Saturday call anchors on FRIDAY's close), checkpoints at 1, 3 and 5 exchange sessions with the 5-session one the VERDICT, `pending <date>` until then - never zero, never wrong. The flat band is `FLAT_BAND_ATR` 0.25 of the benchmark's point-in-time daily ATR(14), edge INCLUSIVE, stamped `flat_band_rule: "atr_0.25_v1"` on every row, `flat` IN the accuracy denominator; **the 0.25 is the LEAD's number, chosen 2026-09-19 because the packet gave none, and it is the TRADER's to change - never from one session's result.** **Two reviews by reproduction on hand-built bars and staged copies of the live stores, NO-GO then GO, and all three round-1 blockers were fixed.** (1) `regrade_matured` could not measure on this desk and DESTROYED the pending row it failed on - an absent daily store turned a correct `pending 2026-09-25` into `unmeasured:no_anchor_close` forever, when the true answer was `right`, +5.0 ATR. ONE loader set now serves the page and the night (`daily_bars_for_symbol` - the durable store, then the machine-local daily cache - `session_bars_for`, `atr_for_session`) and `verdict_rank` (measured > pending > unmeasured-for-data > final) appends only when the rank RISES: an `unmeasured` never supersedes a `pending`, a data-unmeasured row is revisited every run, a measured verdict is FINAL, a re-grade supersedes with a new row carrying the ORIGINAL context, and the file only grows. (2) The page presented an EXTRACTED stance as the trader's own call ("your D1 read is up" on 2026-09-17, inferred from a hedged sentence while another note that day read down): every line, entry label and chip now names its source - `your call: down (clicked 07:02)` vs `we read your note as up` - a click always beats an extracted stance of that timeframe (`select_read`), and contradictory extracted notes compare with NOTHING. (3) The M5 half of congruence was never built: `m5_picks_side_mix` now pairs the rest-of-day read with that session's M5 likes (`not_today` counted apart, D1 picks never entering it), because TJ-15 measured M5 as about half the reviewed decisions. The store is strict by lead decision: `append_grades` refuses a gradable CLICK whose context is only the named absence `CONTEXT_UNMEASURED` (`ContextMissingError`) - the grade is HELD BACK, the payload row says `grader_gap: "context_unbuildable: ..."` and the next pass retries; every stored click carries a point-in-time `trade_mentor_context_v2` snapshot through the ONE internals builder, and `grader_gap` now exists on every row so TJ-14B's dormant Mentor kind can be woken later. **Follow-up `2967e4a6`** (lead-verified, 169 tests): an under-floor side mix is never a verdict (`VERDICT_TOO_FEW` when `n < MIN_REPORTABLE_N`; live 2026-09-17 had printed `disagrees` off 2 M5 likes), each line says its OWN content first on a both-ways or no-read day, and the five-session anchor refuses a session that is still trading. The nightly slot `read_grades_mature` is deterministic (`uses_model=False`, `max_attempts=3`, `reserve_minutes=2.0`), sits directly after `theta_pick_grading` and before `miss_contrast` / `market_story_rollups` / `measured_report` inside `_deterministic_stage` so it is on all three slates, answers a missing store with an `ok` row and a reason in under a second, and writes only `DAY_REVIEW_READS_DIR/<session>.jsonl`. **Measured on staged copies of the live stores:** 0 clicks exist yet (the click card went live 2026-09-20), 7 extracted reads on each of 09-17 and 09-18; `EXTRACTOR_VERSION` v2 moves the 49 live notes from 18 to 20 directional with NO reversal (12 of the 22 unstated fire a bullish AND a bearish word, which no vocabulary can fix - the CLICK is what gets graded); congruence as the trader will read it on 2026-09-18, `we read your note as up; 62 of 99 D1 likes and claims were SHORT (long 37, short 62)` - disagrees - and on 09-17 the notes read both ways with 59 of 90 D1 likes LONG. `d1_environment.jsonl` holds 15 rows over five sessions and none for 09-18, so the desk-label line honestly reads unmeasured most days, and the fills line reads `the legs could not call` for the trader's sold puts until they run TJ-9Q's `--apply`. **Two live-desk facts:** `C:\TradingBotData\data\daily_bars\SPY.parquet` EXISTS (189 rows through 09-18) yet `chart_snapshot.load_d1_bars` answers EMPTY for SPY / QQQ / IWM / VXX on this desk for its own, unexplained reason - a follow-up question - so every benchmark daily bar came from the machine-local cache `%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` (1,993 symbols); and the live home has NO `day_review\bars\` folder yet, so every rest-of-day read is honestly `unmeasured:no_completed_bar_after_the_stamp` until the first post-close tick or a back-fill writes a tape - gate #155 REQUIRES that tape before it can pass. Advisories recorded, not repaired: nothing counts clicks held back for `context_unbuildable`; `baseline_reads` needs GRADE rows (TJ-12 / TJ-16 must feed it those); the congruence D1 label is the SAME session's while the context block uses the PRIOR session's; `internals_bars_at` now has its first production caller; `MIN_REPORTABLE_N` = 30 is the "name a winner" floor, so the M5 side-mix line will read `too few to call` on most days and a smaller NAMED floor would be the trader's or the lead's number. At integration the lead added the slot to TJ-13B's two weeknight-slate pins and moved the 49-note text fixture to `tests/fixtures/day_review/tj10_live_notes.json`, because every `*.json` directly under `tests/fixtures` must carry the Milestone-3 market-data provenance contract (`3e52d94f`). Merged into `lead/p033-integration2`; **not on `main`**. Live gate #155 owed. Long form: DESK_INTERNALS "TJ-10".
 
 ### 2026-09-20 - TJ-9Q: a sold put is a sale, and stored Questrade rows move only through the trader's CLI (branch `claude/tj9q-questrade-instrument`, tip `76f3cf2a`, merged into `lead/p033-integration2` `86c64f96`)
 

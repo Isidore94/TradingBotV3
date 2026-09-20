@@ -7259,6 +7259,176 @@ back, and **0 live rows fall there**.
   **no production caller** - the service maps through `_stamped_dates_for`. They exist for
   TJ-15 and are pinned only by tests.
 
+## TJ-10 - the read grader: a verdict is measured, and the band is the lead's number (2026-09-20, packet TJ-10)
+
+The long form behind the CLAUDE.md rule *"A read is a MEASURED row, and a clicked call is
+never pooled with a stance we inferred"*. Merged into `lead/p033-integration2` on
+2026-09-20 (merge `57b44ca9`, branch tip `2967e4a6`, integration fix `3e52d94f`); `main`
+has not been fast-forwarded to it yet and live gate #155 is owed.
+
+Decision 0021 answer 14: *"'Were you right' is a MEASURED row, never a model's opinion."*
+`scripts/market_read_grades.py` is that row and it is pure - no thread, no sleep, no clock
+of its own, no notifier, **and no model anywhere in the packet**. Everything it may see is
+handed in.
+
+**A click wins over the words.** A READ is either a CLICKED prediction
+(`market_journal.prediction_of`, the ONE accessor) or a stance EXTRACTED from the trader's
+prose (`market_thesis.extract_thesis`), and the two are never pooled - `pooled_accuracy`
+raises `PoolingError`, because an inferred stance and a stated one are evidence about
+different things. `no_view` is recorded and never graded. `select_read` is the ONE
+selection rule: a CLICK always beats an extracted stance of the same timeframe, and
+contradictory extracted notes compare with NOTHING (`your notes read both ways (1 up, 1
+down) - no single read to compare`, verdict `unmeasured`).
+
+**What is measured.** `rest_of_day` anchors on the OPEN of the first completed M5 bar that
+STARTS after the stamp - never the stamp's own bar - and ends at the last completed bar at
+or before `session_close`, half days included; the durable tape is Pacific-local and the
+stamp UTC, converted with `astimezone` and never `replace(tzinfo=None)`.
+`next_5_sessions` anchors on the DECISION session's own daily close
+(`market_calendar.decision_session`, so a Friday 21:04 PT call - or a Saturday one -
+anchors on FRIDAY's close, the trader's 2026-09-19 judged-session rule), reports
+checkpoints at 1, 3 and 5 exchange sessions and takes its VERDICT from the 5-session one;
+until then it is `pending <date>`, never zero and never wrong. While the decision session
+is still trading the anchor is `None` - a forming close is not a close (follow-up fix
+`2967e4a6`, after the reviewer reproduced an anchor of 130.0 taken off a still-open bar).
+
+**The flat band is `FLAT_BAND_ATR = 0.25` of the benchmark's POINT-IN-TIME daily ATR(14),
+edge INCLUSIVE, and it is the LEAD's number.** It exists because a directional call on a
+day that went nowhere is not a wrong call, and counting it wrong would make a trader who
+reads chop correctly look like a coin flip. Truth table: +1.00 ATR with an `up` read is
+`right` and `down`/`chop`/`range` are `wrong`; +0.25 and +0.10 ATR are `flat` for `up` or
+`down` and `right` for `chop`/`range`; -0.30 ATR with a `down` read is `right`. `flat` sits
+IN the accuracy denominator (`n` = right + wrong + flat). **The packet named no number, the
+lead chose 0.25 on 2026-09-19, and it is the TRADER's to change - never from one session's
+result** (plan.md sec 6). Every row carries `flat_band_rule: "atr_0.25_v1"`, so a later
+band supersedes cleanly instead of silently re-grading rows measured under this one.
+
+**A verdict may only ever move UP** (round-1 fix). The reviewer reproduced the defect this
+replaces: `regrade_matured` revisited only `pending*` rows, could not measure on this desk,
+and DESTROYED the row it failed on - an absent daily store turned a correct
+`pending 2026-09-25` into `unmeasured:no_anchor_close` forever, when the true answer was
+`right`, +5.0 ATR. `verdict_rank` is now the rule (measured > pending > unmeasured-for-a-
+data-reason > final): a new row is appended only when the rank RISES, an `unmeasured`
+result never supersedes a `pending` one, a data-unmeasured row is revisited on EVERY later
+run, a measured verdict is FINAL (contradicting bars later write nothing),
+`unmeasured:not_a_call` is final because no bar turns a `No view` into a call, a re-grade
+supersedes with a NEW row carrying the ORIGINAL context forward, and the file only grows.
+`DayReviewService.build_reads_for` keeps the same rule. **ONE loader set serves the page
+and the night** - `daily_bars_for_symbol` (the durable store, then the machine-local daily
+cache), `session_bars_for` (TJ-2A's tape) and `atr_for_session` - because a page and a
+night that read different stores grade different markets, which is exactly what happened
+before the fix round.
+
+**Every surface names its SOURCE, in plain words** (round-1 fix). The page had presented an
+EXTRACTED stance as the trader's own call - "your D1 read is up" on 2026-09-17, inferred
+from a hedged sentence while another note that day read down. A click now reads
+`your call: down (clicked 07:02)`, an extraction `we read your note as up`, on every
+congruence line, every entry label and the reader's chip (`read_phrase`, `_read_chip`).
+
+**Every gradable grade carries its point-in-time context, and the store is STRICTER for a
+CLICK** (TJ-16 item 1, shipped here so no graded click is ever stored without one; the
+strict half is the lead's decision on the reviewer's recommendation). The market half is
+`trade_mentor_context_v2` - the entry's own stored block when it has one, else a rebuild
+through `trade_mentor_context.internals_at` and through nothing else; there is never a
+second builder, and `internals_bars_at` now has its first production caller in
+`build_reads_for` (TJ-14A item 6). `append_grades` refuses a gradable grade with a BLANK
+context, and refuses a gradable CLICKED grade that carries only the named absence
+`CONTEXT_UNMEASURED` (`ContextMissingError`) - an extracted row and a superseding re-grade
+may carry it. When `context_for` fails for a clicked read the grade is HELD BACK that pass,
+the payload row says `grader_gap: "context_unbuildable: ..."`, and the next pass retries:
+the trader still sees the verdict and the reason, rather than a stated call degraded to a
+context-less row forever. **Nothing counts the clicks held back that way** - an advisory,
+not a defect.
+
+**`grader_gap` now EXISTS on every grade row** (`""` when nothing was missing, else the
+measurement gap's reason, or `context_unbuildable: <error>`; deliberately NOT set for
+`not_a_call`, which is a complete answer). It is a field, never a signal - nothing reads it
+yet, and TJ-14B's dormant `grader_gap` Mentor kind can be woken against it by a later
+packet.
+
+**Congruence is printed, never pushed** (answer 15), and it is keyed on TIMEFRAME.
+`CONGRUENCE_KINDS` is the three-line D1 spine - the read against the desk's D1 label,
+against the session's like/claim side mix, and against the bias of its fills (from the
+LEGS: a LONG option is never a bullish setup). `CONGRUENCE_M5_KIND`
+(`m5_picks_side_mix`) is APPENDED beside it whenever the session has a rest-of-day read,
+pairing it with that session's M5 likes (`not today` counted apart, never folded into the
+side mix) and never with D1 picks: TJ-15 measured about half the trader's reviewed
+decisions as M5, so a D1 view compared with a mostly-M5 crowd answers the wrong question.
+Each line names its `n`, its timeframe and its source ids, names the MISSING side rather
+than reading an absence as agreement, and a label with no direction (`compressed`,
+`mixed`, `unknown`) is never agreement. **An under-floor side mix is never a verdict**
+(follow-up `2967e4a6`): `VERDICT_TOO_FEW = "too_few"` when `n < MIN_REPORTABLE_N`, with the
+counts and the floor note kept in the text - live 2026-09-17 had printed `disagrees` off 2
+M5 likes, and a chip or a later pooling packet keys on the verdict, not on the words beside
+it. On a both-ways or no-read day each line says its OWN content FIRST and the reason there
+is nothing to compare it with second. Reviewer's note, recorded not built:
+`MIN_REPORTABLE_N` is 30, the "name a winner" floor, so the M5 side-mix line will read
+`too few to call` on most days; a smaller NAMED floor for a side mix would be the trader's
+or the lead's number. **The congruence D1 label is the SAME session's label** (what the
+desk read of the day being reviewed) while the CONTEXT block's `d1_environment` is the
+PRIOR session's (the newest one the trader could have seen at the stamp) - two different
+questions, deliberately not one field.
+
+**The nightly slot.** `scripts/ai_jobs/read_grades_mature.py` registers `read_grades_mature`
+- deterministic, `uses_model=False`, `max_attempts=3`, `reserve_minutes=2.0` - directly
+after `theta_pick_grading` and before `miss_contrast` / `market_story_rollups` /
+`measured_report`, so it stays INSIDE `_deterministic_stage` and runs on the weeknight,
+Saturday AND Sunday slates (a slot appended after `_STAGE_ONE_LAST_SLOT` silently leaves
+the Sunday slate however deterministic it is). A missing reads directory, an unreadable
+ledger or a missing daily store each give an `ok` row with a reason in under a second and
+never raise; the slot is idempotent across the task's 30-minute re-firings; the only file
+it writes is `DAY_REVIEW_READS_DIR/<session>.jsonl`. Decision 0018 carries the addendum.
+At integration the lead added the slot to TJ-13B's two weeknight-slate pins, and moved the
+49-note text fixture to `tests/fixtures/day_review/tj10_live_notes.json` because every
+`*.json` directly under `tests/fixtures` must carry the Milestone-3 market-data provenance
+contract - the full suite caught it (`3e52d94f`).
+
+**What the desk can measure today** (both reviews ran read-only on STAGED COPIES of the
+live stores, 2026-09-20). **0 clicks exist yet** - the click card only went live on
+2026-09-20 - and there are **7 extracted reads on each of 09-17 and 09-18**. The vocabulary
+bump (`market_thesis.EXTRACTOR_VERSION` = `market_thesis_vocab_v2`: whole-token trend words,
+with `rejecting`/`rejected` SCOPED to the phrase that means a level rejected them) moves the
+49 live notes from **18 to 20** read as a direction with **no reversal** (23 -> 22
+`unstated`); 12 of the unstated fire a bullish AND a bearish word, which no vocabulary can
+fix - words are context, and the CLICK is what gets graded. Congruence as the trader will
+read it, re-counted exactly by the reviewer from `_decisions` + `claimed_picks`: on
+**2026-09-18**, `we read your note as up; 62 of 99 D1 likes and claims were SHORT (long 37,
+short 62)` - disagrees; on **2026-09-17** the notes read both ways and 59 of 90 D1 likes
+were LONG. `d1_environment.jsonl` holds 15 rows over five sessions and none for 09-18, so
+the desk-label line honestly reads `unmeasured` on most days; the fills line reads `the legs
+could not call` for the trader's sold puts until they run TJ-9Q's `--apply`.
+
+**Two live-desk facts, stated carefully.** (a) `C:\TradingBotData\data\daily_bars\SPY.parquet`
+EXISTS and holds 189 rows through 2026-09-18, yet `chart_snapshot.load_d1_bars` answers
+EMPTY for SPY, QQQ, IWM and VXX on this desk for its OWN reason, so far unexplained - a
+follow-up question, not a TJ-10 defect. Every benchmark daily bar in the staged runs came
+from the machine-local cache `%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` (1,993
+symbols). It is NOT true that the home folder has no `daily_bars` directory. (b) The live
+home has no `day_review\bars\` folder at all yet (only `day_review\sessions\<date>\
+outcomes.json`), so every rest-of-day read is honestly
+`unmeasured:no_completed_bar_after_the_stamp` until the first post-close tick writes a tape
+(TJ-2A's `build_session_bars_for`) or a back-fill does - which is why gate #155 REQUIRES
+the tape to exist before it can be judged.
+
+**Advisories recorded, not repaired.** Nothing counts the clicks held back for
+`context_unbuildable`. `baseline_reads` (`always_up`, `same_as_the_last_hour`,
+`with_the_d1_environment`) needs GRADE rows to score, so TJ-12 / TJ-16 must feed it those.
+The congruence D1 label and the context block's D1 environment are deliberately different
+sessions (above). `internals_bars_at` is now called in production.
+
+**The re-review cost the desk a cache file, and the rule changed** (2026-09-20). A
+reviewer's scratch script outside pytest set `TRADINGBOTV3_DATA_DIR` but not `LOCALAPPDATA`
+- and that variable does NOT move `project_paths.CACHE_DIR`,
+`%LOCALAPPDATA%\TradingBotV3\machine_cache` - so the script overwrote the desk's live
+`machine_cache\daily_bars\SPY.csv` with a 6-row fake while the desk was down; it was
+restored from the durable parquet and the lead verified 189 of 189 rows identical. The rule
+in CLAUDE.md "Working agreement for agents" and in `docs/AGENT_TEAM.md` now says BOTH: a
+script outside pytest sets `TRADINGBOTV3_DATA_DIR` AND `LOCALAPPDATA` to scratch
+directories BEFORE importing anything under `scripts/`, and aborts if ANY `project_paths`
+root resolves under `C:\TradingBotData`, the DAS or the real `%LOCALAPPDATA%\TradingBotV3`.
+This is the second incident of its kind after 2026-09-05's live-tracker overwrite; the
+long form of that one is in `docs/AGENT_TEAM.md` "Rules that exist because something broke".
+
 ## TJ-3 - a mark sits on a bar only when it happened DURING that bar (2026-09-19, packet TJ-3)
 
 The long form behind the CLAUDE.md rule *"A note marker sits on a bar only when it

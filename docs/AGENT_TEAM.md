@@ -117,14 +117,20 @@ The lead's Claude auto-memory is machine-local scratch, not the shared record.
 - **Live stores are read-only to every agent** except a builder whose packet names the
   write. The one authorised exception so far was P6a's provisional tagging, and it
   took a backup first (`trade_journal.sqlite3.p6a-backup-*`).
-- **A scratch script sets `TRADINGBOTV3_DATA_DIR` before it imports anything.** On
+- **A scratch script sets `TRADINGBOTV3_DATA_DIR` AND `LOCALAPPDATA` before it imports
+  anything.** On
   2026-09-05 a reviewer imported a test harness from a scratch script outside pytest;
   `conftest.py` was not loaded, `project_paths` resolved to the live home folder, and the
   harness saved a 1-setup tracker over the 1.2 GB live one (restored from the SQLite mirror
   copy, gate #57's first real proof). A second reviewer's scratch export patched an ALIAS of
-  the leaderboard path and overwrote the live leaderboard CSVs. Every agent script prints
-  `project_paths.DATA_DIR` first and aborts if it is under `C:\TradingBotData`; harnesses
-  under `tests/` run only under pytest.
+  the leaderboard path and overwrote the live leaderboard CSVs. On 2026-09-20 a reviewer's
+  script set `TRADINGBOTV3_DATA_DIR` and nothing else, and that variable does not move
+  `project_paths.CACHE_DIR` (`%LOCALAPPDATA%\TradingBotV3\machine_cache`): it overwrote the
+  desk's live `machine_cache\daily_bars\SPY.csv` with a 6-row fake while the desk was down,
+  restored from the durable parquet and verified 189 of 189 rows identical. Every agent
+  script sets BOTH variables to scratch directories before the import, prints every
+  `project_paths` root first and aborts if any resolves under `C:\TradingBotData`, the DAS
+  or the real `%LOCALAPPDATA%\TradingBotV3`; harnesses under `tests/` run only under pytest.
 - **Detector, scoring and alert files are ask-first.** The trader's decision quoted in
   the packet for the exact functions is the answer; otherwise the builder stops and
   the question goes in the handoff. `CLAUDE.md` lists the files.
