@@ -11,9 +11,16 @@ and must be able to run on a nightly slot with no event loop.
 
 Three rules it keeps:
 
-* **A stamp resolves to the LAST completed bar at or before it.** 10:12 belongs
-  to the bar that opened at 10:10; nothing is ever placed on a bar that had not
-  happened yet.
+* **A marker sits on a bar only when it happened DURING that bar.** 10:12
+  belongs to the bar that opened at 10:10 because 10:12 is inside 10:10-10:15;
+  nothing is ever placed on a bar that had not happened yet, and nothing is
+  CLAMPED onto the last candle of a tape that ended before it. The reviewer
+  measured that clamp on a copy of the live journal: 62 of 216 trade legs (29%)
+  are filled after 13:00 Pacific, and every one of them was being drawn on the
+  12:55 candle as though the fill had happened at the close. A stamp past the
+  end is `index: None` and `placement: "after_tape"` - kept so the page can SAY
+  how many there are, never drawn on a bar. Missing data is uncertainty, never
+  confirmation.
 * **An unknown stamp yields NO marker.** A thought written before the first bar,
   a row with no timestamp and a stamp nobody can parse are all `None` - never
   bar zero, which is the one place the trader was certainly not looking.
@@ -34,7 +41,7 @@ review queue or `review_policy.json`: a marker is a place on a chart.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
@@ -79,6 +86,41 @@ VERDICT_KINDS: dict[str, str] = {
 #: How much of a written thought a marker's label carries. The label is read in a
 #: tooltip beside a candle, not in the reader pane.
 LABEL_LIMIT = 80
+
+#: Where a stamp fell relative to the tape it was resolved against.
+#:
+#: * ``on_bar`` - inside one bar's own span; the only one that is DRAWN.
+#: * ``after_tape`` - at or after the end of the last bar. Kept and counted: a
+#:   fill at 14:30 against a tape that ends at 12:55 is not a 12:55 fill.
+#: * ``between_bars`` - inside the tape's span but in a hole it does not draw (a
+#:   halt on an M5 tape, a weekend or a holiday on a daily one). Kept and
+#:   counted for the same reason.
+#: * ``before_tape`` / ``no_tape`` / ``unreadable`` - no marker at all: a
+#:   pre-open thought, an empty tape and an unparseable stamp say nothing about
+#:   a candle, and the page has nothing to count them against.
+PLACEMENT_ON_BAR = "on_bar"
+PLACEMENT_AFTER = "after_tape"
+PLACEMENT_BETWEEN = "between_bars"
+PLACEMENT_BEFORE = "before_tape"
+PLACEMENT_NO_TAPE = "no_tape"
+PLACEMENT_UNREADABLE = "unreadable"
+
+#: The placements a marker is KEPT for. The rest never become a marker.
+KEPT_PLACEMENTS: tuple[str, ...] = (
+    PLACEMENT_ON_BAR,
+    PLACEMENT_AFTER,
+    PLACEMENT_BETWEEN,
+)
+
+#: What one bar of an intraday tape covers when the tape is too short to say.
+#: Day Review's durable tape is M5 by construction (`day_review_bars`).
+DEFAULT_BAR_MINUTES = 5
+
+#: What distinguishes a trade's two glyph ADDRESSES. Both legs carry the same
+#: `ref_id` - the `trade_id` the page would select with - so the address is what
+#: lets a caller ask where the EXIT was drawn.
+TRADE_OPEN_SUFFIX = ":in"
+TRADE_CLOSE_SUFFIX = ":out"
 
 
 # -- stamps and bars ---------------------------------------------------------
@@ -142,33 +184,75 @@ def _is_daily(bars: Iterable[Mapping[str, Any]]) -> bool:
     return False
 
 
-def bar_index_for(bars: Any, stamp: Any) -> int | None:
-    """The index of the LAST bar at or before ``stamp``.
+def _bar_width(starts: list[datetime]) -> timedelta:
+    """How long one bar of this tape covers, read off the tape itself.
 
-    ``None`` when the stamp sits before the first bar, carries no readable
-    moment, or is absent - an unknown stamp yields NO marker and is never placed
-    at an invented one.
+    The SMALLEST positive gap between consecutive starts: a tape with a halt in
+    it still reports 5 minutes rather than the length of the halt, and a daily
+    tape carrying datetimes reports one day rather than a weekend.
+    """
+    gaps = [
+        later - earlier
+        for earlier, later in zip(starts, starts[1:])
+        if later > earlier
+    ]
+    return min(gaps) if gaps else timedelta(minutes=DEFAULT_BAR_MINUTES)
+
+
+def placement_for(bars: Any, stamp: Any) -> tuple[int | None, str]:
+    """Which bar ``stamp`` happened during, and what to call it if none did.
+
+    Returns ``(index, placement)``. A marker is drawn ONLY for
+    ``on_bar`` - the stamp fell inside that bar's own span. A stamp later than
+    the tape's last bar is ``after_tape`` with no index: clamping it onto the
+    last candle would say the trader acted at the close when they acted two
+    hours after it.
     """
     rows = [bar for bar in (bars or ()) if isinstance(bar, Mapping)]
     if not rows:
-        return None
+        return (None, PLACEMENT_NO_TAPE)
     moment = _as_datetime(stamp)
     if moment is None:
-        return None
+        return (None, PLACEMENT_UNREADABLE)
     moment = _aware(moment)
-    found: int | None = None
     if _is_daily(rows):
         target_date = moment.astimezone(MARKET_ZONE).date()
-        for index, bar in enumerate(rows):
-            bar_date = _as_date(bar.get("dt"))
-            if bar_date is not None and bar_date <= target_date:
-                found = index
-        return found
-    for index, bar in enumerate(rows):
-        bar_moment = _as_datetime(bar.get("dt"))
-        if bar_moment is not None and _aware(bar_moment) <= moment:
-            found = index
-    return found
+        dates = [(index, _as_date(bar.get("dt"))) for index, bar in enumerate(rows)]
+        known = [(index, day) for index, day in dates if day is not None]
+        if not known:
+            return (None, PLACEMENT_NO_TAPE)
+        for index, day in known:
+            if day == target_date:
+                return (index, PLACEMENT_ON_BAR)
+        if target_date < min(day for _index, day in known):
+            return (None, PLACEMENT_BEFORE)
+        if target_date > max(day for _index, day in known):
+            return (None, PLACEMENT_AFTER)
+        return (None, PLACEMENT_BETWEEN)
+    starts = [(index, _as_datetime(bar.get("dt"))) for index, bar in enumerate(rows)]
+    known = [(index, _aware(start)) for index, start in starts if start is not None]
+    if not known:
+        return (None, PLACEMENT_NO_TAPE)
+    width = _bar_width([start for _index, start in known])
+    for index, start in known:
+        if start <= moment < start + width:
+            return (index, PLACEMENT_ON_BAR)
+    if moment < min(start for _index, start in known):
+        return (None, PLACEMENT_BEFORE)
+    if moment >= max(start for _index, start in known) + width:
+        return (None, PLACEMENT_AFTER)
+    return (None, PLACEMENT_BETWEEN)
+
+
+def bar_index_for(bars: Any, stamp: Any) -> int | None:
+    """The index of the bar ``stamp`` happened DURING, or ``None``.
+
+    ``None`` for a stamp before the first bar, after the last one, in a hole the
+    tape does not draw, unreadable or absent - an unknown stamp yields NO marker
+    and is never placed at an invented one. :func:`placement_for` says which of
+    those it was.
+    """
+    return placement_for(bars, stamp)[0]
 
 
 # -- labels ------------------------------------------------------------------
@@ -182,11 +266,24 @@ def _excerpt(text: Any, limit: int = LABEL_LIMIT) -> str:
 
 
 def _marker(
-    bars: Any, stamp: Any, *, kind: str, label: str, ref_id: str
+    bars: Any,
+    stamp: Any,
+    *,
+    kind: str,
+    label: str,
+    ref_id: str,
+    marker_id: str = "",
 ) -> dict[str, Any] | None:
-    """One placed marker, or None when the stamp has no bar to stand on."""
-    index = bar_index_for(bars, stamp)
-    if index is None:
+    """One marker, or None when the stamp says nothing about this tape.
+
+    `ref_id` is what the PAGE SELECTS with (a note's `entry_id`, a trade's
+    `trade_id`) and `marker_id` is what ADDRESSES this glyph. They are the same
+    string for everything except a trade, whose two legs share one `trade_id`:
+    without a separate address `note_marker_position` could never reach the exit
+    leg, because the entry leg answers first.
+    """
+    index, placement = placement_for(bars, stamp)
+    if placement not in KEPT_PLACEMENTS:
         return None
     ref = str(ref_id or "").strip()
     if not ref:
@@ -195,17 +292,41 @@ def _marker(
     return {
         "stamp": moment.isoformat() if moment is not None else "",
         "index": index,
+        "placement": placement,
         "kind": kind,
         "label": str(label or "").strip() or kind.replace("_", " "),
         "ref_id": ref,
+        "marker_id": str(marker_id or "").strip() or ref,
     }
 
 
 def _ordered(markers: Iterable[Mapping[str, Any] | None]) -> tuple[dict[str, Any], ...]:
-    """Bar order, ties keeping the order they were handed in (a stable sort)."""
+    """Bar order, ties keeping the order they were handed in (a stable sort).
+
+    A marker with no bar to sit on sorts LAST, in the order it arrived: it is
+    carried so the page can count it, and it never displaces a drawn one.
+    """
     kept = [dict(marker) for marker in markers if marker]
-    kept.sort(key=lambda marker: int(marker["index"]))
+    kept.sort(
+        key=lambda marker: (1, 0) if marker["index"] is None else (0, int(marker["index"]))
+    )
     return tuple(kept)
+
+
+def placement_counts(markers: Any) -> dict[str, int]:
+    """How many markers landed on a bar, after the tape, and in a hole.
+
+    Built on the worker and carried in the payload, so the page states it
+    without counting anything on the Qt thread.
+    """
+    counts = {name: 0 for name in KEPT_PLACEMENTS}
+    for marker in markers or ():
+        if not isinstance(marker, Mapping):
+            continue
+        name = str(marker.get("placement") or "")
+        if name in counts:
+            counts[name] += 1
+    return counts
 
 
 def _is_machine(entry: Mapping[str, Any]) -> bool:
@@ -365,11 +486,15 @@ def name_charts(
         bars = tapes.get(name)
         if not bars:
             continue
+        markers = symbol_markers(
+            name, bars, decisions=decisions, trades=trades, claims=claims
+        )
         charts[name] = {
             "bars": list(bars),
-            "markers": symbol_markers(
-                name, bars, decisions=decisions, trades=trades, claims=claims
-            ),
+            "markers": markers,
+            # Counted HERE, on the worker, so the pane states it without
+            # counting anything on the Qt thread.
+            "placements": placement_counts(markers),
         }
     return charts
 
@@ -451,6 +576,7 @@ def _trade_markers(bars: Any, trades: Any, *, symbol: str) -> list[dict[str, Any
                 kind="trade_open",
                 label=f"in · {stem}" if stem else "in",
                 ref_id=ref,
+                marker_id=f"{ref}{TRADE_OPEN_SUFFIX}",
             )
         )
         closed = row.get("closed_at") or row.get("last_closing_leg_at")
@@ -462,18 +588,31 @@ def _trade_markers(bars: Any, trades: Any, *, symbol: str) -> list[dict[str, Any
                     kind="trade_close",
                     label=f"out · {stem}" if stem else "out",
                     ref_id=ref,
+                    marker_id=f"{ref}{TRADE_CLOSE_SUFFIX}",
                 )
             )
     return out
 
 
 __all__ = [
+    "DEFAULT_BAR_MINUTES",
+    "KEPT_PLACEMENTS",
     "LABEL_LIMIT",
     "MARKER_KINDS",
     "MARKET_ZONE",
+    "PLACEMENT_AFTER",
+    "PLACEMENT_BEFORE",
+    "PLACEMENT_BETWEEN",
+    "PLACEMENT_NO_TAPE",
+    "PLACEMENT_ON_BAR",
+    "PLACEMENT_UNREADABLE",
+    "TRADE_CLOSE_SUFFIX",
+    "TRADE_OPEN_SUFFIX",
     "VERDICT_KINDS",
     "bar_index_for",
     "benchmark_markers",
     "name_charts",
+    "placement_counts",
+    "placement_for",
     "symbol_markers",
 ]

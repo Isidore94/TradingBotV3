@@ -902,17 +902,23 @@ class CandleChart(pg.PlotWidget):
 
         ``None`` when it is not drawn. What a hit test - and a test - needs to
         find a glyph without guessing where the ribbon is.
+
+        Matched on the payload's ``marker_id`` FIRST and its ``ref_id`` second,
+        because a trade's two legs share one `trade_id`: asked for the address
+        (`t-42:out`) this reaches the exit glyph, and asked for the selector
+        (`t-42`) it answers with the first leg drawn, as it always did.
         """
         wanted = str(ref_id or "")
         if not wanted:
             return None
-        for position, (_index, marker) in enumerate(self._drawn_note_markers):
-            if str(marker.get("ref_id") or "") != wanted:
-                continue
-            if position >= len(self._note_marker_items):
-                return None
-            point = self._note_marker_items[position].pos()
-            return (float(point.x()), float(point.y()))
+        for field in ("marker_id", "ref_id"):
+            for position, (_index, marker) in enumerate(self._drawn_note_markers):
+                if str(marker.get(field) or "") != wanted:
+                    continue
+                if position >= len(self._note_marker_items):
+                    return None
+                point = self._note_marker_items[position].pos()
+                return (float(point.x()), float(point.y()))
         return None
 
     def _placed_note_markers(self) -> list[tuple[int, dict]]:

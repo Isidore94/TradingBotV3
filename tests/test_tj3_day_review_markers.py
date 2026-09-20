@@ -310,12 +310,20 @@ def test_read_day_builds_a_name_chart_for_each_decided_symbol(monkeypatch):
     assert len(charts["AAA"]["bars"]) == 30
     markers = list(charts["AAA"]["markers"])
     assert [marker["kind"] for marker in markers] == ["veto"]
-    # LEAD AMENDMENT 2026-09-19: the tester's literal was 44, copied from the SPY
-    # case above (a 78-bar tape). AAA's own tape here is 30 bars (06:30..08:55 PT)
-    # and the decision is 10:12 PT, so the LAST bar at or before it is index 29 -
-    # the contract `bar_index_for` pins in test_tj3_marker_payload.py. 44 would be
-    # a marker past the end of the bars this same test asserts are drawn.
-    assert markers[0]["index"] == 29
+    # LEAD AMENDMENT 2026-09-19, twice, and the history is the point.
+    #
+    # The tester's literal was 44, copied from the SPY case above (a 78-bar
+    # tape); AAA's own tape here is 30 bars (06:30..08:55 PT), so 44 was a
+    # marker past the end of the very bars this test asserts are drawn. The
+    # lead amended it to 29, the LAST bar at or before 10:12 - but that is a
+    # CLAMP, and the reviewer measured what a clamp costs on the live journal:
+    # 62 of 216 trade legs fall after 13:00 PT and were being drawn on the
+    # 12:55 candle as though the fill had happened at the close. The honest
+    # answer for a stamp the tape never covered is that it has no bar: the
+    # marker is kept so the page can SAY how many there are, and it is not
+    # drawn anywhere. 10:12 is 77 minutes after AAA's last bar closed.
+    assert markers[0]["index"] is None
+    assert markers[0]["placement"] == "after_tape"
 
 
 def test_a_name_with_no_tape_gets_no_invented_chart(monkeypatch):

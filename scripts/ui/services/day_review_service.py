@@ -57,6 +57,9 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # index ON THE WORKER. The page draws them and builds none of them.
     "spy_markers",
     "name_charts",
+    # How many of those marks the tape could not carry, counted on the worker so
+    # the page can SAY it without counting anything on the Qt thread.
+    "spy_marker_placements",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -111,6 +114,22 @@ def _stamped_dates_for(session: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _looks_like_a_date(key: Any) -> bool:
+    """Is this mapping key a session DATE rather than a symbol?
+
+    `read_day`'s bars mapping carries both, and a name is never spelled
+    `2026-09-18`.
+    """
+    text = str(key or "")
+    if len(text) != 10:
+        return False
+    try:
+        date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
+
+
 def empty_payload(session_date: str = "") -> dict[str, Any]:
     """A payload with every key present and nothing in it.
 
@@ -130,6 +149,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "spy_m5_bars": [],
         "spy_markers": (),
         "name_charts": {},
+        "spy_marker_placements": {},
     }
 
 
@@ -370,8 +390,18 @@ class DayReviewService:
                 entries=entries,
                 trades=payload["trades"],
             )
+            payload["spy_marker_placements"] = day_review_markers.placement_counts(
+                payload["spy_markers"]
+            )
+            # `stored` holds TWO shapes: this session's SYMBOL -> bars, and a
+            # later exit session's DATE -> {symbol: bars} (the walk-away read
+            # adds those). Only the first shape is a tape, so a date key can
+            # never be read as a name.
             payload["name_charts"] = day_review_markers.name_charts(
-                stored,
+                {
+                    name: rows for name, rows in stored.items()
+                    if isinstance(rows, list) and not _looks_like_a_date(name)
+                },
                 decisions=decisions,
                 trades=payload["trades"],
                 claims=[

@@ -192,6 +192,10 @@ NAME_CHART_MISSING_NOTE = (
     "nothing to draw it on."
 )
 
+#: What the SPY caption says when the session has no tape at all. A mark with no
+#: bar to sit on is SAID, never silently dropped.
+NO_TAPE_MARKER_NOTE = "No tape for this session - marks not drawn."
+
 #: The story's floor. It GROWS with its text above this (TJ-4 writes paragraphs);
 #: below it, an empty story reads as a broken section.
 STORY_MIN_HEIGHT_PX = 120
@@ -1221,7 +1225,10 @@ class DayReviewPanel(QFrame):
         self._render_chart(list(payload.get("spy_m5_bars") or []))
         # The markers were RESOLVED on the worker; this pushes them and computes
         # nothing (TJ-3). After `set_data`, because new bars drop the payload.
-        self._render_spy_markers(tuple(payload.get("spy_markers") or ()))
+        self._render_spy_markers(
+            tuple(payload.get("spy_markers") or ()),
+            payload.get("spy_marker_placements"),
+        )
         self._name_charts = dict(payload.get("name_charts") or {})
         self._refresh_name_chart()
         for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
@@ -1601,14 +1608,49 @@ class DayReviewPanel(QFrame):
         """Which name the side pane is showing. "" when it is showing none."""
         return self._name_chart_symbol
 
-    def _render_spy_markers(self, markers) -> None:
-        """Push the worker's marker payload onto the one SPY chart."""
-        if self._chart is None:
+    @staticmethod
+    def _marker_caption(placements: Mapping[str, Any] | None) -> str:
+        """What the tape could NOT carry, in words. Counted on the worker.
+
+        A mark the tape cannot carry is the one thing the trader must be told
+        about: a fill two hours after the last candle used to be drawn ON that
+        candle, which is the chart saying they acted at the close.
+        """
+        counts = dict(placements or {})
+
+        def _count(name: str) -> int:
+            try:
+                return int(counts.get(name) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        parts: list[str] = []
+        after = _count("after_tape")
+        between = _count("between_bars")
+        if after:
+            parts.append(f"{after} mark{'s' if after != 1 else ''} after the tape")
+        if between:
+            parts.append(f"{between} off a drawn bar")
+        return f"{' · '.join(parts)} - not drawn." if parts else ""
+
+    def _render_spy_markers(self, markers, placements=None) -> None:
+        """Push the worker's marker payload onto the one SPY chart.
+
+        Says out loud what could not be drawn - including the case where there
+        is no tape at all, which used to be a silence.
+        """
+        caption = self._marker_caption(placements)
+        if self._chart is None or not self._chart.bar_count():
+            self.spy_note.setText(
+                f"{self.spy_note.text()} {NO_TAPE_MARKER_NOTE}".strip()
+            )
             return
         try:
             self._chart.set_note_markers(markers)
         except Exception:  # noqa: BLE001 - a marker never costs the page
             logging.debug("The Day Review markers could not be drawn.", exc_info=True)
+        if caption:
+            self.spy_note.setText(f"{self.spy_note.text()} {caption}".strip())
 
     def _refresh_name_chart(self) -> None:
         """Redraw whatever the side pane is already showing, from the new read.
@@ -1645,8 +1687,10 @@ class DayReviewPanel(QFrame):
         pane.set_data(bars, timeframe="m5")
         pane.set_note_markers(tuple(chart.get("markers") or ()))
         self._name_chart_symbol = name
+        caption = self._marker_caption(chart.get("placements"))
         self.name_chart_note.setText(
             f"{name} M5 — {len(bars)} completed bar(s), and what you said about it."
+            + (f" {caption}" if caption else "")
         )
 
     def _select_entry_by_ref(self, ref_id: str) -> None:
