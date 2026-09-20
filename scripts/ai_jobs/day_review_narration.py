@@ -31,11 +31,16 @@ import hashlib
 import json
 import logging
 import os
-from datetime import date, datetime, timezone
+import re
+import time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 _log = logging.getLogger(__name__)
+
+#: A session folder's name. Anything else beside the packs is not a queue entry.
+_SESSION_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 PROMPT_VERSION = "day_review_narration_v1"
 SCHEMA = "day_review_narration_v1"
@@ -52,22 +57,38 @@ MODEL_TIER = "medium"
 #: well inside that.
 TIMEOUT_SECONDS = 540
 
-#: How many QUEUED sessions one night may narrate on top of its own, oldest
-#: first. The slot reserves ten minutes; three short stories fit inside that and
-#: an unbounded queue would not. What is left over stays queued and is SAID
-#: (reviewer, 2026-09-20: a daytime Redo of any day but the night's own was
-#: dropped silently, because nothing swept the markers).
+#: How many QUEUED sessions one night may NARRATE on top of its own, oldest
+#: first. The budget is spent on work ATTEMPTED - a model call - and never on a
+#: name in a list: three markers whose sessions have no pack used to take the
+#: whole budget and then sit at the head of the queue for ever, starving every
+#: real request behind them (reviewer round 2, 2026-09-20; and today the live
+#: home folder holds three session folders and ZERO packs, so it was every
+#: request). A packless marker costs nothing, keeps its marker and is named.
 REDO_SWEEP_LIMIT = 3
 
-#: What one reply may contain, per list. `ai_summary.validate_structured_output`
-#: enforces required keys, `additionalProperties`, types, enums and a STRING's
-#: `maxLength` - it does not enforce `maxItems` or the length of an array's
-#: items, and a 5,000-source / 500-claim reply was written whole (372 KB) and
-#: then rendered line by line on the Qt thread (reviewer, 2026-09-20). Generous
-#: and finite: a day has one story, not five hundred.
-MAX_GRADED_CLAIMS = 6
-MAX_SOURCES = 24
-MAX_OPEN_THESES = 6
+#: How many packless sessions one reason line names before it says `+N more`.
+MAX_NAMED_UNBUILT = 5
+
+#: The ABSOLUTE ceilings on what one reply may contain, per list. They are not
+#: the working caps: the caps come FROM THE PACK (see `_narration_schema_for`),
+#: because a regular session with every Mentor card answered already carries 8
+#: read rows and 25 citable ids before a forecast, a trade, a walk-away row or
+#: an internals mark is counted (reviewer round 2). These only bound what the
+#: page can be asked to RENDER, because
+#: `ai_summary.validate_structured_output` enforces no `maxItems` at all and a
+#: 5,000-source reply was written whole (372 KB) and drawn line by line on the
+#: Qt thread (reviewer round 1).
+MAX_GRADED_CLAIMS = 64
+MAX_SOURCES = 512
+MAX_OPEN_THESES = 32
+
+#: How long one model call may take, in MINUTES - the same number as
+#: `TIMEOUT_SECONDS`, in the unit the launch window speaks. The slot's
+#: `reserve_minutes` buys the FIRST call; every call after it asks the window
+#: again for this much room, because a sweep begun at 07:50 ET with a
+#: ten-minute reserve could otherwise still be loading a model at 08:35, in
+#: front of the trader's own market prep (reviewer round 2).
+SWEEP_CALL_MINUTES = 9.0
 
 #: Bounds are deliberately NOT 2,000 anywhere in either schema: a `maxLength` of
 #: exactly 2,000 is the grammar defect gate #144 found, where the constrained
@@ -177,6 +198,48 @@ D1_VIEW_INSTRUCTIONS = (
 
 class NarrationRejected(ValueError):
     """The model's answer was not a narration of the evidence it was given."""
+
+
+def _bounded_schema(schema: Mapping[str, Any], **limits: int) -> dict[str, Any]:
+    """A copy of `schema` whose named arrays are capped at what the pack holds.
+
+    The model is TOLD the real number rather than a fixed six. A regular
+    session with every Mentor card answered carries eight read rows and
+    twenty-five citable ids (two of the scheduled cards store two entries
+    each), so a fixed cap of six made the model choose two reads to drop -
+    silently - or made the whole answer unwritable on the busiest days
+    (reviewer round 2, 2026-09-20). The ceilings above still apply, because a
+    number that comes from the evidence is still rendered by a page.
+    """
+    body = json.loads(json.dumps(dict(schema)))
+    for key, limit in limits.items():
+        spec = (body.get("properties") or {}).get(key)
+        if isinstance(spec, dict):
+            spec["maxItems"] = max(0, int(limit))
+    return body
+
+
+def _narration_schema_for(pack: Mapping[str, Any]) -> dict[str, Any]:
+    """The day story's schema for THIS pack: one claim per read, ids it holds."""
+    import day_review_pack
+
+    reads = len([row for row in pack.get("reads") or () if isinstance(row, Mapping)])
+    sources = len(day_review_pack.allowed_source_ids(pack))
+    return _bounded_schema(
+        NARRATION_JSON_SCHEMA,
+        were_you_right=min(reads, MAX_GRADED_CLAIMS),
+        sources=min(sources, MAX_SOURCES),
+    )
+
+
+def _d1_schema_for(items) -> dict[str, Any]:
+    """The rolling view's schema for THIS window: one thesis per D1 thing said."""
+    count = len(list(items or ()))
+    return _bounded_schema(
+        D1_VIEW_JSON_SCHEMA,
+        open_theses=min(count, MAX_OPEN_THESES),
+        sources=min(count, MAX_SOURCES),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +393,7 @@ def _check_day_narration(narration: Mapping[str, Any], pack: Mapping[str, Any]) 
 
     reads = _by_source_id(pack.get("reads"), what="reads")
     said = _by_source_id(pack.get("trader_said"), what="trader_said")
+    graded: set[str] = set()
     for claim in narration.get("were_you_right") or ():
         if not isinstance(claim, Mapping):
             raise NarrationRejected("a graded claim was not an object")
@@ -339,6 +403,14 @@ def _check_day_narration(narration: Mapping[str, Any], pack: Mapping[str, Any]) 
             raise NarrationRejected(
                 f"the narration graded a claim no read row carries: {evidence_id!r}"
             )
+        # One read, one verdict. Two claims on one read row are two readings of
+        # a single measured thing, and the page would print both as if the desk
+        # had measured twice.
+        if evidence_id in graded:
+            raise NarrationRejected(
+                f"the narration graded {evidence_id!r} twice; one read carries one verdict"
+            )
+        graded.add(evidence_id)
         measured = str(row.get("verdict") or "")
         stated = str(claim.get("verdict") or "")
         if stated != measured:
@@ -502,6 +574,41 @@ def _call(request, *, evidence: Mapping[str, Any], schema, prompt_version: str, 
     )
 
 
+def _clock_for(now: datetime | None) -> Callable[[], datetime]:
+    """A clock that starts at `now` and MOVES. One seam, injectable in a test.
+
+    The window is re-asked between model calls, so the moment has to advance -
+    and it may never advance by sleeping. This is `now` plus the wall time this
+    run has actually spent, measured monotonically.
+    """
+    start = now or datetime.now(timezone.utc)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    began = time.monotonic()
+
+    def _at() -> datetime:
+        return start + timedelta(seconds=time.monotonic() - began)
+
+    return _at
+
+
+def _window_allows(clock: Callable[[], datetime]) -> tuple[bool, str]:
+    """May this run start ANOTHER model call right now?
+
+    The slot's `reserve_minutes` buys the FIRST call and nothing more. A night
+    that narrated its own session at 07:50 ET could otherwise sweep three more
+    and be loading a model at 08:35, past the window's close, which is the
+    night-only rule broken from inside (reviewer round 2, 2026-09-20). So every
+    call after the first asks again, with one call's worth of room.
+    """
+    from ai_jobs import window
+
+    try:
+        return window.launch_allowed(clock(), reserve_minutes=SWEEP_CALL_MINUTES)
+    except Exception as exc:  # noqa: BLE001 - an unanswerable window STOPS the run
+        return False, f"the night window could not be read: {exc}"
+
+
 def queued_sessions(root: Path | None = None, *, skip: str = "") -> list[str]:
     """Sessions with a `redo_requested` marker on disk, OLDEST first.
 
@@ -522,7 +629,12 @@ def queued_sessions(root: Path | None = None, *, skip: str = "") -> list[str]:
     return [
         name
         for name in names
-        if name != ignore and day_review_pack.redo_requested(name, root=base)
+        # A folder that is not a session DATE is not a queue entry, whatever a
+        # future writer leaves beside the packs. A marker is never retired by
+        # age: uncertainty never deletes.
+        if _SESSION_DATE.fullmatch(name)
+        and name != ignore
+        and day_review_pack.redo_requested(name, root=base)
     ]
 
 
@@ -533,9 +645,10 @@ def run_day_review_narration(
     root: Path | None = None,
     request: Callable[..., Mapping[str, Any]] | None = None,
     only_this_session: bool = False,
+    clock: Callable[[], datetime] | None = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
-    """Narrate one session, sweep what the trader queued, refresh the D1 view.
+    """Narrate one session, refresh the D1 view, sweep what the trader queued.
 
     Never raises: a crash here is a lost night. Every failure path leaves the
     last verified file byte-identical and says what happened.
@@ -543,10 +656,15 @@ def run_day_review_narration(
     ``only_this_session`` is set by the runner when the operator named a day
     (``--session``): a targeted redo does what it was asked for and nothing
     else. The unattended nightly run sweeps.
+
+    The order is the night's own story, then the rolling D1 view, then the
+    queue: the two things this session owes come first, and what is left of the
+    window goes to the backlog. Every call after the first re-asks the window.
     """
     import day_review_pack
 
     base = _root(root)
+    tick = clock or _clock_for(now)
     session = str(session_date or "").strip()[:10] or datetime.now().date().isoformat()
     pack = day_review_pack.read_pack(session, root=base)
     redo = day_review_pack.redo_requested(session, root=base)
@@ -575,19 +693,21 @@ def run_day_review_narration(
         if story["status"] == "ok" and redo:
             day_review_pack.clear_redo(session, root=base)
 
-    if not only_this_session:
-        swept = _sweep_queued(session, base, now=now, request=request)
-        outputs.extend(swept["outputs"])
-        if swept["reason"]:
-            reasons.append(swept["reason"])
-            model = model or swept["model"]
-
-    view = _run_d1_view(session, base, now=now, request=request, redo=redo)
+    view = _run_d1_view(
+        session, base, now=now, request=request, redo=redo, clock=tick
+    )
     outputs.extend(view["outputs"])
     if view["reason"]:
         reasons.append(view["reason"])
     model = model or view["model"]
     degraded = degraded or view["status"] == "degraded_no_narrative"
+
+    if not only_this_session:
+        swept = _sweep_queued(session, base, now=now, request=request, clock=tick)
+        outputs.extend(swept["outputs"])
+        if swept["reason"]:
+            reasons.append(swept["reason"])
+            model = model or swept["model"]
 
     # The night's OWN story and the rolling view decide the status. A queued
     # session that was rejected is reported in the reason and keeps its marker
@@ -607,19 +727,28 @@ def _sweep_queued(
     *,
     now: datetime | None,
     request: Callable[..., Mapping[str, Any]] | None,
+    clock: Callable[[], datetime],
 ) -> dict[str, Any]:
     """Narrate the sessions a daytime Redo queued. At most `REDO_SWEEP_LIMIT`.
 
     Oldest first, so a queue that outgrows one night drains in order rather than
-    starving its oldest entry. Four rules, and each of them is a test:
+    starving its oldest entry. Six rules, and each of them is a test:
 
     * the marker OVERRIDES that session's unchanged-hash skip - the trader asked
       for the story to be written again and the pack has not moved;
+    * **the budget is spent on sessions NARRATED, never on names in a list.**
+      Three markers whose sessions had no pack used to consume the whole budget
+      and, being the oldest, sat at the head of the queue every night after -
+      so no real request behind them was ever attempted (reviewer round 2);
     * a marker is cleared only after a GOOD run. A rejected or raising redo
       leaves that session's prior story byte-identical AND keeps its marker, so
       the next night tries again;
-    * a queued session with no pack is skipped with its marker KEPT and named -
-      the post-close tick may simply not have reached it yet;
+    * a queued session with no pack is skipped with its marker KEPT and named
+      (at most `MAX_NAMED_UNBUILT` of them, then `+N more`) - the post-close
+      tick may simply not have reached it yet, and by TJ-4's review round 2 the
+      page builds the pack before it queues anything;
+    * every call re-asks the launch window, and a window that has closed stops
+      the sweep CLEANLY with every remaining marker kept and said;
     * one bad queued session never costs the night's own story or the rolling
       D1 view. This returns a REPORT; it cannot fail the night.
     """
@@ -628,17 +757,27 @@ def _sweep_queued(
     queued = queued_sessions(root, skip=session)
     if not queued:
         return {"status": "ok", "model": "", "reason": "", "outputs": []}
-    taken, left = queued[:REDO_SWEEP_LIMIT], queued[REDO_SWEEP_LIMIT:]
     outputs: list[str] = []
     narrated: list[str] = []
     kept: list[str] = []
     unbuilt: list[str] = []
+    left: list[str] = []
+    closed = ""
     model = ""
-    for day in taken:
+    for index, day in enumerate(queued):
+        if len(narrated) + len(kept) >= REDO_SWEEP_LIMIT:
+            left = queued[index:]
+            break
         pack = day_review_pack.read_pack(day, root=root)
         if pack is None:
+            # Costs no model call, so it costs no budget either.
             unbuilt.append(day)
             continue
+        allowed, why = _window_allows(clock)
+        if not allowed:
+            closed = why
+            left = queued[index:]
+            break
         outcome = _run_day_story(day, pack, root, now=now, request=request, redo=True)
         outputs.extend(outcome["outputs"])
         model = model or outcome["model"]
@@ -653,7 +792,13 @@ def _sweep_queued(
     if kept:
         parts.append("still queued after a rejected redo: " + ", ".join(kept))
     if unbuilt:
-        parts.append("still queued, no pack yet: " + ", ".join(unbuilt))
+        named = ", ".join(unbuilt[:MAX_NAMED_UNBUILT])
+        over = len(unbuilt) - MAX_NAMED_UNBUILT
+        parts.append(
+            "still queued, no pack yet: " + named + (f", +{over} more" if over > 0 else "")
+        )
+    if closed:
+        parts.append(f"the night window closed mid-sweep ({closed})")
     if left:
         parts.append(
             f"{len(left)} more queued session(s) wait for tomorrow night "
@@ -698,16 +843,17 @@ def _run_day_story(
             "reason": refusal,
             "outputs": [],
         }
+    schema = _narration_schema_for(pack)
     try:
         result = _call(
             caller,
             evidence=_day_evidence(pack, root),
-            schema=NARRATION_JSON_SCHEMA,
+            schema=schema,
             prompt_version=PROMPT_VERSION,
             schema_name="tradingbot_day_review_narration",
         )
         narration = result.get("summary") if isinstance(result, Mapping) else None
-        narration = _validate(narration, NARRATION_JSON_SCHEMA, name="day story")
+        narration = _validate(narration, schema, name="day story")
         _check_day_narration(narration, pack)
         payload = {
             "schema": SCHEMA,
@@ -716,6 +862,16 @@ def _run_day_story(
             "inputs_hash": str(pack.get("inputs_hash") or ""),
             "prompt_version": PROMPT_VERSION,
             "model": str(result.get("model") or ""),
+            # A SIZE statement, counted here so the page states it without
+            # counting anything: how many of the session's measured reads this
+            # story actually graded. No result is involved and nothing is
+            # ranked - the page says `graded K of N reads` when K < N.
+            "graded": {
+                "reads_graded": len(narration.get("were_you_right") or ()),
+                "reads_in_pack": len(
+                    [row for row in pack.get("reads") or () if isinstance(row, Mapping)]
+                ),
+            },
             "narration": dict(narration),
         }
         _atomic_write(destination, payload)
@@ -742,6 +898,7 @@ def _run_d1_view(
     now: datetime | None,
     request: Callable[..., Mapping[str, Any]] | None,
     redo: bool,
+    clock: Callable[[], datetime],
 ) -> dict[str, Any]:
     try:
         items = _d1_items(session, root)
@@ -774,6 +931,20 @@ def _run_d1_view(
             "outputs": [str(destination)],
         }
 
+    # The SECOND call of the night asks the window again: the slot's reserve
+    # bought the FIRST one and nothing more (reviewer round 2, 2026-09-20).
+    # Asked here rather than at the top of this function, so a view that needs
+    # no call at all - nothing said on a D1 card, or an unchanged hash - is
+    # never reported as blocked by a window it never wanted.
+    allowed, why = _window_allows(clock)
+    if not allowed:
+        return {
+            "status": "skipped",
+            "model": "",
+            "reason": f"the rolling D1 view waits for the next night ({why})",
+            "outputs": [],
+        }
+
     caller, refusal = _request_for(request)
     if caller is None:
         return {
@@ -782,16 +953,17 @@ def _run_d1_view(
             "reason": refusal,
             "outputs": [],
         }
+    schema = _d1_schema_for(items)
     try:
         result = _call(
             caller,
             evidence=evidence,
-            schema=D1_VIEW_JSON_SCHEMA,
+            schema=schema,
             prompt_version=D1_VIEW_PROMPT_VERSION,
             schema_name="tradingbot_d1_view_narration",
         )
         narration = result.get("summary") if isinstance(result, Mapping) else None
-        narration = _validate(narration, D1_VIEW_JSON_SCHEMA, name="D1 view")
+        narration = _validate(narration, schema, name="D1 view")
         _check_d1_narration(narration, set(evidence["allowed_source_ids"]))
         payload = {
             "schema": D1_VIEW_SCHEMA,
@@ -824,12 +996,14 @@ __all__ = [
     "D1_VIEW_PROMPT_VERSION",
     "D1_VIEW_SCHEMA",
     "MAX_GRADED_CLAIMS",
+    "MAX_NAMED_UNBUILT",
     "MAX_OPEN_THESES",
     "MAX_SOURCES",
     "NARRATION_JSON_SCHEMA",
     "PROMPT_VERSION",
     "REDO_SWEEP_LIMIT",
     "SCHEMA",
+    "SWEEP_CALL_MINUTES",
     "d1_view_path",
     "narration_path",
     "queued_sessions",

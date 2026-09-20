@@ -101,6 +101,16 @@ STORY_QUEUED_NOTE = (
 #: What it says when the night window is open and the button did what it says.
 STORY_REDO_STARTED_NOTE = "Rewriting {session}'s story in the background…"
 
+#: What it says while the Redo's own pack build runs on its worker. The night
+#: can only narrate a session it has a PACK for, so the click builds one first.
+STORY_BUILDING_PACK_NOTE = "Building {session}'s facts before queuing the story…"
+
+#: And when that build could not produce one. Said plainly, and NOTHING is
+#: queued: a marker for a session with no pack is a request the night can never
+#: answer (reviewer round 2, 2026-09-20 - the live home folder held three
+#: session folders and zero packs).
+REDO_NO_PACK_NOTE = "No pack could be built for {session} - nothing queued."
+
 #: The slot the Redo button runs, by name. One spelling, used by the argv and
 #: by the CLI that receives it.
 REDO_SLOT = "day_review_narration"
@@ -445,6 +455,33 @@ class _IndexBuildWorker(QThread):
         self.built.emit(self._session)
 
 
+class _RedoPackWorker(QThread):
+    """One day pack, built off the Qt thread before a Redo is queued.
+
+    The night can only narrate a session it HAS a pack for, and a marker for a
+    session with no pack is a request nobody can answer (reviewer round 2,
+    2026-09-20). The build is deterministic and calls no model - it is the same
+    seam the post-close tick uses - but it streams the session's stores, so it
+    may never run on the Qt thread.
+    """
+
+    done = Signal(str, bool)
+
+    def __init__(self, builder, session_date: str, parent=None) -> None:
+        super().__init__(parent)
+        self._builder = builder
+        self._session = str(session_date)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its signal
+        built = False
+        try:
+            built = bool(self._builder(self._session))
+        except Exception:  # noqa: BLE001 - a failed build is an answer, not a crash
+            logging.debug("The Redo's day pack could not be built.", exc_info=True)
+            built = False
+        self.done.emit(self._session, built)
+
+
 class DayReviewPanel(QFrame):
     """The day, read back: what happened, what you said, what you traded."""
 
@@ -498,6 +535,9 @@ class DayReviewPanel(QFrame):
         #: How a Redo actually starts (TJ-4 change 4). Injected so a test can
         #: assert the click without spawning a process.
         self._redo_launcher: Callable[[str], Any] = redo_launcher or launch_redo_process
+        #: The Redo's own pack builds, held while they run (a QThread nobody
+        #: holds is collected mid-run). One per click; short-lived.
+        self._redo_workers: list[_RedoPackWorker] = []
         self._auto_fired_session: str | None = None
         self._auto_post_close_session: str | None = None
         self._auto_timer = QTimer(self)
@@ -1469,6 +1509,19 @@ class DayReviewPanel(QFrame):
         process = str(narration.get("process") or "").strip()
         if process:
             lines.append(process)
+        # A SIZE statement, counted by the night and printed here: how many of
+        # the session's measured reads this story graded. No result is involved
+        # and nothing is ranked - it is said only when it is fewer than the
+        # session held, so "the story covered everything" stays silent.
+        graded = story.get("graded")
+        if isinstance(graded, Mapping):
+            try:
+                covered = int(graded.get("reads_graded") or 0)
+                held = int(graded.get("reads_in_pack") or 0)
+            except (TypeError, ValueError):
+                covered = held = 0
+            if held and covered < held:
+                lines.append(f"graded {covered} of {held} reads")
         body = "\n".join(lines)
         self.story_body.setText(body)
         self.story_body.setVisible(bool(body))
@@ -1508,13 +1561,55 @@ class DayReviewPanel(QFrame):
     def redo_story(self) -> None:
         """Ask for this session's story again - tonight, or now if it is night.
 
-        Local inference is night-only, seven days a week (plan TJ-13 item 5,
-        TJ-4 change 4). Outside the window this writes the `redo_requested`
+        The pack comes FIRST. The night narrates a session it has a pack for
+        and skips one it does not, so a click that only wrote a marker could
+        queue a request nobody would ever answer - which is what the live home
+        folder, with three session folders and no packs, would have done to
+        every Redo (reviewer round 2, 2026-09-20). The build is the page's own
+        off-Qt seam, deterministic and model-free; only when it has produced a
+        pack does the marker get written or the night's process get started.
+
+        Local inference is still night-only, seven days a week (plan TJ-13 item
+        5, TJ-4 change 4): outside the window this writes the `redo_requested`
         marker the nightly slot honours and SAYS it is queued; inside it, it
         starts one child process per click and writes no marker.
         """
         session = self.session_date()
         if not session:
+            return
+        builder = getattr(self.service, "build_pack_for", None)
+        if not callable(builder):
+            # A host that hands this page a reader with no builder cannot build
+            # one here either. The click still queues: a packless marker costs
+            # the night no budget, keeps its place and is named in the ledger.
+            self._redo_after_pack(session, True)
+            return
+        try:
+            worker = _RedoPackWorker(builder, session, self)
+            worker.done.connect(self._redo_after_pack)
+            worker.finished.connect(lambda w=worker: self._drop_redo_worker(w))
+            self._redo_workers.append(worker)
+            self.status.setText(STORY_BUILDING_PACK_NOTE.format(session=session))
+            self.statusChanged.emit(self.status.text())
+            worker.start()
+        except Exception:  # noqa: BLE001 - a failed start never raises into Qt
+            logging.debug("The Redo's pack build could not start.", exc_info=True)
+            self._redo_after_pack(session, False)
+
+    def _drop_redo_worker(self, worker) -> None:
+        """Let a finished build go. Held until then so Qt does not collect it."""
+        try:
+            self._redo_workers.remove(worker)
+        except ValueError:
+            pass
+        worker.deleteLater()
+
+    def _redo_after_pack(self, session_date: str, built: bool) -> None:
+        """Queue it for tonight, or start it - now that the facts exist."""
+        session = str(session_date or "")[:10]
+        if not built:
+            self.status.setText(REDO_NO_PACK_NOTE.format(session=session))
+            self.statusChanged.emit(self.status.text())
             return
         try:
             allowed, reason = window.launch_allowed()
@@ -1528,7 +1623,7 @@ class DayReviewPanel(QFrame):
                 text = f"{STORY_QUEUED_NOTE} {reason}".strip()
             except Exception as exc:  # noqa: BLE001 - a marker never costs the page
                 logging.debug("The story redo could not be queued.", exc_info=True)
-                text = f"the redo could not be queued for tonight: {exc}"
+                text = f"{session} could not be queued for tonight: {exc}"
             self.status.setText(text)
             self.statusChanged.emit(self.status.text())
             return

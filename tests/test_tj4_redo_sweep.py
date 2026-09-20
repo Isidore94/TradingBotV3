@@ -435,10 +435,32 @@ def test_a_reply_with_five_hundred_graded_claims_is_rejected_whole(root):
 
 
 def test_a_source_id_longer_than_the_schema_allows_is_rejected_whole(root):
-    """The shared validator checks a STRING's length, never an array item's."""
-    pack, path, before = _prior(root)
+    """The shared validator checks a STRING's length, never an array item's.
+
+    The over-long id is one the pack ACTUALLY CARRIES (reviewer round 2: with
+    an invented id this test passed on the old code for the wrong reason - the
+    grounding rule rejected it before any length rule could). Here the id is
+    allowed, so only its LENGTH can reject the reply.
+    """
+    import day_review_pack
+    from ai_jobs.day_review_narration import narration_path
+
+    long_id = "said:" + "x" * 300
+    entry = fx.observation_only_entry(text="One long-winded note.")
+    pack = day_review_pack.build_pack(
+        SESSION, entries=[entry], now=fx.AFTER_THE_CLOSE
+    )
+    pack["trader_said"][0]["source_id"] = long_id
+    day_review_pack.write_pack(pack, root=root)
+    assert long_id in day_review_pack.allowed_source_ids(pack), "the id must be ALLOWED"
+
+    path = narration_path(SESSION, root=root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"verified":"last night"}\n', encoding="utf-8")
+    before = path.read_bytes()
+
     reply = _reply_for(pack, headline="a very long id")
-    reply["summary"]["sources"] = ["x" * 5000]
+    reply["summary"]["sources"] = [long_id]
 
     outcome = _run(root, lambda **_k: reply)
 

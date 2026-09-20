@@ -36,6 +36,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -43,6 +44,11 @@ from typing import Any, Iterable, Mapping
 import project_paths
 
 _log = logging.getLogger(__name__)
+
+#: A session folder's name, exactly. `session_dir` slices to ten characters, so
+#: without this `"2026-09-18-extra"` would write to a REAL day's folder and
+#: `".."` would write outside `sessions/` altogether (reviewer, 2026-09-20).
+_SESSION_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 SCHEMA = "day_review_pack_v1"
 
@@ -576,6 +582,41 @@ def redo_path(session_date: str, *, root: Path | None = None) -> Path:
     return session_dir(session_date, root=root) / "redo_requested.json"
 
 
+def validated_session(session_date: str, *, now: datetime | None = None) -> str:
+    """`session_date` as a real, closed exchange session, or RAISE.
+
+    This is the one place a Redo turns a string into a PATH, and it fails
+    CLOSED - unlike a reader, which answers `unmeasured`. A write the trader
+    asked for is not evidence: it must land where they meant it or not at all.
+    Measured by the reviewer on the round-1 build: `request_redo("..")` wrote
+    `redo_requested.json` at the `day_review` ROOT, outside `sessions/`, and
+    `"2026-09-18-extra"` was silently truncated to a real day.
+
+    A future session has no pack and no story, and a day the exchange never
+    opened has neither either, so both are refused rather than queued for ever.
+    """
+    text = str(session_date or "").strip()
+    if not _SESSION_DATE.fullmatch(text):
+        raise ValueError(f"{session_date!r} is not a YYYY-MM-DD session date")
+    try:
+        day = date.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"{session_date!r} is not a calendar date: {exc}") from exc
+    try:
+        import market_calendar
+
+        if not market_calendar.is_session(day):
+            raise ValueError(f"{text} is not a trading session")
+        last = market_calendar.last_completed_session(now or datetime.now().astimezone())
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - an unanswerable calendar refuses
+        raise ValueError(f"the exchange calendar cannot place {text}: {exc}") from exc
+    if day > last:
+        raise ValueError(f"{text} has not closed yet; there is nothing to narrate")
+    return text
+
+
 def request_redo(
     session_date: str, *, root: Path | None = None, now: datetime | None = None
 ) -> Path:
@@ -584,7 +625,11 @@ def request_redo(
     Without this the daytime "queued for tonight" would be a lie: the pack's
     hash has not moved, so the night would skip the very session the trader
     asked to have redone.
+
+    The session is VALIDATED first and a bad one raises without writing: see
+    :func:`validated_session`.
     """
+    session_date = validated_session(session_date, now=now)
     path = redo_path(session_date, root=root)
     moment = now or datetime.now().astimezone()
     _atomic_write(path, {
@@ -629,6 +674,7 @@ __all__ = [
     "redo_requested",
     "request_redo",
     "said_items",
+    "validated_session",
     "session_dir",
     "write_pack",
 ]
