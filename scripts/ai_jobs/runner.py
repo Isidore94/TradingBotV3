@@ -570,6 +570,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         journal_auto_tag,
         market_story_narration,
         measured_report_publish,
+        miss_contrast,
         note_vocabulary_audit,
         policy_draft,
         setup_research,
@@ -784,6 +785,31 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Weekly, monthly and quarterly Market Journal story packs "
                 "(deterministic, no model; rebuilt only when an input changed)"
+            ),
+            max_attempts=3,
+        ),
+        # TJ-15 (2026-09-19), APPENDED INSIDE stage 1: after the four cohort
+        # graders because it reads what a decision turned OUT to be, and
+        # deliberately BEFORE `measured_report` rather than after it.
+        #
+        # That position is load-bearing. `_STAGE_ONE_LAST_SLOT` is
+        # `measured_report` and `_deterministic_stage` walks the slate up to
+        # and INCLUDING it, so a slot appended after that name is not in stage 1
+        # by that function's reckoning and silently leaves the SUNDAY slate,
+        # however deterministic it is. Nothing here reads `measured_report`'s
+        # output and nothing there reads this pack, so the two are free to sit
+        # in either order - and only one of the two orders runs on a Sunday.
+        #
+        # Deterministic: no model, seconds of work, one JSON pack beside the
+        # digest, and a missing input is a recorded reason on an `ok` row.
+        # Hence `journal_import`'s attempt budget rather than the briefs'.
+        JobSlot(
+            name="miss_contrast",
+            run=miss_contrast.run_miss_contrast,
+            reserve_minutes=5.0,
+            description=(
+                "What the misses had in common - a point-in-time feature "
+                "contrast per veto reason and for likes (deterministic, no model)"
             ),
             max_attempts=3,
         ),

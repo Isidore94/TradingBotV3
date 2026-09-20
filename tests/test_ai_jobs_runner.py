@@ -319,6 +319,14 @@ EXPECTED_SLOT_ORDER = (
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.
     "market_story_rollups",
+    # TJ-15 (2026-09-19): what the misses had in common. Deterministic, no
+    # model. It is INSIDE stage 1 and deliberately ahead of `measured_report`:
+    # `_STAGE_ONE_LAST_SLOT` is that name and `_deterministic_stage` walks up to
+    # and including it, so a slot appended after it would leave the Sunday
+    # slate. Nothing here reads the measured report and nothing there reads this
+    # pack, so only the position is a choice - and only one of the two runs on a
+    # Sunday.
+    "miss_contrast",
     # WS-RP (2026-09-13): one measured report for the session - the five
     # WISHLIST 10K answers with their populations. Deterministic, no model; it
     # reads what the slots above it wrote and feeds nothing above it, so it
