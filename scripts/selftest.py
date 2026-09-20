@@ -113,6 +113,13 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "day_review_index",
     "day_review_bars",
     "forecast_brief",
+    # TJ-4: the day pack and the night's narration of it. Both are reached
+    # through FUNCTION-LEVEL imports - the page's worker builds the pack after
+    # the grades, the page reads the two verified files, and the Redo button
+    # imports the pack to write its marker. A bundle missing either would
+    # launch and then fail the first time the trader opened Day Review.
+    "day_review_pack",
+    "ai_jobs.day_review_narration",
     # Phase 0.32: Daily Recap imports this inside its report worker for the
     # published next-test card. A frozen desk without it would launch and fail
     # only when Review opens, so make the reach explicit.

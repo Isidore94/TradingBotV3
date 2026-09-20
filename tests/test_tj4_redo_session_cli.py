@@ -83,9 +83,16 @@ def _spy_slot(name: str, seen: list[dict]):
 # ---------------------------------------------------------------------------
 
 
-def test_a_session_without_the_day_story_slot_is_refused_and_runs_nothing(monkeypatch):
+def test_a_session_without_the_day_story_slot_is_refused_and_runs_nothing(
+    monkeypatch, capsys
+):
     """A flag that silently did nothing for every other slot would read as a
-    general override of the night's own session date, which it is not."""
+    general override of the night's own session date, which it is not.
+
+    The MESSAGE is asserted, not only the exit code: an unknown flag also exits
+    2, so a test that checked the code alone would pass on a build that never
+    had `--session` at all.
+    """
     import run_ai_jobs
     from ai_jobs import runner
 
@@ -97,9 +104,10 @@ def test_a_session_without_the_day_story_slot_is_refused_and_runs_nothing(monkey
     with pytest.raises(SystemExit) as refused:
         run_ai_jobs.main(["--session", SESSION])
     assert refused.value.code == 2
+    assert f"--slot {SLOT}" in capsys.readouterr().err
 
 
-def test_a_session_named_beside_another_slot_is_refused(monkeypatch):
+def test_a_session_named_beside_another_slot_is_refused(monkeypatch, capsys):
     import run_ai_jobs
     from ai_jobs import runner
 
@@ -110,10 +118,11 @@ def test_a_session_named_beside_another_slot_is_refused(monkeypatch):
     with pytest.raises(SystemExit) as refused:
         run_ai_jobs.main(["--slot", "ai_summary", "--session", SESSION])
     assert refused.value.code == 2
+    assert f"--slot {SLOT}" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("asked", ["yesterday", "2026-13-01", "2026-09-19"])
-def test_a_malformed_or_non_session_date_is_refused(monkeypatch, asked):
+def test_a_malformed_or_non_session_date_is_refused(monkeypatch, capsys, asked):
     """`2026-09-19` is a SATURDAY: a day the exchange never opened has no pack
     and no story, so the command is refused rather than run to find nothing."""
     import run_ai_jobs
@@ -126,6 +135,11 @@ def test_a_malformed_or_non_session_date_is_refused(monkeypatch, asked):
     with pytest.raises(SystemExit) as refused:
         run_ai_jobs.main(["--slot", SLOT, "--session", asked])
     assert refused.value.code == 2
+    complaint = capsys.readouterr().err
+    assert "session" in complaint.lower()
+    assert "unrecognized" not in complaint.lower(), (
+        "the flag must be RECOGNISED and then refused, not unknown"
+    )
 
 
 # ---------------------------------------------------------------------------
