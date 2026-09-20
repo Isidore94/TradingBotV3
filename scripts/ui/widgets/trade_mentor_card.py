@@ -296,6 +296,31 @@ class TradeMentorCard(QWidget):
         #: is cleared only when the session changes - a question about Friday's
         #: trades asked on Wednesday is a different question.
         self._trade_check_session = ""
+        # TJ-14B item 3. The few extra questions the desk is missing an answer
+        # to, at most three, each a CLICK. Kept apart from the market read above
+        # and from TJ-9's trade section: three different questions merged into
+        # one box would be one box that answers none of them.
+        self.questions_label = QLabel("")
+        self.questions_label.setObjectName("MutedLabel")
+        self.questions_label.setWordWrap(True)
+        self.questions_label.setVisible(False)
+        self.questions_box = QWidget(self)
+        self._questions_layout = QVBoxLayout(self.questions_box)
+        self._questions_layout.setContentsMargins(0, 0, 0, 0)
+        self._questions_layout.setSpacing(3)
+        self.questions_box.setVisible(False)
+        #: (kind, subject_id) -> (Subject, the combo holding its answer)
+        self._question_inputs: dict[tuple[str, str], tuple[Any, QComboBox]] = {}
+        self._question_store = None
+        self._question_service = None
+        self.save_questions_button = QPushButton("Save these answers")
+        self.save_questions_button.setToolTip(
+            "Files each answer through the store that owns it. Nothing is "
+            "written for a question you leave on '-'."
+        )
+        self.save_questions_button.clicked.connect(self.save_questions)
+        self.save_questions_button.setVisible(False)
+
         self.save_answers_button = QPushButton("Save answers")
         self.save_answers_button.setToolTip(
             "Files what you remember as a labelled next-morning note. It never "
@@ -351,6 +376,9 @@ class TradeMentorCard(QWidget):
         layout.addWidget(self.trade_check_label)
         layout.addWidget(self.trade_check_box)
         layout.addWidget(self.save_answers_button)
+        layout.addWidget(self.questions_label)
+        layout.addWidget(self.questions_box)
+        layout.addWidget(self.save_questions_button)
         layout.addLayout(buttons)
         layout.addWidget(self.status_label)
 
@@ -756,6 +784,10 @@ class TradeMentorCard(QWidget):
         self._reset_predictions()
         self._restore_predictions(self.draft_predictions_for(slot.slot_id))
         self._render_internals()
+        # TJ-14B: the questions belong to the CARD, not to the session. The host
+        # rebuilds them for this slot right after this returns; an unanswered
+        # one is not lost, it is CARRIED and asked again on the next card.
+        self._clear_questions()
         if str(getattr(slot, "session", "") or "") != self._trade_check_session:
             # TJ-9 item 2. The section RIDES on every later card of the same
             # session - an unanswered card must not expire into silence - and
@@ -806,6 +838,141 @@ class TradeMentorCard(QWidget):
         if str(request_id) == self._context_slot_id and isinstance(context, Mapping):
             self._current_context = dict(context)
             self._render_internals()
+
+    # -- TJ-14B: the few questions the desk is missing an answer to ---------
+    def _clear_questions(self) -> None:
+        self._question_inputs = {}
+        self.questions_label.setVisible(False)
+        self.questions_box.setVisible(False)
+        self.save_questions_button.setVisible(False)
+        while self._questions_layout.count():
+            item = self._questions_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def set_questions(self, result, *, store=None, service=None) -> None:
+        """Draw this card's questions - at most three, plus what is waiting.
+
+        `result` is `mentor_questions.pending`'s answer. Only its `asked`
+        subjects are drawn: `carried` is COUNTED in the waiting note and asked
+        on a later card, never dropped and never a fourth here.
+
+        Every question carries `Stop asking this`, which retires that ONE
+        subject through `TradeMentorService.stop_asking` - the single writer -
+        and writes no answer at all.
+        """
+        self._clear_questions()
+        self._question_store = store
+        self._question_service = service
+        asked = tuple(getattr(result, "asked", ()) or ()) if result is not None else ()
+        note = str(getattr(result, "waiting_note", "") or "") if result is not None else ""
+        if not asked:
+            if note:
+                self.questions_label.setText(note)
+                self.questions_label.setVisible(True)
+            return
+        self.questions_label.setText(
+            "A few things the desk cannot work out on its own"
+            + (f". {note}" if note else ".")
+        )
+        self.questions_label.setVisible(True)
+
+        import mentor_questions
+
+        for subject in asked:
+            row = QWidget(self.questions_box)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            prompt = QLabel(str(getattr(subject, "prompt", "") or subject.kind), row)
+            prompt.setWordWrap(True)
+            combo = QComboBox(row)
+            # "-" first, so a question the trader did not touch stays unasked
+            # rather than being filed as whatever happened to be at index 0.
+            combo.addItem("-", "")
+            for option in tuple(getattr(subject, "options", ()) or ()):
+                combo.addItem(str(option).replace("_", " "), str(option))
+            if combo.findData(mentor_questions.STOP_ASKING) < 0:
+                combo.addItem("stop asking this", mentor_questions.STOP_ASKING)
+            row_layout.addWidget(prompt, 1)
+            row_layout.addWidget(combo)
+            self._questions_layout.addWidget(row)
+            self._question_inputs[(str(subject.kind), str(subject.subject_id))] = (
+                subject,
+                combo,
+            )
+            if str(subject.kind) == "ai_question":
+                # The overnight question is now a CLICK with an answer and a
+                # once-a-day rule. Before TJ-14B the same sentence was printed
+                # as "One thing to test: ..." on EVERY card, forever, with no
+                # way to answer it; printing both would ask it twice.
+                self.coaching_label.setVisible(False)
+        self.questions_box.setVisible(True)
+        self.save_questions_button.setVisible(True)
+
+    def question_box(self, kind: str, subject_id: str):
+        """The combo one question is answered in, or ``None``."""
+        entry = self._question_inputs.get((str(kind), str(subject_id)))
+        return entry[1] if entry else None
+
+    def save_questions(self) -> dict[str, Any]:
+        """File every question the trader answered, and nothing else.
+
+        A retirement is not an answer and stores none: `Stop asking this` goes
+        to the service, which is the single writer of what the trader silenced.
+        A writer that refuses costs its own row and never the others.
+        """
+        import mentor_questions
+
+        moment = self._now()
+        saved = 0
+        retired = 0
+        failures: list[str] = []
+        for (kind, subject_id), (subject, combo) in list(self._question_inputs.items()):
+            chosen = str(combo.currentData() or "")
+            if not chosen:
+                continue
+            if chosen == mentor_questions.STOP_ASKING:
+                service = self._question_service
+                if service is None:
+                    failures.append(f"{kind}: nothing to record the retirement with")
+                    continue
+                try:
+                    service.stop_asking(kind, subject_id)
+                    retired += 1
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(f"{kind}: {exc}")
+                continue
+            try:
+                outcome = mentor_questions.record_answer(
+                    subject,
+                    {"state": chosen},
+                    store=self._question_store,
+                    now=moment,
+                )
+            except Exception as exc:  # noqa: BLE001 - one refusal is not the card
+                failures.append(f"{kind}: {exc}")
+                continue
+            if outcome.get("ok"):
+                saved += 1
+            else:
+                failures.append(f"{kind}: {outcome.get('reason') or 'not stored'}")
+        if not saved and not retired and not failures:
+            self._set_status("Nothing was answered, so nothing was filed.")
+            return {"ok": False, "reason": "no question was answered"}
+        parts = []
+        if saved:
+            parts.append(f"{saved} answer(s) filed")
+        if retired:
+            parts.append(f"{retired} question(s) retired")
+        if failures:
+            parts.append(f"{len(failures)} NOT stored ({failures[0]})")
+        self._set_status("; ".join(parts) + ".")
+        if saved or retired:
+            self._clear_questions()
+        return {"ok": not failures, "saved": saved, "retired": retired, "failures": failures}
 
     def _clear_trade_check(self) -> None:
         self._answer_inputs = {}

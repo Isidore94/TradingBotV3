@@ -1133,6 +1133,10 @@ class MainWindow(QMainWindow):
             # night failed. A fill from this morning is only askable if somebody
             # looked. It never blocks, never waits and never raises.
             self._pre_card_journal_pull(slot)
+            # TJ-14B item 3: the few questions the desk cannot work out on its
+            # own, at most three, on EVERY card - the trade section below has
+            # its own ride rule and its own early returns.
+            self._show_mentor_questions(slot)
 
             import trade_mentor_trade_check as check
             from journal_store import JournalStore
@@ -1217,6 +1221,190 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - an unreadable journal asks nothing extra
             logging.debug("Trade check ride undecidable.", exc_info=True)
             return False
+
+    def _show_mentor_questions(self, slot) -> None:
+        """Put this card's budgeted questions on it (TJ-14B item 3).
+
+        Everything `mentor_questions.pending` needs arrives already loaded - the
+        registry is PURE and a trigger that opened a store would be a second
+        opinion about it, on whatever thread the card happened to be built on.
+        The reads here are bounded to the two sessions a question can be about.
+
+        `carried` is kept on the window so the next card asks the remainder
+        first: a question over budget is counted and carried, never dropped.
+        """
+        try:
+            import mentor_questions
+            from journal_store import JournalStore
+
+            card = self.trading_panel.alert_center.chart_review.mentor_card
+            store = JournalStore()
+            state = self._mentor_question_state(slot, store)
+            result = mentor_questions.pending(state, slot)
+            self._mentor_carried = tuple(result.carried)
+            card.set_questions(result, store=store, service=self.trade_mentor_service)
+        except Exception:  # noqa: BLE001 - a question never costs the prompt
+            logging.debug("Trade Mentor questions could not be built.", exc_info=True)
+
+    def _mentor_question_state(self, slot, store) -> dict:
+        """Every lane `mentor_questions.pending` reads, loaded once, here."""
+        import trade_mentor_trade_check as check
+
+        session = str(getattr(slot, "session", "") or "")
+        reviewed = check.previous_exchange_session(slot.scheduled_at.date())
+        trades: list = []
+        for day in (session, reviewed):
+            try:
+                trades.extend(store.list_trades(trade_date=day))
+            except Exception:  # noqa: BLE001 - an unreadable day asks nothing
+                logging.debug("Mentor trade lane unreadable for %s.", day, exc_info=True)
+        return {
+            "session": session,
+            "now": slot.scheduled_at,
+            "auto_mode": self._auto_mode_now(),
+            "trades": trades,
+            "open_positions": [
+                row for row in trades if str(row.get("status") or "").upper() != "CLOSED"
+            ],
+            "likes": self._mentor_like_lane(trades, (session, reviewed)),
+            # The three lanes below feed the DORMANT kinds only (`trade_origin`
+            # and `open_position_check` wait on TJ-12, `grader_gap` on TJ-10),
+            # which `pending` never puts on a live card. They are named here so
+            # the seam is one line's work when those packets land.
+            "grader_gaps": (),
+            "decisions": (),
+            "claims": (),
+            "focus_adds": (),
+            "armed": (),
+            "ai_question": self._mentor_ai_question(),
+            "answered": self._mentor_answered(store, (session, reviewed)),
+            "retired": self.trade_mentor_service.retired_subjects(),
+            "carried": getattr(self, "_mentor_carried", ()),
+        }
+
+    @staticmethod
+    def _mentor_like_lane(trades, days) -> list:
+        """The sessions' QUICK likes, each told whether it was then traded.
+
+        The join is by name and SIDE against the same two sessions' trades - a
+        LONG like says nothing about a SHORT entry - and it is done here rather
+        than in the registry so the trigger stays pure.
+        """
+        try:
+            from pathlib import Path
+
+            from project_paths import TRADER_ANNOTATIONS_FILE
+            from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
+
+            rows = load_annotations(
+                Path(TRADER_ANNOTATIONS_FILE), event_types=(EVENT_LIKE_CLAIM,)
+            )
+        except Exception:  # noqa: BLE001 - a missing log asks nothing
+            logging.debug("Like lane unreadable.", exc_info=True)
+            return []
+        wanted = {str(day)[:10] for day in days if str(day or "").strip()}
+        traded: set[tuple[str, str]] = set()
+        for trade in trades:
+            symbol = str(trade.get("symbol") or "").strip().upper()
+            side = str(trade.get("direction") or "").strip().upper()
+            if symbol and side:
+                traded.add((symbol, side))
+        lane: list[dict] = []
+        for row in rows:
+            if str(row.get("session_date") or "")[:10] not in wanted:
+                continue
+            symbol = str(row.get("symbol") or "").strip().upper()
+            side = str(row.get("side") or "").strip().upper()
+            side = "LONG" if side.startswith("LONG") else "SHORT" if side.startswith("SHORT") else ""
+            enriched = dict(row)
+            if symbol and side and (symbol, side) in traded:
+                enriched["matched_trade_id"] = f"{symbol}:{side}"
+            lane.append(enriched)
+        return lane
+
+    @staticmethod
+    def _mentor_ai_question() -> dict:
+        """Last night's coaching question and its click options, or `{}`.
+
+        ONE walk of the narrations folder - the card's own legacy line reads the
+        same newest file, and it is hidden when this becomes a click.
+        """
+        try:
+            import json
+            from pathlib import Path
+
+            from project_paths import MARKET_STORY_NARRATIONS_DIR
+
+            for path in reversed(sorted(Path(MARKET_STORY_NARRATIONS_DIR).glob("*.json"))):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                narration = payload.get("narration") if isinstance(payload, dict) else None
+                if not isinstance(narration, dict):
+                    continue
+                question = str(narration.get("mentor_question") or "").strip()
+                if not question:
+                    continue
+                options = narration.get("mentor_question_options") or ()
+                return {
+                    "question": question,
+                    "options": tuple(str(item) for item in options if str(item or "").strip()),
+                }
+        except Exception:  # noqa: BLE001 - a degraded night asks nothing
+            logging.debug("Overnight Mentor question unreadable.", exc_info=True)
+        return {}
+
+    @staticmethod
+    def _mentor_answered(store, days) -> dict:
+        """Which questions already have an answer, so none is asked twice.
+
+        Two stores, because two kinds file their answers as the trader's own
+        dated Market Journal row (`day_close`, `ai_question`) and the rest as
+        append-only annotation rows. Both reads are bounded to the sessions a
+        question can be about.
+        """
+        answered: dict[str, dict] = {}
+        import mentor_questions
+
+        for day in days:
+            if not str(day or "").strip():
+                continue
+            try:
+                rows = store.list_opportunity_events(
+                    event_type=mentor_questions.EVENT_MENTOR_ANSWER,
+                    trade_date=str(day)[:10],
+                    limit=1000,
+                )
+            except Exception:  # noqa: BLE001
+                logging.debug("Mentor answers unreadable for %s.", day, exc_info=True)
+                continue
+            for row in rows:
+                payload = row.get("payload") or {}
+                kind = str(payload.get("mentor_question_kind") or "")
+                subject_id = str(payload.get("subject_id") or "")
+                if kind and subject_id:
+                    answered[f"{kind}:{subject_id}"] = {
+                        "answered_at": str(row.get("occurred_at") or "")[:10]
+                    }
+        try:
+            from ui.services.market_journal_service import shared_journal_service
+
+            for day in days:
+                if not str(day or "").strip():
+                    continue
+                for row in shared_journal_service().entries_for(str(day)[:10]):
+                    payload = (row.get("mentor") or {}).get("mentor_question") or {}
+                    kind = str(payload.get("mentor_question_kind") or "")
+                    subject_id = str(payload.get("subject_id") or "")
+                    if kind and subject_id:
+                        answered[f"{kind}:{subject_id}"] = {
+                            "answered_at": str(payload.get("answered_at") or "")[:10]
+                            or str(day)[:10]
+                        }
+        except Exception:  # noqa: BLE001 - a missing journal answers nothing
+            logging.debug("Mentor journal answers unreadable.", exc_info=True)
+        return answered
 
     def _auto_mode_now(self) -> str:
         """The Auto Pilot mode, or `""` when it cannot be read.
