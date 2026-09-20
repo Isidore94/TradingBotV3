@@ -5133,6 +5133,193 @@ entry, so a host reading `result["entry"]` reads nothing.
 
 ---
 
+## TJ-14B - the card asks for what the desk is missing, and nothing else (2026-09-20, packet TJ-14B)
+
+The trader's words (2026-09-19): *"We don't need to run every question every hour but if we
+need more data make trade mentor ask me for it. I'm happy to click boxes or give my
+responses but then I expect the AI to take it from there."* TJ-14 items 2-5. Branch
+`claude/tj14b-mentor-questions`, tip `cfe137d1`, merged `161e905c` into
+`lead/p033-integration2`; not on `main`.
+
+**The registry.** `scripts/mentor_questions.py` is PURE - no store, no Qt, no clock; every
+lane arrives in the `state` mapping the caller built, because a trigger that opened the
+journal would be a second opinion about it and a read on whatever thread built the card.
+Each `QuestionKind` declares its trigger (a measured gap, never a clock alone), its click
+options, the store it `writes`, its `cadence` / `expiry`, its `priority` and - the point of
+the whole thing - its `consumer` and the `answer_key` that consumer reads.
+`consumer_report()` resolves the dotted consumer and statically asks whether that reader
+touches the key. **The probe is an `ast` walk of the consumer's SOURCE and deliberately NOT
+a call**: the key counts only as a string constant used in CODE (a subscript, a call
+argument, a comparison, a keyword value), so a comment, a docstring and a bare string
+statement are all refused - and a probe that CALLED the consumer and looked for the value in
+its output would pass for `json.dumps`, which imports, is callable, and will never read a
+Mentor answer. Both of the reviewer's foolers are now tests (`tests/test_tj14b_registry.py`).
+
+**A question is ASKED only when its answer has a reader** (decision 0021 answer 28; lead
+decision, 2026-09-19). FOUR kinds ship DORMANT with the packet that builds their reader:
+`trade_origin` and `open_position_check` wait on **TJ-12** (the Process line and the
+long-hold rows - `trade_origin.planned_state` has no reader outside its own module, and
+`walkaway_day.LONG_HOLD_SESSIONS` only sets a `not_judged_reason` on a CLOSED trade),
+`grader_gap` waits on **TJ-10** (nothing emitted `needs_trader_input` when the packet was
+written; TJ-10 has since merged on this branch and the field exists, so waking it is a small
+follow-up), and `quick_like_followup` waits on **TJ-14C** - the fourth, found in the review:
+its answer is an `opportunity_events` row and its named consumer
+`ui.annotations.like_cohort.like_pick_rows` reads `claimed_setup_id` only off
+`trader_annotations.jsonl` rows, so the KEY is genuinely read, the STORE is not joined, and
+the live log holds 46 quick likes - the trader really would have been asked. `pending()`
+never returns a dormant kind on a live card; `consumer_report` reports it as `dormant` with
+the packet named. **No shim reader was written**: a reader nobody calls is the same lie the
+walk exists to catch. Waking one is a one-field edit (`dormant_until=""`) plus the lane in
+`MainWindow._mentor_question_state`, which already names all five of them.
+
+**The budget of three.** Beyond TJ-14A's forced prediction rows and TJ-9's forced
+`trade_label` section - both registered, both `budgeted=False` - a card carries at most
+three questions, ranked by `priority` then kind. The remainder is COUNTED on the card ("2
+more waiting") and carried on the window to the next card: never dropped, never a fourth. A
+carried subject whose lane arrives empty next hour is still owed - a question leaves only
+when it is answered or retired. Cadence decides "answered": `once` forever, `weekly` per
+exchange week, `daily` per session, `per_card` never. AWAY returns an empty card - forced
+rows included, because a card nobody saw is not a question.
+
+**`Stop asking this` retires ONE subject.** `TradeMentorService.stop_asking` is the single
+writer, `retired_subjects()` the reader, both persisted in `trade_mentor_slots.json` beside
+the slot records. That file lives under `PERSISTENT_DATA_DIR` (`C:\TradingBotData`), not
+`%LOCALAPPDATA%`, so the retired subjects and the day's pull tally survive a machine-cache
+wipe as well as a restart. It is never stored as an ANSWER: filing `stop_asking_this` where
+a setup name belongs would count it forever.
+
+**Fills by day, and the ONE owner.** `mentor_questions.pre_card_pull` holds the whole policy
+- `PULLS_PER_DAY_CAP` = 3 (a normal session carries six cards, so a cap of six is no cap),
+`PULL_FAILURES_PER_DAY_CAP` = 2, `PRE_CARD_PULL_DAYS` = 2 (today, for a fill made this
+morning, and yesterday for a late post), a tally keyed on the DAY that resets on the next
+one, a corrupt tally read as EMPTY and rewritten clean, AWAY refused, and a service that is
+already running spending the attempt without counting a failure. It CALLS
+`JournalImportService` (its own `QThread`, Questrade only, the desk's single caller of the
+refresh chain) and **never refreshes a token**. It never raises: the card the trader is
+being interrupted for is worth more than the fills it wanted, and a fill a late pull lands
+is asked about on the NEXT card. TJ-9's `morning_import_retry` now goes THROUGH it and keeps
+its own once-a-morning rule, whose date is parked in the same persisted tally - which closes
+TJ-9's advisory that `_journal_retry_date` lived only in memory, where a restart before
+10:00 allowed a second morning pull. **IBKR has no day leg at all** and the card still says
+so. *Was an hourly Questrade pull safe?* The chain rotates on every refresh and two
+consumers on one machine snapped it on 2026-08-25, but `_authorized_get` refreshes only when
+the access token is missing or expired or a 401 arrives AND the stored token has not already
+moved - so N pulls a day is not N rotations. A small capped number is safe; the cap is the
+conservative shape either way, and the failure cap stops the day rather than trying once
+more. **There was no per-day failure cap anywhere in the repository before this packet** -
+`journal_importers.refresh_access_token` has the lock, the re-read inside it and the one
+atomic save, and no counter of any kind; the only cap that existed was `ai_jobs/runner.py`'s
+`max_attempts=3` on the nightly `journal_import` SLOT, which is one night's retry budget.
+
+**ONE card starts AT MOST ONE import, and the three attempts are RESERVED and SPACED.** When
+TJ-9's three-day morning catch-up is owed (the reviewed session's statement has not landed
+and nothing was retried today) it goes FIRST and the pre-card pull is skipped on that card -
+three days cover today too - and it does not spend the pre-card cap. `last_retry` is stamped
+**only when an import actually started**: a refused or busy start leaves the morning owed.
+Otherwise the pre-card pull runs, and only on one of the day's three reserved cards
+(`pull_slot_ids`): the 09:00 card (the trade check's own hour), the middle card between it
+and the close, and the LAST card - read off the session's REAL slot list, so an early close
+has no middle card and simply forfeits that attempt rather than rolling it earlier.
+Measured through the real `MainWindow._show_trade_mentor_prompt` with the reviewed session
+uncovered: the six slots of 2026-09-14 (07 / 08 / 09 / 10 / 11 / 12 Pacific) call the import
+service with days `[3, 2, 2, 2]` - one uncapped catch-up at 07:00, then the three pre-card
+pulls at 09:00, 11:00 and 12:00; the four slots of the 2026-11-27 early close (07, 08, 09,
+12) start two pulls, the middle attempt forfeited. The wording is **three pre-card plus one
+catch-up**.
+
+**Same-session fills, and the merge rule.** `build_task` lists today's unlabelled fills
+beside the reviewed session's, deliberately NOT gated on import coverage - today's statement
+does not exist yet, and waiting for it is exactly how every live label came to be
+`recalled_after`. `save_answers` stamps `label_provenance` from
+`trade_origin.label_provenance` (asked with no setup, so only `same_session` and
+`recalled_after` are reachable; `claimed_before_entry` stays `confirm_setup`'s to decide) and
+writes the BOOLEAN that matches instead of the hard-coded `recalled_after_session: True`
+every row used to carry. **A DATE-ONLY first fill is never `same_session`**: it reads
+`recalled_after` with `label_provenance_reason` saying why - a broker file is authoritative
+for money and blind to time, so there is no moment for a label to have been made before.
+Every delivered slot of the session hands the card a FRESH `TradeCheckTask` and the card
+MERGES it: a trade row already on the card keeps its exact widget objects and their current
+values (never rebuilt), a trade the fresh task names and the card does not is ADDED after
+them, a row that is no longer owed is dropped, the heading and the freshness line are ALWAYS
+rewritten, and the Save gate is recomputed over every row now on the card. Each trade's
+widgets live in ONE container so a single trade can join or leave without touching another,
+and every block NAMES its session (`AAA LONG - today (2026-09-14)`, `BBB SHORT -
+2026-09-11`) - because `same_session` versus `recalled_after` is the whole point of asking on
+the day, and a row that says only the symbol cannot show it.
+
+**The AI question.** `NARRATION_JSON_SCHEMA` gains `mentor_question_options` (array,
+`maxItems` 4, string items, `maxLength` 60 - nowhere near the 2,000 behind gate #144) and the
+narration is VALIDATED against it: a five-option output is rejected WHOLE
+(`degraded_no_narrative`) and the last verified file stays byte-identical. The field is
+OPTIONAL, so a night that emits none is unaffected. On the card the overnight question stops
+being the `One thing to test: ...` line printed on every card forever with no options and no
+answer: it becomes ONE click a day whose answer is a dated Market Journal row, and the legacy
+line is hidden whenever the click is offered so it is never asked twice.
+
+**The three review rounds: NO-GO, NO-GO, GO.** All three were driven by reproduction through
+the real Qt slot.
+
+* **Round 1 (NO-GO, three blockers).** (1) The two-day pre-card pull started first, the
+  import service's `running` guard refused the three-day morning catch-up, and
+  `morning_import_retry` stamped `last_retry` anyway - so a Monday whose Friday-night import
+  failed never reached back to Friday. (2) First-come spent the whole day's budget by the
+  08:00 card, so no fill after 11:00 ET was ever imported and `same_session` - the label the
+  packet exists to make reachable - was unreachable all afternoon while the card kept asking.
+  (3) `quick_like_followup` named a consumer that reads its key off another store: the fourth
+  dormant kind. The round also produced the AST probe (the reviewer's two foolers), the
+  corrupt-tally rule, building the trade section BEFORE the pull path so nothing there can
+  cost TJ-9's forced questions, `auto_mode` passed into `morning_import_retry` so AWAY
+  refuses at both seams, and the like lane bounded to the sessions a question can be about
+  instead of walking the whole append-only annotation log on the Qt thread every prompt.
+* **Round 2 (NO-GO, one blocker).** `set_trade_check` returned early on a not-ready journal
+  and drew NOTHING - including for the fills the desk had already SEEN today, which are
+  exactly the mornings `same_session` matters most on. The question widgets became one shared
+  builder used by both branches; a not-ready card with nothing seen today still says
+  `journal not ready` and asks nothing, byte-identical to before.
+* **Round 3 (NO-GO, one blocker, then GO at `cfe137d1`).** Once the 09:00 not-ready card drew
+  answer widgets for today's own fills, `open_answers_session()` answered with the session
+  and `MainWindow._show_trade_mentor_prompt` returned before `set_trade_check` on every later
+  slot - only 09:00 carries kind `m5_trades` - so the REVIEWED session's trades were never
+  asked about that day and the card kept printing `journal not ready` with a freshness date
+  that had gone stale. The early return protected the trader's half-set widgets and nothing
+  else was allowed to move because of it; the protection now lives in the MERGE, row by row,
+  where it cannot also freeze the words above the rows.
+
+**Item 5 - "the AI takes it from there": the manual-step audit.** *Automated or removed by
+this packet:* answering the overnight coaching question (a sentence printed on every card
+with no path to a stored row at all, now one click a day); labelling a fill on the day it
+happened (`build_task` only ever reviewed `previous_exchange_session`, so the middle
+provenance was unreachable and every live label was `recalled_after`); stopping a question
+the trader does not want (there was no mechanism - the only way was to keep ignoring it);
+and looking for the day's fills (the only day-time pull was TJ-9's morning retry, and only
+after a failed import). *Kept, already automated:* TJ-9's morning retry, now routed through
+the one owner rather than beside it. *Manual BY DESIGN and staying manual:* the
+`review_policy` sign-off; `python -m ai_jobs.digest approve-audit` (gate #144 / Q4's second
+half); the **Questrade token repair** - the trader pastes a token and `refresh_access_token`
+never clears a rejected one, so TJ-14B deliberately stops pulling after two failures a day
+rather than trying to repair it; and a CONFIRM of a setup tag, which is the trader's click
+through the Journal's own writer (TJ-14B's quick-like follow-up writes no annotation row at
+all). *Findings rather than defects:* the four dormant kinds - their answers are not asked
+for, rather than asked for and dropped - and **`confirm_setup` can still stamp `same_session`
+for a date-only fill**. TJ-14B fixed that in `save_answers` by refusing `same_session` when
+`trade_origin.first_fill_at` is `None`; `confirm_setup` calls `trade_origin.label_provenance`
+directly and was left alone, because `trade_origin.py` is TJ-9's pure rule and changing it
+moves every caller at once. The rule belongs in `label_provenance` itself - one line for
+TJ-12 or a follow-up.
+
+**Lead decisions ratified 2026-09-20, each the trader's to overrule.** (a) The day's pre-card
+import pulls are THREE, reserved for the 09:00, 11:00 and last cards, plus ONE uncapped
+morning catch-up that goes first - the reviewer measured every pull spent by 08:00 otherwise.
+(b) The card MERGES a fresh task, so a not-ready morning becomes yesterday's questions while
+half-set widgets survive - freezing the section to protect the widgets also froze the words
+above them. (c) A same-day answer is labelled `same_session` and a date-only fill never is -
+the middle provenance was unreachable on every live row, and a broker file has no moment a
+label could have been made before.
+
+Live gate **#159**'s TJ-14B clauses and the new gate **#163** are owed, on real sessions.
+
+---
+
 ## TJ-9Q - a sold put is recorded backwards, and the type is never read (2026-09-19, split out of TJ-9)
 
 Measured by the TJ-9 tester on a READ-ONLY copy of `trade_journal.sqlite3`, which refuted

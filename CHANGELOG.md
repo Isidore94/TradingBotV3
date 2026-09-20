@@ -1955,6 +1955,60 @@ They are evidence and must not be loaded as context.
   instead of 4, so a session with more than 32 other decided names needs a second call; no D1
   leg, zero IB. Shadow of nothing: no detector, score, alert, watchlist, Focus, review queue or
   `review_policy.json` is reachable from it. Rule: DESK_INTERNALS "TM" (2026-09-19 addendum).
+- **The Mentor question registry, the budget of three and the day's fills (TJ-14B items 2-5,
+  2026-09-20, branch `claude/tj14b-mentor-questions`, merged `161e905c` into
+  `lead/p033-integration2`).** `scripts/mentor_questions.py` is PURE (no store, no Qt, no
+  clock - every lane arrives in the `state` mapping the caller built) and is the card's SINGLE
+  description of every question it may carry: nine kinds, each naming its trigger (a measured
+  gap, never a clock alone), its click options, the store it `writes`, its `cadence` /
+  `expiry`, its `priority` and - the point of the registry - the `consumer` that reads its
+  answer plus the `answer_key` that consumer reads. `consumer_report()` resolves the dotted
+  consumer and walks its SOURCE with `ast` to ask whether the key is used in CODE (a subscript,
+  a call argument, a comparison, a keyword value); a comment, a docstring and a bare string
+  statement are all refused, and a probe that CALLED the consumer would pass for `json.dumps`.
+  **A question is asked only when its answer has a reader:** four kinds are registered in full
+  and carry `dormant_until` naming the packet that builds it - `trade_origin` and
+  `open_position_check` (TJ-12), `grader_gap` (TJ-10), `quick_like_followup` (TJ-14C).
+  `pending()` never returns a dormant kind on a live card, `consumer_report` reports it as
+  `dormant` with the packet named, and NO shim reader was written. **Budget:** beyond TJ-9's
+  forced `trade_label` section and TJ-14A's forced prediction rows (`budgeted=False`), a card
+  asks at most `BUDGET` = 3 questions by `priority` then kind; the rest are COUNTED on the card
+  and CARRIED to the next one, never dropped, never a fourth, and AWAY asks nothing at all.
+  `Stop asking this` (`STOP_ASKING`, the fifth option beside the four `ANSWER_STATES`) retires
+  ONE subject through `TradeMentorService.stop_asking` - the single writer - persisted in
+  `trade_mentor_slots.json` under `PERSISTENT_DATA_DIR`, so it survives a restart and a machine
+  cache wipe, and it is never stored as an ANSWER. **The day's fills:** `pre_card_pull` is the
+  ONE owner of the desk's day-time Questrade attempts (`PULLS_PER_DAY_CAP` 3,
+  `PULL_FAILURES_PER_DAY_CAP` 2, `PRE_CARD_PULL_DAYS` 2, one tally keyed on the day and reset
+  by the next, a corrupt tally read as empty and rewritten clean) and ONE card starts AT MOST
+  ONE import: TJ-9's three-day morning catch-up goes FIRST when it is owed, outside the cap,
+  with `last_retry` stamped only when an import actually STARTED, and otherwise the two-day
+  pre-card pull runs on one of the day's three RESERVED, SPACED cards (`pull_slot_ids`: the
+  09:00 card, the middle card and the LAST card, read off the session's real slot list, so an
+  early close forfeits the middle attempt and never rolls it earlier). It calls
+  `JournalImportService` (its own `QThread`, Questrade only), never refreshes a token itself,
+  never runs in AWAY and never raises; the card never waits, and a fill a late pull lands is
+  asked about on the NEXT card. IBKR has no day leg and the card says so.
+  **Same-session fills:** `trade_mentor_trade_check.build_task` lists today's unlabelled fills
+  BESIDE the reviewed session's and is not gated on import coverage, every trade block naming
+  its own session; the card MERGES each delivered slot's fresh task (a row already on the card
+  keeps its exact widgets and values, a new one is added after them, a row no longer owed is
+  dropped, the heading and freshness line are always rewritten, the Save gate recomputed over
+  all rows); and `save_answers` writes `label_provenance` from `trade_origin.label_provenance`
+  with the BOOLEAN `recalled_after_session` that matches, instead of the constant `True` every
+  row used to carry - a DATE-ONLY first fill is never `same_session` and says why in
+  `label_provenance_reason`. **The AI question:** `market_story_narration.NARRATION_JSON_SCHEMA`
+  gains the OPTIONAL `mentor_question_options` (array, `maxItems` 4, string items, `maxLength`
+  60) and VALIDATES it - a five-option night is rejected WHOLE (`degraded_no_narrative`) and the
+  prior verified file stands byte-identical - so the overnight question becomes ONE click a day
+  whose answer is a dated Market Journal row instead of the `One thing to test: ...` line
+  printed on every card forever with no options and no answer; the legacy line is hidden
+  whenever the click is offered. `selftest.LAZY_ENGINE_MODULES` gains `mentor_questions`
+  (source selftest 92/92 -> 93/93), because the registry is imported lazily inside the Qt slot
+  whose guard would swallow a missing module silently. Shadow of nothing: no detector, score,
+  gate, alert, watchlist, Focus, review queue or `review_policy.json` is reachable from it.
+  Tests: `tests/test_tj14b_*.py`. Rule: DESK_INTERNALS "TJ-14B". Gate #159's TJ-14B clauses
+  and the new gate #163.
 - **The Journal's Trades splitter opens at its declared 3:2 and the tag-review row no longer
   eats the tab (WS-J1, WISHLIST item 1 leftover, 2026-09-13, sweep branch).** Two layout defects
   in `scripts/ui/panels/journal/trades_tab.py`: the `QSplitter` declared `setStretchFactor` 3:2
@@ -3168,6 +3222,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-20 - TJ-14B: the Mentor asks only what something will read - a question registry with named consumers, a budget of three, and fills by day (branch `claude/tj14b-mentor-questions`, tip `cfe137d1`, merged into `lead/p033-integration2` `161e905c`)
+
+Trader, 2026-09-19: *"We don't need to run every question every hour but if we need more data make trade mentor ask me for it. I'm happy to click boxes or give my responses but then I expect the AI to take it from there."* TJ-14 items 2-5, built as the pure `scripts/mentor_questions.py` - no store, no Qt object, no clock, every lane arriving inside the `state` mapping the caller built, because a trigger that opened the journal would be a second opinion about it on whatever thread built the card. Each of the nine `QuestionKind`s declares its trigger, its click options, the store it `writes`, its `cadence` / `expiry`, its `priority` and the `consumer` plus `answer_key` that make the question worth asking; `consumer_report()` resolves the dotted consumer and walks its SOURCE with `ast`, counting the key only where it is used in CODE - the probe is deliberately NOT a call, because a probe that called the consumer and looked for the value would pass for `json.dumps`, which imports, is callable and will never read a Mentor answer. **A question is ASKED only when its answer has a reader** (decision 0021 answer 28; lead decision 2026-09-19): four kinds ship REGISTERED and DORMANT with the packet that builds their reader - `trade_origin` and `open_position_check` (TJ-12: `trade_origin.planned_state` has no reader outside its own module and `walkaway_day.LONG_HOLD_SESSIONS` only sets a `not_judged_reason` on a CLOSED trade), `grader_gap` (TJ-10, whose `grader_gap` field now exists on every grade row) and `quick_like_followup` (TJ-14C: `like_cohort.like_pick_rows` genuinely reads `claimed_setup_id`, but only off `trader_annotations.jsonl` rows, so the KEY is read and the STORE is not joined) - and **no shim reader was written, because a reader nobody calls is the same lie the walk exists to catch**; waking one is `dormant_until=""` plus its lane in `MainWindow._mentor_question_state`, which already names them all. Beyond TJ-9's forced trade section and TJ-14A's forced prediction rows a card asks at most THREE questions by priority, the remainder counted on the card and carried to the next one - never dropped, never a fourth - and AWAY asks nothing; `Stop asking this` retires ONE subject through `TradeMentorService.stop_asking`, persisted in `trade_mentor_slots.json` on the durable tier. **Three review rounds by reproduction through the real Qt slot (NO-GO, NO-GO, GO).** Round 1's blockers: the two-day pre-card pull pre-empted and CONSUMED TJ-9's three-day morning catch-up (the import service refused the second start and `morning_import_retry` stamped `last_retry` anyway, so a Monday whose Friday-night import failed never reached back to Friday), and first-come spent the whole day's budget by the 08:00 card, so no fill after 11:00 ET was ever imported while the card went on asking - `same_session`, the label the packet exists to make reachable, was unreachable every afternoon. ONE card now starts AT MOST ONE import, the catch-up goes first and outside the cap with `last_retry` stamped only when an import actually started, and the three attempts are RESERVED and SPACED (`pull_slot_ids`: the 09:00 card, the middle card, the last card, read off the session's real slot list; an early close forfeits the middle attempt rather than rolling it earlier). Measured through `MainWindow._show_trade_mentor_prompt` over all six slots of 2026-09-14 with the reviewed session uncovered, the import service is called with days `[3, 2, 2, 2]`; over the four slots of the 2026-11-27 early close, two pulls. Round 1 also sharpened the `reads` probe into the AST walk (both of the reviewer's foolers - a key named only in a comment and a docstring, and a body returning the key as a bare string - are now tests), made a corrupt tally read as empty and rewritten clean, built the trade section BEFORE the pull path so nothing there can cost TJ-9's forced questions, passed `auto_mode` into `morning_import_retry` so AWAY refuses at both seams, and bounded the like lane to the sessions a question can be about instead of walking the whole annotation log on the Qt thread. Round 2's blocker: `set_trade_check` returned early on a not-ready journal and drew NOTHING, so the mornings `same_session` matters most on asked nothing at all; the question widgets became one shared builder and a not-ready card with nothing seen today is byte-identical to before. Round 3's blocker: once the 09:00 not-ready card drew today's own fills, the host's `open_answers_session()` early return skipped `set_trade_check` on every later slot, so the REVIEWED session's trades were never asked about that day and the stale `journal not ready` line stayed up - the card now MERGES each delivered slot's fresh task row by row (existing widgets and their half-set values kept, a new trade added after them, a row no longer owed dropped, heading and freshness line always rewritten, the Save gate recomputed over every row), each block naming its session (`AAA LONG - today (2026-09-14)` / `BBB SHORT - 2026-09-11`). `save_answers` writes `label_provenance` from `trade_origin.label_provenance` with the boolean `recalled_after_session` that matches, and a DATE-ONLY first fill is never `same_session` - a broker file is authoritative for money and blind to time, so there is no moment for a label to have been made before. `NARRATION_JSON_SCHEMA` gains the optional `mentor_question_options` (=<4 strings, `maxLength` 60, nowhere near gate #144's 2,000) and validates it: a five-option night is rejected WHOLE and the prior verified file stands byte-identical, while a night that emits none is unaffected. `selftest.LAZY_ENGINE_MODULES` gains `mentor_questions` (source selftest 92/92 -> 93/93). The manual-step audit (item 5) is in DESK_INTERNALS "TJ-14B": four steps automated or removed, one kept, four manual BY DESIGN (the `review_policy` sign-off, `digest approve-audit`, the Questrade token repair, and the trader's own CONFIRM of a setup tag), and two findings - the dormant kinds, and `confirm_setup` still stamping `same_session` for a date-only fill because `trade_origin.py` is TJ-9's pure rule and moving it moves every caller at once (a line for TJ-12). Merged into `lead/p033-integration2`; **not on `main`**. Live gate #159's TJ-14B clauses and the new gate #163 owed. Long form: DESK_INTERNALS "TJ-14B".
 
 ### 2026-09-20 - TJ-10: the read grader, the prediction ledger and the congruence lines - objective Python, no model (branch `claude/tj10-read-grader`, tip `2967e4a6`, merged into `lead/p033-integration2` `57b44ca9`, integration fix `3e52d94f`)
 
