@@ -1148,18 +1148,23 @@ class MainWindow(QMainWindow):
             self._show_mentor_questions(slot, store=store)
 
             is_check_slot = str(getattr(slot, "kind", "")) == KIND_M5_TRADES
-            # ONLY a section with answer widgets is protected from a rebuild -
-            # that is the one the trader could already have touched. A visible
-            # LABEL is not: the `journal not ready` line has nothing to lose by
-            # being rebuilt, and it has a date in it that goes stale the moment
-            # the morning retry lands the fills. Gating on the label meant a
-            # journal that became ready after the 09:00 card was never asked
-            # about all day, while the card kept printing a false freshness
-            # date.
-            answers_open = str(card.open_answers_session() or "") == str(slot.session)
-            if not is_check_slot and answers_open:
-                return
-            if not is_check_slot and not self._trade_check_is_owed(check, slot):
+            # EVERY delivered slot of the session hands the card the FRESH
+            # task; the card MERGES it (`set_trade_check`), keeping the exact
+            # widgets of a row the trader may already have touched, adding a
+            # trade it does not hold yet, dropping one that is answered, and
+            # rewriting the heading every time.
+            #
+            # The host used to return early whenever the card held ANSWER
+            # WIDGETS, which was the only protection those half-set combos had.
+            # Once the 09:00 not-ready card started drawing today's own fills
+            # (TJ-14B) that early return fired on every later slot of the day:
+            # the reviewed session's trades were never asked about at all, and
+            # the card went on printing `journal not ready` and a freshness
+            # date that was no longer true. The protection now lives in the
+            # merge, which is where it can protect the widgets WITHOUT also
+            # freezing the words above them.
+            carrying = str(card.trade_check_session() or "") == str(slot.session)
+            if not is_check_slot and not carrying and not self._trade_check_is_owed(check, slot):
                 return
 
             card.set_trade_check(task, store=store)

@@ -281,6 +281,13 @@ class TradeMentorCard(QWidget):
         #: trade_id -> field -> (state combo, free-text box)
         self._answer_inputs: dict[str, dict[str, tuple[QComboBox, QLineEdit]]] = {}
         self._trade_questions: dict[str, Any] = {}
+        #: trade_id -> the heading that names its symbol, side and SESSION.
+        self._trade_headings: dict[str, QLabel] = {}
+        #: trade_id -> the ONE container widget holding that trade's block.
+        #: A block exists so a later slot can ADD a trade beside the rows the
+        #: trader has already touched, and drop one that is no longer owed,
+        #: without rebuilding a single widget that already has a value in it.
+        self._trade_blocks: dict[str, QWidget] = {}
         self._raw_trade_inputs: dict[str, QPlainTextEdit] = {}
         self._ai_draft_buttons: dict[str, QPushButton] = {}
         self._ai_drafts: dict[str, dict[str, dict[str, Any]]] = {}
@@ -983,6 +990,8 @@ class TradeMentorCard(QWidget):
         self._setup_confirm_buttons = {}
         self._setup_choice_boxes = {}
         self._setup_confirmed = set()
+        self._trade_blocks = {}
+        self._trade_headings = {}
         self.save_answers_button.setEnabled(False)
         while self._trade_check_layout.count():
             item = self._trade_check_layout.takeAt(0)
@@ -990,6 +999,29 @@ class TradeMentorCard(QWidget):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
+
+    def _drop_trade_block(self, trade_id: str) -> None:
+        """Take ONE trade's block off the card and forget its widgets.
+
+        A trade leaves the card because it is no longer owed - its fields were
+        answered and saved - and it leaves ALONE: every other block keeps the
+        widgets the trader has been typing into.
+        """
+        key = str(trade_id)
+        block = self._trade_blocks.pop(key, None)
+        if block is not None:
+            self._trade_check_layout.removeWidget(block)
+            block.setParent(None)
+            block.deleteLater()
+        self._answer_inputs.pop(key, None)
+        self._trade_questions.pop(key, None)
+        self._raw_trade_inputs.pop(key, None)
+        self._ai_draft_buttons.pop(key, None)
+        self._ai_drafts.pop(key, None)
+        self._setup_confirm_buttons.pop(key, None)
+        self._setup_choice_boxes.pop(key, None)
+        self._trade_headings.pop(key, None)
+        self._setup_confirmed.discard(key)
 
     def set_trade_check(self, task, store=None) -> None:
         """Build the 09:00 card's second section from `build_task`'s answer.
@@ -1009,44 +1041,64 @@ class TradeMentorCard(QWidget):
         explicit answer states. That is the whole of "forced": the trader can
         say `not remembered`, which is a complete answer, but they cannot leave
         the morning blank by closing the card.
+
+        **Every delivered slot of the session hands this a FRESH task, and the
+        section MERGES rather than choosing between keeping and rebuilding**
+        (TJ-14B fix round). A row already on the card keeps its exact widgets
+        and their values, a trade the fresh task names and the card does not
+        is ADDED, a row that is no longer owed is dropped, and the heading is
+        always rewritten from the fresh task. The host used to return early
+        whenever the card held answer widgets, so a 09:00 card that had drawn
+        today's own fills was never told the statement had landed: the reviewed
+        session's trades were never asked about that day and the card went on
+        printing `journal not ready` and a stale freshness date.
         """
         import trade_mentor_trade_check as check
 
-        self._clear_trade_check()
         self._trade_store = store
         if task is None:
+            self._clear_trade_check()
             self.trade_check_label.setVisible(False)
             self.trade_check_box.setVisible(False)
             self.save_answers_button.setVisible(False)
             self._trade_check_session = ""
             return
-        self._trade_check_session = str(
-            getattr(self._slot, "session", "") or ""
-        )
+        session = str(getattr(self._slot, "session", "") or "")
+        if not session or session != self._trade_check_session:
+            # A different day's card - or a card with no session to be
+            # identified by - has nothing to merge with. A question about
+            # Friday's trades must never keep its widgets into Wednesday.
+            self._clear_trade_check()
+        self._trade_check_session = session
         same_session = tuple(getattr(task, "same_session_trade_ids", ()) or ())
         if not getattr(task, "journal_ready", False):
-            self.trade_check_label.setText(
+            opening = (
                 f"Yesterday's trades ({task.reviewed_session}): "
                 f"{task.reason or check.REASON_NOT_READY} - "
-                f"{self._freshness_phrase(task)}. The broker statement has not "
-                "landed, so nothing is asked yet; this comes back on the next "
-                "card. The day pull is Questrade only - IBKR has no day leg."
-                + (
-                    f" {len(same_session)} fill(s) seen TODAY are asked below - "
-                    "today's statement never lands mid-session, and a fill the "
-                    "desk has already seen is one you can still label."
-                    if task.trades
-                    else ""
-                )
+                f"{self._freshness_phrase(task)}."
             )
-            self.trade_check_label.setVisible(True)
-            if not task.trades:
+            if task.trades:
+                # The heading may not contradict itself: a card that DRAWS
+                # today's fills cannot also say nothing is asked yet.
+                self.trade_check_label.setText(
+                    opening
+                    + " Yesterday's broker statement has not landed, so "
+                    "yesterday's trades are not asked yet and come back on the "
+                    f"next card. {len(same_session)} fill(s) seen TODAY are "
+                    "asked below - today's statement never lands mid-session, "
+                    "and a fill the desk has already seen is one you can still "
+                    "label. The day pull is Questrade only - IBKR has no day leg."
+                )
+            else:
                 # Nothing SEEN either. An empty questionnaire drawn from an
                 # incomplete list is a lie about the session.
-                self.trade_check_box.setVisible(False)
-                self.save_answers_button.setVisible(False)
-                return
-            self._build_trade_questions(task)
+                self.trade_check_label.setText(
+                    opening + " The broker statement has not landed, so nothing "
+                    "is asked yet; this comes back on the next card. The day "
+                    "pull is Questrade only - IBKR has no day leg."
+                )
+            self.trade_check_label.setVisible(True)
+            self._merge_trade_questions(task)
             return
         if not task.trades:
             self.trade_check_label.setText(
@@ -1054,8 +1106,7 @@ class TradeMentorCard(QWidget):
                 f"{self._freshness_phrase(task).capitalize()}."
             )
             self.trade_check_label.setVisible(True)
-            self.trade_check_box.setVisible(False)
-            self.save_answers_button.setVisible(False)
+            self._merge_trade_questions(task)
             return
 
         remainder = (
@@ -1076,70 +1127,123 @@ class TradeMentorCard(QWidget):
             )
         )
         self.trade_check_label.setVisible(True)
-        self._build_trade_questions(task)
+        self._merge_trade_questions(task)
 
-    def _build_trade_questions(self, task) -> None:
-        """One block of widgets per trade the card is asking about.
+    def _merge_trade_questions(self, task) -> None:
+        """Make the card's rows the fresh task's rows, widget by widget.
+
+        Three moves, in this order:
+
+        1. a row whose trade the fresh task no longer names is DROPPED - it was
+           answered and saved, and a question that is already answered must not
+           come back;
+        2. a row that is already here is LEFT EXACTLY AS IT IS. Not re-created,
+           not re-read: the same combo objects with whatever the trader has
+           chosen, and the same typed text. This is what the host's early
+           return used to protect, and it is protected here instead;
+        3. a trade the fresh task names and the card does not is ADDED after
+           the rows already on it - the reviewed session's trades once the
+           statement lands, or a fill seen later in the day.
+
+        Then the Save gate is recomputed over ALL the rows now on the card, so
+        adding a trade at 11:00 greys Save again until that trade is answered
+        too.
+        """
+        owed = {str(question.trade_id): question for question in task.trades}
+        for trade_id in [key for key in self._trade_blocks if key not in owed]:
+            self._drop_trade_block(trade_id)
+        for trade_id, question in owed.items():
+            if trade_id in self._trade_blocks:
+                continue
+            self._add_trade_block(question, task)
+        has_rows = bool(self._answer_inputs)
+        self.trade_check_box.setVisible(has_rows)
+        self.save_answers_button.setVisible(has_rows)
+        self._refresh_save_gate()
+
+    def _add_trade_block(self, question, task) -> None:
+        """One block of widgets for ONE trade the card is asking about.
 
         Shared by the ready branch and the not-ready one: a statement that has
         not landed says nothing about the fills the desk has ALREADY SEEN today
         (TJ-14B), and a card that refused to draw them would make `same_session`
         unreachable on exactly the mornings it matters most.
+
+        Every widget lives inside one container, so a later slot can drop this
+        trade - or add another beside it - without touching anything the trader
+        has already answered.
         """
         import trade_mentor_trade_check as check
 
-        for question in task.trades:
-            self._trade_questions[question.trade_id] = question
-            heading = QLabel(
-                f"{question.symbol} {question.direction}".strip() or question.trade_id
-            )
-            heading.setObjectName("MutedLabel")
-            self._trade_check_layout.addWidget(heading)
-            self._add_setup_confirm(question)
-            raw_box = QPlainTextEdit(self.trade_check_box)
-            raw_box.setMaximumHeight(72)
-            raw_box.setPlaceholderText(
-                "Tell me in one note: why, stop/invalidation, target, and setup. "
-                "Your exact words are saved before local AI fills the draft."
-            )
-            self._trade_check_layout.addWidget(raw_box)
-            ai_button = QPushButton("Fill missing fields with local AI", self.trade_check_box)
-            ai_button.clicked.connect(
-                lambda _checked=False, trade_id=question.trade_id: self._start_ai_draft(
-                    trade_id
-                )
-            )
-            self._trade_check_layout.addWidget(ai_button)
-            self._raw_trade_inputs[question.trade_id] = raw_box
-            self._ai_draft_buttons[question.trade_id] = ai_button
-            fields: dict[str, tuple[QComboBox, QLineEdit]] = {}
-            for name in question.missing:
-                row = QWidget(self.trade_check_box)
-                row_layout = QHBoxLayout(row)
-                row_layout.setContentsMargins(0, 0, 0, 0)
-                row_layout.setSpacing(4)
-                row_layout.addWidget(QLabel(name))
-                combo = QComboBox(row)
-                # "-" first, so a field the trader did not touch stays unasked
-                # rather than being filed as whatever happened to be at index 0.
-                combo.addItem("-", "")
-                for state in check.ANSWER_STATES:
-                    combo.addItem(state.replace("_", " "), state)
-                # The Save gate is a STATE, not a latch: going back to "-"
-                # closes it again, which is why this listens to the combo
-                # rather than counting clicks.
-                combo.currentIndexChanged.connect(self._refresh_save_gate)
-                text_input = QLineEdit(row)
-                text_input.setPlaceholderText("in your own words (optional)")
-                row_layout.addWidget(combo)
-                row_layout.addWidget(text_input, 1)
-                self._trade_check_layout.addWidget(row)
-                fields[name] = (combo, text_input)
-            self._answer_inputs[question.trade_id] = fields
+        trade_id = str(question.trade_id)
+        self._trade_questions[trade_id] = question
+        block = QWidget(self.trade_check_box)
+        block_layout = QVBoxLayout(block)
+        block_layout.setContentsMargins(0, 0, 0, 0)
+        block_layout.setSpacing(self._trade_check_layout.spacing())
+        heading = QLabel(self._trade_heading(question, task))
+        heading.setObjectName("MutedLabel")
+        block_layout.addWidget(heading)
+        self._trade_headings[trade_id] = heading
+        self._add_setup_confirm(question, block, block_layout)
+        raw_box = QPlainTextEdit(block)
+        raw_box.setMaximumHeight(72)
+        raw_box.setPlaceholderText(
+            "Tell me in one note: why, stop/invalidation, target, and setup. "
+            "Your exact words are saved before local AI fills the draft."
+        )
+        block_layout.addWidget(raw_box)
+        ai_button = QPushButton("Fill missing fields with local AI", block)
+        ai_button.clicked.connect(
+            lambda _checked=False, trade_id=trade_id: self._start_ai_draft(trade_id)
+        )
+        block_layout.addWidget(ai_button)
+        self._raw_trade_inputs[trade_id] = raw_box
+        self._ai_draft_buttons[trade_id] = ai_button
+        fields: dict[str, tuple[QComboBox, QLineEdit]] = {}
+        for name in question.missing:
+            row = QWidget(block)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            row_layout.addWidget(QLabel(name))
+            combo = QComboBox(row)
+            # "-" first, so a field the trader did not touch stays unasked
+            # rather than being filed as whatever happened to be at index 0.
+            combo.addItem("-", "")
+            for state in check.ANSWER_STATES:
+                combo.addItem(state.replace("_", " "), state)
+            # The Save gate is a STATE, not a latch: going back to "-"
+            # closes it again, which is why this listens to the combo
+            # rather than counting clicks.
+            combo.currentIndexChanged.connect(self._refresh_save_gate)
+            text_input = QLineEdit(row)
+            text_input.setPlaceholderText("in your own words (optional)")
+            row_layout.addWidget(combo)
+            row_layout.addWidget(text_input, 1)
+            block_layout.addWidget(row)
+            fields[name] = (combo, text_input)
+        self._answer_inputs[trade_id] = fields
+        self._trade_check_layout.addWidget(block)
+        self._trade_blocks[trade_id] = block
 
-        self.trade_check_box.setVisible(True)
-        self.save_answers_button.setVisible(True)
-        self._refresh_save_gate()
+    def _trade_heading(self, question, task) -> str:
+        """`AAPL LONG - today (2026-09-14)` / `MSFT SHORT - 2026-09-11`.
+
+        Which session a trade is from is the whole point of asking on the day:
+        an answer given about today's fill is `same_session` and one about
+        yesterday's is `recalled_after`, and the trader cannot tell the two
+        apart from a row that only says the symbol.
+        """
+        name = f"{question.symbol} {question.direction}".strip() or str(question.trade_id)
+        today_ids = {str(key) for key in (getattr(task, "same_session_trade_ids", ()) or ())}
+        if str(question.trade_id) in today_ids:
+            day = self._trade_check_session or str(getattr(question, "trade_date", "") or "")
+            return f"{name} - today ({day})" if day else f"{name} - today"
+        session = str(getattr(task, "reviewed_session", "") or "") or str(
+            getattr(question, "trade_date", "") or ""
+        )
+        return f"{name} - {session}" if session else name
 
     @staticmethod
     def _freshness_phrase(task) -> str:
@@ -1151,13 +1255,16 @@ class TradeMentorCard(QWidget):
         current = str(getattr(task, "fills_current_to", "") or "")
         return f"fills current to {current}" if current else "no verified import yet"
 
-    def _add_setup_confirm(self, question) -> None:
+    def _add_setup_confirm(self, question, parent=None, layout=None) -> None:
         """One click for the setup, when the machine has something to suggest.
 
         The button is a SUGGESTION until it is pressed. Showing it writes
         nothing - the row stays exactly as the bulk tagger left it - and
         pressing it is the trader's write through the Journal's own writer. A
         trade whose setup the trader already confirmed is never offered one.
+
+        `parent` / `layout` are the trade's own block, so the row leaves the
+        card with that trade and with nothing else.
         """
         import trade_mentor_trade_check as check
 
@@ -1165,7 +1272,9 @@ class TradeMentorCard(QWidget):
         if not guess or "setup" not in tuple(question.missing or ()):
             return
         lane = str(getattr(question, "setup_guess_lane", "") or "")
-        row = QWidget(self.trade_check_box)
+        parent = parent if parent is not None else self.trade_check_box
+        layout = layout if layout is not None else self._trade_check_layout
+        row = QWidget(parent)
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(4)
@@ -1194,9 +1303,14 @@ class TradeMentorCard(QWidget):
         row_layout.addWidget(QLabel("setup"))
         row_layout.addWidget(choice, 1)
         row_layout.addWidget(button)
-        self._trade_check_layout.addWidget(row)
+        layout.addWidget(row)
         self._setup_confirm_buttons[str(question.trade_id)] = button
         self._setup_choice_boxes[str(question.trade_id)] = choice
+
+    def trade_heading_text(self, trade_id: str) -> str:
+        """What ONE trade's block says it is - symbol, side and its session."""
+        heading = self._trade_headings.get(str(trade_id))
+        return heading.text() if heading is not None else ""
 
     def setup_confirm_button(self, trade_id: str):
         """The confirm button offered for one trade, or ``None``."""
@@ -1217,12 +1331,12 @@ class TradeMentorCard(QWidget):
     def open_answers_session(self) -> str:
         """Which session's trade check has ANSWER WIDGETS on the card, or ``""``.
 
-        The host asks this before rebuilding, and it is deliberately narrower
-        than :meth:`trade_check_session`: only a section the trader could
-        already have TOUCHED is worth protecting. A `journal not ready` line is
-        not - it carries a date that goes stale the moment the morning retry
-        lands the fills, and a card that refused to rebuild it never became the
-        questions at all that day.
+        Deliberately narrower than :meth:`trade_check_session`: it answers only
+        for a section the trader could already have TOUCHED. It is no longer
+        the host's rebuild guard - the card MERGES a fresh task now, so the
+        widgets are protected row by row instead of by refusing the whole
+        update, which used to freeze a `journal not ready` line (and its stale
+        date) on the card for the rest of the day.
         """
         return self._trade_check_session if self._answer_inputs else ""
 
