@@ -48,7 +48,14 @@ from typing import Any, Iterable, Mapping, Sequence
 #: The vocabulary's version. It travels on every row so a later vocabulary can
 #: be told apart from this one without re-reading the prose. **Never assert a
 #: literal version in a test** - the same rule the veto vocabulary carries.
-EXTRACTOR_VERSION = "market_thesis_vocab_v1"
+#:
+#: v2 (TJ-10 item 5, 2026-09-19) adds the trend words the trader actually types -
+#: `downtrending`, `uptrending`, `leaking`, `failing`, `breaking down`,
+#: `breaking out`, `holding lows`, and `rejecting the <level>` scoped to the
+#: phrase that means it. Measured over the 49 live notes: 18 read as a direction
+#: under v1, 20 under v2, and no note reverses. A stored row keeps the version it
+#: was extracted under.
+EXTRACTOR_VERSION = "market_thesis_vocab_v2"
 
 #: Two different absences, kept apart. `unstated` is "the trader did not say";
 #: `unknown` is "nobody supplied it" (an imported forecast's creation time).
@@ -129,6 +136,15 @@ _BULLISH_WORDS = (
     "long",
     "buy",
     "buying",
+    # TJ-10 item 5: the trader's own trend words. `holding lows` is a PHRASE -
+    # bare `holding` would fire inside "holding the 15ema", which the trader
+    # writes in the same breath as "downtrending".
+    "uptrending",
+    "trending up",
+    "breaking out",
+    "holding lows",
+    "holding the lows",
+    "higher lows",
 )
 _BEARISH_WORDS = (
     "lose",
@@ -153,6 +169,19 @@ _BEARISH_WORDS = (
     "short",
     "fade",
     "fades",
+    # TJ-10 item 5, the bearish half of the trader's trend words. `rejecting`
+    # and `rejected` are SCOPED to the phrase that means a level rejected them
+    # (lead decision 1, 2026-09-19): bare `rejected` reads "made a higher high
+    # and rejected" as bearish and would take a clear bullish note away.
+    "downtrending",
+    "trending down",
+    "breaking down",
+    "leaking",
+    "failing",
+    "lower highs",
+    "rejecting the",
+    "rejected at",
+    "rejecting at",
 )
 _CAUTIOUS_WORDS = (
     "caution",

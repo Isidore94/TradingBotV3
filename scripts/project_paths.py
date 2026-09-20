@@ -398,6 +398,15 @@ TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
 # the later TJ packets put the session's own M5 bars beside it, and those are
 # not rebuildable once the bars age out of the provider's window.
 DAY_REVIEW_DIR = PERSISTENT_DATA_DIR / "day_review"
+# The read ledger (TJ-10): one append-only JSONL per session, `reads/<date>.jsonl`,
+# holding the graded market reads - what the trader said the market would do, what
+# it did, and the point-in-time context each call was made in. Append-only and
+# never rewritten: a matured horizon is a NEW row naming the one it supersedes, so
+# what the desk knew WHEN stays readable. Durable rather than a cache - the bars a
+# grade was measured from age out of the provider's window - and evidence only:
+# nothing in the running system reads it to detect, score, rank, gate or alert
+# (plan.md sec 5).
+DAY_REVIEW_READS_DIR = DAY_REVIEW_DIR / "reads"
 # Append-only JSONL of the trader's hand-vetted swing picks - "today's best
 # swing targets", typed at the end of a session into the strip under the M5
 # alert list. One row per action: an add carries (session_date, symbol, side,
