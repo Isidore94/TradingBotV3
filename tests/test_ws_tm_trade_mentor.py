@@ -536,6 +536,23 @@ def _card(tmp_path, journal, clock):
     )
 
 
+def _call(card, direction: str = "chop", confidence: str = "medium", horizon: str = ""):
+    """TJ-14A: every Mentor answer now carries a forced prediction CLICK.
+
+    Added to these tests rather than removing an assertion from them: the card
+    they drive is the same card, but since TJ-14A no code path files an hourly
+    answer without its call (decision 0021 answers 21 and 29, lead decisions 1
+    and 2). Each test below keeps every assertion it had and gains the clicks
+    the trader would now make.
+    """
+    from market_journal import DIRECTION_NO_VIEW, HORIZON_REST_OF_DAY
+
+    target = horizon or HORIZON_REST_OF_DAY
+    card.prediction_button(target, direction).click()
+    if direction != DIRECTION_NO_VIEW:
+        card.confidence_button(target, confidence).click()
+
+
 def _nine_slot():
     import trade_mentor_schedule as schedule
 
@@ -555,6 +572,7 @@ def test_submit_files_one_market_journal_row_stamped_with_the_real_response_time
 
     card.show_slot(slot)
     card.text_box.setPlainText("SPY lost the 9:45 low; I expect a retest of VWAP.")
+    _call(card, "down", "high")
     card.submit()
 
     rows = [
@@ -584,6 +602,7 @@ def test_submitting_twice_writes_one_row(tmp_path):
 
     card.show_slot(_nine_slot())
     card.text_box.setPlainText("Chop between the overnight levels.")
+    _call(card)
     card.submit()
     card.submit()
 
@@ -607,12 +626,14 @@ def test_read_unchanged_writes_a_new_row_that_references_the_previous_read(tmp_p
 
     card.show_slot(_nine_slot())
     card.text_box.setPlainText("Bid under the open; buyers in control.")
+    _call(card, "up", "high")
     card.submit()
     first_id = journal.entries_for("2026-09-14")[-1]["entry_id"]
 
     eleven = [s for s in schedule.slots_for_session(NORMAL_SESSION) if s.scheduled_at.hour == 11][0]
     clock.set(_pacific(NORMAL_SESSION, 11, 3, 0))
     card.show_slot(eleven, previous=journal.entries_for("2026-09-14")[-1])
+    _call(card, "up", "medium")
     card.read_unchanged()
 
     rows = [
@@ -678,6 +699,7 @@ def test_give_a_read_is_available_with_no_slot_due(tmp_path):
 
     card.give_a_read()
     card.text_box.setPlainText("After the bell: closed on the highs.")
+    _call(card, "up", "low")
     card.submit()
 
     rows = [
@@ -860,6 +882,9 @@ def test_a_scheduled_popup_stays_quiet_but_a_real_click_can_type_and_submit(tmp_
     _app.processEvents()
     assert QApplication.focusWidget() is card.text_box
     assert card.text_box.toPlainText() == "SPY held VWAP"
+    # TJ-14A: Ctrl+Enter reaches `submit()` itself, and `submit()` is gated on
+    # the call as well as the button is - so the click belongs here too.
+    _call(card, "up", "medium")
     QTest.keyClick(
         card.text_box,
         Qt.Key.Key_Return,
@@ -1001,6 +1026,7 @@ def test_the_current_context_is_saved_with_submit_and_unchanged_reads_and_surviv
     context_service.contextReady.emit(nine.slot_id, first_context)
     _app.processEvents()
     card.text_box.setPlainText("SPY is holding the open.")
+    _call(card, "up", "high")
     card.submit()
 
     # The AI extract is allowed to compact the context, but a small source budget
@@ -1032,6 +1058,7 @@ def test_the_current_context_is_saved_with_submit_and_unchanged_reads_and_surviv
     _app.processEvents()
     context_service.contextReady.emit(eleven.slot_id, second_context)
     _app.processEvents()
+    _call(card, "up", "medium")
     card.read_unchanged()
 
     rows = [row for row in journal.entries_for("2026-09-14") if row.get("origin") == "trade_mentor"]
@@ -1043,6 +1070,7 @@ def test_the_current_context_is_saved_with_submit_and_unchanged_reads_and_surviv
     # normal note, with an explicit unavailable snapshot rather than stale values.
     card.give_a_read()
     card.text_box.setPlainText("Still watching the tape.")
+    _call(card, "no_view")
     card.submit()
     rows = [row for row in journal.entries_for("2026-09-14") if row.get("origin") == "trade_mentor"]
     assert rows[-1]["text"] == "Still watching the tape."

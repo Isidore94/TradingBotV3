@@ -61,6 +61,30 @@ QLabel#CautionLabel {
     color: @caution@;
 }
 
+/* TJ-14A item 5: the Trade Mentor's internals strip. What the desk ALREADY
+   read - breadth, fear, rates, oil, sector leaders and laggards - sits above
+   the box the trader types into, so they write only what it cannot see. The
+   variant lives here, keyed on object name, because a per-widget stylesheet is
+   a parse on the Qt thread every time a card comes up (CLAUDE.md, performance
+   rules) and this card comes up every hour. */
+QWidget#MentorInternalsStrip {
+    background: @accent_soft@;
+    border: 1px solid @border@;
+    border-radius: @radius@;
+}
+
+QLabel#MentorInternalsText {
+    color: @text_secondary@;
+    font-size: @font_body@;
+}
+
+QPushButton#MentorPredictionButton:checked,
+QPushButton#MentorConfidenceButton:checked {
+    background: @accent@;
+    color: @bg_app@;
+    font-weight: 650;
+}
+
 /* Market Journal reader (G3): the meta line above the thought - session,
    timeframe, when it was written, who wrote it, the symbols. Secondary, so
    the words underneath are what the eye lands on. */

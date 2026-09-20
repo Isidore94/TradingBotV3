@@ -55,8 +55,16 @@ def session_is_backfillable(session: str | date, *, now: datetime | None = None)
 
 
 def decided_symbols(session: str, sources: Any) -> set[str]:
-    """Names with a trader decision or trade, plus the four fixed benchmarks."""
-    names = set(BENCHMARKS)
+    """Names with a trader decision or trade, the benchmarks, and the internals.
+
+    TJ-14A item 6: the Trade Mentor's internals have to be rebuildable for an
+    hour the trader never answered, and that is only possible if the ONE
+    batched post-close download already holds the names. It is the SYMBOL LIST
+    that changes here and nothing else - no second download, no daily leg.
+    """
+    from trade_mentor_context import SYMBOLS as INTERNALS
+
+    names = set(BENCHMARKS) | set(INTERNALS)
     try:
         if all(hasattr(sources, name) for name in ("annotations", "pick_feedback", "swing_favorites", "review_events")):
             annotations = daily_recap_reader._read_jsonl("annotations", sources.annotations, "created_at")

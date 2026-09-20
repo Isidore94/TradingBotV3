@@ -142,15 +142,23 @@ def test_context_is_a_small_flat_all_symbol_snapshot_with_completed_bar_arithmet
         sources={"m5": "cached", "d1": "yahoo"},
     )
 
+    # TJ-14A item 4: `XLRE` joined the list the desk already watches (the
+    # desk's own `group_rrs.SECTOR_ETFS` has always had eleven SPDRs), in
+    # alphabetical place, so every other symbol keeps its index.
     assert SYMBOLS == (
         "VXX", "RSP", "USO", "TLT", "IWM", "QQQ", "SPY", "XLB", "XLC",
-        "XLE", "XLF", "XLI", "XLK", "XLP", "XLU", "XLV", "XLY",
+        "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY",
     )
-    assert context["schema"] == "trade_mentor_context_v1"
+    assert context["schema"] == "trade_mentor_context_v2"
     assert context["captured_at"] == NOW.isoformat()
     assert context["sources"] == {"m5": "cached", "d1": "yahoo"}
     assert [row["symbol"] for row in context["readings"]] == list(SYMBOLS)
-    assert len(json.dumps(context, sort_keys=True).encode("utf-8")) <= 6 * 1024
+    # The snapshot stays BOUNDED, and TJ-14A item 4 deliberately made it
+    # bigger: eighteen symbols instead of seventeen, four more facts each, and
+    # the derived block. Measured on this fixture after the widening: 6,981
+    # bytes against 4,462 before it. The cap moves with the payload and is
+    # still a cap - a Mentor row may not grow without a test noticing.
+    assert len(json.dumps(context, sort_keys=True).encode("utf-8")) <= 10 * 1024
 
     spy = _reading(context, "SPY")
     assert spy["m5_status"] == "measured"

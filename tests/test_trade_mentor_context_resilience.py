@@ -136,11 +136,22 @@ def test_real_mentor_note_keeps_full_metadata_and_scalar_context_in_small_ai_pac
     service.contextReady.emit(slot.slot_id, context)
     QtWidgets.QApplication.instance().processEvents()
     card.text_box.setPlainText("I think SPY is holding the open.")
+    # TJ-14A: a Mentor answer carries a forced prediction click, and `submit()`
+    # is gated on it. The click is ADDED here; every assertion below is the
+    # tester's original.
+    card.prediction_button("rest_of_day", "up").click()
+    card.confidence_button("rest_of_day", "medium").click()
     assert card.submit()["ok"] is True
     stored = journal.entries_for("2026-09-14")[-1]
     assert stored["mentor"]["context"] == context
 
-    package = build_evidence_package(["market_journal"], source_overrides={"journal.entries": next((tmp_path / "ledger").glob("*.jsonl"))}, now=NOW, session_date="2026-09-11", budget_chars=3_000)
+    # The budget moved with the payload, and the point of the test did not: a
+    # SMALL source budget must still carry the real row rather than a banner.
+    # TJ-14A item 4 widened the snapshot (eighteen symbols, four more facts
+    # each, the derived block), so one compacted Mentor row measures ~2,900
+    # characters here against ~1,600 before it. Production's journal scope is
+    # nowhere near this tight (80,000 total; this asks for 6,000).
+    package = build_evidence_package(["market_journal"], source_overrides={"journal.entries": next((tmp_path / "ledger").glob("*.jsonl"))}, now=NOW, session_date="2026-09-11", budget_chars=6_000)
     source = next(row for row in package["sources"] if row["source_id"] == "journal.entries")
     assert all(isinstance(row, dict) for row in source["content"]), (
         "the bounded package must retain the real journal row, not replace it with a banner"
@@ -150,7 +161,17 @@ def test_real_mentor_note_keeps_full_metadata_and_scalar_context_in_small_ai_pac
     common = compact["common"]
     rows = [dict(common, **dict(zip(compact["columns"], values))) for values in compact["rows"]]
     assert ai_row["text"] == "I think SPY is holding the open."
-    assert common["schema"] == "trade_mentor_context_v1"
+    # TJ-14A item 4 widened the live builder to v2 (the day's change, the place
+    # in the day's range, both prior-session sides and the derived block). A
+    # STORED v1 row stays readable and is pinned elsewhere; this snapshot is
+    # built live, so it is v2.
+    assert common["schema"] == "trade_mentor_context_v2"
+    # The derived block reaches the AI as a readable SENTENCE as well as a
+    # structure: `_bounded` cuts six levels down, which is where a derived
+    # line's own lists sit, so the structure alone would have handed the model
+    # "[nested content omitted]" where the sector names should be.
+    assert "Breadth (RSP-SPY)" in common["internals"]
+    assert "Leaders" in common["internals"]
     assert common["availability"] == "stale" and common["reason"] == "M5 outer cache was stale"
     assert common["rules"] == context["rules"] and common["sources"] == context["sources"]
     assert [row["symbol"] for row in rows] == list(SYMBOLS)

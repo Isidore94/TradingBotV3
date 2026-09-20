@@ -62,8 +62,16 @@ def test_decided_symbols_unions_recap_trade_names_and_all_benchmarks(monkeypatch
 
     names = bars.decided_symbols(SESSION, sources=object())
 
-    assert names == {"TSLA", "AAPL", "NVDA", "SPY", "QQQ", "IWM", "VXX"}
+    # TJ-14A item 6: the internals the Trade Mentor watches join the ONE
+    # batched post-close download, so an hour the trader never answered can
+    # still have its internals rebuilt from the durable tape. The union is
+    # WIDER, and it is still exactly the decisions, the trades, the benchmarks
+    # and that fixed list - nothing else.
+    from trade_mentor_context import SYMBOLS as INTERNALS
+
+    assert names == {"TSLA", "AAPL", "NVDA", "SPY", "QQQ", "IWM", "VXX"} | set(INTERNALS)
     assert set(bars.BENCHMARKS) <= names
+    assert set(INTERNALS) <= names
 
 
 def test_fetch_uses_one_duplicate_free_batched_call_per_fifty_and_omits_missing_symbol():

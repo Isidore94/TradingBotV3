@@ -1085,6 +1085,12 @@ class MainWindow(QMainWindow):
         Shown beside the new prompt so "Read unchanged" has something to name.
         One bounded read of a small JSONL, at most once an hour - not a paint
         path, and never in the 60-second poll (the service emits, this runs).
+
+        The answer is the latest read of EACH timeframe, `{"M5": row, "D1":
+        row}`, not the latest row full stop. "Read unchanged" reaffirms PER
+        TIMEFRAME, and `rows[-1]` is the D1 row on every day the 08:00 card was
+        answered - which is how a D1-timeframe entry came to be filed at 09:00
+        carrying a rest-of-day call, a row true of neither timeframe.
         """
         try:
             from ui.services.market_journal_service import shared_journal_service
@@ -1097,7 +1103,12 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - a missing previous read is not an error
             logging.debug("Previous mentor read unreadable.", exc_info=True)
             return None
-        return rows[-1] if rows else None
+        latest: dict[str, dict] = {}
+        for row in rows:
+            timeframe = str(row.get("timeframe") or "").strip().upper()
+            if timeframe in ("M5", "D1") and str(row.get("text") or "").strip():
+                latest[timeframe] = row
+        return latest or None
 
     def _show_trade_mentor_prompt(self, slot) -> None:
         """Show a due prompt in its reusable popup, with its question."""

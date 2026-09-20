@@ -238,6 +238,16 @@ def _excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
     return f"{first}…" if truncated else first
 
 
+def _prediction_text(entry: Mapping[str, Any]) -> str:
+    """The clicked call as one line, or `""`. Worded once, in `market_journal`."""
+    try:
+        from market_journal import prediction_line
+
+        return prediction_line(entry)
+    except Exception:  # noqa: BLE001 - a page never fails on a missing call
+        return ""
+
+
 def _clock_text(created_at: Any) -> str:
     """`HH:MM` off the row's own stamp, or a dash. Never a guessed zone."""
     raw = str(created_at or "").strip()
@@ -1468,14 +1478,19 @@ class DayReviewPanel(QFrame):
                     if entry.get("written_after_the_session")
                     else ""
                 )
+                # TJ-14A: a Mentor card answered with a CLICK and no words is a
+                # complete answer whose `text` is empty on purpose. The row
+                # shows the call rather than a blank line, and nothing invents
+                # a sentence the trader did not write.
+                body = str(entry.get("text") or "") or _prediction_text(entry)
                 label = (
                     f"{_clock_text(entry.get('created_at'))}"
                     f"  ·  {entry.get('timeframe') or ''}{marker}"
-                    f"  ·  {_excerpt(entry.get('text'))}"
+                    f"  ·  {_excerpt(body)}"
                 )
                 item = QListWidgetItem(label)
                 item.setData(Qt.UserRole, str(entry.get("entry_id") or ""))
-                item.setToolTip(str(entry.get("text") or ""))
+                item.setToolTip(body)
                 self.entries.addItem(item)
             if not kept:
                 self.entries.addItem("Nothing was written for this session.")
@@ -1514,7 +1529,13 @@ class DayReviewPanel(QFrame):
         if entry.get("written_after_the_session"):
             meta += "  ·  written after the session"
         self.entry_meta.setText(meta)
-        self.entry_reader.setPlainText(str(entry.get("text") or ""))
+        # The words, then the call beneath them (TJ-14A keeps the two apart).
+        # A clicks-only answer shows its call alone; it never reads as blank.
+        words = str(entry.get("text") or "")
+        call = _prediction_text(entry)
+        self.entry_reader.setPlainText(
+            "\n\n".join(part for part in (words, call) if part)
+        )
 
     def _render_forecast(self, forecast: Mapping[str, Any]) -> None:
         text = str(forecast.get("text") or "")
