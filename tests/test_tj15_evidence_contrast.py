@@ -14,6 +14,17 @@ The contract these tests pin (the builder may add keys, never remove one):
         features=None,                  # None = every column both groups carry
         top=3,
     ) -> {
+        # ... see below ...
+    }
+    evidence_contrast.rate(runs, measured, pending=0) -> {
+        "runs": int, "measured": int, "pending": int,
+        "rate": float|None, "low": float|None, "high": float|None,
+        "reportable": bool,             # measured >= evidence_stats.MIN_REPORTABLE_N
+    }
+
+The contrast's own return:
+
+    {
         "label_a": str, "label_b": str,
         "n_a": int, "n_b": int,         # the GROUP sizes, not the measured ones
         "compared": int,                # K: features with a measurement on BOTH sides
@@ -173,3 +184,45 @@ def test_a_blank_cell_is_left_out_of_the_median_and_is_never_read_as_zero():
     assert row["feature"] == "atr20"
     assert row["median_a"] == pytest.approx(3.5)
     assert (row["n_a"], row["n_b"]) == (2, 4)
+
+
+def test_a_rate_is_the_one_wilson_over_closed_horizons_and_an_open_one_is_in_neither_half():
+    """TJ-11 blocker 2, inherited: a rate counts CLOSED horizons only.
+
+    Runs and no-runs alike enter it; an open horizon is counted and PRINTED as
+    `pending` and is in neither half of the fraction. `pending` must therefore
+    move `rate` not at all - the live lately-rejected cell read 34% (30/87)
+    where the closed-only truth was 26% (20/77) when it did.
+
+    The interval is the ONE Wilson - `swing_headline`'s z, 1.96 two-sided - and
+    the floor under a named cell is `evidence_stats.MIN_REPORTABLE_N`. A second
+    Wilson computed a second way is a second answer to the same question, so
+    this compares against the desk's function rather than a literal.
+    """
+    import evidence_contrast
+    from evidence_stats import MIN_REPORTABLE_N
+    from swing_headline import wilson_lower_bound
+
+    cell = evidence_contrast.rate(9, 40, pending=7)
+    assert (cell["runs"], cell["measured"], cell["pending"]) == (9, 40, 7)
+    assert cell["rate"] == pytest.approx(9 / 40)
+    assert cell["low"] == pytest.approx(wilson_lower_bound(9, 40))
+    assert cell["low"] < cell["rate"] < cell["high"]
+    assert cell["reportable"] is True
+
+    # The same closed evidence with a hundred more open horizons is the same
+    # rate and the same interval. Only `pending` moves.
+    with_open = evidence_contrast.rate(9, 40, pending=107)
+    assert with_open["rate"] == pytest.approx(cell["rate"])
+    assert with_open["low"] == pytest.approx(cell["low"])
+    assert with_open["pending"] == 107
+
+    thin = evidence_contrast.rate(3, MIN_REPORTABLE_N - 1)
+    assert thin["reportable"] is False
+    assert thin["rate"] == pytest.approx(3 / (MIN_REPORTABLE_N - 1))
+
+    # Nothing measured is not a rate of zero.
+    nothing = evidence_contrast.rate(0, 0, pending=4)
+    assert nothing["rate"] is None
+    assert nothing["low"] is None and nothing["high"] is None
+    assert nothing["reportable"] is False
