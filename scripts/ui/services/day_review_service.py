@@ -719,6 +719,19 @@ class DayReviewService:
             return tape_of[symbol]
 
         def daily_for(symbol: str) -> list[dict[str, Any]]:
+            """The benchmark's daily history: the durable store, else the cache.
+
+            `chart_snapshot.load_d1_bars` is the durable parquet the walk-away
+            ruler already reads - off the Qt thread, mtime-cached, no network,
+            no IB. Measured on the desk 2026-09-20: it holds no file for SPY at
+            all (the home folder has no `daily_bars/`), so on the machine this
+            page runs on it answers EMPTY, and with no bars there is no ATR and
+            every verdict would read `unmeasured`. The fallback is the SAME
+            machine-local cache the desk's own D1 environment labels are built
+            from - still a file, still no provider - so the grader measures what
+            the desk itself measures. Neither is a fetch; a symbol in neither is
+            `unmeasured` and says so.
+            """
             if symbol not in daily_of:
                 bars: list[dict[str, Any]] = []
                 try:
@@ -727,6 +740,13 @@ class DayReviewService:
                     bars = list(chart_snapshot.load_d1_bars(symbol) or ())
                 except Exception:  # noqa: BLE001 - `unmeasured`, never an error
                     _log.debug("Daily bars unreadable for %s.", symbol, exc_info=True)
+                if not bars:
+                    try:
+                        import d1_environment_store
+
+                        bars = list(d1_environment_store._cached_daily_bars(symbol) or ())
+                    except Exception:  # noqa: BLE001
+                        _log.debug("The daily cache was unreadable.", exc_info=True)
                 daily_of[symbol] = bars
             return daily_of[symbol]
 
