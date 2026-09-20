@@ -408,6 +408,8 @@ def test_grading_one_read_twice_is_rejected_whole(root):
     reply = _grade_everything(pack)
     first = reply["summary"]["were_you_right"][0]
     reply["summary"]["were_you_right"] = [first, dict(first)]
+    # A SHORT source list too, so no cap of any vintage can be what rejects it.
+    reply["summary"]["sources"] = [first["source_id"], first["evidence_id"]]
     assert len(reply["summary"]["were_you_right"]) == 2 < len(pack["reads"])
 
     outcome = _run(root, lambda **_k: reply)
