@@ -129,42 +129,6 @@ def _offscreen_symbol_font(request):
 
 
 
-#: Test modules that drive `MainWindow._show_trade_mentor_prompt` for real.
-#: TJ-14B persists the day's journal-pull tally BESIDE the Mentor slot state, so
-#: the per-day cap survives a desk restart (lead decision 3). One desk-day is
-#: exactly what that models - but every one of these modules builds its own
-#: `MainWindow` over the same session date and the same machine-local state
-#: file, so without this the cards of one TEST spend the cap of the next and the
-#: order of the file decides which assertions hold.
-_MENTOR_PULL_TALLY_MODULES = frozenset(
-    {
-        "test_tj9_desk_seam_and_ride",
-        "test_tj14b_precard_pull",
-        "test_tj14b_same_session_fill",
-    }
-)
-
-
-@pytest.fixture(autouse=True)
-def _fresh_trade_mentor_pull_tally(request):
-    """Give each Mentor desk test its own day's worth of journal pulls."""
-    module = getattr(getattr(request.node, "module", None), "__name__", "")
-    if module.rsplit(".", 1)[-1] not in _MENTOR_PULL_TALLY_MODULES:
-        yield
-        return
-    try:
-        from project_paths import TRADE_MENTOR_SLOTS_FILE
-
-        path = Path(TRADE_MENTOR_SLOTS_FILE)
-        if path.exists():
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict) and payload.pop("pull_tally", None) is not None:
-                path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    except Exception:  # noqa: BLE001 - isolation never fails a test by itself
-        pass
-    yield
-
-
 def _forbid_the_autopilot_from_arming_itself() -> None:
     """Write the ONE machine-local setting a test process must not default.
 

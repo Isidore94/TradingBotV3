@@ -38,6 +38,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 if str(ROOT_DIR / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT_DIR / "tests"))
 
+# TJ-14B gives the desk's day-time journal pulls ONE persisted per-day tally;
+# this gives each test in this module its own day of it. See the module.
+from tj14b_desk_isolation import fresh_mentor_pull_tally  # noqa: E402,F401
 from tj14b_support import (  # noqa: E402
     REVIEWED,
     SESSION,
