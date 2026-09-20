@@ -211,6 +211,12 @@ def test_a_session_with_no_likes_or_claims_names_that_side_as_missing():
 
 
 def test_a_bearish_view_against_a_day_of_long_picks_disagrees():
+    """UPDATED (TJ-10 follow-up item 1, widened not weakened): n=3 sits under
+    `evidence_stats.MIN_REPORTABLE_N` (30), so the lean this line counts is
+    `too_few` rather than a full-weight `disagrees` - the text still names the
+    mismatch."""
+    import market_read_grades as grades
+
     decisions = [
         _decision("AAA", "LONG", timeframe="D1"),
         _decision("BBB", "LONG", timeframe="D1"),
@@ -218,7 +224,9 @@ def test_a_bearish_view_against_a_day_of_long_picks_disagrees():
     ]
     line = _lines(d1_read=_d1_read("down"), decisions=decisions)["picks_side_mix"]
 
-    assert line["verdict"] == "disagrees"
+    assert line["verdict"] == grades.VERDICT_TOO_FEW
+    assert "too few to call" in line["text"]
+    assert "LONG" in line["text"]
 
 
 # -- against the day's fills -------------------------------------------------

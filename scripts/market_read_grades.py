@@ -70,6 +70,13 @@ DEFAULT_BENCHMARK = "SPY"
 VERDICT_RIGHT = "right"
 VERDICT_WRONG = "wrong"
 VERDICT_FLAT = "flat"
+#: A congruence PICKS line (`picks_side_mix` / `m5_picks_side_mix`) whose
+#: counted `n` sits under `evidence_stats.MIN_REPORTABLE_N` never reports
+#: `agrees` / `disagrees` - live 2026-09-17 printed `disagrees` on a 2-of-2 M5
+#: side mix, and a chip or a later pooling packet keys on `verdict`, not on the
+#: text beside it (reviewer, 2026-09-20). The counts and the floor note in the
+#: text are unchanged; only the verdict a reader could act on moves to this.
+VERDICT_TOO_FEW = "too_few"
 #: `pending <date>` while the horizon is open; `unmeasured:<reason>` when a bar
 #: or the ATR is missing. Both are prefixes, so a reader tells them apart
 #: without parsing English.
@@ -530,8 +537,12 @@ def grade_read(
     else:
         result = _grade_rest_of_day(read, m5_bars, atr, moment)
     verdict = str(result.get("verdict") or "")
-    gap = ""
-    if verdict.startswith(f"{UNMEASURED_PREFIX}:"):
+    # `gap`: an explicit reason a builder attached to the result (e.g. a
+    # `pending` row whose anchor session has not closed yet), else the
+    # `unmeasured:<reason>` suffix, so both a data gap and an open-anchor gap
+    # reach the same named field (TJ-14B's `grader_gap` Mentor kind reads it).
+    gap = str(result.get("gap") or "")
+    if not gap and verdict.startswith(f"{UNMEASURED_PREFIX}:"):
         reason = verdict.split(":", 1)[1]
         if reason != "not_a_call":
             gap = reason
@@ -674,6 +685,15 @@ def _grade_five_sessions(
     session = _as_date(read.get("session"))
     if session is None:
         return _unmeasured_result("no_session_date")
+    if not _session_has_closed(session, now):
+        # The decision session is still trading, so its own daily bar is
+        # FORMING, not a close (reviewer, 2026-09-20: reproduced an anchor of
+        # 130.0 read off a still-open bar). The row waits like any other open
+        # horizon rather than anchor on a price that is not final yet.
+        return _pending_result(
+            session.isoformat(),
+            gap="the decision session has not closed yet",
+        )
     closes = _daily_closes(daily_bars)
     anchor_price = closes.get(session)
     if anchor_price is None:
@@ -1106,6 +1126,19 @@ def _floor_note(n: int) -> str:
     return ""
 
 
+def _congruence_verdict(mine: str, majority: str, n: int) -> str:
+    """`agrees` / `disagrees`, or `VERDICT_TOO_FEW` under the reporting floor.
+
+    Only a PICKS line calls this (`_line_picks`, D1 and M5 alike): the desk
+    label and fills lines are not in the packet that named this floor.
+    """
+    import evidence_stats
+
+    if n < evidence_stats.MIN_REPORTABLE_N:
+        return VERDICT_TOO_FEW
+    return "agrees" if mine == majority else "disagrees"
+
+
 def _read_direction(read: Mapping[str, Any] | None) -> str:
     if not read:
         return ""
@@ -1156,14 +1189,16 @@ def _line_desk_label(
     source_ids = [str(read.get("read_id") or "")] if read else []
     name = str(label or "").strip()
     if not read:
-        # The contradiction note is the honest reason there is no read to use,
-        # and it is the trader's own two notes talking past each other.
+        # Own content FIRST: the desk's own label, then the reason there is
+        # nothing to compare it with - a contradiction note, or plainly none.
+        desk_said = (
+            f"the desk reads {name}" if name
+            else "the desk has no D1 label for this session"
+        )
+        reason = note or "there is no D1 read today to compare it with"
         return _line(
             kind,
-            text=note or (
-                "no D1 read today, so there is nothing to compare the desk's "
-                f"label ({name or 'unmeasured'}) with"
-            ),
+            text=f"{desk_said}; {reason}",
             missing="your D1 read", timeframe=timeframe, source_ids=source_ids,
         )
     mine = _read_direction(read)
@@ -1251,12 +1286,34 @@ def _line_picks(
     source_ids = longs + shorts
     total = len(source_ids)
     what = "likes and claims" if timeframe == market_journal.TIMEFRAME_D1 else "likes"
+    majority = "up" if counts["long"] > counts["short"] else (
+        "down" if counts["short"] > counts["long"] else ""
+    )
+    tail = f", {not_today} not today" if counts.get("not_today") else ""
+    if not total:
+        mine_mix = f"no {timeframe} {what} this session"
+    elif majority:
+        mine_mix = (
+            f"{max(counts['long'], counts['short'])} of {total} {timeframe} {what} "
+            f"were {'LONG' if majority == 'up' else 'SHORT'} "
+            f"(long {counts['long']}, short {counts['short']})"
+        )
+    else:
+        # A TIE names no side: "half and half" is not a lean, and printing one
+        # would invent a crowd the session did not have.
+        mine_mix = (
+            f"{counts['long']} long, {counts['short']} short - no lean in "
+            f"{total} {timeframe} {what}"
+        )
+    mine_mix = f"{mine_mix}{tail}"
     if not read:
+        # Own content FIRST: the mix this line counted, then the reason there
+        # is nothing to compare it with - a contradiction note, or plainly
+        # none. The counts are never dropped just because the read is absent.
+        reason = note or "no read to compare them with"
         return _line(
             kind,
-            text=note or (
-                f"{total} {timeframe} {what}, and no read to compare them with"
-            ),
+            text=f"{mine_mix}{_floor_note(total)}; {reason}",
             counts=counts, source_ids=source_ids,
             timeframe=timeframe, missing=f"your {timeframe} read",
         )
@@ -1268,24 +1325,7 @@ def _line_picks(
             missing=f"your {timeframe} {what}",
         )
     mine = _read_direction(read)
-    majority = "up" if counts["long"] > counts["short"] else (
-        "down" if counts["short"] > counts["long"] else ""
-    )
-    if majority:
-        mix = (
-            f"{max(counts['long'], counts['short'])} of {total} {timeframe} {what} "
-            f"were {'LONG' if majority == 'up' else 'SHORT'} "
-            f"(long {counts['long']}, short {counts['short']})"
-        )
-    else:
-        # A TIE names no side: "half and half" is not a lean, and printing one
-        # would invent a crowd the session did not have.
-        mix = (
-            f"{counts['long']} long, {counts['short']} short - no lean in "
-            f"{total} {timeframe} {what}"
-        )
-    tail = f", {not_today} not today" if counts.get("not_today") else ""
-    text = f"{said}; {mix}{tail}" + _floor_note(total)
+    text = f"{said}; {mine_mix}" + _floor_note(total)
     if not mine or not majority:
         return _line(
             kind, text=text, counts=counts, source_ids=source_ids,
@@ -1294,7 +1334,7 @@ def _line_picks(
         )
     return _line(
         kind, text=text, counts=counts, source_ids=source_ids, timeframe=timeframe,
-        verdict="agrees" if mine == majority else "disagrees",
+        verdict=_congruence_verdict(mine, majority, total),
     )
 
 
@@ -1331,15 +1371,6 @@ def _line_fills(
         return _line(
             kind, text="no fills today", missing="your fills", timeframe=timeframe,
         )
-    if not read:
-        return _line(
-            kind,
-            text=note or f"{len(listed)} fills, and no read to compare them with",
-            counts=counts, source_ids=source_ids, missing=f"your {timeframe} read",
-            timeframe=timeframe,
-        )
-    mine = _read_direction(read)
-    said = read_phrase(read)
     majority = "up" if counts["bullish"] > counts["bearish"] else (
         "down" if counts["bearish"] > counts["bullish"] else ""
     )
@@ -1349,6 +1380,18 @@ def _line_fills(
     )
     if not majority and total:
         mix += " - no lean"
+    if not read:
+        # Own content FIRST: the fills' own mix, then the reason there is
+        # nothing to compare it with.
+        reason = note or "no read to compare them with"
+        return _line(
+            kind,
+            text=f"{mix}{_floor_note(total)}; {reason}",
+            counts=counts, source_ids=source_ids, missing=f"your {timeframe} read",
+            timeframe=timeframe,
+        )
+    mine = _read_direction(read)
+    said = read_phrase(read)
     text = f"{said}; {mix}" + _floor_note(total)
     if not mine or not majority:
         return _line(
@@ -1688,6 +1731,7 @@ __all__ = [
     "UNMEASURED_PREFIX",
     "VERDICT_FLAT",
     "VERDICT_RIGHT",
+    "VERDICT_TOO_FEW",
     "VERDICT_WRONG",
     "accuracy",
     "append_grades",

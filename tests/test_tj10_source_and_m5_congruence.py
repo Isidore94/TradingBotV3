@@ -137,9 +137,17 @@ def test_two_notes_that_read_both_ways_are_not_one_view():
         )
     }
     assert lines["desk_d1_label"]["verdict"] == grader.UNMEASURED
-    assert lines["desk_d1_label"]["text"] == note
+    # UPDATED (TJ-10 follow-up item 2, widened not weakened): the line leads
+    # with its OWN content (the desk's label / the picks' own mix) and only
+    # then the reason there is nothing to compare it with, rather than
+    # dropping its own content and printing the note verbatim.
+    assert lines["desk_d1_label"]["text"].startswith("the desk reads trending_down")
+    assert lines["desk_d1_label"]["text"].endswith(note)
     assert lines["picks_side_mix"]["verdict"] == grader.UNMEASURED
-    assert lines["picks_side_mix"]["text"] == note
+    assert lines["picks_side_mix"]["text"].startswith(
+        "1 of 1 D1 likes and claims were LONG"
+    )
+    assert lines["picks_side_mix"]["text"].endswith(note)
 
 
 def test_every_line_names_a_timeframe():
@@ -209,7 +217,12 @@ def test_an_m5_read_is_paired_with_m5_picks_and_never_with_d1_ones():
     assert set(line["source_ids"]) == {"e-AAA-M5", "e-BBB-M5"}
     assert line["counts"] == {"long": 0, "short": 2, "not_today": 1}
     assert line["counts"]["long"] + line["counts"]["short"] == len(line["source_ids"])
-    assert line["verdict"] == "disagrees"
+    # UPDATED (TJ-10 follow-up item 1, widened not weakened): n=2 is under
+    # `evidence_stats.MIN_REPORTABLE_N` (30) - this is the reviewer's live
+    # 2026-09-17 shape, where a 2-of-2 side mix printed `disagrees` at full
+    # weight. The verdict is now `too_few`; the counts and floor note stand.
+    assert line["verdict"] == grader.VERDICT_TOO_FEW
+    assert "too few to call" in line["text"]
     assert "not today" in line["text"]
 
 
@@ -325,7 +338,9 @@ def test_read_day_builds_an_m5_line_for_an_m5_read(monkeypatch):
     )
     assert line["timeframe"] == "M5"
     assert line["counts"]["long"] == 2
-    assert line["verdict"] == "agrees"
+    # UPDATED (TJ-10 follow-up item 1, widened not weakened): n=2 is under the
+    # reporting floor, so the verdict is `too_few` rather than `agrees`.
+    assert line["verdict"] == grader.VERDICT_TOO_FEW
     assert "your call: up" in line["text"]
 
 
