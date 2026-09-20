@@ -310,7 +310,12 @@ def test_read_day_builds_a_name_chart_for_each_decided_symbol(monkeypatch):
     assert len(charts["AAA"]["bars"]) == 30
     markers = list(charts["AAA"]["markers"])
     assert [marker["kind"] for marker in markers] == ["veto"]
-    assert markers[0]["index"] == 44
+    # LEAD AMENDMENT 2026-09-19: the tester's literal was 44, copied from the SPY
+    # case above (a 78-bar tape). AAA's own tape here is 30 bars (06:30..08:55 PT)
+    # and the decision is 10:12 PT, so the LAST bar at or before it is index 29 -
+    # the contract `bar_index_for` pins in test_tj3_marker_payload.py. 44 would be
+    # a marker past the end of the bars this same test asserts are drawn.
+    assert markers[0]["index"] == 29
 
 
 def test_a_name_with_no_tape_gets_no_invented_chart(monkeypatch):
