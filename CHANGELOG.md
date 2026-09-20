@@ -57,8 +57,12 @@ They are evidence and must not be loaded as context.
   `a89ec7d5`).** `scripts/real_miss.py` holds `REAL_MISS_V1` (`RUN_ATR` 1.0, `ADVERSE_ATR`
   0.5, one pure `verdict()`; the adverse extreme taken first inside a bar; a missing ATR or
   no completed bar is `unmeasured:<reason>`; import-light so TJ-15's nightly slot calls the
-  same function). `market_calendar.decision_session` / `next_session` answer which exchange
-  session a stamp belongs to, or the next one, on memoized holidays. `walkaway_day` gains
+  same function). `market_calendar.decision_session` answers which exchange session a
+  decision JUDGED - the session whose New York date the stamp falls on when that date is a
+  session day, else the most recent PRIOR session, so an after-close, weekend or holiday
+  call maps BACK to the session before it (**TJ-11F, trader 2026-09-19**, reversing this
+  packet's original forward rule); `next_session` is its own helper, both on memoized
+  holidays. `walkaway_day` gains
   the D1 ruler (daily bars from the decision session's CLOSE over 1/3/5 exchange sessions,
   `pending <date>` until the horizon closes, point-in-time ATR(14)), against-you-first and
   at-the-close in percent and ATR, the row's real-miss verdict and reason code, a fifth
@@ -71,7 +75,10 @@ They are evidence and must not be loaded as context.
   `unmeasured`), and one money line carrying its `n`. **A pooled rate counts a name only
   when its horizon has CLOSED** - an early run inside an open one stays on its row and out
   of the fraction, and open names print as `pending P`. `ui/annotations/store` writes the
-  ADDITIVE `decision_session` beside an UNCHANGED `session_date`, and
+  ADDITIVE `decision_session` beside an UNCHANGED `session_date`, stamped
+  `decision_session_rule: "judged_session_v2"` (TJ-11F); a stored session WITHOUT that
+  marker was written under the struck forward rule and every reader recomputes it from the
+  row's own stamp, and no row is ever rewritten or backfilled.
   `load_annotations(..., by_decision_session=True)` is TJ-11's opt-in read; every other
   reader on the desk is byte-identical to base, pinned for `pick_feedback`,
   `review_learning`'s join, the three cohort graders and `daily_recap_reader._decisions`.
@@ -2891,6 +2898,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-19 (evening) - TJ-11F: an after-close decision belongs to the session it JUDGED (branch `claude/tj11f-decision-session`, tip `67143e3e`, merged into `lead/p033-integration2` `f00ec302`)
+
+Trader, ~16:20 PDT, three hours after wave 1 went live: *"a veto on friday night (after the market close) should not be considered monday since we have new information then."* That strikes decision 0021 answer 16's last clause and `plan.md` TJ-11 item 5 as TJ-11 built them earlier the same day, and decision 0021 carries the reversal as answer 33. `market_calendar.decision_session` now maps BACKWARD - the exchange session whose New York calendar date the stamp falls on when that date is a session day (pre-market, in-session and after the close alike), else the most recent PRIOR session; a new annotation row carries `decision_session_rule: "judged_session_v2"` beside `decision_session` and a stored session WITHOUT that marker is recomputed from the row's own stamp, so **no row is rewritten or backfilled**; `day_review_service._stamped_dates_for` gives a session the non-session dates AFTER it (Friday owns its weekend, Friday 09-04 owns Labor Day); and the D1 ruler's reference is the JUDGED session's close. `session_date` is byte-identical to base for every writer and reader, `pick_feedback.decisions_today` reproduced byte-identical for 09-18, 09-19 and 09-21, the five TJ-11 parity tests are green unchanged, and the cohort graders and the 18 live Saturday-stamped rows are untouched - nothing on the live desk outside Day Review changes. Reviewer GO by reproduction on a COPY of the live annotation store (1,198 rows, 0 carrying `decision_session` or the marker): the 18 Friday-evening calls of 2026-09-18 21:04-21:07 PT read on `read_day("2026-09-18")` and none on `read_day("2026-09-21")`. The stored-field vs service-tag disagreement TJ-11's review recorded is CLOSED. Recorded and not repaired: the rule marker is two independent literals (`store` and `walkaway_day`), the "Today - provisional" entry can open the page on a non-session date and tag in-memory rows with a session the rule would not choose (never written to a store), and `load_annotations(..., by_decision_session=True)` / `row_decision_session` still have no production caller. Live gate #156 is reworded and still owed.
 
 ### 2026-09-19 - TJ-9: forced 09:00 trade labels (branch `claude/tj9-forced-trade-labels`, tip `ee35ae54`, merged into `lead/p033-integration` `8077a758`)
 

@@ -6586,12 +6586,17 @@ closes - while a `run`, once reached, cannot be taken back.
 the best favourable one - what the trader was up against before the move, not the
 give-back after it. It is never positive.
 
-**`market_calendar.decision_session(stamp)`** is the one session-stamp seam: the session
-the stamp falls in (a date at or before that session's close, so pre-market counts), else
-the NEXT exchange session. Evening, weekend and holiday all map forward. Zones are
+**`market_calendar.decision_session(stamp)`** is the one session-stamp seam. **CHANGED
+2026-09-19 by TJ-11F** - it answered *"the session the stamp falls in, else the NEXT
+exchange session; evening, weekend and holiday all map forward"* for one day, and now
+answers the **session whose New York calendar date the stamp falls on** when that date is
+a session day - pre-market, in-session and after the close all stay on that day - **else
+the most recent PRIOR session**. Evening, weekend and holiday map BACK. The close is no
+longer a boundary, so nothing here needs `session_close`; `next_session` stays as its own
+helper, called by `walkaway_day` and `day_review_service._stamped_dates_for`. Zones are
 converted with `astimezone`, never stripped; a naive stamp is read as market-local, and a
-full ISO TIMESTAMP in text is parsed as a moment - reading its first ten characters as a
-date answered Friday for a call made at 21:04 that evening.
+full ISO TIMESTAMP in text is parsed as a MOMENT and never truncated to its first ten
+characters, so an aware stamp in another zone cannot answer the wrong day.
 
 **And the session a decision belongs to is an ADDITIVE field, never a new meaning for an
 old one** (reviewer NO-GO at `21ed0eb6`, closed at `a744bec1`). `session_date` is the join
@@ -6608,8 +6613,11 @@ The lead's binding design: **`session_date` keeps EXACTLY its base meaning and v
 every writer and reader.** The decision's session is a NEW ADDITIVE key,
 `decision_session` (`store.DECISION_SESSION_FIELD`), written on NEW rows only, empty rather
 than guessed when the calendar cannot answer, **never backfilled** - an old row simply
-lacks it. Only TJ-11's readers use it, taking the stored value when present and mapping the
-stamp forward when it is not (`store.row_decision_session`, `walkaway_day._row_session`),
+lacks it. Only TJ-11's readers use it, taking the stored value **only when the row also
+carries `decision_session_rule: "judged_session_v2"`** and otherwise mapping the row's own
+stamp back through the calendar (`store.row_decision_session`, `walkaway_day._row_session`;
+the marker and the backward direction are TJ-11F's, 2026-09-19 - this read took the stored
+value whenever it was present and mapped the stamp FORWARD when it was not),
 and `load_annotations(..., by_decision_session=True)` is the explicit opt-in that nothing
 outside TJ-11 passes. A cohort row is built from named fields, so the extra key adds no
 column to any grader. Parity with base is PINNED by tests for `pick_feedback`,
@@ -6619,7 +6627,8 @@ column to any grader. Parity with base is PINNED by tests for `pick_feedback`,
 annotation rows carrying 2026-09-19 became **12 veto-cohort and 6 like-cohort picks** with
 a non-session `trade_date` and a Monday-close ruler, and **zero outcome rows**. The graders
 and those rows are deliberately untouched: nothing on the live desk changed, and only
-TJ-11's readers map forward.
+TJ-11's readers map them at all (forward then; BACK since TJ-11F, so those 18 rows read on
+Friday 2026-09-18).
 
 **The skill line: a miss is always read against a base rate** (decision 0021 answer 22).
 Three populations of the SAME scan - liked/claimed, rejected, untouched (shown by the scan,
@@ -6684,6 +6693,8 @@ TJ-11, 92.4 ms after**, and settle-deadline hits went 2 -> 0.
 * The stored `decision_session` and the service's tag **DISAGREE for a same-day after-close
   call**: for a Friday 16:30 ET veto the stored field says Monday while the page shows it
   on Friday. TJ-15's nightly slot must pick one of the two deliberately, and say which.
+  **CLOSED by TJ-11F (2026-09-19): both say FRIDAY**, pinned by
+  `test_the_stored_session_and_the_page_agree_for_an_after_close_call`.
 * `market_calendar.session_close` is a flat 16:00 with no early-close modelling. This is
   pre-existing and TJ-11 did not widen it.
 * On a fresh day the SESSION skill line honestly reads `measured 0, pending N` and names no
@@ -6692,4 +6703,66 @@ TJ-11, 92.4 ms after**, and settle-deadline hits went 2 -> 0.
 
 **Open trader question** (not blocking): should a Friday-evening veto hide its setups row
 and count for the cohort on MONDAY? Today it is stamped with New York's Saturday date and
-nothing about that changed.
+nothing about that changed. **ANSWERED 2026-09-19 for the PAGE only (see TJ-11F below):
+the veto reads on FRIDAY. The setups-row hide and the cohort are still driven by
+`session_date` and are untouched.**
+
+### TJ-11F - the rule was reversed the day after it shipped (2026-09-19)
+
+Wave 1 went live on the desk at 16:03 PDT. At ~16:20 PDT the trader answered the lead's
+TJ-11 question: *"a veto on friday night (after the market close) should not be considered
+monday since we have new information then."* That strikes decision 0021 answer 16's last
+clause (now its answer 33) and `plan.md` TJ-11 item 5 as TJ-11 had built them earlier the
+same day. A decision belongs to the session whose information it JUDGED; the next
+session's scan is new information. Branch `claude/tj11f-decision-session`, tip `67143e3e`,
+merged `f00ec302` into `lead/p033-integration2`.
+
+**What moved.** `market_calendar.decision_session` maps BACK, not forward. The annotation
+writer adds `decision_session_rule` beside `decision_session`.
+`day_review_service._stamped_dates_for(session)` is now `session` plus the non-session
+dates AFTER it, up to but excluding the next session day - Friday owns its Saturday and
+Sunday, Friday 2026-09-04 owns 09-05, 09-06 and Labor Day 09-07, and Monday owns only
+itself. The D1 ruler's reference moved with it: an after-close call is measured from the
+JUDGED session's close, so the 2026-09-18 evening calls are measured from **Friday's**.
+
+**What did not move.** `session_date` is byte-identical to base for every writer and
+reader; `pick_feedback.decisions_today` was reproduced byte-identical to base for 09-18,
+09-19 and 09-21. `review_learning`'s veto join, the three cohort graders and
+`daily_recap_reader._decisions` stay pinned and green, and the 18 Saturday-stamped cohort
+picks are left exactly as they are (lead decision (a)). **Nothing on the live desk outside
+Day Review changes**, and `decision_session` has no caller outside Day Review.
+
+**The marker, because a row is never rewritten.** A new row carries
+`decision_session_rule: "judged_session_v2"`. A stored session WITHOUT the marker was
+computed by the struck forward rule, so every reader ignores it and recomputes from the
+row's own stamp; a marked row is believed. It is a schema stamp, not a vocabulary version.
+Measured read-only on a COPY of the live annotation store, 2026-09-19: **1,198 rows, 0
+carrying `decision_session`, 0 carrying the marker** - the file's last write (2026-09-18
+21:07) predates wave 1 going live - so the marker is insurance against rows the running
+desk could have written in that window, not a migration.
+
+**Reproduced on that copy.** All 18 Friday-evening calls (12 veto + 6 `like_claim`, filed
+21:04-21:07 Pacific and stamped New York's Saturday date) appear on `read_day("2026-09-18")`
+- 150 rows = 132 + 18 + 0 - and **none** on `read_day("2026-09-21")`, which holds zero.
+
+**Calendar edges, stated because they are not obvious.** A call over the Labor Day weekend
+answers Friday 2026-09-04; a Thanksgiving-Thursday evening answers Wednesday 2026-11-25;
+an early-close Friday evening stays on its own Friday; garbage answers `None` rather than
+guessing. And 23:00 Pacific on a Sunday is 02:00 Eastern on the Monday - a session date,
+before its open - so it answers **Monday** under the struck rule and the new one alike,
+the same date the base `session_date` carries. Only a NON-session New York date walks
+back, and **0 live rows fall there**.
+
+**Three advisories, recorded and not repaired** (reviewer GO, 2026-09-19).
+* The rule marker is **two independent literals** - `store.DECISION_SESSION_RULE` and
+  `walkaway_day.DECISION_SESSION_RULE`, both `"judged_session_v2"`. They must move
+  together and nothing makes them; this wants ONE imported constant.
+* Day Review's "Today - provisional" entry lets the page open on a **NON-session date**. On
+  a Saturday, `_stamped_dates_for("2026-09-19")` returns the weekend itself and the service
+  tags those in-memory rows `decision_session: 2026-09-19` with the v2 marker, although the
+  rule would say 2026-09-18. The rows shown are the same 18 the base build showed on that
+  page and **nothing is written to a store**, but the tag is wrong in memory; this wants a
+  guard that asks the calendar before tagging.
+* `load_annotations(..., by_decision_session=True)` and `row_decision_session` still have
+  **no production caller** - the service maps through `_stamped_dates_for`. They exist for
+  TJ-15 and are pinned only by tests.

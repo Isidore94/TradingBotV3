@@ -95,7 +95,12 @@ mentor."* Binding, as `plan.md` TJ-9 … TJ-13:
     the desk's D1 label, the side mix of their likes and the bias of their fills.
 16. **Swing calls get a swing ruler:** an Earlier-calls table over five sessions,
     against-you-first beside ran-after, ATR units, one versioned real-miss rule, and a
-    decision made outside a session belongs to the NEXT exchange session.
+    decision made outside a session belongs to ~~the NEXT exchange session~~ *(struck
+    2026-09-19 ~16:20 PDT by the trader, built as TJ-11F)* → **the session it JUDGED**:
+    the session whose New York date the stamp falls on when that date is a session day,
+    else the most recent PRIOR session. Trader, 2026-09-19: *"a veto on friday night
+    (after the market close) should not be considered monday since we have new
+    information then."* See "Answer 16 reversed" below.
 17. **A five-line deterministic report card heads Day Review**; the week and the month
     re-cut the same lines. It computes no new statistic.
 18. **The night serves the trader first.** Inside decision 0018's narration/model stages
@@ -166,3 +171,24 @@ what to change — the lead answered about 65% as written and named eight holes.
     failed start, no pretend trader input on the live home folder (a click-gate is read on a
     staged copy and recorded `staged-pass`, never live-validated), the desk left running as
     found. Rules: `plan.md` 12.6a.
+
+### Answer 16 reversed, 2026-09-19 ~16:20 PDT (packet TJ-11F)
+
+Asked whether a decision made after the close belongs to the session it was made after or
+to the one that follows it, the trader said: *"a veto on friday night (after the market
+close) should not be considered monday since we have new information then."* Binding, and
+it strikes answer 16's last clause the day TJ-11 built it:
+
+33. **A decision belongs to the session whose information it JUDGED.** A call made after
+    Friday's close, over the weekend or on a holiday was made on that session's scan and
+    that session's close; the next session's scan is new information and the judgement
+    does not carry to it. `market_calendar.decision_session(stamp)` is the session whose
+    New York date the stamp falls on when that date is a session day — pre-market,
+    in-session and after the close alike — else the most recent PRIOR session. A NEW
+    annotation row carries `decision_session` beside the rule marker
+    `decision_session_rule: "judged_session_v2"`; a stored session WITHOUT that marker was
+    written under the struck forward rule, so every reader recomputes it from the row's
+    own stamp. **No row is ever rewritten or backfilled**, and `session_date` keeps
+    exactly its base meaning and value for every writer and reader on the desk, so nothing
+    outside Day Review changes. Built on `claude/tj11f-decision-session`; `plan.md` TJ-11
+    item 5, gate #156.
