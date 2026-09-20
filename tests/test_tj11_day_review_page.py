@@ -374,8 +374,13 @@ def test_read_day_reads_daily_bars_through_the_off_qt_reader_once_per_symbol(mon
     assert len(calls) == len(set(calls)), f"a symbol was read twice: {calls}"
 
 
-def test_a_friday_evening_call_reaches_mondays_day_review(monkeypatch):
-    """The live case: 18 D1 calls stamped 2026-09-19, a Saturday."""
+def test_a_friday_evening_call_reaches_fridays_day_review(monkeypatch):
+    """The live case: 18 D1 calls stamped 2026-09-19, a Saturday.
+
+    UPDATED by TJ-11F on the trader's word (2026-09-19): *"a veto on friday
+    night (after the market close) should not be considered monday since we
+    have new information then."* This pinned Monday's page under TJ-11.
+    """
     rows = [
         _annotation("EEE", session_date="2026-09-19",
                     created_at="2026-09-18T21:04:28.734007-07:00"),
@@ -384,18 +389,20 @@ def test_a_friday_evening_call_reaches_mondays_day_review(monkeypatch):
     ]
     service, _calls = _wire(monkeypatch, annotations=rows)
 
-    day = service.read_day("2026-09-21", now=datetime(2026, 9, 22, 8, 0))["walkaway"]
+    friday = service.read_day(SESSION, now=datetime(2026, 9, 22, 8, 0))["walkaway"]
+    monday = service.read_day("2026-09-21", now=datetime(2026, 9, 22, 8, 0))["walkaway"]
 
-    assert sorted(row.symbol for row in day.rejected) == ["EEE", "FFF"]
+    assert [row.symbol for row in friday.rejected] == ["EEE"]
+    assert [row.symbol for row in monday.rejected] == ["FFF"]
 
 
-def test_a_saturday_stamped_call_is_not_shown_on_the_friday_before_it(monkeypatch):
+def test_a_saturday_stamped_call_is_not_shown_on_the_monday_after_it(monkeypatch):
     rows = [
         _annotation("EEE", session_date="2026-09-19",
                     created_at="2026-09-18T21:04:28.734007-07:00"),
     ]
     service, _calls = _wire(monkeypatch, annotations=rows)
 
-    day = service.read_day(SESSION, now=NOW)["walkaway"]
+    day = service.read_day("2026-09-21", now=datetime(2026, 9, 22, 8, 0))["walkaway"]
 
     assert [row.symbol for row in day.rejected] == []

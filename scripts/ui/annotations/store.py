@@ -185,20 +185,30 @@ class AnnotationError(ValueError):
 
 
 #: The ADDITIVE field TJ-11 writes beside `session_date`: the exchange session
-#: the decision belongs to, which for a call made after the close is the NEXT
-#: one. `session_date` keeps its own meaning and its own value for every writer
-#: and every reader; an old row simply lacks this key and is never rewritten,
-#: and only TJ-11's own readers look at it.
+#: the decision JUDGED, which for a call made after Friday's close is FRIDAY's
+#: (TJ-11F, trader 2026-09-19). `session_date` keeps its own meaning and its own
+#: value for every writer and every reader; an old row simply lacks this key and
+#: is never rewritten, and only TJ-11's own readers look at it.
 DECISION_SESSION_FIELD = "decision_session"
 
+#: Which RULE computed :data:`DECISION_SESSION_FIELD` on this row. Rows written
+#: between wave 1 going live (2026-09-19 16:03 PDT) and TJ-11F could hold a
+#: FORWARD-mapped value, and no row is ever rewritten - so a stored session is
+#: believed only when the row also says the judged-session rule wrote it, and a
+#: value without the marker is recomputed from the row's own stamp. This is a
+#: schema stamp, not a vocabulary version.
+DECISION_SESSION_RULE_FIELD = "decision_session_rule"
+DECISION_SESSION_RULE = "judged_session_v2"
 
-def _forward_session(value: Any) -> str:
-    """The exchange session a stamp belongs to, or ``""`` when unanswerable.
+
+def _judged_session(value: Any) -> str:
+    """The exchange session a stamp JUDGED, or ``""`` when unanswerable.
 
     One seam, `market_calendar.decision_session`. A date that IS a session comes
-    back unchanged, so this only ever moves a weekend, an evening or a holiday
-    forward. Answering ``""`` rather than guessing is the point: a row that
-    cannot be placed carries no claim about where it belongs.
+    back unchanged, so this only ever walks a weekend, an evening after the
+    close or a holiday BACK to the session it was made on. Answering ``""``
+    rather than guessing is the point: a row that cannot be placed carries no
+    claim about where it belongs.
     """
     try:
         from market_calendar import decision_session
@@ -210,17 +220,20 @@ def _forward_session(value: Any) -> str:
 
 
 def row_decision_session(row: Mapping[str, Any]) -> str:
-    """Which exchange session one annotation row's decision belongs to.
+    """Which exchange session one annotation row's decision JUDGED.
 
-    TJ-11's ONE reader-side seam, and nothing outside TJ-11 calls it. A new row
-    carries :data:`DECISION_SESSION_FIELD`; an old row does not, so its stamp
-    (`created_at`, else `session_date`) is mapped through the same calendar
-    function. The row is never rewritten either way.
+    TJ-11's ONE reader-side seam, and nothing outside TJ-11 calls it. A stored
+    :data:`DECISION_SESSION_FIELD` is believed only when the row also carries
+    :data:`DECISION_SESSION_RULE` - without it the value came from the forward
+    rule TJ-11F reversed. Otherwise the row's own stamp (`created_at`, else
+    `session_date`) is mapped through the calendar. The row is never rewritten
+    either way: a reader maps, it does not repair.
     """
     stored = str(row.get(DECISION_SESSION_FIELD) or "").strip()
-    if stored:
+    rule = str(row.get(DECISION_SESSION_RULE_FIELD) or "").strip()
+    if stored and rule == DECISION_SESSION_RULE:
         return stored[:10]
-    return _forward_session(row.get("created_at") or row.get("session_date"))
+    return _judged_session(row.get("created_at") or row.get("session_date"))
 
 
 def _session_date_text(session_date: Any = None) -> str:
@@ -380,15 +393,17 @@ def build_annotation(
         "created_at": _created_at_text(created_at),
         "source": ANNOTATION_SOURCE,
     }
-    # ADDITIVE (TJ-11): the exchange session this decision belongs to, which for
-    # a call made after the close is the NEXT one - the 18 D1 calls made at
-    # 21:04 Pacific on Friday 2026-09-18 are Monday's decisions. `session_date`
-    # above is untouched and still says what it has always said; this key is
-    # extra, is read only by TJ-11's own readers, and is left EMPTY rather than
-    # guessed when the calendar cannot answer.
-    row[DECISION_SESSION_FIELD] = _forward_session(
+    # ADDITIVE (TJ-11, reversed by TJ-11F): the exchange session this decision
+    # JUDGED - the 18 D1 calls made at 21:04 Pacific on Friday 2026-09-18 judged
+    # FRIDAY's scan and Friday's close, not Monday's. `session_date` above is
+    # untouched and still says what it has always said; these keys are extra,
+    # are read only by TJ-11's own readers, and the session is left EMPTY rather
+    # than guessed when the calendar cannot answer. The rule marker says which
+    # rule computed the value, because a row is never rewritten.
+    row[DECISION_SESSION_FIELD] = _judged_session(
         _created_at_text(created_at)
-    ) or _forward_session(row["session_date"])
+    ) or _judged_session(row["session_date"])
+    row[DECISION_SESSION_RULE_FIELD] = DECISION_SESSION_RULE
 
     if kind == EVENT_VETO:
         code = str(reason_code or "").strip().lower()
@@ -639,9 +654,9 @@ def load_annotations(
     `review_learning` have always been joined on. **This default never moves.**
 
     `by_decision_session=True` is TJ-11's OPT-IN: match on the exchange session
-    the decision belongs to instead (:func:`row_decision_session`), so a call
-    made after Friday's close is read as Monday's. Nothing outside TJ-11 passes
-    it, and the file is never rewritten either way.
+    the decision JUDGED instead (:func:`row_decision_session`), so a call made
+    after Friday's close is read as FRIDAY's (TJ-11F). Nothing outside TJ-11
+    passes it, and the file is never rewritten either way.
     """
     target = Path(path)
     try:
@@ -650,7 +665,7 @@ def load_annotations(
         return []
     wanted_date = _session_date_text(session_date) if session_date is not None else None
     wanted_session = (
-        (_forward_session(wanted_date) or wanted_date)
+        (_judged_session(wanted_date) or wanted_date)
         if (by_decision_session and wanted_date)
         else None
     )

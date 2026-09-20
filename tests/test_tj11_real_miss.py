@@ -201,23 +201,28 @@ def _decision_session(stamp):
     return decision_session(stamp)
 
 
-def test_a_friday_evening_call_after_the_close_belongs_to_mondays_session():
-    """The live case: 18 D1 calls made 2026-09-18 21:04 Pacific."""
-    assert _decision_session(datetime(2026, 9, 18, 21, 30, tzinfo=PACIFIC)) == date(2026, 9, 21)
-    assert _decision_session(datetime(2026, 9, 18, 21, 4, 28, tzinfo=PACIFIC)) == date(2026, 9, 21)
+def test_a_friday_evening_call_after_the_close_is_fridays_judgement():
+    """The live case: 18 D1 calls made 2026-09-18 21:04 Pacific.
+
+    UPDATED by TJ-11F on the trader's word (2026-09-19): *"a veto on friday
+    night (after the market close) should not be considered monday since we
+    have new information then."* These pinned Monday under TJ-11.
+    """
+    assert _decision_session(datetime(2026, 9, 18, 21, 30, tzinfo=PACIFIC)) == date(2026, 9, 18)
+    assert _decision_session(datetime(2026, 9, 18, 21, 4, 28, tzinfo=PACIFIC)) == date(2026, 9, 18)
 
 
-def test_a_saturday_stamped_row_is_read_as_mondays_session():
-    """An existing row is never rewritten; its reader maps it forward."""
-    assert _decision_session("2026-09-19") == date(2026, 9, 21)
-    assert _decision_session(date(2026, 9, 19)) == date(2026, 9, 21)
-    assert _decision_session(date(2026, 9, 20)) == date(2026, 9, 21)
+def test_a_saturday_stamped_row_is_read_as_fridays_session():
+    """An existing row is never rewritten; its reader maps it back (TJ-11F)."""
+    assert _decision_session("2026-09-19") == date(2026, 9, 18)
+    assert _decision_session(date(2026, 9, 19)) == date(2026, 9, 18)
+    assert _decision_session(date(2026, 9, 20)) == date(2026, 9, 18)
 
 
-def test_a_call_the_evening_before_a_monday_holiday_belongs_to_tuesday():
-    """Labor Day 2026 is Monday 2026-09-07."""
-    assert _decision_session(datetime(2026, 9, 4, 21, 30, tzinfo=PACIFIC)) == date(2026, 9, 8)
-    assert _decision_session("2026-09-07") == date(2026, 9, 8)
+def test_a_call_the_evening_before_a_monday_holiday_belongs_to_the_friday_before():
+    """Labor Day 2026 is Monday 2026-09-07; the session it judged is 09-04."""
+    assert _decision_session(datetime(2026, 9, 4, 21, 30, tzinfo=PACIFIC)) == date(2026, 9, 4)
+    assert _decision_session("2026-09-07") == date(2026, 9, 4)
 
 
 def test_a_call_inside_the_session_keeps_its_own_session():
@@ -227,22 +232,38 @@ def test_a_call_inside_the_session_keeps_its_own_session():
     assert _decision_session("2026-09-18") == date(2026, 9, 18)
 
 
-def test_a_stamp_after_a_weekday_close_moves_to_the_next_session():
-    assert _decision_session(datetime(2026, 9, 17, 17, 0, tzinfo=EASTERN)) == date(2026, 9, 18)
+def test_a_stamp_after_a_weekday_close_keeps_its_own_session():
+    """UPDATED by TJ-11F: the close is no longer a boundary."""
+    assert _decision_session(datetime(2026, 9, 17, 17, 0, tzinfo=EASTERN)) == date(2026, 9, 17)
 
 
-def test_the_close_boundary_is_compared_with_astimezone_not_by_stripping_a_zone():
-    """16:00 ET on 2026-09-18 is 20:00 UTC. A minute later is Monday's."""
+def test_a_zone_is_converted_with_astimezone_and_never_stripped():
+    """UPDATED by TJ-11F: the close stopped being a boundary, so this test
+    lost its old subject (16:00 vs 16:01 ET are now the same session) and
+    proves the zone rule on the boundary that remains.
+
+    22:00 Eastern on Sunday 2026-09-20 is 02:00 UTC on the Monday. Strip the
+    zone and the date reads Monday, a session, and the answer would be
+    Monday's. Converted it is a Sunday evening in New York, so it is Friday's.
+    """
     at_the_close = datetime(2026, 9, 18, 20, 0, tzinfo=timezone.utc)
-    one_minute_later = datetime(2026, 9, 18, 20, 1, tzinfo=timezone.utc)
+    sunday_evening_ny = datetime(2026, 9, 21, 2, 0, tzinfo=timezone.utc)
 
     assert _decision_session(at_the_close) == date(2026, 9, 18)
-    assert _decision_session(one_minute_later) == date(2026, 9, 21)
+    assert sunday_evening_ny.astimezone(EASTERN).date() == date(2026, 9, 20)
+    assert _decision_session(sunday_evening_ny) == date(2026, 9, 18)
 
 
 def test_a_naive_stamp_is_read_as_market_local_and_never_as_utc():
-    """Naive 2026-09-18 21:30 is an evening in New York, so Monday's session."""
-    assert _decision_session(datetime(2026, 9, 18, 21, 30)) == date(2026, 9, 21)
+    """UPDATED by TJ-11F: naive Friday 21:30 now answers Friday either way, so
+    the case that still separates the two readings is the small hours.
+
+    Naive 2026-09-21 02:00 read as market-local is Monday pre-market, a
+    session. Read as UTC it would be Sunday 22:00 in New York, and the answer
+    would be Friday's.
+    """
+    assert _decision_session(datetime(2026, 9, 21, 2, 0)) == date(2026, 9, 21)
+    assert _decision_session(datetime(2026, 9, 18, 21, 30)) == date(2026, 9, 18)
     assert _decision_session(datetime(2026, 9, 18, 10, 0)) == date(2026, 9, 18)
 
 

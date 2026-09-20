@@ -101,11 +101,14 @@ def test_the_new_field_is_additive_and_session_date_is_byte_for_byte_base(monkey
     # What base wrote, unchanged: the market session WINDOW's date, pinned
     # above to the Saturday the live rows carry.
     assert row["session_date"] == SATURDAY
-    # What TJ-11 adds, beside it.
-    assert row[store.DECISION_SESSION_FIELD] == MONDAY
-    # And nothing else appeared: the row minus the new key is the base row's
+    # What TJ-11 adds, beside it. UPDATED by TJ-11F (trader, 2026-09-19): the
+    # 21:04 Pacific stamp judged FRIDAY, and the row now also says which rule
+    # computed that, because a row is never rewritten.
+    assert row[store.DECISION_SESSION_FIELD] == "2026-09-18"
+    assert row[store.DECISION_SESSION_RULE_FIELD] == store.DECISION_SESSION_RULE
+    # And nothing else appeared: the row minus the new keys is the base row's
     # own key set.
-    assert set(row) - {store.DECISION_SESSION_FIELD} == {
+    assert set(row) - {store.DECISION_SESSION_FIELD, store.DECISION_SESSION_RULE_FIELD} == {
         "schema_version", "event_id", "event_type", "symbol", "session_date",
         "created_at", "source", "reason_code", "vocab_version", "side",
         "timeframe",
@@ -146,18 +149,29 @@ def test_load_annotations_default_matches_session_date_exactly(tmp_path):
     assert [row["symbol"] for row in store.load_annotations(target, session_date=SATURDAY)] == ["HLIT"]
 
 
-def test_the_forward_mapping_is_an_explicit_opt_in(tmp_path):
+def test_the_backward_mapping_is_an_explicit_opt_in(tmp_path):
+    """UPDATED by TJ-11F: the Saturday row's judged session is FRIDAY's.
+
+    The point of the test is unchanged - the mapping is an OPT-IN and the
+    default is exact `session_date` matching - so both halves are asserted
+    against the session the row now belongs to.
+    """
     from ui.annotations import store
 
     target = _write(tmp_path / "a.jsonl", [_veto_row()])
 
+    # The default is exact `session_date` matching, so the Saturday row is
+    # neither Friday's nor Monday's to anybody but TJ-11.
     assert store.load_annotations(target, session_date=MONDAY) == []
+    assert store.load_annotations(target, session_date="2026-09-18") == []
     assert [
         row["symbol"]
         for row in store.load_annotations(
-            target, session_date=MONDAY, by_decision_session=True
+            target, session_date="2026-09-18", by_decision_session=True
         )
     ] == ["HLIT"]
+    # And Monday's opt-in read no longer holds it.
+    assert store.load_annotations(target, session_date=MONDAY, by_decision_session=True) == []
 
 
 def test_a_new_row_reads_the_same_to_pick_feedback_as_the_base_row_did(tmp_path):
@@ -272,8 +286,14 @@ def test_a_new_row_reads_the_same_to_daily_recap_readers_decisions(tmp_path):
 # -- TJ-11's own reader ------------------------------------------------------
 
 
-def test_only_tj11s_reader_moves_the_row_forward():
-    """The walk-away builder reads the additive field, or maps the stamp."""
+def test_only_tj11s_reader_moves_the_row_back():
+    """The walk-away builder reads the additive field, or maps the stamp.
+
+    UPDATED by TJ-11F on the trader's word (2026-09-19): the mapping is
+    BACKWARD, and a stored `decision_session` with no `decision_session_rule`
+    marker was written under the forward rule, so it is recomputed rather than
+    believed. This pinned Monday for both rows under TJ-11.
+    """
     from walkaway_day import build
 
     def _rejected(session, decision):
@@ -295,9 +315,10 @@ def test_only_tj11s_reader_moves_the_row_forward():
     older = dict(stored)
     older.pop("decision_session")
 
-    # The new row says which session it belongs to; the old one is mapped from
-    # its own stamp. Both land on Monday, and neither lands on Friday.
-    assert _rejected(MONDAY, stored) == ["HLIT"]
-    assert _rejected(MONDAY, older) == ["HLIT"]
-    assert _rejected("2026-09-18", stored) == []
-    assert _rejected("2026-09-18", older) == []
+    # `stored` carries a FORWARD `decision_session` and no rule marker, so it
+    # is recomputed from its own stamp exactly as `older` is. Both land on
+    # Friday - the session they judged - and neither lands on Monday.
+    assert _rejected(MONDAY, stored) == []
+    assert _rejected(MONDAY, older) == []
+    assert _rejected("2026-09-18", stored) == ["HLIT"]
+    assert _rejected("2026-09-18", older) == ["HLIT"]
