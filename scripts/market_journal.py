@@ -135,6 +135,43 @@ def build_prediction(
     }
 
 
+#: How each horizon prints on a screen. Display only - nothing is stored here.
+HORIZON_TEXT = {
+    HORIZON_REST_OF_DAY: "Rest of day",
+    HORIZON_NEXT_5_SESSIONS: "Next 5 sessions",
+}
+DIRECTION_TEXT = {
+    "up": "Up",
+    "down": "Down",
+    "chop": "Chop",
+    "range": "Range",
+    DIRECTION_NO_VIEW: "No view",
+}
+
+
+def prediction_line(entry: Mapping[str, Any]) -> str:
+    """One readable line for a clicked call, or ``""``. DISPLAY ONLY.
+
+    A card answered with clicks and no words stores `text == ""` - nobody wrote
+    a sentence and the desk does not write one for them (decision 0021 answer
+    29). A SCREEN still has to show something other than a blank row, so the
+    surfaces that print journal text fall back to this. It is built here, once,
+    so two pages cannot word the same call differently, and it is never written
+    to the store.
+    """
+    call = prediction_of(entry)
+    if call is None:
+        return ""
+    horizon = HORIZON_TEXT.get(call.horizon, call.horizon)
+    direction = DIRECTION_TEXT.get(call.direction, call.direction)
+    line = f"{horizon}: {direction}"
+    if call.confidence:
+        line += f" ({call.confidence} confidence)"
+    if call.because:
+        line += f" - {call.because}"
+    return line
+
+
 def prediction_of(entry: Mapping[str, Any]) -> Prediction | None:
     """The clicked call on one entry, or ``None``. The ONE accessor.
 

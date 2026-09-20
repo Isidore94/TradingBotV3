@@ -207,8 +207,29 @@ def _entry_row(row: Mapping[str, Any]) -> dict[str, Any]:
     and only one of them is a prediction.
     """
     after = bool(row.get("written_after_the_session"))
+    # TJ-14A: a Mentor answer keeps the DESCRIPTION and the PREDICTION apart,
+    # and a card answered with clicks and no words has an empty `text`. The
+    # call travels with the row so no reader of this story has to re-derive it
+    # from the words - which is exactly the reading the click replaced - and so
+    # a wordless answer is never an empty row here.
+    try:
+        from market_journal import prediction_of
+
+        call = prediction_of(row)
+    except Exception:  # noqa: BLE001 - a story is never lost to an accessor
+        call = None
     return {
         "kind": KIND_TRADER,
+        "prediction": (
+            {
+                "direction": call.direction,
+                "horizon": call.horizon,
+                "confidence": call.confidence,
+                "because": call.because,
+            }
+            if call is not None
+            else None
+        ),
         "entry_id": str(row.get("entry_id") or ""),
         "session_date": str(row.get("session_date") or ""),
         "created_at": str(row.get("created_at") or ""),
