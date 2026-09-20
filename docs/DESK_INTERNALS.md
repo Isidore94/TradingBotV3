@@ -1483,6 +1483,135 @@ cut, which is the conservative direction - "you may be reading part of this" is 
 say wrongly and "you have all of it" is not. A symbol that genuinely has more rows than
 the ceiling holds still says True.
 
+## TJ-15 - what the misses had in common, and the two floors it took (2026-09-19, packet TJ-15)
+
+The long form behind the CLAUDE.md rule *"A miss contrast has TWO floors and judges D1
+only."* plan.md 12.4 TJ-15, decision 0021. Branch `claude/tj15-miss-contrast` (tip
+`8547c4a5`), merged `fb3f55e9` into `lead/p033-integration2`, with the lead's slot-position
+fix `1f260ffa` on top. Two reviews by reproduction on the real 2026-09-18 window: NO-GO,
+then GO after the fix round.
+
+TJ-11 put the names the trader turned down that ran onto the Day Review page. TJ-15 asks
+the next question of the same rows - *what did they have in common?* - and answers it with
+arithmetic only. **No model is called anywhere in this chain.**
+
+**One method, built once.** `scripts/evidence_contrast.py` takes two groups of
+point-in-time feature mappings and returns, per feature, the two integer counts, the two
+medians and ONE rank statistic: `compression_calibration.auc`, the statistic PCT-3
+established, CALLED rather than re-derived. The rank key is `abs(auc - 0.5)` descending
+then feature NAME ascending; **no group size, no median magnitude and no R statistic may
+enter it** (gate #43). An AUC below 0.5 therefore ranks on SEPARATION, not on being high -
+live, the `like` group's leader scored 0.33. A feature only one side measured is NAMED in
+`unmeasured_features`; a blank cell is left out of the median and never read as zero.
+`rate()` is the ONE Wilson - `swing_headline.WILSON_Z` through `walkaway_day._wilson` -
+over CLOSED horizons only, with the open ones counted, printed as `pending`, and in neither
+half. TJ-16 reuses this module; it is not TJ-15's private helper.
+
+**Two floors, and they are different floors** (fix round). The first build had one.
+`MIN_REPORTABLE_N` gates a group's RATE, whose denominator is every measured decision - but
+a FEATURE is measured only on the decisions that also carried a point-in-time scan row, and
+on the live window that was a much smaller number. `veto / sma_incoming` had n=47 and
+measured=30, cleared the rate floor, and then named the night's leading finding off **four
+rows against one** at an AUC of exactly 1.0 - which is what four-against-one gives whenever
+the four sit above the one. So `MIN_CONTRAST_SIDE_N` is 10: a feature is ranked only with
+at least ten rows on EACH side and `MIN_REPORTABLE_N` across both. One under that is still
+NAMED, with both counts, in `thin_features` - hiding it would say it was never looked at -
+carries no AUC, and never enters `features`. `compared` counts the RANKED features only and
+the statement prints both numbers. A GROUP is a leader only with a reportable rate AND at
+least one ranked feature; one with a reportable rate and no ranked feature keeps its row
+and its rate and reads `no feature had enough rows on both sides`, and the pack's headline
+says that rather than claiming the floor. `n_a` and `n_b` are FIELDS at the group level and
+on every feature and thin-feature row, never only in prose.
+
+**D1 only, because the ruler and the features are D1's** (fix round). The first build
+pooled every timeframe, and the population was not what it was assumed to be: over the 20
+sessions ending 2026-09-18 it was **1,026 M5 against 1,013 D1** (plus 4 H1 and 2 "5M"), and
+the top-named leader was an M5 group judged on a five-session swing horizon with D1-scan
+features it never had. The pack now judges D1 and nothing else, compares the timeframe
+case-insensitively, COUNTS the rest in `excluded_by_timeframe` and says the number in its
+own sentence; a row with no timeframe is counted in `no_timeframe` and never read as D1.
+
+**Point in time, and one session back is still point in time** (fix round). The features
+are the LAST scan row for `(symbol, side)` at or before the decision's own stamp - never a
+later one, never an older one. Restricting that to the decision's OWN session threw away
+47-83% of decisions, because the scan does not run when the trader clicks: on the live
+window it ran at roughly 07:00-07:50, 10:01, 12:45 and 13:00 desk time and on some sessions
+only once, so an evening or pre-market decision had no same-session row at all. The window
+reaches back ONE exchange session (`MAX_SCAN_AGE_SESSIONS = 1`) - what the trader was
+actually looking at in the evening or before the open - with the age carried on the row and
+counted per group as `scan_same_session` / `scan_prior_session` / `no_point_in_time_scan`;
+live that was 238 / 140 / 97 of 475 measured decisions. `run_timestamp` is NAIVE desk wall
+time and an annotation's stamp is ZONED, so the desk zone is ATTACHED to the naive side
+through `ui.annotations.pass_bars.attach_desk_zone` and the aware side is never stripped -
+strip it instead and a `14:05+00:00` spelling of a 07:05 Pacific veto reads 14:05, which
+puts the 07:30 scan *before* the decision.
+
+**Only a VETO has a reason code** (fix round). A veto's reason is a code from the versioned
+veto vocabulary, so vetoes group by it, pooled across vocabulary versions and said so in
+the pack - a code is never reused, so a code means one thing. Every other verdict's reason
+is the trader's FREE TEXT, and grouping on it made one group per sentence: live, `dislike`
+split into two groups of one, each immune to any floor because a group of one is never
+compared with anything. They group by the verdict alone.
+
+**Where the slot sits, and why that is not a free choice.** `miss_contrast` is registered
+INSIDE the deterministic stage, after the cohort graders and `theta_pick_grading` and
+**before the `market_story_rollups` + `measured_report` pair that closes it**. The packet
+first appended it after that pair; the lead moved it above them at integration
+(`1f260ffa`), because WS-10D and WS-RP each pin `measured_report` DIRECTLY after
+`market_story_rollups` and `test_veto_cohort_grading` pins the whole slate - three order
+assertions the packet's targeted runs never reached and the full suite caught at once.
+The position is load-bearing in the other direction too: `runner._STAGE_ONE_LAST_SLOT` is
+`measured_report` and `_deterministic_stage` walks the slate up to and INCLUDING that name,
+so a slot appended AFTER it is not in stage 1 by that function's reckoning and silently
+leaves the **Sunday** slate, however deterministic it is. `_STAGE_ONE_LAST_SLOT` is
+untouched, `measured_report` still closes the stage, and the slot runs on the weeknight,
+Saturday and Sunday slates alike. Nothing here reads the measured report and nothing there
+reads this pack, so only the ORDER was ever a choice - and only one of the two orders runs
+on a Sunday. `uses_model=False`, `max_attempts=3`, `reserve_minutes=5.0`. Decision 0018
+carries the slot-list addendum.
+
+**The file, and what a real pass costs.** `d1_features_history.csv` is ~709 MB over 264
+columns, streamed by session through `stream_feature_rows` as a GENERATOR: ONE
+`csv.DictReader` pass with a 20-session filter is **7.8 s warm / 17.7 s cold** at about 100
+KB of traced Python allocation, where `pandas.read_csv` of the whole file would be roughly
+1.4 GB inside the process that owns the night. The slot holds one feature mapping per
+DECISION, never a list of the file. End to end on the real 2026-09-18 window: 600-900
+durable daily frames read, a ~119 KB pack, **~18-24 s and ~240-300 MB of process heap** for
+the whole slot. A live group compares 54-81 features and names another 6-88 too thin to
+call. The re-derived live result: 1,013 D1 decisions judged in 11 groups, leaders
+`compressed` (`last_volume`, 32 v 71, AUC 0.72), `veto` with no code recorded
+(`rs_vs_industry_5d`, 15 v 53, 0.70) and `like` (25 v 59, 0.33).
+
+**One rule, one mapping.** `real_miss.verdict` is CALLED through its module attribute, and
+which session a decision belongs to is `walkaway_day._row_session` - the same seam Day
+Review's own walk-away asks - so the table under the misses and the misses themselves
+cannot disagree, and TJ-11F's judged-session rule carries through unchanged.
+
+**It never costs the night.** A missing, locked or unreadable features file, an unreadable
+annotation store and an absent daily-bar store are each a recorded REASON on an `ok` row.
+The one thing it REFUSES is a missing, empty or unparseable `session_date`: that is
+`failed` with a reason and NO file, because a pack keyed to nothing publishes
+`miss_contrast-.json`, one file every later session would supersede and no reader could
+date. The pack goes to `store.digests_dir()`, the same place `daily_digest` and
+`measured_report` publish - **the DAS on this desk**, not a local-first write - gated by the
+runner's `store_available` probe before any slot starts, and written temp-and-rename onto a
+superseding sibling, so a correction is a new file and an earlier pack is never rewritten.
+
+**Advisories, recorded and not repaired.** The no-code veto bucket reads just `veto` where
+it wants to read `veto (no code recorded)`. The pack never states the DIRECTION of a
+leading feature in words - it gives the two medians and leaves the reader to see which way
+they point. `MIN_CONTRAST_SIDE_N = 10` is lenient: a merged-tree like leader rested on 10
+against 37, so gate #160 watches whether ten a side is enough. `read_latest` is a FILE
+READ - TJ-5's Week Review table must call it on a worker, never on the Qt thread. And the
+builder calls six PRIVATE `walkaway_day` seams deliberately, rather than copy a rule that
+would then drift.
+
+**One lesson for the next packet.** The packet's targeted runs were green while three order
+assertions elsewhere were red. A packet that adds or MOVES a runner slot runs `-k "slot or
+stage or slate"` plus `tests/test_veto_cohort_grading.py`,
+`tests/test_ws_10d_market_story.py` and `tests/test_ws_rp_shared_report.py` - not only
+`tests/test_ai_jobs_runner.py`. plan.md 12.3 carries it.
+
 ## M1 - a shadow that measured nothing for ten days (2026-09-05)
 
 The long form behind the CLAUDE.md rule *"The AVWAP band challenger is measured through

@@ -190,3 +190,39 @@ refused by the night-only window.
 
 **One reopen trigger is added:** if a night kind is ever chosen by anything
 other than the exchange calendar, `night_kind` is the one place it changes.
+
+## Amendment 2026-09-19 — `miss_contrast` joins stage 1, above the pair that closes it (TJ-15)
+
+Built as packet TJ-15 (`plan.md` 12.4), merged into `lead/p033-integration2`;
+the slot's position is the lead's integration fix `1f260ffa`.
+
+**The stage-1 list, as `default_slots()` now spells it:** `journal_import`,
+`journal_auto_tag`, `veto_cohort_grading`, `like_cohort_grading`,
+`sidecar_completion`, `pass_cohort_grading`, `rejection_cohort_grading`,
+`note_vocabulary_audit`, `preference_trade_outcomes`, `evidence_report`,
+`daily_digest`, `theta_pick_grading` (WS-TH), **`miss_contrast` (TJ-15)**,
+`market_story_rollups` (WS-10D), `measured_report` (WS-RP).
+
+**`miss_contrast` sits after the cohort graders and BEFORE the
+`market_story_rollups` + `measured_report` pair.** It reads what a decision
+turned OUT to be, so it belongs after the graders; it calls no model
+(`uses_model=False`, `max_attempts=3`, `reserve_minutes=5.0`) and nothing below
+it reads its pack, so it stays ahead of `ai_summary`. Its place ABOVE the
+closing pair is load-bearing twice over:
+
+* WS-10D and WS-RP each pin `measured_report` DIRECTLY after
+  `market_story_rollups`, and `tests/test_veto_cohort_grading.py` pins the whole
+  slate. The packet first appended the slot after that pair; three order
+  assertions went red in the full suite and the lead moved it above them.
+* `runner._STAGE_ONE_LAST_SLOT` is `measured_report` and
+  `runner._deterministic_stage` walks the slate up to and INCLUDING that name,
+  so a slot appended AFTER it is not in stage 1 by that function's reckoning and
+  silently leaves the **Sunday** slate, however deterministic it is.
+
+`_STAGE_ONE_LAST_SLOT` is unchanged and `measured_report` still closes the
+stage. Nothing in `miss_contrast` reads the measured report and nothing in the
+measured report reads this pack, so only the order was ever a choice — and only
+one of the two orders runs on a Sunday. **A later packet appending inside stage
+1 lands in the same place, for the same reason**, and runs `-k "slot or stage or
+slate"` plus the three pinning test files above, not only
+`tests/test_ai_jobs_runner.py`.

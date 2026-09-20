@@ -2345,6 +2345,34 @@ They are evidence and must not be loaded as context.
   calls a model, uploads, changes a live decision or writes a live store. Tests:
   `tests/test_ws_rp_shared_report.py` (44 behavior checks plus two unchanged N3 guards) and
   `tests/test_ai_jobs_runner.py` (deterministic-slot order). Gate #133.
+- **`miss_contrast` - what the misses had in common (TJ-15, 2026-09-19).**
+  `scripts/evidence_contrast.py` is pure: per feature two counts, two medians and ONE rank
+  statistic through `compression_calibration.auc` (called, never re-derived), rank key
+  `abs(auc-0.5)` then feature NAME with no group size and no R statistic in it;
+  `MIN_REPORTABLE_N` gates a group's RATE and `MIN_CONTRAST_SIDE_N` (10 a side,
+  `MIN_REPORTABLE_N` across both) gates a FEATURE, a thinner one named in `thin_features`
+  with both counts and no AUC, `compared` counting the ranked only; `rate()` is the ONE
+  Wilson over CLOSED horizons with `pending` in neither half. `scripts/ai_jobs/miss_contrast.py`
+  is the deterministic Stage 1 slot (`uses_model=False`, `max_attempts=3`,
+  `reserve_minutes=5.0`), registered after the cohort graders and `theta_pick_grading` and
+  BEFORE the `market_story_rollups` + `measured_report` pair that closes the stage, so it
+  stays on the weeknight, Saturday and Sunday slates (`_STAGE_ONE_LAST_SLOT` untouched);
+  `EXPECTED_SLOT_ORDER` gains one name. It judges **D1 decisions only**, counting every
+  other timeframe in `excluded_by_timeframe` and a blank one in `no_timeframe`; per veto
+  reason CODE (pooled across vocabulary versions) and once per other verdict it contrasts
+  real misses against correct rejections on the LAST D1 scan at or before the decision's
+  stamp, from its own session or the ONE before (`MAX_SCAN_AGE_SESSIONS = 1`, ages counted
+  per group), streaming the ~709 MB `d1_features_history.csv` by session. A group is named
+  only with a reportable rate AND a ranked feature. One JSON pack per session beside the
+  digest in `store.digests_dir()` (`miss_contrast-<session>.json`, temp-and-rename onto a
+  superseding sibling), `read_latest` the reader - a file read, to be called on a worker. An
+  unreadable `session_date` refuses with `failed` and writes nothing; every other missing
+  input is a recorded reason on an `ok` row. Shadow evidence: nothing reaches a detector,
+  score, alert, watchlist, Focus, the review queue or `review_policy.json`. Tests:
+  `tests/test_tj15_evidence_contrast.py`, `tests/test_tj15_point_in_time.py`,
+  `tests/test_tj15_miss_contrast_slot.py`, `tests/test_tj15_miss_contrast_builder.py`,
+  `tests/test_tj15_fix_round.py`. Rule: DESK_INTERNALS "TJ-15"; slot position: decision 0018
+  amendment 2026-09-19. Gate #160 owed.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
@@ -2929,6 +2957,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-19 (night) - TJ-15: what the misses had in common - a measured D1 feature contrast, a deterministic nightly slot (branch `claude/tj15-miss-contrast`, tip `8547c4a5`, merged into `lead/p033-integration2` `fb3f55e9`, slot position fixed `1f260ffa`)
+
+The bot says WHY, not only what - with arithmetic, and no model anywhere in the chain. `scripts/evidence_contrast.py` is the ONE method (two counts, two medians and `compression_calibration.auc` per feature; rank key `abs(auc-0.5)` then feature NAME; `rate()` the ONE Wilson over closed horizons with `pending` in neither half) and `scripts/ai_jobs/miss_contrast.py` the deterministic Stage 1 slot that publishes one `miss_contrast-<session>.json` pack beside the digest. **Two reviews by reproduction on the real 2026-09-18 window, NO-GO then GO, and both round-1 blockers were about what the pack SAYS.** (1) It named a leader off FOUR values against ONE: `veto / sma_incoming` had n=47 and measured=30, cleared the rate floor, and then reported an AUC of exactly 1.0 - which is what four-against-one gives whenever the four sit above the one. A feature is now ranked only with `MIN_CONTRAST_SIDE_N` = 10 rows on EACH side and `MIN_REPORTABLE_N` across both; a thinner one is still NAMED in `thin_features` with both counts and no AUC, `compared` counts the ranked only, and a GROUP leads only with a reportable rate AND a ranked feature - otherwise its row reads `no feature had enough rows on both sides`. (2) About HALF the reviewed population is M5 - **1,026 M5 against 1,013 D1** (plus 4 H1 and 2 "5M") over the 20 sessions ending 2026-09-18 - and it was all pooled under the D1 swing ruler. The pack now judges **D1 only**, counts everything else in `excluded_by_timeframe`, counts a row with no timeframe in `no_timeframe` and never reads it as D1, and says the number in its own sentence. Also built in the fix round: the point-in-time join reaches the decision's own session OR the ONE prior exchange session (`MAX_SCAN_AGE_SESSIONS = 1`, always the LAST scan at or before the stamp, never later, never older), because the live D1 scan runs at roughly 07:00-07:50, 10:01, 12:45 and 13:00 desk time and sometimes once a day, and an own-session-only join lost 47-83% of decisions (live after the fix: 238 same-session / 140 prior-session / 97 none, of 475 measured); only a VETO groups by its vocabulary `reason_code` (pooled across versions, said in the pack) because every other verdict's reason is free text and grouped one sentence per group; an unreadable `session_date` refuses with `failed` and writes no file. Re-derived live result: 1,013 D1 decisions in 11 groups, leaders `compressed` (`last_volume`, 32 v 71, AUC 0.72), `veto` with no code recorded (`rs_vs_industry_5d`, 15 v 53, 0.70) and `like` (25 v 59, 0.33 - an AUC below 0.5 ranks on separation, not on being high). Costs: the ~709 MB `d1_features_history.csv` is STREAMED by session, 7.8 s warm / 17.7 s cold at about 100 KB of traced allocation; the whole slot is ~18-24 s and ~240-300 MB of process heap with 600-900 durable daily frames read, and the pack is ~119 KB. **The lead moved the slot at integration** (`1f260ffa`) from after `market_story_rollups` + `measured_report` to ABOVE that pair: WS-10D and WS-RP each pin `measured_report` directly after `market_story_rollups` and `test_veto_cohort_grading` pins the whole slate, three red order pins the packet's targeted runs never reached; `_STAGE_ONE_LAST_SLOT` is untouched and a slot appended after it would silently leave the Sunday slate. Advisories recorded, not repaired: the no-code veto bucket reads just `veto`, the pack never states a leading feature's DIRECTION in words, `MIN_CONTRAST_SIDE_N` = 10 is lenient (a merged-tree like leader rested on 10 v 37 - watch on gate #160), `read_latest` is a file read TJ-5 must call on a worker, and six private `walkaway_day` seams are called deliberately rather than copied. Merged into `lead/p033-integration2`, reaching `main` after the night's AI run. Live gate #160 owed. Long form: DESK_INTERNALS "TJ-15"; slot position: decision 0018 amendment 2026-09-19.
 
 ### 2026-09-19 (evening) - TJ-3: note markers on the Day Review charts, and a mark sits on a bar only when it happened during it (branch `claude/tj3-note-markers`, tip `58ee11f4`, merged into `lead/p033-integration2` `72647104`)
 
