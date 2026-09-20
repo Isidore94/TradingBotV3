@@ -572,7 +572,9 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         measured_report_publish,
         miss_contrast,
         note_vocabulary_audit,
+        observation_tags,
         policy_draft,
+        prediction_contrast,
         read_grades_mature,
         setup_research,
         theta_grading,
@@ -826,6 +828,38 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             ),
             max_attempts=3,
         ),
+        # TJ-16 (2026-09-20), APPENDED INSIDE stage 1, DIRECTLY AFTER
+        # `miss_contrast` and still above the `market_story_rollups` /
+        # `measured_report` pair that CLOSES the stage.
+        #
+        # Beside TJ-15 because it is the same question asked of the other half
+        # of the record: that pack asks what the MISSES had in common, this one
+        # asks what the trader's RIGHT calls had in common, and both answer it
+        # through the one `evidence_contrast.contrast`. It reads the Day Review
+        # read ledger, which `read_grades_mature` above has already closed for
+        # the night, so its position after that slot is a real dependency and
+        # not a preference.
+        #
+        # The position above the closing pair is load-bearing for the same
+        # reason it is for TJ-15: `_STAGE_ONE_LAST_SLOT` is `measured_report`
+        # and `_deterministic_stage` walks the slate up to and INCLUDING it, so
+        # a slot appended after that name silently leaves the SUNDAY slate
+        # however deterministic it is.
+        #
+        # Deterministic: no model, seconds of work, one JSON pack beside the
+        # digest, and a missing input is a recorded reason on an `ok` row.
+        # Hence `journal_import`'s attempt budget rather than the briefs'.
+        JobSlot(
+            name="prediction_contrast",
+            run=prediction_contrast.run_prediction_contrast,
+            reserve_minutes=5.0,
+            description=(
+                "What leads to a good call - the trader's right reads against "
+                "their wrong ones, per point-in-time context field "
+                "(deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
         # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
         # stage, after `theta_pick_grading`, and it CLOSES the block. It reads
         # the Market Journal's own entries and the exchange calendar, writes
@@ -917,6 +951,32 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             # attempts at ONE session a week. plan.md §12.3: set max_attempts,
             # never 0.
             max_attempts=3,
+        ),
+        # TJ-16 item 4 (2026-09-20), APPENDED INSIDE stage 2, AFTER `ai_summary`
+        # and BEFORE `ticker_briefs`.
+        #
+        # After `ai_summary` because WS-10D pins `measured_report` DIRECTLY
+        # before it and that pair must stay adjacent; before `ticker_briefs`
+        # because the briefs hold two hours of reserve and this is seconds of
+        # work per note, so queueing behind them would cost the tags a whole
+        # night for nothing.
+        #
+        # It loads a local MEDIUM model, so `uses_model` is declared honestly
+        # and --force may not buy it the daytime clock (TJ-13A item 1). It has
+        # no deterministic half - the whole job is the model reading words -
+        # so no `model_free_kwargs`. A rejected reply publishes nothing and the
+        # last verified file stands.
+        JobSlot(
+            name="observation_tags",
+            run=observation_tags.run_observation_tags,
+            reserve_minutes=15.0,
+            description=(
+                "Grounded codes for the trader's own words - a closed "
+                "vocabulary, an exact span per code, and no verdict in the "
+                "prompt"
+            ),
+            max_attempts=3,
+            uses_model=True,
         ),
         JobSlot(
             name="ticker_briefs",

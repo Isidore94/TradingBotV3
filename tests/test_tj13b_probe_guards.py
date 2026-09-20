@@ -624,7 +624,16 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # `theta_pick_grading`. This guard is about the e8c04f88 set and the 12-14
     # move, so the new slot is pinned where it sits and then set aside.
     assert slate[slate.index("theta_pick_grading") + 1] == "read_grades_mature"
-    today = tuple(name for name in slate if name != "read_grades_mature")
+    # LEAD AMENDMENT 2026-09-20 (TJ-16): TJ-16 registered TWO new slots - the
+    # deterministic `prediction_contrast` directly after `miss_contrast` in
+    # stage 1, and the model slot `observation_tags` directly before
+    # `ticker_briefs` in stage 2 (a weeknight has no `ai_summary`). Same
+    # treatment as `read_grades_mature`: each is pinned where it sits and then
+    # set aside, so this guard stays about the e8c04f88 set and the 12-14 move.
+    assert slate[slate.index("miss_contrast") + 1] == "prediction_contrast"
+    assert slate[slate.index("ticker_briefs") - 1] == "observation_tags"
+    set_aside = ("read_grades_mature", "prediction_contrast", "observation_tags")
+    today = tuple(name for name in slate if name not in set_aside)
 
     assert len(today) == len(pinned_at_e8c04f88)
     assert set(today) == set(pinned_at_e8c04f88), "a slot was added or removed"

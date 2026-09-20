@@ -632,10 +632,18 @@ def test_the_scope_can_be_selected_on_demand():
         # TJ-15 (2026-09-19): the deterministic miss contrast, inside stage 1 and
         # ahead of the pair that closes it.
         "miss_contrast",
+        # TJ-16 (2026-09-20): the right-against-wrong prediction contrast,
+        # appended inside stage 1 directly after the miss contrast and still
+        # ahead of the pair that closes the stage.
+        "prediction_contrast",
         "market_story_rollups",
         "measured_report",
         # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
         "ai_summary",
+        # TJ-16 item 4 (2026-09-20): the grounded word tagger, appended inside
+        # stage 2 after `ai_summary` (the `measured_report` / `ai_summary` pair
+        # stays adjacent) and before the two-hour briefs.
+        "observation_tags",
         "ticker_briefs",
         "market_story_narration",
         # Stage 3. LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run
