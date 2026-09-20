@@ -352,10 +352,12 @@ def test_a_note_verdict_that_cannot_be_carried_is_dropped_not_left_to_rot(
             (old_id,),
         )
 
-    _cli("--db", str(db_of(store)), "--apply")
+    assert _cli("--db", str(db_of(store)), "--apply") in (0, 4)
 
     live, _, verdicts = _machine_rows(store)
     assert all(trade_id in live for trade_id in verdicts), verdicts
+    # ...and the run was not abandoned over it: BE moved.
+    assert trade_for(store, "BE2JUL26P260.00")["security_type"] == "OPT"
 
 
 def test_a_position_that_only_gains_a_type_is_not_on_page_one_even_when_re_keyed(
@@ -385,6 +387,34 @@ def test_a_position_that_only_gains_a_type_is_not_on_page_one_even_when_re_keyed
     assert "AAOI18JUN26P120.00" in head
     assert "MARA" not in head, "an unchanged equity position reached page one"
     assert "money or direction moves: 1" in head
+
+
+def test_the_same_trades_in_a_different_order_are_not_a_change(tmp_path):
+    """The rule itself, deterministically: two trades, same direction, same
+    status, same money, handed back the other way round by the rebuild. That is
+    a position that did not change, and only its instrument type moved."""
+    from journal_reclassify import _position_change
+
+    def trade(trade_id, direction, pnl, security_type):
+        return {
+            "trade_id": trade_id,
+            "broker": "QUESTRADE",
+            "account_number": "A1",
+            "symbol": "MARA",
+            "security_type": security_type,
+            "currency": "USD",
+            "direction": direction,
+            "status": "CLOSED",
+            "net_pnl": pnl,
+        }
+
+    before = [trade("aaa", "SHORT", 12.5, "UNKNOWN"), trade("bbb", "LONG", -4.0, "UNKNOWN")]
+    after_same = [trade("zzz", "LONG", -4.0, "STK"), trade("yyy", "SHORT", 12.5, "STK")]
+    after_moved = [trade("zzz", "LONG", -4.0, "STK"), trade("yyy", "SHORT", 99.0, "STK")]
+
+    assert _position_change(before, after_same) == "type"
+    assert _position_change(before, after_moved) == "matters"
+    assert _position_change(before, list(reversed(before))) == ""
 
 
 def test_a_run_that_would_strand_more_machine_rows_is_refused_and_restored(
