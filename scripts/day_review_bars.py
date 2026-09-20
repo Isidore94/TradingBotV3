@@ -122,11 +122,21 @@ def _rows_from_download(download: Any, symbols: tuple[str, ...]) -> dict[str, li
                 continue
             rows = []
             for stamp, row in frame.iterrows():
+                # A multi-ticker frame has ONE index - the union of every
+                # symbol's stamps - so a name with no print at a stamp gets an
+                # all-NaN row there. That is a hole, not a bar: skip it. The
+                # old `int(nan)` raised and the except below threw away every
+                # GOOD bar the name had (about eighty names on 2026-09-20).
+                prices = [float(row[field]) for field in ("Open", "High", "Low", "Close")]
+                if any(price != price for price in prices):
+                    continue
+                volume = row.get("Volume", 0)
                 rows.append({
                     "dt": stamp.to_pydatetime() if hasattr(stamp, "to_pydatetime") else stamp,
-                    "open": float(row["Open"]), "high": float(row["High"]),
-                    "low": float(row["Low"]), "close": float(row["Close"]),
-                    "volume": int(row.get("Volume", 0) or 0),
+                    "open": prices[0], "high": prices[1],
+                    "low": prices[2], "close": prices[3],
+                    # NaN is truthy, so `or 0` never caught it.
+                    "volume": 0 if volume is None or volume != volume else int(volume),
                 })
             if rows:
                 result[symbol] = rows
