@@ -72,6 +72,11 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # load in front of the trader, which is what the night window exists for.
     "day_story",
     "d1_view",
+    # TJ-12: the six-line report card that HEADS the page. Built LAST, on this
+    # worker, from what the payload ended up with - it is another projection of
+    # the ONE read, never a second one, and the page formats it without ever
+    # calling `day_report_card.build` itself.
+    "report_card",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -169,6 +174,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "congruence": (),
         "day_story": None,
         "d1_view": None,
+        "report_card": {},
     }
 
 
@@ -462,6 +468,22 @@ class DayReviewService:
         # reading over Friday's tape.
         payload["day_story"] = self._day_story(session)
         payload["d1_view"] = self._d1_view()
+        # TJ-12, and LAST of all because it is a projection of what the payload
+        # ENDED UP with. Two file reads belong to this worker and to nowhere
+        # else: `prediction_ledger.your_reads` (the tally, as INTEGERS, so the
+        # page re-counts nothing) and the AI-job ledger's bounded TAIL. A failed
+        # card costs the card and nothing else - the key is already present from
+        # `empty_payload`, so every path hands the page the same shape.
+        try:
+            payload["report_card"] = self._report_card(
+                session,
+                payload=payload,
+                decisions=decisions,
+                claims=claims,
+                now=moment,
+            )
+        except Exception:  # noqa: BLE001 - a card never costs the day
+            _log.debug("The Day Review report card could not be built.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
@@ -611,6 +633,107 @@ class DayReviewService:
             _log.debug("The rolling D1 view was unreadable.", exc_info=True)
             return None
         return dict(stored) if isinstance(stored, Mapping) else None
+
+    # -- the report card (TJ-12) -------------------------------------------
+    @staticmethod
+    def _ledger_path():
+        """The AI-job ledger, WITHOUT creating the store. ``None`` when absent.
+
+        `ai_jobs.ledger.ledger_path()` defaults to `create=True`, which makes
+        the folder; a reader whose honest answer may be "night status unknown"
+        must not be the thing that creates the store it is asking about.
+        """
+        try:
+            import ai_jobs.ledger as ledger
+
+            return ledger.ledger_path(create=False)
+        except Exception:  # noqa: BLE001 - no store configured is `unknown`
+            _log.debug("The AI job ledger path is unresolvable.", exc_info=True)
+            return None
+
+    @staticmethod
+    def _fills_current_to() -> str:
+        """The last session the desk has VERIFIED fill coverage for, or ``""``.
+
+        `trade_mentor_trade_check.fills_current_to` is the ONE owner of that
+        question (TJ-9). An absence is NOT a date, so it comes back empty and
+        the card says the desk has no verified coverage rather than printing
+        today.
+        """
+        try:
+            import trade_mentor_trade_check as check
+            from journal_store import JournalStore
+
+            answer = check.fills_current_to(JournalStore())
+        except Exception:  # noqa: BLE001 - an unreadable ledger names no date
+            _log.debug("Fill coverage unreadable.", exc_info=True)
+            return ""
+        return answer.isoformat() if answer is not None else ""
+
+    def _report_card(
+        self,
+        session: str,
+        *,
+        payload: Mapping[str, Any],
+        decisions,
+        claims,
+        now: datetime,
+    ) -> dict[str, Any]:
+        """The six lines, built on THIS worker from what the payload holds.
+
+        Everything the card counts is already in the payload; the only stores
+        opened here are the read ledger (through its owner, so the counts travel
+        as integers) and the AI-job ledger's bounded tail. The page never calls
+        `day_report_card.build`.
+        """
+        import day_report_card
+        import prediction_ledger
+
+        tally = None
+        try:
+            tally = prediction_ledger.your_reads(session)
+        except Exception:  # noqa: BLE001 - no graded reads is a SAID absence
+            _log.debug("The read tally was unreadable.", exc_info=True)
+
+        # `trade_origin` reads a lane row's own stamp key, and the recap's
+        # decision rows carry theirs as `stamp`. Renaming it HERE keeps that
+        # module's key list the one authority on when a statement was made.
+        decision_lane = [
+            {**row, "created_at": row.get("stamp") or row.get("created_at")}
+            for row in (decisions or ())
+            if isinstance(row, Mapping)
+        ]
+        story = payload.get("day_story")
+        card = day_report_card.build(
+            {
+                "session": session,
+                "walkaway": payload.get("walkaway"),
+                "your_reads": tally,
+                "congruence": payload.get("congruence") or (),
+                "trades": payload.get("trades") or [],
+                "origin_lanes": {
+                    "decisions": decision_lane,
+                    "claims": list(claims or ()),
+                    # The Focus and armed lanes are not part of ONE Day Review
+                    # read; a trade planned only through them reads `unplanned`
+                    # here, which is why the line prints its `n` beside it.
+                    "focus_adds": (),
+                    "armed": (),
+                },
+                "freshness": {
+                    "session": session,
+                    "story_written_at": (
+                        str((story or {}).get("generated_at") or "")
+                        if isinstance(story, Mapping)
+                        else ""
+                    ),
+                    "fills_current_to": self._fills_current_to(),
+                    "reads_graded_through": session if payload.get("reads") else "",
+                    "ledger_path": self._ledger_path(),
+                },
+            }
+        )
+        return {"session": card.session, "lines": [dict(line) for line in card.lines]}
 
     # -- the day pack ------------------------------------------------------
     def build_pack_for(

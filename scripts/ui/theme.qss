@@ -120,6 +120,26 @@ QLabel#CongruenceLines {
     color: @text_secondary@;
 }
 
+/* TJ-12's report card, at the head of Day Review. Six clickable lines, styled
+   HERE and never with a per-widget stylesheet: a stylesheet set on the Qt
+   thread is exactly the cost this page exists to avoid. A line reads as text,
+   not as a button - it is a sentence you may click, not a verb. */
+QFrame#DayReviewReportCard {
+    border: 1px solid @border@;
+    border-radius: 6px;
+}
+
+QPushButton#DayReviewReportCardLine {
+    background: transparent;
+    border: none;
+    padding: 2px 0;
+    text-align: left;
+}
+
+QPushButton#DayReviewReportCardLine:hover {
+    color: @accent@;
+}
+
 /* Market Journal reader (G3): the meta line above the thought - session,
    timeframe, when it was written, who wrote it, the symbols. Secondary, so
    the words underneath are what the eye lands on. */

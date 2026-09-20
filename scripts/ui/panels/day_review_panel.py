@@ -196,6 +196,33 @@ WALKAWAY_PLACEHOLDER_CELLS: tuple[tuple[int, int], ...] = ((0, 1), (1, 0), (1, 1
 #: he chose two columns). LEFT is what happened and the chart, RIGHT is what he
 #: said: a chart uses every pixel of width it is given, and a column of running
 #: text does not.
+#: TJ-12: the six-line report card that HEADS the page, above the story. It is
+#: a THIRD row of the page's own column, never a cell inside either column -
+#: what the trader missed and what they did well is the first thing on the page.
+REPORT_CARD_OBJECT_NAME = "DayReviewReportCard"
+REPORT_CARD_LINE_OBJECT_NAME = "DayReviewReportCardLine"
+
+#: Where each card line's click goes, by target name. The two walk-away targets
+#: are `walkaway_day.TABLES` entries and are resolved through the panel's own
+#: table map, so a renamed table breaks the click loudly instead of silently.
+REPORT_CARD_TITLE = "Your report card"
+
+#: What a line says before anything has been read. Never a zero and never a
+#: rate: a first paint has measured nothing.
+REPORT_CARD_PLACEHOLDERS: dict[str, str] = {
+    "did_well": "Did well: nothing read yet.",
+    "missed": "Missed: nothing read yet.",
+    "your_reads": "Your reads: nothing read yet.",
+    "congruence": "Congruence: nothing read yet.",
+    "process": "Process: nothing read yet.",
+    "how_fresh": "How fresh: nothing read yet.",
+}
+
+#: How wide one card line may run before it is wrapped onto another visual row.
+#: A `QPushButton` does not word-wrap, and a line the trader cannot finish
+#: reading is a line that does not say what it measured.
+REPORT_CARD_WRAP_CHARS = 120
+
 COLUMNS_OBJECT_NAME = "DayReviewColumns"
 COLUMN_WEIGHTS = (55, 45)
 #: Per-machine, like every other `qt_*` setting and every other desk splitter -
@@ -554,6 +581,7 @@ class DayReviewPanel(QFrame):
         self._auto_timer.timeout.connect(self._on_auto_tick)
 
         self._build_header()
+        self._build_report_card()
         self._build_story()
         self._build_walkaway()
         self._build_said()
@@ -586,6 +614,114 @@ class DayReviewPanel(QFrame):
         self.status = QLabel("")
         self.status.setObjectName("SectionSubtitle")
         self.status.setWordWrap(True)
+
+    def _build_report_card(self) -> None:
+        """The six lines, built ONCE. A render only sets their text (TJ-12).
+
+        Six fixed buttons rather than a rebuilt list: the page diffs and never
+        rebuilds, and a card that re-created its widgets on every read would put
+        six layout passes on the Qt thread for six sentences.
+        """
+        import day_report_card
+
+        self.report_card_section = QFrame()
+        self.report_card_section.setObjectName(REPORT_CARD_OBJECT_NAME)
+        body = QVBoxLayout(self.report_card_section)
+        body.setContentsMargins(10, 8, 10, 8)
+        body.setSpacing(2)
+        title = QLabel(REPORT_CARD_TITLE)
+        title.setObjectName("SectionTitle")
+        body.addWidget(title)
+        #: key -> the clickable line. Ordered by `LINE_KEYS`, which is the
+        #: packet's order and the order the payload arrives in.
+        self._report_card_lines: dict[str, QPushButton] = {}
+        for key in day_report_card.LINE_KEYS:
+            button = QPushButton(REPORT_CARD_PLACEHOLDERS.get(key, key))
+            button.setObjectName(REPORT_CARD_LINE_OBJECT_NAME)
+            button.setFlat(True)
+            button.setProperty("cardLine", key)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            button.setCursor(Qt.PointingHandCursor)
+            # The target is read from `LINE_TARGETS` at CLICK time, not bound
+            # here: the card owns what a line opens, and a second copy of that
+            # map on the page would be a second opinion about it.
+            button.clicked.connect(lambda _checked=False, name=key: self._open_card_target(name))
+            body.addWidget(button)
+            self._report_card_lines[key] = button
+
+    @property
+    def report_card_lines(self) -> tuple[QPushButton, ...]:
+        """The six line widgets, in `day_report_card.LINE_KEYS` order."""
+        import day_report_card
+
+        return tuple(
+            self._report_card_lines[key]
+            for key in day_report_card.LINE_KEYS
+            if key in self._report_card_lines
+        )
+
+    def _open_card_target(self, key: str) -> None:
+        import day_report_card
+
+        target = day_report_card.LINE_TARGETS.get(str(key), "")
+        if target:
+            self.reveal_card_target(target)
+
+    def reveal_card_target(self, target: str):
+        """Scroll to what a card line is ABOUT, and hand the widget back.
+
+        Every `LINE_TARGETS` value resolves to a widget already on this page -
+        a line that opened nothing would be a promise the card could not keep.
+        """
+        name = str(target or "")
+        widget = self.walkaway_tables.get(name)
+        if widget is None:
+            widget = {
+                "said": getattr(self, "said_section", None),
+                "congruence": self.congruence_note,
+                "trades": getattr(self, "traded_section", None),
+                "status": self.status,
+                "story": getattr(self, "story_section", None),
+            }.get(name)
+        if widget is None:
+            return None
+        try:
+            self.scroll.ensureWidgetVisible(widget)
+        except Exception:  # noqa: BLE001 - a scroll never costs the page
+            logging.debug("The card target could not be scrolled to.", exc_info=True)
+        return widget
+
+    @staticmethod
+    def _wrapped_card_text(text: str) -> str:
+        """One line, broken on WORDS so a `QPushButton` can show all of it."""
+        words = str(text or "").split()
+        if not words:
+            return ""
+        rows: list[str] = []
+        current = words[0]
+        for word in words[1:]:
+            if len(current) + 1 + len(word) > REPORT_CARD_WRAP_CHARS:
+                rows.append(current)
+                current = word
+            else:
+                current = f"{current} {word}"
+        rows.append(current)
+        return "\n".join(rows)
+
+    def _render_report_card(self, card: Any) -> None:
+        """Set six texts. It builds nothing: the WORKER built this card."""
+        lines = {}
+        rows = card.get("lines") if isinstance(card, Mapping) else getattr(card, "lines", None)
+        for line in rows or ():
+            if isinstance(line, Mapping) and line.get("key"):
+                lines[str(line["key"])] = line
+        for key, button in self._report_card_lines.items():
+            row = lines.get(key)
+            text = str((row or {}).get("text") or "").strip()
+            if not text:
+                text = REPORT_CARD_PLACEHOLDERS.get(key, key)
+            button.setText(self._wrapped_card_text(text))
+            button.setToolTip(text)
 
     def _build_story(self) -> None:
         self.story_note = QLabel(NO_STORY_YET)
@@ -1056,6 +1192,9 @@ class DayReviewPanel(QFrame):
         body.addWidget(self.subtitle)
         body.addLayout(header)
         body.addWidget(self.provisional_note)
+        # TJ-12: the card HEADS the page - above the two columns that hold the
+        # story, and never inside one of them.
+        body.addWidget(self.report_card_section)
         body.addWidget(self.columns, 1)
         body.addWidget(self._walkaway_row())
         body.addWidget(self._bottom_row())
@@ -1416,6 +1555,10 @@ class DayReviewPanel(QFrame):
             for row in (payload.get("reads") or ())
             if isinstance(row, Mapping) and row.get("entry_id")
         }
+        # TJ-12, FIRST because it heads the page: six texts the worker already
+        # built. `render` formats - it never calls `day_report_card.build` or
+        # `how_fresh`, which are worker work inside the ONE payload.
+        self._render_report_card(payload.get("report_card"))
         self._render_story(payload.get("story"))
         # TJ-4, AFTER the facts: the verified story replaces the "no story yet"
         # line when there is one, and leaves the facts exactly as they were when
@@ -2452,6 +2595,10 @@ __all__ = [
     "NO_IDEAS_YET",
     "NO_STORY_YET",
     "PICKER_SESSIONS",
+    "REPORT_CARD_LINE_OBJECT_NAME",
+    "REPORT_CARD_OBJECT_NAME",
+    "REPORT_CARD_PLACEHOLDERS",
+    "REPORT_CARD_WRAP_CHARS",
     "SAID_SPLIT_KEY",
     "SAID_SPLIT_WEIGHTS",
     "SPY_MIN_HEIGHT_PX",
