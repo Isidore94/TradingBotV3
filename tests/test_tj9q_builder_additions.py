@@ -370,10 +370,10 @@ def test_the_dry_run_says_the_broker_stated_no_net_amount_rather_than_printing_z
 
     out = capsys.readouterr().out
     assert "net_amount is ABSENT" in out
-    assert "broker net_amount: not stated by Questrade" in out
+    assert "net_amount: not stated by Questrade" in out
     # No line pretends a stated amount of zero. (Strike prices are not money:
     # the check is on the money columns' own lines.)
-    money_lines = [line for line in out.splitlines() if "net_amount" in line or "broker  cash" in line]
+    money_lines = [line for line in out.splitlines() if "net_amount" in line or "cash (payload" in line]
     assert money_lines
     for line in money_lines:
         assert "0.000000" not in line, line

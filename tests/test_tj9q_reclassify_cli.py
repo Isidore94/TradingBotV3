@@ -379,7 +379,14 @@ def test_a_trade_whose_annotation_cannot_be_carried_is_refused_not_dropped(
     )
     before = _annotation_rows(store)
 
-    assert _cli("--db", str(db), "--apply") == 0
+    # AMENDED BY THE BUILDER, review round 2026-09-19 (the reviewer's blocker):
+    # this was `== 0`. A run that refused a position is NOT a clean run - it
+    # leaves that contract on the old spelling, so the import switch must stay
+    # off and the exit code must say something happened. Nothing else in this
+    # test moved; the refusal contract it pins is unchanged.
+    import journal_reclassify
+
+    assert _cli("--db", str(db), "--apply") == journal_reclassify.EXIT_SWITCH_STAYED_OFF
 
     after = _annotation_rows(store)
     assert len(after) == len(before) == 1
