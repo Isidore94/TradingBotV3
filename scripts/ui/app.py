@@ -1133,43 +1133,40 @@ class MainWindow(QMainWindow):
             from trade_mentor_schedule import KIND_M5_TRADES
 
             card = review.mentor_card
+            store = JournalStore()
+            # The TASK is built FIRST and the pulls come after it (TJ-14B review,
+            # item B): a raise anywhere in the pull path used to lose the forced
+            # trade section that is built further down, which is the one thing on
+            # this card the trader is not allowed to skip.
+            task = check.build_task(store, slot.scheduled_at.date())
+            # TJ-14B item 4: ONE card starts AT MOST ONE import. Everything
+            # inside is guarded and returns rather than raises.
+            self._mentor_journal_pull(slot, task)
+            # TJ-14B item 3: the few questions the desk cannot work out on its
+            # own, at most three, on EVERY card - the trade section below has
+            # its own ride rule and its own early returns.
+            self._show_mentor_questions(slot, store=store)
+
             is_check_slot = str(getattr(slot, "kind", "")) == KIND_M5_TRADES
-            # ONLY a section with answer widgets is protected from a rebuild -
-            # that is the one the trader could already have touched. A visible
-            # LABEL is not: the `journal not ready` line has nothing to lose by
-            # being rebuilt, and it has a date in it that goes stale the moment
-            # the morning retry lands the fills. Gating on the label meant a
-            # journal that became ready after the 09:00 card was never asked
-            # about all day, while the card kept printing a false freshness
-            # date.
-            answers_open = str(card.open_answers_session() or "") == str(slot.session)
-            if not is_check_slot and answers_open:
-                return
-            if not is_check_slot and not self._trade_check_is_owed(check, slot):
+            # EVERY delivered slot of the session hands the card the FRESH
+            # task; the card MERGES it (`set_trade_check`), keeping the exact
+            # widgets of a row the trader may already have touched, adding a
+            # trade it does not hold yet, dropping one that is answered, and
+            # rewriting the heading every time.
+            #
+            # The host used to return early whenever the card held ANSWER
+            # WIDGETS, which was the only protection those half-set combos had.
+            # Once the 09:00 not-ready card started drawing today's own fills
+            # (TJ-14B) that early return fired on every later slot of the day:
+            # the reviewed session's trades were never asked about at all, and
+            # the card went on printing `journal not ready` and a freshness
+            # date that was no longer true. The protection now lives in the
+            # merge, which is where it can protect the widgets WITHOUT also
+            # freezing the words above them.
+            carrying = str(card.trade_check_session() or "") == str(slot.session)
+            if not is_check_slot and not carrying and not self._trade_check_is_owed(check, slot):
                 return
 
-            store = JournalStore()
-            task = check.build_task(store, slot.scheduled_at.date())
-            if not task.journal_ready:
-                # TJ-9 item 6: the night ended without an OK import for the
-                # session the card is about, so the desk pulls once more before
-                # asking. On the import service's own QThread, Questrade only,
-                # no model, at most once a morning - and the card goes up now
-                # either way, saying what it has.
-                outcome = check.morning_import_retry(
-                    self._journal_import_service(),
-                    task,
-                    today=str(slot.session),
-                    last_retry=self._journal_retry_date,
-                )
-                self._journal_retry_date = str(outcome.get("last_retry") or "")
-                if outcome.get("retried"):
-                    logging.info(
-                        "Trade Mentor: retrying the Questrade import before the "
-                        "%s card (fills current to %s).",
-                        slot.slot_id,
-                        task.fills_current_to or "nothing yet",
-                    )
             card.set_trade_check(task, store=store)
         except Exception:  # noqa: BLE001 - the read still stands without it
             logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
@@ -1200,6 +1197,298 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - an unreadable journal asks nothing extra
             logging.debug("Trade check ride undecidable.", exc_info=True)
             return False
+
+    def _show_mentor_questions(self, slot, store=None) -> None:
+        """Put this card's budgeted questions on it (TJ-14B item 3).
+
+        Everything `mentor_questions.pending` needs arrives already loaded - the
+        registry is PURE and a trigger that opened a store would be a second
+        opinion about it, on whatever thread the card happened to be built on.
+        The reads here are bounded to the two sessions a question can be about.
+
+        `carried` is kept on the window so the next card asks the remainder
+        first: a question over budget is counted and carried, never dropped.
+        """
+        try:
+            import mentor_questions
+
+            card = self.trading_panel.alert_center.chart_review.mentor_card
+            if store is None:
+                from journal_store import JournalStore
+
+                store = JournalStore()
+            state = self._mentor_question_state(slot, store)
+            result = mentor_questions.pending(state, slot)
+            self._mentor_carried = tuple(result.carried)
+            card.set_questions(result, store=store, service=self.trade_mentor_service)
+        except Exception:  # noqa: BLE001 - a question never costs the prompt
+            logging.debug("Trade Mentor questions could not be built.", exc_info=True)
+
+    def _mentor_question_state(self, slot, store) -> dict:
+        """Every lane `mentor_questions.pending` reads, loaded once, here."""
+        import trade_mentor_trade_check as check
+
+        session = str(getattr(slot, "session", "") or "")
+        reviewed = check.previous_exchange_session(slot.scheduled_at.date())
+        trades: list = []
+        for day in (session, reviewed):
+            try:
+                trades.extend(store.list_trades(trade_date=day))
+            except Exception:  # noqa: BLE001 - an unreadable day asks nothing
+                logging.debug("Mentor trade lane unreadable for %s.", day, exc_info=True)
+        return {
+            "session": session,
+            "now": slot.scheduled_at,
+            "auto_mode": self._auto_mode_now(),
+            "trades": trades,
+            "open_positions": [
+                row for row in trades if str(row.get("status") or "").upper() != "CLOSED"
+            ],
+            "likes": self._mentor_like_lane(trades, (session, reviewed)),
+            # The three lanes below feed the DORMANT kinds only (`trade_origin`
+            # and `open_position_check` wait on TJ-12, `grader_gap` on TJ-10),
+            # which `pending` never puts on a live card. They are named here so
+            # the seam is one line's work when those packets land.
+            "grader_gaps": (),
+            "decisions": (),
+            "claims": (),
+            "focus_adds": (),
+            "armed": (),
+            "ai_question": self._mentor_ai_question(),
+            "answered": self._mentor_answered(store, (session, reviewed)),
+            "retired": self.trade_mentor_service.retired_subjects(),
+            "carried": getattr(self, "_mentor_carried", ()),
+        }
+
+    @staticmethod
+    def _mentor_like_lane(trades, days) -> list:
+        """The sessions' QUICK likes, each told whether it was then traded.
+
+        The join is by name and SIDE against the same two sessions' trades - a
+        LONG like says nothing about a SHORT entry - and it is done here rather
+        than in the registry so the trigger stays pure.
+
+        **Bounded to the sessions a question can be about** (TJ-14B review, item
+        E): the store's own `session_date` filter is asked once per session
+        rather than the whole append-only log being walked on the Qt thread
+        every prompt - 3.5 ms today and unbounded, which is the shape that grew
+        every other log-walking read into a stall.
+        """
+        wanted = [str(day)[:10] for day in days if str(day or "").strip()]
+        rows: list[dict] = []
+        try:
+            from pathlib import Path
+
+            from project_paths import TRADER_ANNOTATIONS_FILE
+            from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
+
+            for day in wanted:
+                rows.extend(
+                    load_annotations(
+                        Path(TRADER_ANNOTATIONS_FILE),
+                        session_date=day,
+                        event_types=(EVENT_LIKE_CLAIM,),
+                    )
+                )
+        except Exception:  # noqa: BLE001 - a missing log asks nothing
+            logging.debug("Like lane unreadable.", exc_info=True)
+            return []
+        traded: set[tuple[str, str]] = set()
+        for trade in trades:
+            symbol = str(trade.get("symbol") or "").strip().upper()
+            side = str(trade.get("direction") or "").strip().upper()
+            if symbol and side:
+                traded.add((symbol, side))
+        lane: list[dict] = []
+        for row in rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            side = str(row.get("side") or "").strip().upper()
+            side = "LONG" if side.startswith("LONG") else "SHORT" if side.startswith("SHORT") else ""
+            enriched = dict(row)
+            if symbol and side and (symbol, side) in traded:
+                enriched["matched_trade_id"] = f"{symbol}:{side}"
+            lane.append(enriched)
+        return lane
+
+    @staticmethod
+    def _mentor_ai_question() -> dict:
+        """Last night's coaching question and its click options, or `{}`.
+
+        ONE walk of the narrations folder - the card's own legacy line reads the
+        same newest file, and it is hidden when this becomes a click.
+        """
+        try:
+            import json
+            from pathlib import Path
+
+            from project_paths import MARKET_STORY_NARRATIONS_DIR
+
+            for path in reversed(sorted(Path(MARKET_STORY_NARRATIONS_DIR).glob("*.json"))):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                narration = payload.get("narration") if isinstance(payload, dict) else None
+                if not isinstance(narration, dict):
+                    continue
+                question = str(narration.get("mentor_question") or "").strip()
+                if not question:
+                    continue
+                options = narration.get("mentor_question_options") or ()
+                return {
+                    "question": question,
+                    "options": tuple(str(item) for item in options if str(item or "").strip()),
+                }
+        except Exception:  # noqa: BLE001 - a degraded night asks nothing
+            logging.debug("Overnight Mentor question unreadable.", exc_info=True)
+        return {}
+
+    @staticmethod
+    def _mentor_answered(store, days) -> dict:
+        """Which questions already have an answer, so none is asked twice.
+
+        Two stores, because two kinds file their answers as the trader's own
+        dated Market Journal row (`day_close`, `ai_question`) and the rest as
+        append-only annotation rows. Both reads are bounded to the sessions a
+        question can be about.
+        """
+        answered: dict[str, dict] = {}
+        import mentor_questions
+
+        for day in days:
+            if not str(day or "").strip():
+                continue
+            try:
+                rows = store.list_opportunity_events(
+                    event_type=mentor_questions.EVENT_MENTOR_ANSWER,
+                    trade_date=str(day)[:10],
+                    limit=1000,
+                )
+            except Exception:  # noqa: BLE001
+                logging.debug("Mentor answers unreadable for %s.", day, exc_info=True)
+                continue
+            for row in rows:
+                payload = row.get("payload") or {}
+                kind = str(payload.get("mentor_question_kind") or "")
+                subject_id = str(payload.get("subject_id") or "")
+                if kind and subject_id:
+                    answered[f"{kind}:{subject_id}"] = {
+                        "answered_at": str(row.get("occurred_at") or "")[:10]
+                    }
+        try:
+            from ui.services.market_journal_service import shared_journal_service
+
+            for day in days:
+                if not str(day or "").strip():
+                    continue
+                for row in shared_journal_service().entries_for(str(day)[:10]):
+                    payload = (row.get("mentor") or {}).get("mentor_question") or {}
+                    kind = str(payload.get("mentor_question_kind") or "")
+                    subject_id = str(payload.get("subject_id") or "")
+                    if kind and subject_id:
+                        answered[f"{kind}:{subject_id}"] = {
+                            "answered_at": str(payload.get("answered_at") or "")[:10]
+                            or str(day)[:10]
+                        }
+        except Exception:  # noqa: BLE001 - a missing journal answers nothing
+            logging.debug("Mentor journal answers unreadable.", exc_info=True)
+        return answered
+
+    def _auto_mode_now(self) -> str:
+        """The Auto Pilot mode, or `""` when it cannot be read.
+
+        An unreadable mode is NOT an absence: the safe direction for a pull is
+        the same as for a prompt, and the Mentor service has already decided
+        the trader is present by the time this runs.
+        """
+        try:
+            from autopilot_core import read_auto_pilot_mode
+
+            return str(read_auto_pilot_mode() or "").upper()
+        except Exception:  # noqa: BLE001 - an unreadable mode blocks nothing
+            logging.debug("Auto mode unreadable for the pre-card pull.", exc_info=True)
+            return ""
+
+    def _mentor_journal_pull(self, slot, task) -> dict:
+        """The ONE owner of the desk's day-time Questrade attempts (TJ-14B).
+
+        **One card starts AT MOST ONE import** (review blocker 1). Two calls in
+        one synchronous slot cannot both start: `JournalImportService.running`
+        refuses the second, and the one that lost was the THREE-day morning
+        catch-up, marked spent and never fired again that morning - so a Monday
+        whose Friday-night import had failed never reached back to Friday.
+
+        So they are ordered, never stacked:
+
+        * when the morning catch-up is OWED - the reviewed session's statement
+          has not landed and nothing has been retried today - it goes FIRST and
+          the pre-card pull is skipped on this card. Its three days cover today
+          too, and it does not spend the pre-card cap;
+        * otherwise the pre-card pull runs, and only on one of the day's three
+          RESERVED cards (`mentor_questions.pull_slot_ids`: the 09:00 card, the
+          middle card, and the last one).
+
+        The tally is persisted beside the Mentor's slot state, so a restart
+        cannot spend the day's attempts twice; a corrupt one is read as empty
+        and rewritten clean. The pull runs on `JournalImportService`'s own
+        `QThread`, the desk's single caller of the Questrade refresh chain, and
+        nothing here refreshes a token. **The card never waits for it**: a fill
+        a late pull lands is asked about on the NEXT card, and a pull that
+        raises, refuses or is busy costs the card nothing.
+        """
+        try:
+            import mentor_questions
+            import trade_mentor_trade_check as check
+
+            service = self.trade_mentor_service
+            tally = service.pull_tally()
+            day = str(getattr(slot, "session", "") or "")
+            auto_mode = self._auto_mode_now()
+            last_retry = self._journal_retry_date or str(tally.get("last_retry") or "")
+            if not getattr(task, "journal_ready", False) and str(last_retry)[:10] != day[:10]:
+                outcome = check.morning_import_retry(
+                    self._journal_import_service(),
+                    task,
+                    today=day,
+                    # The once-a-morning date is kept in the PERSISTED tally
+                    # too, so a restart before 10:00 no longer allows a second
+                    # morning pull (TJ-9's advisory).
+                    last_retry=last_retry,
+                    tally=tally,
+                    auto_mode=auto_mode,
+                )
+                self._journal_retry_date = str(outcome.get("last_retry") or "")
+                persisted = dict(outcome.get("tally") or tally)
+                persisted["last_retry"] = self._journal_retry_date
+                service.set_pull_tally(persisted)
+                if outcome.get("retried"):
+                    logging.info(
+                        "Trade Mentor: retrying the Questrade import before the "
+                        "%s card (fills current to %s).",
+                        getattr(slot, "slot_id", ""),
+                        getattr(task, "fills_current_to", "") or "nothing yet",
+                    )
+                return outcome
+            outcome = mentor_questions.pre_card_pull(
+                self._journal_import_service(),
+                today=day,
+                tally=tally,
+                auto_mode=auto_mode,
+                slot=slot,
+            )
+            persisted = dict(outcome.get("tally") or {})
+            if last_retry:
+                persisted["last_retry"] = last_retry
+            service.set_pull_tally(persisted)
+            if outcome.get("pulled"):
+                logging.info(
+                    "Trade Mentor: pulling the Questrade journal before the %s card.",
+                    getattr(slot, "slot_id", ""),
+                )
+            return outcome
+        except Exception:  # noqa: BLE001 - a pull never costs the card
+            logging.debug("Mentor journal pull failed.", exc_info=True)
+            return {}
 
     def _journal_import_service(self):
         """The desk's ONE journal import owner, built on first need.

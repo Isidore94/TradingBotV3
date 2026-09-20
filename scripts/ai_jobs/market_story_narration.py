@@ -16,6 +16,10 @@ from typing import Any, Callable, Mapping
 PROMPT_VERSION = "market_story_narration_v1"
 SCHEMA = "market_story_narration_v1"
 
+#: How many click options the overnight question may carry (TJ-14B). Four is a
+#: card row; a fifth is a list, and a list is not a click.
+MENTOR_QUESTION_OPTIONS_MAX = 4
+
 NARRATION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -33,6 +37,16 @@ NARRATION_JSON_SCHEMA: dict[str, Any] = {
             "items": {"type": "string", "maxLength": 400},
         },
         "mentor_question": {"type": "string", "maxLength": 300},
+        # TJ-14B. The overnight question becomes a CLICK on tomorrow's Mentor
+        # card, so the options are a CLOSED set the card can draw: at most four,
+        # each a short string. Optional - a night that offers none still asks a
+        # question, in words. `maxLength` is deliberately nowhere near 2,000
+        # (gate #144's grammar-compile defect).
+        "mentor_question_options": {
+            "type": "array",
+            "maxItems": MENTOR_QUESTION_OPTIONS_MAX,
+            "items": {"type": "string", "maxLength": 60},
+        },
         "sources": {
             "type": "array",
             "maxItems": 12,
@@ -93,6 +107,29 @@ def _evidence(packs: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         "allowed_source_ids": source_ids,
         "rollups": {kind: dict(pack) for kind, pack in packs.items()},
     }
+
+
+def _check_mentor_question_options(narration: Mapping[str, Any]) -> None:
+    """The click options are validated HERE, not only advertised to the model.
+
+    A schema the local grammar is compiled from is still only a request; an
+    output that fails it is rejected WHOLE and the last verified file stays
+    (plan.md 12.3). Five options is not a closed set a card row can draw, so the
+    whole narration goes - a truncated list would be the desk quietly deciding
+    which of the trader's choices to drop.
+    """
+    options = narration.get("mentor_question_options")
+    if options is None:
+        return
+    if not isinstance(options, (list, tuple)):
+        raise ValueError("mentor_question_options is not a list")
+    if len(options) > MENTOR_QUESTION_OPTIONS_MAX:
+        raise ValueError(
+            f"mentor_question_options carried {len(options)} options; "
+            f"at most {MENTOR_QUESTION_OPTIONS_MAX} may be offered as clicks"
+        )
+    if any(not isinstance(option, str) or not option.strip() for option in options):
+        raise ValueError("every mentor_question option must be a non-empty string")
 
 
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
@@ -176,6 +213,7 @@ def run_market_story_narration(
         cited = [str(item) for item in narration.get("sources") or ()]
         if not cited or any(source not in allowed for source in cited):
             raise ValueError("narration cited a source outside its fact packs")
+        _check_mentor_question_options(narration)
         moment = now or datetime.now(timezone.utc)
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)

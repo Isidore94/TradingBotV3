@@ -101,7 +101,18 @@ def test_the_second_card_of_the_same_morning_does_not_pull_again():
     assert len(service.calls) == 2
 
 
-def test_an_import_already_running_spends_the_attempt_rather_than_queueing():
+def test_an_import_already_running_leaves_the_morning_retry_still_owed():
+    """AMENDED by TJ-14B's review (blocker 1, lead rule): `last_retry` is
+    stamped ONLY when an import actually STARTED.
+
+    It used to be stamped here too - "the attempt is spent either way". That was
+    safe while this was the only day-time pull. It stopped being safe the moment
+    a second pull could be in flight: TJ-14B's pre-card pull started first, this
+    one was REFUSED by `JournalImportService.running`, and the morning was
+    marked spent - so a Monday whose Friday-night import had failed never made
+    the three-day pull that reaches back to Friday. A refused start did not do
+    the pull this wanted, so the retry stays OWED for the next card.
+    """
     import trade_mentor_trade_check as check
 
     service = _FakeImportService(started=False)
@@ -109,8 +120,31 @@ def test_an_import_already_running_spends_the_attempt_rather_than_queueing():
     outcome = check.morning_import_retry(service, _task(False), today="2026-09-14")
 
     assert outcome["retried"] is False
-    assert outcome["last_retry"] == "2026-09-14"
+    assert outcome["last_retry"] == "", "a refused start does not spend the morning"
     assert "already running" in outcome["reason"]
+
+    # And the next card makes the pull the refused one wanted.
+    service = _FakeImportService()
+    again = check.morning_import_retry(
+        service, _task(False), today="2026-09-14", last_retry=outcome["last_retry"]
+    )
+    assert again["retried"] is True
+    assert service.calls == [check.MORNING_RETRY_DAYS]
+
+
+def test_away_pulls_nothing_at_this_seam_either():
+    """TJ-14B review, item C: the AWAY refusal holds at BOTH seams."""
+    import trade_mentor_trade_check as check
+
+    service = _FakeImportService()
+
+    outcome = check.morning_import_retry(
+        service, _task(False), today="2026-09-14", auto_mode="AWAY"
+    )
+
+    assert outcome["retried"] is False
+    assert service.calls == []
+    assert outcome["last_retry"] == ""
 
 
 def test_a_service_that_raises_never_costs_the_card():

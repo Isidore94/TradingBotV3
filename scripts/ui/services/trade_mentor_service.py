@@ -102,6 +102,16 @@ class TradeMentorService(QObject):
         self._state_path = Path(state_path)
         self._slots: dict[str, dict[str, str]] = {}
         self._paused_date = ""
+        #: `"<kind>:<subject_id>"` the trader pressed `Stop asking this` on.
+        #: TJ-14B: ONE subject, never the kind, and this service is the single
+        #: writer - a second writer would be a second opinion about what the
+        #: trader silenced.
+        self._retired: set[str] = set()
+        #: TJ-14B item 4: the day's journal-pull tally, persisted BESIDE the
+        #: slot state so the per-day cap survives a desk restart (TJ-9's
+        #: `_journal_retry_date` lived in memory and a restart before 10:00
+        #: allowed a second morning pull).
+        self._pull_tally: dict[str, object] = {}
         self._load()
         # Delivered ONCE per instance. Persisted `delivered_at` says the card
         # was put up at some point; this says this process has already put it
@@ -149,6 +159,12 @@ class TradeMentorService(QObject):
                         key: str(record.get(key) or "") for key in _EMPTY_RECORD
                     }
         self._paused_date = str(payload.get("paused_date") or "")
+        retired = payload.get("retired_subjects")
+        if isinstance(retired, (list, tuple)):
+            self._retired = {str(item) for item in retired if str(item or "").strip()}
+        tally = payload.get("pull_tally")
+        if isinstance(tally, dict):
+            self._pull_tally = dict(tally)
 
     def _save(self) -> None:
         """Persist, and never let a failed persist cost the prompt.
@@ -158,7 +174,12 @@ class TradeMentorService(QObject):
         disk that refuses the write leaves the trader with a card they can
         still answer; the journal entry is the durable half.
         """
-        payload = {"slots": self._slots, "paused_date": self._paused_date}
+        payload = {
+            "slots": self._slots,
+            "paused_date": self._paused_date,
+            "retired_subjects": sorted(self._retired),
+            "pull_tally": dict(self._pull_tally),
+        }
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_path.with_name(self._state_path.name + ".tmp")
@@ -187,6 +208,46 @@ class TradeMentorService(QObject):
         if record["answered_at"]:
             return
         record["skipped_reason"] = str(reason or "").strip() or SKIP_NOT_PRESENT
+        self._save()
+
+    # -- TJ-14B: what the trader told the Mentor to stop asking -----------
+    def stop_asking(self, kind: str, subject_id: str) -> None:
+        """Retire ONE subject of one question kind. The kind keeps asking.
+
+        *"`Stop asking this` retires that kind FOR THAT SUBJECT only"*
+        (plan.md TJ-14 item 3). A trader tired of being asked about one held
+        position has not asked to stop being asked about every held position,
+        and a retirement that silenced the kind would delete a whole class of
+        evidence on one click.
+
+        Persisted beside the slot state, so it survives a desk restart. This
+        service is the SINGLE writer.
+        """
+        key = f"{str(kind or '').strip()}:{str(subject_id or '').strip()}"
+        if key.strip(":") == "" or key in self._retired:
+            return
+        self._retired.add(key)
+        self._save()
+
+    def retired_subjects(self) -> tuple[str, ...]:
+        """Every `"<kind>:<subject_id>"` the trader stopped, oldest sort order."""
+        return tuple(sorted(self._retired))
+
+    def pull_tally(self) -> dict[str, object]:
+        """The day's journal-pull tally, as `mentor_questions.pre_card_pull` reads it.
+
+        A tally that is not a mapping reads as EMPTY rather than raising: a
+        corrupt state file must not be able to stop the desk pulling for a day,
+        and this is called inside a Qt slot (TJ-14B review, item B). The next
+        `set_pull_tally` rewrites it clean.
+        """
+        if not isinstance(self._pull_tally, dict):
+            return {}
+        return dict(self._pull_tally)
+
+    def set_pull_tally(self, tally) -> None:
+        """Persist the tally the pull owner handed back. One owner, one number."""
+        self._pull_tally = dict(tally) if isinstance(tally, dict) else {}
         self._save()
 
     def pause_today(self, *, now: datetime | None = None) -> str:
