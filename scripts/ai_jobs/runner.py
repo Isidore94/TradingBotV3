@@ -768,29 +768,12 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Grade the recorded theta picks at 5/10/20 sessions and at expiry (deterministic, no model)",
             max_attempts=3,
         ),
-        # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
-        # stage, after `theta_pick_grading`, and it CLOSES the block. It reads
-        # the Market Journal's own entries and the exchange calendar, writes
-        # the weekly/monthly/quarterly story packs, and feeds nothing above it
-        # - so it sits last inside the stage and still ahead of `ai_summary`.
-        #
-        # Deterministic: no model is called. The local-AI narration of these
-        # packs is a later packet and joins the narration stage, which is
-        # exactly why the two are not one slot. Hence `journal_import`'s
-        # attempt budget rather than the briefs'.
-        JobSlot(
-            name="market_story_rollups",
-            run=run_market_story_rollups,
-            reserve_minutes=5.0,
-            description=(
-                "Weekly, monthly and quarterly Market Journal story packs "
-                "(deterministic, no model; rebuilt only when an input changed)"
-            ),
-            max_attempts=3,
-        ),
         # TJ-15 (2026-09-19), APPENDED INSIDE stage 1: after the four cohort
         # graders because it reads what a decision turned OUT to be, and
-        # deliberately BEFORE `measured_report` rather than after it.
+        # deliberately BEFORE `market_story_rollups` + `measured_report` - the pair
+        # that CLOSES the stage (WS-10D and WS-RP each pin `measured_report` directly
+        # after `market_story_rollups`; the lead moved this slot above the pair at
+        # integration, 2026-09-19, when the full suite showed those two pins red).
         #
         # That position is load-bearing. `_STAGE_ONE_LAST_SLOT` is
         # `measured_report` and `_deterministic_stage` walks the slate up to
@@ -810,6 +793,26 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "What the misses had in common - a point-in-time feature "
                 "contrast per veto reason and for likes (deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
+        # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
+        # stage, after `theta_pick_grading`, and it CLOSES the block. It reads
+        # the Market Journal's own entries and the exchange calendar, writes
+        # the weekly/monthly/quarterly story packs, and feeds nothing above it
+        # - so it sits last inside the stage and still ahead of `ai_summary`.
+        #
+        # Deterministic: no model is called. The local-AI narration of these
+        # packs is a later packet and joins the narration stage, which is
+        # exactly why the two are not one slot. Hence `journal_import`'s
+        # attempt budget rather than the briefs'.
+        JobSlot(
+            name="market_story_rollups",
+            run=run_market_story_rollups,
+            reserve_minutes=5.0,
+            description=(
+                "Weekly, monthly and quarterly Market Journal story packs "
+                "(deterministic, no model; rebuilt only when an input changed)"
             ),
             max_attempts=3,
         ),

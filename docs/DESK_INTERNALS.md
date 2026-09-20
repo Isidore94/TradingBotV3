@@ -1483,6 +1483,135 @@ cut, which is the conservative direction - "you may be reading part of this" is 
 say wrongly and "you have all of it" is not. A symbol that genuinely has more rows than
 the ceiling holds still says True.
 
+## TJ-15 - what the misses had in common, and the two floors it took (2026-09-19, packet TJ-15)
+
+The long form behind the CLAUDE.md rule *"A miss contrast has TWO floors and judges D1
+only."* plan.md 12.4 TJ-15, decision 0021. Branch `claude/tj15-miss-contrast` (tip
+`8547c4a5`), merged `fb3f55e9` into `lead/p033-integration2`, with the lead's slot-position
+fix `1f260ffa` on top. Two reviews by reproduction on the real 2026-09-18 window: NO-GO,
+then GO after the fix round.
+
+TJ-11 put the names the trader turned down that ran onto the Day Review page. TJ-15 asks
+the next question of the same rows - *what did they have in common?* - and answers it with
+arithmetic only. **No model is called anywhere in this chain.**
+
+**One method, built once.** `scripts/evidence_contrast.py` takes two groups of
+point-in-time feature mappings and returns, per feature, the two integer counts, the two
+medians and ONE rank statistic: `compression_calibration.auc`, the statistic PCT-3
+established, CALLED rather than re-derived. The rank key is `abs(auc - 0.5)` descending
+then feature NAME ascending; **no group size, no median magnitude and no R statistic may
+enter it** (gate #43). An AUC below 0.5 therefore ranks on SEPARATION, not on being high -
+live, the `like` group's leader scored 0.33. A feature only one side measured is NAMED in
+`unmeasured_features`; a blank cell is left out of the median and never read as zero.
+`rate()` is the ONE Wilson - `swing_headline.WILSON_Z` through `walkaway_day._wilson` -
+over CLOSED horizons only, with the open ones counted, printed as `pending`, and in neither
+half. TJ-16 reuses this module; it is not TJ-15's private helper.
+
+**Two floors, and they are different floors** (fix round). The first build had one.
+`MIN_REPORTABLE_N` gates a group's RATE, whose denominator is every measured decision - but
+a FEATURE is measured only on the decisions that also carried a point-in-time scan row, and
+on the live window that was a much smaller number. `veto / sma_incoming` had n=47 and
+measured=30, cleared the rate floor, and then named the night's leading finding off **four
+rows against one** at an AUC of exactly 1.0 - which is what four-against-one gives whenever
+the four sit above the one. So `MIN_CONTRAST_SIDE_N` is 10: a feature is ranked only with
+at least ten rows on EACH side and `MIN_REPORTABLE_N` across both. One under that is still
+NAMED, with both counts, in `thin_features` - hiding it would say it was never looked at -
+carries no AUC, and never enters `features`. `compared` counts the RANKED features only and
+the statement prints both numbers. A GROUP is a leader only with a reportable rate AND at
+least one ranked feature; one with a reportable rate and no ranked feature keeps its row
+and its rate and reads `no feature had enough rows on both sides`, and the pack's headline
+says that rather than claiming the floor. `n_a` and `n_b` are FIELDS at the group level and
+on every feature and thin-feature row, never only in prose.
+
+**D1 only, because the ruler and the features are D1's** (fix round). The first build
+pooled every timeframe, and the population was not what it was assumed to be: over the 20
+sessions ending 2026-09-18 it was **1,026 M5 against 1,013 D1** (plus 4 H1 and 2 "5M"), and
+the top-named leader was an M5 group judged on a five-session swing horizon with D1-scan
+features it never had. The pack now judges D1 and nothing else, compares the timeframe
+case-insensitively, COUNTS the rest in `excluded_by_timeframe` and says the number in its
+own sentence; a row with no timeframe is counted in `no_timeframe` and never read as D1.
+
+**Point in time, and one session back is still point in time** (fix round). The features
+are the LAST scan row for `(symbol, side)` at or before the decision's own stamp - never a
+later one, never an older one. Restricting that to the decision's OWN session threw away
+47-83% of decisions, because the scan does not run when the trader clicks: on the live
+window it ran at roughly 07:00-07:50, 10:01, 12:45 and 13:00 desk time and on some sessions
+only once, so an evening or pre-market decision had no same-session row at all. The window
+reaches back ONE exchange session (`MAX_SCAN_AGE_SESSIONS = 1`) - what the trader was
+actually looking at in the evening or before the open - with the age carried on the row and
+counted per group as `scan_same_session` / `scan_prior_session` / `no_point_in_time_scan`;
+live that was 238 / 140 / 97 of 475 measured decisions. `run_timestamp` is NAIVE desk wall
+time and an annotation's stamp is ZONED, so the desk zone is ATTACHED to the naive side
+through `ui.annotations.pass_bars.attach_desk_zone` and the aware side is never stripped -
+strip it instead and a `14:05+00:00` spelling of a 07:05 Pacific veto reads 14:05, which
+puts the 07:30 scan *before* the decision.
+
+**Only a VETO has a reason code** (fix round). A veto's reason is a code from the versioned
+veto vocabulary, so vetoes group by it, pooled across vocabulary versions and said so in
+the pack - a code is never reused, so a code means one thing. Every other verdict's reason
+is the trader's FREE TEXT, and grouping on it made one group per sentence: live, `dislike`
+split into two groups of one, each immune to any floor because a group of one is never
+compared with anything. They group by the verdict alone.
+
+**Where the slot sits, and why that is not a free choice.** `miss_contrast` is registered
+INSIDE the deterministic stage, after the cohort graders and `theta_pick_grading` and
+**before the `market_story_rollups` + `measured_report` pair that closes it**. The packet
+first appended it after that pair; the lead moved it above them at integration
+(`1f260ffa`), because WS-10D and WS-RP each pin `measured_report` DIRECTLY after
+`market_story_rollups` and `test_veto_cohort_grading` pins the whole slate - three order
+assertions the packet's targeted runs never reached and the full suite caught at once.
+The position is load-bearing in the other direction too: `runner._STAGE_ONE_LAST_SLOT` is
+`measured_report` and `_deterministic_stage` walks the slate up to and INCLUDING that name,
+so a slot appended AFTER it is not in stage 1 by that function's reckoning and silently
+leaves the **Sunday** slate, however deterministic it is. `_STAGE_ONE_LAST_SLOT` is
+untouched, `measured_report` still closes the stage, and the slot runs on the weeknight,
+Saturday and Sunday slates alike. Nothing here reads the measured report and nothing there
+reads this pack, so only the ORDER was ever a choice - and only one of the two orders runs
+on a Sunday. `uses_model=False`, `max_attempts=3`, `reserve_minutes=5.0`. Decision 0018
+carries the slot-list addendum.
+
+**The file, and what a real pass costs.** `d1_features_history.csv` is ~709 MB over 264
+columns, streamed by session through `stream_feature_rows` as a GENERATOR: ONE
+`csv.DictReader` pass with a 20-session filter is **7.8 s warm / 17.7 s cold** at about 100
+KB of traced Python allocation, where `pandas.read_csv` of the whole file would be roughly
+1.4 GB inside the process that owns the night. The slot holds one feature mapping per
+DECISION, never a list of the file. End to end on the real 2026-09-18 window: 600-900
+durable daily frames read, a ~119 KB pack, **~18-24 s and ~240-300 MB of process heap** for
+the whole slot. A live group compares 54-81 features and names another 6-88 too thin to
+call. The re-derived live result: 1,013 D1 decisions judged in 11 groups, leaders
+`compressed` (`last_volume`, 32 v 71, AUC 0.72), `veto` with no code recorded
+(`rs_vs_industry_5d`, 15 v 53, 0.70) and `like` (25 v 59, 0.33).
+
+**One rule, one mapping.** `real_miss.verdict` is CALLED through its module attribute, and
+which session a decision belongs to is `walkaway_day._row_session` - the same seam Day
+Review's own walk-away asks - so the table under the misses and the misses themselves
+cannot disagree, and TJ-11F's judged-session rule carries through unchanged.
+
+**It never costs the night.** A missing, locked or unreadable features file, an unreadable
+annotation store and an absent daily-bar store are each a recorded REASON on an `ok` row.
+The one thing it REFUSES is a missing, empty or unparseable `session_date`: that is
+`failed` with a reason and NO file, because a pack keyed to nothing publishes
+`miss_contrast-.json`, one file every later session would supersede and no reader could
+date. The pack goes to `store.digests_dir()`, the same place `daily_digest` and
+`measured_report` publish - **the DAS on this desk**, not a local-first write - gated by the
+runner's `store_available` probe before any slot starts, and written temp-and-rename onto a
+superseding sibling, so a correction is a new file and an earlier pack is never rewritten.
+
+**Advisories, recorded and not repaired.** The no-code veto bucket reads just `veto` where
+it wants to read `veto (no code recorded)`. The pack never states the DIRECTION of a
+leading feature in words - it gives the two medians and leaves the reader to see which way
+they point. `MIN_CONTRAST_SIDE_N = 10` is lenient: a merged-tree like leader rested on 10
+against 37, so gate #160 watches whether ten a side is enough. `read_latest` is a FILE
+READ - TJ-5's Week Review table must call it on a worker, never on the Qt thread. And the
+builder calls six PRIVATE `walkaway_day` seams deliberately, rather than copy a rule that
+would then drift.
+
+**One lesson for the next packet.** The packet's targeted runs were green while three order
+assertions elsewhere were red. A packet that adds or MOVES a runner slot runs `-k "slot or
+stage or slate"` plus `tests/test_veto_cohort_grading.py`,
+`tests/test_ws_10d_market_story.py` and `tests/test_ws_rp_shared_report.py` - not only
+`tests/test_ai_jobs_runner.py`. plan.md 12.3 carries it.
+
 ## M1 - a shadow that measured nothing for ten days (2026-09-05)
 
 The long form behind the CLAUDE.md rule *"The AVWAP band challenger is measured through
@@ -4638,6 +4767,144 @@ passes on un-fixed code.
 
 **Item 7 left this packet.** The Questrade instrument work became packet TJ-9Q - see
 "TJ-9Q - a sold put is recorded backwards" below.
+
+### 2026-09-19, TJ-14A: the card splits in two, and the internals stop being invisible
+
+Branch `claude/tj14a-mentor-card` (tip `6808abd9`), merged `e8c04f88` into
+`lead/p033-integration2`; reaching `main` after the night's AI run. Two reviews driven
+through the real Qt slot, NO-GO then GO. plan.md 12.4 TJ-14 items 1 and 6; items 2-5 are
+TJ-14B. **The lead has confirmed this vocabulary as TJ-10's and TJ-16's contract**, so a
+later packet reads these fields rather than inventing its own.
+
+The trader's words: *"For trade mentor make sure we differentiate predictions from just
+'describe the market and your thoughts'! The hope is an AI can pickup on my tendencies and
+what leads to good predictions and what leads to wrong ones"* and *"trade mentor should
+automatically be processing what's going on with the internals we watch. RSP VXX USO TLT
+and the sector ETFs XLK XLE etc. so the AI already has that"*. The measurement behind the
+first: `market_thesis.extract_thesis` over the trader's 42 real notes gave 21 `unstated`, 8
+bullish, 7 neutral, 6 bearish, and read *"D1 SPY is still downtrending"* as `unstated` - the
+trader describes the tape far more often than they predict it, so the graded thing becomes
+a CLICK and the words become context.
+
+**What I see / What I expect.** `mentor.observation` holds the words and the entry's `text`
+stays those same words, so every existing reader keeps working. `mentor.prediction` is
+`{direction, horizon, confidence, because, schema: "mentor_prediction_v1"}`. Horizons:
+`rest_of_day` on every card, `next_5_sessions` on the 08:00 and 12:00 D1 cards only - a
+swing call offered six times a day would be the same click about the same five sessions.
+Directions are `up / down / chop / no_view` for the day and `up / down / range / no_view`
+for the five sessions; `no_view` is a COMPLETE answer, is never graded, and takes `How
+sure` off the card. `How sure` is FORCED on every other direction (decision 0021 answer 29:
+a prediction IS direction, horizon and confidence - TJ-16 reads calibration BY confidence,
+so a call filed without one could never join it). `Because…` is the only optional part.
+`market_journal.prediction_of` is the ONE reader and answers `None` for all FOUR older row
+vintages in the live ledger (69 rows: 28 with no `mentor` key, 13 with `mentor == {}`, 6
+without context, 22 full v1), so an extracted stance is never pooled with a clicked one.
+
+**A row's timeframe and its prediction's horizon always agree, and the WRITER enforces
+it.** The defect that made it a rule (review round 1): `read_unchanged` on the 09:00 card,
+handed the 08:00 card's D1 row as "your last read" because `_previous_mentor_read` answered
+`rows[-1]` and an answered `m5_d1` card writes M5 then D1, kept `previous.timeframe` while
+the horizon silently fell back to the only one the 09:00 card shows - filing a
+**D1-timeframe entry carrying a `rest_of_day` call**, a row true of neither timeframe and
+permanent in an append-only ledger. Now `market_journal._check_prediction_timeframe` is
+asked at both gates every write passes (`build_entry` raises `PredictionTimeframeError`,
+`is_publishable` refuses the same pair for a row assembled as a dict literal); the host
+hands the card the latest read of EACH timeframe (`{"M5": row, "D1": row}`, today's session
+only); `Read unchanged` files one row per timeframe the card shows, each reaffirming THAT
+timeframe's words with THAT horizon's fresh click, all or nothing per card; and a timeframe
+with no earlier read makes the verb unavailable with the tooltip saying which one. The
+silent fallback is deleted, not narrowed. A clicks-only answer is never offered for
+reaffirmation, because the verb restates WORDS.
+
+**Forced means the verb refuses, not just the button.** The gate is inside `submit()` and
+`read_unchanged()`, because `Ctrl+Enter` and any future host call reach the verb without
+touching a button; the refusal names the row that is still open. Submit stays grey until
+every direction row AND its `How sure` are clicked. `skip()` is untouched and TJ-9's
+trade-check Save gate is entirely separate - a prediction never arms it and a missing
+prediction never greys it. `Read unchanged` demands a FRESH click: copying the 09:00 call
+onto the 11:00 row would manufacture a prediction the trader never made, and the two hours
+would always agree.
+
+**A clicks-only row is a complete answer and its `text` is empty on purpose.**
+`is_publishable` is relaxed for exactly one case - an entry whose `mentor.prediction`
+carries a clicked direction - and every other empty entry is refused as before. Nothing
+writes a sentence nobody wrote: `market_journal.prediction_line` words the call for a
+SCREEN only, `market_story._entry_row` carries the structured call so the day pack never
+re-derives a stance from words that are not there, and `entries_about`, `extract_thesis`
+(`unstated`, no crash) and the bounded AI package were checked against a real wordless row
+and needed no change. An `m5_d1` card answered with two clicks and no words writes TWO rows
+in the same second with the same empty text, so `entry_id` takes a SALT (`timeframe|
+horizon`) for a WORDLESS row only - an entry with words keeps byte-identical ids. An
+`m5_d1` card always writes BOTH rows, and drafts keep unsaved clicks.
+
+**`trade_mentor_context_v2`.** `XLRE` joins `SYMBOLS` in alphabetical place (18 symbols;
+every existing index, including SPY at 6, is unchanged) because the desk's own
+`group_rrs.SECTOR_ETFS` always had eleven SPDRs while the Mentor context had ten. Each
+symbol gains the day's change (against the PRIOR SESSION'S CLOSE, so an opening gap is part
+of the move), its place in the day's range (0-1) and the side of the prior session's high
+and low. The `derived` block is the read the trader used to type by hand: `breadth` (RSP
+minus SPY on the day), `fear` (VXX against SPY with a `divergence` flag when both go the
+same way), `rates` (TLT), `oil` (USO), `sector_leaders` / `sector_laggards` (top and bottom
+three, on the day AND over 30 minutes - two rankings, never one list read twice, ties
+broken by symbol), `offense_vs_defense` (XLK/XLY/XLC against XLP/XLU/XLV) and
+`sectors_above_vwap` (a count WITH its denominator). Every line names the readings it rests
+on and a missing input makes THAT line `unmeasured` naming the input that is actually
+missing - never zero, and never a line poisoned by a reading it does not name. Completed
+bars only: a forming bar moves nothing, proven by a fixture whose forming bar closes at
+500.00 against a 100.00 tape. v1 rows stay readable, and `compact_for_ai` projects both
+vintages while carrying ONE scalar `common.internals`, because `ai_summary._bounded` cuts
+SIX levels down - exactly where a derived line's `inputs` and leader lists sit - and the
+model would otherwise have been handed `"[nested content omitted]"` where the sector names
+should be.
+
+**One builder, and a thin loader beside it.** `build_context` serves the live card and the
+pure `internals_at(session, stamp, bars)`, which takes its bars as an argument - two
+implementations of the same reading drift on the first rounding decision. `internals_bars_at`
+is the only part of the module that touches a store: M5 from the durable Day Review tape,
+D1 from `d1_environment_store._cached_daily_bars` (the same daily cache the live context
+service reads) and, for a symbol that cache has NEVER held, one daily bar per prior session
+built from the tape itself (`_session_bar_from_tape`, up to `_TAPE_D1_LOOKBACK` = 3
+sessions back, no network, point-in-time). That second source is not an optimisation:
+**RSP, USO and TLT have no file in `%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars`**
+- the scan universe never fetches them and the live card only ever escaped through
+`trade_mentor_context_service`'s Yahoo top-up - so without it a rebuild could measure
+neither breadth nor rates nor oil, three of the eight derived lines, for every hour the
+trader never answered. A symbol answered from the tape has its DAY facts measured and its
+five-session / SMA20 facts honestly `unmeasured` with the reason; `sources.d1` says
+`daily_cache+day_review_tape` when it happened. The point-in-time cut is the builder's own
+(`_valid_m5` / `_valid_d1` at the stamp), so no caller can widen it; a symbol missing from
+both stores stays `unmeasured`. `internals_bars_at` has NO production caller yet - it is a
+capability until TJ-10 and TJ-16 call it.
+
+`day_review_bars.decided_symbols` adds the internals to the one batched post-close download
+- **the symbol list and nothing else, no D1 leg, zero IB**. That download is one batched
+yfinance call per FIFTY symbols (`CHUNK_SIZE`), and its fixed base grew from 4 names to 18,
+so a session with more than 32 OTHER decided names now needs a second call where it used to
+need one. (An earlier note said ~36; the arithmetic on the de-duplicated union is 50 − 18 =
+32, and the four old benchmarks are all inside the 18.)
+
+**The strip.** `MentorInternalsStrip` sits above **What I see**, is built from the context
+the service ALREADY delivered (no second `request_context`, no fetch, no loader), is worded
+by the pure `trade_mentor_context.internals_lines`, and is styled from `theme.qss` by
+object name - no widget-level stylesheet, because a card that comes up every hour must not
+parse CSS on the Qt thread. An `unmeasured` line is PRINTED as unmeasured: a blank where a
+reading should be reads as calm.
+
+**Measured, 2026-09-19 (offscreen, staged scratch home).** Card construct p50 0.60 -> 1.12
+ms; `show_slot` p50 0.06 -> 0.13 ms; `internals_lines` 0.008 ms and `_render_internals` p50
+0.010 ms - the strip is one `setText`. The stored Mentor row grew about 53-57% (4,462 ->
+~7-8 KB on the popup-context fixture; roughly 7 answers a day), reading a synthesised
+21-day v2 month file takes ~9 ms, and `_previous_mentor_read` costs ~10.7 ms once per
+prompt on the Qt thread. The 09:00 card - strip, What I see, the prediction row and TJ-9's
+forced trade section - is 591 px tall at 520 px wide inside its scroll area, nothing
+clipped. Two test thresholds were widened with the measured number beside each (popup
+context cap 6 -> 10 KB, resilience budget 3,000 -> 6,000 chars) rather than the guards being
+dropped, and 6 WS-TM test functions gained clicks across 9 call sites.
+
+**Advisories, recorded and not repaired.** A rebuilt row's `m5_as_of` is Pacific-zoned
+where the live card's is Eastern - the same moment, to be compared with `astimezone` and
+never as a string. `read_unchanged` now returns `{"ok", "entries": [...]}` rather than one
+entry, so a host reading `result["entry"]` reads nothing.
 
 ---
 
