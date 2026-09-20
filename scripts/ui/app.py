@@ -1245,19 +1245,83 @@ class MainWindow(QMainWindow):
                 row for row in trades if str(row.get("status") or "").upper() != "CLOSED"
             ],
             "likes": self._mentor_like_lane(trades, (session, reviewed)),
-            # The three lanes below feed the DORMANT kinds only (`trade_origin`
-            # and `open_position_check` wait on TJ-12, `grader_gap` on TJ-10),
-            # which `pending` never puts on a live card. They are named here so
-            # the seam is one line's work when those packets land.
+            # `grader_gap` is still DORMANT (plan.md §12.5 names TJ-10's small
+            # follow-up), so its lane is still named and still empty.
             "grader_gaps": (),
-            "decisions": (),
-            "claims": (),
-            "focus_adds": (),
-            "armed": (),
+            # TJ-12 woke `trade_origin` and `open_position_check`, so these are
+            # really read now. An EMPTY lane is not neutral here: `planned_state`
+            # answers `unplanned` when nothing was said, and an unread store
+            # looks exactly like nothing said - the trader would be asked where
+            # every trade came from.
+            **self._mentor_origin_lanes((session, reviewed)),
             "ai_question": self._mentor_ai_question(),
             "answered": self._mentor_answered(store, (session, reviewed)),
             "retired": self.trade_mentor_service.retired_subjects(),
             "carried": getattr(self, "_mentor_carried", ()),
+        }
+
+    @staticmethod
+    def _mentor_annotation_lane(days) -> list:
+        """The sessions' like/claim annotations, bounded to those sessions.
+
+        ONE reader for two lanes: the quick-like follow-up and TJ-12's
+        planned-vs-unplanned question both ask this log the same bounded
+        question, and two walks of an append-only file on the Qt thread is the
+        shape every other log-walking read grew a stall out of.
+        """
+        from pathlib import Path
+
+        from project_paths import TRADER_ANNOTATIONS_FILE
+        from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
+
+        rows: list[dict] = []
+        for day in [str(value)[:10] for value in days if str(value or "").strip()]:
+            rows.extend(
+                load_annotations(
+                    Path(TRADER_ANNOTATIONS_FILE),
+                    session_date=day,
+                    event_types=(EVENT_LIKE_CLAIM,),
+                )
+            )
+        return rows
+
+    @staticmethod
+    def _mentor_origin_lanes(days) -> dict:
+        """The lanes `trade_origin.planned_state` reads, loaded once, bounded.
+
+        Each lane is guarded on its own: an unreadable store asks MORE questions
+        (nothing was said about that name, as far as the desk can tell) and
+        never takes the Mentor card down.
+
+        `focus_adds` and `armed` are named and EMPTY, deliberately: neither
+        store has a public reader that hands back a row with the stamp key
+        `trade_origin` reads, and inventing one is a different packet's work. A
+        trade planned only through a Focus add or an armed alert is therefore
+        asked once - `CADENCE_ONCE` - and the trader's own answer is what the
+        Process line then reads.
+        """
+        wanted = [str(value)[:10] for value in days if str(value or "").strip()]
+        decisions: list[dict] = []
+        try:
+            decisions = list(MainWindow._mentor_annotation_lane(wanted))
+        except Exception:  # noqa: BLE001 - an unreadable log says nothing
+            logging.debug("Mentor decision lane unreadable.", exc_info=True)
+        claims: list[dict] = []
+        try:
+            import claimed_picks
+
+            claims = [
+                row
+                for row in claimed_picks.load_rows()
+                if str(row.get("session_date") or "")[:10] in wanted
+            ]
+        except Exception:  # noqa: BLE001 - an unreadable store says nothing
+            logging.debug("Mentor claim lane unreadable.", exc_info=True)
+        return {
+            "decisions": decisions,
+            "claims": claims,
+            "focus_adds": (),
+            "armed": (),
         }
 
     @staticmethod
@@ -1277,19 +1341,7 @@ class MainWindow(QMainWindow):
         wanted = [str(day)[:10] for day in days if str(day or "").strip()]
         rows: list[dict] = []
         try:
-            from pathlib import Path
-
-            from project_paths import TRADER_ANNOTATIONS_FILE
-            from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
-
-            for day in wanted:
-                rows.extend(
-                    load_annotations(
-                        Path(TRADER_ANNOTATIONS_FILE),
-                        session_date=day,
-                        event_types=(EVENT_LIKE_CLAIM,),
-                    )
-                )
+            rows = list(MainWindow._mentor_annotation_lane(wanted))
         except Exception:  # noqa: BLE001 - a missing log asks nothing
             logging.debug("Like lane unreadable.", exc_info=True)
             return []

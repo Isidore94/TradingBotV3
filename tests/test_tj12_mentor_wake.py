@@ -128,6 +128,10 @@ def test_a_planned_trade_is_still_never_asked():
     it: a trade the trader spoke about before its first fill is not asked."""
     import mentor_questions
 
+    # `trade_row` opens at 07:31 New York, so the like is stamped an hour and a
+    # half earlier IN THE SAME ZONE - the comparison is `astimezone`'s, and a
+    # fixture that mixed the offsets would be testing the arithmetic, not the
+    # rule.
     trade = trade_row("T-1", symbol="AAPL", day=REVIEWED)
     payload = state(
         trades=[trade],
@@ -135,7 +139,7 @@ def test_a_planned_trade_is_still_never_asked():
             {
                 "symbol": "AAPL",
                 "side": "LONG",
-                "created_at": f"{REVIEWED}T06:00:00-07:00",
+                "created_at": f"{REVIEWED}T06:00:00-04:00",
                 "verdict": "like",
             }
         ],
