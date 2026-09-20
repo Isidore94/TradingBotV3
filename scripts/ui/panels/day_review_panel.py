@@ -177,6 +177,21 @@ SAID_SPLIT_KEY = "qt_day_review_said_split_v1"
 #: The SPY pane's floor. A candle chart in a 120 px strip is a smear.
 SPY_MIN_HEIGHT_PX = 320
 
+#: The name pane that opens BESIDE the walk-away tables (TJ-3): the same floor,
+#: and a width floor so the tables cannot squeeze it into a smear either.
+NAME_CHART_MIN_HEIGHT_PX = 260
+NAME_CHART_MIN_WIDTH_PX = 320
+
+#: What the name pane says before a row is clicked, and when the session's bars
+#: file never got that name. Said rather than drawn on somebody else's tape.
+NAME_CHART_IDLE_NOTE = (
+    "Click a walk-away row to see that name's session, with what you said on it."
+)
+NAME_CHART_MISSING_NOTE = (
+    "{symbol}: the session's bars file holds no tape for this name, so there is "
+    "nothing to draw it on."
+)
+
 #: The story's floor. It GROWS with its text above this (TJ-4 writes paragraphs);
 #: below it, an empty story reads as a broken section.
 STORY_MIN_HEIGHT_PX = 120
@@ -368,6 +383,10 @@ class DayReviewPanel(QFrame):
         self._forecast_expanded = False
         self._loaded_once = False
         self._chart: Any = None
+        #: The ONE name pane and what it is showing (TJ-3). "" means nothing.
+        self._name_chart: Any = None
+        self._name_chart_symbol = ""
+        self._name_charts: dict[str, Any] = {}
         self._clock: Callable[[], datetime] = clock or datetime.now
         self._auto_time_reader: Callable[[], Any] = (
             auto_time_reader or daily_recap_schedule.auto_time_from_settings
@@ -607,6 +626,27 @@ class DayReviewPanel(QFrame):
         self._chart_layout = QVBoxLayout(self._chart_holder)
         self._chart_layout.setContentsMargins(0, 0, 0, 0)
 
+        # The ONE name pane (TJ-3 item 3). One `CandleChart` for every row of
+        # every walk-away table: the old Market Journal page built four charts on
+        # the first click and cost 299 ms, and a page that builds a widget per
+        # name would be that mistake with more names. Built on the first row
+        # click, then re-fed - never rebuilt.
+        self.name_chart_heading = QLabel("That name, this session")
+        self.name_chart_heading.setObjectName("SectionTitle")
+        self.name_chart_note = QLabel(NAME_CHART_IDLE_NOTE)
+        self.name_chart_note.setObjectName("SectionSubtitle")
+        self.name_chart_note.setWordWrap(True)
+        self._name_chart_holder = QWidget()
+        self._name_chart_holder.setMinimumWidth(theme.px(NAME_CHART_MIN_WIDTH_PX))
+        body = QVBoxLayout(self._name_chart_holder)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(4)
+        body.addWidget(self.name_chart_heading)
+        body.addWidget(self.name_chart_note)
+        self._name_chart_layout = QVBoxLayout()
+        self._name_chart_layout.setContentsMargins(0, 0, 0, 0)
+        body.addLayout(self._name_chart_layout, 1)
+
     def _build_ideas(self) -> None:
         self.ideas_note = QLabel(NO_IDEAS_YET)
         self.ideas_note.setObjectName("SectionSubtitle")
@@ -754,12 +794,22 @@ class DayReviewPanel(QFrame):
         self.walkaway_grid.setRowStretch(1, 0)
         self.walkaway_grid.setRowStretch(2, 0)
 
+        # The name pane sits BESIDE the tables (TJ-3): a row and the chart it
+        # opens are read together, and a chart under five tables would be off
+        # the bottom of the page by the time it was drawn.
+        beside = QWidget()
+        side_by_side = QHBoxLayout(beside)
+        side_by_side.setContentsMargins(0, 0, 0, 0)
+        side_by_side.setSpacing(12)
+        side_by_side.addWidget(holder, 3)
+        side_by_side.addWidget(self._name_chart_holder, 2)
+
         row = QWidget()
         body = QVBoxLayout(row)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(6)
         body.addWidget(self.walkaway_skill)
-        body.addWidget(holder)
+        body.addWidget(beside)
         return row
 
     def _bottom_row(self) -> QWidget:
@@ -1169,6 +1219,11 @@ class DayReviewPanel(QFrame):
         self._render_forecast(dict(payload.get("forecast") or {}))
         self._render_trades(list(payload.get("trades") or []))
         self._render_chart(list(payload.get("spy_m5_bars") or []))
+        # The markers were RESOLVED on the worker; this pushes them and computes
+        # nothing (TJ-3). After `set_data`, because new bars drop the payload.
+        self._render_spy_markers(tuple(payload.get("spy_markers") or ()))
+        self._name_charts = dict(payload.get("name_charts") or {})
+        self._refresh_name_chart()
         for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
             self._backfill_bars_for(str(exit_session))
         error = str(payload.get("error") or "")
@@ -1527,8 +1582,88 @@ class DayReviewPanel(QFrame):
 
             self._chart = CandleChart()
             self._chart.setMinimumHeight(theme.px(200))
+            self._chart.markerClicked.connect(self._select_entry_by_ref)
             self._chart_layout.addWidget(self._chart)
         return self._chart
+
+    def _ensure_name_chart(self):
+        """Build the name pane ONCE, the first time a row asks for it."""
+        if self._name_chart is None:
+            from ui.widgets.candle_chart import CandleChart
+
+            self._name_chart = CandleChart()
+            self._name_chart.setMinimumHeight(theme.px(NAME_CHART_MIN_HEIGHT_PX))
+            self._name_chart.markerClicked.connect(self._select_entry_by_ref)
+            self._name_chart_layout.addWidget(self._name_chart)
+        return self._name_chart
+
+    def name_chart_symbol(self) -> str:
+        """Which name the side pane is showing. "" when it is showing none."""
+        return self._name_chart_symbol
+
+    def _render_spy_markers(self, markers) -> None:
+        """Push the worker's marker payload onto the one SPY chart."""
+        if self._chart is None:
+            return
+        try:
+            self._chart.set_note_markers(markers)
+        except Exception:  # noqa: BLE001 - a marker never costs the page
+            logging.debug("The Day Review markers could not be drawn.", exc_info=True)
+
+    def _refresh_name_chart(self) -> None:
+        """Redraw whatever the side pane is already showing, from the new read.
+
+        A name the new payload has no tape for stops being shown rather than
+        going on showing yesterday's candles under today's heading.
+        """
+        if not self._name_chart_symbol:
+            return
+        self._open_name_chart(self._name_chart_symbol)
+
+    def _open_name_chart(self, symbol: str) -> None:
+        """Draw one name BESIDE the tables, from the payload alone.
+
+        No read, no store, no builder: `name_charts` came off the same worker
+        payload the tables did, with its markers already resolved against these
+        very bars.
+        """
+        name = str(symbol or "").strip().upper()
+        chart = dict(self._name_charts.get(name) or {})
+        bars = [
+            bar for bar in (chart.get("bars") or ())
+            if isinstance(bar, Mapping) and bar.get("dt") is not None
+        ]
+        if not bars:
+            self._name_chart_symbol = ""
+            self.name_chart_note.setText(NAME_CHART_MISSING_NOTE.format(symbol=name))
+            if self._name_chart is not None:
+                self._name_chart.set_data([])
+                self._name_chart.setVisible(False)
+            return
+        pane = self._ensure_name_chart()
+        pane.setVisible(True)
+        pane.set_data(bars, timeframe="m5")
+        pane.set_note_markers(tuple(chart.get("markers") or ()))
+        self._name_chart_symbol = name
+        self.name_chart_note.setText(
+            f"{name} M5 — {len(bars)} completed bar(s), and what you said about it."
+        )
+
+    def _select_entry_by_ref(self, ref_id: str) -> None:
+        """A marker click selects the note it names - the trader's own question.
+
+        A marker for something that is not a note (a trade leg, a decision row)
+        moves no selection: the reader is showing a thought, and replacing it
+        with a blank would lose the one the trader was reading.
+        """
+        wanted = str(ref_id or "")
+        if not wanted:
+            return
+        for index, entry in enumerate(self._entries):
+            if str(entry.get("entry_id") or "") == wanted:
+                self.entries.setCurrentRow(index)
+                self._fill_reader(entry)
+                return
 
     def _render_chart(self, bars) -> None:
         # A bar with no `dt` cannot be placed on a time axis, so it is DROPPED
@@ -1559,11 +1694,13 @@ class DayReviewPanel(QFrame):
         )
 
     def _activate_walkaway(self, item) -> None:
-        """Ask the host for a BOARD chart of this row's name.
+        """Open that name BESIDE the table, and tell the host about it too.
 
-        `show_board_symbol` is the door for a board on another page; a board
-        chart holds no place in the waiting list, so nothing here is re-queued
-        or skip-counted.
+        Two different answers to one click, and TJ-3 adds the second without
+        removing the first: the host's `show_board_symbol` is the door for a
+        board on another page (a board chart holds no place in the waiting list,
+        so nothing here is re-queued or skip-counted), while this page draws the
+        name's own session with the trader's words on it.
         """
         if item is None:
             return
@@ -1575,6 +1712,7 @@ class DayReviewPanel(QFrame):
         symbol = str(getattr(row, "symbol", "") or "").strip().upper()
         if not symbol:
             return
+        self._open_name_chart(symbol)
         self.chartRequested.emit(symbol, str(getattr(row, "side", "") or ""))
 
     # -- writing -----------------------------------------------------------

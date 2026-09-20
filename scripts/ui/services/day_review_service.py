@@ -53,6 +53,10 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     "trades",
     "forecast",
     "spy_m5_bars",
+    # TJ-3: where the trader's own words sit on each tape, resolved to a bar
+    # index ON THE WORKER. The page draws them and builds none of them.
+    "spy_markers",
+    "name_charts",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -124,6 +128,8 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "trades": [],
         "forecast": {},
         "spy_m5_bars": [],
+        "spy_markers": (),
+        "name_charts": {},
     }
 
 
@@ -170,6 +176,13 @@ class DayReviewService:
         payload = empty_payload(session)
         moment = now or datetime.now()
         problems: list[str] = []
+        # Bound HERE so the marker build at the end of this method is safe when
+        # the walk-away block below - which is what fills them - raised before it
+        # reached them. Both are plain locals of this method; that block binds
+        # them exactly as it always did (TJ-3).
+        decisions: list[dict[str, Any]] = []
+        claims: list[dict[str, Any]] = []
+        stored: dict[str, Any] = {}
 
         entries: list[dict[str, Any]] = []
         try:
@@ -345,6 +358,29 @@ class DayReviewService:
                     payload["spy_m5_bars"] = [dict(bar) for bar in stored_bars.get(BENCHMARK_SYMBOL, ())]
         except Exception:  # noqa: BLE001 - a missing chart file never costs the read
             _log.debug("Day Review session bars were unreadable.", exc_info=True)
+        # TJ-3, and LAST because it is built against what the payload ENDED UP
+        # with: the Qt-thread hand-off for a live session, the durable file for a
+        # closed one. Pure arithmetic over rows already read - it opens no store,
+        # so a page that draws markers still reads the day exactly once.
+        try:
+            import day_review_markers
+
+            payload["spy_markers"] = day_review_markers.benchmark_markers(
+                payload["spy_m5_bars"],
+                entries=entries,
+                trades=payload["trades"],
+            )
+            payload["name_charts"] = day_review_markers.name_charts(
+                stored,
+                decisions=decisions,
+                trades=payload["trades"],
+                claims=[
+                    claim for claim in claims
+                    if str(claim.get("session_date") or "")[:10] == session
+                ],
+            )
+        except Exception:  # noqa: BLE001 - a marker never costs the day
+            _log.debug("Day Review markers could not be built.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
