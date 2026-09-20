@@ -7760,6 +7760,196 @@ root resolves under `C:\TradingBotData`, the DAS or the real `%LOCALAPPDATA%\Tra
 This is the second incident of its kind after 2026-09-05's live-tracker overwrite; the
 long form of that one is in `docs/AGENT_TEAM.md` "Rules that exist because something broke".
 
+## TJ-4 - the day pack and the night's voice (2026-09-20, packet TJ-4)
+
+The long form behind the CLAUDE.md rule *"The night narrates the day, never grades it, and
+sweeps what the trader queued."* Branch `claude/tj4-day-story` (tip `6c1e2506`), merged
+`d929e34f` into `lead/p033-integration2`; `main` has not been fast-forwarded to it and live
+gate #148 is owed.
+
+The trader's own words, 2026-09-19, on what the whole program is for: a bot that *"takes in
+what I do and think … mathematically deduces what parts of my thinking are profitable and
+unprofitable"*. The whole of TJ-4 rests on the amendment that followed: **the model narrates
+verdicts, it never makes them.** Five things make that true rather than hoped for.
+
+**1. The pack is the only thing the night may see, and it is deterministic.**
+`scripts/day_review_pack.py` is PURE - it opens no store and has no clock of its own; the
+caller hands it the day it has already read. It is built by the post-close tick on the Day
+Review worker AFTER `build_reads_for`, because the pack's `reads` section IS what TJ-10's
+grader just wrote. Building it a second time hours later produces a byte-identical pack,
+which is what makes the `inputs_hash` skip honest: the night is not paid again for a session
+that has not moved. The clock lives in `built_at`, outside the hash. Twelve `SECTIONS` after
+the 2026-09-19 amendment, with `report_card` (TJ-12) and `mood` (TJ-7) present and empty as
+hooks. The pack sits INSIDE `day_review_index._prune`'s 40-session delete path, which is safe
+only because it is rebuildable - the hash-stability test is what proves it, and the write
+seam says so in a comment.
+
+**2. An observation is not a call.** TJ-14A split what the trader SAW from what they CLICKED
+at the writer; the pack keeps them as two items with two ids, an empty observation emits no
+item, and the night rejects any output that grades an `observation`. A machine row and the
+pasted forecast never reach `trader_said`.
+
+**3. One id, one row, and a narrated verdict IS the measured verdict.** Every
+`were_you_right[].evidence_id` must name a `reads` item and its `verdict` must EQUAL that
+row's measured verdict. Ids are derived from what they point at, so they can collide - a
+store that appended a row twice, two congruence lines of one kind - and a collision is not
+harmless: a reader keyed on `source_id` would silently take the LAST row, letting a narration
+quote the second row's verdict while naming the first. So the pack MINTS ids through one
+`_Minter` (the nth claimant gets `<base>#n`, nothing dropped and nothing raised) and the
+night REFUSES a pack whose id names two rows. Every breach rejects the output WHOLE - not
+trimmed, not partially kept: an unknown id, no ids at all, an evidence id no read row carries,
+a verdict that disagrees, an observation graded as a call, a second claim on one read, a
+`chased_against_news` other than `unknown` with no pasted forecast, an empty headline, a list
+over its bound, any closed-schema breach. The last verified file stays byte-identical and the
+ledger row is `degraded_no_narrative`. Two artifacts, two verdicts: a rejected day story never
+costs the rolling D1 view its prior file.
+
+**4. The reply is bounded HERE, and the bound comes from the evidence.** The shared
+`ai_summary.validate_structured_output` enforces required keys, `additionalProperties`, types,
+enums and a top-level string's `maxLength` - it does **not** enforce `maxItems`, nor the
+length of an array's ITEMS. A 5,000-source, 500-claim reply was therefore accepted, written
+whole (372 KB) and then drawn line by line on the Qt thread (reviewer round 1). TJ-4 is the
+first consumer that renders a per-item list from a model answer, so it enforces the bounds
+itself rather than widening the shared validator under every other caller. The working bounds
+are the PACK's: at most one claim per read row and never two claims on one read, at most as
+many sources as the pack carries ids, at most as many theses as the window carries D1 things
+said - and the schema handed to the model carries those numbers. **A fixed cap could not be
+right:** a regular session with every Mentor card answered already holds 8 read rows and 25
+citable ids, because two of the six scheduled cards store TWO entries each, so the first fixed
+pair (6 and 24) rejected a full day whole and left the trader with no story on exactly the
+days they answered every prompt (reviewer round 2). `MAX_GRADED_CLAIMS` (64), `MAX_SOURCES`
+(512) and `MAX_OPEN_THESES` (32) survive only as absolute ceilings on what a page can be asked
+to draw. When a story grades fewer reads than the session held, the night counts it and the
+page SAYS `graded K of N reads` - a size statement, with no result in it.
+
+**5. No model runs by day, from any door - and "queued for tonight" is TRUE.** The slot
+declares `uses_model` honestly, so `--force` cannot buy it the clock, and by day the page's
+Redo button writes a `redo_requested` marker instead of starting anything. The first build
+read that marker only for the session the night itself narrates, and the page's default pick
+during a session day is the PREVIOUS session - so the DEFAULT click queued a day nothing would
+ever read, for ever (reviewer round 1). Now the NIGHT SWEEPS: it scans
+`sessions/*/redo_requested.json`, oldest first, re-narrates each (the marker overrides that
+session's unchanged-hash skip), clears a marker only after a GOOD run, and names in its reason
+what it narrated, what is still queued and how many wait for tomorrow. Three rules keep that
+honest rather than merely busy:
+
+- **The budget is spent on sessions NARRATED, never on names in a list.** Markers for three
+  sessions with no pack took the whole budget and, being the oldest, sat at the head of the
+  queue every night after - so the real request behind them was never attempted, on any night.
+  That was live, not theoretical: the home folder held three session folders and zero packs
+  (reviewer round 2). A packless marker now costs nothing, keeps its place and is named,
+  `MAX_NAMED_UNBUILT` (5) of them and then `+N more`.
+- **A Redo BUILDS the pack before it queues anything.** The night can only narrate a session it
+  has a pack for, so the click runs the page's own off-Qt `build_pack_for` seam
+  (deterministic, no model) and writes the marker - or starts the night's process - only once
+  a pack exists. A build that produces none says `No pack could be built for <date> - nothing
+  queued`. A host whose service has no `build_pack_for` seam still queues: there is nothing to
+  build with, the click keeps today's behaviour, and a packless marker now costs the night no
+  budget and is named.
+- **A marker goes where the trader meant it or nowhere.** `validated_session` fails CLOSED:
+  exactly `YYYY-MM-DD`, a real exchange session, already closed. `".."` used to write a marker
+  at the `day_review` ROOT and `"2026-09-18-extra"` was truncated into a real day's folder. A
+  folder that is not a session date is not a queue entry, and **no marker is ever retired by
+  age** - uncertainty never deletes, so the reason line carries `+N more` for ever once
+  markers accumulate, which is the honest cost of that rule.
+
+A queued session's own failure keeps its marker and leaves that day's prior story
+byte-identical; one bad queued session never costs the night's own story, its `ok` or the
+rolling view; a night with no pack of its OWN still drains the queue. `--session` is the one
+exception: an operator who named a day gets that day and no sweep.
+
+**6. The window is asked again before every call after the first.** The slot's
+`reserve_minutes` (10.0) buys the FIRST call and nothing more, so a night that narrated its own
+session at 07:50 ET could declare five calls of nine minutes each and still be loading a model
+at 08:35 - the night-only rule broken from inside (reviewer round 2). The order is own story →
+rolling D1 view → sweep, and before the view and before each swept session the slot asks
+`ai_jobs.window` for `SWEEP_CALL_MINUTES` (9.0, the per-call timeout) of room. Measured against
+the real off-hours window: the first call is allowed at 07:50 ET and refused at 07:51, every
+later call allowed at 07:51 and refused at 07:52, so with `TIMEOUT_SECONDS` = 540 the latest a
+call can END is 08:00 ET, exactly the close. A window that has closed stops the run CLEANLY:
+every remaining marker is kept and the reason says the window closed and what is still queued.
+The clock is ONE injectable seam - the slot's `now` plus the run's own monotonic elapsed - and
+nothing sleeps.
+
+**Two size rules, both stated rather than hidden.** The pack carries the three walk-away rows
+that ran furthest after the decision (an ORDER, never a ranking that decides anything), and the
+rolling D1 view sees only the D1 items of the last `LATELY_SESSIONS` exchange sessions - never
+an M5 item, because a rest-of-day read is about the tape and not about the bigger picture.
+
+**Where the slot sits is a measured choice, not an append.** `plan.md` said "after
+`market_story_narration`", but gate #158 wants the day story finished before 23:30 Pacific and
+`ticker_briefs` reserves 120 minutes in front of it. It cannot move further forward either -
+two existing pins say `ai_summary` sits directly after `measured_report` - so it goes between
+them, INSIDE decision 0018's stage 2, after `ai_summary` and before `observation_tags` and
+`ticker_briefs`.
+
+### The four rounds, in plain words
+
+Every round was NO-GO, and every round was the reviewer finding the thing that would have
+happened on a real night rather than a thing that reads badly.
+
+**Round 1 - the button lied.** By day the Redo click said "queued for tonight", and for every
+session except the one the night was about to narrate anyway, nothing would ever read the
+marker. The page's default pick during a session day is the PREVIOUS session, so the DEFAULT
+click was the broken one. Round 1 also found the unbounded reply: a schema that validates keys
+and types but not list LENGTHS let a 372 KB answer through to the Qt thread.
+
+**Round 2 - the fix for round 1 starved itself, and the caps were too small for a good day.**
+Three markers for sessions with no pack ate the whole sweep budget and, being oldest, sat at
+the head of the queue for ever. That was not a thought experiment: the live home folder held
+three session folders and zero packs. In the same round the caps chosen in round 1 (6 claims,
+24 sources) turned out to be below a REAL full day - 8 reads and 25 ids - so the trader would
+have lost their story on precisely the days they answered every prompt. And a worst-case night
+declared five nine-minute calls against a ten-minute reserve, which is the night-only rule
+broken from inside the job that declares it.
+
+**Round 3 - the trader's own hand.** `redo_story()` built a NEW `_RedoPackWorker` on every
+call and nothing tested for one in flight, so three impatient clicks started three full
+`read_day` builds racing on one `pack.json` and three `run_ai_jobs.py` children, with the
+button enabled throughout. Now `_redo_busy` makes a second click a NO-OP that leaves the
+"Building …" note exactly as it is, the button is grey from the click, and `_release_redo` runs
+on EVERY ending - queued, launched, no pack, refused, a launcher that raised, a build that
+raised - through a `finally` plus a backstop in `_drop_redo_worker`, so a worker that ends
+without its `done` reaching the page cannot leave the verb grey for ever. A session switch
+mid-build neither frees the button early nor strands it. The same round's advisory became a
+rule: `validated_session` now gates the LAUNCH branch too, and `run_ai_jobs.py --session` is
+that same function, so the picker's provisional Today is refused at the door instead of
+parsing and answering `skipped` later.
+
+**Round 4 - the product was whole and the TEST was the blocker.**
+`test_a_session_switch_mid_build_neither_frees_nor_strands_the_button` counted
+`service.calls` while the worker thread was still on its way to its append: 2 failures in 8
+runs, and the one test covering the lead's session-switch requirement could not be trusted. The
+lead fixed it at `6c1e2506` - the gated service sets a second Event after its append and the
+test waits on it - and measured the fail-before-fix the previous commit had promised and never
+recorded: 9 failed / 5 passed on the reverted code, 14 passed on the fix, 25 of 25 green in the
+round's own run.
+
+### Two live facts this lands on
+
+Measured on the desk, 2026-09-20: `C:\TradingBotData\day_review\sessions\` holds **three
+session folders and ZERO `pack.json`**, so the first Redo after this merge is also the first
+pack build for that session, and gate #148's third clause is readable for the first time. And
+**no live journal row yet carries a TJ-14A prediction**, so the first morning's were-you-right
+list will be EMPTY unless the trader clicks a prediction on the Mentor card first. That is the
+honest empty state, not a defect: the story still has a headline and the deterministic facts,
+and `graded 0 of 0 reads` is a true sentence about a day nobody made a call on.
+
+### Recorded, not repaired
+
+- `build_pack_for` runs a second full `read_day` for a day the panel has already read - off
+  the Qt thread, but duplicated work.
+- `redo_story()` reads the settings and the clock and writes the marker on the Qt thread, on
+  click.
+- A build that RAISES is reported with the NO-PACK note; the exception survives only in the
+  log line. The note is true (nothing was queued, no pack exists) and the button comes back.
+- `_sweep_queued` iterates every packless marker each night, one `read_pack` per entry. Cheap
+  and bounded by the folder count, and each one is named - but the queue is never retired, by
+  design.
+- `run_ai_jobs.py --session` now fails CLOSED on an unanswerable calendar (`2099-01-01` → exit
+  2), reversing the deliberate fail-open comment the round-1 code carried. Intended by the
+  lead's "one shared rule" decision, and the validated NYSE range is 2000-2032.
+
 ## TJ-3 - a mark sits on a bar only when it happened DURING that bar (2026-09-19, packet TJ-3)
 
 The long form behind the CLAUDE.md rule *"A note marker sits on a bar only when it
