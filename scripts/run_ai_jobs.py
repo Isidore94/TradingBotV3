@@ -128,7 +128,7 @@ def _print_status() -> int:
     return 0
 
 
-def _run_model_probe(tier: str) -> int:
+def _run_model_probe(tier: str, *, force: bool = False) -> int:
     """TJ-13B: measure one local tier on this desk and print what it cost.
 
     A COMMAND, not a slot. It builds no slate, runs no other job, and exits
@@ -138,11 +138,20 @@ def _run_model_probe(tier: str) -> int:
     The real machine lock is handed to the probe here, because this is the one
     caller that actually loads a model: while the nightly runner is working,
     the probe stands down rather than loading a second model beside it.
+
+    ``--force`` is passed through (2026-09-20 review): the probe's own refusal
+    says "pass --force to measure it again", and until the flag reached it that
+    sentence was false - a desk with one measurement on the session could never
+    be re-measured from the command line. Here as everywhere else, --force
+    re-spends ONLY the already-measured check. It never buys the clock and
+    never beats a held lock.
     """
     from ai_jobs import ledger, model_probe
 
     try:
-        outcome = model_probe.run_model_probe(tier=tier, lock=model_probe.runner_lock)
+        outcome = model_probe.run_model_probe(
+            tier=tier, force=force, lock=model_probe.runner_lock
+        )
     except ValueError as exc:
         print(f"model probe refused: {exc}")
         return 1
@@ -243,7 +252,9 @@ def main(argv: list[str] | None = None) -> int:
              "A probe is a model LOAD, so it runs only inside the night window "
              "and only when no AI job holds the machine lock; it reads a COPY "
              "of one week's fact packs and never the live store. Exit code 0 "
-             "means it measured, 1 means it refused and says why. Tiers: large, "
+             "means it measured, 1 means it refused and says why - it is not "
+             "night, a job is already running, or this session was measured "
+             "already, which is the one --force re-spends. Tiers: large, "
              "medium.",
     )
     parser.add_argument("--verbose", action="store_true")
@@ -255,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         return _print_status()
 
     if args.probe_model:
-        return _run_model_probe(str(args.probe_model).strip())
+        return _run_model_probe(str(args.probe_model).strip(), force=args.force)
 
     from ai_jobs import runner
 

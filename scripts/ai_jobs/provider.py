@@ -154,7 +154,12 @@ def request_with_fallback(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     ledger_path=None,
 ) -> dict[str, Any]:
-    """Ask the large local model; fall back to the medium one and SAY so.
+    """Ask the large local model, fall back to the medium one, and write NO ledger row.
+
+    The row is the calling SLOT's: it writes one, carrying ``attribution``
+    under :data:`LEDGER_FIELD`. A row written here as well would be two records
+    of one night. ``ledger_path`` is accepted for symmetry with the rest of
+    this seam and is deliberately unused.
 
     Returns ``{"status", "result", "attribution"}``. ``result`` is
     ``ai_summary.request_ai_summary``'s envelope, or ``None`` when neither model
@@ -165,11 +170,10 @@ def request_with_fallback(
     citation rule. A second shape would be a second place for all three to
     drift.
 
-    ``ledger_path`` is accepted for symmetry with the rest of this seam and is
-    deliberately unused: this function writes NO ledger row. The slot that
-    publishes writes one row and carries ``attribution`` on it under
-    :data:`LEDGER_FIELD`; a row written here as well would be two records of one
-    night.
+    Raises ``ValueError`` for ``openai`` - a setting that is off, refused
+    before anything is sent - and for any name that is not a local tier. A slot
+    calling this must catch it: a raise here is a FAILED row with a sentence on
+    it, not a night that publishes half an answer.
     """
     import ai_summary
 

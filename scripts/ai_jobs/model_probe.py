@@ -120,17 +120,30 @@ RESERVE_SAFETY_FACTOR = 1.25
 def runner_lock():
     """The AI-jobs machine lock, taken without waiting.
 
-    Handed to :func:`run_model_probe` by the CLI, which is the only caller that
-    actually loads a model. It is a PARAMETER rather than a default so a
-    harness can exercise this seam without the state of this machine's lock
-    deciding whether a test passes - and so the refusal itself is testable with
-    a fake.
+    The DEFAULT guard for :func:`run_model_probe` (lead decision, 2026-09-20):
+    a bare call - a REPL, a later slot, a script - must not be able to load a
+    27B beside a running nightly job just by leaving an argument out. It was a
+    caller-supplied parameter for one day, which meant the most dangerous call
+    in this package was the one that named nothing.
+
+    It is resolved through this module's own attribute at CALL time (see
+    :data:`USE_RUNNER_LOCK`), so a harness hands the probe a free lock by
+    patching ``model_probe.runner_lock`` rather than by passing an argument at
+    every call site.
     """
     from local_writer_lock import local_writer_lock
 
     from ai_jobs.runner import RUNNER_LOCK_KEY
 
     return local_writer_lock(RUNNER_LOCK_KEY, timeout_seconds=0.0)
+
+
+#: "Take the machine lock." A sentinel rather than ``lock=runner_lock``,
+#: because a default argument binds the function object at import and could
+#: then never be replaced; this resolves :func:`runner_lock` through the module
+#: at call time. ``lock=None`` means the same thing - there is deliberately no
+#: value of ``lock`` that means "load a model with no guard at all".
+USE_RUNNER_LOCK = object()
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +492,7 @@ def run_model_probe(
     force: bool = False,
     post: Callable[..., Any] = requests.post,
     ledger_path: Path | None = None,
-    lock: Callable[[], Any] | None = None,
+    lock: Callable[[], Any] | None = USE_RUNNER_LOCK,
 ) -> dict[str, Any]:
     """Measure one local tier on this desk and write the measurement down.
 
@@ -488,11 +501,12 @@ def run_model_probe(
     measurement here.
 
     ``force`` re-spends the "already measured for this session" check and
-    NOTHING else. It does not buy the clock: this is a model load.
+    NOTHING else. It does not buy the clock (this is a model load) and it does
+    not beat a held lock.
 
-    ``lock`` is a zero-argument callable returning a context manager - pass
-    :func:`runner_lock` on a real desk. See its docstring for why the guard is
-    handed in rather than defaulted.
+    ``lock`` is a zero-argument callable returning a context manager. It
+    defaults to the machine's own AI-jobs lock; ``None`` means the same thing.
+    A harness that wants a free lock patches :func:`runner_lock`.
     """
     if tier not in PROBE_TIERS:
         raise ValueError(
@@ -536,10 +550,11 @@ def run_model_probe(
     # 3. The machine lock. Never a second model load beside a working one.
     from local_writer_lock import LocalLockUnavailable
 
+    guard = runner_lock if lock is USE_RUNNER_LOCK or lock is None else lock
     with ExitStack() as stack:
-        if lock is not None:
+        if guard is not None:
             try:
-                stack.enter_context(lock())
+                stack.enter_context(guard())
             except LocalLockUnavailable as exc:
                 return _record(
                     status=ledger.STATUS_SKIPPED,
@@ -765,8 +780,12 @@ def reserve_minutes_from_probe(
     guessed reserve would reserve the window against a number from nowhere.
 
     The arithmetic is the load plus one bounded answer at the measured rate,
-    with :data:`RESERVE_SAFETY_FACTOR` on top, floored by the load itself: the
-    model has to BE there before it writes a word.
+    with :data:`RESERVE_SAFETY_FACTOR` on top. The load is INSIDE that sum, so
+    the reserve always covers it - the model has to BE there before it writes a
+    word. (An explicit `max(minutes, load/60)` floor stood here until the
+    2026-09-20 review pointed out that a positive generation term and a factor
+    above 1.0 make it unreachable; a branch no input can take is not a
+    safeguard, it is a claim nobody can check.)
     """
     measurement = latest_measurement(tier=tier, ledger_path=ledger_path)
     if not measurement:
@@ -785,7 +804,7 @@ def reserve_minutes_from_probe(
 
     generation_seconds = ai_summary.LOCAL_MAP_GENERATION_TOKENS / tokens_per_second
     minutes = (load_seconds + generation_seconds) * RESERVE_SAFETY_FACTOR / 60.0
-    return round(max(minutes, load_seconds / 60.0), 1)
+    return round(minutes, 1)
 
 
 def describe_measurement(

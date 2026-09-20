@@ -165,6 +165,23 @@ def _probe_rows(path: Path) -> list[dict]:
     ]
 
 
+@pytest.fixture(autouse=True)
+def _a_free_machine_lock(monkeypatch):
+    """A free lock for every test here that does not hand the probe its own.
+
+    Since 2026-09-20 `run_model_probe` takes the machine's AI-jobs lock by
+    DEFAULT. The live nightly runner holds that lock for most of every night,
+    and nothing in this file may pass or fail on whether it happens to be
+    working - the tests that are ABOUT the lock inject their own, which
+    overrides this.
+    """
+    import contextlib
+
+    from ai_jobs import model_probe
+
+    monkeypatch.setattr(model_probe, "runner_lock", lambda: contextlib.nullcontext())
+
+
 # ---------------------------------------------------------------------------
 # the machine lock
 # ---------------------------------------------------------------------------
@@ -272,6 +289,42 @@ def test_the_guard_is_held_across_the_model_call_not_merely_checked_first(tmp_pa
         )
 
     assert events == ["enter", "post", "exit"], events
+
+
+def test_the_default_guard_is_the_machines_own_lock(tmp_path, monkeypatch):
+    """Review 2026-09-20: a bare call must not be able to load a 27B.
+
+    There is no value of ``lock`` that means "no guard at all" - leaving it out
+    and passing ``None`` both take the machine's own AI-jobs lock, because the
+    most dangerous call in this package must not be the one that names nothing.
+    """
+    from ai_jobs import model_probe
+
+    entered: list[str] = []
+
+    class _Recorded:
+        def __enter__(self):
+            entered.append("enter")
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(model_probe, "runner_lock", _Recorded)
+
+    led = tmp_path / "ledger.jsonl"
+    packs = _write_packs(tmp_path / "store" / "digests")
+    with _live_settings():
+        model_probe.run_model_probe(
+            tier="large", packs_root=packs, now=SATURDAY_NIGHT,
+            post=_fake_post([]), ledger_path=led,
+        )
+        model_probe.run_model_probe(
+            tier="large", packs_root=packs, now=SATURDAY_NIGHT, force=True,
+            post=_fake_post([]), ledger_path=led, lock=None,
+        )
+
+    assert entered == ["enter", "enter"]
 
 
 def test_the_typed_command_is_what_hands_the_probe_the_real_lock(monkeypatch):
@@ -427,6 +480,152 @@ def test_a_server_that_reports_no_completion_tokens_leaves_the_reserve_unmeasure
     assert result["measurement"]["context_tokens_accepted"] == 41_234
     assert result["measurement"]["tokens_per_second"] == 0.0
     assert model_probe.reserve_minutes_from_probe(tier="large", ledger_path=led) is None
+
+
+# ---------------------------------------------------------------------------
+# --force, driven through the REAL command line (review 2026-09-20, blocker 1)
+# ---------------------------------------------------------------------------
+
+
+def _cli_desk(monkeypatch, tmp_path, *, moment):
+    """Wire `run_ai_jobs.main` to a scratch desk: scratch ledger, scratch packs,
+    a fixed clock, and a model request that is a fake.
+
+    `main` names no ledger path, no packs root and no `post`, which is the
+    whole point of driving the flag through it - so each of those is redirected
+    here instead. `requests.post` is replaced by an explosion: this file must
+    never be able to reach 127.0.0.1:11434.
+    """
+    import ai_summary
+    import requests
+    from ai_jobs import ledger, store, window
+
+    led = tmp_path / "ledger.jsonl"
+    packs = _write_packs(tmp_path / "store" / "digests")
+    monkeypatch.setattr(ledger, "ledger_path", lambda *, create=True: led)
+    monkeypatch.setattr(store, "digests_dir", lambda *, create=True: packs)
+    real_now = window.market_now
+    monkeypatch.setattr(
+        window, "market_now", lambda now=None: real_now(moment if now is None else now)
+    )
+    monkeypatch.setattr(requests, "post", _never_post)
+
+    asked: list[str] = []
+
+    def _fake_request(**kwargs):
+        asked.append(str(kwargs.get("model") or ""))
+        return {
+            "model": kwargs.get("model"),
+            "summary": {"executive_summary": "measured"},
+            "usage": {"prompt_tokens": 41_234, "completion_tokens": 800 + len(asked)},
+        }
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", _fake_request)
+    return led, asked
+
+
+def test_force_is_what_lets_the_trader_measure_the_model_twice(tmp_path, monkeypatch):
+    """The probe's own refusal says "pass --force to measure it again". Until
+    the flag reached it that sentence was false: `--probe-model large` and
+    `--probe-model large --force` behaved identically, so a desk with one
+    measurement on the session could never be re-measured from the command
+    line."""
+    import run_ai_jobs
+    from ai_jobs import model_probe
+
+    led, asked = _cli_desk(monkeypatch, tmp_path, moment=SATURDAY_NIGHT)
+
+    with _live_settings():
+        first = run_ai_jobs.main(["--probe-model", "large"])
+        again = run_ai_jobs.main(["--probe-model", "large"])
+        forced = run_ai_jobs.main(["--probe-model", "large", "--force"])
+
+    assert first == 0
+    assert again == 1, "a second probe on the same session is refused"
+    assert forced == 0, "--force is how the trader asks for another measurement"
+    assert asked == [LARGE_TAG, LARGE_TAG], "the refused run must not ask the model"
+
+    measured = [row for row in _probe_rows(led) if row.get("model_probe")]
+    assert len(measured) == 2
+    # Append-only: two rows, and the newest is the one the reserve reads.
+    newest = model_probe.latest_measurement(tier="large", ledger_path=led)
+    assert newest["completion_tokens"] == 802
+    assert newest == measured[-1]["model_probe"]
+
+
+def test_force_still_does_not_buy_the_clock_from_the_command_line(tmp_path, monkeypatch):
+    """14:00 on a Saturday is exactly when the trader is at the desk. --force
+    re-spends the already-measured check and nothing else."""
+    import run_ai_jobs
+    from ai_jobs import ledger
+
+    daytime = datetime(2026, 9, 19, 14, 0, tzinfo=PACIFIC)
+    led, asked = _cli_desk(monkeypatch, tmp_path, moment=daytime)
+
+    with _live_settings():
+        assert run_ai_jobs.main(["--probe-model", "large", "--force"]) == 1
+
+    assert asked == []
+    rows = _probe_rows(led)
+    assert rows and rows[-1]["status"] == ledger.STATUS_SKIPPED
+    assert "window" in rows[-1]["reason"].lower()
+
+
+def test_force_does_not_beat_a_held_lock_from_the_command_line(tmp_path, monkeypatch):
+    """The one refusal --force must never touch: another job is on the box."""
+    import run_ai_jobs
+    from ai_jobs import ledger, model_probe
+
+    led, asked = _cli_desk(monkeypatch, tmp_path, moment=SATURDAY_NIGHT)
+    monkeypatch.setattr(model_probe, "runner_lock", _held_lock())
+
+    with _live_settings():
+        assert run_ai_jobs.main(["--probe-model", "large", "--force"]) == 1
+
+    assert asked == []
+    rows = _probe_rows(led)
+    assert rows and rows[-1]["status"] == ledger.STATUS_SKIPPED
+    assert "lock" in rows[-1]["reason"].lower()
+
+
+def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
+    """The tester byte-pinned the weeknight slate to `e8c04f88`; the LEAD then
+    moved `miss_contrast` above the `market_story_rollups` / `measured_report`
+    pair on main (`1f260ffa`). Re-pinning a byte-pin is only safe if something
+    proves the re-pin is that move and nothing else: same twenty names, same
+    set, same order everywhere outside positions 12-14."""
+    from ai_jobs import runner
+
+    pinned_at_e8c04f88 = (
+        "journal_import",
+        "journal_auto_tag",
+        "veto_cohort_grading",
+        "like_cohort_grading",
+        "sidecar_completion",
+        "pass_cohort_grading",
+        "rejection_cohort_grading",
+        "note_vocabulary_audit",
+        "preference_trade_outcomes",
+        "evidence_report",
+        "daily_digest",
+        "theta_pick_grading",
+        "market_story_rollups",
+        "miss_contrast",
+        "measured_report",
+        "ticker_briefs",
+        "market_story_narration",
+        "journal_enrichment",
+        "review_policy_draft",
+        "setup_research",
+    )
+    today = tuple(slot.name for slot in runner.slots_for("weeknight"))
+
+    assert len(today) == len(pinned_at_e8c04f88)
+    assert set(today) == set(pinned_at_e8c04f88), "a slot was added or removed"
+    assert today[:12] == pinned_at_e8c04f88[:12]
+    assert today[15:] == pinned_at_e8c04f88[15:]
+    assert sorted(today[12:15]) == sorted(pinned_at_e8c04f88[12:15])
+    assert today[12:15] == ("miss_contrast", "market_story_rollups", "measured_report")
 
 
 # ---------------------------------------------------------------------------

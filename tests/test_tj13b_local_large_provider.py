@@ -366,7 +366,16 @@ def test_a_slot_row_carries_which_model_was_asked_which_answered_and_why(tmp_pat
 def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
     """Pinned from the branch this packet starts on (`e8c04f88`: wave 1 + TJ-11F
     + TJ-3 + TJ-15 + TJ-14A). The week story is a SATURDAY slot; if TJ-13B adds
-    anything to a weeknight, this is where it shows."""
+    anything to a weeknight, this is where it shows.
+
+    LEAD AMENDMENT 2026-09-20: re-pinned to `main` (9fa10e4b) after the lead's
+    own slot-order fix `1f260ffa` moved `miss_contrast` ABOVE the
+    `market_story_rollups` / `measured_report` pair. The same twenty names in
+    the same stages; the ONLY difference from the `e8c04f88` pin is that one
+    move inside positions 12-14, and
+    `test_tj13b_probe_guards.py::test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14`
+    is what proves that is all it is. TJ-13B itself still touches no slate.
+    """
     from ai_jobs import runner
 
     expected = (
@@ -382,8 +391,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "evidence_report",
         "daily_digest",
         "theta_pick_grading",
-        "market_story_rollups",
         "miss_contrast",
+        "market_story_rollups",
         "measured_report",
         "ticker_briefs",
         "market_story_narration",

@@ -228,6 +228,26 @@ def _probe_rows(path: Path) -> list[dict]:
     return [row for row in _rows(path) if row.get("job") == model_probe.PROBE_JOB]
 
 
+@pytest.fixture(autouse=True)
+def _a_free_machine_lock(monkeypatch):
+    """LEAD AMENDMENT 2026-09-20: hand this file's probes a FREE lock.
+
+    `run_model_probe` now takes the machine's AI-jobs lock BY DEFAULT (review
+    2026-09-20: a bare call must not be able to load a 27B beside a running
+    nightly job). The real lock is held by the scheduled runner for most of
+    every night, and a test that passes or fails on whether that job happens to
+    be working is not a test - so the guard is replaced here by one that is
+    always free. Nothing else changes: not one assertion below moves, and the
+    REFUSAL under a held lock is pinned in
+    `tests/test_tj13b_probe_guards.py::test_a_probe_stands_down_while_the_nightly_runner_holds_the_lock`.
+    """
+    import contextlib
+
+    from ai_jobs import model_probe
+
+    monkeypatch.setattr(model_probe, "runner_lock", lambda: contextlib.nullcontext())
+
+
 # ---------------------------------------------------------------------------
 # the command exists, and it runs only the probe
 # ---------------------------------------------------------------------------
