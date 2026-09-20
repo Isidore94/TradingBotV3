@@ -631,12 +631,17 @@ class DayReviewService:
         stored = grader.current_grades(grader.read_grades(session))
         by_read = {str(row.get("read_id") or ""): row for row in stored}
         fresh: list[dict[str, Any]] = []
-        for grade in grades:
+        for grade in self._storable_grades(grades):
             previous = by_read.get(str(grade.get("read_id") or ""))
             if previous is None:
                 fresh.append(grade)
                 continue
-            if str(previous.get("verdict") or "") == str(grade.get("verdict") or ""):
+            was = str(previous.get("verdict") or "")
+            if was == str(grade.get("verdict") or ""):
+                continue
+            # The same rule the nightly re-grade keeps: a verdict may only move
+            # UP, so an absent store can never retire a correct `pending` row.
+            if grader.verdict_rank(str(grade.get("verdict") or "")) <= grader.verdict_rank(was):
                 continue
             fresh.append({**grade, "supersedes": str(previous.get("grade_id") or "")})
         if fresh:
@@ -719,50 +724,29 @@ class DayReviewService:
             return tape_of[symbol]
 
         def daily_for(symbol: str) -> list[dict[str, Any]]:
-            """The benchmark's daily history: the durable store, else the cache.
+            """The benchmark's daily history, through the ONE shared loader.
 
-            `chart_snapshot.load_d1_bars` is the durable parquet the walk-away
-            ruler already reads - off the Qt thread, mtime-cached, no network,
-            no IB. Measured on the desk 2026-09-20: it holds no file for SPY at
-            all (the home folder has no `daily_bars/`), so on the machine this
-            page runs on it answers EMPTY, and with no bars there is no ATR and
-            every verdict would read `unmeasured`. The fallback is the SAME
-            machine-local cache the desk's own D1 environment labels are built
-            from - still a file, still no provider - so the grader measures what
-            the desk itself measures. Neither is a fetch; a symbol in neither is
-            `unmeasured` and says so.
+            `market_read_grades.daily_bars_for_symbol` is what the nightly
+            re-grade uses too. A page and a night that read different stores
+            grade different markets - which is exactly what happened before the
+            fix round (reviewer, 2026-09-20).
             """
             if symbol not in daily_of:
-                bars: list[dict[str, Any]] = []
                 try:
-                    import chart_snapshot
-
-                    bars = list(chart_snapshot.load_d1_bars(symbol) or ())
+                    daily_of[symbol] = list(grader.daily_bars_for_symbol(symbol) or ())
                 except Exception:  # noqa: BLE001 - `unmeasured`, never an error
                     _log.debug("Daily bars unreadable for %s.", symbol, exc_info=True)
-                if not bars:
-                    try:
-                        import d1_environment_store
-
-                        bars = list(d1_environment_store._cached_daily_bars(symbol) or ())
-                    except Exception:  # noqa: BLE001
-                        _log.debug("The daily cache was unreadable.", exc_info=True)
-                daily_of[symbol] = bars
+                    daily_of[symbol] = []
             return daily_of[symbol]
 
         labels = self._d1_labels()
         prior_grades = self._prior_grades(session)
         internals_bars = self._internals_bars(session, rows)
-        # The trader's latest D1 read of the session, for the context's
-        # "does this agree with your own D1 view?" and for every congruence
-        # line. A CLICK outranks an extraction, and the latest one wins.
-        d1_rows = [
-            row for row in rows
-            if str(row.get("timeframe") or "").upper() == "D1"
-            and grader.is_gradable(row)
-        ]
-        clicked = [row for row in d1_rows if row.get("source") == grader.SOURCE_CLICK]
-        latest_d1 = (clicked or d1_rows)[-1] if (clicked or d1_rows) else None
+        # The ONE read per timeframe a congruence line may be compared with: a
+        # CLICK outranks an extraction, and contradictory extracted stances name
+        # themselves instead of one of them being picked (`select_read`).
+        latest_d1, d1_note = grader.select_read(rows, timeframe="D1")
+        latest_m5, m5_note = grader.select_read(rows, timeframe="M5")
 
         reads: list[dict[str, Any]] = []
         grades: list[dict[str, Any]] = []
@@ -770,6 +754,7 @@ class DayReviewService:
             symbol = str(row.get("benchmark") or BENCHMARK_SYMBOL)
             daily = daily_for(symbol)
             context: dict[str, Any] = {}
+            context_gap = ""
             try:
                 context = grader.context_for(
                     by_entry.get(str(row.get("entry_id") or "")) or {},
@@ -781,7 +766,12 @@ class DayReviewService:
                     prior_grades=prior_grades,
                     latest_d1_click=latest_d1 if latest_d1 is not row else None,
                 )
-            except Exception:  # noqa: BLE001 - an unbuildable snapshot is named
+            except Exception as exc:  # noqa: BLE001
+                # A CLICK whose snapshot cannot be built is NOT stored this pass
+                # (`_storable_grades` drops it) and the row says why, so the next
+                # pass tries again. Degrading it to a named absence would make a
+                # stated call permanently context-less (lead, 2026-09-20).
+                context_gap = f"context_unbuildable: {type(exc).__name__}: {exc}"
                 _log.debug("A read's context could not be built.", exc_info=True)
             grade = grader.grade_read(
                 row,
@@ -791,6 +781,8 @@ class DayReviewService:
                 now=now,
                 context=context,
             )
+            if context_gap:
+                grade["grader_gap"] = context_gap
             grades.append(grade)
             entry = by_entry.get(str(row.get("entry_id") or "")) or {}
             mentor = entry.get("mentor") if isinstance(entry.get("mentor"), Mapping) else {}
@@ -821,8 +813,36 @@ class DayReviewService:
             decisions=decisions or (),
             claims=claims or (),
             trades=trades or (),
+            d1_note=d1_note,
+            # Lead decision 6's M5 half: a rest-of-day read belongs with the
+            # session's M5 likes, never with its D1 ones.
+            m5_read=latest_m5,
+            m5_note=m5_note,
         )
         return reads, lines, grades
+
+    @staticmethod
+    def _storable_grades(grades) -> list[dict[str, Any]]:
+        """The grades this pass may WRITE.
+
+        A clicked grade whose context could not be built is held back rather
+        than stored with a named absence: the ledger refuses it anyway
+        (`ContextMissingError`), and a row written once can never be given a
+        snapshot afterwards. The next pass builds it again.
+        """
+        import market_read_grades as grader
+
+        keep: list[dict[str, Any]] = []
+        for grade in grades or ():
+            clicked = str(grade.get("source") or "") == grader.SOURCE_CLICK
+            gap = str(grade.get("grader_gap") or "")
+            if clicked and gap.startswith("context_unbuildable"):
+                _log.debug(
+                    "A clicked grade was held back: %s", gap
+                )
+                continue
+            keep.append(grade)
+        return keep
 
     @staticmethod
     def _prior_daily_bar(daily_bars, session: str):

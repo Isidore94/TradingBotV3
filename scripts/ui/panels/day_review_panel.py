@@ -1365,6 +1365,30 @@ class DayReviewPanel(QFrame):
             return "unmeasured — " + text.split(":", 1)[1].replace("_", " ")
         return text
 
+    @staticmethod
+    def _read_chip(read: Mapping[str, Any] | None) -> str:
+        """The chip beside an entry: WHAT was graded, then how it turned out.
+
+        Live clicks are 0 and every live read row is an EXTRACTION, so a chip
+        that said only "right" would present a stance the desk inferred from a
+        sentence as the trader's own stated call (reviewer, 2026-09-20). The
+        source is named in plain words, on every chip, always.
+        """
+        if not read:
+            return ""
+        verdict = DayReviewPanel._verdict_text(str(read.get("verdict") or ""))
+        if not verdict:
+            return ""
+        direction = str(read.get("direction") or "")
+        if str(read.get("source") or "") == "click":
+            said = f"your call: {direction}" if direction else "your call"
+        else:
+            said = (
+                f"we read your note as {direction}" if direction
+                else "read from your note"
+            )
+        return f"{said} — {verdict}"
+
     def _render_theses(self, rows) -> None:
         self.theses.clear()
         for row in rows:
@@ -1571,15 +1595,11 @@ class DayReviewPanel(QFrame):
                 # a sentence the trader did not write.
                 body = str(entry.get("text") or "") or _prediction_text(entry)
                 # TJ-10: the verdict the WORKER measured, beside the words it
-                # graded. Nothing is computed here and an ungraded row shows no
-                # chip at all.
-                verdict = self._verdict_text(
-                    str(
-                        self._reads.get(str(entry.get("entry_id") or ""), {}).get(
-                            "verdict"
-                        )
-                        or ""
-                    )
+                # graded, and SAYING which it graded - a clicked call or a
+                # stance the desk read out of the note. Nothing is computed
+                # here and an ungraded row shows no chip at all.
+                verdict = self._read_chip(
+                    self._reads.get(str(entry.get("entry_id") or ""))
                 )
                 label = (
                     f"{_clock_text(entry.get('created_at'))}"
@@ -1621,14 +1641,9 @@ class DayReviewPanel(QFrame):
         if not entry:
             self.entry_meta.setText("")
             self.entry_reader.setPlainText("")
-            self._show_verdict_chip("")
+            self._show_verdict_chip(None)
             return
-        self._show_verdict_chip(
-            str(
-                self._reads.get(str(entry.get("entry_id") or ""), {}).get("verdict")
-                or ""
-            )
-        )
+        self._show_verdict_chip(self._reads.get(str(entry.get("entry_id") or "")))
         origin = str(entry.get("origin") or "")
         stamp = _clock_text(entry.get("created_at"))
         meta = f"written {stamp}  ·  {entry.get('timeframe') or ''}  ·  {origin}"
@@ -1643,7 +1658,7 @@ class DayReviewPanel(QFrame):
             "\n\n".join(part for part in (words, call) if part)
         )
 
-    def _show_verdict_chip(self, verdict: str) -> None:
+    def _show_verdict_chip(self, read: Mapping[str, Any] | None) -> None:
         """One chip for the selected read, styled by a DYNAMIC PROPERTY.
 
         `theme.qss` keys on `#VerdictChip[verdict="right"]` and friends, so no
@@ -1651,9 +1666,10 @@ class DayReviewPanel(QFrame):
         stylesheet). A property change needs an explicit repolish; that is one
         widget, not a page.
         """
-        text = self._verdict_text(verdict)
-        kind = str(verdict or "").split(":", 1)[0].split(" ", 1)[0]
-        self.verdict_chip.setText(f"Read: {text}" if text else "")
+        verdict = str((read or {}).get("verdict") or "")
+        text = self._read_chip(read)
+        kind = verdict.split(":", 1)[0].split(" ", 1)[0]
+        self.verdict_chip.setText(text)
         self.verdict_chip.setVisible(bool(text))
         if self.verdict_chip.property("verdict") == kind:
             return

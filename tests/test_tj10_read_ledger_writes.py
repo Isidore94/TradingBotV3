@@ -49,10 +49,18 @@ class _Journal:
         return []
 
 
+#: A month of daily bars whose every true range is exactly 2.00, so ATR(14) is
+#: 2.00 and the fixture tape's +2.00 session move is 1.0 ATR - four band-widths
+#: clear of `FLAT_BAND_ATR`, which makes an `up` read `right`.
+def _daily_history():
+    return fx.daily_bars({f"2026-08-{day:02d}": 100.0 + day for day in range(3, 31)})
+
+
 def _service(monkeypatch, tmp_path, entries):
     """A service whose every store is a dict and whose ledger is `tmp_path`."""
     import chart_snapshot
     import claimed_picks
+    import d1_environment_store
     import daily_recap_reader
     import day_review_bars
     import market_read_grades as grader
@@ -70,6 +78,11 @@ def _service(monkeypatch, tmp_path, entries):
         lambda *a, **k: {"SPY": fx.session_tape()},
     )
     monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _symbol: [])
+    # The durable store is empty on this desk; the machine-local daily cache is
+    # what answers, through the ONE shared loader.
+    monkeypatch.setattr(
+        d1_environment_store, "_cached_daily_bars", lambda _symbol: _daily_history()
+    )
     monkeypatch.setattr(grader, "_default_root", lambda: Path(tmp_path))
 
     service = DayReviewService(journal_service=_Journal(entries))
@@ -128,6 +141,9 @@ def test_a_moved_verdict_is_a_new_row_naming_the_old_one(monkeypatch, tmp_path):
     stored = grader.read_grades(fx.SESSION, root=tmp_path)
     assert len(stored) == 2
     assert stored[0]["verdict"] == f"pending {fx.SESSION}"
+    # The tape ran +2.00 from the anchor on a 2.00 ATR: 1.0 ATR up, four band
+    # widths clear of the flat band.
+    assert stored[1]["verdict"] == grader.VERDICT_RIGHT
     assert stored[1]["supersedes"] == stored[0]["grade_id"]
     assert moved and moved[0]["supersedes"] == stored[0]["grade_id"]
 

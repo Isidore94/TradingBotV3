@@ -104,8 +104,16 @@ D1_CHECKPOINT_SESSIONS = (1, 3, 5)
 #: The naive rules a read is measured against (TJ-12 / TJ-16 read these).
 BASELINES = ("always_up", "same_as_the_last_hour", "with_the_d1_environment")
 
-#: The three congruence lines, in the order they are printed.
+#: The three congruence lines, in the order they are printed. This is the D1
+#: spine and it is always exactly these three, in this order.
 CONGRUENCE_KINDS = ("desk_d1_label", "picks_side_mix", "fills_bias")
+#: The M5 half of lead decision 6, APPENDED when the session has an M5 read.
+#: TJ-15 measured 1,026 M5 reviewed decisions against 1,013 D1 over 20 sessions,
+#: so a rest-of-day read compared with D1 picks would be answering about the
+#: wrong crowd. It is a separate kind rather than a second `picks_side_mix` row
+#: because every reader of these lines keys on `kind`.
+CONGRUENCE_M5_KIND = "m5_picks_side_mix"
+_M5_TIMEFRAME = "M5"
 
 #: What a read may be graded ON. `no_view`, `cautious` and `unstated` are
 #: complete answers and are never in it.
@@ -450,6 +458,14 @@ def baseline_reads(rows: Iterable[Mapping[str, Any]], name: str) -> list[dict[st
     The rule reads each row's OWN context snapshot and no bars at all, so a
     baseline is point-in-time by construction and cannot see a bar the trader
     could not. A question the trader declined is never answered by a baseline.
+
+    **Feed it GRADE rows, not bare read rows.** The `context` a baseline reads
+    (`last_hour_spy`, `d1_environment`) is attached when a read is GRADED, so a
+    caller that hands over the output of :func:`read_rows` gets `unmeasured` on
+    every rule that needs one. TJ-12 and TJ-16 read the stored ledger
+    (:func:`read_grades`) and pass each row's `read` merged with its `context`;
+    the rows come back in the same order with the same stamps, so the trader's
+    score and the baseline's are measured on identical questions.
     """
     rule = str(name or "")
     if rule not in BASELINES:
@@ -981,6 +997,62 @@ def _previous_verdict(prior_grades: Iterable[Mapping[str, Any]], stamp: datetime
 # ---------------------------------------------------------------------------
 # item 6 - the congruence lines. PRINTED, never pushed.
 # ---------------------------------------------------------------------------
+def select_read(
+    rows: Iterable[Mapping[str, Any]], *, timeframe: str
+) -> tuple[dict[str, Any] | None, str]:
+    """The ONE read of `timeframe` a congruence line may be compared with.
+
+    `(read, note)`. Two rules, both from the fix round 2026-09-20:
+
+    * **A CLICKED read always wins over any extracted one** for that timeframe -
+      a stated call outranks an inferred stance, always (decision 0021 answer 29).
+    * An EXTRACTED stance is used only when the session's extracted stances of
+      that timeframe do NOT contradict each other. On 2026-09-17 one note read
+      `up` and another on the same session read `down`; comparing either one
+      with the desk's label would be picking a view the trader never stated. The
+      note says so and the line is `unmeasured`.
+    """
+    mine = [
+        dict(row) for row in rows or ()
+        if _timeframe_of(row) == str(timeframe or "").strip().upper()
+        and is_gradable(row)
+    ]
+    if not mine:
+        return None, ""
+    clicked = [row for row in mine if str(row.get("source") or "") == SOURCE_CLICK]
+    if clicked:
+        return clicked[-1], ""
+    directional = [row for row in mine if _read_direction(row)]
+    ups = [row for row in directional if _read_direction(row) == "up"]
+    downs = [row for row in directional if _read_direction(row) == "down"]
+    if ups and downs:
+        return None, (
+            f"your notes read both ways ({len(ups)} up, {len(downs)} down) - "
+            "no single read to compare"
+        )
+    if directional:
+        return directional[-1], ""
+    return mine[-1], ""
+
+
+def read_phrase(read: Mapping[str, Any] | None) -> str:
+    """How a read is NAMED on a trader-facing line, source and all.
+
+    Live clicks are 0 and every live read row is an extraction, so a surface
+    that said "your D1 read is up" would be presenting an inferred stance as the
+    trader's own stated call (reviewer, 2026-09-20). A click says it was
+    clicked, and an extraction says the desk read it out of a note.
+    """
+    if not read:
+        return "no read"
+    direction = str(read.get("direction") or "") or UNMEASURED
+    if str(read.get("source") or "") == SOURCE_CLICK:
+        stamp = _as_datetime(read.get("stamp"))
+        when = f" (clicked {stamp.strftime('%H:%M')})" if stamp else " (clicked)"
+        return f"your call: {direction}{when}"
+    return f"we read your note as {direction}"
+
+
 def congruence_lines(
     *,
     session: str,
@@ -989,22 +1061,41 @@ def congruence_lines(
     decisions: Iterable[Mapping[str, Any]] = (),
     claims: Iterable[Mapping[str, Any]] = (),
     trades: Iterable[Mapping[str, Any]] = (),
+    d1_note: str = "",
+    m5_read: Mapping[str, Any] | None = None,
+    m5_note: str = "",
 ) -> tuple[dict[str, Any], ...]:
-    """Three lines: your view against the desk's, your picks' and your fills'.
+    """Your view against the desk's, against your picks' and against your fills'.
 
     Trader, 2026-09-19: *"if my thoughts about the market are potentially
     incongruent with my overall D1 picture, I want to know about it."* Every
-    line names its TIMEFRAME, its `n` and its source ids; a missing side is
-    named and is never read as agreement; a count under
-    `evidence_stats.MIN_REPORTABLE_N` says `too few to call` beside its counts.
-    Nothing here carries a threshold, a priority or an alert, and it reaches no
-    notifier: decision 0021 answer 15 - printed, never pushed, never acted on.
+    line names its TIMEFRAME, its SOURCE (a click or an extraction, in plain
+    words), its `n` and its source ids; a missing side is named and is never
+    read as agreement; a count under `evidence_stats.MIN_REPORTABLE_N` says
+    `too few to call` beside its counts. Nothing here carries a threshold, a
+    priority or an alert, and it reaches no notifier: decision 0021 answer 15 -
+    printed, never pushed, never acted on.
+
+    :data:`CONGRUENCE_KINDS` is the D1 spine and is always all three lines in
+    that order. An M5 line is APPENDED beside the D1 picks line when an
+    ``m5_read`` is given (lead decision 6: half the trader's reviewed decisions
+    are M5, and a rest-of-day read belongs with M5 picks, not D1 ones).
     """
-    return (
-        _line_desk_label(d1_read, d1_label),
-        _line_picks(d1_read, decisions, claims, session),
-        _line_fills(d1_read, trades),
-    )
+    lines = [
+        _line_desk_label(d1_read, d1_label, d1_note),
+        _line_picks(d1_read, decisions, claims, session, note=d1_note),
+        _line_fills(d1_read, trades, d1_note),
+    ]
+    if m5_read is not None or m5_note:
+        lines.insert(
+            2,
+            _line_picks(
+                m5_read, decisions, claims, session,
+                note=m5_note, kind=CONGRUENCE_M5_KIND,
+                timeframe=_M5_TIMEFRAME,
+            ),
+        )
+    return tuple(lines)
 
 
 def _floor_note(n: int) -> str:
@@ -1057,21 +1148,30 @@ def _line(kind: str, **fields: Any) -> dict[str, Any]:
     return row
 
 
-def _line_desk_label(read: Mapping[str, Any] | None, label: str) -> dict[str, Any]:
+def _line_desk_label(
+    read: Mapping[str, Any] | None, label: str, note: str = ""
+) -> dict[str, Any]:
     kind = CONGRUENCE_KINDS[0]
-    timeframe = _timeframe_of(read)
+    timeframe = _timeframe_of(read) or "D1"
     source_ids = [str(read.get("read_id") or "")] if read else []
     name = str(label or "").strip()
     if not read:
+        # The contradiction note is the honest reason there is no read to use,
+        # and it is the trader's own two notes talking past each other.
         return _line(
-            kind, text="no D1 read today, so there is nothing to compare the "
-            f"desk's label ({name or 'unmeasured'}) with",
+            kind,
+            text=note or (
+                "no D1 read today, so there is nothing to compare the desk's "
+                f"label ({name or 'unmeasured'}) with"
+            ),
             missing="your D1 read", timeframe=timeframe, source_ids=source_ids,
         )
     mine = _read_direction(read)
+    said = read_phrase(read)
     if not name:
         return _line(
-            kind, text="the desk has no D1 label for this session",
+            kind,
+            text=f"{said}; the desk has no D1 label for this session",
             missing="the desk's D1 label", timeframe=timeframe,
             source_ids=source_ids,
         )
@@ -1079,19 +1179,26 @@ def _line_desk_label(read: Mapping[str, Any] | None, label: str) -> dict[str, An
     if not mine or not theirs:
         return _line(
             kind,
-            text=f"your D1 read is {mine or 'not directional'}; the desk reads "
-                 f"{name}, which carries no direction"
-                 if not theirs else
-                 f"your D1 read is not directional; the desk reads {name}",
+            text=(
+                f"{said}; the desk reads {name}, which carries no direction"
+                if not theirs
+                else f"{said} - not a direction; the desk reads {name}"
+            ),
             missing="" if theirs else f"a direction in {name}",
             timeframe=timeframe, source_ids=source_ids,
         )
     return _line(
         kind,
-        text=f"your D1 read is {mine}; the desk reads {name}",
+        text=f"{said}; the desk reads {name}",
         verdict="agrees" if mine == theirs else "disagrees",
         timeframe=timeframe, source_ids=source_ids,
     )
+
+
+#: A rejection of a side, counted beside the likes on an M5 line but never
+#: folded into the side mix: "not today" says what the trader did NOT take, and
+#: reading it as a pick of the other side would be a claim they never made.
+_NOT_TODAY_MARKERS = ("not_today", "m5_not_today")
 
 
 def _line_picks(
@@ -1099,20 +1206,29 @@ def _line_picks(
     decisions: Iterable[Mapping[str, Any]],
     claims: Iterable[Mapping[str, Any]],
     session: str,
+    *,
+    note: str = "",
+    kind: str = "",
+    timeframe: str = "",
 ) -> dict[str, Any]:
     import market_journal
 
-    kind = CONGRUENCE_KINDS[1]
-    timeframe = _timeframe_of(read)
+    kind = kind or CONGRUENCE_KINDS[1]
+    timeframe = (timeframe or _timeframe_of(read) or "D1").strip().upper()
     longs: list[str] = []
     shorts: list[str] = []
+    not_today = 0
     for row in decisions or ():
-        if str(row.get("verdict") or "") != "like":
-            continue
         if str(row.get("timeframe") or "").strip().upper() != timeframe:
             continue
-        side = str(row.get("side") or "").strip().upper()
+        verdict = str(row.get("verdict") or "")
         source = str(row.get("capture_id") or "") or f"decision:{row.get('symbol')}"
+        if any(marker in verdict for marker in _NOT_TODAY_MARKERS):
+            not_today += 1
+            continue
+        if verdict != "like":
+            continue
+        side = str(row.get("side") or "").strip().upper()
         if side == "LONG":
             longs.append(source)
         elif side == "SHORT":
@@ -1130,29 +1246,46 @@ def _line_picks(
             elif side == "SHORT":
                 shorts.append(source)
     counts = {"long": len(longs), "short": len(shorts)}
+    if timeframe != market_journal.TIMEFRAME_D1:
+        counts["not_today"] = not_today
     source_ids = longs + shorts
     total = len(source_ids)
+    what = "likes and claims" if timeframe == market_journal.TIMEFRAME_D1 else "likes"
     if not read:
         return _line(
-            kind, text=f"{total} {timeframe or ''} likes and claims, and no read to "
-            "compare them with", counts=counts, source_ids=source_ids,
-            timeframe=timeframe, missing="your D1 read",
+            kind,
+            text=note or (
+                f"{total} {timeframe} {what}, and no read to compare them with"
+            ),
+            counts=counts, source_ids=source_ids,
+            timeframe=timeframe, missing=f"your {timeframe} read",
         )
+    said = read_phrase(read)
     if not total:
         return _line(
-            kind, text=f"no {timeframe} likes or claims this session",
+            kind, text=f"{said}; no {timeframe} {what} this session",
             counts=counts, source_ids=source_ids, timeframe=timeframe,
-            missing="your likes and claims",
+            missing=f"your {timeframe} {what}",
         )
     mine = _read_direction(read)
     majority = "up" if counts["long"] > counts["short"] else (
         "down" if counts["short"] > counts["long"] else ""
     )
-    text = (
-        f"{max(counts['long'], counts['short'])} of {total} {timeframe} likes and "
-        f"claims were {'LONG' if counts['long'] >= counts['short'] else 'SHORT'}"
-        f" (long {counts['long']}, short {counts['short']})"
-    ) + _floor_note(total)
+    if majority:
+        mix = (
+            f"{max(counts['long'], counts['short'])} of {total} {timeframe} {what} "
+            f"were {'LONG' if majority == 'up' else 'SHORT'} "
+            f"(long {counts['long']}, short {counts['short']})"
+        )
+    else:
+        # A TIE names no side: "half and half" is not a lean, and printing one
+        # would invent a crowd the session did not have.
+        mix = (
+            f"{counts['long']} long, {counts['short']} short - no lean in "
+            f"{total} {timeframe} {what}"
+        )
+    tail = f", {not_today} not today" if counts.get("not_today") else ""
+    text = f"{said}; {mix}{tail}" + _floor_note(total)
     if not mine or not majority:
         return _line(
             kind, text=text, counts=counts, source_ids=source_ids,
@@ -1166,7 +1299,9 @@ def _line_picks(
 
 
 def _line_fills(
-    read: Mapping[str, Any] | None, trades: Iterable[Mapping[str, Any]]
+    read: Mapping[str, Any] | None,
+    trades: Iterable[Mapping[str, Any]],
+    note: str = "",
 ) -> dict[str, Any]:
     kind = CONGRUENCE_KINDS[2]
     listed = [dict(trade) for trade in trades or ()]
@@ -1188,28 +1323,41 @@ def _line_fills(
             else:
                 counts["unknown"] += 1
     total = counts["bullish"] + counts["bearish"]
+    # A fill carries no timeframe of its own, so the line names the timeframe of
+    # the READ it is compared with and says the fills are all of them. Every
+    # line names a timeframe; a blank one reads as "nobody decided".
+    timeframe = _timeframe_of(read) or "D1"
     if not listed:
-        return _line(kind, text="no fills today", missing="your fills")
+        return _line(
+            kind, text="no fills today", missing="your fills", timeframe=timeframe,
+        )
     if not read:
         return _line(
-            kind, text=f"{len(listed)} fills, and no read to compare them with",
-            counts=counts, source_ids=source_ids, missing="your D1 read",
+            kind,
+            text=note or f"{len(listed)} fills, and no read to compare them with",
+            counts=counts, source_ids=source_ids, missing=f"your {timeframe} read",
+            timeframe=timeframe,
         )
     mine = _read_direction(read)
+    said = read_phrase(read)
     majority = "up" if counts["bullish"] > counts["bearish"] else (
         "down" if counts["bearish"] > counts["bullish"] else ""
     )
-    text = (
-        f"{len(listed)} fills: {counts['bullish']} bullish, {counts['bearish']} "
-        f"bearish, {counts['unknown']} the legs could not call"
-    ) + _floor_note(total)
+    mix = (
+        f"{len(listed)} fills (all timeframes): {counts['bullish']} bullish, "
+        f"{counts['bearish']} bearish, {counts['unknown']} the legs could not call"
+    )
+    if not majority and total:
+        mix += " - no lean"
+    text = f"{said}; {mix}" + _floor_note(total)
     if not mine or not majority:
         return _line(
             kind, text=text, counts=counts, source_ids=source_ids,
+            timeframe=timeframe,
             missing="" if mine else "a directional read",
         )
     return _line(
-        kind, text=text, counts=counts, source_ids=source_ids,
+        kind, text=text, counts=counts, source_ids=source_ids, timeframe=timeframe,
         verdict="agrees" if mine == majority else "disagrees",
     )
 
@@ -1218,13 +1366,19 @@ def _line_fills(
 # the store: append-only JSONL under the durable Day Review folder
 # ---------------------------------------------------------------------------
 def _default_root() -> Path:
-    from project_paths import DAY_REVIEW_DIR
+    from project_paths import DAY_REVIEW_READS_DIR
 
-    return Path(DAY_REVIEW_DIR)
+    # The constant is `<DAY_REVIEW_DIR>/reads`; `reads_path` appends `reads` to
+    # whatever root it is given, so the root is that folder's parent.
+    return Path(DAY_REVIEW_READS_DIR).parent
 
 
 def reads_path(session: str, *, root: Any = None) -> Path:
-    """`<root>/reads/<session>.jsonl` - one file per session, append-only."""
+    """`<root>/reads/<session>.jsonl` - one file per session, append-only.
+
+    With no root it is `project_paths.DAY_REVIEW_READS_DIR`, the named durable
+    constant this ledger owns.
+    """
     base = Path(root) if root is not None else _default_root()
     return base / "reads" / f"{str(session or '')[:10]}.jsonl"
 
@@ -1237,21 +1391,51 @@ def _is_gradable_grade(grade: Mapping[str, Any]) -> bool:
     )
 
 
+def _has_real_context(grade: Mapping[str, Any]) -> bool:
+    """Is this row's context a MEASUREMENT rather than a named absence?
+
+    Keyed on `availability` rather than on the exact dict, so a caller cannot
+    slip past the check by adding a key to the named absence.
+    """
+    context = grade.get("context") or {}
+    if not context:
+        return False
+    return str(context.get("availability") or "") != UNMEASURED
+
+
 def append_grades(session: str, rows: Iterable[Mapping[str, Any]], *, root: Any = None) -> int:
     """Append grade rows, refusing any gradable one with no context.
 
     TJ-16 item 1: the context snapshot ships WITH this packet so no graded
     click is ever stored without one - a row written blank can never be given
-    one afterwards, because the market has moved on. The check runs over the
-    WHOLE batch before anything is written, so a refusal leaves no half-written
-    file behind.
+    one afterwards, because the market has moved on.
+
+    **The store is STRICTER for a CLICK** (lead decision, fix round
+    2026-09-20). A blank `context` is refused for every row; a CLICKED gradable
+    grade is refused for the NAMED ABSENCE too, because a stated call is the
+    evidence this whole ledger exists for and one stored without its snapshot is
+    permanently unanswerable. An EXTRACTED row, and a RE-GRADE of an earlier row
+    (`supersedes` set, whose context was taken when the read was first seen),
+    may carry the named absence.
+
+    The check runs over the WHOLE batch before anything is written, so a refusal
+    leaves no half-written file behind.
     """
     listed = [dict(row) for row in rows or ()]
     for row in listed:
-        if _is_gradable_grade(row) and not (row.get("context") or {}):
+        if not _is_gradable_grade(row):
+            continue
+        if not (row.get("context") or {}):
             raise ContextMissingError(
                 "a gradable grade may not be stored without its point-in-time "
                 f"context: {row.get('grade_id') or row.get('read_id')}"
+            )
+        clicked = str(row.get("source") or "") == SOURCE_CLICK
+        if clicked and not row.get("supersedes") and not _has_real_context(row):
+            raise ContextMissingError(
+                "a gradable CLICKED grade may not be stored with a named-absence "
+                "context: a stated call stored without the snapshot it was made "
+                f"in can never be given one: {row.get('grade_id') or row.get('read_id')}"
             )
     if not listed:
         return 0
@@ -1295,6 +1479,42 @@ def current_grades(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [row for row in listed if str(row.get("grade_id") or "") not in replaced]
 
 
+#: What a verdict is WORTH, so a re-grade can only ever move a row UP.
+#:
+#: The defect this fixes (reviewer, 2026-09-20): `regrade_matured` appended
+#: whenever the verdict CHANGED, and on a desk whose durable daily store is
+#: empty a correct `pending 2026-09-25` was superseded by
+#: `unmeasured:no_anchor_close` - after which the row was never looked at again,
+#: because only `pending*` rows were revisited. The true answer was `right`.
+#: **Missing data is uncertainty, never confirmation** (plan.md sec 5): an
+#: `unmeasured` result never supersedes a `pending` row, and a row that is
+#: already unmeasured for a DATA reason is revisited on every later run.
+_VERDICT_RANK_MEASURED = 3
+_VERDICT_RANK_PENDING = 2
+_VERDICT_RANK_UNMEASURED_DATA = 1
+_VERDICT_RANK_FINAL = 0
+#: The one `unmeasured` reason that is FINAL: the trader answered `No view` (or
+#: wrote no stance), and no bar arriving later can turn that into a call.
+FINAL_UNMEASURED_REASONS = ("not_a_call", "no_session_date", "no_stamp")
+
+
+def verdict_rank(verdict: str) -> int:
+    """How far along a verdict is. A re-grade may only ever raise it."""
+    text = str(verdict or "")
+    if text in (VERDICT_RIGHT, VERDICT_WRONG, VERDICT_FLAT):
+        return _VERDICT_RANK_MEASURED
+    if text.startswith(PENDING_PREFIX):
+        return _VERDICT_RANK_PENDING
+    if text.startswith(f"{UNMEASURED_PREFIX}:"):
+        reason = text.split(":", 1)[1]
+        return (
+            _VERDICT_RANK_FINAL
+            if reason in FINAL_UNMEASURED_REASONS
+            else _VERDICT_RANK_UNMEASURED_DATA
+        )
+    return _VERDICT_RANK_FINAL
+
+
 def regrade_matured(
     now: datetime,
     *,
@@ -1305,9 +1525,21 @@ def regrade_matured(
 ) -> list[dict[str, Any]]:
     """The nightly hook: re-measure the horizons that have matured. ONE function.
 
-    Deterministic and modelless - the lead registers it as a nightly slot. A
-    closed horizon is closed: a second night writes nothing, because a new row
-    is appended only when the VERDICT changed.
+    Deterministic and modelless. Two rules, both from the fix round:
+
+    * It revisits every row that is still OPEN - `pending`, and also one left
+      `unmeasured` for a DATA reason (no bars, no ATR, no anchor close), because
+      the store that was missing last night may be there tonight. Only
+      `unmeasured:not_a_call` is final.
+    * **A new row is appended only when the verdict moves UP**
+      (:func:`verdict_rank`), so an absent store can never turn a correct
+      `pending` into an `unmeasured` row and retire it. A closed horizon is
+      closed and a second night writes nothing.
+
+    The bars come from the SAME loaders the Day Review page uses
+    (:func:`daily_bars_for`, :func:`session_bars_for`, :func:`atr_for`) unless
+    the caller injects its own; a night that reads a different store from the
+    page is the defect this signature exists to prevent.
     """
     moment = _aware(now)
     base = Path(root) if root is not None else _default_root()
@@ -1317,11 +1549,16 @@ def regrade_matured(
         files = sorted(folder.glob("*.jsonl"))
     except OSError:
         return written
+    load_daily = daily_bars_for or daily_bars_for_symbol
+    load_m5 = m5_bars_for or session_bars_for
+    load_atr = atr_for or atr_for_session
     for path in files:
         session = path.stem
         stored = read_grades(session, root=root)
         for grade in current_grades(stored):
-            if not str(grade.get("verdict") or "").startswith(PENDING_PREFIX):
+            was = str(grade.get("verdict") or "")
+            rank = verdict_rank(was)
+            if rank not in (_VERDICT_RANK_PENDING, _VERDICT_RANK_UNMEASURED_DATA):
                 continue
             read = grade.get("read")
             if not isinstance(read, Mapping):
@@ -1331,16 +1568,10 @@ def regrade_matured(
             m5: Sequence[Any] = ()
             try:
                 if str(read.get("horizon") or "").endswith("sessions"):
-                    daily = (daily_bars_for(symbol) if daily_bars_for else _load_daily(symbol)) or ()
+                    daily = load_daily(symbol) or ()
                 else:
-                    m5 = (
-                        m5_bars_for(symbol, session) if m5_bars_for
-                        else _load_session_bars(symbol, session)
-                    ) or ()
-                band = (
-                    atr_for(symbol, session) if atr_for
-                    else daily_atr(_load_daily(symbol), through=session)
-                )
+                    m5 = load_m5(symbol, session) or ()
+                band = load_atr(symbol, session)
             except Exception:  # noqa: BLE001 - one unreadable name costs one row
                 _log.debug("A matured read could not be re-measured.", exc_info=True)
                 continue
@@ -1349,7 +1580,9 @@ def regrade_matured(
                 supersedes=str(grade.get("grade_id") or ""),
                 context=grade.get("context") or {},
             )
-            if str(fresh.get("verdict") or "") == str(grade.get("verdict") or ""):
+            if verdict_rank(str(fresh.get("verdict") or "")) <= rank:
+                # Nothing was learned, or less than before. The row stays as it
+                # is and tomorrow's run looks at it again.
                 continue
             try:
                 append_grades(session, [fresh], root=root)
@@ -1360,31 +1593,84 @@ def regrade_matured(
     return written
 
 
-def _load_daily(symbol: str) -> list[Any]:
+# ---------------------------------------------------------------------------
+# the shared loaders - ONE daily store, ONE tape, ONE ATR
+# ---------------------------------------------------------------------------
+def daily_bars_for_symbol(symbol: str) -> list[Any]:
+    """One benchmark's daily history: the durable store, else the desk's cache.
+
+    THE one loader. The Day Review page and the nightly re-grade both call it,
+    because a night that read a different store from the page graded a different
+    market (reviewer, 2026-09-20: the page had a machine-cache fallback and the
+    night did not, so the night turned a correct `pending` into `unmeasured`).
+
+    `chart_snapshot.load_d1_bars` is the durable parquet store - off the Qt
+    thread, mtime-cached, no network, no IB. Measured on the desk 2026-09-20 it
+    holds NO file for SPY, QQQ, IWM or VXX: the home folder has no `daily_bars/`
+    at all. The fallback is the machine-local daily cache the desk's own D1
+    environment labels are built from (1,993 symbols), wrapped HERE so nothing
+    else reaches into `d1_environment_store`'s private reader. Neither is a
+    fetch; a symbol in neither is `unmeasured` and says so.
+    """
+    name = str(symbol or "").strip().upper()
+    if not name:
+        return []
+    bars: list[Any] = []
     try:
         import chart_snapshot
 
-        return list(chart_snapshot.load_d1_bars(symbol) or [])
+        bars = list(chart_snapshot.load_d1_bars(name) or [])
     except Exception:  # noqa: BLE001 - a missing daily store is unmeasured
         _log.debug("The durable daily store was unreadable.", exc_info=True)
+    if bars:
+        return bars
+    try:
+        import d1_environment_store
+
+        # The ONE place this private reader is called from. It is the desk's own
+        # cached daily bars - a file, not a provider - and it is private only
+        # because nobody outside that module needed it before.
+        return list(d1_environment_store._cached_daily_bars(name) or [])
+    except Exception:  # noqa: BLE001
+        _log.debug("The machine-local daily cache was unreadable.", exc_info=True)
         return []
 
 
-def _load_session_bars(symbol: str, session: str) -> list[Any]:
+def session_bars_for(symbol: str, session: str) -> list[Any]:
+    """One benchmark's durable M5 tape for one session (TJ-2A). THE one loader.
+
+    Measured on the desk 2026-09-20: `day_review/bars/` holds no session at all
+    yet, so this answers empty and every rest-of-day read is honestly
+    `unmeasured` until the post-close tick writes a tape.
+    """
     try:
         import day_review_bars
 
-        tape = day_review_bars.read_session_bars(session) or {}
-        return list(tape.get(symbol) or [])
+        tape = day_review_bars.read_session_bars(str(session or "")[:10]) or {}
+        return list(tape.get(str(symbol or "").strip().upper()) or [])
     except Exception:  # noqa: BLE001 - a missing tape is unmeasured
         _log.debug("The durable session tape was unreadable.", exc_info=True)
         return []
 
 
+def atr_for_session(symbol: str, session: str) -> float | None:
+    """The benchmark's point-in-time daily ATR(14) at `session`. THE one default."""
+    return daily_atr(daily_bars_for_symbol(symbol), through=session)
+
+
 __all__ = [
     "BASELINES",
     "CONGRUENCE_KINDS",
+    "CONGRUENCE_M5_KIND",
+    "CONTEXT_UNMEASURED",
     "ContextMissingError",
+    "FINAL_UNMEASURED_REASONS",
+    "atr_for_session",
+    "daily_bars_for_symbol",
+    "read_phrase",
+    "select_read",
+    "session_bars_for",
+    "verdict_rank",
     "D1_CHECKPOINT_SESSIONS",
     "DEFAULT_BENCHMARK",
     "FLAT_BAND_ATR",
