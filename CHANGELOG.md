@@ -2582,6 +2582,74 @@ They are evidence and must not be loaded as context.
   `tests/test_tj15_miss_contrast_slot.py`, `tests/test_tj15_miss_contrast_builder.py`,
   `tests/test_tj15_fix_round.py`. Rule: DESK_INTERNALS "TJ-15"; slot position: decision 0018
   amendment 2026-09-19. Gate #160 owed.
+- **What leads to a good call - the prediction ledger beside its baselines, the
+  right-against-wrong contrast, and a tagger that never sees an outcome (TJ-16,
+  2026-09-20).** Three modules and two nightly slots, all REPORTED evidence: nothing here
+  reaches a detector, score, alert, watchlist, Focus, the review queue or
+  `review_policy.json`.
+  `scripts/prediction_ledger.py` is the read ledger's reader. `read_ledger(sessions, root=,
+  source=)` returns the CURRENT grade row per read (`market_read_grades.current_grades`, so
+  a matured re-grade counts once at its current verdict); `build_readout(rows)` raises
+  `market_read_grades.PoolingError` on a clicked/extracted mix, keeps `rest_of_day` and
+  `next_5_sessions` apart, and prints every accuracy cell beside what `always_up`,
+  `same_as_the_last_hour` and `with_the_d1_environment` scored on the SAME stamps. A
+  baseline has no stored verdict, so it is measured NOW through
+  `market_read_grades._verdict_for` - the grader's own band, CALLED through its module
+  attribute, so a superseding band moves every baseline while the stored rows stay where
+  they were; a baseline with no direction (`compressed`) is `unmeasured`, never wrong.
+  Calibration by `How sure` sets `high_beats_low` and says "High did not beat Low" when it
+  did not, and `None` while either bucket is under `MIN_REPORTABLE_N`. `horizon_of` is
+  public - ONE mapping, no cross-module private reach. An empty ledger reads `no clicked
+  calls yet` with `rate: None`, never 0.0.
+  `scripts/ai_jobs/prediction_contrast.py` is the deterministic Stage 1 slot
+  `prediction_contrast` (`uses_model=False`, `max_attempts=3`, `reserve_minutes=5.0`),
+  registered DIRECTLY after `miss_contrast` and still above the `market_story_rollups` +
+  `measured_report` pair that closes the stage. Right against wrong per point-in-time
+  context field through TJ-15's one `evidence_contrast.contrast`, in two populations
+  printed apart (`lately` = `LATELY_SESSIONS` exchange sessions ending at the pack's
+  session; `all` = every session on disk), per horizon, plus a `by_hour` and a
+  `by_environment` table with `n`, the Wilson bounds and `reportable` on every cell. A
+  `flat` reading is counted on the horizon and is in NEITHER contrast group; a numeric
+  field keeps its own name, a categorical one becomes one feature per value worth 1.0 / 0.0
+  on a MEASURED row and NOTHING on an `unmeasured` one; clicked reads are the population
+  and extracted stances are counted in `excluded_by_source`. The contrast is called with a
+  `top` covering every feature over the FEATURE floor, so nothing is hidden and nothing is
+  selected by a result; the bounded view is `tendencies(pack, limit=3)`, ordered by `n`
+  descending then name - a SIZE rule (gate #43) - and a cell under `MIN_REPORTABLE_N` is
+  never offered. A `tags` block names the tag features considered (`entries_tagged`,
+  `reads_matched`, `codes`, `features`, `entries_written_after`). `read_latest` is the
+  reader; packs are superseding siblings beside the digest in `store.digests_dir()`.
+  `scripts/ai_jobs/observation_tags.py` plus the vocabulary asset
+  `scripts/ui/annotations/vocabularies/observation_tags_v1.json` (11 codes) are the Stage 2
+  slot `observation_tags` (local MEDIUM model, `uses_model=True`, `max_attempts=3`,
+  `reserve_minutes=15.0`), after `ai_summary` and before `ticker_briefs`. It codes
+  `mentor.observation` and `mentor.prediction.because` from a closed versioned vocabulary,
+  each code carrying the exact span that must reproduce its quote. The payload is BUILT
+  from the two texts and the picklist, so it structurally contains no verdict, grade,
+  price or bar. `verify_reply` believes an answer only if it clears BOTH halves - the
+  GROUNDING (every span reproduces its quote, every code is in the vocabulary, every
+  `note_id` was offered) and the SHAPE (no more than `MAX_TAGS` = 60 rows, no key outside
+  `REPLY_KEYS` / `TAG_KEYS`, no byte-identical duplicate row) - because the schema's own
+  `maxItems` and `additionalProperties` are a grammar hint to the provider and are
+  re-checked here. Any failure rejects the WHOLE reply and the last verified file stays
+  byte-identical. The session's notes are read through `EvidenceLedger.read(start=session,
+  end=session)`, windowed at the stream and never filtered after the fact. Each stored tag
+  carries the entry's computed `written_after_the_session` and the file header counts
+  `entries_written_after`: hindsight is LABELLED, never dropped, never re-weighted, and the
+  label never reaches the prompt. The vocabulary has its OWN loader (`load_vocabulary()`
+  reads the highest `observation_tags_v*.json` and refuses a file whose declared
+  `vocab_version` disagrees with its FILENAME; the shared `ui/annotations/vocabulary.py`
+  `_parse` is veto-shaped and serves the capture rail). The codes become `tag:<code>`
+  context features for the NEXT contrast run - never the same one, the tagger being stage 2
+  and the contrast stage 1.
+  Slot order after this packet: `... read_grades_mature, miss_contrast, prediction_contrast,
+  market_story_rollups, measured_report, ai_summary, observation_tags, ticker_briefs,
+  market_story_narration, ...`. `your_reads`, `tendencies` and `read_latest` ship as READERS
+  with **no page yet** - Day Review's `Your reads` line is TJ-12's and the Week Review
+  tables are TJ-5's. Tests: `tests/test_tj16_prediction_ledger.py`,
+  `tests/test_tj16_prediction_contrast_slot.py`, `tests/test_tj16_observation_tags.py`,
+  `tests/test_tj16_tagger_bounds.py`, `tests/tj16_support.py`. Rule: DESK_INTERNALS "TJ-16";
+  slot positions: decision 0018 addendum 2026-09-20. Gates #164-#167 owed.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
@@ -3222,6 +3290,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-20 - TJ-16: what leads to a good call - a prediction ledger beside three baselines, a right-against-wrong contrast, and a word tagger that never sees an outcome (branch `claude/tj16-prediction-contrast`, tip `d0d61f95`, merged into `lead/p033-integration2` `c4a760e5`)
+
+Trader, 2026-09-19: *"The hope is an AI can pick up on my tendencies and what leads to good predictions and what leads to wrong ones."* Two questions, one packet - *what leads to a good call?* and *what were you actually looking at when you said it?* - and neither half may do the other's job. **Why a baseline and not a hit rate:** a trader who is right 55% of the time reads like a coin flip until you know what the coin was, so `scripts/prediction_ledger.py` prints every accuracy cell beside what `always_up`, `same_as_the_last_hour` and `with_the_d1_environment` scored on the SAME stamps - on the tester's ten-session fixture the trader went 22 of 40 and the three naive rules went 24, 32 and 32, and that sentence is only sayable because `market_read_grades.baseline_reads` re-answers each row from that row's own point-in-time context snapshot and no bars at all. The trader's verdicts are STORED and never re-measured; a baseline has none, so its verdict is measured now through `market_read_grades._verdict_for` (the module attribute, never a copied `abs(move) <= 0.25`), and a baseline that cannot answer - `compressed` is not a direction - LEAVES the fraction rather than counting as a loss. Calibration says the unflattering thing: `high_beats_low` is a bool and reads "High did not beat Low" when it is False, `None` (not "no") while either bucket is under `MIN_REPORTABLE_N`. The deterministic Stage 1 slot `prediction_contrast` sits DIRECTLY after `miss_contrast` and encodes and splits only - TJ-15's `evidence_contrast.contrast` already owns the rank key, the two floors and the sentence - printing `lately` and `all` apart, per horizon, with `by_hour` and `by_environment` tables carrying `n`, the Wilson bounds and `reportable` in every cell; a `flat` reading is counted on the horizon and is in NEITHER group, because the market did nothing and folding it into either side would be inventing a verdict. The encoding is where an honest pack is won: a categorical field becomes one feature per value, worth 1.0 on a row holding that value, 0.0 on a row holding a different MEASURED value and **nothing at all** on a row reading `unmeasured` - on the fixture eight of forty reads had no `spy_vs_prior_range`, so the feature is ranked on 32 rows and a builder that read the blanks as zeros would have moved the statistic with rows nobody measured. Nothing is hidden and nothing is ranked by result: the contrast shows every feature over the FEATURE floor (the context block is about a dozen fields, not TJ-15's 264 columns) and the bounded view is `tendencies`, at most three cells ordered by `n` then name, each citing its own table, key and `n`, never offering a cell under the floor - two weeks of clicks is forty rows and every cell of it is under that floor, so the week story may narrate NOTHING from it and the most quotable sentence in the pack is the least supported one. The Stage 2 slot `observation_tags` (local MEDIUM model, after `ai_summary`, before `ticker_briefs`) codes `mentor.observation` and `mentor.prediction.because` from a closed versioned vocabulary of 11 codes, each with the exact span that must reproduce its quote (`market_thesis`' rule); **the tagger is blind by construction** - `build_evidence` knows about two strings and a picklist and has no way to reach anything else, so there is no verdict key to remember to delete and the grade ledger of the very same session sits on disk beside the job untouched, because a tag derived from the outcome is not a label of the words but a rationalisation of the result. **Two reviews by reproduction, NO-GO then GO at `d0d61f95`.** Round 1's first blocker: `MAX_TAGS` and `additionalProperties: false` lived only inside `TAGS_JSON_SCHEMA`, which is a **grammar hint to the provider and never a guard** - `ai_summary` already ships a documented fallback for a backend that will not compile that grammar and `validate_structured_output` walks only the top level - so the reviewer handed the slot a 10,000-row reply and watched it publish `ok`, and a row carrying `"why": "smuggled"` was believed. `verify_reply` now re-checks the SHAPE as well as the grounding and each rule throws the WHOLE reply away: over `MAX_TAGS` (60) rows, a key outside `REPLY_KEYS` at the top, a key outside `TAG_KEYS` on a row, or a byte-identical duplicate row - **a model that repeats itself has not been verified**, and de-duping silently would have stored a file that does not say what the model returned while `codes_by_entry` collapsed codes per entry so no number moved and nobody noticed. Two rows on ONE note with OVERLAPPING spans and DIFFERENT codes stay accepted: one sentence can cite a level and be hedged, and that is the finding, not an error. Round 1's second blocker: the journal read was unbounded - the first build read every row ever written and filtered in Python. It is now WINDOWED at the stream (`EvidenceLedger.read(start=session, end=session)`), which is safe because a CORRECTION carries the ORIGINAL `session_date`, so both halves of a supersede pair stay inside a one-session window and `resolve_entries` still hides the older one; measured on a COPY of the live stream, 84 rows unwindowed against 7 for one session, identical answer. Round 1's advisory became a rule: `prediction.because` can carry hindsight (the reviewer wrote *"in hindsight the 50 day failed and I lost on this call"* and watched it reach the payload verbatim), so each stored tag carries the entry's computed `written_after_the_session`, the tags header and the next pack's `tags` block count `entries_written_after` (present and zero, never absent), and the LABEL stays out of the payload - a prompt saying "this was written after the close" would be telling the tagger something about the outcome, the one thing this slot may never do. Nothing is re-ranked by it: the ten-session fixture built with and without the label is byte-identical across every horizon number. The vocabulary has its OWN loader by lead decision (the shared `ui/annotations/vocabulary.py` `_parse` demands a unique single-character hotkey and a per-entry `note_required` and is called by the capture rail on every click); the declared version is compared with the FILENAME, never a literal, so a v2 ships beside v1 and rows stamped v1 stay interpretable against exactly the list that produced them. Tonight's tags are tonight's: the tagger is stage 2 and the contrast stage 1, so a night's codes reach a contrast on the NEXT run, and the pack proves it by holding no `tag:` feature on the night it was tagged. **The empty state is the state the desk is in** - measured 2026-09-20, `C:\TradingBotData\day_review\` holds only `sessions\`, so there are ZERO clicked grade rows and zero notes carrying an observation: every surface opens on `no clicked calls yet`, nothing raises, no rate is 0.0, and the slot writes an empty pack and records `ok`, never `failed`. Packaging: one new non-`.py` runtime asset inside a tree the spec already mirrors by directory (`tests/test_packaging_spec_drift.py` unchanged); no new dependency, no `selftest` change (both new `ai_jobs` modules are nightly-only and unreachable from the frozen desk, like `ai_jobs.miss_contrast`). Merged into `lead/p033-integration2`; **not on `main`**. Live gates #164-#167 owed. Long form: DESK_INTERNALS "TJ-16"; slot positions: decision 0018 addendum 2026-09-20.
 
 ### 2026-09-20 - TJ-14B: the Mentor asks only what something will read - a question registry with named consumers, a budget of three, and fills by day (branch `claude/tj14b-mentor-questions`, tip `cfe137d1`, merged into `lead/p033-integration2` `161e905c`)
 

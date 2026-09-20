@@ -1688,9 +1688,153 @@ would then drift.
 
 **One lesson for the next packet.** The packet's targeted runs were green while three order
 assertions elsewhere were red. A packet that adds or MOVES a runner slot runs `-k "slot or
-stage or slate"` plus `tests/test_veto_cohort_grading.py`,
-`tests/test_ws_10d_market_story.py` and `tests/test_ws_rp_shared_report.py` - not only
-`tests/test_ai_jobs_runner.py`. plan.md 12.3 carries it.
+stage or slate or order"` plus the SEVEN order pins - `tests/test_ai_jobs_runner.py`
+(`EXPECTED_SLOT_ORDER`), `tests/test_veto_cohort_grading.py`,
+`tests/test_ws_10d_market_story.py`, `tests/test_ws_rp_shared_report.py`,
+`tests/test_tj13b_local_large_provider.py`, `tests/test_tj13b_probe_guards.py` and
+`tests/test_opt_in_evidence_scopes.py` (the seventh, amended by the lead 2026-09-20 at
+TJ-16's merge: the `ai_summary` → `ticker_briefs` pair keeps its ORDER and only
+`day_review_narration` and `observation_tags` may sit between them). plan.md 12.3 carries it.
+
+## TJ-16 - a skill number, and words tagged blind (2026-09-20, packet TJ-16)
+
+The long form behind the CLAUDE.md rule *"The ledger reads beside three baselines on the
+same stamps, and the tagger never sees an outcome."* plan.md 12.4 TJ-16, decision 0021.
+Branch `claude/tj16-prediction-contrast` (tip `d0d61f95`), merged `c4a760e5` into
+`lead/p033-integration2`. Two reviews by reproduction: NO-GO, then GO after the fix round.
+
+Two questions, one packet. *What leads to a good call?* and *what were you actually looking
+at when you said it?* The math finds the tendency; the model labels the words; neither may
+do the other's job.
+
+**Why a baseline and not a hit rate.** A trader who is right 55% of the time reads like a
+coin flip until you know what the coin was. On the fixture the tester built - ten sessions
+of four hourly clicks - the trader went 22 of 40 (55%), and the three naive rules answering
+the SAME forty stamps went 24/40, 32/40 and 32/40. All three beat them. That sentence is
+only sayable because the baselines are measured on identical questions:
+`market_read_grades.baseline_reads` re-answers each row from that row's own point-in-time
+context snapshot and no bars at all, so a naive rule cannot see anything the trader could
+not. The trader's verdicts are STORED and are never re-measured; a baseline has no stored
+verdict, so its verdict is measured now - through `market_read_grades._verdict_for`, the
+module attribute, never a copied `abs(move) <= 0.25`. Swap the band and every baseline
+follows it while the stored rows stay where they were, which is exactly what a superseding
+band needs.
+
+**A baseline that cannot answer is not a baseline that lost.** `compressed` is not a
+direction, so `with_the_d1_environment` has no answer on those stamps and they LEAVE its
+fraction. Counting them as four losses for the naive rule would have flattered the trader
+with rows nobody measured (plan.md sec 5).
+
+**Calibration says the unflattering thing.** `high_beats_low` is a bool, and when it is
+False the statement reads "High did not beat Low" with both rates and both `n`. It is
+`None` - "not answerable yet" - while either bucket is under `MIN_REPORTABLE_N`, which is
+not the same as "no".
+
+**The contrast is TJ-15's, called.** `evidence_contrast.contrast` already holds the rank key
+(`abs(auc-0.5)` then feature NAME), the two floors and the sentence. TJ-16 encodes and
+splits; it computes no AUC of its own. A `flat` reading is counted on the horizon and is in
+NEITHER group: the market did nothing, so the trader was neither right nor wrong, and
+folding those rows into either side would be inventing a verdict.
+
+**The encoding is where an honest pack is won or lost.** A numeric field keeps its own name
+(`hour`, `gap_pct`). A categorical one becomes one feature per value -
+`spy_vs_prior_range:above` - worth 1.0 on a row holding that value, 0.0 on a row holding a
+DIFFERENT MEASURED value, and **nothing at all** on a row whose field reads `unmeasured`. On
+the fixture eight of forty reads had no `spy_vs_prior_range` reading: the feature is ranked
+on 32 rows (18 right against 14 wrong), and a builder that had read the eight blanks as
+zeros would have ranked it on 40 and moved the statistic with rows nobody measured. A field
+that parses as a number ANYWHERE in the population is numeric everywhere, which is why
+`gap_pct` - measured on five of forty - keeps its name and lands in `thin_features` with its
+two counts and no AUC rather than becoming a category with thirty-five "unmeasured" members.
+
+**Nothing is hidden and nothing is ranked by result.** The contrast is called with a `top`
+that covers every feature over the FEATURE floor, because the context block is about a dozen
+fields and hiding nine of them would be a bounded view with no reader. The pack's bounded
+view is `tendencies`: at most three cells, each citing its own table, key and `n`, ordered by
+`n` descending then by name - a SIZE rule (gate #43) - and a cell under `MIN_REPORTABLE_N` is
+never offered however quotable it reads. Two weeks of clicks is forty rows and every cell of
+it is under the floor, so the week story may narrate NOTHING from it; the most quotable
+sentence in that pack ("you read the 07:00 hour better", 7-3) is the least supported one.
+
+**The tagger is blind by construction.** `build_evidence` knows about two strings and a
+picklist and has no way to reach anything else, so there is no verdict key to remember to
+delete at the end - the grade ledger of the very same session sits on disk beside the job and
+none of it, not a grade id and not a price off the tape they were measured on, reaches the
+prompt. A tag derived from the outcome is not a label of the words, it is a rationalisation
+of the result. The grounding rule is `market_thesis`': a span is a QUOTATION and
+`text[start:end]` must equal `quote` exactly. One row that does not reproduce rejects the
+WHOLE reply - not the row - because a half-accepted answer is a file nobody can trust and
+nobody can tell apart from a whole one.
+
+**A JSON schema is a grammar hint, never a guard** (review round 1). `MAX_TAGS` (60) and
+`additionalProperties: false` lived in `TAGS_JSON_SCHEMA`, which is sent to the provider in
+`response_format` - and `ai_summary._request_local_summary` already ships a documented
+fallback for a backend that refuses to compile that grammar, while
+`validate_structured_output` walks only the TOP level and only declared types, so an array of
+objects arrives untouched. The reviewer handed the slot a 10,000-row reply and watched it
+publish `ok`, and a tag row carrying `"why": "smuggled"` believed. `verify_reply` now
+re-checks the SHAPE as well as the grounding, and each rule throws the whole reply away: more
+than `MAX_TAGS` rows, a key outside `REPLY_KEYS` at the top, a key outside `TAG_KEYS` on a
+row, or a byte-identical duplicate row (identity `(note_id, code, start, end)`, so key order
+cannot dodge it). **A model that repeats itself has not been verified**: de-duping silently
+would have stored a file that does not say what the model returned, and `codes_by_entry`
+collapses codes per entry, so no number would have moved and nobody would ever have noticed.
+Two rows on ONE note with OVERLAPPING spans and DIFFERENT codes stay accepted - one sentence
+can cite a level and be hedged, and that is the finding, not an error. **The lesson is not
+TJ-16's alone**: TJ-4's first build shipped the same trust in the same week.
+
+**The window is asked of the ledger, not applied after it.** `EvidenceLedger.read` filters by
+`session_date` while streaming; the first build read every row ever written and filtered in
+Python, which is not what "never stream the whole journal unbounded" means. It is safe to
+narrow because a CORRECTION carries the ORIGINAL `session_date` ("`session_date` is what the
+entry is ABOUT"), so both halves of a supersede pair stay inside a one-session window and
+`resolve_entries` still hides the older one. Measured by the reviewer on a COPY of the live
+stream (`market_journal-202608.jsonl` + `-202609.jsonl`, 174,075 B, 17 sessions): 84 rows
+unwindowed against 7 for one session, 0.0059 s and 0.17 MB peak, identical answer - and a
+supersede pair inside the window still resolves to the CORRECTED text while another session's
+note never reaches the payload.
+
+**Hindsight is labelled, not dropped.** `prediction.because` can carry an outcome - the
+reviewer wrote "in hindsight the 50 day failed and I lost on this call" and watched it reach
+the payload verbatim. The machine adds no outcome and the trader's own words are the artifact
+under study, so the note is tagged like any other and nothing it produces is re-ranked (the
+ten-session fixture built with and without the label is byte-identical across every horizon
+number). Each stored tag carries the entry's computed `written_after_the_session`, the tags
+file header counts `entries_written_after`, and `prediction_contrast`'s `tags` block carries
+the same count, present and zero, never absent. The label stays OUT of the payload: a prompt
+that said "this was written after the close" would be telling the tagger something about the
+outcome, which is the one thing this slot may never do.
+
+**Its vocabulary has its own loader, deliberately.** `ui/annotations/vocabulary.py` is a
+generic family loader whose `_parse` demands a unique single-character `hotkey` and a boolean
+`note_required` per entry, and it is called by the capture rail on every click. A tag
+vocabulary has neither field, and widening a capture-rail loader for a nightly reader is risk
+for no gain (lead decision, 2026-09-20). `observation_tags.load_vocabulary()` reads the
+highest `observation_tags_v*.json` and refuses a file whose declared `vocab_version`
+disagrees with its own FILENAME, so a v2 ships beside v1 and rows stamped v1 stay
+interpretable against exactly the list that produced them. No test asserts the version.
+
+**Tonight's tags are tonight's.** The tagger is a stage 2 slot and the contrast is a stage 1
+one, so a night's codes reach a contrast on the NEXT run. The pack proves it by holding no
+`tag:` feature at all on the night it was tagged - and `tags.reads_matched == 0` beside a
+non-empty `codes` list is the live signal that the `entry_id` join is broken, which is what
+gate #166 reads.
+
+**The empty state is the state the desk is in.** Measured 2026-09-20:
+`C:\TradingBotData\day_review\` holds only `sessions\` - there is no `reads\` folder, so
+there are **ZERO clicked grade rows and zero notes carrying an observation**. The first thing
+the trader sees is therefore the honest empty state: every surface opens on `no clicked calls
+yet`, nothing raises, no rate is 0.0 ("you are never right" is not what "nothing measured"
+means), and the slot writes an empty pack and records `ok` (or `manual_test` on a forced
+run), never `failed` - an evidence job is never allowed to cost the thing it records.
+
+**Advisories, recorded and not repaired.** `prediction_ledger.your_reads` names the baseline
+with the most RIGHT rather than the best RATE - the line prints both integers so it is not
+misleading, but "best" by count is not the comparison the docstring implies; it is batched
+for TJ-12, which owns that page. And a caller that passes `tags=` explicitly while leaving
+`written_after` unset reads `entries_written_after: 0` - "present and zero" for a fact the
+build did not measure; only the test-injection path does this, the nightly default deriving
+both from one read of each night's tags file.
 
 ## M1 - a shadow that measured nothing for ten days (2026-09-05)
 

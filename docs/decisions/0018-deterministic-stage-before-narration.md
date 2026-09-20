@@ -264,3 +264,42 @@ added the name to TJ-13B's two weeknight-slate pins in
 `tests/test_ai_jobs_runner.py` (`EXPECTED_SLOT_ORDER`),
 `tests/test_veto_cohort_grading.py`, `tests/test_ws_10d_market_story.py` and
 `tests/test_ws_rp_shared_report.py`.
+
+## Addendum 2026-09-20 — `prediction_contrast` joins stage 1 and `observation_tags` joins stage 2 (TJ-16)
+
+Built as packet TJ-16 (`plan.md` 12.4), merged into `lead/p033-integration2`
+(`c4a760e5`). Two slots, one in each stage, and the stage boundary itself is
+untouched: `_STAGE_ONE_LAST_SLOT` is still `measured_report`.
+
+**`prediction_contrast` sits DIRECTLY after `miss_contrast`**, still above the
+`market_story_rollups` + `measured_report` pair that closes stage 1. It is
+deterministic (`uses_model=False`, `max_attempts=3`, `reserve_minutes=5.0`) and
+reads the read ledger that `read_grades_mature`, two slots above it, has already
+closed for the night — so the order is a data dependency, not a preference. It
+is above the closing pair for the reason the 2026-09-19 amendment gives: a slot
+appended after `measured_report` silently leaves the **Sunday** slate however
+deterministic it is.
+
+**`observation_tags` sits INSIDE stage 2, after `ai_summary` and before
+`ticker_briefs`.** After `ai_summary` because WS-10D pins `measured_report`
+directly before it and that pair must stay adjacent; before `ticker_briefs`
+because the briefs hold 120 minutes of reserve while this is seconds of work per
+note, so queueing behind them would cost the tags a whole night for nothing. It
+loads a local MEDIUM model, so `uses_model=True` is declared honestly and
+`--force` may not buy it the daytime clock (TJ-13A item 1); it has no
+deterministic half, so no `model_free_kwargs`. A rejected reply publishes
+nothing and the last verified file stands byte-identical. **Nothing it writes
+reaches a detector, score, alert, watchlist, Focus, the review queue or
+`review_policy.json`**, and its codes reach `prediction_contrast` only on the
+NEXT night, the tagger being stage 2 and the contrast stage 1.
+
+**The narration pair, and the seventh order pin.** `ai_summary` and
+`ticker_briefs` keep their ORDER, but they are no longer adjacent: the lead
+amended `tests/test_opt_in_evidence_scopes.py` at this merge so that only
+`day_review_narration` (TJ-4) and `observation_tags` (TJ-16) may sit between
+them, and nothing else. The order pins to run are therefore SEVEN files —
+`tests/test_ai_jobs_runner.py` (`EXPECTED_SLOT_ORDER`),
+`tests/test_veto_cohort_grading.py`, `tests/test_ws_10d_market_story.py`,
+`tests/test_ws_rp_shared_report.py`, `tests/test_tj13b_local_large_provider.py`,
+`tests/test_tj13b_probe_guards.py` and `tests/test_opt_in_evidence_scopes.py` —
+with `-k "slot or stage or slate or order"` beside them.
