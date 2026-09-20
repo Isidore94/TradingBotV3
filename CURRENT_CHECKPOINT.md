@@ -31,7 +31,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 ### 2026-09-20 - the NaN-row fix for Day Review session bars (lead, from the trader's console report)
 
-`claude/tj2-nan-bars` `c26c6a8f`, merged into `lead/p033-integration2` `ed62bd0a`; NOT live (the desk is up on `main` `16ec284e`). One all-NaN union-index row used to cost a name its whole session tape (about eighty names at the 16:05 start); now the hole is skipped and the tape kept. 4 fail-before-fix tests + 87 neighbours green. **Owed after it is live:** re-fetch the 19 `day_reviewars\*.parquet` files written at 16:06 by the old code (they lack the dropped names). Long form: CHANGELOG Recent changes.
+`claude/tj2-nan-bars` `c26c6a8f`, merged into `lead/p033-integration2` `ed62bd0a`; NOT live (the desk is up on `main` `16ec284e`). One all-NaN union-index row used to cost a name its whole session tape (about eighty names at the 16:05 start); now the hole is skipped and the tape kept. 4 fail-before-fix tests + 87 neighbours green. **Owed after it is live:** re-fetch the 19 `day_review\bars\*.parquet` files written at 16:06 by the old code (they lack the dropped names). Long form: CHANGELOG Recent changes.
 
 ### 2026-09-20 - TJ-4 MERGED
 
