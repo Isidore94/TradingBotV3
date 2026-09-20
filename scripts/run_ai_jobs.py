@@ -43,7 +43,11 @@ import argparse
 import json
 import logging
 import sys
+from datetime import date
 from pathlib import Path
+
+#: The ONE slot `--session` may name (TJ-4 change 4). Spelled once.
+DAY_REVIEW_SLOT = "day_review_narration"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
@@ -257,10 +261,56 @@ def main(argv: list[str] | None = None) -> int:
              "already, which is the one --force re-spends. Tiers: large, "
              "medium.",
     )
+    parser.add_argument(
+        "--session",
+        default="",
+        metavar="YYYY-MM-DD",
+        help="narrate THIS session instead of the one the clock names. Accepted "
+             "ONLY together with `--slot day_review_narration` - it is the Day "
+             "Review page's Redo button, which asks for one named day. It is "
+             "handed to that one slot and to nothing else: the night's own "
+             "session date, the night kind and every other slot's "
+             "already-done check are untouched, and the night-only rule still "
+             "holds, so a forced daytime redo still records skipped.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
     _configure_logging(args.verbose)
+
+    # TJ-4 change 4. Refused rather than ignored: a flag that silently did
+    # nothing for every other slot would make `--session` look like a general
+    # override of the night's own session date, which it is not.
+    session_override = str(args.session or "").strip()
+    if session_override:
+        if args.slot != DAY_REVIEW_SLOT:
+            parser.error(
+                f"--session is accepted only with --slot {DAY_REVIEW_SLOT}; it "
+                "names the one day that slot narrates and reaches no other job"
+            )
+        try:
+            asked = date.fromisoformat(session_override)
+        except ValueError:
+            parser.error(
+                f"--session {session_override!r} is not a YYYY-MM-DD session date"
+            )
+        else:
+            # A day the exchange never opened has no pack and no story. The
+            # calendar is asked, and an UNANSWERABLE calendar fails OPEN here:
+            # the slot itself answers `skipped` when there is no pack, which is
+            # a truthful ledger row, while refusing at the parser would make a
+            # redo impossible outside the calendar's known range.
+            try:
+                from market_calendar import is_session
+
+                a_session = is_session(asked)
+            except Exception:  # noqa: BLE001 - a refusal is not a verdict
+                a_session = True
+            if not a_session:
+                parser.error(
+                    f"--session {session_override} is not a trading session; there "
+                    "is no day to narrate"
+                )
 
     if args.status:
         return _print_status()
@@ -312,7 +362,9 @@ def main(argv: list[str] | None = None) -> int:
             summary_scopes=scopes or None,
             session_date=_session_date_or_blank(),
         )
-    report = runner.run_slots(slots, force=args.force, only=args.slot)
+    report = runner.run_slots(
+        slots, force=args.force, only=args.slot, session_override=session_override
+    )
     logging.info("%s", report.summary())
 
     if not report.store_ok:

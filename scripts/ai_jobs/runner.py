@@ -180,8 +180,15 @@ def run_slots(
     force: bool = False,
     only: str = "",
     ledger_path=None,
+    session_override: str = "",
 ) -> RunReport:
-    """Run every due slot once. Never raises: a crash here is a lost night."""
+    """Run every due slot once. Never raises: a crash here is a lost night.
+
+    ``session_override`` (TJ-4 change 4) is the ONE narrow door for "narrate
+    THAT day": it applies only to the slot named by ``only`` and reaches
+    nothing else. `session_date_for`, `night_kind` and every other slot's
+    already-done check are untouched, so a redo cannot re-key the night.
+    """
 
     # ONE runner at a time on this machine (2026-08-28). The scheduled task
     # fires every 30 minutes for eight hours, which was harmless while every
@@ -201,7 +208,12 @@ def run_slots(
     try:
         with local_writer_lock(RUNNER_LOCK_KEY, timeout_seconds=0.0):
             return _run_slots_locked(
-                slots, now=now, force=force, only=only, ledger_path=ledger_path
+                slots,
+                now=now,
+                force=force,
+                only=only,
+                ledger_path=ledger_path,
+                session_override=session_override,
             )
     except LocalLockUnavailable as exc:
         # The lock reports both "someone else holds it" and "this box has no
@@ -220,7 +232,12 @@ def run_slots(
                 "AI jobs: no cross-process lock available (%s); running unguarded.", exc
             )
             return _run_slots_locked(
-                slots, now=now, force=force, only=only, ledger_path=ledger_path
+                slots,
+                now=now,
+                force=force,
+                only=only,
+                ledger_path=ledger_path,
+                session_override=session_override,
             )
         logging.info(
             "AI jobs: another run is already in progress on this machine; leaving it "
@@ -236,6 +253,7 @@ def _run_slots_locked(
     force: bool = False,
     only: str = "",
     ledger_path=None,
+    session_override: str = "",
 ) -> RunReport:
     """The body of :func:`run_slots`, always under the machine-local lock."""
     from market_calendar import SessionCalendarError
@@ -395,9 +413,18 @@ def _run_slots_locked(
 
         started = datetime.now().astimezone()
         clock = time.perf_counter()
+        # TJ-4 change 4: the Redo button's one named day. It reaches ONLY the
+        # slot the operator typed, and the ledger row is keyed to the day that
+        # slot actually worked on - a row claiming tonight's session for work
+        # done on last Tuesday's would be the dishonest half of this.
+        run_session = (
+            session_override
+            if session_override and only and slot.name == only
+            else session_date
+        )
         try:
             extra_kwargs = dict(slot.model_free_kwargs or {}) if model_free else {}
-            outcome = slot.run(session_date=session_date, now=moment, **extra_kwargs) or {}
+            outcome = slot.run(session_date=run_session, now=moment, **extra_kwargs) or {}
             # A job may report that it published an honestly degraded document
             # rather than a trustworthy one. That is not "ok", and because
             # completed_jobs counts only STATUS_OK, the next firing retries it.
@@ -442,7 +469,7 @@ def _run_slots_locked(
             row = ledger.record(
                 job=slot.name,
                 status=status,
-                session_date=session_date,
+                session_date=run_session,
                 started_at=started,
                 model=str(outcome.get("model") or ""),
                 reason=row_reason,
@@ -464,7 +491,7 @@ def _run_slots_locked(
             row = ledger.record(
                 job=slot.name,
                 status=ledger.STATUS_FAILED,
-                session_date=session_date,
+                session_date=run_session,
                 started_at=started,
                 error=f"{type(exc).__name__}: {exc}",
                 path=ledger_path,

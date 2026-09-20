@@ -35,7 +35,9 @@ Pilot (TJ-1 item 6).
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from PySide6.QtCore import QEvent, QThread, Qt, QTimer, Signal
@@ -61,6 +63,7 @@ from PySide6.QtWidgets import (
 )
 
 import daily_recap_schedule
+from ai_jobs import window
 from ui import theme
 from ui.panels import desk_layout
 from ui.widgets.data_table import MEASURE_PRECISION_ROWS
@@ -82,9 +85,25 @@ LOOKBACK_SESSIONS = 3
 #: the reader box's job).
 EXCERPT_LIMIT = 90
 
-#: What the "What happened" section says until TJ-4 writes a story. Said plainly
-#: rather than leaving an empty box that reads as a read that failed.
+#: What the "What happened" section says when the night has not written a story
+#: for this session. Said plainly rather than leaving an empty box that reads as
+#: a read that failed. The deterministic facts stay under it either way.
 NO_STORY_YET = "No story yet - it is written overnight (TJ-4)."
+
+#: What a DAYTIME Redo says. Local inference is night-only, seven days a week
+#: (trader, 2026-09-19; decision 0021 answer 19), so the button writes a
+#: `redo_requested` marker the nightly slot honours and says so. A 14 GB model
+#: load in front of the trader's own market prep is the thing the rule is about.
+STORY_QUEUED_NOTE = (
+    "Queued for tonight - the desk writes the story overnight, never by day."
+)
+
+#: What it says when the night window is open and the button did what it says.
+STORY_REDO_STARTED_NOTE = "Rewriting {session}'s story in the background…"
+
+#: The slot the Redo button runs, by name. One spelling, used by the argv and
+#: by the CLI that receives it.
+REDO_SLOT = "day_review_narration"
 
 #: What the SPY section says when the desk has no bars for the session. TJ-2
 #: brings the stored bars for a past session; until then this is the truth.
@@ -221,6 +240,49 @@ LOADING_NOTE = "Reading the session…"
 #: streams the big stores once, so it is worth a sentence rather than a silence.
 BUILDING_INDEX_NOTE = "Building {session}'s index in the background…"
 FETCHING_BARS_NOTE = "Fetching that day's bars: {session}…"
+
+
+def redo_command(session_date: str) -> list[str]:
+    """The argv `plan.md` TJ-4 change 4 names. PURE - it runs nothing.
+
+    `run_ai_jobs.py --slot day_review_narration --force --session <date>`.
+    `--force` here re-spends the attempt caps and the already-done check; it
+    does NOT buy the clock, which is why the button refuses by day and queues
+    instead.
+    """
+    import sys
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "run_ai_jobs.py"
+    return [
+        sys.executable,
+        str(script),
+        "--slot",
+        REDO_SLOT,
+        "--force",
+        "--session",
+        str(session_date or "")[:10],
+    ]
+
+
+def launch_redo_process(session_date: str) -> None:
+    """Start the redo in a below-normal child PROCESS, and return at once.
+
+    A process rather than a thread: a 14 GB model load can never share the
+    desk's own heap, and a run that goes wrong must not be able to take down
+    the window the trader watches charts in - the same reasoning that keeps the
+    whole AI layer out of the GUI (`scripts/run_ai_jobs.py`).
+    """
+    import subprocess
+
+    flags = 0
+    if os.name == "nt":
+        flags = int(
+            getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        )
+    subprocess.Popen(  # noqa: S603 - argv is built here, never from user text
+        redo_command(session_date), creationflags=flags, close_fds=True
+    )
 
 
 def _excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
@@ -369,6 +431,17 @@ class _IndexBuildWorker(QThread):
                 logging.debug(
                     "The session's reads could not be graded.", exc_info=True
                 )
+        # TJ-4: the day pack, AFTER the grades, because its `reads` section IS
+        # what the grader just wrote. Same shape as the line above it: through
+        # `getattr`, because a host that hands this page a reader without the
+        # seam must still get its index, and in its own guard, because a failed
+        # pack costs the night's story and nothing else.
+        build_pack = getattr(self._service, "build_pack_for", None)
+        if callable(build_pack):
+            try:
+                build_pack(self._session)
+            except Exception:  # noqa: BLE001 - a pack never costs the index
+                logging.debug("The day pack could not be built.", exc_info=True)
         self.built.emit(self._session)
 
 
@@ -386,6 +459,7 @@ class DayReviewPanel(QFrame):
         *,
         clock: Callable[[], datetime] | None = None,
         auto_time_reader: Callable[[], Any] | None = None,
+        redo_launcher: Callable[[str], Any] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -421,6 +495,9 @@ class DayReviewPanel(QFrame):
         self._auto_time_reader: Callable[[], Any] = (
             auto_time_reader or daily_recap_schedule.auto_time_from_settings
         )
+        #: How a Redo actually starts (TJ-4 change 4). Injected so a test can
+        #: assert the click without spawning a process.
+        self._redo_launcher: Callable[[str], Any] = redo_launcher or launch_redo_process
         self._auto_fired_session: str | None = None
         self._auto_post_close_session: str | None = None
         self._auto_timer = QTimer(self)
@@ -465,6 +542,24 @@ class DayReviewPanel(QFrame):
         self.story_note = QLabel(NO_STORY_YET)
         self.story_note.setObjectName("SectionSubtitle")
         self.story_note.setWordWrap(True)
+        # TJ-4: the night's story, under its own headline. The page FORMATS it -
+        # every verdict on it was measured by TJ-10's grader and copied by the
+        # night; nothing here grades anything.
+        self.story_body = QLabel("")
+        self.story_body.setWordWrap(True)
+        self.story_body.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.story_body.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.redo_story_button = QPushButton("Redo story")
+        self.redo_story_button.setToolTip(
+            "Ask the desk to write this day's story again. By day it is queued "
+            "for tonight: local inference is night-only."
+        )
+        self.redo_story_button.clicked.connect(self.redo_story)
+        # TJ-4 item 3: the rolling D1 view, above the open theses it is about.
+        self.d1_view_note = QLabel("")
+        self.d1_view_note.setObjectName("SectionSubtitle")
+        self.d1_view_note.setWordWrap(True)
+        self.d1_view_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.story_facts = QLabel("")
         self.story_facts.setWordWrap(True)
         self.story_facts.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -720,12 +815,23 @@ class DayReviewPanel(QFrame):
         that turns extra width into more information, so it takes the room the
         column has left.
         """
+        verbs = QHBoxLayout()
+        verbs.setContentsMargins(0, 0, 0, 0)
+        verbs.addWidget(self.redo_story_button)
+        verbs.addStretch(1)
         self.story_section = self._section(
-            "What happened", self.story_note, self.story_facts, self.congruence_note
+            "What happened",
+            self.story_note,
+            self.story_body,
+            self.story_facts,
+            self.congruence_note,
+            verbs,
         )
         theses_label = QLabel("Open theses")
         theses_label.setObjectName("SectionSubtitle")
-        self.theses_section = self._section("", theses_label, self.theses)
+        self.theses_section = self._section(
+            "", theses_label, self.d1_view_note, self.theses
+        )
         self.spy_section = self._section(
             "SPY, this session", self.spy_note, self._chart_holder, stretch_last=True
         )
@@ -1262,6 +1368,11 @@ class DayReviewPanel(QFrame):
             if isinstance(row, Mapping) and row.get("entry_id")
         }
         self._render_story(payload.get("story"))
+        # TJ-4, AFTER the facts: the verified story replaces the "no story yet"
+        # line when there is one, and leaves the facts exactly as they were when
+        # there is not.
+        self._render_day_story(payload.get("day_story"))
+        self._render_d1_view(payload.get("d1_view"))
         self._render_congruence(tuple(payload.get("congruence") or ()))
         self._render_theses(payload.get("theses") or [])
         self._render_walkaway(tuple(payload.get("rejected_that_worked") or ()))
@@ -1315,6 +1426,121 @@ class DayReviewPanel(QFrame):
         for note in tuple(getattr(story, "notes", ()) or ()):
             lines.append(str(note))
         self.story_facts.setText("\n".join(lines))
+
+    def _render_day_story(self, story: Any) -> None:
+        """The night's verified narration. Formatting only (TJ-4 item 4).
+
+        Every verdict printed here was MEASURED by TJ-10's grader and copied by
+        the night, which refuses the whole output rather than write one that
+        disagrees. The page grades nothing, computes nothing and calls nothing.
+        """
+        self.story_body.setText("")
+        self.story_body.setVisible(False)
+        if not isinstance(story, Mapping):
+            return
+        narration = story.get("narration")
+        if not isinstance(narration, Mapping):
+            return
+        headline = str(narration.get("headline") or "").strip()
+        if headline:
+            self.story_note.setText(headline)
+        lines: list[str] = []
+        for key in ("what_happened", "what_you_thought"):
+            text = str(narration.get(key) or "").strip()
+            if text:
+                lines.append(text)
+        for claim in narration.get("were_you_right") or ():
+            if not isinstance(claim, Mapping):
+                continue
+            said = str(claim.get("claim") or "").strip()
+            verdict = self._verdict_text(str(claim.get("verdict") or ""))
+            if said and verdict:
+                lines.append(f"· {said} — {verdict}")
+            elif said:
+                lines.append(f"· {said}")
+        chased = narration.get("chased_against_news")
+        if isinstance(chased, Mapping):
+            verdict = str(chased.get("verdict") or "").strip()
+            if verdict:
+                # `unknown` is printed exactly as it is: the desk does not
+                # measure oil or the 10-year, and a condition it cannot see is
+                # unknown, never assumed either way.
+                lines.append(f"· Chased against the news: {verdict}")
+        process = str(narration.get("process") or "").strip()
+        if process:
+            lines.append(process)
+        body = "\n".join(lines)
+        self.story_body.setText(body)
+        self.story_body.setVisible(bool(body))
+
+    def _render_d1_view(self, view: Any) -> None:
+        """The rolling D1 view, above the open theses. Formatting only."""
+        self.d1_view_note.setText("")
+        self.d1_view_note.setVisible(False)
+        if not isinstance(view, Mapping):
+            return
+        narration = view.get("narration")
+        if not isinstance(narration, Mapping):
+            return
+        lines: list[str] = []
+        belief = str(narration.get("belief_now") or "").strip()
+        if belief:
+            lines.append(belief)
+        for thesis in narration.get("open_theses") or ():
+            if not isinstance(thesis, Mapping):
+                continue
+            claim = str(thesis.get("claim") or "").strip()
+            if not claim:
+                continue
+            still = str(thesis.get("still_true") or "").strip()
+            since = str(thesis.get("since") or "").strip()
+            parts = [f"· {claim}"]
+            if since:
+                parts.append(f"since {since}")
+            if still:
+                parts.append(f"still true: {still}")
+            lines.append(" — ".join(parts))
+        text = "\n".join(lines)
+        self.d1_view_note.setText(text)
+        self.d1_view_note.setVisible(bool(text))
+
+    # -- Redo story --------------------------------------------------------
+    def redo_story(self) -> None:
+        """Ask for this session's story again - tonight, or now if it is night.
+
+        Local inference is night-only, seven days a week (plan TJ-13 item 5,
+        TJ-4 change 4). Outside the window this writes the `redo_requested`
+        marker the nightly slot honours and SAYS it is queued; inside it, it
+        starts one child process per click and writes no marker.
+        """
+        session = self.session_date()
+        if not session:
+            return
+        try:
+            allowed, reason = window.launch_allowed()
+        except Exception as exc:  # noqa: BLE001 - an unreadable window queues
+            allowed, reason = False, f"the night window could not be read ({exc})"
+        if not allowed:
+            import day_review_pack
+
+            try:
+                day_review_pack.request_redo(session)
+                text = f"{STORY_QUEUED_NOTE} {reason}".strip()
+            except Exception as exc:  # noqa: BLE001 - a marker never costs the page
+                logging.debug("The story redo could not be queued.", exc_info=True)
+                text = f"the redo could not be queued for tonight: {exc}"
+            self.status.setText(text)
+            self.statusChanged.emit(self.status.text())
+            return
+        try:
+            self._redo_launcher(session)
+        except Exception as exc:  # noqa: BLE001 - a failed launch never raises into Qt
+            logging.debug("The story redo could not be started.", exc_info=True)
+            self.status.setText(f"the story redo could not be started: {exc}")
+            self.statusChanged.emit(self.status.text())
+            return
+        self.status.setText(STORY_REDO_STARTED_NOTE.format(session=session))
+        self.statusChanged.emit(self.status.text())
 
     def _render_congruence(self, lines) -> None:
         """The three lines, under the story. Formatting only (TJ-10 item 6).
