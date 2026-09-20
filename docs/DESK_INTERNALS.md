@@ -3594,6 +3594,151 @@ name while the trade was open reached the Journal's Tags column by no path at al
 
 - **A broker file is authoritative for money and blind to time.** `journal_statement_import` (Questrade `.xlsx`, no `openpyxl`) and `journal_ib_transactions` (IBKR sectioned csv, USD price / CAD money, masked accounts unmasked only when exactly one fits) write executions at MIDNIGHT market-local; `journal_trade_shape.is_date_only` refuses to name a session for them. Side and options come from the DESCRIPTION; identity is `fill_signature` plus an ordinal, never positional; a statement never writes into a (broker, account, day) a richer source already covers. Commission carries a SIGN and the importer owns it — nothing downstream may `abs()` it.
 
+#### TJ-9Q - a Questrade fill says what it is, and a sold put is a sale (2026-09-19/20)
+
+Branch `claude/tj9q-questrade-instrument` (tip `76f3cf2a`), **merged into
+`lead/p033-integration2` as `86c64f96`** - not on `main`, and the stored rows have NOT
+moved: `--apply` on the live journal is the trader's own act and is owed.
+
+The trader sells puts; they do not buy premium (one recorded exception, a QQQ put bought
+and sold on 2026-06-26). Until 2026-09-19 the journal said the opposite. Measured that day
+and re-measured on 09-20, both on byte-exact COPIES of `trade_journal.sqlite3`:
+
+| measurement | value |
+| --- | --- |
+| Questrade executions / `security_type = UNKNOWN` | 226 / 226 |
+| payload keys per execution | exactly 20 - no `securityType`, no `symbolType` |
+| `net_amount` / `gross_amount` on Questrade rows | NULL on all 226 |
+| stored `multiplier` column | 1.0 on all 226, options included |
+| stored sides | SELL 101, BUY 92, COV 25, STO 4, BTC 4 |
+| open `UNKNOWN` Questrade positions | 29 (24 OPEN + 5 CLOSED_PARTIAL) |
+| the four option positions | 10 fills, 4 symbols |
+
+Two causes, both vocabulary. The executions endpoint states no type, so
+`normalize_security_type(None)` answered `UNKNOWN` and `journal_identity` then priced a
+contract at one. `normalize_side` knew `BTO` and `STC` but not `STO`, `BTC` or `COV`, so
+those three were stored verbatim and `_signed_quantity` - which negates only its own SELL
+set - read every one of them as a BUY: `STO` opened the position LONG, `BTC` added to it
+instead of closing it, and `COV` came out right by accident. **Three sold-put positions**
+(four STO fills - AAOI has two) read `direction = LONG` and sit OPEN with
+`quantity_closed` 0, and the ONE bought put (QQQ, BTO/STC) is correctly LONG and CLOSED
+but 100x too small. TJ-9's item 7 was refuted as an additive change on exactly this: a
+forward-only classifier would split every open position from its closing fill, because
+`group_key` and `trade_id` key on the type. `execution_uid` never moves, and
+`fill_signature` is the CSV path's and is untouched.
+
+**The answer is in the broker's own fields, twice over.** The symbol is Questrade's own
+option spelling (`AAOI18Jun26P120.00`) and the side word is one of four.
+`classify_questrade_security_type` requires BOTH to agree, which makes them a check on
+each other rather than a guess; a payload that does state a type (`get_positions` does) is
+believed over both; a disagreement, an unreadable symbol or an absent side stays
+`UNKNOWN`, because an UNKNOWN position is visible and fixable and a wrong one is silent.
+Nothing is inferred from a ticker's LENGTH. The stored SYMBOL may not move either:
+`canonical_option_symbol` rewrites a symbol into OCC form as soon as the type is `OPT`,
+and the root, expiry, strike and right are not in this payload - so the symbol is still
+spelled from the type the payload STATED, and classification is additive.
+
+**One journal, one convention.** With 29 positions open under the old spelling, a new fill
+classified `OPT` could not close a position grouped `UNKNOWN` - it would open a second
+one. So the classifier and the side map are pure and always correct, and the SEAMS consult
+`QUESTRADE_INSTRUMENT_FROM_SYMBOL` (ships `False`; the effective value is read at CALL
+time from `local_settings["questrade_instrument_from_symbol"]`, absent = False): the
+importer's `_append_normalized` and `journal_statement_import._execution_from_row`, never
+the classifier. With it OFF both paths are BYTE-IDENTICAL to before - raw side word
+stored, `UNKNOWN`, multiplier 1.0, `STO`/`BTC`/`Cov` CSV rows still dropped - and the
+reviewer proved that base-versus-tip through the real seams. The old map survives by name
+as `normalize_side_pre_tj9q` for exactly those gated seams.
+
+**What the correction is worth**, measured on a copy of the live journal:
+
+| position | before | after |
+| --- | --- | --- |
+| AAOI 18Jun26 P120 | LONG OPEN, qty 4/0, -3.965665 | SHORT CLOSED, 2/2, **+241.034335** |
+| BE 2Jul26 P260 | LONG OPEN, 2/0, -1.987107 | SHORT CLOSED, 1/1, **-666.987107** |
+| QBTS 26Jun26 P22.50 | LONG OPEN, 4/0, -3.961772 | SHORT CLOSED, 2/2, **-57.961772** |
+| QQQ 26Jun26 P700 | LONG CLOSED, -2.782369 | LONG CLOSED, **-81.982369** |
+
+Every one equals the broker's own `totalCost` arithmetic to the cent - and `totalCost`
+already carries the multiplier, which is what makes it an independent check rather than a
+restatement of ours. Total recomputed P&L across all trades 4,737.45 -> 4,184.25: the
+-553.20 is exactly the four option corrections, and no equity trade moves.
+
+**The stored rows move once, through a tool that refuses.**
+`scripts/journal_reclassify.py` (`--db`, `--dry-run`, `--apply`, `--i-am-the-trader`,
+`--verbose`) is a dry run BY DEFAULT and the dry run reads COPIES - it does not open the
+database it is reporting on, so it cannot change a byte of it. `--apply` takes a
+byte-exact timestamped backup FIRST, moves type + side + multiplier together through the
+ONE additive `JournalStore.reclassify_executions` (Questrade rows only - it refuses any
+other broker's uid, and the SQL carries `AND broker = 'QUESTRADE'`), rebuilds, and
+verifies: the same executions, every broker-stated amount unchanged, and no newly stranded
+annotation or machine row. A failure RESTORES the backup byte-exact and exits 1. The three
+fields travel together because they are read together - `group_key` reads the type,
+`_signed_quantity` the side, and `journal_file_authority._multiplier_for` the stored
+multiplier COLUMN before it will look at the type.
+
+**A mass re-key must carry every trade-keyed table, not only the trader's.** Each
+`trade_annotations` row is re-keyed by largest execution overlap and a TIE is REFUSED,
+never guessed: a contract sold, bought back, sold again and bought back again is one open
+position today and two closed round trips afterwards, each holding half the executions -
+that position is left entirely in the old convention and NAMED. The machine's rows follow
+the same rule, each table by its own nature: `ai_trade_enrichment` (nothing regenerates
+it) refuses its POSITION when it cannot be placed; `note_lane_verdicts` (derived, and
+`refresh_auto_tags` already deletes dead ones) is DROPPED, counted and named;
+`opportunity_events` is NEVER rewritten - it is carried by a `trade_aliases` row, and
+unresolvable references are counted and named.
+
+**The switch is written LAST, and never onto a half-moved journal** (the round-1 blocker:
+it flipped ON after a refusal, and a new fill then split that contract into two
+positions). `--apply` writes `local_settings["questrade_instrument_from_symbol"]` only
+when NOTHING was refused AND no open `UNKNOWN` Questrade position is left; otherwise
+everything that moved stays moved and correct, the blockers are named, and the run exits
+**4**. Exit codes: 0 done · 1 verify failed and restored · 2 would not start · 3 busy (the
+desk slot or the `ai_jobs_runner` lock - the nightly journal import runs inside that
+runner) · 4 rows moved, switch stayed off, re-runnable. `--apply` refuses a `--db` under
+`C:\TradingBotData` or the DAS without `--i-am-the-trader`. If the power goes out
+mid-apply, running `--apply` again repairs a reclassified-but-not-rebuilt journal.
+
+**Measured by the reviewer on a copy of the live journal, 2026-09-20:** dry run 0.2 s and
+zero bytes changed; `--apply` 0.3-0.4 s; 226 fills moved, 0 refused; `security_type` moved
+on 226 (OPT 10 / STK 216), `side` on 33 (STO->SELL 4, BTC->BUY 4, COV->BUY 25),
+`multiplier` on 10; ZERO non-Questrade rows touched; all 616 `execution_uid`s and every
+`net_amount` / `gross_amount` / `commission` / `fees` / `quantity` / `price` byte-identical;
+exactly FOUR positions move; 185 annotations in and 185 out on live trades, content
+identical, `label_provenance` still present and EMPTY on all 185 (a maintenance pass may
+not invent a date for a call the trader made); `ai_trade_enrichment` 24 of 24 on live
+trades; `note_lane_verdicts` 94 carried and 4 dropped (CRDO, FBIN, IOVA, SMH - one
+execution shared by two rebuilt trades; machine `no_claim` verdicts, nothing the trader
+wrote); every existing `opportunity_events` row byte-identical, 94 aliases, 4 left and
+named; the tax report identical for 2026 (76 positions, CAD 5,426.33) and 2025 (24, CAD
+1,308.97), because it sums `net_amount`, which is NULL on every Questrade row and is never
+written here - what changes is an exclusion REASON, "still open" becoming "a fill carries
+no broker-stated amount", a better sentence about the same zero dollars. A second
+`--apply` is a no-op. Page one of the report is ~40 lines, decision first (the builder cut
+it from 609).
+
+**The ONE ungated change, lead-approved:** `journal_file_authority._BUY_SIDES` gains `COV`
+(the set held `COVER`), so the trader's 25 covers stop counting as cash coming IN. It
+moves 14 (account, day) pairs, 72,596.51 in total absolute = twice the covers' 36,298.26
+(SMPL 2026-09-18 alone +366.98 -> -366.98), and it makes the file AGREE with the sync on
+those days. It has no automatic caller - only a trader-initiated statement import or
+"Check a statement..." - so it lands when this build reaches the desk, not at `--apply`,
+and the dry run says so rather than leaving it out of its before/after. Also ungated and
+correct: a hand-typed `STO` in the manual-fill dialog now stores SELL.
+
+**The trader's own steps, in plain words.** By DAY with the market closed, never between
+22:00 and 06:00 Pacific (the overnight AI jobs run then, and the nightly journal import
+runs inside them). 1. Close the Trading Desk. 2. Look first, changing nothing:
+`.venv\Scripts\python.exe scripts\journal_reclassify.py --db "C:\TradingBotData\data\runtime\trade_journal.sqlite3"`.
+3. Read page one: AAOI goes from `LONG OPEN -3.97` to `SHORT CLOSED 241.03`, BE to
+-666.99, QBTS to -57.96, QQQ to -81.98; `refused: 0`; and under **THE SWITCH**,
+`ON.  --apply would turn it on.` If `refused:` is not 0 or the switch says OFF, it is
+refusing to guess about something the trader wrote - send that page back before going on.
+4. Run it for real with `--apply --i-am-the-trader` on the same command. 5. Read the SAME
+two lines on THAT output: `refused: 0`, and the switch line must read **ON. New Questrade
+fills are stored the same way from now on.** 6. Keep the printed backup for a week.
+7. Start the desk and check the three puts read SHORT and CLOSED. To undo: copy the backup
+file back over `trade_journal.sqlite3`.
+
 ### M1 - the challenger measured through the catch-up path, long form
 
 - **The AVWAP band challenger is measured through the CATCH-UP path too** (M1, 2026-09-05): `build_anchor_band_variant_meta` lives in `legacy.py` and serves BOTH the live scan (`runner.py` re-exports it) and the tracker catch-up (`_evaluate_priority_snapshot_for_date`), which never set the block, so the shadow measured nothing from 08-26 to 09-05. Never add a third builder; a record is rebuilt on every persisted tracker write, so no migration exists. The Band variant tab prints `Measured N of M setups (K unmeasured: <top reason>).` from the export's own counts (`top_unmeasured_reason`), never by reading the 1.1 GB tracker; still shadow only, T4's 20-session accrual starts at the first measured row.

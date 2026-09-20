@@ -749,7 +749,7 @@ the close. Every premise below is recon's to re-verify (12.3).
 
 ##### TJ-9 — Yesterday's trades are labelled at 09:00, and the desk insists
 
-**Items 1-6 BUILT and MERGED 2026-09-19**, branch `claude/tj9-forced-trade-labels` (tip `ee35ae54`), merged into `lead/p033-integration` as `8077a758` after three review rounds (NO-GO, NO-GO, GO). What shipped differs from the text below in two places: the section rides on ANY later delivered slot of the session while still owed (not only after a shown card), and the setup guess is filtered by SHAPE (rejection word, link, any `<prefix>:<code>`), not by a closed vocabulary. Live gate **#154** retained, plus a first-morning check of the not-ready -> ready path. **Item 7 is NOT built here: it became packet TJ-9Q** (`.claude/packets/TJ-9Q.md`, branch `claude/tj9q-questrade-instrument` holding the tester's parked tests) because the Questrade executions payload carries no `securityType`, `journal_identity.group_key` and `journal_store._contract_multiplier` read the type (a forward-only classifier splits every open position from its closing fill; a backfill multiplies option P&L by 100), and `normalize_side` does not map `STO` / `BTC` / `Cov` (the trader's four sold puts read `LONG`, three stuck `OPEN`). TJ-9Q builds the classifier, the side map and a dry-run-by-default reclassify CLI; the live `--apply` is the TRADER's act. Needs TJ-9; gate: the trader reads the dry run.
+**Items 1-6 BUILT and MERGED 2026-09-19**, branch `claude/tj9-forced-trade-labels` (tip `ee35ae54`), merged into `lead/p033-integration` as `8077a758` after three review rounds (NO-GO, NO-GO, GO). What shipped differs from the text below in two places: the section rides on ANY later delivered slot of the session while still owed (not only after a shown card), and the setup guess is filtered by SHAPE (rejection word, link, any `<prefix>:<code>`), not by a closed vocabulary. Live gate **#154** retained, plus a first-morning check of the not-ready -> ready path. **Item 7 was not built here: it became packet TJ-9Q, which is now its own entry below.**
 
 *Goal:* every real trade carries a setup, a stop answer and one sentence by 09:05.
 
@@ -800,6 +800,34 @@ before its first fill, against a trade from nowhere — with what each group mad
 Live gate **#154**: at 09:00 the card lists yesterday's trades with a suggested setup each;
 Save stays grey until all are answered; skipping it brings the section back at 10:00; the
 Journal then shows those trades confirmed.
+
+##### TJ-9Q — A Questrade fill says what it is, and a sold put is a sale
+
+**BUILT and MERGED 2026-09-20** (branch `claude/tj9q-questrade-instrument`, tip
+`76f3cf2a`, merged `86c64f96` into `lead/p033-integration2`; not on `main`). TJ-9's item 7,
+split out after the tester's step 0 refuted three of its premises: `net_amount` is NULL on
+all 226 Questrade rows, so the goldens use the payload's own `totalCost`; there are THREE
+sold-put positions (four STO fills — AAOI has two) and ONE bought put, not four sold puts;
+and `journal_file_authority` is affected, in two ways, both corrections. Items 1-4 are
+built. The classifier (`classify_questrade_security_type`) and the side map (`STO`→SELL,
+`BTC`/`COV`→BUY) are pure and always correct; the import seams and the CSV statement path
+are gated on `QUESTRADE_INSTRUMENT_FROM_SYMBOL`, which **ships OFF — item 4's gate is NOT
+met**, because 29 positions are open under the old convention and one journal may never
+hold both; and `scripts/journal_reclassify.py` is the one way stored rows move (dry run by
+default, byte-exact backup, one store method, every trade-keyed table carried or NAMED,
+the switch written LAST and never onto a half-moved journal, exit 4 when it was held
+back). The one ungated change is `_BUY_SIDES` gaining `COV`, which makes a broker file
+agree with the sync on the 14 (account, day) pairs its 25 covers touch. **Owed: the
+trader's own `--apply` run on the live journal** — nothing there has moved — and the live
+gate below. Long form: DESK_INTERNALS "TJ-9Q".
+
+Live gate **#162**: after the trader's `--apply` run, the Journal page shows the three
+sold puts as SHORT and CLOSED with AAOI **+241.03**, BE -666.99, QBTS -57.96 and QQQ
+-81.98; the next Questrade import adds a fill without creating a second position for a
+contract that already exists; the overnight AI narration is still shown for a re-keyed
+Questrade trade (24 of 24 enrichment rows landed on live trades on the copy); and
+"Check a statement..." on a day holding a cover no longer reports a disagreement the size
+of twice the cover.
 
 ##### TJ-10 — The read grader and the congruence line (no model)
 
@@ -1231,6 +1259,21 @@ have been. Rest of the gate (TJ-14B): an ordinary hourly card is one click; on a
 new fill the next card asks its setup and stop; a trade from nowhere is asked its origin
 once; nothing is asked twice after `Stop asking this`.
 
+##### TJ-14C — A quick like's answer joins the like cohort (PLANNED)
+
+**PLANNED, not started** — a follow-up the TJ-14B work surfaced. TJ-14B registers a
+`quick_like_followup` Mentor kind that stays DORMANT because nothing joins what the
+trader answers about a quick like back to the like itself: the answer is written as an
+`opportunity_events` row keyed to the opportunity, while the like cohort is read from the
+review-event stream, so the two never meet and the question has no consumer. TJ-14C joins
+them — one reader that carries a quick like's answered `opportunity_events` row into the
+cohort that grades that like — and waking the dormant kind is what proves it. Rules that
+already bind it: an action joins `TAKE_ACTIONS` / `REJECT_ACTIONS` on what its WRITER
+does, never its name; a like carries zero privileges and contributes a LINK, never a tag;
+no tag is derived from an outcome; and an evidence store is never allowed to cost the
+thing it records. Needs TJ-14B merged. Gate: the first quick like answered through the
+Mentor shows its answer on the like's own cohort row, with `n` unchanged elsewhere.
+
 ##### TJ-15 — What the misses had in common (no model, no chart pictures)
 
 **BUILT and MERGED 2026-09-19**, branch `claude/tj15-miss-contrast` (tip `8547c4a5`),
@@ -1388,7 +1431,7 @@ full suite with the nightly AI lock free, ruff, smoke, selftest, and reconciles 
 
 | Wave | Packets (file in `.claude/packets/`) | Branch | Needs |
 |---|---|---|---|
-| 1 | **TJ-9 MERGED 2026-09-19** (`TJ-9.md`, merged `8077a758`; item 7 -> `TJ-9Q.md`, not started) · **TJ-11 MERGED 2026-09-19** (`TJ-11.md`) · **TJ-13A MERGED 2026-09-19** (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` (merged `a89ec7d5`) · `claude/tj13a-night-slates` (merged `9eaae1dd`), both into `lead/p033-integration` | `main` |
+| 1 | **TJ-9 MERGED 2026-09-19** (`TJ-9.md`, merged `8077a758`; item 7 -> **TJ-9Q, MERGED 2026-09-20**, `claude/tj9q-questrade-instrument` tip `76f3cf2a`, merged `86c64f96` into `lead/p033-integration2`) · **TJ-11 MERGED 2026-09-19** (`TJ-11.md`) · **TJ-13A MERGED 2026-09-19** (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` (merged `a89ec7d5`) · `claude/tj13a-night-slates` (merged `9eaae1dd`), both into `lead/p033-integration` | `main` |
 | 1F | **TJ-11F MERGED 2026-09-19 (evening)** - trader reversal of TJ-11 item 5: an after-close, weekend or holiday decision belongs to the session it JUDGED | `claude/tj11f-decision-session` (tip `67143e3e`, merged `f00ec302` into `lead/p033-integration2`) | TJ-11 |
 | 2 | **TJ-14A MERGED 2026-09-19 (night)** (`TJ-14A.md`) · **TJ-3 MERGED 2026-09-19 (evening)** (`TJ-3.md`) · **TJ-15 MERGED 2026-09-19 (night)** (`TJ-15-16.md`) — wave 2 complete | `claude/tj14a-mentor-card` (tip `6808abd9`, merged `e8c04f88`) · `claude/tj3-note-markers` (tip `58ee11f4`, merged `72647104` into `lead/p033-integration2`) · `claude/tj15-miss-contrast` (tip `8547c4a5`, merged `fb3f55e9`, slot position fixed `1f260ffa`) | TJ-9 · TJ-11 ✓ · TJ-11 ✓ |
 | 3 | TJ-14B (`TJ-14B.md`) · TJ-10 (`TJ-10.md`) | `claude/tj14b-mentor-questions` · `claude/tj10-read-grader` | TJ-14A (TJ-10 also rebases on TJ-3's page edits) |
@@ -1407,9 +1450,11 @@ TJ-10 → TJ-4 → TJ-12), `ui/widgets/trade_mentor_card.py` (TJ-9 → TJ-14A �
 | # | Packet | One line | Needs | Gate |
 |---|---|---|---|---|
 | — | TJ-1L | Day Review in two columns (MERGED; verified an ancestor of `main` 2026-09-19) | TJ-1 | #145 |
-| 1 | TJ-9 | **MERGED 2026-09-19** (item 7 split into TJ-9Q, not started) - yesterday's trades labelled at 09:00, forced; label provenance; planned vs unplanned; journal freshness | — | #154 |
+| 1 | TJ-9 | **MERGED 2026-09-19** - yesterday's trades labelled at 09:00, forced; label provenance; planned vs unplanned; journal freshness | — | #154 |
+| 1Q | TJ-9Q | **MERGED 2026-09-20** - a Questrade fill says what it is and a sold put is a SALE; the import seams gated OFF; `journal_reclassify.py` the one way stored rows move, and the `--apply` is the trader's own act (owed) | TJ-9 | #162 |
 | — | *restart* | NOT a hold any more (superseded above): the trader restarts when the build is merged and the gates are read then | — | #145 #152 #153 |
 | 2 | TJ-14 | **TJ-14A MERGED 2026-09-19 (night)** - items 1 and 6: the card split (What I see / What I expect) with a forced prediction click, timeframe-horizon agreement enforced at the writer, `trade_mentor_context_v2` and the internals strip. TJ-14B remains: the question registry with consumers, the budget of three, same-session fills, "the AI takes it from there" | TJ-9 | #159 |
+| 2C | TJ-14C | **PLANNED** - join a quick like's answered `opportunity_events` row into the like cohort; it wakes TJ-14B's dormant `quick_like_followup` kind | TJ-14B | — |
 | 3 | TJ-10 | Read grader on the clicked prediction (+ context snapshot), congruence lines | TJ-14 | #155 |
 | 4 | TJ-11 | **MERGED 2026-09-19** - walk-away v2: earlier calls, against-first, ATR, real-miss rule, skill line vs base rate, instrument-aware rows, ADDITIVE session stamp | TJ-2 | #156 |
 | 4F | TJ-11F | **MERGED 2026-09-19 (evening)** - an after-close decision belongs to the session it JUDGED; `decision_session_rule: "judged_session_v2"`; the D1 ruler starts from the judged session's close | TJ-11 | #156 |
