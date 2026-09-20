@@ -6766,3 +6766,95 @@ back, and **0 live rows fall there**.
 * `load_annotations(..., by_decision_session=True)` and `row_decision_session` still have
   **no production caller** - the service maps through `_stamped_dates_for`. They exist for
   TJ-15 and are pinned only by tests.
+
+## TJ-3 - a mark sits on a bar only when it happened DURING that bar (2026-09-19, packet TJ-3)
+
+The long form behind the CLAUDE.md rule *"A note marker sits on a bar only when it
+happened DURING that bar."* Trader, 2026-09-17: *"it also needs some sort of chart system
+to show me when I commented on it so I can see exactly where I went wrong."* plan.md §12.4
+TJ-3, decision 0021. Branch `claude/tj3-note-markers`, tip `58ee11f4`, merged `72647104`
+into `lead/p033-integration2`. Two reviews, both GO by reproduction, the second after a fix
+round.
+
+**One rule decides everything else here: a marker's `index` is an index into the tape it
+will be DRAWN on, and it exists only when the stamp fell INSIDE that bar's own span.** A
+name whose session tape is short does not borrow SPY's index - that index names a different
+moment and would fall past the end of the drawn bars - and the stamp is not CLAMPED onto
+the last candle either. The tester's first literal said bar 44 (SPY's index for that
+stamp), the lead amended it to 29 (AAA's own 30-bar tape), and the review round showed the
+honest answer is that the stamp belongs on NO bar at all. What the clamp cost was measured
+on a copy of the live journal: 62 of 216 trade legs (29%) fill after 13:00 Pacific, and
+every one was being drawn on the 12:55 candle as though the trader had acted at the close.
+The same probe found `trade_date` is the EXIT day and 116 of 216 `opened_at` values fall on
+an EARLIER day - those correctly place nothing on the session's own tape.
+
+So `placement_for(bars, stamp)` answers `(index, placement)`: `on_bar` (drawn),
+`after_tape` and `between_bars` (KEPT with `index: None`, counted, drawn nowhere), and
+`before_tape` / `no_tape` / `unreadable` (no marker at all - a pre-open thought says nothing
+about a candle and there is nothing to count it against). `bar_index_for` delegates and
+keeps that meaning. The intraday test is `start <= stamp < start + width` with the bar WIDTH
+read off the tape itself - the smallest positive gap between starts, so a halt does not
+widen a bar - and a DAILY tape matches by market-local DATE. Comparison is always
+`astimezone` with market-local ATTACHED to a naive stamp, never a stripped zone: the journal
+stores UTC and `day_review_bars` persists `America/Los_Angeles`, so 17:12Z is the 10:10 PT
+bar, while a naive read made it bar 77, the last of the day. On a DAILY tape a weekend or
+holiday stamp is `between_bars` rather than Friday's candle - the page has no D1 toggle and
+this packet added none, so that is a decision owed KNOWINGLY if one ever lands, against the
+trader's TJ-11F rule that a Friday-evening call is Friday's judgement.
+
+**What could not be drawn is SAID**, because a silent drop is the same lie as a clamp with
+fewer pixels. `placement_counts` counts the placements ON THE WORKER, `name_charts` carries
+them per name and `spy_marker_placements` carries the benchmark's;
+`day_review_panel._marker_caption` turns them into `2 marks after the tape - not drawn.`
+(joined with `N off a drawn bar` when both happen), and a session with no tape at all says
+so instead of nothing. On the live 2026-09-17 session: 278 marks over 174 name charts =
+270 drawn + 8 counted.
+
+**`ref_id` selects, `marker_id` addresses.** Both legs of a trade carry the same `trade_id`
+- that is the id the page selects with, and a leg click deliberately selects nothing,
+because a trade is not a note - so each glyph also carries `<trade_id>:in` / `:out`, which
+`note_marker_position` matches first. Without it the entry leg answers for both and the exit
+glyph can never be found.
+
+**The kinds are a vocabulary, not a judgement.** Ten come from `plan.md`; the eleventh is
+`prediction`, because a Mentor read the trader DESCRIBED and one where they clicked a
+direction are not the same thing (TJ-14 item 1). A Mentor marker is placed at
+`responded_at`, falling back to `created_at`, and NEVER at `scheduled_at` - an unanswered
+prompt is not a thing the trader said. `benchmark_markers` builds the SPY chart: market
+notes, Mentor reads, the pasted forecast and EVERY trade of the day, each labelled with its
+symbol. `symbol_markers` builds one name's own decisions, claims and trades, and
+`name_charts` pairs each acted-on name with the tape that holds it, so a name the bars file
+never got is absent rather than drawn on somebody else's tape. `dislike` and `not_today`
+draw in the rejection family beside `veto`, `swing_favorite` in the like family (lead,
+2026-09-19), with the verdict still spelled out in the label. A machine row never gets a
+marker. `capture_id` is present-and-empty on every pick-feedback and swing-favorite row, so
+the id falls back to what the row IS - a marker two decisions share is a marker the page
+cannot select with.
+
+**`candle_chart.py` is the Alert Center's chart too, so this is additive or it is
+nothing.** The reviewer proved it by reproduction at base and at tip: for an unmarked D1
+chart (earnings, levels, overlay, volume) the scene items, the view range, the earnings
+glyph positions, the ribbon span and the sha256 of the full-widget PNG are IDENTICAL, as are
+the bar / level / empty-space click sequences; with no markers set nothing is built and
+`_position_note_glyphs` and `NoteMarkers.paint` run 0 times. Once a payload arrives the
+glyphs pool like `_sync_earnings` (hidden, never destroyed), every item is added
+`ignoreBounds` so no marker moves the y-range, and `set_data` DROPS the payload because new
+bars mean every index in it names a different moment - the host pushes markers after bars.
+`markerClicked` is emitted IN ADDITION to `barClicked`, `priceClicked` and `levelSelected`.
+The one shared line that changed: `EarningsDropLines`' ribbon fraction moved from a module
+constant to a class attribute of the same value, so the note connectors take their own line
+(0.20 against the earnings 0.10). `tests/test_tj3_chart_is_additive.py` is the proof.
+
+**Everything is built on the worker.** `read_day` resolves both payloads at the END of the
+one read, against the tape that read ENDED UP with, from rows it had already opened - no
+second store and no read on a row click; the paint path never imports `day_review_markers`.
+The page formats: ONE reused `_name_chart` beside the tables, and a marker click selects
+that note in "What you said" while a marker for something that is not a note moves no
+selection. Measured cost: `read_day` median ~502 -> ~554 ms on a staged session, and a
+payload of ~1.0-1.5 MB for a 174-name session because `name_charts` carries a tape per
+decided name. **Recorded as a LATER packet:** trimming `name_charts` to the rows the tables
+actually show.
+
+Live gate **#147** is owed and needs gate #146/#152's back-fill first: the live home has no
+`day_review/bars/*.parquet` yet, so with no file the SPY chart draws from the Qt hand-off,
+the caption says the marks were not drawn, and no name chart can open.

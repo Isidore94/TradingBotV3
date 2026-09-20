@@ -162,7 +162,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); TJ-3 … TJ-8 PLANNED; **TJ-11 MERGED 2026-09-19** (`claude/tj11-walkaway-v2` → `lead/p033-integration` `a89ec7d5`; walk-away v2, `REAL_MISS_V1`, the skill line, an additive `decision_session`; direction reversed the same evening by **TJ-11F MERGED 2026-09-19** (`claude/tj11f-decision-session` → `lead/p033-integration2` `f00ec302`; an after-close decision belongs to the session it JUDGED); gate #156 owed, reworded) and **TJ-13A MERGED 2026-09-19** (`claude/tj13a-night-slates` → `lead/p033-integration` `9eaae1dd`; nights only seven days, night slates, four overnight repairs; gate #158 owed); **TJ-9 … TJ-13 otherwise PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); **TJ-3 MERGED 2026-09-19 (evening)** (`claude/tj3-note-markers` → `lead/p033-integration2` `72647104`; Day Review note markers, a mark on a bar only when it happened during it, the Alert Center's chart proven unchanged; gate #147 owed, after #146/#152's bars back-fill); TJ-4 … TJ-8 PLANNED; **TJ-11 MERGED 2026-09-19** (`claude/tj11-walkaway-v2` → `lead/p033-integration` `a89ec7d5`; walk-away v2, `REAL_MISS_V1`, the skill line, an additive `decision_session`; direction reversed the same evening by **TJ-11F MERGED 2026-09-19** (`claude/tj11f-decision-session` → `lead/p033-integration2` `f00ec302`; an after-close decision belongs to the session it JUDGED); gate #156 owed, reworded) and **TJ-13A MERGED 2026-09-19** (`claude/tj13a-night-slates` → `lead/p033-integration` `9eaae1dd`; nights only seven days, night slates, four overnight repairs; gate #158 owed); **TJ-9 … TJ-13 otherwise PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -478,6 +478,36 @@ exists with one row per decided symbol (`trading_bot.log` shows one batched down
 
 ##### TJ-3 — Charts with the trader's notes on them
 
+**TJ-3 BUILT and MERGED 2026-09-19** (`claude/tj3-note-markers`, tip `58ee11f4`, merged
+`72647104` into `lead/p033-integration2`; two reviews, both GO by reproduction, the second
+after one fix round). All three changes below landed. (1) `NoteMarkers` plus pooled glyphs
+in `candle_chart.py`, **additive** to the live Alert Center's chart - proven byte-for-byte
+at base and tip (scene items, view range, earnings glyphs, ribbon span, full-widget PNG
+sha256 and the click sequences identical; with no markers set nothing is built) - with
+`set_note_markers` / `note_marker_count` / `note_marker_position` / `note_marker_at` and
+`markerClicked(ref_id)` emitted IN ADDITION to the existing signals. (2) The pure
+`scripts/day_review_markers.py`: `placement_for` / `bar_index_for`, `benchmark_markers`,
+`symbol_markers`, `name_charts`, `placement_counts`, eleven `MARKER_KINDS` (the plan's ten
+plus `prediction`). **What differs from the plan text above:** the plan said a stamp
+between bars takes "the LAST completed bar at or before the stamp" - it does not. **A mark
+sits on a bar only when it happened DURING that bar**; a stamp past the end of the tape is
+`after_tape` with `index: None`, KEPT, counted on the worker and SAID in the caption, never
+clamped onto the last candle (the review measured 62 of 216 live trade legs, 29%, filling
+after 13:00 Pacific and being drawn on the 12:55 candle), and a stamp in a hole is
+`between_bars` the same way; `before_tape` / `no_tape` / `unreadable` yield no marker at
+all. **The packet's D1 toggle is a pure-builder capability only - the page has no toggle
+and this packet added none**, so the weekend/holiday stamp on a daily tape (`between_bars`)
+is a decision owed knowingly if one ever lands. (3) The page: `spy_markers`, `name_charts`
+and `spy_marker_placements` in `PAYLOAD_KEYS` / `empty_payload`, all built ON THE WORKER at
+the end of `read_day` from rows already read; the SPY chart always with its caption, a
+walk-away row click opening that name in ONE reused `CandleChart` beside the tables, a
+marker click selecting that note in "What you said". Claim markers come from the session's
+`claimed_picks` rows through `symbol_markers(..., claims=)`. Live gate **#147** owed, and it
+needs gate #146/#152's back-fill first - the live home has no `day_review/bars/*.parquet`
+yet. **Recorded as a LATER packet:** `name_charts` carries a tape per decided name (~1.0-1.5
+MB for a 174-name session) and could be trimmed to the rows the tables show. Long form:
+DESK_INTERNALS "TJ-3".
+
 *Goal:* *"show me when I commented on it so I can see exactly where I went wrong."*
 
 What exists: `ui/widgets/candle_chart.py` `EarningsDropLines` (`:480-539`) draws pooled
@@ -503,8 +533,17 @@ before the stamp), an unknown stamp yields no marker, markers pool (count stable
 three renders), `markerClicked` carries the entry id.
 
 Live gate **#147**: on yesterday's Day Review the SPY chart shows a marker at each note the
-trader wrote, clicking it selects that note; clicking a passed name opens its chart with the
-pass marker on the right bar.
+trader wrote (and at each Mentor answer, the pasted forecast and both legs of every trade of
+the day), clicking one selects that note in "What you said"; clicking a passed name in a
+walk-away table opens that name's own session chart beside the tables with the pass marker
+on the right bar, and clicking a second row re-uses the same chart widget. **A mark the tape
+could not carry is COUNTED, not drawn:** a trade leg filled after the last completed bar
+(29% of the live journal's legs fill after 13:00 Pacific) appears on NO candle and the
+caption under the chart says how many - e.g. `2 marks after the tape - not drawn.` Nothing
+on the Alert Center's charts changed. **The bars file must exist for the session**
+(`day_review/bars/<date>.parquet` - absent on the live store when this was built, so gate
+#146/#152's back-fill is a prerequisite: with no file the SPY chart draws from the Qt
+hand-off, the caption says the marks were not drawn, and no name chart can open).
 
 ##### TJ-4 — The overnight day story and the rolling D1 view
 
@@ -1227,7 +1266,7 @@ full suite with the nightly AI lock free, ruff, smoke, selftest, and reconciles 
 |---|---|---|---|
 | 1 | **TJ-9 MERGED 2026-09-19** (`TJ-9.md`, merged `8077a758`; item 7 -> `TJ-9Q.md`, not started) · **TJ-11 MERGED 2026-09-19** (`TJ-11.md`) · **TJ-13A MERGED 2026-09-19** (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` (merged `a89ec7d5`) · `claude/tj13a-night-slates` (merged `9eaae1dd`), both into `lead/p033-integration` | `main` |
 | 1F | **TJ-11F MERGED 2026-09-19 (evening)** - trader reversal of TJ-11 item 5: an after-close, weekend or holiday decision belongs to the session it JUDGED | `claude/tj11f-decision-session` (tip `67143e3e`, merged `f00ec302` into `lead/p033-integration2`) | TJ-11 |
-| 2 | TJ-14A (`TJ-14A.md`) · **TJ-3 and TJ-15 are UNBLOCKED** by TJ-11's merge (`TJ-3.md`, `TJ-15-16.md`) | `claude/tj14a-mentor-card` · `claude/tj3-note-markers` · `claude/tj15-miss-contrast` | TJ-9 · TJ-11 ✓ · TJ-11 ✓ |
+| 2 | TJ-14A (`TJ-14A.md`, in a fix round after a NO-GO) · **TJ-3 MERGED 2026-09-19 (evening)** (`TJ-3.md`) · TJ-15 (`TJ-15-16.md`, in a fix round after a NO-GO) | `claude/tj14a-mentor-card` · `claude/tj3-note-markers` (tip `58ee11f4`, merged `72647104` into `lead/p033-integration2`) · `claude/tj15-miss-contrast` | TJ-9 · TJ-11 ✓ · TJ-11 ✓ |
 | 3 | TJ-14B (`TJ-14B.md`) · TJ-10 (`TJ-10.md`) | `claude/tj14b-mentor-questions` · `claude/tj10-read-grader` | TJ-14A (TJ-10 also rebases on TJ-3's page edits) |
 | 4 | TJ-4 (`TJ-4.md`) · TJ-16 (`TJ-15-16.md`) · TJ-13B (`TJ-5-6-7-13B.md`) | `claude/tj4-day-story` · `claude/tj16-prediction-contrast` · `claude/tj13b-large-local` | TJ-10, TJ-11 · TJ-10, TJ-14A, TJ-15 · TJ-13A |
 | 5 | TJ-12 (`TJ-12.md`) | `claude/tj12-report-card` | TJ-9, TJ-10, TJ-11, TJ-4 |
@@ -1250,7 +1289,7 @@ TJ-10 → TJ-4 → TJ-12), `ui/widgets/trade_mentor_card.py` (TJ-9 → TJ-14A �
 | 3 | TJ-10 | Read grader on the clicked prediction (+ context snapshot), congruence lines | TJ-14 | #155 |
 | 4 | TJ-11 | **MERGED 2026-09-19** - walk-away v2: earlier calls, against-first, ATR, real-miss rule, skill line vs base rate, instrument-aware rows, ADDITIVE session stamp | TJ-2 | #156 |
 | 4F | TJ-11F | **MERGED 2026-09-19 (evening)** - an after-close decision belongs to the session it JUDGED; `decision_session_rule: "judged_session_v2"`; the D1 ruler starts from the judged session's close | TJ-11 | #156 |
-| 4 | TJ-3 | Note markers on the SPY and name charts (may run alongside) | TJ-2 | #147 |
+| 4 | TJ-3 | **MERGED 2026-09-19 (evening)** - note markers on the SPY and name charts; a mark sits on a bar only when it happened DURING that bar, and one past the tape's end is counted, never clamped; the page has no D1 toggle | TJ-2 | #147 |
 | 5 | TJ-4 | Day pack + overnight day story that only narrates measured rows; rolling D1 view | TJ-10 | #148 |
 | 6 | TJ-12 | Six-line report card heading Day Review (incl. How fresh) | TJ-10, TJ-11 | #157 |
 | 7 | TJ-15 | What the misses had in common (measured feature contrast) | TJ-11 | #160 |

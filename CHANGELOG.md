@@ -53,6 +53,37 @@ They are evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Day Review note markers (TJ-3, 2026-09-19, branch `claude/tj3-note-markers`, merged
+  `72647104` into `lead/p033-integration2`).** The trader's own words are drawn on the
+  session tape. `scripts/day_review_markers.py` is a PURE builder (no Qt, no store, no
+  clock): `placement_for` puts a marker on a bar ONLY when the stamp fell inside that bar's
+  own span (`start <= stamp < start + width`, the width read off the tape as the smallest
+  positive gap; a daily tape matches by market-local DATE), comparing through `astimezone`
+  and never a stripped zone - the journal is UTC, the durable tape is Pacific-local. A stamp
+  past the end of the tape is **never clamped onto the last candle**: it is `index: None`,
+  `placement: "after_tape"`, KEPT so the page can SAY how many there are (62 of 216 live
+  trade legs, 29%, fill after 13:00 Pacific); a stamp in a hole the tape does not draw is
+  `between_bars`, the same way; a pre-open, unreadable or absent stamp yields NO marker
+  rather than bar zero. `placement_counts` counts on the worker, `name_charts` carries the
+  counts per name and `spy_marker_placements` the benchmark's, and the captions read
+  `2 marks after the tape - not drawn.` (or say there is no tape at all). `benchmark_markers`
+  builds the SPY chart (market notes, Mentor reads placed at `responded_at`, the pasted
+  forecast and EVERY trade of the day labelled with its symbol); `symbol_markers` builds one
+  name's decisions, claims and trades; `name_charts` pairs each acted-on name with the tape
+  that holds it. Eleven `MARKER_KINDS` - the ten plan names plus `prediction`;
+  `dislike`/`not_today` draw beside `veto` and `swing_favorite` with `like`; a machine row
+  never gets a marker; each trade leg carries its own `marker_id` (`<trade_id>:in` / `:out`)
+  while `ref_id` stays the page's selector. `ui/widgets/candle_chart.py` gains ONE ADDITIVE
+  overlay family - `NoteMarkers` plus pooled `TextItem` glyphs (hidden, never destroyed),
+  `set_note_markers` / `note_marker_count` / `note_marker_position` / `note_marker_at`, and
+  `markerClicked(ref_id)` emitted IN ADDITION to the existing signals; with no markers set
+  nothing is built, so the Alert Center's charts pay nothing (proven byte-for-byte, PNG
+  hash included, at base and tip). `day_review_service.read_day` builds `spy_markers`,
+  `name_charts` and `spy_marker_placements` ON THE WORKER at the end of the one read from
+  rows it had already read, and the page only pushes them: the SPY chart always, a walk-away
+  row click opening that name in ONE reused `CandleChart` beside the tables, a marker click
+  selecting that note in "What you said". The page has no D1 toggle and this packet added
+  none. Live gate #147 owed. Long form: DESK_INTERNALS "TJ-3".
 - **Day Review walk-away v2 (TJ-11, 2026-09-19, branch `claude/tj11-walkaway-v2`, merged
   `a89ec7d5`).** `scripts/real_miss.py` holds `REAL_MISS_V1` (`RUN_ATR` 1.0, `ADVERSE_ATR`
   0.5, one pure `verdict()`; the adverse extreme taken first inside a bar; a missing ATR or
@@ -2898,6 +2929,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-19 (evening) - TJ-3: note markers on the Day Review charts, and a mark sits on a bar only when it happened during it (branch `claude/tj3-note-markers`, tip `58ee11f4`, merged into `lead/p033-integration2` `72647104`)
+
+Trader, 2026-09-17: *"it also needs some sort of chart system to show me when I commented on it so I can see exactly where I went wrong."* Three changes: the pure `scripts/day_review_markers.py`, an ADDITIVE `NoteMarkers` family in `ui/widgets/candle_chart.py`, and the page pushing what the worker built. **The rule the packet turns on is that a marker's `index` is an index into the tape it will be DRAWN on, and it exists only when the stamp fell inside that bar's own span.** The first tester literal was SPY's index for the stamp (44), the lead amended it to the name's own 30-bar tape (29), and the review round showed the honest answer is NO bar: a stamp past the end of the tape is `after_tape` with `index: None`, counted and never clamped. Measured on a copy of the live journal: 62 of 216 trade legs (29%) fill after 13:00 Pacific and were being drawn on the 12:55 candle as though the trader had acted at the close; `trade_date` is the EXIT day and 116 of 216 `opened_at` values fall on an earlier day, so they correctly place nothing. `between_bars` is kept and counted the same way; `before_tape` / `no_tape` / `unreadable` yield no marker at all. `placement_counts` counts on the worker and the captions SAY it (`2 marks after the tape - not drawn.`, or that there is no tape at all): on the live 2026-09-17 session, 278 marks over 174 name charts = 270 drawn + 8 counted. Comparison is always `astimezone` (journal UTC, durable tape Pacific-local; a naive read put a 17:12Z note on bar 77 instead of the 10:10 PT bar) and a daily tape matches by market-local DATE, which makes a weekend stamp `between_bars` - the page has NO D1 toggle and this packet added none, so that stays a knowing decision if one ever lands. Both reviews GO by reproduction. `candle_chart.py` is the live Alert Center's chart, and was proven additive at base and tip: identical scene items, view range, earnings glyph positions, ribbon span, full-widget PNG sha256 and click sequences, with `_position_note_glyphs` and `NoteMarkers.paint` running 0 times when no markers are set; glyphs pool hidden, every item is `ignoreBounds`, `set_data` drops stale markers, and `markerClicked` is emitted IN ADDITION to `barClicked` / `priceClicked` / `levelSelected`. Everything is built ON THE WORKER at the end of `read_day` from rows already read (no second store, no read on a row click, the paint path never imports the builder); `read_day` median ~502 -> ~554 ms on a staged session. **Recorded as a later packet:** `name_charts` carries a tape per decided name (~1.0-1.5 MB for a 174-name session) and could be trimmed to the visible rows. Live gate #147 owed and needs gate #146/#152's back-fill first - the live home has no `day_review/bars/*.parquet` yet. Full suite on the merge: BASELINE_PENDING_LEAD. Long form: DESK_INTERNALS "TJ-3".
 
 ### 2026-09-19 (evening) - TJ-11F: an after-close decision belongs to the session it JUDGED (branch `claude/tj11f-decision-session`, tip `67143e3e`, merged into `lead/p033-integration2` `f00ec302`)
 
