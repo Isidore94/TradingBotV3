@@ -284,12 +284,17 @@ def test_a_non_dict_tally_is_survivable(desk):
 
 def test_an_unimportable_registry_never_costs_the_forced_trade_section(desk, monkeypatch):
     """The trade section is the one thing on this card the trader may not skip.
-    It used to be built AFTER the pull, so a raise in the pull path took it."""
+
+    It used to be built AFTER the pull path, so a raise anywhere in that path
+    took it with it. The journal is deliberately NOT ready here, so the morning
+    catch-up - the leg that reaches `mentor_questions` from inside
+    `morning_import_retry` - is the one that raises.
+    """
     import builtins
 
     window, store, service = desk
-    mark_covered(store, REVIEWED)
-    add_round_trip(store, "AAPL", day=REVIEWED)
+    mark_covered(store, "2026-09-09")
+    add_round_trip(store, "AAPL", day=SESSION.isoformat())
 
     real_import = builtins.__import__
 
@@ -308,14 +313,30 @@ def test_an_unimportable_registry_never_costs_the_forced_trade_section(desk, mon
 
 def test_a_corrupt_tally_never_costs_the_forced_trade_section(desk):
     window, store, service = desk
-    mark_covered(store, REVIEWED)
-    add_round_trip(store, "AAPL", day=REVIEWED)
+    mark_covered(store, "2026-09-09")
+    add_round_trip(store, "AAPL", day=SESSION.isoformat())
     window.trade_mentor_service.set_pull_tally({"pulls": "three", "failures": None})
 
     window._show_trade_mentor_prompt(_slots(SESSION)[2])
 
     card = window.trading_panel.alert_center.chart_review.mentor_card
     assert card._answer_inputs
+
+
+def test_todays_fills_are_asked_about_even_when_last_nights_statement_failed(desk):
+    """The mornings `same_session` matters most on are exactly the ones where
+    yesterday's statement has not landed. A card that drew nothing then would
+    make the label unreachable whenever the night failed."""
+    window, store, service = desk
+    mark_covered(store, "2026-09-09")
+    trade_id = add_round_trip(store, "AAPL", day=SESSION.isoformat())
+
+    window._show_trade_mentor_prompt(_slots(SESSION)[2])
+
+    card = window.trading_panel.alert_center.chart_review.mentor_card
+    assert trade_id in card._answer_inputs
+    assert "journal not ready" in card.trade_check_label.text()
+    assert "seen TODAY" in card.trade_check_label.text()
 
 
 # ---------------------------------------------------------------------------

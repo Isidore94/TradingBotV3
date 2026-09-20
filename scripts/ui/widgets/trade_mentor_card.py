@@ -1023,6 +1023,7 @@ class TradeMentorCard(QWidget):
         self._trade_check_session = str(
             getattr(self._slot, "session", "") or ""
         )
+        same_session = tuple(getattr(task, "same_session_trade_ids", ()) or ())
         if not getattr(task, "journal_ready", False):
             self.trade_check_label.setText(
                 f"Yesterday's trades ({task.reviewed_session}): "
@@ -1030,10 +1031,22 @@ class TradeMentorCard(QWidget):
                 f"{self._freshness_phrase(task)}. The broker statement has not "
                 "landed, so nothing is asked yet; this comes back on the next "
                 "card. The day pull is Questrade only - IBKR has no day leg."
+                + (
+                    f" {len(same_session)} fill(s) seen TODAY are asked below - "
+                    "today's statement never lands mid-session, and a fill the "
+                    "desk has already seen is one you can still label."
+                    if task.trades
+                    else ""
+                )
             )
             self.trade_check_label.setVisible(True)
-            self.trade_check_box.setVisible(False)
-            self.save_answers_button.setVisible(False)
+            if not task.trades:
+                # Nothing SEEN either. An empty questionnaire drawn from an
+                # incomplete list is a lie about the session.
+                self.trade_check_box.setVisible(False)
+                self.save_answers_button.setVisible(False)
+                return
+            self._build_trade_questions(task)
             return
         if not task.trades:
             self.trade_check_label.setText(
@@ -1055,8 +1068,25 @@ class TradeMentorCard(QWidget):
             f"Yesterday's trades ({task.reviewed_session}), missing fields only - "
             f"all {len(task.trades)}. Save stays off until each one is answered."
             + remainder
+            + (
+                f" {len(same_session)} of them filled TODAY - labelling those "
+                "now is the label made before the outcome is known."
+                if same_session
+                else ""
+            )
         )
         self.trade_check_label.setVisible(True)
+        self._build_trade_questions(task)
+
+    def _build_trade_questions(self, task) -> None:
+        """One block of widgets per trade the card is asking about.
+
+        Shared by the ready branch and the not-ready one: a statement that has
+        not landed says nothing about the fills the desk has ALREADY SEEN today
+        (TJ-14B), and a card that refused to draw them would make `same_session`
+        unreachable on exactly the mornings it matters most.
+        """
+        import trade_mentor_trade_check as check
 
         for question in task.trades:
             self._trade_questions[question.trade_id] = question
