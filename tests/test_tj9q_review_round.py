@@ -309,6 +309,84 @@ def test_the_report_says_how_many_machine_rows_were_carried_and_how_many_were_no
     assert "carried" in out and "left where they were" in out
 
 
+def test_a_position_whose_ai_narration_cannot_be_carried_is_refused_too(
+    tmp_path, local_settings_restored
+):
+    """Nothing regenerates `ai_trade_enrichment`. A tie there is the same kind
+    of loss as a tie on the trader's own tag, so it refuses the POSITION - the
+    row stays reachable and the switch stays off - instead of either guessing or
+    abandoning the whole repair. (The note-lane verdicts are DERIVED and the
+    events are reached through an alias; only this one is gone for good.)"""
+    import journal_reclassify
+
+    store = new_store(tmp_path)
+    store_old_convention(store, INTERLEAVED + BE_PUT)
+    old_id = trade_for(store, "AAOI18JUN26P120.00")["trade_id"]
+    store.save_ai_enrichment(
+        trade_id=old_id, session_date="2026-06-11", summary="rolled the same strike twice"
+    )
+
+    assert _cli("--db", str(db_of(store)), "--apply") == journal_reclassify.EXIT_SWITCH_STAYED_OFF
+
+    live, enrichment, _ = _machine_rows(store)
+    assert enrichment == [old_id]
+    assert set(enrichment) <= live, "the narration was left pointing at nothing"
+    assert trade_for(store, "BE2JUL26P260.00")["security_type"] == "OPT"
+
+
+def test_a_note_verdict_that_cannot_be_carried_is_dropped_not_left_to_rot(
+    tmp_path, local_settings_restored
+):
+    """`refresh_auto_tags` already DELETEs a verdict whose trade is gone -
+    "this table is derived and nothing downstream may read a row whose trade is
+    gone" - so a verdict the overlap rule cannot place is dropped under that
+    same rule, counted, and named. The note lane writes it again from the
+    trader's own note."""
+    store = new_store(tmp_path)
+    store_old_convention(store, INTERLEAVED + BE_PUT)
+    old_id = trade_for(store, "AAOI18JUN26P120.00")["trade_id"]
+    with store.connection() as conn:
+        conn.execute(
+            "INSERT INTO note_lane_verdicts(trade_id, note_lane_json, updated_at) "
+            "VALUES(?, '{}', '2026-06-11T10:00:00-07:00')",
+            (old_id,),
+        )
+
+    _cli("--db", str(db_of(store)), "--apply")
+
+    live, _, verdicts = _machine_rows(store)
+    assert all(trade_id in live for trade_id in verdicts), verdicts
+
+
+def test_a_position_that_only_gains_a_type_is_not_on_page_one_even_when_re_keyed(
+    tmp_path, capsys
+):
+    """A re-key renames every trade in a position, and sorting by trade id then
+    hands them back in a different order. Comparing the LIST rather than the SET
+    of trades put nine positions on page one of the live journal where four
+    belong. Two round trips in one symbol, none of whose money moves."""
+    store = new_store(tmp_path)
+    two_round_trips = [
+        dict(MARA_SHORT, id=7101, exchangeExecId="EXEC-7101", side="Short", quantity=10,
+             timestamp="2026-09-01T10:00:00.000000-04:00"),
+        dict(MARA_SHORT, id=7102, exchangeExecId="EXEC-7102", side="Cov", quantity=10,
+             timestamp="2026-09-01T11:00:00.000000-04:00"),
+        dict(MARA_SHORT, id=7103, exchangeExecId="EXEC-7103", side="Short", quantity=5,
+             timestamp="2026-09-02T10:00:00.000000-04:00"),
+        dict(MARA_SHORT, id=7104, exchangeExecId="EXEC-7104", side="Cov", quantity=5,
+             timestamp="2026-09-02T11:00:00.000000-04:00"),
+    ]
+    store_old_convention(store, AAOI_PUT + two_round_trips)
+
+    _cli("--db", str(db_of(store)))
+
+    out = capsys.readouterr().out
+    head = out.split("DETAIL")[0]
+    assert "AAOI18JUN26P120.00" in head
+    assert "MARA" not in head, "an unchanged equity position reached page one"
+    assert "money or direction moves: 1" in head
+
+
 def test_a_run_that_would_strand_more_machine_rows_is_refused_and_restored(
     tmp_path, monkeypatch, local_settings_restored
 ):

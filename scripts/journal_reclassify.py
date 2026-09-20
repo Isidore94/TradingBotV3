@@ -208,7 +208,8 @@ def _trades(store: JournalStore) -> list[dict[str, Any]]:
     with store.connection() as conn:
         rows = conn.execute(
             "SELECT trade_id, broker, account_number, symbol, security_type, currency, "
-            "direction, status, quantity_opened, quantity_closed, gross_pnl, net_pnl "
+            "direction, status, quantity_opened, quantity_closed, gross_pnl, net_pnl, "
+            "opened_at, closed_at, trade_date "
             "FROM trades"
         ).fetchall()
     return [{key: row[key] for key in row.keys()} for row in rows]
@@ -300,7 +301,15 @@ class _Snapshot:
             )
             grouped.setdefault(key, []).append(trade)
         for entries in grouped.values():
-            entries.sort(key=lambda item: (str(item.get("status")), str(item.get("trade_id"))))
+            # Chronological, so a re-key cannot reshuffle a position's own list
+            # and make an unchanged position look like a changed one.
+            entries.sort(
+                key=lambda item: (
+                    str(item.get("opened_at") or ""),
+                    str(item.get("closed_at") or ""),
+                    str(item.get("trade_id") or ""),
+                )
+            )
         return grouped
 
     def open_unknown(self) -> list[dict[str, Any]]:
@@ -384,6 +393,7 @@ def plan_reclassify(db_path: Path, workdir: Path) -> dict[str, Any]:
     after, legs_before, stranded, machine_rows = _simulate(
         db_path, live_updates, workdir, "after-0.sqlite3"
     )
+    stranded = stranded | _unreachable_narration(machine_rows)
     attempt = 0
     while stranded and attempt < 3:
         attempt += 1
@@ -400,8 +410,9 @@ def plan_reclassify(db_path: Path, workdir: Path) -> dict[str, Any]:
                     "account_number": str(trade.get("account_number") or ""),
                     "executions": sorted(uids),
                     "reason": (
-                        "the rebuilt trades share its executions evenly, so the trader's "
-                        "annotation cannot be carried without guessing"
+                        "the rebuilt trades share its executions evenly, so what is written "
+                        "about it (the trader's annotation, or narration nothing regenerates) "
+                        "cannot be carried without guessing"
                     ),
                 }
             )
@@ -409,6 +420,7 @@ def plan_reclassify(db_path: Path, workdir: Path) -> dict[str, Any]:
         after, legs_before, stranded, machine_rows = _simulate(
             db_path, live_updates, workdir, f"after-{attempt}.sqlite3"
         )
+        stranded = stranded | _unreachable_narration(machine_rows)
     plan = {
         "db_path": db_path,
         "before": before,
@@ -421,6 +433,20 @@ def plan_reclassify(db_path: Path, workdir: Path) -> dict[str, Any]:
     }
     plan["switch"] = switch_decision(plan)
     return plan
+
+
+#: The machine table whose rows nothing regenerates. A position whose narration
+#: cannot be carried is REFUSED, exactly like one whose trader annotation cannot
+#: be - the derived note verdicts are rewritten by the note lane and the
+#: immutable events are reached through an alias, but this one would simply be
+#: gone from the Journal page.
+NON_REGENERABLE_TABLE = "ai_trade_enrichment"
+
+
+def _unreachable_narration(machine_rows: Mapping[str, Mapping[str, Any]]) -> set[str]:
+    """Old trade ids whose AI narration the overlap rule could not carry."""
+    counts = machine_rows.get(NON_REGENERABLE_TABLE) or {}
+    return {str(item) for item in (counts.get("left_trade_ids") or [])}
 
 
 def switch_decision(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -527,19 +553,24 @@ def _position_change(
     the same direction, the same status and the same money to the cent. On the
     trader's journal there are about 200 of those and four that matter, and a
     report that lists them all in one flat list is a report nobody reads.
+
+    Compared as a SET of trades, never as a list: a re-key renames every trade
+    in the position, and a position whose trades merely come back in a different
+    order has not changed - saying it did would put nine positions on page one
+    where four belong.
     """
     def shape(entries: Sequence[Mapping[str, Any]]) -> list[tuple[str, str, str]]:
-        return [
+        return sorted(
             (
                 str(item.get("direction") or ""),
                 str(item.get("status") or ""),
                 f"{float(item.get('net_pnl') or 0.0):.4f}",
             )
             for item in entries
-        ]
+        )
 
     def typed(entries: Sequence[Mapping[str, Any]]) -> list[str]:
-        return [group_key_text(_group_of(item)) for item in entries]
+        return sorted(group_key_text(_group_of(item)) for item in entries)
 
     if shape(old_entries) != shape(new_entries):
         return "matters"
@@ -695,8 +726,16 @@ def print_report(
             write(
                 f"  {table:<22} carried {counts.get('carried', 0)}, "
                 f"left where they were {counts.get('left', 0)}, "
+                f"dropped (derived, regenerated) {counts.get('dropped', 0)}, "
                 f"already dead before this run {counts.get('already_dead', 0)}"
             )
+            named = list(counts.get("symbols") or [])
+            if named:
+                write(f"      not carried: {', '.join(named[:10])}")
+        write(
+            "  A row is only ever moved onto the trade that holds MOST of its executions, "
+            "and a tie is never guessed."
+        )
     write(
         f"Trades: {len(before.trades)} -> {len(after.trades)};  "
         f"annotations: {len(before.annotations)} (stranded before: {len(before.stranded)}, "
@@ -991,7 +1030,7 @@ def _apply_locked(
         report = store.reclassify_executions(plan["updates"], refresh_tags=False)
         machine_rows = report.get("machine_rows") or {}
         after = _Snapshot(store)
-        problems = _verify(before, after)
+        problems = _verify(before, after, machine_rows)
     except Exception as exc:  # noqa: BLE001 - the restore is the point
         problems = [f"the reclassify raised {type(exc).__name__}: {exc}"]
         after = before
@@ -1039,9 +1078,12 @@ def _apply_locked(
     return EXIT_OK
 
 
-def _verify(before: _Snapshot, after: _Snapshot) -> list[str]:
+def _verify(
+    before: _Snapshot, after: _Snapshot, machine_rows: Mapping[str, Mapping[str, Any]] | None = None
+) -> list[str]:
     """Everything that must still be true, checked before the run is kept."""
     problems: list[str] = []
+    machine_rows = machine_rows or {}
     if set(before.net_amounts) != set(after.net_amounts):
         problems.append("the set of executions changed")
     else:
@@ -1065,10 +1107,21 @@ def _verify(before: _Snapshot, after: _Snapshot) -> list[str]:
         )
     for table, dead_after in after.machine_dead.items():
         dead_before = before.machine_dead.get(table, 0)
-        if dead_after > dead_before:
+        # Strict for the two tables whose rows this pass can move. The immutable
+        # one is never rewritten, so a reference the overlap rule could not
+        # resolve stays unresolvable - allowed ONLY up to the number this run
+        # counted and printed, because an event going dark unaccounted for is
+        # exactly the failure this check exists to catch.
+        allowance = (
+            int((machine_rows.get(table) or {}).get("left", 0) or 0)
+            if table == "opportunity_events"
+            else 0
+        )
+        if dead_after > dead_before + allowance:
             problems.append(
                 f"{table} would be left with {dead_after} row(s) pointing at a trade that "
-                f"no longer exists, up from {dead_before}"
+                f"no longer exists, up from {dead_before} "
+                f"({allowance} accounted for in the report)"
             )
     return problems
 

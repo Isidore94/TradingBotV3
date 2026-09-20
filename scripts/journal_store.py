@@ -905,9 +905,13 @@ class JournalStore:
                     updated += int(cursor.rowcount or 0)
         with self.connection() as conn:
             legs_before = self._legs_by_trade(conn)
+            symbols_before = {
+                str(row[0]): str(row[1] or "")
+                for row in conn.execute("SELECT trade_id, symbol FROM trades")
+            }
         trades = self.rebuild_trades(refresh_tags=refresh_tags)
         with self.connection() as conn:
-            carried = self._carry_machine_rows(conn, legs_before)
+            carried = self._carry_machine_rows(conn, legs_before, symbols_before)
         return {
             "executions_updated": updated,
             "executions_requested": len(rows),
@@ -946,28 +950,39 @@ class JournalStore:
         return legs
 
     def _carry_machine_rows(
-        self, conn: sqlite3.Connection, legs_before: dict[str, set[str]]
-    ) -> dict[str, dict[str, int]]:
+        self,
+        conn: sqlite3.Connection,
+        legs_before: dict[str, set[str]],
+        symbols_before: dict[str, str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
         """Move the MACHINE's rows onto the rebuilt trades, or leave them alone.
 
         The trader's annotations are carried by ``_rekey_annotations``; these
         three tables were not, and a re-key silently emptied them:
 
         * ``ai_trade_enrichment`` - the overnight narration the Journal page
-          shows. Re-keyed: ``list_ai_enrichment`` matches the literal id.
-        * ``note_lane_verdicts`` - derived, and ``refresh_auto_tags`` DELETEs a
-          verdict whose trade is gone, so leaving one behind loses it for good.
-          Re-keyed, unless the rebuilt trade already has one (that table is
-          keyed by trade and a machine row may not overwrite another).
-        * ``opportunity_events`` - immutable by design and NEVER rewritten. A
-          ``trade_aliases`` row is written instead, which is the documented way
-          an event reaches the trade it belongs to (``resolve_trade_id``).
+          shows, and nothing regenerates it. Re-keyed; a row that cannot be
+          mapped is LEFT where it is (never deleted) and reported.
+        * ``note_lane_verdicts`` - DERIVED, keyed by trade, and
+          ``refresh_auto_tags`` already DELETEs a verdict whose trade is gone
+          ("nothing downstream may read a row whose trade is gone"). Re-keyed
+          where it can be; where it cannot - a tie, or a rebuilt trade that
+          already carries one - the row is DROPPED under that same rule rather
+          than left to rot, and the drop is counted and printed. The note lane
+          writes it again from the trader's own note.
+        * ``opportunity_events`` - immutable by design and NEVER rewritten and
+          never deleted. A ``trade_aliases`` row is written instead, which is
+          the documented way an event reaches the trade it belongs to
+          (``resolve_trade_id``). Where the mapping is ambiguous the event stays
+          exactly as it is and is COUNTED, so an unreachable event is a number
+          on the report rather than a silence.
 
         The mapping is the same one the annotations use - largest execution
-        overlap, a tie refused - and a row whose trade cannot be mapped is left
-        exactly where it is. Counted per table so the caller can print it and
-        refuse a run that would strand more rows than it found.
+        overlap, a tie refused, never guessed. Counted per table, with the
+        symbols named, so the caller can print it and refuse a run that would
+        strand a row it did not account for.
         """
+        symbols_before = dict(symbols_before or {})
         new_by_trade = self._legs_by_trade(conn)
         live = set(new_by_trade)
         summary: dict[str, dict[str, int]] = {}
@@ -993,16 +1008,23 @@ class JournalStore:
             alias_targets[old_id] = best_id
             return best_id
 
-        for table, key_column, unique_key in (
-            ("ai_trade_enrichment", "trade_id", False),
-            ("note_lane_verdicts", "trade_id", True),
-            ("opportunity_events", "trade_id", None),
+        for table, kind in (
+            ("ai_trade_enrichment", "rekey"),
+            ("note_lane_verdicts", "derived"),
+            ("opportunity_events", "immutable"),
         ):
-            counts = {"carried": 0, "left": 0, "already_dead": 0}
+            counts: dict[str, Any] = {
+                "carried": 0,
+                "left": 0,
+                "dropped": 0,
+                "already_dead": 0,
+                "symbols": [],
+                "left_trade_ids": [],
+            }
             referenced = [
                 str(row[0])
                 for row in conn.execute(
-                    f"SELECT DISTINCT {key_column} FROM {table} WHERE COALESCE({key_column}, '') != ''"
+                    f"SELECT DISTINCT trade_id FROM {table} WHERE COALESCE(trade_id, '') != ''"
                 )
             ]
             for old_id in referenced:
@@ -1014,31 +1036,46 @@ class JournalStore:
                     counts["already_dead"] += 1
                     continue
                 new_id = _mapped(old_id)
-                if not new_id:
-                    counts["left"] += 1
+                symbol = symbols_before.get(old_id, "")
+                if new_id:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO trade_aliases(old_trade_id, new_trade_id, reason, created_at)
+                        VALUES(?, ?, ?, ?)
+                        """,
+                        (old_id, new_id, "reclassify re-key (machine rows)", _now_iso()),
+                    )
+                if kind == "immutable":
+                    # The alias IS the carry; the row itself is never touched.
+                    if new_id:
+                        counts["carried"] += 1
+                    else:
+                        counts["left"] += 1
+                        counts["left_trade_ids"].append(old_id)
+                        counts["symbols"].append(symbol or old_id)
                     continue
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO trade_aliases(old_trade_id, new_trade_id, reason, created_at)
-                    VALUES(?, ?, ?, ?)
-                    """,
-                    (old_id, new_id, "reclassify re-key (machine rows)", _now_iso()),
+                taken = (
+                    conn.execute(
+                        f"SELECT 1 FROM {table} WHERE trade_id = ?", (new_id,)
+                    ).fetchone()
+                    if new_id
+                    else None
                 )
-                if unique_key is None:
-                    # Immutable: the alias IS the carry.
+                if new_id and taken is None:
+                    conn.execute(
+                        f"UPDATE {table} SET trade_id = ? WHERE trade_id = ?", (new_id, old_id)
+                    )
                     counts["carried"] += 1
                     continue
-                if unique_key:
-                    taken = conn.execute(
-                        f"SELECT 1 FROM {table} WHERE {key_column} = ?", (new_id,)
-                    ).fetchone()
-                    if taken is not None:
-                        counts["left"] += 1
-                        continue
-                conn.execute(
-                    f"UPDATE {table} SET {key_column} = ? WHERE {key_column} = ?", (new_id, old_id)
-                )
-                counts["carried"] += 1
+                if kind == "derived":
+                    conn.execute(f"DELETE FROM {table} WHERE trade_id = ?", (old_id,))
+                    counts["dropped"] += 1
+                else:
+                    counts["left"] += 1
+                    counts["left_trade_ids"].append(old_id)
+                counts["symbols"].append(symbol or old_id)
+            counts["symbols"] = sorted(set(counts["symbols"]))
+            counts["left_trade_ids"] = sorted(set(counts["left_trade_ids"]))
             summary[table] = counts
         return summary
 
