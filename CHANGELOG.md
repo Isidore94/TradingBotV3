@@ -1868,6 +1868,49 @@ They are evidence and must not be loaded as context.
   `tests/test_ws_tm_trade_mentor.py` (36 + 3), one added in `tests/test_market_journal.py`;
   `test_qt_alert_capture`'s "nothing under the charts" pin now names the hidden card after the
   arm bar. Selftest 75 -> 80 (five reach checks).
+- **The Mentor card asks two different questions (TJ-14A item 1, 2026-09-19).** **What I see**
+  is the words (optional; a clicks-only answer's `text` stays `""`, never a synthesised
+  sentence) and **What I expect** is a forced click stored as `mentor.prediction`
+  (`mentor_prediction_v1`: direction, horizon, confidence, optional `because`), with
+  `market_journal.prediction_of` the ONE accessor - `None` for all four older live row
+  vintages, so an extracted stance is never pooled with a clicked one - and `prediction_line`
+  the ONE wording for a screen. Horizons are `rest_of_day` (every card) and `next_5_sessions`
+  (the 08:00 and 12:00 D1 cards); directions `up / down / chop / no_view` for the day and
+  `up / down / range / no_view` for the five sessions; `no_view` is complete and hides `How
+  sure`, which is otherwise forced. The gate is inside `submit()` and `read_unchanged()` as
+  well as on the buttons, an `m5_d1` card always writes both rows, drafts keep unsaved clicks,
+  `entry_id` salts a WORDLESS row so two of them cannot share an identity, and `is_publishable`
+  is relaxed for a clicked row only. **A row's `timeframe` and its prediction's `horizon`
+  always agree** (`HORIZON_FOR_TIMEFRAME`), enforced at the writer - `build_entry` raises
+  `PredictionTimeframeError` and `is_publishable` refuses - so `Read unchanged` reaffirms PER
+  TIMEFRAME from the latest read of each (the host supplies `{"M5": row, "D1": row}`, never
+  `rows[-1]`) and is unavailable, saying which timeframe is missing, rather than substituting
+  one; it now returns `{"ok", "entries": [...]}`. TJ-9's forced trade-check section is
+  unchanged and keeps its own gate. Tests: `tests/test_tj14a_mentor_prediction.py`,
+  `tests/test_tj14a_fix_round.py`, and 6 WS-TM functions gained clicks. Rule: DESK_INTERNALS
+  "TM" (2026-09-19 addendum). Gate #159's first clause.
+- **`trade_mentor_context_v2` and the internals strip (TJ-14A item 6, 2026-09-19).** 18 symbols
+  (`XLRE` added alphabetically; every existing index, SPY at 6 included, unchanged), each with
+  the day's change against the prior session's close, its place in the day's range and both
+  prior-session sides, plus a `derived` block - breadth, fear (with a divergence flag), rates,
+  oil, sector leaders and laggards on the day AND over 30 minutes, offense vs defense, and
+  sectors above VWAP as a count with its denominator - each line naming its readings and
+  `unmeasured` naming the input that is actually missing. Completed bars only; v1 rows stay
+  readable and `compact_for_ai` projects both vintages, now carrying `common.internals`, ONE
+  scalar that survives `ai_summary._bounded`'s six-level depth cut. `internals_at` is a pure
+  rebuild for any moment on the SAME builder as the live card; the thin loader
+  `internals_bars_at` reads M5 from the durable Day Review tape and D1 from the scanner's daily
+  cache, falling back to daily bars built from the prior sessions' own tape (`_TAPE_D1_LOOKBACK`
+  3, no network) for the names that cache has never held - RSP, USO and TLT, which the scan
+  universe never fetches - so a rebuild measures breadth, rates and oil while the five-session
+  and SMA20 facts stay `unmeasured` with the reason; it has no production caller until TJ-10 /
+  TJ-16. The card SHOWS the block as `MentorInternalsStrip`, worded by the pure
+  `internals_lines`, styled in `theme.qss` by object name, built from the context the service
+  already delivered (no second fetch). `day_review_bars.decided_symbols` adds the symbols to
+  the one batched post-close download - one yfinance call per FIFTY symbols, fixed base 18
+  instead of 4, so a session with more than 32 other decided names needs a second call; no D1
+  leg, zero IB. Shadow of nothing: no detector, score, alert, watchlist, Focus, review queue or
+  `review_policy.json` is reachable from it. Rule: DESK_INTERNALS "TM" (2026-09-19 addendum).
 - **The Journal's Trades splitter opens at its declared 3:2 and the tag-review row no longer
   eats the tab (WS-J1, WISHLIST item 1 leftover, 2026-09-13, sweep branch).** Two layout defects
   in `scripts/ui/panels/journal/trades_tab.py`: the `QSplitter` declared `setStretchFactor` 3:2
@@ -2957,6 +3000,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-19 (night) - TJ-14A: the Mentor card asks two different questions, and the desk reads the internals (branch `claude/tj14a-mentor-card`, tip `6808abd9`, merged into `lead/p033-integration2` `e8c04f88`)
+
+Trader, 2026-09-19: *"For trade mentor make sure we differentiate predictions from just 'describe the market and your thoughts'!"* and *"trade mentor should automatically be processing what's going on with the internals we watch. RSP VXX USO TLT and the sector ETFs."* The card now keeps **What I see** (free text, optional, `mentor.observation`) apart from **What I expect** (`mentor.prediction`, schema `mentor_prediction_v1`: direction, horizon, confidence, optional `because`). Horizons are `rest_of_day` on every card and `next_5_sessions` on the 08:00 and 12:00 D1 cards; day directions are `up / down / chop / no_view` and five-session ones `up / down / range / no_view`; `no_view` is a COMPLETE answer that hides `How sure`, which is otherwise forced (TJ-16 reads calibration BY confidence). Submit stays grey until every direction row and its `How sure` are clicked, and the gate lives INSIDE `submit()` and `read_unchanged()`, not only on the buttons. A card answered with clicks and no words is one complete row whose `text` stays `""` - never a synthesised sentence; `is_publishable` is relaxed for a clicked row only, and a wordless row's `entry_id` is salted so an `m5_d1` card's two rows differ while an entry WITH words keeps a byte-identical id. `market_journal.prediction_of` is the ONE reader and answers `None` for all four older vintages in the live ledger (69 rows: 28 with no `mentor` key, 13 `mentor == {}`, 6 without context, 22 full v1), so an extracted stance is never pooled with a clicked one; TJ-9's forced trade-check section keeps its OWN separate gate. **The review round's blocker:** `read_unchanged` after an 08:00 or 12:00 D1 card filed a D1-timeframe row carrying a `rest_of_day` call, because the host handed `rows[-1]` and the card fell back silently - permanent bad evidence in an append-only ledger. Now **a row's timeframe and its prediction's horizon ALWAYS agree** (`HORIZON_FOR_TIMEFRAME`), enforced at the WRITER (`build_entry` raises `PredictionTimeframeError`, `is_publishable` refuses), and "Read unchanged" reaffirms PER TIMEFRAME from the latest read of each (today's session only, all-or-nothing per card, the verb unavailable and the tooltip saying which timeframe is missing when there is no earlier read); a clicks-only answer is never offered for reaffirmation, because the verb restates WORDS. `trade_mentor_context_v2` gives 18 symbols (`XLRE` added alphabetically, SPY still index 6) the day's change, place in the day's range and both prior-session sides, plus a `derived` block - breadth, fear with a divergence flag, rates, oil, sector leaders and laggards on the day AND over 30 minutes, offense vs defense, and sectors above VWAP with its denominator - each line naming its inputs and `unmeasured` naming the one that is actually missing; completed bars only, v1 rows still readable, and `compact_for_ai` carries ONE scalar `common.internals` because `ai_summary._bounded` cuts six levels down and would otherwise have handed the model `"[nested content omitted]"`. ONE builder serves the live card and the pure `internals_at`; the thin `internals_bars_at` reads M5 from the durable tape and D1 from the desk's daily cache, and for RSP, USO and TLT - which have no file in `machine_cache/daily_bars` because the scan universe never fetches them - builds the prior sessions' daily bars from the tape itself (`_TAPE_D1_LOOKBACK` 3, no network, point-in-time), so a rebuild measures breadth / rates / oil while the five-session and SMA20 facts stay `unmeasured` and say why. The card SHOWS the strip (`MentorInternalsStrip`, styled in `theme.qss` by object name, no second fetch), and `day_review_bars` adds the internals symbols to its one batched post-close download - one yfinance call per FIFTY symbols, fixed base 18 instead of 4, so a session with more than 32 other decided names needs a second call; no D1 leg, zero IB. Measured: the stored Mentor row grew ~53-57% (4,462 -> ~7-8 KB, about 7 answers a day), a synthesised 21-day v2 month file reads in ~9 ms, `_previous_mentor_read` costs ~10.7 ms once per prompt on the Qt thread, the 09:00 card is 591 px tall at 520 px wide with nothing clipped, and card construct p50 went 0.60 -> 1.12 ms; three thresholds were widened with the measured number beside each (popup-context cap 6 -> 10 KB, resilience budget 3,000 -> 6,000 chars) and 6 WS-TM test functions gained clicks across 9 call sites. Recorded, not repaired: a rebuilt row's `m5_as_of` is Pacific-zoned where the live card's is Eastern (same moment - compare with `astimezone`, never the string); `read_unchanged` now returns `{"ok", "entries": [...]}`; `internals_bars_at` has no production caller until TJ-10 / TJ-16. Items 2-5 remain TJ-14B. Merged into `lead/p033-integration2`, reaching `main` after the night's AI run. Live gate #159's first clause is now readable. Long form: DESK_INTERNALS "TM" (2026-09-19 addendum).
 
 ### 2026-09-19 (night) - TJ-15: what the misses had in common - a measured D1 feature contrast, a deterministic nightly slot (branch `claude/tj15-miss-contrast`, tip `8547c4a5`, merged into `lead/p033-integration2` `fb3f55e9`, slot position fixed `1f260ffa`)
 

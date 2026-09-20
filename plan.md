@@ -162,7 +162,7 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
-| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); **TJ-3 MERGED 2026-09-19 (evening)** (`claude/tj3-note-markers` → `lead/p033-integration2` `72647104`; Day Review note markers, a mark on a bar only when it happened during it, the Alert Center's chart proven unchanged; gate #147 owed, after #146/#152's bars back-fill); **TJ-15 MERGED 2026-09-19 (night)** (`claude/tj15-miss-contrast` → `lead/p033-integration2` `fb3f55e9`, slot position fixed `1f260ffa`; the pure `evidence_contrast` with two floors, the deterministic `miss_contrast` slot inside stage 1 above the pair that closes it, D1 decisions only; gate #160 owed); TJ-4 … TJ-8 PLANNED; **TJ-11 MERGED 2026-09-19** (`claude/tj11-walkaway-v2` → `lead/p033-integration` `a89ec7d5`; walk-away v2, `REAL_MISS_V1`, the skill line, an additive `decision_session`; direction reversed the same evening by **TJ-11F MERGED 2026-09-19** (`claude/tj11f-decision-session` → `lead/p033-integration2` `f00ec302`; an after-close decision belongs to the session it JUDGED); gate #156 owed, reworded) and **TJ-13A MERGED 2026-09-19** (`claude/tj13a-night-slates` → `lead/p033-integration` `9eaae1dd`; nights only seven days, night slates, four overnight repairs; gate #158 owed); **TJ-9 … TJ-13 otherwise PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
+| 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); **TJ-3 MERGED 2026-09-19 (evening)** (`claude/tj3-note-markers` → `lead/p033-integration2` `72647104`; Day Review note markers, a mark on a bar only when it happened during it, the Alert Center's chart proven unchanged; gate #147 owed, after #146/#152's bars back-fill); **TJ-15 MERGED 2026-09-19 (night)** (`claude/tj15-miss-contrast` → `lead/p033-integration2` `fb3f55e9`, slot position fixed `1f260ffa`; the pure `evidence_contrast` with two floors, the deterministic `miss_contrast` slot inside stage 1 above the pair that closes it, D1 decisions only; gate #160 owed) and **TJ-14A MERGED 2026-09-19 (night)** (`claude/tj14a-mentor-card` → `lead/p033-integration2` `e8c04f88`; TJ-14 items 1 and 6 - the Mentor card's What I see / What I expect split with a forced prediction click, a row's timeframe and its horizon always agreeing at the WRITER, `trade_mentor_context_v2` and the internals strip; TJ-14B holds items 2-5; gate #159's first clause owed); TJ-4 … TJ-8 PLANNED; **TJ-11 MERGED 2026-09-19** (`claude/tj11-walkaway-v2` → `lead/p033-integration` `a89ec7d5`; walk-away v2, `REAL_MISS_V1`, the skill line, an additive `decision_session`; direction reversed the same evening by **TJ-11F MERGED 2026-09-19** (`claude/tj11f-decision-session` → `lead/p033-integration2` `f00ec302`; an after-close decision belongs to the session it JUDGED); gate #156 owed, reworded) and **TJ-13A MERGED 2026-09-19** (`claude/tj13a-night-slates` → `lead/p033-integration` `9eaae1dd`; nights only seven days, night slates, four overnight repairs; gate #158 owed); **TJ-9 … TJ-13 otherwise PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
@@ -1055,6 +1055,32 @@ week-story clause to TJ-13B.
 
 ##### TJ-14 — The Mentor asks for what the desk is missing, and nothing else
 
+**Items 1 and 6 BUILT and MERGED 2026-09-19 as packet TJ-14A**, branch
+`claude/tj14a-mentor-card` (tip `6808abd9`), merged `e8c04f88` into
+`lead/p033-integration2`; reaching `main` after the night's AI run. Two reviews driven
+through the real Qt slot (NO-GO, then GO). The card has two labelled parts that never share
+a field: **What I see** (`mentor.observation`, optional) and **What I expect**
+(`mentor.prediction`, `mentor_prediction_v1` — direction, horizon printed on the row, `How
+sure` forced unless `No view`, `Because…` optional). The gate is inside `submit()` and
+`read_unchanged()` as well as on the buttons; an `m5_d1` card writes both rows, words or no
+words, and a wordless row's `text` stays `""` with a salted `entry_id`.
+`market_journal.prediction_of` is the ONE accessor and returns `None` for all four live
+pre-TJ-14A vintages. **A row's timeframe and its prediction's horizon always agree**
+(`HORIZON_FOR_TIMEFRAME`), enforced at the WRITER, and `Read unchanged` reaffirms PER
+TIMEFRAME from the latest read of each — the review round found the old `rows[-1]` fallback
+filing a D1-timeframe row carrying a rest-of-day call on any day the 08:00 card was
+answered. Item 6: `trade_mentor_context_v2` adds `XLRE` (18 symbols), three day facts per
+symbol and the derived block; `internals_at` is a pure rebuild on the SAME builder as the
+live card, `internals_bars_at` its thin loader (daily cache first, then daily bars built
+from the prior sessions' own tape for RSP / USO / TLT, which that cache has never held —
+no network, and no production caller until TJ-10 / TJ-16); the card shows
+`MentorInternalsStrip`; and `day_review_bars` carries the symbols in its one batched
+post-close download — one yfinance call per fifty, fixed base 18 instead of 4, no D1 leg.
+**The lead has confirmed this vocabulary as TJ-10's and TJ-16's contract.** Items 2-5 (the
+question registry, the budget of three, the day-time fill pull, "the AI takes it from
+there") remain for **TJ-14B**. Long form: DESK_INTERNALS "TM" (2026-09-19 addendum). Live
+gate **#159**'s first clause is now readable.
+
 *Goal (trader, 2026-09-19):* *"We don't need to run every question every hour but if we need
 more data make trade mentor ask me for it. I'm happy to click boxes or give my responses
 but then I expect the AI to take it from there."*
@@ -1151,9 +1177,20 @@ asking this` retires one subject only; a same-session label carries `same_sessio
 asks nothing; a failed pull leaves the card on time; the quick-like follow-up writes a link
 and no tag.
 
-Live gate **#159**: an ordinary hourly card is one click; on a day with a new fill the next
-card asks its setup and stop; a trade from nowhere is asked its origin once; nothing is
-asked twice after `Stop asking this`.
+Live gate **#159** — first clause (TJ-14A, readable on the trader's next desk session):
+every Mentor card comes up with a direction row whose horizon is printed on it, Submit
+stays grey until that row AND `How sure` are clicked (and goes green at once on `No view`),
+the 08:00 and 12:00 cards show both rows and file two entries, a card answered with clicks
+and no words files a row whose `text` is empty and whose `mentor.prediction` holds the
+call, `Read unchanged` refuses until this hour's call is clicked and — on the card after an
+answered 08:00 — files an **M5** row with the M5 words and the M5 call, never a D1 row
+carrying a rest-of-day one, and the internals strip above **What I see** prints breadth /
+fear / rates / oil / leaders / laggards / offense-defense / sectors-above-VWAP with
+`unmeasured` said out loud, with no second context read and no new stall in the hourly
+popup. Day Review the next morning shows the call where a wordless answer's words would
+have been. Rest of the gate (TJ-14B): an ordinary hourly card is one click; on a day with a
+new fill the next card asks its setup and stop; a trade from nowhere is asked its origin
+once; nothing is asked twice after `Stop asking this`.
 
 ##### TJ-15 — What the misses had in common (no model, no chart pictures)
 
@@ -1314,7 +1351,7 @@ full suite with the nightly AI lock free, ruff, smoke, selftest, and reconciles 
 |---|---|---|---|
 | 1 | **TJ-9 MERGED 2026-09-19** (`TJ-9.md`, merged `8077a758`; item 7 -> `TJ-9Q.md`, not started) · **TJ-11 MERGED 2026-09-19** (`TJ-11.md`) · **TJ-13A MERGED 2026-09-19** (`TJ-13A.md`) | `claude/tj9-forced-trade-labels` · `claude/tj11-walkaway-v2` (merged `a89ec7d5`) · `claude/tj13a-night-slates` (merged `9eaae1dd`), both into `lead/p033-integration` | `main` |
 | 1F | **TJ-11F MERGED 2026-09-19 (evening)** - trader reversal of TJ-11 item 5: an after-close, weekend or holiday decision belongs to the session it JUDGED | `claude/tj11f-decision-session` (tip `67143e3e`, merged `f00ec302` into `lead/p033-integration2`) | TJ-11 |
-| 2 | TJ-14A (`TJ-14A.md`) · **TJ-3 MERGED 2026-09-19 (evening)** (`TJ-3.md`) · **TJ-15 MERGED 2026-09-19 (night)** (`TJ-15-16.md`) | `claude/tj14a-mentor-card` · `claude/tj3-note-markers` (tip `58ee11f4`, merged `72647104` into `lead/p033-integration2`) · `claude/tj15-miss-contrast` (tip `8547c4a5`, merged `fb3f55e9`, slot position fixed `1f260ffa`) | TJ-9 · TJ-11 ✓ · TJ-11 ✓ |
+| 2 | **TJ-14A MERGED 2026-09-19 (night)** (`TJ-14A.md`) · **TJ-3 MERGED 2026-09-19 (evening)** (`TJ-3.md`) · **TJ-15 MERGED 2026-09-19 (night)** (`TJ-15-16.md`) — wave 2 complete | `claude/tj14a-mentor-card` (tip `6808abd9`, merged `e8c04f88`) · `claude/tj3-note-markers` (tip `58ee11f4`, merged `72647104` into `lead/p033-integration2`) · `claude/tj15-miss-contrast` (tip `8547c4a5`, merged `fb3f55e9`, slot position fixed `1f260ffa`) | TJ-9 · TJ-11 ✓ · TJ-11 ✓ |
 | 3 | TJ-14B (`TJ-14B.md`) · TJ-10 (`TJ-10.md`) | `claude/tj14b-mentor-questions` · `claude/tj10-read-grader` | TJ-14A (TJ-10 also rebases on TJ-3's page edits) |
 | 4 | TJ-4 (`TJ-4.md`) · TJ-16 (`TJ-15-16.md`) · TJ-13B (`TJ-5-6-7-13B.md`) | `claude/tj4-day-story` · `claude/tj16-prediction-contrast` · `claude/tj13b-large-local` | TJ-10, TJ-11 · TJ-10, TJ-14A, TJ-15 · TJ-13A |
 | 5 | TJ-12 (`TJ-12.md`) | `claude/tj12-report-card` | TJ-9, TJ-10, TJ-11, TJ-4 |
@@ -1333,7 +1370,7 @@ TJ-10 → TJ-4 → TJ-12), `ui/widgets/trade_mentor_card.py` (TJ-9 → TJ-14A �
 | — | TJ-1L | Day Review in two columns (MERGED; verified an ancestor of `main` 2026-09-19) | TJ-1 | #145 |
 | 1 | TJ-9 | **MERGED 2026-09-19** (item 7 split into TJ-9Q, not started) - yesterday's trades labelled at 09:00, forced; label provenance; planned vs unplanned; journal freshness | — | #154 |
 | — | *restart* | NOT a hold any more (superseded above): the trader restarts when the build is merged and the gates are read then | — | #145 #152 #153 |
-| 2 | TJ-14 | Mentor card split (What I see / What I expect), question registry with consumers, budget of three, same-session fills, internals v2 | TJ-9 | #159 |
+| 2 | TJ-14 | **TJ-14A MERGED 2026-09-19 (night)** - items 1 and 6: the card split (What I see / What I expect) with a forced prediction click, timeframe-horizon agreement enforced at the writer, `trade_mentor_context_v2` and the internals strip. TJ-14B remains: the question registry with consumers, the budget of three, same-session fills, "the AI takes it from there" | TJ-9 | #159 |
 | 3 | TJ-10 | Read grader on the clicked prediction (+ context snapshot), congruence lines | TJ-14 | #155 |
 | 4 | TJ-11 | **MERGED 2026-09-19** - walk-away v2: earlier calls, against-first, ATR, real-miss rule, skill line vs base rate, instrument-aware rows, ADDITIVE session stamp | TJ-2 | #156 |
 | 4F | TJ-11F | **MERGED 2026-09-19 (evening)** - an after-close decision belongs to the session it JUDGED; `decision_session_rule: "judged_session_v2"`; the D1 ruler starts from the judged session's close | TJ-11 | #156 |
