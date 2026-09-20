@@ -56,6 +56,45 @@ _AA_RESTORE_MS = 150
 # the second line and the pinned label keeps the first.
 _EARNINGS_GLYPH_FRACTION = 0.075
 _EARNINGS_RIBBON_FRACTION = 0.10
+# The note ribbon (TJ-3) sits on the THIRD line, under the earnings one, so a
+# chart showing both never draws an E through a note glyph. It reserves no
+# headroom of its own: markers are drawn inside whatever range the candles
+# produced, exactly like the paint lines.
+_NOTE_GLYPH_FRACTION = 0.17
+_NOTE_RIBBON_FRACTION = 0.20
+# How close a click has to land, in screen pixels, to count as hitting a note
+# marker. Wider than a level's because the target is a small glyph rather than a
+# line that runs the width of the chart.
+NOTE_MARKER_HIT_TOLERANCE_PX = 12.0
+# What each marker kind draws. One short glyph per family, in ASCII: the desk
+# theme sizes fonts in px and a glyph the font cannot render is a box. An
+# unknown kind still draws - a marker that is silently dropped would be the
+# trader's own words disappearing.
+NOTE_MARKER_GLYPHS: dict[str, str] = {
+    "note": "N",
+    "mentor": "M",
+    "prediction": "M!",
+    "forecast": "F",
+    "like": "+",
+    "pass": "~",
+    "veto": "X",
+    "click_away": "/",
+    "claim": "C",
+    "trade_open": "^",
+    "trade_close": "v",
+}
+#: The theme role each family is drawn in. A refusal reads in the short role, an
+#: endorsement in the long one, and the trader's own words stay neutral.
+NOTE_MARKER_COLORS: dict[str, str] = {
+    "veto": "short",
+    "pass": "short",
+    "click_away": "short",
+    "like": "long",
+    "claim": "long",
+    "trade_open": "long",
+    "trade_close": "short",
+}
+_NOTE_MARKER_DEFAULT_COLOR = "text_primary"
 # A log axis is undefined at or below zero. Prices are positive in practice
 # (CandleChart falls back to linear if they are not), so this floor only keeps
 # a bad cache row from raising mid-render.
@@ -490,6 +529,12 @@ class EarningsDropLines(pg.GraphicsObject):
     of bars: the loop is over ~4-12 items and costs nothing worth optimising.
     """
 
+    #: Where THIS family's ribbon line sits, as a fraction of the view height
+    #: measured down from the top. A class attribute rather than the module
+    #: constant so a second family (TJ-3's note markers) can take its own line
+    #: without a second copy of the geometry; the earnings value is unchanged.
+    RIBBON_FRACTION = _EARNINGS_RIBBON_FRACTION
+
     def __init__(self) -> None:
         super().__init__()
         self._marks: list[tuple[int, float]] = []  # (bar index, candle high)
@@ -514,7 +559,7 @@ class EarningsDropLines(pg.GraphicsObject):
         span = float(y_max) - float(y_min)
         if span <= 0:
             return None
-        return float(y_min), float(y_max) - span * _EARNINGS_RIBBON_FRACTION
+        return float(y_min), float(y_max) - span * self.RIBBON_FRACTION
 
     def _render(self) -> None:
         self._picture = QPicture()
@@ -561,6 +606,21 @@ class EarningsDropLines(pg.GraphicsObject):
         self.update()
 
 
+class NoteMarkers(EarningsDropLines):
+    """The connectors joining each note glyph to the candle it marks (TJ-3).
+
+    The same geometry the earnings ribbon draws, one line lower: the glyphs are
+    pooled `TextItem`s on the chart (text has to be drawn in SCREEN space to stay
+    legible) and the connectors are geometry, so they live in one item here.
+
+    Like every other overlay on this chart it is added with ``ignoreBounds`` and
+    never gets a vote in the price range: the scale comes from the candles, so a
+    marker can only ever be drawn inside the range the candles produced.
+    """
+
+    RIBBON_FRACTION = _NOTE_RIBBON_FRACTION
+
+
 class CandleChart(pg.PlotWidget):
     """Candles + overlay lines; y-range follows the candles (overlays clip).
 
@@ -581,6 +641,11 @@ class CandleChart(pg.PlotWidget):
     # nearby. Emitted in addition to barClicked/priceClicked, never instead:
     # a click on a level is still a click on the chart.
     levelSelected = Signal(str, str, float)
+    # The `ref_id` of a note marker a left click landed on (TJ-3): the id the
+    # PAGE selects with - a journal entry's `entry_id`, a trade's `trade_id`.
+    # Emitted in addition to barClicked/priceClicked, never instead: a click on
+    # a marker is still a click on the chart.
+    markerClicked = Signal(str)
 
     def __init__(self, parent=None, *, log_y: bool = True) -> None:
         self._price_axis = PriceAxis(orientation="left")
@@ -631,6 +696,16 @@ class CandleChart(pg.PlotWidget):
         self._earnings_lines = EarningsDropLines()
         plot.addItem(self._earnings_lines, ignoreBounds=True)
         self._earnings_text_items: list[pg.TextItem] = []
+        # Note markers (TJ-3). Built on the FIRST payload and not before: this
+        # widget is the live desk's Alert Center chart too, and a chart nobody
+        # hands markers to must pay nothing for them - no scene item, no range
+        # connection, no work on any paint. `_note_marker_lines` is the
+        # built/not-built sentinel.
+        self._note_markers: list[dict] = []
+        self._note_marker_lines: NoteMarkers | None = None
+        self._note_marker_items: list[pg.TextItem] = []
+        #: What is drawn right now, in pool order: [(bar index, marker dict)].
+        self._drawn_note_markers: list[tuple[int, dict]] = []
         self._earnings_projection: pg.TextItem | None = None
         self._bad_bar_note: pg.TextItem | None = None
         plot.vb.sigRangeChanged.connect(self._position_earnings_glyphs)
@@ -793,6 +868,164 @@ class CandleChart(pg.PlotWidget):
         # anchor=(1, 0) is the label's top-RIGHT, so this is the inset corner.
         self._earnings_projection.setPos(max(0.0, view.width() - 6.0), 4.0)
 
+    # ------------------------------------------------------------------
+    # note markers (TJ-3)
+    # ------------------------------------------------------------------
+    def set_note_markers(self, markers=()) -> None:
+        """Draw the marker payload `day_review_markers` built on the worker.
+
+        Each entry is ``{stamp, index, kind, label, ref_id}``. This DRAWS and
+        reads nothing: the index was resolved against the same bars the caller
+        handed :meth:`set_data`, so the paint path holds no builder, no store and
+        no clock.
+
+        A marker with no index, or one pointing past the end of the drawn tape,
+        is dropped rather than parked at bar zero. :meth:`set_data` clears the
+        payload, because new bars mean every index in it names a different
+        moment - push the markers again after the bars.
+        """
+        kept: list[dict] = []
+        for marker in markers or ():
+            try:
+                kept.append(dict(marker))
+            except (TypeError, ValueError):
+                continue
+        self._note_markers = kept
+        self._sync_note_markers()
+
+    def note_marker_count(self) -> int:
+        """How many marker glyphs are actually drawn."""
+        return sum(1 for item in self._note_marker_items if item.isVisible())
+
+    def note_marker_position(self, ref_id: str) -> tuple[float, float] | None:
+        """Where that marker's glyph sits, in the view's own coordinates.
+
+        ``None`` when it is not drawn. What a hit test - and a test - needs to
+        find a glyph without guessing where the ribbon is.
+
+        Matched on the payload's ``marker_id`` FIRST and its ``ref_id`` second,
+        because a trade's two legs share one `trade_id`: asked for the address
+        (`t-42:out`) this reaches the exit glyph, and asked for the selector
+        (`t-42`) it answers with the first leg drawn, as it always did.
+        """
+        wanted = str(ref_id or "")
+        if not wanted:
+            return None
+        for field in ("marker_id", "ref_id"):
+            for position, (_index, marker) in enumerate(self._drawn_note_markers):
+                if str(marker.get(field) or "") != wanted:
+                    continue
+                if position >= len(self._note_marker_items):
+                    return None
+                point = self._note_marker_items[position].pos()
+                return (float(point.x()), float(point.y()))
+        return None
+
+    def _placed_note_markers(self) -> list[tuple[int, dict]]:
+        """The markers that name a bar this chart is actually drawing."""
+        placed: list[tuple[int, dict]] = []
+        for marker in self._note_markers:
+            index = marker.get("index")
+            if isinstance(index, bool) or index is None:
+                continue
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(self._bars):
+                placed.append((index, marker))
+        return placed
+
+    def _sync_note_markers(self) -> None:
+        """Feed the payload into the pooled glyphs (hidden, never destroyed)."""
+        placed = self._placed_note_markers()
+        if not placed and self._note_marker_lines is None:
+            # Nothing drawn and nothing built: an unmarked chart never grows a
+            # scene item for a family it does not use.
+            self._drawn_note_markers = []
+            return
+        if self._note_marker_lines is None:
+            self._note_marker_lines = NoteMarkers()
+            self.getPlotItem().addItem(self._note_marker_lines, ignoreBounds=True)
+            self.getPlotItem().vb.sigRangeChanged.connect(self._position_note_glyphs)
+        marks = [(index, self._y(self._bars[index]["high"])) for index, _marker in placed]
+        self._note_marker_lines.set_marks(marks)
+        self._note_marker_lines.setVisible(bool(marks))
+        while len(self._note_marker_items) < len(placed):
+            item = pg.TextItem("", anchor=(0.5, 0.5))
+            item.setZValue(21)
+            self.getPlotItem().addItem(item, ignoreBounds=True)
+            self._note_marker_items.append(item)
+        for position, item in enumerate(self._note_marker_items):
+            if position >= len(placed):
+                item.setVisible(False)
+                continue
+            marker = placed[position][1]
+            kind = str(marker.get("kind") or "")
+            item.setText(
+                NOTE_MARKER_GLYPHS.get(kind, "•"),
+                color=theme.color(
+                    NOTE_MARKER_COLORS.get(kind, _NOTE_MARKER_DEFAULT_COLOR)
+                ),
+            )
+            item.setToolTip(str(marker.get("label") or kind))
+            item.setVisible(True)
+        self._drawn_note_markers = placed
+        self._position_note_glyphs()
+
+    def _position_note_glyphs(self, *_args) -> None:
+        """Park every glyph on the note ribbon at the top of the CURRENT view."""
+        if not self._drawn_note_markers:
+            return
+        try:
+            (_x_min, _x_max), (y_min, y_max) = self.getPlotItem().vb.viewRange()
+        except Exception:
+            return
+        span = float(y_max) - float(y_min)
+        ribbon = float(y_max) - span * _NOTE_GLYPH_FRACTION
+        for position, (index, _marker) in enumerate(self._drawn_note_markers):
+            if position >= len(self._note_marker_items):
+                break
+            self._note_marker_items[position].setPos(float(index), ribbon)
+
+    def note_marker_at(
+        self, view_x: float, view_y: float, *, tolerance_px: float = NOTE_MARKER_HIT_TOLERANCE_PX
+    ) -> dict | None:
+        """The drawn marker nearest that point, within tolerance. In PIXELS.
+
+        Pixels because the trader is aiming with a cursor: the x axis counts
+        bars and the y axis is log price, and no single distance in data space
+        means the same thing on both.
+        """
+        if not self._drawn_note_markers:
+            return None
+        try:
+            pixel_width, pixel_height = self.getPlotItem().vb.viewPixelSize()
+        except Exception:
+            return None
+        pixel_width, pixel_height = float(pixel_width), float(pixel_height)
+        if not (math.isfinite(pixel_width) and math.isfinite(pixel_height)):
+            return None
+        if pixel_width <= 0 or pixel_height <= 0:
+            return None
+        best = None
+        best_distance = float(tolerance_px)
+        for position, (_index, marker) in enumerate(self._drawn_note_markers):
+            if position >= len(self._note_marker_items):
+                break
+            item = self._note_marker_items[position]
+            if not item.isVisible():
+                continue
+            point = item.pos()
+            distance = math.hypot(
+                (float(view_x) - float(point.x())) / pixel_width,
+                (float(view_y) - float(point.y())) / pixel_height,
+            )
+            if distance <= best_distance:
+                best_distance = distance
+                best = marker
+        return dict(best) if best is not None else None
+
     def bar_defects(self) -> list[bar_integrity.BarDefect]:
         """Malformed bars in the drawn series - empty on a healthy chart.
 
@@ -881,6 +1114,10 @@ class CandleChart(pg.PlotWidget):
         behaviour of framing the whole payload.
         """
         self._bars = [dict(bar) for bar in bars or []]
+        # New bars are a new tape, so every index in a marker payload built
+        # against the old one names a different moment. The host pushes the
+        # markers again after the bars (TJ-3).
+        self._note_markers = []
         self._set_crosshair_visible(False)
         # Retained so a log/linear toggle can re-render without the caller
         # having to re-fetch the snapshot.
@@ -893,6 +1130,7 @@ class CandleChart(pg.PlotWidget):
             self._sync_overlays(0)
             self._sync_volume()
             self._sync_earnings()
+            self._sync_note_markers()
             self._sync_bad_bar_note()
             self._push_levels()  # nothing to hang a level on; hide them all
             return
@@ -950,6 +1188,7 @@ class CandleChart(pg.PlotWidget):
             )
         self._sync_volume()
         self._sync_earnings()
+        self._sync_note_markers()
         self._sync_bad_bar_note()
         # Levels last: a log/linear flip or a bar change moves where they sit.
         self._push_levels()
@@ -1447,11 +1686,13 @@ class CandleChart(pg.PlotWidget):
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton and self._bars:
             price = None
+            view_x = None
             view_y = None
             try:
                 scene_pos = self.mapToScene(event.position().toPoint())
                 view_pos = self.getPlotItem().vb.mapSceneToView(scene_pos)
                 index = int(round(view_pos.x()))
+                view_x = view_pos.x()
                 view_y = view_pos.y()
                 # The view is in log space when log scaling is on, and this
                 # price arms a real level - map it back before it escapes.
@@ -1464,6 +1705,13 @@ class CandleChart(pg.PlotWidget):
                     self.priceClicked.emit(index, price)
                 if view_y is not None:
                     self._select_level_at(index, view_y)
+                    # A note marker is the LAST thing asked, and it takes
+                    # nothing away: the bar, the price and the level have
+                    # already been announced (TJ-3).
+                    if view_x is not None and self._drawn_note_markers:
+                        hit = self.note_marker_at(view_x, view_y)
+                        if hit is not None:
+                            self.markerClicked.emit(str(hit.get("ref_id") or ""))
         super().mousePressEvent(event)
 
     def _select_level_at(self, index: int, view_y: float) -> None:
