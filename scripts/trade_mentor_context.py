@@ -14,16 +14,45 @@ from typing import Any, Mapping, Sequence
 from market_calendar import MARKET_TZ, is_session, previous_session
 from market_early_close import session_close
 
+#: TJ-14A item 4. `XLRE` joined the list because the desk's own sector map
+#: (`group_rrs.SECTOR_ETFS`) has always carried eleven SPDRs while this context
+#: carried ten - a trader reading the strip saw a hole where real estate should
+#: be. The order stays alphabetical inside the sector block, so `SPY` keeps its
+#: place and every existing positional reader is untouched.
 SYMBOLS = (
     "VXX", "RSP", "USO", "TLT", "IWM", "QQQ", "SPY", "XLB", "XLC",
-    "XLE", "XLF", "XLI", "XLK", "XLP", "XLU", "XLV", "XLY",
+    "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY",
 )
+
+#: The eleven SPDR sector funds, in the order the derived lines rank them by
+#: name when two of them are exactly tied.
+SECTORS = ("XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY")
+#: Offense against defense - the read the trader used to type by hand.
+OFFENSE = ("XLK", "XLY", "XLC")
+DEFENSE = ("XLP", "XLU", "XLV")
+
+SCHEMA_V1 = "trade_mentor_context_v1"
+SCHEMA = "trade_mentor_context_v2"
+
+#: How many names a leader / laggard list carries.
+_RANK_DEPTH = 3
 
 _M5_KEYS = (
     "symbol", "m5_status", "m5_reason", "m5_as_of", "m5_change_30m_pct",
     "m5_direction", "m5_vs_session_vwap", "d1_status", "d1_reason", "d1_as_of",
     "d1_change_5d_pct", "d1_vs_sma20",
 )
+#: v2 adds four facts per symbol. They are appended, never interleaved, so a
+#: reader that walks `_M5_KEYS` positionally keeps reading the same columns.
+_DAY_KEYS = ("day_change_pct", "day_range_place", "vs_prior_high", "vs_prior_low")
+_V2_KEYS = _M5_KEYS + _DAY_KEYS
+
+#: Every derived line, in the order the card prints them.
+DERIVED_LINES = (
+    "breadth", "fear", "rates", "oil", "sector_leaders", "sector_laggards",
+    "offense_vs_defense", "sectors_above_vwap",
+)
+
 _OPEN = time(9, 30)
 
 
@@ -35,6 +64,11 @@ def _blank(symbol: str) -> dict[str, Any]:
         "m5_vs_session_vwap": None, "d1_status": "unavailable",
         "d1_reason": "no usable D1 bars", "d1_as_of": None,
         "d1_change_5d_pct": None, "d1_vs_sma20": None,
+        # v2. Present and empty when they cannot be measured, never absent:
+        # "not measured" and "the key did not exist yet" are two different
+        # absences and a later reader must be able to tell them apart.
+        "day_change_pct": None, "day_range_place": None,
+        "vs_prior_high": None, "vs_prior_low": None,
     }
 
 
@@ -239,35 +273,277 @@ def _d1_reading(row: dict[str, Any], bars: Sequence[Any], now: datetime) -> None
     )
 
 
+def _day_reading(row: dict[str, Any], m5_bars: Sequence[Any], d1_bars: Sequence[Any], now: datetime) -> None:
+    """TJ-14A item 4: the day's change, the place in its range, the two sides.
+
+    Measured from COMPLETED bars only, exactly like the two readings above it.
+    The day's change is read against the PRIOR SESSION'S CLOSE rather than this
+    session's open, because "up on the day" is what a trader means by it and an
+    opening gap is part of the move; the prior high and low come from the same
+    completed daily bar, so all three facts rest on one session.
+    """
+    valid, reason = _valid_m5(m5_bars, now)
+    if reason or not valid:
+        return
+    last = valid[-1]
+    session_day = last["market_dt"].date()
+    today = [bar for bar in valid if bar["market_dt"].date() == session_day]
+    high = max(bar["high"] for bar in today)
+    low = min(bar["low"] for bar in today)
+    if high > low:
+        # A fraction of ONE, so it is rounded far finer than the percentages
+        # above it: ten places keep the stored row small without rounding a
+        # place in the range into a different place in the range.
+        row["day_range_place"] = round(
+            min(1.0, max(0.0, (last["close"] - low) / (high - low))), 10
+        )
+    daily, d1_reason = _valid_d1(d1_bars, now)
+    if d1_reason:
+        return
+    prior = [bar for bar in daily if bar["day"] < session_day]
+    if not prior:
+        return
+    previous = prior[-1]
+    if previous["close"] > 0:
+        row["day_change_pct"] = round(
+            (last["close"] - previous["close"]) / previous["close"] * 100.0, 6
+        )
+    row["vs_prior_high"] = _side(last["close"], previous["high"])
+    row["vs_prior_low"] = _side(last["close"], previous["low"])
+
+
+def _side(value: float, level: float) -> str:
+    return "above" if value > level else "below" if value < level else "at"
+
+
+def _direction(value: float) -> str:
+    return "up" if value > 0 else "down" if value < 0 else "flat"
+
+
+def _line(inputs: Sequence[str], missing: Sequence[str], **extra: Any) -> dict[str, Any]:
+    """One derived line, which always NAMES the readings it rests on.
+
+    A missing input makes THIS line `unmeasured` and says which reading was
+    absent; it never poisons a line that rests on other readings, and it is
+    never a zero (plan.md §5: missing data is uncertainty).
+    """
+    row: dict[str, Any] = {
+        "status": "unmeasured" if missing else "measured",
+        "inputs": [str(name) for name in inputs],
+        "reason": (
+            "no completed day reading for " + ", ".join(sorted(set(missing)))
+            if missing
+            else ""
+        ),
+        "value": None,
+    }
+    if missing:
+        for key in extra:
+            row[key] = None
+        return row
+    row.update(extra)
+    return row
+
+
+def _derived_block(readings: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The reads the trader used to type out by hand, measured once.
+
+    Nothing here is a score, a signal or a threshold: every line is a stated
+    number with the readings it came from, printed on the card and stored on
+    the row. A line is `measured` only when every reading it names could speak.
+    """
+    by_symbol = {str(row.get("symbol") or ""): row for row in readings}
+
+    def day(symbol: str) -> float | None:
+        row = by_symbol.get(symbol)
+        return _number(row.get("day_change_pct")) if row else None
+
+    def m30(symbol: str) -> float | None:
+        row = by_symbol.get(symbol)
+        return _number(row.get("m5_change_30m_pct")) if row else None
+
+    def missing_day(names: Sequence[str]) -> list[str]:
+        return [name for name in names if day(name) is None]
+
+    block: dict[str, dict[str, Any]] = {}
+
+    pair = ("RSP", "SPY")
+    absent = missing_day(pair)
+    block["breadth"] = _line(pair, absent)
+    if not absent:
+        block["breadth"]["value"] = round(day("RSP") - day("SPY"), 6)
+
+    fear_inputs = ("VXX", "SPY")
+    absent = missing_day(fear_inputs)
+    block["fear"] = _line(
+        fear_inputs, absent, vxx_direction=None, spy_direction=None, divergence=None
+    )
+    if not absent:
+        vxx, spy = day("VXX"), day("SPY")
+        block["fear"].update(
+            vxx_direction=_direction(vxx),
+            spy_direction=_direction(spy),
+            # Both up or both down is the day the trader would have written out:
+            # the hedge and the index are saying the same thing, which they
+            # normally do not.
+            divergence=bool((vxx > 0 and spy > 0) or (vxx < 0 and spy < 0)),
+        )
+
+    for name, symbol in (("rates", "TLT"), ("oil", "USO")):
+        absent = missing_day((symbol,))
+        block[name] = _line((symbol,), absent)
+        if not absent:
+            block[name]["value"] = day(symbol)
+
+    absent = sorted(set(missing_day(SECTORS)) | {name for name in SECTORS if m30(name) is None})
+    leaders = _line(SECTORS, absent, day=None, m30=None)
+    laggards = _line(SECTORS, absent, day=None, m30=None)
+    if not absent:
+        # TWO rankings, never one list read twice: a sector can lead the day
+        # while it is falling over the last half hour, and that disagreement is
+        # the whole point of printing both.
+        by_day = sorted(SECTORS, key=lambda name: (-day(name), name))
+        by_m30 = sorted(SECTORS, key=lambda name: (-m30(name), name))
+        leaders.update(day=by_day[:_RANK_DEPTH], m30=by_m30[:_RANK_DEPTH])
+        # Worst first, so a reader can stop after one name. It is the REVERSE
+        # of the leader order, so a tie breaks the same way at both ends.
+        laggards.update(
+            day=list(reversed(by_day))[:_RANK_DEPTH],
+            m30=list(reversed(by_m30))[:_RANK_DEPTH],
+        )
+    block["sector_leaders"] = leaders
+    block["sector_laggards"] = laggards
+
+    battle = OFFENSE + DEFENSE
+    absent = missing_day(battle)
+    block["offense_vs_defense"] = _line(battle, absent)
+    if not absent:
+        offense = sum(day(name) for name in OFFENSE) / len(OFFENSE)
+        defense = sum(day(name) for name in DEFENSE) / len(DEFENSE)
+        block["offense_vs_defense"]["value"] = round(offense - defense, 6)
+
+    vwap_absent = [
+        name
+        for name in SECTORS
+        if str((by_symbol.get(name) or {}).get("m5_vs_session_vwap") or "") not in ("above", "below", "at")
+    ]
+    above = _line(SECTORS, vwap_absent, count=None, denominator=None)
+    if not vwap_absent:
+        # A COUNT WITH ITS DENOMINATOR, never a bare number: "nine" means
+        # nothing without "of eleven".
+        above.update(
+            count=sum(
+                1
+                for name in SECTORS
+                if str(by_symbol[name].get("m5_vs_session_vwap") or "") == "above"
+            ),
+            denominator=len(SECTORS),
+        )
+    block["sectors_above_vwap"] = above
+    return block
+
+
+_RULES = {
+    "m5": "completed regular-session 30-minute change",
+    "d1": "completed-session five-day change and SMA20",
+    "day": "completed regular-session change from the prior session's close, place in the day's range, and the two prior-session sides",
+}
+
+
 def build_context(*, now: datetime, m5_bars: Mapping[str, Sequence[Any]], d1_bars: Mapping[str, Sequence[Any]], sources: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Build the bounded, JSON-safe snapshot attached to one journal read."""
+    """Build the bounded, JSON-safe snapshot attached to one journal read.
+
+    THE one builder: the live card and :func:`internals_at`'s rebuild from the
+    durable tape both come through here, because two implementations of the
+    same reading drift on the first rounding decision.
+    """
     moment = _market_now(now)
     readings: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
         reading = _blank(symbol)
-        _m5_reading(reading, (m5_bars or {}).get(symbol, ()), moment)
-        _d1_reading(reading, (d1_bars or {}).get(symbol, ()), moment)
+        m5 = (m5_bars or {}).get(symbol, ())
+        d1 = (d1_bars or {}).get(symbol, ())
+        _m5_reading(reading, m5, moment)
+        _d1_reading(reading, d1, moment)
+        _day_reading(reading, m5, d1, moment)
         readings.append(reading)
     return {
-        "schema": "trade_mentor_context_v1",
+        "schema": SCHEMA,
         "captured_at": now.isoformat(),
         "availability": "available",
         "reason": "",
-        "rules": {"m5": "completed regular-session 30-minute change", "d1": "completed-session five-day change and SMA20"},
+        "rules": dict(_RULES),
         "sources": dict(sources or {"m5": "unknown", "d1": "unknown"}),
         "readings": readings,
+        "derived": _derived_block(readings),
     }
 
 
 def unavailable_context(*, now: datetime, reason: str) -> dict[str, Any]:
     """An explicit all-symbol absence, used when a note wins a slow fetch."""
+    readings = [_blank(symbol) for symbol in SYMBOLS]
     return {
-        "schema": "trade_mentor_context_v1", "captured_at": now.isoformat(),
+        "schema": SCHEMA, "captured_at": now.isoformat(),
         "availability": "unavailable", "reason": str(reason),
-        "rules": {"m5": "completed regular-session 30-minute change", "d1": "completed-session five-day change and SMA20"},
+        "rules": dict(_RULES),
         "sources": {"m5": "unavailable", "d1": "unavailable"},
-        "readings": [_blank(symbol) for symbol in SYMBOLS],
+        "readings": readings,
+        "derived": _derived_block(readings),
     }
+
+
+def internals_at(session: Any, stamp: datetime, bars: Mapping[str, Any]) -> dict[str, Any]:
+    """The same block, for any moment, from bars the caller supplies.
+
+    PURE. It takes its bars as an argument (`{"m5": ..., "d1": ...}`) so a
+    rebuild of a skipped hour, a note typed on the desk tab and a prediction's
+    own context snapshot all read ONE function - and so this module still
+    fetches nothing. :func:`internals_bars_at` is the thin loader beside it.
+    """
+    payload = bars or {}
+    context = build_context(
+        now=stamp,
+        m5_bars=payload.get("m5") or {},
+        d1_bars=payload.get("d1") or {},
+        sources=payload.get("sources") or {"m5": "rebuilt", "d1": "rebuilt"},
+    )
+    # Says what it is. The readings and the derived block are byte-identical to
+    # what the live card would have shown on the same bars; this key only
+    # records which session was asked for.
+    context["rebuilt_for_session"] = str(session or "")[:10]
+    return context
+
+
+def internals_bars_at(session: Any, stamp: datetime) -> dict[str, Any]:
+    """Read the bars :func:`internals_at` needs, cut point-in-time.
+
+    The thin loader, and the only part of this module that touches a store. M5
+    comes from TJ-2A's durable session tape (which is why `day_review_bars`
+    downloads these symbols); D1 comes from the SAME daily cache the live
+    context service already reads. Both are cut to completed observations at or
+    before `stamp` by the builder itself, so no caller can widen the cut. A
+    symbol with nothing there has its facts `unmeasured`, never guessed.
+    """
+    day = str(session or "")[:10]
+    m5: dict[str, Any] = {}
+    try:
+        from day_review_bars import read_session_bars
+
+        tape = read_session_bars(day) or {}
+        m5 = {symbol: tape.get(symbol) or [] for symbol in SYMBOLS if tape.get(symbol)}
+    except Exception:  # noqa: BLE001 - a missing tape is unmeasured, never an error
+        m5 = {}
+    d1: dict[str, Any] = {}
+    try:
+        from d1_environment_store import _cached_daily_bars
+
+        for symbol in SYMBOLS:
+            rows = _cached_daily_bars(symbol)
+            if rows:
+                d1[symbol] = rows
+    except Exception:  # noqa: BLE001
+        d1 = {}
+    return {"m5": m5, "d1": d1, "sources": {"m5": "day_review_tape", "d1": "daily_cache"}}
 
 
 def compact_for_ai(context: Any) -> Any:
@@ -276,11 +552,13 @@ def compact_for_ai(context: Any) -> Any:
     Stored journal rows keep their ordinary, independently readable shape.  This
     projection is only for the existing bounded AI evidence package.
     """
-    if not isinstance(context, Mapping) or context.get("schema") != "trade_mentor_context_v1":
+    schema = str((context or {}).get("schema") or "") if isinstance(context, Mapping) else ""
+    if schema not in (SCHEMA_V1, SCHEMA):
         return context
     readings = context.get("readings")
     if not isinstance(readings, list) or not all(isinstance(row, Mapping) for row in readings):
         return context
+    keys = _V2_KEYS if schema == SCHEMA else _M5_KEYS
     # The evidence source keeps this under ``mentor.context_compact``.  The
     # durable journal's full ``mentor.context`` remains untouched.  Values
     # shared by every symbol move into ``common`` so the journal source can
@@ -289,8 +567,20 @@ def compact_for_ai(context: Any) -> Any:
         key: context.get(key)
         for key in ("schema", "captured_at", "availability", "reason", "rules", "sources")
     }
+    if schema == SCHEMA:
+        # The derived lines are identical for every symbol - they ARE the
+        # whole-market read - so they belong in `common` exactly once. They are
+        # the reads the trader used to type by hand and they must reach the AI.
+        common["derived"] = context.get("derived")
+        # ...and they must SURVIVE the evidence package's depth cut. Measured
+        # 2026-09-19: `ai_summary._bounded` stops six levels down, which is
+        # exactly where a derived line's `inputs` and leader lists sit, so the
+        # model saw "[nested content omitted]" where the sector names should
+        # be. This one SCALAR sits a level higher and says the same thing in
+        # the card's own words.
+        common["internals"] = "\n".join(internals_lines(context))
     columns: list[str] = []
-    for key in _M5_KEYS:
+    for key in keys:
         values = [row.get(key) for row in readings]
         # These two headings keep the compact table directly readable by
         # older evidence consumers.  All remaining uniform values belong in
@@ -307,3 +597,87 @@ def compact_for_ai(context: Any) -> Any:
         "columns": columns,
         "rows": [[row.get(key) for key in columns] for row in readings],
     }
+
+
+# ---------------------------------------------------------------------------
+# what the card prints
+# ---------------------------------------------------------------------------
+def _pct(value: Any) -> str:
+    number = _number(value)
+    return "unmeasured" if number is None else f"{number:+.2f}%"
+
+
+def internals_lines(context: Any) -> tuple[str, ...]:
+    """The strip's text, computed OUTSIDE Qt and with no widget in sight.
+
+    Pure, so the card does no work beyond ``setText`` and the wording is
+    testable without a screen. An ``unmeasured`` line is PRINTED as unmeasured:
+    a blank where a reading should be reads as calm, which is the one thing it
+    is not.
+    """
+    if not isinstance(context, Mapping):
+        return ("Internals: nothing was read.",)
+    derived = context.get("derived")
+    availability = str(context.get("availability") or "")
+    if not isinstance(derived, Mapping):
+        return (f"Internals: {availability or 'unavailable'}.",)
+
+    def line(name: str) -> Mapping[str, Any]:
+        row = derived.get(name)
+        return row if isinstance(row, Mapping) else {}
+
+    def measured(name: str) -> bool:
+        return str(line(name).get("status") or "") == "measured"
+
+    def value(name: str) -> str:
+        return _pct(line(name).get("value")) if measured(name) else "unmeasured"
+
+    def names(name: str, key: str) -> str:
+        values = line(name).get(key)
+        return ", ".join(str(item) for item in values) if values else "unmeasured"
+
+    fear = line("fear")
+    fear_text = (
+        (
+            f"VXX {fear.get('vxx_direction')} / SPY {fear.get('spy_direction')}"
+            + ("  (both the same way)" if fear.get("divergence") else "")
+        )
+        if measured("fear")
+        else "unmeasured"
+    )
+    above = line("sectors_above_vwap")
+    above_text = (
+        f"{above.get('count')} of {above.get('denominator')}"
+        if measured("sectors_above_vwap")
+        else "unmeasured"
+    )
+    rows = [
+        "  ·  ".join(
+            (
+                f"Breadth (RSP-SPY) {value('breadth')}",
+                f"Fear {fear_text}",
+                f"Rates (TLT) {value('rates')}",
+                f"Oil (USO) {value('oil')}",
+            )
+        ),
+        "  ·  ".join(
+            (
+                f"Leaders {names('sector_leaders', 'day')}",
+                f"Laggards {names('sector_laggards', 'day')}",
+                f"Offense-defense {value('offense_vs_defense')}",
+                f"Sectors above VWAP {above_text}",
+            )
+        ),
+    ]
+    if availability and availability != "available":
+        rows.insert(
+            0, f"Internals {availability}: {context.get('reason') or 'no reason given'}"
+        )
+    return tuple(rows)
+
+
+__all__ = [
+    "DEFENSE", "DERIVED_LINES", "OFFENSE", "SCHEMA", "SCHEMA_V1", "SECTORS",
+    "SYMBOLS", "build_context", "compact_for_ai", "internals_at",
+    "internals_bars_at", "internals_lines", "unavailable_context",
+]

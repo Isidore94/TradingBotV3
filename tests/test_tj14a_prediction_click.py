@@ -157,6 +157,15 @@ def test_the_hourly_card_will_not_file_until_the_direction_row_is_clicked(tmp_pa
     assert card.submit_button.isEnabled() is False, "words are not a prediction"
 
     _click(card, REST_OF_DAY, "chop")
+    # AMENDED BY THE BUILDER under the lead's decision 1 (2026-09-19 evening),
+    # the only assertion in this file the packet authorises changing: a
+    # prediction IS direction, horizon AND confidence (decision 0021 answer 29),
+    # because TJ-16's calibration is read by confidence and a call filed
+    # without one could never join it. The gate was pinned to the direction row
+    # alone; it now stays grey until `How sure` is clicked too, and opens at
+    # once on `No view`, which is asserted in the test below.
+    assert card.submit_button.isEnabled() is False, "a call with no confidence is half a call"
+    _confidence(card, REST_OF_DAY, "medium")
     assert card.submit_button.isEnabled() is True
 
 
@@ -310,6 +319,10 @@ def test_read_unchanged_restates_the_words_and_still_demands_a_fresh_click(tmp_p
         "a reaffirmed read still needs this hour's call"
     )
     _click(card, REST_OF_DAY, "chop")
+    # One CLICK added by the builder, no assertion touched: under the lead's
+    # decision 1 `How sure` is forced whenever the direction is not `No view`,
+    # and the same rule gates `Read unchanged` - it files a graded call too.
+    _confidence(card, REST_OF_DAY, "medium")
     assert card.unchanged_button.isEnabled() is True
     card.unchanged_button.click()
     _app.processEvents()

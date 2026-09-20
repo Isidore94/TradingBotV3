@@ -30,6 +30,7 @@ that can be quietly rewritten is not evidence about what anyone believed.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
@@ -72,6 +73,101 @@ ORIGIN_EXTERNAL_FORECAST = "external_forecast"
 #: never touches the canonical D1 level store (trader decision, plan.md L1118).
 RVOL_OVERLAY_FLOOR = 1.2
 
+# ---------------------------------------------------------------------------
+# A description is not a prediction - TJ-14A item 1, decision 0021 answer 29
+# ---------------------------------------------------------------------------
+#: The trader's own words, 2026-09-19: *"make sure we differentiate predictions
+#: from just 'describe the market and your thoughts'"*. A Mentor row therefore
+#: carries TWO keys that never share a field: `mentor.observation` is what they
+#: SEE, and `mentor.prediction` is what they EXPECT - a click, with its horizon
+#: printed on the row it was made on. Only the click is graded; the words are
+#: context. Measured that day, `market_thesis.extract_thesis` read 21 of the
+#: trader's 42 real notes as `unstated`, which is why the call is a click.
+PREDICTION_SCHEMA = "mentor_prediction_v1"
+#: Every card asks the first; only the 08:00 and 12:00 D1 cards ask the second.
+HORIZON_REST_OF_DAY = "rest_of_day"
+HORIZON_NEXT_5_SESSIONS = "next_5_sessions"
+#: "I have no call" is a COMPLETE answer and is never graded.
+DIRECTION_NO_VIEW = "no_view"
+#: Two vocabularies, because a day has chop and five sessions have a range.
+DIRECTIONS = {
+    HORIZON_REST_OF_DAY: ("up", "down", "chop", DIRECTION_NO_VIEW),
+    HORIZON_NEXT_5_SESSIONS: ("up", "down", "range", DIRECTION_NO_VIEW),
+}
+#: Forced whenever the direction is not `no_view` (decision 0021 answer 29: a
+#: prediction IS direction, horizon and confidence; only `because` is optional).
+CONFIDENCE_LEVELS = ("low", "medium", "high")
+#: Which horizon one stored entry's timeframe carries.
+HORIZON_FOR_TIMEFRAME = {
+    TIMEFRAME_M5: HORIZON_REST_OF_DAY,
+    TIMEFRAME_D1: HORIZON_NEXT_5_SESSIONS,
+}
+
+
+@dataclass(frozen=True)
+class Prediction:
+    """One clicked call, exactly as it was stored. Never derived from words."""
+
+    direction: str
+    horizon: str
+    confidence: str
+    because: str
+    schema: str = PREDICTION_SCHEMA
+
+    @property
+    def is_no_view(self) -> bool:
+        return self.direction == DIRECTION_NO_VIEW
+
+
+def build_prediction(
+    *, direction: str, horizon: str, confidence: str = "", because: str = ""
+) -> dict[str, Any]:
+    """The stored shape of one click. `no_view` carries no confidence."""
+    call = str(direction or "").strip().lower()
+    span = str(horizon or "").strip().lower()
+    level = str(confidence or "").strip().lower()
+    return {
+        "direction": call,
+        "horizon": span,
+        "confidence": "" if call == DIRECTION_NO_VIEW else level,
+        "because": str(because or "").strip(),
+        "schema": PREDICTION_SCHEMA,
+    }
+
+
+def prediction_of(entry: Mapping[str, Any]) -> Prediction | None:
+    """The clicked call on one entry, or ``None``. The ONE accessor.
+
+    It reads `mentor.prediction` and NOTHING else - never `text`, never
+    `observation`. A reader that fell back to the words for a row that has a
+    click would quietly re-introduce the extraction this packet replaced, and
+    would pool an inferred stance with a stated one (decision 0021 answer 29).
+
+    ``None`` for every row written before TJ-14A. The live September file holds
+    four such vintages - no `mentor` key, `mentor == {}`, a mentor payload with
+    no context, and a full v1 context - and not one of them is a click.
+    """
+    if not isinstance(entry, Mapping):
+        return None
+    mentor = entry.get("mentor")
+    if not isinstance(mentor, Mapping):
+        return None
+    payload = mentor.get("prediction")
+    if not isinstance(payload, Mapping):
+        return None
+    horizon = str(payload.get("horizon") or "").strip().lower()
+    direction = str(payload.get("direction") or "").strip().lower()
+    if horizon not in DIRECTIONS or direction not in DIRECTIONS[horizon]:
+        return None
+    confidence = str(payload.get("confidence") or "").strip().lower()
+    return Prediction(
+        direction=direction,
+        horizon=horizon,
+        confidence="" if direction == DIRECTION_NO_VIEW else confidence,
+        because=str(payload.get("because") or ""),
+        schema=str(payload.get("schema") or PREDICTION_SCHEMA),
+    )
+
 
 def _now(value: datetime | None = None) -> datetime:
     moment = value or datetime.now(timezone.utc)
@@ -80,10 +176,18 @@ def _now(value: datetime | None = None) -> datetime:
     return moment
 
 
-def entry_id(session_date: str, created_at: str, text: str) -> str:
-    """Stable id for one entry, from what it is about and when it was written."""
+def entry_id(session_date: str, created_at: str, text: str, *, salt: str = "") -> str:
+    """Stable id for one entry, from what it is about and when it was written.
+
+    `salt` exists for TJ-14A's clicks-only answer. A D1 card filed with two
+    calls and no words writes two rows in the same second with the same empty
+    text, and without a salt they would share an id - which every join over
+    this store uses as an identity. An entry that HAS words never takes a salt,
+    so every id written before this packet is unchanged.
+    """
+    suffix = f"|{salt}" if salt else ""
     digest = hashlib.sha256(
-        f"{session_date}|{created_at}|{text}".encode("utf-8")
+        f"{session_date}|{created_at}|{text}{suffix}".encode("utf-8")
     ).hexdigest()[:12]
     return f"mj-{session_date}-{digest}"
 
@@ -123,9 +227,20 @@ def build_entry(
     body = str(text or "").strip()
     session = str(session_date or "").strip()
     written_session = moment.astimezone().date().isoformat()
+    timeframe_text = _normalize_timeframe(timeframe)
+    # Only a WORDLESS row is salted, and only by the two facts that tell two
+    # such rows apart: which timeframe it is about and which call it carries.
+    clicked = (mentor or {}).get("prediction") if isinstance(mentor, Mapping) else None
+    salt = (
+        ""
+        if body
+        else f"{timeframe_text}|{(clicked or {}).get('horizon') or ''}"
+        if isinstance(clicked, Mapping)
+        else ""
+    )
     return {
         "event_type": "entry",
-        "entry_id": entry_id(session, created_at, body),
+        "entry_id": entry_id(session, created_at, body, salt=salt),
         "session_date": session,
         "created_at": created_at,
         "created_local_date": written_session,
@@ -140,7 +255,7 @@ def build_entry(
         # date rule is kept as the fallback for a session the calendar cannot
         # place, because a slightly coarse answer is better than none.
         "written_after_the_session": _written_after_the_session(session, moment, written_session),
-        "timeframe": _normalize_timeframe(timeframe),
+        "timeframe": timeframe_text,
         "symbols": [str(item).strip().upper() for item in (symbols or ()) if str(item).strip()],
         "origin": str(origin or ""),
         "text": body,
@@ -257,8 +372,14 @@ def is_publishable(entry: Mapping[str, Any]) -> tuple[bool, str]:
     An empty entry is refused rather than stored: a journal full of blanks is
     worse than a shorter one, because it makes the record look denser than the
     thinking behind it.
+
+    TJ-14A item 1 opens ONE door in that rule: a Mentor card answered with a
+    CLICK and no words is a complete answer, and its `text` stays empty because
+    nobody wrote a sentence. The relaxation is as narrow as it sounds - the row
+    must carry a clicked `mentor.prediction` - so every other empty-text entry
+    is refused exactly as before.
     """
-    if not str(entry.get("text") or "").strip():
+    if not str(entry.get("text") or "").strip() and prediction_of(entry) is None:
         return False, "an empty entry is not a thought; nothing is stored"
     if not str(entry.get("session_date") or "").strip():
         return False, "an entry with no session is unfiled and could never be read back"

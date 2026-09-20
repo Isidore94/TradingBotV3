@@ -55,6 +55,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from market_journal import (
+    CONFIDENCE_LEVELS,
+    DIRECTION_NO_VIEW,
+    DIRECTIONS,
+    HORIZON_FOR_TIMEFRAME,
+    HORIZON_NEXT_5_SESSIONS,
+    HORIZON_REST_OF_DAY,
+    TIMEFRAME_D1,
+    TIMEFRAME_M5,
+    build_prediction,
+)
 from trade_mentor_schedule import (
     KIND_M5_D1,
     KIND_M5_TRADES,
@@ -77,6 +88,32 @@ _QUESTIONS = {
 }
 
 _D1_QUESTION = "And the daily picture?"
+
+#: TJ-14A item 1. The card has TWO labelled parts and they never share a field.
+SEE_HEADING = "What I see  ·  the tape right now, in your own words (optional)"
+EXPECT_HEADING = "What I expect  ·  one call, and how sure you are"
+
+#: What each horizon's button row says about itself. The horizon is PRINTED on
+#: the row, so a call can never be read back against the wrong clock.
+HORIZON_LABELS = {
+    HORIZON_REST_OF_DAY: "Rest of day:",
+    HORIZON_NEXT_5_SESSIONS: "Next 5 sessions:",
+}
+#: The order the two rows appear in, each under the words it belongs to.
+HORIZONS = (HORIZON_REST_OF_DAY, HORIZON_NEXT_5_SESSIONS)
+#: Which timeframe each horizon's answer is filed as (the M5 entry carries the
+#: rest-of-day call, the D1 entry the five-session one).
+TIMEFRAME_FOR_HORIZON = {
+    HORIZON_REST_OF_DAY: TIMEFRAME_M5,
+    HORIZON_NEXT_5_SESSIONS: TIMEFRAME_D1,
+}
+_DIRECTION_LABELS = {
+    "up": "Up",
+    "down": "Down",
+    "chop": "Chop",
+    "range": "Range",
+    DIRECTION_NO_VIEW: "No view",
+}
 
 
 class _MentorAIWorkerSignals(QObject):
@@ -161,6 +198,22 @@ class TradeMentorCard(QWidget):
         self.coaching_label.setWordWrap(True)
         self.coaching_label.setVisible(False)
 
+        # TJ-14A item 5. What the desk ALREADY knows, above the box the trader
+        # types into, so they write only what it cannot see. Built from the
+        # context the service already delivered: it starts no read of its own.
+        self.internals_strip = QWidget(self)
+        self.internals_strip.setObjectName("MentorInternalsStrip")
+        strip_layout = QVBoxLayout(self.internals_strip)
+        strip_layout.setContentsMargins(6, 4, 6, 4)
+        strip_layout.setSpacing(1)
+        self.internals_text = QLabel("", self.internals_strip)
+        self.internals_text.setObjectName("MentorInternalsText")
+        self.internals_text.setWordWrap(True)
+        strip_layout.addWidget(self.internals_text)
+
+        self.see_label = QLabel(SEE_HEADING)
+        self.see_label.setObjectName("MutedLabel")
+        self.see_label.setWordWrap(True)
         self.text_box = QPlainTextEdit(self)
         self.text_box.setPlaceholderText(
             "In your own words. Nothing here is parsed or scored - it is stored "
@@ -168,6 +221,19 @@ class TradeMentorCard(QWidget):
         )
         self.text_box.setMaximumHeight(84)
         self.text_box.installEventFilter(self)
+
+        # TJ-14A items 1-2. The forced click, one row per horizon, each row
+        # under the words it belongs to. `_prediction_rows` holds the widgets;
+        # `_predictions` holds what has been clicked and is the ONE thing the
+        # file verbs are gated on.
+        self.expect_label = QLabel(EXPECT_HEADING)
+        self.expect_label.setObjectName("MutedLabel")
+        self.expect_label.setWordWrap(True)
+        self._prediction_rows: dict[str, dict[str, Any]] = {}
+        self._predictions: dict[str, dict[str, str]] = {}
+        for horizon in HORIZONS:
+            self._prediction_rows[horizon] = self._build_prediction_row(horizon)
+            self._predictions[horizon] = {"direction": "", "confidence": ""}
 
         self.d1_label = QLabel(_D1_QUESTION)
         self.d1_label.setObjectName("MutedLabel")
@@ -252,9 +318,14 @@ class TradeMentorCard(QWidget):
         layout.addWidget(self.prompt_label)
         layout.addWidget(self.previous_label)
         layout.addWidget(self.coaching_label)
+        layout.addWidget(self.internals_strip)
+        layout.addWidget(self.see_label)
         layout.addWidget(self.text_box)
+        layout.addWidget(self.expect_label)
+        layout.addWidget(self._prediction_rows[HORIZON_REST_OF_DAY]["widget"])
         layout.addWidget(self.d1_label)
         layout.addWidget(self.d1_box)
+        layout.addWidget(self._prediction_rows[HORIZON_NEXT_5_SESSIONS]["widget"])
         layout.addWidget(self.trade_check_label)
         layout.addWidget(self.trade_check_box)
         layout.addWidget(self.save_answers_button)
@@ -295,6 +366,235 @@ class TradeMentorCard(QWidget):
             context_service.contextReady.connect(self._on_context_ready)
             context_service.contextUnavailable.connect(self._on_context_unavailable)
 
+    # -- what I expect ----------------------------------------------------
+    def _build_prediction_row(self, horizon: str) -> dict[str, Any]:
+        """One horizon's forced click, with its clock printed on the row.
+
+        A DESCRIPTION is not a PREDICTION (decision 0021 answer 29). The words
+        above this row say what the tape is doing; this row is the only thing
+        TJ-10 grades, which is why it is a closed set of buttons rather than a
+        sentence somebody has to parse afterwards.
+        """
+        container = QWidget(self)
+        column = QVBoxLayout(container)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(2)
+
+        directions = QHBoxLayout()
+        directions.setContentsMargins(0, 0, 0, 0)
+        directions.setSpacing(4)
+        heading = QLabel(HORIZON_LABELS[horizon], container)
+        heading.setObjectName("MutedLabel")
+        directions.addWidget(heading)
+        direction_buttons: dict[str, QPushButton] = {}
+        for name in DIRECTIONS[horizon]:
+            button = QPushButton(_DIRECTION_LABELS[name], container)
+            button.setObjectName("MentorPredictionButton")
+            button.setCheckable(True)
+            button.setToolTip(
+                "No view is a complete answer and is never graded."
+                if name == DIRECTION_NO_VIEW
+                else f"{HORIZON_LABELS[horizon][:-1]} {_DIRECTION_LABELS[name].lower()}."
+            )
+            button.clicked.connect(
+                lambda _checked=False, h=horizon, d=name: self._choose_direction(h, d)
+            )
+            directions.addWidget(button)
+            direction_buttons[name] = button
+        directions.addStretch(1)
+        column.addLayout(directions)
+
+        confidence_widget = QWidget(container)
+        confidence_row = QHBoxLayout(confidence_widget)
+        confidence_row.setContentsMargins(0, 0, 0, 0)
+        confidence_row.setSpacing(4)
+        sure_label = QLabel("How sure:", confidence_widget)
+        sure_label.setObjectName("MutedLabel")
+        confidence_row.addWidget(sure_label)
+        confidence_buttons: dict[str, QPushButton] = {}
+        for level in CONFIDENCE_LEVELS:
+            button = QPushButton(level.capitalize(), confidence_widget)
+            button.setObjectName("MentorConfidenceButton")
+            button.setCheckable(True)
+            button.clicked.connect(
+                lambda _checked=False, h=horizon, name=level: self._choose_confidence(h, name)
+            )
+            confidence_row.addWidget(button)
+            confidence_buttons[level] = button
+        confidence_row.addStretch(1)
+        # Nothing to be sure OF until a direction is clicked, and nothing at all
+        # on a No view - asking how sure somebody is of nothing is the kind of
+        # question that teaches a trader to click past the card.
+        confidence_widget.setVisible(False)
+        column.addWidget(confidence_widget)
+
+        because = QLineEdit(container)
+        because.setObjectName("MentorBecauseBox")
+        because.setPlaceholderText("Because… (optional, one line)")
+        column.addWidget(because)
+        return {
+            "widget": container,
+            "directions": direction_buttons,
+            "confidence_widget": confidence_widget,
+            "confidence": confidence_buttons,
+            "because": because,
+        }
+
+    def prediction_button(self, horizon: str, direction: str):
+        """The direction button for one horizon, or ``None`` if it has none."""
+        row = self._prediction_rows.get(str(horizon))
+        return row["directions"].get(str(direction)) if row else None
+
+    def confidence_button(self, horizon: str, level: str):
+        """The `How sure` button for one horizon, or ``None``."""
+        row = self._prediction_rows.get(str(horizon))
+        return row["confidence"].get(str(level)) if row else None
+
+    def because_box(self, horizon: str):
+        """The optional one-line `Because…` for one horizon, or ``None``."""
+        row = self._prediction_rows.get(str(horizon))
+        return row["because"] if row else None
+
+    def _choose_direction(self, horizon: str, direction: str) -> None:
+        state = self._predictions.setdefault(horizon, {"direction": "", "confidence": ""})
+        state["direction"] = direction
+        row = self._prediction_rows[horizon]
+        for name, button in row["directions"].items():
+            button.setChecked(name == direction)
+        if direction == DIRECTION_NO_VIEW:
+            state["confidence"] = ""
+            for button in row["confidence"].values():
+                button.setChecked(False)
+        row["confidence_widget"].setVisible(direction not in ("", DIRECTION_NO_VIEW))
+        self._refresh_prediction_gate()
+
+    def _choose_confidence(self, horizon: str, level: str) -> None:
+        state = self._predictions.setdefault(horizon, {"direction": "", "confidence": ""})
+        if state.get("direction") == DIRECTION_NO_VIEW:
+            return
+        state["confidence"] = level
+        for name, button in self._prediction_rows[horizon]["confidence"].items():
+            button.setChecked(name == level)
+        self._refresh_prediction_gate()
+
+    def _horizons_on_this_card(self) -> tuple[str, ...]:
+        return tuple(
+            horizon
+            for horizon in HORIZONS
+            if self._prediction_rows[horizon]["widget"].isVisibleTo(self)
+        )
+
+    def _prediction_complete(self, horizon: str) -> bool:
+        """Forced means direction AND how sure - unless there is no view.
+
+        Decision 0021 answer 29: a prediction IS direction, horizon and
+        confidence; only `because` is optional. TJ-16's calibration is read by
+        confidence, so a call filed without one could never join it.
+        """
+        state = self._predictions.get(horizon) or {}
+        direction = str(state.get("direction") or "")
+        if not direction:
+            return False
+        if direction == DIRECTION_NO_VIEW:
+            return True
+        return bool(state.get("confidence"))
+
+    def _prediction_for(self, horizon: str) -> dict[str, Any]:
+        state = self._predictions.get(horizon) or {}
+        return build_prediction(
+            direction=str(state.get("direction") or ""),
+            horizon=horizon,
+            confidence=str(state.get("confidence") or ""),
+            because=self._prediction_rows[horizon]["because"].text(),
+        )
+
+    def _previous_horizon(self) -> str:
+        """Which horizon a `Read unchanged` restates - the previous row's own."""
+        timeframe = str((self._previous or {}).get("timeframe") or TIMEFRAME_M5)
+        horizon = HORIZON_FOR_TIMEFRAME.get(timeframe, HORIZON_REST_OF_DAY)
+        return horizon if horizon in self._horizons_on_this_card() else HORIZON_REST_OF_DAY
+
+    def _refresh_prediction_gate(self) -> None:
+        """The file verbs stay grey until this hour's call has been clicked."""
+        try:
+            horizons = self._horizons_on_this_card()
+            self.submit_button.setEnabled(
+                bool(horizons) and all(self._prediction_complete(h) for h in horizons)
+            )
+            self.unchanged_button.setEnabled(
+                bool(self._previous) and self._prediction_complete(self._previous_horizon())
+            )
+        except RuntimeError:  # pragma: no cover - widget already torn down
+            pass
+
+    def _missing_prediction_reason(self, horizons: tuple[str, ...]) -> str:
+        """Why a file verb refused. The gate lives HERE as well as on the button.
+
+        Forced means no code path files an hourly answer without its clicks -
+        a keyboard shortcut, a host call and a future caller all reach this.
+        """
+        for horizon in horizons:
+            state = self._predictions.get(horizon) or {}
+            if not str(state.get("direction") or ""):
+                return (
+                    f"{HORIZON_LABELS[horizon]} still needs a call. "
+                    "No view is a complete answer."
+                )
+            if not self._prediction_complete(horizon):
+                return f"{HORIZON_LABELS[horizon]} still needs How sure."
+        return ""
+
+    def _reset_predictions(self) -> None:
+        for horizon, row in self._prediction_rows.items():
+            self._predictions[horizon] = {"direction": "", "confidence": ""}
+            for button in row["directions"].values():
+                button.setChecked(False)
+            for button in row["confidence"].values():
+                button.setChecked(False)
+            row["confidence_widget"].setVisible(False)
+            row["because"].setText("")
+
+    def _restore_predictions(self, saved: Mapping[str, Any]) -> None:
+        """Put unsaved clicks back, exactly as unsaved text is put back."""
+        for horizon in HORIZONS:
+            record = saved.get(horizon) if isinstance(saved, Mapping) else None
+            if not isinstance(record, Mapping):
+                continue
+            direction = str(record.get("direction") or "")
+            if direction in DIRECTIONS.get(horizon, ()):
+                self._choose_direction(horizon, direction)
+            level = str(record.get("confidence") or "")
+            if level in CONFIDENCE_LEVELS:
+                self._choose_confidence(horizon, level)
+            self._prediction_rows[horizon]["because"].setText(str(record.get("because") or ""))
+
+    def _clicked_predictions(self) -> dict[str, dict[str, str]]:
+        """What is on the card right now, for the draft file."""
+        answered: dict[str, dict[str, str]] = {}
+        for horizon in HORIZONS:
+            state = self._predictions.get(horizon) or {}
+            because = self._prediction_rows[horizon]["because"].text()
+            if str(state.get("direction") or "") or because.strip():
+                answered[horizon] = {
+                    "direction": str(state.get("direction") or ""),
+                    "confidence": str(state.get("confidence") or ""),
+                    "because": because,
+                }
+        return answered
+
+    def _render_internals(self) -> None:
+        """Draw the strip from the snapshot the card ALREADY holds.
+
+        No fetch, no loader, no second request: the wording is computed by a
+        pure function and this is one `setText`.
+        """
+        try:
+            from trade_mentor_context import internals_lines
+
+            self.internals_text.setText("\n".join(internals_lines(self._current_context)))
+        except Exception:  # noqa: BLE001 - the strip never costs the prompt
+            logging.debug("Trade Mentor internals strip not drawn.", exc_info=True)
+
     # -- drafts -----------------------------------------------------------
     def _load_drafts(self) -> None:
         try:
@@ -304,7 +604,13 @@ class TradeMentorCard(QWidget):
         if isinstance(payload, dict):
             for slot_id, record in payload.items():
                 if isinstance(record, Mapping):
-                    self._drafts[str(slot_id)] = str(record.get("text") or "")
+                    self._drafts[str(slot_id)] = {
+                        "text": str(record.get("text") or ""),
+                        # TJ-14A: an unsaved CLICK is kept exactly as unsaved
+                        # text is, and across a restart - that is what the
+                        # drafts file is for.
+                        "predictions": dict(record.get("predictions") or {}),
+                    }
 
     def _save_drafts(self) -> None:
         """Never costs the card. A draft that could not be written is a lost
@@ -312,7 +618,12 @@ class TradeMentorCard(QWidget):
         try:
             self._drafts_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
-                slot_id: {"text": text} for slot_id, text in self._drafts.items() if text
+                slot_id: {
+                    "text": str(record.get("text") or ""),
+                    "predictions": dict(record.get("predictions") or {}),
+                }
+                for slot_id, record in self._drafts.items()
+                if str(record.get("text") or "") or record.get("predictions")
             }
             tmp = self._drafts_path.with_name(self._drafts_path.name + ".tmp")
             tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -322,7 +633,11 @@ class TradeMentorCard(QWidget):
 
     def draft_for(self, slot_id: str) -> str:
         """Whatever was typed against `slot_id` and never submitted."""
-        return self._drafts.get(str(slot_id), "")
+        return str((self._drafts.get(str(slot_id)) or {}).get("text") or "")
+
+    def draft_predictions_for(self, slot_id: str) -> dict[str, Any]:
+        """Whatever was CLICKED against `slot_id` and never submitted."""
+        return dict((self._drafts.get(str(slot_id)) or {}).get("predictions") or {})
 
     def _stash_draft(self) -> None:
         """Keep what is in the boxes, exactly as typed - trailing space and all."""
@@ -331,8 +646,12 @@ class TradeMentorCard(QWidget):
         text = self.text_box.toPlainText()
         d1_text = self.d1_box.toPlainText()
         combined = text if not d1_text else f"{text}\n{d1_text}"
-        if combined.strip():
-            self._drafts[self._slot.slot_id] = combined
+        clicks = self._clicked_predictions()
+        if combined.strip() or clicks:
+            self._drafts[self._slot.slot_id] = {
+                "text": combined,
+                "predictions": clicks,
+            }
             self._save_drafts()
 
     def _drop_draft(self, slot_id: str) -> None:
@@ -377,6 +696,14 @@ class TradeMentorCard(QWidget):
         show_d1 = kind == KIND_M5_D1
         self.d1_label.setVisible(show_d1)
         self.d1_box.setVisible(show_d1)
+        # Every card asks for the rest of the day; only a D1 card asks about the
+        # next five sessions. A swing call offered six times a day would be the
+        # same click about the same five sessions, over and over.
+        self._prediction_rows[HORIZON_REST_OF_DAY]["widget"].setVisible(True)
+        self._prediction_rows[HORIZON_NEXT_5_SESSIONS]["widget"].setVisible(show_d1)
+        self._reset_predictions()
+        self._restore_predictions(self.draft_predictions_for(slot.slot_id))
+        self._render_internals()
         if str(getattr(slot, "session", "") or "") != self._trade_check_session:
             # TJ-9 item 2. The section RIDES on every later card of the same
             # session - an unanswered card must not expire into silence - and
@@ -395,7 +722,7 @@ class TradeMentorCard(QWidget):
         else:
             self.previous_label.setText("")
             self.previous_label.setVisible(False)
-        self.unchanged_button.setEnabled(bool(self._previous))
+        self._refresh_prediction_gate()
         try:
             from ai_jobs.market_story_narration import latest_coaching_question
 
@@ -418,10 +745,12 @@ class TradeMentorCard(QWidget):
     def _on_context_ready(self, request_id: str, context: object) -> None:
         if str(request_id) == self._context_slot_id and isinstance(context, Mapping):
             self._current_context = dict(context)
+            self._render_internals()
 
     def _on_context_unavailable(self, request_id: str, context: object) -> None:
         if str(request_id) == self._context_slot_id and isinstance(context, Mapping):
             self._current_context = dict(context)
+            self._render_internals()
 
     def _clear_trade_check(self) -> None:
         self._answer_inputs = {}
@@ -874,7 +1203,7 @@ class TradeMentorCard(QWidget):
         except Exception:  # noqa: BLE001 - a read is never lost to a calendar
             return moment.date().isoformat()
 
-    def _mentor_payload(self, slot: MentorSlot, moment: datetime) -> dict[str, Any]:
+    def _mentor_payload(self, slot: MentorSlot, moment: datetime, *, observation: str = "", horizon: str = "") -> dict[str, Any]:
         payload: dict[str, Any] = {
             "slot_id": str(slot.slot_id),
             "prompt_kind": str(slot.kind),
@@ -891,10 +1220,22 @@ class TradeMentorCard(QWidget):
             if self._context_slot_id == str(slot.slot_id) and self._current_context is not None
             else self._unavailable_context(moment, "context pending")
         )
+        # TJ-14A item 2. Two keys that never share a field: the WORDS about now,
+        # and the CLICK about what happens next. The entry's `text` stays the
+        # observation, so every existing reader of this store keeps working.
+        payload["observation"] = str(observation or "")
+        if horizon:
+            payload["prediction"] = self._prediction_for(horizon)
         return payload
 
     def submit(self) -> dict[str, Any]:
-        """File the raw text. Once per slot, whatever the button does."""
+        """File the raw text and this hour's call. Once per slot, whatever the
+        button does.
+
+        The forced gate lives HERE as well as on the button (TJ-14A): forced
+        means no code path files an hourly answer without its clicks, and
+        `Ctrl+Enter` reaches this verb without touching a button.
+        """
         slot = self._slot
         if slot is None:
             return {"ok": False, "reason": "nothing is being asked"}
@@ -902,29 +1243,34 @@ class TradeMentorCard(QWidget):
             # A double click is one read. The guard is here rather than on the
             # button because Ctrl+Enter reaches the same verb.
             return {"ok": False, "reason": "this read is already filed"}
+        horizons = self._horizons_on_this_card()
+        missing = self._missing_prediction_reason(horizons)
+        if missing:
+            self._set_status(missing)
+            return {"ok": False, "reason": missing}
         moment = self._now()
         text = self.text_box.toPlainText().strip()
-        d1_text = self.d1_box.toPlainText().strip() if self.d1_box.isVisible() else ""
-        if not text and not d1_text:
-            self._set_status("Nothing typed, so nothing was filed.")
-            return {"ok": False, "reason": "an empty read is not an observation"}
+        d1_text = self.d1_box.toPlainText().strip() if self.d1_box.isVisibleTo(self) else ""
 
         session = self._session_for(slot, moment)
-        payload = self._mentor_payload(slot, moment)
         written: list[dict[str, Any]] = []
         # The M5 read and the D1 read are stored SEPARATELY even though one card
         # collected both (the trader's brief). Two timeframes in one row would
-        # be one row that is true of neither.
-        for body, timeframe in ((text, "M5"), (d1_text, "D1")):
-            if not body:
-                continue
+        # be one row that is true of neither. Since TJ-14A a D1 card writes BOTH
+        # rows once both calls are clicked - words or no words - because the
+        # call, not the sentence, is what is graded.
+        bodies = {HORIZON_REST_OF_DAY: text, HORIZON_NEXT_5_SESSIONS: d1_text}
+        for horizon in horizons:
+            body = bodies.get(horizon, "")
             result = self._service().write_entry(
                 text=body,
                 session_date=session,
-                timeframe=timeframe,
+                timeframe=TIMEFRAME_FOR_HORIZON[horizon],
                 origin="trade_mentor",
                 now=moment,
-                mentor=payload,
+                mentor=self._mentor_payload(
+                    slot, moment, observation=body, horizon=horizon
+                ),
             )
             if not result.get("ok"):
                 self._set_status(str(result.get("reason") or "entry NOT saved"))
@@ -935,6 +1281,8 @@ class TradeMentorCard(QWidget):
         self._drop_draft(slot.slot_id)
         self.text_box.setPlainText("")
         self.d1_box.setPlainText("")
+        self._reset_predictions()
+        self._refresh_prediction_gate()
         self._set_status(f"Filed at {moment.strftime('%H:%M')}.")
         self.answered.emit(slot.slot_id)
         self.setVisible(False)
@@ -951,6 +1299,14 @@ class TradeMentorCard(QWidget):
             return {"ok": False, "reason": "there is no earlier read to reaffirm"}
         if slot.slot_id in self._submitted:
             return {"ok": False, "reason": "this read is already filed"}
+        # "My view has not changed" is a statement about the WORDS. Copying the
+        # 09:00 call onto the 11:00 row would manufacture a graded prediction
+        # the trader never made - and the two hours would always agree.
+        horizon = self._previous_horizon()
+        missing = self._missing_prediction_reason((horizon,))
+        if missing:
+            self._set_status(missing)
+            return {"ok": False, "reason": missing}
         moment = self._now()
         result = self._service().write_entry(
             text=body,
@@ -958,7 +1314,9 @@ class TradeMentorCard(QWidget):
             timeframe=str(previous.get("timeframe") or "M5"),
             origin="trade_mentor",
             now=moment,
-            mentor=self._mentor_payload(slot, moment),
+            mentor=self._mentor_payload(
+                slot, moment, observation=body, horizon=horizon
+            ),
             # Names the read it restates, and deliberately NOT `supersedes`:
             # superseding would hide the 09:00 read behind the 11:00 one.
             reaffirms=str(previous.get("entry_id") or ""),
