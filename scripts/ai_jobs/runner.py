@@ -296,10 +296,26 @@ def _run_slots_locked(
             continue
         if not slot.enabled:
             continue
-        if slot.name in already:
+        # TJ-4 change 4: the Redo button's one named day. It reaches ONLY the
+        # slot the operator typed, and from here down that slot's whole run -
+        # its already-done check, its attempt cap and every ledger row it
+        # writes, the window refusal included - is keyed to the session it
+        # WORKED ON. A row claiming tonight's session for work done on last
+        # Tuesday's, and an old-day redo skipped because TONIGHT is already
+        # covered, are the two dishonest halves of this (reviewer, 2026-09-20).
+        # With the keyword at its default `run_session` IS `session_date` and
+        # nothing here moves.
+        overridden = bool(session_override) and bool(only) and slot.name == only
+        run_session = session_override if overridden else session_date
+        slot_already = (
+            (set() if force else ledger.completed_jobs(run_session, path=ledger_path))
+            if overridden
+            else already
+        )
+        if slot.name in slot_already:
             if session_today:
                 logging.info(
-                    "AI job %s already completed for %s; skipping.", slot.name, session_date
+                    "AI job %s already completed for %s; skipping.", slot.name, run_session
                 )
                 continue
             # A weekend or holiday firing whose last completed session is
@@ -308,17 +324,17 @@ def _run_slots_locked(
             # ledger under ~27 rows a night.
             reason = (
                 f"no session: {market_calendar_describe(moment)}; "
-                f"{session_date} is already covered"
+                f"{run_session} is already covered"
             )
             if _already_recorded_no_session(
-                slot.name, session_date, path=ledger_path
+                slot.name, run_session, path=ledger_path
             ):
                 logging.debug("AI job %s: %s (already recorded).", slot.name, reason)
                 continue
             row = ledger.record(
                 job=slot.name,
                 status=ledger.STATUS_SKIPPED,
-                session_date=session_date,
+                session_date=run_session,
                 reason=reason,
                 path=ledger_path,
                 extra={"no_session": True},
@@ -333,21 +349,21 @@ def _run_slots_locked(
         # an operator asking for a run by hand is the one case where the cap is
         # not protecting anybody.
         if slot.max_attempts and not force:
-            if ledger.has_terminal_marker(slot.name, session_date, path=ledger_path):
+            if ledger.has_terminal_marker(slot.name, run_session, path=ledger_path):
                 logging.debug(
-                    "AI job %s: already finished for %s; skipping.", slot.name, session_date
+                    "AI job %s: already finished for %s; skipping.", slot.name, run_session
                 )
                 continue
             cap_reason = ledger.attempt_cap_reason(
                 slot.name,
-                session_date,
+                run_session,
                 max_attempts=slot.max_attempts,
                 path=ledger_path,
             )
             if cap_reason:
                 row = ledger.mark_terminal(
                     job=slot.name,
-                    session_date=session_date,
+                    session_date=run_session,
                     reason=cap_reason,
                     path=ledger_path,
                 )
@@ -403,7 +419,7 @@ def _run_slots_locked(
             row = ledger.record(
                 job=slot.name,
                 status=ledger.STATUS_SKIPPED,
-                session_date=session_date,
+                session_date=run_session,
                 reason=reason,
                 path=ledger_path,
             )
@@ -413,17 +429,14 @@ def _run_slots_locked(
 
         started = datetime.now().astimezone()
         clock = time.perf_counter()
-        # TJ-4 change 4: the Redo button's one named day. It reaches ONLY the
-        # slot the operator typed, and the ledger row is keyed to the day that
-        # slot actually worked on - a row claiming tonight's session for work
-        # done on last Tuesday's would be the dishonest half of this.
-        run_session = (
-            session_override
-            if session_override and only and slot.name == only
-            else session_date
-        )
         try:
             extra_kwargs = dict(slot.model_free_kwargs or {}) if model_free else {}
+            if overridden:
+                # The operator asked for ONE day, so a slot that also sweeps a
+                # queue of its own (TJ-4's day story) does what it was asked for
+                # and nothing else. Only the overridden slot can ever be handed
+                # this, so no other job sees a keyword it does not know.
+                extra_kwargs["only_this_session"] = True
             outcome = slot.run(session_date=run_session, now=moment, **extra_kwargs) or {}
             # A job may report that it published an honestly degraded document
             # rather than a trustworthy one. That is not "ok", and because

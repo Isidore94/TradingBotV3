@@ -52,6 +52,23 @@ MODEL_TIER = "medium"
 #: well inside that.
 TIMEOUT_SECONDS = 540
 
+#: How many QUEUED sessions one night may narrate on top of its own, oldest
+#: first. The slot reserves ten minutes; three short stories fit inside that and
+#: an unbounded queue would not. What is left over stays queued and is SAID
+#: (reviewer, 2026-09-20: a daytime Redo of any day but the night's own was
+#: dropped silently, because nothing swept the markers).
+REDO_SWEEP_LIMIT = 3
+
+#: What one reply may contain, per list. `ai_summary.validate_structured_output`
+#: enforces required keys, `additionalProperties`, types, enums and a STRING's
+#: `maxLength` - it does not enforce `maxItems` or the length of an array's
+#: items, and a 5,000-source / 500-claim reply was written whole (372 KB) and
+#: then rendered line by line on the Qt thread (reviewer, 2026-09-20). Generous
+#: and finite: a day has one story, not five hundred.
+MAX_GRADED_CLAIMS = 6
+MAX_SOURCES = 24
+MAX_OPEN_THESES = 6
+
 #: Bounds are deliberately NOT 2,000 anywhere in either schema: a `maxLength` of
 #: exactly 2,000 is the grammar defect gate #144 found, where the constrained
 #: decoder silently truncated mid-sentence.
@@ -73,7 +90,7 @@ NARRATION_JSON_SCHEMA: dict[str, Any] = {
         "what_you_thought": {"type": "string", "maxLength": 600},
         "were_you_right": {
             "type": "array",
-            "maxItems": 6,
+            "maxItems": MAX_GRADED_CLAIMS,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -101,7 +118,7 @@ NARRATION_JSON_SCHEMA: dict[str, Any] = {
         "process": {"type": "string", "maxLength": 400},
         "sources": {
             "type": "array",
-            "maxItems": 24,
+            "maxItems": MAX_SOURCES,
             "items": {"type": "string", "maxLength": 160},
         },
     },
@@ -115,7 +132,7 @@ D1_VIEW_JSON_SCHEMA: dict[str, Any] = {
         "belief_now": {"type": "string", "maxLength": 600},
         "open_theses": {
             "type": "array",
-            "maxItems": 6,
+            "maxItems": MAX_OPEN_THESES,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -130,7 +147,7 @@ D1_VIEW_JSON_SCHEMA: dict[str, Any] = {
         },
         "sources": {
             "type": "array",
-            "maxItems": 24,
+            "maxItems": MAX_SOURCES,
             "items": {"type": "string", "maxLength": 160},
         },
     },
@@ -218,24 +235,73 @@ def _moment(now: datetime | None) -> str:
 # validation
 # ---------------------------------------------------------------------------
 def _validate(payload: Any, schema: Mapping[str, Any], *, name: str) -> dict[str, Any]:
-    """The closed schema, top level and one level into every declared object."""
+    """The closed schema, top level and one level into every declared object.
+
+    `ai_summary.validate_structured_output` is the SHARED validator and it stops
+    at the top level's own strings: it does NOT enforce `maxItems`, nor the
+    `maxLength` of an array's ITEMS. That gap is inherited from
+    `market_story_narration`'s pattern, and TJ-4 is the first consumer that
+    RENDERS a per-item list from the answer - a 5,000-source, 500-claim reply
+    was accepted, written whole (372 KB) and then drawn line by line on the Qt
+    thread (reviewer, 2026-09-20). So the bounds this module declares are
+    enforced HERE rather than by widening the shared validator under every
+    other caller.
+    """
     import ai_summary
 
     body = ai_summary.validate_structured_output(payload, schema, name=name)
     for key, spec in (schema.get("properties") or {}).items():
         if key not in body:
             continue
-        if str(spec.get("type") or "") == "object":
+        kind = str(spec.get("type") or "")
+        if kind == "object":
             ai_summary.validate_structured_output(body[key], spec, name=f"{name}.{key}")
-        elif str(spec.get("type") or "") == "array":
-            item_spec = spec.get("items") or {}
-            if str(item_spec.get("type") or "") != "object":
-                continue
-            for index, item in enumerate(body[key] or ()):
+            continue
+        if kind != "array":
+            continue
+        rows = list(body[key] or ())
+        limit = spec.get("maxItems")
+        if isinstance(limit, int) and not isinstance(limit, bool) and len(rows) > limit:
+            raise NarrationRejected(
+                f"{name}.{key} carries {len(rows)} items; at most {limit} are allowed"
+            )
+        item_spec = spec.get("items") or {}
+        item_kind = str(item_spec.get("type") or "")
+        if item_kind == "object":
+            for index, item in enumerate(rows):
                 ai_summary.validate_structured_output(
                     item, item_spec, name=f"{name}.{key}[{index}]"
                 )
+        elif item_kind == "string":
+            longest = item_spec.get("maxLength")
+            for index, item in enumerate(rows):
+                if isinstance(longest, int) and len(str(item)) > longest:
+                    raise NarrationRejected(
+                        f"{name}.{key}[{index}] is longer than {longest} characters"
+                    )
     return body
+
+
+def _by_source_id(rows, *, what: str) -> dict[str, Mapping[str, Any]]:
+    """`source_id -> row`, RAISING when one id names two rows.
+
+    A dict comprehension over a pack with a duplicated id silently keeps the
+    LAST row, so a narration could quote the second row's verdict while naming
+    the first and still pass the equality check (reviewer, 2026-09-20). The
+    pack's own minter makes a duplicate unmintable; this is the reader's half of
+    the same rule, for a pack an older build wrote or a hand edited.
+    """
+    out: dict[str, Mapping[str, Any]] = {}
+    for row in rows or ():
+        if not isinstance(row, Mapping):
+            continue
+        source_id = str(row.get("source_id") or "")
+        if source_id in out:
+            raise NarrationRejected(
+                f"the pack's {what} carries {source_id!r} twice; one id must name one row"
+            )
+        out[source_id] = row
+    return out
 
 
 def _check_sources(narration: Mapping[str, Any], allowed: set[str]) -> None:
@@ -255,17 +321,15 @@ def _check_day_narration(narration: Mapping[str, Any], pack: Mapping[str, Any]) 
 
     allowed = set(day_review_pack.allowed_source_ids(pack))
     _check_sources(narration, allowed)
+    # A story with no headline is written and then read as "No story yet" OVER a
+    # story, because the page keeps its own line when there is nothing to put in
+    # its place (reviewer, 2026-09-20). An answer that says nothing is not an
+    # answer; it is rejected like any other breach.
+    if not str(narration.get("headline") or "").strip():
+        raise NarrationRejected("the narration carries no headline")
 
-    reads = {
-        str(row.get("source_id") or ""): row
-        for row in pack.get("reads") or ()
-        if isinstance(row, Mapping)
-    }
-    said = {
-        str(item.get("source_id") or ""): item
-        for item in pack.get("trader_said") or ()
-        if isinstance(item, Mapping)
-    }
+    reads = _by_source_id(pack.get("reads"), what="reads")
+    said = _by_source_id(pack.get("trader_said"), what="trader_said")
     for claim in narration.get("were_you_right") or ():
         if not isinstance(claim, Mapping):
             raise NarrationRejected("a graded claim was not an object")
@@ -438,50 +502,85 @@ def _call(request, *, evidence: Mapping[str, Any], schema, prompt_version: str, 
     )
 
 
+def queued_sessions(root: Path | None = None, *, skip: str = "") -> list[str]:
+    """Sessions with a `redo_requested` marker on disk, OLDEST first.
+
+    The Day Review page's default pick during a session day is the PREVIOUS
+    session, so the DEFAULT daytime Redo queues a day the night was never going
+    to narrate. Nothing read those markers, so the trader was told "queued for
+    tonight" and nothing ever ran (reviewer, 2026-09-20). This is what makes the
+    sentence true: the night finds them.
+    """
+    import day_review_pack
+
+    base = _root(root)
+    try:
+        names = sorted(child.name for child in (base / "sessions").iterdir() if child.is_dir())
+    except OSError:
+        return []
+    ignore = str(skip or "")[:10]
+    return [
+        name
+        for name in names
+        if name != ignore and day_review_pack.redo_requested(name, root=base)
+    ]
+
+
 def run_day_review_narration(
     *,
     session_date: str = "",
     now: datetime | None = None,
     root: Path | None = None,
     request: Callable[..., Mapping[str, Any]] | None = None,
+    only_this_session: bool = False,
     **_ignored: Any,
 ) -> dict[str, Any]:
-    """Narrate one session, and refresh the rolling D1 view beside it.
+    """Narrate one session, sweep what the trader queued, refresh the D1 view.
 
     Never raises: a crash here is a lost night. Every failure path leaves the
     last verified file byte-identical and says what happened.
+
+    ``only_this_session`` is set by the runner when the operator named a day
+    (``--session``): a targeted redo does what it was asked for and nothing
+    else. The unattended nightly run sweeps.
     """
     import day_review_pack
 
     base = _root(root)
     session = str(session_date or "").strip()[:10] or datetime.now().date().isoformat()
     pack = day_review_pack.read_pack(session, root=base)
-    if pack is None:
-        # The post-close tick never reached this session. That is a `skipped`
-        # row with a reason, not a failure and not an invented story - an
-        # evidence job is never allowed to cost the night.
-        return {
-            "status": "skipped",
-            "model": "",
-            "reason": f"no day pack for {session}; nothing to narrate",
-            "outputs": [],
-        }
-
     redo = day_review_pack.redo_requested(session, root=base)
     outputs: list[str] = []
     reasons: list[str] = []
     model = ""
     degraded = False
+    own = "ok"
 
-    story = _run_day_story(
-        session, pack, base, now=now, request=request, redo=redo
-    )
-    outputs.extend(story["outputs"])
-    reasons.append(story["reason"])
-    model = model or story["model"]
-    degraded = degraded or story["status"] == "degraded_no_narrative"
-    if story["status"] == "ok" and redo:
-        day_review_pack.clear_redo(session, root=base)
+    if pack is None:
+        # The post-close tick never reached this session. That is a `skipped`
+        # row with a reason, not a failure and not an invented story - an
+        # evidence job is never allowed to cost the night. It does not cost the
+        # QUEUE either: what the trader asked for on OTHER days is still swept
+        # below, or one missing pack tonight would strand it for ever.
+        own = "skipped"
+        reasons.append(f"no day pack for {session}; nothing to narrate")
+    else:
+        story = _run_day_story(
+            session, pack, base, now=now, request=request, redo=redo
+        )
+        outputs.extend(story["outputs"])
+        reasons.append(story["reason"])
+        model = model or story["model"]
+        degraded = degraded or story["status"] == "degraded_no_narrative"
+        if story["status"] == "ok" and redo:
+            day_review_pack.clear_redo(session, root=base)
+
+    if not only_this_session:
+        swept = _sweep_queued(session, base, now=now, request=request)
+        outputs.extend(swept["outputs"])
+        if swept["reason"]:
+            reasons.append(swept["reason"])
+            model = model or swept["model"]
 
     view = _run_d1_view(session, base, now=now, request=request, redo=redo)
     outputs.extend(view["outputs"])
@@ -490,10 +589,80 @@ def run_day_review_narration(
     model = model or view["model"]
     degraded = degraded or view["status"] == "degraded_no_narrative"
 
+    # The night's OWN story and the rolling view decide the status. A queued
+    # session that was rejected is reported in the reason and keeps its marker
+    # for tomorrow; it does not take this night's `ok` away, because the story
+    # the trader opens in the morning was written.
     return {
-        "status": "degraded_no_narrative" if degraded else "ok",
+        "status": "degraded_no_narrative" if degraded else own,
         "model": model,
         "reason": "; ".join(part for part in reasons if part),
+        "outputs": outputs,
+    }
+
+
+def _sweep_queued(
+    session: str,
+    root: Path,
+    *,
+    now: datetime | None,
+    request: Callable[..., Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Narrate the sessions a daytime Redo queued. At most `REDO_SWEEP_LIMIT`.
+
+    Oldest first, so a queue that outgrows one night drains in order rather than
+    starving its oldest entry. Four rules, and each of them is a test:
+
+    * the marker OVERRIDES that session's unchanged-hash skip - the trader asked
+      for the story to be written again and the pack has not moved;
+    * a marker is cleared only after a GOOD run. A rejected or raising redo
+      leaves that session's prior story byte-identical AND keeps its marker, so
+      the next night tries again;
+    * a queued session with no pack is skipped with its marker KEPT and named -
+      the post-close tick may simply not have reached it yet;
+    * one bad queued session never costs the night's own story or the rolling
+      D1 view. This returns a REPORT; it cannot fail the night.
+    """
+    import day_review_pack
+
+    queued = queued_sessions(root, skip=session)
+    if not queued:
+        return {"status": "ok", "model": "", "reason": "", "outputs": []}
+    taken, left = queued[:REDO_SWEEP_LIMIT], queued[REDO_SWEEP_LIMIT:]
+    outputs: list[str] = []
+    narrated: list[str] = []
+    kept: list[str] = []
+    unbuilt: list[str] = []
+    model = ""
+    for day in taken:
+        pack = day_review_pack.read_pack(day, root=root)
+        if pack is None:
+            unbuilt.append(day)
+            continue
+        outcome = _run_day_story(day, pack, root, now=now, request=request, redo=True)
+        outputs.extend(outcome["outputs"])
+        model = model or outcome["model"]
+        if outcome["status"] == "ok":
+            day_review_pack.clear_redo(day, root=root)
+            narrated.append(day)
+        else:
+            kept.append(day)
+    parts: list[str] = []
+    if narrated:
+        parts.append("redo queued by the trader, narrated: " + ", ".join(narrated))
+    if kept:
+        parts.append("still queued after a rejected redo: " + ", ".join(kept))
+    if unbuilt:
+        parts.append("still queued, no pack yet: " + ", ".join(unbuilt))
+    if left:
+        parts.append(
+            f"{len(left)} more queued session(s) wait for tomorrow night "
+            f"(at most {REDO_SWEEP_LIMIT} a night)"
+        )
+    return {
+        "status": "ok",
+        "model": model,
+        "reason": "; ".join(parts),
         "outputs": outputs,
     }
 
@@ -654,11 +823,16 @@ __all__ = [
     "D1_VIEW_JSON_SCHEMA",
     "D1_VIEW_PROMPT_VERSION",
     "D1_VIEW_SCHEMA",
+    "MAX_GRADED_CLAIMS",
+    "MAX_OPEN_THESES",
+    "MAX_SOURCES",
     "NARRATION_JSON_SCHEMA",
     "PROMPT_VERSION",
+    "REDO_SWEEP_LIMIT",
     "SCHEMA",
     "d1_view_path",
     "narration_path",
+    "queued_sessions",
     "read_d1_view",
     "read_narration",
     "run_day_review_narration",

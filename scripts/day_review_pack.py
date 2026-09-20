@@ -128,6 +128,31 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+class _Minter:
+    """Mints a `source_id` that no other item in this pack carries.
+
+    Every id is derived from what it points AT - a read's `read_id`, a symbol,
+    a congruence kind - and derived ids can collide: a store that appended the
+    same row twice, two congruence lines of one kind, a duplicated entry. A
+    collision is not harmless here. `_check_day_narration` resolves a cited id
+    against ONE row, so two rows under one id would let a narration quote the
+    SECOND row's verdict while claiming the first (reviewer, 2026-09-20).
+
+    So the nth item to ask for an id gets `<base>#n`. Nothing is dropped and
+    nothing raises - an evidence store is never allowed to cost the thing it
+    records - and the suffix still points at exactly one row.
+    """
+
+    def __init__(self) -> None:
+        self._seen: dict[str, int] = {}
+
+    def mint(self, base: str) -> str:
+        text = _text(base) or "item"
+        count = self._seen.get(text, 0) + 1
+        self._seen[text] = count
+        return text if count == 1 else f"{text}#{count}"
+
+
 def _number(value: Any) -> float | None:
     try:
         number = float(value)
@@ -158,7 +183,9 @@ def _entry_rows(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _trader_said(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _trader_said(
+    entries: Iterable[Mapping[str, Any]], mint: _Minter
+) -> list[dict[str, Any]]:
     """One item per observation AND one per prediction (TJ-14A's rule, kept)."""
     import market_journal
 
@@ -178,7 +205,7 @@ def _trader_said(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
                 "text": words,
                 "direction": "",
                 "horizon": "",
-                "source_id": f"said:{entry_id}:{KIND_OBSERVATION}",
+                "source_id": mint.mint(f"said:{entry_id}:{KIND_OBSERVATION}"),
             })
         call = market_journal.prediction_of(entry)
         if call is not None:
@@ -192,7 +219,7 @@ def _trader_said(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
                 "horizon": call.horizon,
                 "confidence": call.confidence,
                 "because": call.because,
-                "source_id": f"said:{entry_id}:{KIND_PREDICTION}",
+                "source_id": mint.mint(f"said:{entry_id}:{KIND_PREDICTION}"),
             })
     return items
 
@@ -203,7 +230,7 @@ def _brief_field(brief: Any, name: str) -> Any:
     return getattr(brief, name, None)
 
 
-def _forecast_section(forecast: Any) -> dict[str, Any]:
+def _forecast_section(forecast: Any, mint: _Minter) -> dict[str, Any]:
     """The pasted brief, verbatim, with each parsed field citable on its own.
 
     `chased_against_news` is judged against what the brief STATED, so the
@@ -221,7 +248,7 @@ def _forecast_section(forecast: Any) -> dict[str, Any]:
     for name in FORECAST_FIELDS:
         fields[name] = {
             "value": _plain(_brief_field(brief, name)),
-            "source_id": f"forecast:{entry_id}:{name}",
+            "source_id": mint.mint(f"forecast:{entry_id}:{name}"),
         }
     return {
         "entry_id": entry_id,
@@ -232,7 +259,9 @@ def _forecast_section(forecast: Any) -> dict[str, Any]:
     }
 
 
-def _environment(environment: Iterable[Mapping[str, Any]], d1_label: str) -> list[dict[str, Any]]:
+def _environment(
+    environment: Iterable[Mapping[str, Any]], d1_label: str, mint: _Minter
+) -> list[dict[str, Any]]:
     """The day's regime shifts, whole, then the desk's D1 label for the session."""
     items: list[dict[str, Any]] = []
     for index, row in enumerate(environment or ()):
@@ -241,19 +270,19 @@ def _environment(environment: Iterable[Mapping[str, Any]], d1_label: str) -> lis
         items.append({
             **_plain(dict(row)),
             "kind": "regime_shift",
-            "source_id": f"env:regime_shift:{index}",
+            "source_id": mint.mint(f"env:regime_shift:{index}"),
         })
     label = _text(d1_label)
     if label:
         items.append({
             "kind": "d1_label",
             "label": label,
-            "source_id": "env:d1_label",
+            "source_id": mint.mint("env:d1_label"),
         })
     return items
 
 
-def _measured(story: Any) -> list[dict[str, Any]]:
+def _measured(story: Any, mint: _Minter) -> list[dict[str, Any]]:
     """`market_story.build_daily_story`'s own cells. The pack measures nothing."""
     cells = getattr(story, "measured", None)
     if cells is None and isinstance(story, Mapping):
@@ -263,11 +292,11 @@ def _measured(story: Any) -> list[dict[str, Any]]:
         if not isinstance(cell, Mapping):
             continue
         symbol = _text(cell.get("symbol")) or str(index)
-        items.append({**_plain(dict(cell)), "source_id": f"measured:{symbol}"})
+        items.append({**_plain(dict(cell)), "source_id": mint.mint(f"measured:{symbol}")})
     return items
 
 
-def _internals(marks: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _internals(marks: Iterable[Mapping[str, Any]], mint: _Minter) -> list[dict[str, Any]]:
     """The open, each Mentor hour and the close, in time order.
 
     The context travels COMPACTED (`trade_mentor_context.compact_for_ai`), so
@@ -288,13 +317,13 @@ def _internals(marks: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
             "kind": kind,
             "at": at,
             "context": _plain(trade_mentor_context.compact_for_ai(mark.get("context"))),
-            "source_id": f"internals:{kind}:{at}",
+            "source_id": mint.mint(f"internals:{kind}:{at}"),
         })
     items.sort(key=lambda item: str(item.get("at") or ""))
     return items
 
 
-def _walkaway(walkaway: Any) -> dict[str, Any]:
+def _walkaway(walkaway: Any, mint: _Minter) -> dict[str, Any]:
     """Counts per population, and the three rows that ran furthest after.
 
     A SIZE rule with an order, never a ranking that decides anything: the story
@@ -323,12 +352,12 @@ def _walkaway(walkaway: Any) -> dict[str, Any]:
     top: list[dict[str, Any]] = []
     for index, row in enumerate(rows[:WALKAWAY_TOP_N]):
         body = {key: value for key, value in row.items() if key != "_order"}
-        body["source_id"] = f"walkaway:{index}:{_text(body.get('symbol'))}"
+        body["source_id"] = mint.mint(f"walkaway:{index}:{_text(body.get('symbol'))}")
         top.append(body)
     return {"counts": counts, "top": top}
 
 
-def _skill(walkaway: Any, session: str) -> dict[str, Any]:
+def _skill(walkaway: Any, session: str, mint: _Minter) -> dict[str, Any]:
     """TJ-11's own skill block, whole. The pack computes no rate of its own."""
     skill = getattr(walkaway, "skill", None)
     if skill is None and isinstance(walkaway, Mapping):
@@ -336,30 +365,30 @@ def _skill(walkaway: Any, session: str) -> dict[str, Any]:
     body = _plain(skill) if isinstance(skill, Mapping) else {}
     if not isinstance(body, dict):
         body = {}
-    return {**body, "source_id": f"skill:{session}"}
+    return {**body, "source_id": mint.mint(f"skill:{session}")}
 
 
-def _reads(reads: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _reads(reads: Iterable[Mapping[str, Any]], mint: _Minter) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for index, row in enumerate(reads or ()):
         if not isinstance(row, Mapping):
             continue
         read_id = _text(row.get("read_id")) or str(index)
-        items.append({**_plain(dict(row)), "source_id": f"read:{read_id}"})
+        items.append({**_plain(dict(row)), "source_id": mint.mint(f"read:{read_id}")})
     return items
 
 
-def _congruence(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _congruence(lines: Iterable[Mapping[str, Any]], mint: _Minter) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for index, line in enumerate(lines or ()):
         if not isinstance(line, Mapping):
             continue
         kind = _text(line.get("kind")) or str(index)
-        items.append({**_plain(dict(line)), "source_id": f"congruence:{kind}"})
+        items.append({**_plain(dict(line)), "source_id": mint.mint(f"congruence:{kind}")})
     return items
 
 
-def _trades(trades: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def _trades(trades: Iterable[Mapping[str, Any]], mint: _Minter) -> dict[str, Any]:
     """The day's closed money, counted once per row and never recomputed."""
     rows: list[dict[str, Any]] = []
     wins = losses = 0
@@ -375,7 +404,7 @@ def _trades(trades: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                 wins += 1
             elif pnl < 0:
                 losses += 1
-        rows.append({**_plain(dict(trade)), "source_id": f"trade:{trade_id}"})
+        rows.append({**_plain(dict(trade)), "source_id": mint.mint(f"trade:{trade_id}")})
     return {
         "n": len(rows),
         "wins": wins,
@@ -412,19 +441,22 @@ def build_pack(
     """
     session = str(session_date or "")[:10]
     moment = now or datetime.now().astimezone()
+    # ONE minter for the whole pack: no two items in it may share a source_id,
+    # whatever the stores handed in (reviewer, 2026-09-20).
+    mint = _Minter()
     body: dict[str, Any] = {
         "schema": SCHEMA,
         "session_date": session,
-        "trader_said": _trader_said(entries),
-        "forecast": _forecast_section(forecast),
-        "environment": _environment(environment, d1_label),
-        "measured": _measured(story),
-        "internals": _internals(internals),
-        "walkaway": _walkaway(walkaway),
-        "skill": _skill(walkaway, session),
-        "reads": _reads(reads),
-        "congruence": _congruence(congruence),
-        "trades": _trades(trades),
+        "trader_said": _trader_said(entries, mint),
+        "forecast": _forecast_section(forecast, mint),
+        "environment": _environment(environment, d1_label, mint),
+        "measured": _measured(story, mint),
+        "internals": _internals(internals, mint),
+        "walkaway": _walkaway(walkaway, mint),
+        "skill": _skill(walkaway, session, mint),
+        "reads": _reads(reads, mint),
+        "congruence": _congruence(congruence, mint),
+        "trades": _trades(trades, mint),
         # TJ-12 and TJ-7's hooks. Present and falsy, never absent.
         "report_card": {},
         "mood": {},
