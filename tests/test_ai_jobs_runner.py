@@ -349,6 +349,13 @@ EXPECTED_SLOT_ORDER = (
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.
     "ai_summary",
+    # TJ-4 (2026-09-20): the overnight day story and the rolling D1 view.
+    # Appended INSIDE stage 2 and deliberately AHEAD of `ticker_briefs`: gate
+    # #158 reads the ledger for a day story finished before 23:30 Pacific, and
+    # the briefs reserve 120 minutes in front of it. It cannot go further
+    # forward either - `ai_summary` sits directly after `measured_report` and
+    # two other pins say so.
+    "day_review_narration",
     # TJ-16 item 4 (2026-09-20): grounded codes for the trader's own words.
     # A local MEDIUM model slot, so it is in stage 2 - after `ai_summary`
     # because WS-10D pins `measured_report` directly before that name, and

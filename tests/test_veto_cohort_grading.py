@@ -639,7 +639,11 @@ def test_the_scope_can_be_selected_on_demand():
         "market_story_rollups",
         "measured_report",
         # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
+        # TJ-4 (2026-09-20) appends the day story inside the stage, ahead of the
+        # briefs: gate #158 wants it finished before 23:30 Pacific and the
+        # briefs reserve 120 minutes.
         "ai_summary",
+        "day_review_narration",
         # TJ-16 item 4 (2026-09-20): the grounded word tagger, appended inside
         # stage 2 after `ai_summary` (the `measured_report` / `ai_summary` pair
         # stays adjacent) and before the two-hour briefs.

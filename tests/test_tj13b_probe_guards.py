@@ -624,15 +624,23 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # `theta_pick_grading`. This guard is about the e8c04f88 set and the 12-14
     # move, so the new slot is pinned where it sits and then set aside.
     assert slate[slate.index("theta_pick_grading") + 1] == "read_grades_mature"
-    # LEAD AMENDMENT 2026-09-20 (TJ-16): TJ-16 registered TWO new slots - the
-    # deterministic `prediction_contrast` directly after `miss_contrast` in
-    # stage 1, and the model slot `observation_tags` directly before
-    # `ticker_briefs` in stage 2 (a weeknight has no `ai_summary`). Same
-    # treatment as `read_grades_mature`: each is pinned where it sits and then
-    # set aside, so this guard stays about the e8c04f88 set and the 12-14 move.
+    # LEAD AMENDMENT 2026-09-20 (TJ-4 + TJ-16 integration): three new slots,
+    # each pinned where it sits and then set aside the way `read_grades_mature`
+    # is, so this guard stays about the e8c04f88 set and the 12-14 move.
+    # TJ-16's deterministic `prediction_contrast` sits directly after
+    # `miss_contrast` in stage 1. In stage 2 the day story goes first (gate
+    # #158 wants it finished before 23:30 Pacific and it is what the trader
+    # reads in the morning), then TJ-16's word tagger, then the briefs with
+    # their 120-minute reserve (a weeknight has no `ai_summary`).
     assert slate[slate.index("miss_contrast") + 1] == "prediction_contrast"
+    assert slate[slate.index("ticker_briefs") - 2] == "day_review_narration"
     assert slate[slate.index("ticker_briefs") - 1] == "observation_tags"
-    set_aside = ("read_grades_mature", "prediction_contrast", "observation_tags")
+    set_aside = (
+        "read_grades_mature",
+        "prediction_contrast",
+        "day_review_narration",
+        "observation_tags",
+    )
     today = tuple(name for name in slate if name not in set_aside)
 
     assert len(today) == len(pinned_at_e8c04f88)

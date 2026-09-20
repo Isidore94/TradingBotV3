@@ -66,6 +66,12 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # that omitted them on a failure would make the page's own key check lie.
     "reads",
     "congruence",
+    # TJ-4: the two VERIFIED files the night wrote - one day story for this
+    # session, and the ONE rolling D1 view. Both are READ here, on the worker,
+    # in a few kilobytes. Building either on the desk would be a 14 GB model
+    # load in front of the trader, which is what the night window exists for.
+    "day_story",
+    "d1_view",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -161,6 +167,8 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "spy_marker_placements": {},
         "reads": (),
         "congruence": (),
+        "day_story": None,
+        "d1_view": None,
     }
 
 
@@ -447,6 +455,13 @@ class DayReviewService:
             payload["congruence"] = congruence
         except Exception:  # noqa: BLE001 - a verdict never costs the day
             _log.debug("Day Review reads could not be graded.", exc_info=True)
+        # TJ-4: the night's two verified files, READ on this worker. The page
+        # calls no model, no grader and no pack builder - it formats what the
+        # night already wrote. A story stamped for another session is not shown:
+        # a page that fell back to "the newest story" would print Thursday's
+        # reading over Friday's tape.
+        payload["day_story"] = self._day_story(session)
+        payload["d1_view"] = self._d1_view()
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
@@ -565,6 +580,174 @@ class DayReviewService:
         except Exception:  # noqa: BLE001 - a cache never costs the page
             _log.debug("The Day Review index could not be built.", exc_info=True)
             return None
+
+    # -- the night's story (read only) -------------------------------------
+    @staticmethod
+    def _day_story(session: str) -> dict[str, Any] | None:
+        """The verified narration for THIS session, or `None`. Reads a file."""
+        if not session:
+            return None
+        try:
+            from ai_jobs import day_review_narration
+
+            stored = day_review_narration.read_narration(session)
+        except Exception:  # noqa: BLE001 - an unreadable story is a quieter page
+            _log.debug("The Day Review story was unreadable.", exc_info=True)
+            return None
+        if not isinstance(stored, Mapping):
+            return None
+        if str(stored.get("session_date") or "")[:10] != session:
+            return None
+        return dict(stored)
+
+    @staticmethod
+    def _d1_view() -> dict[str, Any] | None:
+        """The ONE rolling D1 view, or `None`. Not keyed to a session."""
+        try:
+            from ai_jobs import day_review_narration
+
+            stored = day_review_narration.read_d1_view()
+        except Exception:  # noqa: BLE001
+            _log.debug("The rolling D1 view was unreadable.", exc_info=True)
+            return None
+        return dict(stored) if isinstance(stored, Mapping) else None
+
+    # -- the day pack ------------------------------------------------------
+    def build_pack_for(
+        self,
+        session_date: str,
+        *,
+        payload: Mapping[str, Any] | None = None,
+        now: datetime | None = None,
+        **_kwargs,
+    ) -> dict[str, Any] | None:
+        """Build and store the session's day pack. The ONE named seam for it.
+
+        Called by the page's post-close tick (`_IndexBuildWorker`, on the worker
+        thread) AFTER `build_reads_for`, because the pack's `reads` section IS
+        what the grader just wrote. The nightly slot reads the file this leaves
+        behind and never builds one of its own.
+
+        A failure costs the pack and nothing else: it is derived and
+        rebuildable, and the night says "no story yet" rather than narrating a
+        half-built day.
+        """
+        import day_review_pack
+
+        session = str(session_date or "")[:10]
+        if not session:
+            return None
+        try:
+            data = (
+                dict(payload)
+                if isinstance(payload, Mapping)
+                else self.read_day(session, now=now)
+            )
+        except Exception:  # noqa: BLE001 - an unreadable day builds no pack
+            _log.debug("The day pack's inputs were unreadable.", exc_info=True)
+            return None
+        entries = list(data.get("entries") or [])
+        try:
+            pack = day_review_pack.build_pack(
+                session,
+                entries=entries,
+                forecast=data.get("forecast") or {},
+                story=data.get("story"),
+                environment=self._regime_shifts(session),
+                d1_label=self._d1_label_for(session),
+                internals=self._internals_marks(session, entries),
+                walkaway=data.get("walkaway"),
+                reads=data.get("reads") or (),
+                congruence=data.get("congruence") or (),
+                trades=data.get("trades") or [],
+                now=now,
+            )
+            day_review_pack.write_pack(pack)
+        except Exception:  # noqa: BLE001 - a pack never costs the page
+            _log.debug("The day pack could not be built.", exc_info=True)
+            return None
+        return pack
+
+    @staticmethod
+    def _regime_shifts(session: str) -> list[dict[str, Any]]:
+        """The session's own regime-shift rows, oldest first. Read-only."""
+        try:
+            from evidence_ledger import EvidenceLedger
+            from market_context_ledger import SCHEMA_MARKET_REGIME_SHIFT, STREAM_REGIME
+
+            rows = [
+                dict(row)
+                for row in EvidenceLedger(
+                    stream=STREAM_REGIME, schema=SCHEMA_MARKET_REGIME_SHIFT
+                ).read().rows
+                if str(row.get("session_date") or "")[:10] == session
+            ]
+        except Exception:  # noqa: BLE001 - a missing stream is a quieter pack
+            _log.debug("The regime-shift stream was unreadable.", exc_info=True)
+            return []
+        rows.sort(key=lambda row: str(row.get("event_at") or ""))
+        return rows
+
+    @staticmethod
+    def _d1_label_for(session: str) -> str:
+        """The desk's own D1 label for the session, or "" (nobody labelled it)."""
+        try:
+            import d1_environment_store
+
+            label = d1_environment_store.label_for_session(session, BENCHMARK_SYMBOL)
+        except Exception:  # noqa: BLE001
+            _log.debug("The desk's D1 label was unreadable.", exc_info=True)
+            return ""
+        return "" if str(label or "") in ("", "unknown") else str(label)
+
+    @staticmethod
+    def _internals_marks(session: str, entries) -> list[dict[str, Any]]:
+        """The open, each Mentor hour and the close - TJ-14A's v2 context each.
+
+        Built through `trade_mentor_context`'s ONE builder from the durable
+        tape, so the pack cannot carry a shape the live card never wrote. The
+        bars are loaded ONCE per session and the builder cuts them to each
+        stamp; a session with no tape has its facts `unmeasured`, never guessed.
+        """
+        if not session:
+            return []
+        try:
+            import market_calendar
+            import trade_mentor_context
+
+            day = date.fromisoformat(session)
+            close = market_calendar.session_close(day)
+            opening = close.replace(hour=9, minute=30, second=0, microsecond=0)
+            moments: list[tuple[str, datetime]] = [("open", opening)]
+            for entry in entries or ():
+                if not isinstance(entry, Mapping):
+                    continue
+                mentor = entry.get("mentor")
+                if not isinstance(mentor, Mapping) or not mentor:
+                    continue
+                stamp = str(
+                    mentor.get("responded_at") or entry.get("created_at") or ""
+                )
+                try:
+                    moment = datetime.fromisoformat(stamp)
+                except ValueError:
+                    continue
+                if moment.tzinfo is None:
+                    continue
+                moments.append(("mentor", moment))
+            moments.append(("close", close))
+            bars = trade_mentor_context.internals_bars_at(session, close)
+            marks: list[dict[str, Any]] = []
+            for kind, moment in sorted(moments, key=lambda item: item[1]):
+                marks.append({
+                    "kind": kind,
+                    "at": moment.isoformat(),
+                    "context": trade_mentor_context.internals_at(session, moment, bars),
+                })
+            return marks
+        except Exception:  # noqa: BLE001 - an unreadable tape costs the internals
+            _log.debug("The day pack's internals could not be built.", exc_info=True)
+            return []
 
     def build_session_bars_for(self, session_date: str, **_kwargs) -> Any:
         """Fetch and persist a closed session's M5 tape after its index exists."""

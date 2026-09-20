@@ -45,6 +45,9 @@ import logging
 import sys
 from pathlib import Path
 
+#: The ONE slot `--session` may name (TJ-4 change 4). Spelled once.
+DAY_REVIEW_SLOT = "day_review_narration"
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if not getattr(sys, "frozen", False) and str(SCRIPTS_DIR) not in sys.path:
@@ -257,10 +260,45 @@ def main(argv: list[str] | None = None) -> int:
              "already, which is the one --force re-spends. Tiers: large, "
              "medium.",
     )
+    parser.add_argument(
+        "--session",
+        default="",
+        metavar="YYYY-MM-DD",
+        help="narrate THIS session instead of the one the clock names. Accepted "
+             "ONLY together with `--slot day_review_narration` - it is the Day "
+             "Review page's Redo button, which asks for one named day. It is "
+             "handed to that one slot and to nothing else: the night's own "
+             "session date, the night kind and every other slot's "
+             "already-done check are untouched, and the night-only rule still "
+             "holds, so a forced daytime redo still records skipped.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
     _configure_logging(args.verbose)
+
+    # TJ-4 change 4. Refused rather than ignored: a flag that silently did
+    # nothing for every other slot would make `--session` look like a general
+    # override of the night's own session date, which it is not.
+    session_override = str(args.session or "").strip()
+    if session_override:
+        if args.slot != DAY_REVIEW_SLOT:
+            parser.error(
+                f"--session is accepted only with --slot {DAY_REVIEW_SLOT}; it "
+                "names the one day that slot narrates and reaches no other job"
+            )
+        # ONE rule for what a redo may name, shared with the Day Review page's
+        # own button: exactly `YYYY-MM-DD`, a real exchange session, and one
+        # that has CLOSED. The CLI used to check only the first two, so the
+        # picker's provisional Today entry parsed here and the slot then
+        # answered `skipped` - true, but the operator was told nothing at the
+        # door (reviewer round 3, 2026-09-20).
+        import day_review_pack
+
+        try:
+            session_override = day_review_pack.validated_session(session_override)
+        except ValueError as exc:
+            parser.error(f"--session: {exc}")
 
     if args.status:
         return _print_status()
@@ -312,7 +350,9 @@ def main(argv: list[str] | None = None) -> int:
             summary_scopes=scopes or None,
             session_date=_session_date_or_blank(),
         )
-    report = runner.run_slots(slots, force=args.force, only=args.slot)
+    report = runner.run_slots(
+        slots, force=args.force, only=args.slot, session_override=session_override
+    )
     logging.info("%s", report.summary())
 
     if not report.store_ok:

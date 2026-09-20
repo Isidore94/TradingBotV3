@@ -180,8 +180,15 @@ def run_slots(
     force: bool = False,
     only: str = "",
     ledger_path=None,
+    session_override: str = "",
 ) -> RunReport:
-    """Run every due slot once. Never raises: a crash here is a lost night."""
+    """Run every due slot once. Never raises: a crash here is a lost night.
+
+    ``session_override`` (TJ-4 change 4) is the ONE narrow door for "narrate
+    THAT day": it applies only to the slot named by ``only`` and reaches
+    nothing else. `session_date_for`, `night_kind` and every other slot's
+    already-done check are untouched, so a redo cannot re-key the night.
+    """
 
     # ONE runner at a time on this machine (2026-08-28). The scheduled task
     # fires every 30 minutes for eight hours, which was harmless while every
@@ -201,7 +208,12 @@ def run_slots(
     try:
         with local_writer_lock(RUNNER_LOCK_KEY, timeout_seconds=0.0):
             return _run_slots_locked(
-                slots, now=now, force=force, only=only, ledger_path=ledger_path
+                slots,
+                now=now,
+                force=force,
+                only=only,
+                ledger_path=ledger_path,
+                session_override=session_override,
             )
     except LocalLockUnavailable as exc:
         # The lock reports both "someone else holds it" and "this box has no
@@ -220,7 +232,12 @@ def run_slots(
                 "AI jobs: no cross-process lock available (%s); running unguarded.", exc
             )
             return _run_slots_locked(
-                slots, now=now, force=force, only=only, ledger_path=ledger_path
+                slots,
+                now=now,
+                force=force,
+                only=only,
+                ledger_path=ledger_path,
+                session_override=session_override,
             )
         logging.info(
             "AI jobs: another run is already in progress on this machine; leaving it "
@@ -236,6 +253,7 @@ def _run_slots_locked(
     force: bool = False,
     only: str = "",
     ledger_path=None,
+    session_override: str = "",
 ) -> RunReport:
     """The body of :func:`run_slots`, always under the machine-local lock."""
     from market_calendar import SessionCalendarError
@@ -278,10 +296,26 @@ def _run_slots_locked(
             continue
         if not slot.enabled:
             continue
-        if slot.name in already:
+        # TJ-4 change 4: the Redo button's one named day. It reaches ONLY the
+        # slot the operator typed, and from here down that slot's whole run -
+        # its already-done check, its attempt cap and every ledger row it
+        # writes, the window refusal included - is keyed to the session it
+        # WORKED ON. A row claiming tonight's session for work done on last
+        # Tuesday's, and an old-day redo skipped because TONIGHT is already
+        # covered, are the two dishonest halves of this (reviewer, 2026-09-20).
+        # With the keyword at its default `run_session` IS `session_date` and
+        # nothing here moves.
+        overridden = bool(session_override) and bool(only) and slot.name == only
+        run_session = session_override if overridden else session_date
+        slot_already = (
+            (set() if force else ledger.completed_jobs(run_session, path=ledger_path))
+            if overridden
+            else already
+        )
+        if slot.name in slot_already:
             if session_today:
                 logging.info(
-                    "AI job %s already completed for %s; skipping.", slot.name, session_date
+                    "AI job %s already completed for %s; skipping.", slot.name, run_session
                 )
                 continue
             # A weekend or holiday firing whose last completed session is
@@ -290,17 +324,17 @@ def _run_slots_locked(
             # ledger under ~27 rows a night.
             reason = (
                 f"no session: {market_calendar_describe(moment)}; "
-                f"{session_date} is already covered"
+                f"{run_session} is already covered"
             )
             if _already_recorded_no_session(
-                slot.name, session_date, path=ledger_path
+                slot.name, run_session, path=ledger_path
             ):
                 logging.debug("AI job %s: %s (already recorded).", slot.name, reason)
                 continue
             row = ledger.record(
                 job=slot.name,
                 status=ledger.STATUS_SKIPPED,
-                session_date=session_date,
+                session_date=run_session,
                 reason=reason,
                 path=ledger_path,
                 extra={"no_session": True},
@@ -315,21 +349,21 @@ def _run_slots_locked(
         # an operator asking for a run by hand is the one case where the cap is
         # not protecting anybody.
         if slot.max_attempts and not force:
-            if ledger.has_terminal_marker(slot.name, session_date, path=ledger_path):
+            if ledger.has_terminal_marker(slot.name, run_session, path=ledger_path):
                 logging.debug(
-                    "AI job %s: already finished for %s; skipping.", slot.name, session_date
+                    "AI job %s: already finished for %s; skipping.", slot.name, run_session
                 )
                 continue
             cap_reason = ledger.attempt_cap_reason(
                 slot.name,
-                session_date,
+                run_session,
                 max_attempts=slot.max_attempts,
                 path=ledger_path,
             )
             if cap_reason:
                 row = ledger.mark_terminal(
                     job=slot.name,
-                    session_date=session_date,
+                    session_date=run_session,
                     reason=cap_reason,
                     path=ledger_path,
                 )
@@ -385,7 +419,7 @@ def _run_slots_locked(
             row = ledger.record(
                 job=slot.name,
                 status=ledger.STATUS_SKIPPED,
-                session_date=session_date,
+                session_date=run_session,
                 reason=reason,
                 path=ledger_path,
             )
@@ -397,7 +431,13 @@ def _run_slots_locked(
         clock = time.perf_counter()
         try:
             extra_kwargs = dict(slot.model_free_kwargs or {}) if model_free else {}
-            outcome = slot.run(session_date=session_date, now=moment, **extra_kwargs) or {}
+            if overridden:
+                # The operator asked for ONE day, so a slot that also sweeps a
+                # queue of its own (TJ-4's day story) does what it was asked for
+                # and nothing else. Only the overridden slot can ever be handed
+                # this, so no other job sees a keyword it does not know.
+                extra_kwargs["only_this_session"] = True
+            outcome = slot.run(session_date=run_session, now=moment, **extra_kwargs) or {}
             # A job may report that it published an honestly degraded document
             # rather than a trustworthy one. That is not "ok", and because
             # completed_jobs counts only STATUS_OK, the next firing retries it.
@@ -442,7 +482,7 @@ def _run_slots_locked(
             row = ledger.record(
                 job=slot.name,
                 status=status,
-                session_date=session_date,
+                session_date=run_session,
                 started_at=started,
                 model=str(outcome.get("model") or ""),
                 reason=row_reason,
@@ -464,7 +504,7 @@ def _run_slots_locked(
             row = ledger.record(
                 job=slot.name,
                 status=ledger.STATUS_FAILED,
-                session_date=session_date,
+                session_date=run_session,
                 started_at=started,
                 error=f"{type(exc).__name__}: {exc}",
                 path=ledger_path,
@@ -564,6 +604,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     from ai_jobs import (
         briefs,
         cohorts,
+        day_review_narration,
         digest,
         enrichment,
         evidence_report,
@@ -951,6 +992,26 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             # attempts at ONE session a week. plan.md §12.3: set max_attempts,
             # never 0.
             max_attempts=3,
+        ),
+        # TJ-4, APPENDED INSIDE stage 2 and deliberately AHEAD of the briefs.
+        # Gate #158 reads the ledger for a day story finished before 23:30
+        # Pacific and `ticker_briefs` reserves 120 minutes in front of it, so
+        # the story goes first. It cannot move further forward: two existing
+        # pins say `ai_summary` sits directly after `measured_report`
+        # (`test_ws_10d_market_story.py`, `test_ws_rp_shared_report.py`), and
+        # decision 0018's stage boundaries do not move for a new slot. It reads
+        # only the deterministic day pack, and a failure preserves the last
+        # verified story.
+        JobSlot(
+            name="day_review_narration",
+            run=day_review_narration.run_day_review_narration,
+            reserve_minutes=10.0,
+            description=(
+                "Grounded overnight story of one session, plus the rolling D1 "
+                "view of what the trader believes lately"
+            ),
+            max_attempts=3,
+            uses_model=True,
         ),
         # TJ-16 item 4 (2026-09-20), APPENDED INSIDE stage 2, AFTER `ai_summary`
         # and BEFORE `ticker_briefs`.
