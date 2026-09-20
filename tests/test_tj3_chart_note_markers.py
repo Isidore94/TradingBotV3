@@ -110,14 +110,19 @@ def test_the_marker_glyphs_pool_across_three_renders(chart, qapp):
     """
     payload = [_marker("a", 5), _marker("b", 17, "veto"), _marker("c", 31, "trade_open")]
 
+    # The ITEMS are held, not their `id()`: a freed scene item's address can be
+    # handed straight back to its replacement, and then a rebuild would read as
+    # a reuse.
     seen = []
     for _pass in range(3):
         chart.set_note_markers(payload)
         qapp.processEvents()
-        seen.append([id(item) for item in _scene_items(chart)])
+        seen.append(_scene_items(chart))
 
     assert chart.note_marker_count() == 3
-    assert seen[0] == seen[1] == seen[2], "the glyphs were rebuilt instead of reused"
+    assert len(seen[0]) == len(seen[1]) == len(seen[2])
+    for first, second, third in zip(*seen):
+        assert first is second is third, "the glyphs were rebuilt instead of reused"
 
 
 def test_a_shorter_payload_hides_the_spare_glyphs_and_destroys_nothing(chart, qapp):
@@ -125,13 +130,16 @@ def test_a_shorter_payload_hides_the_spare_glyphs_and_destroys_nothing(chart, qa
                             (("a", 3), ("b", 9), ("c", 15), ("d", 21))])
     qapp.processEvents()
     assert chart.note_marker_count() == 4
-    full = [id(item) for item in _scene_items(chart)]
+    full = _scene_items(chart)
 
     chart.set_note_markers([_marker("a", 3), _marker("b", 9)])
     qapp.processEvents()
 
     assert chart.note_marker_count() == 2
-    assert [id(item) for item in _scene_items(chart)] == full
+    after = _scene_items(chart)
+    assert len(after) == len(full)
+    for kept, now in zip(full, after):
+        assert kept is now, "a spare glyph was destroyed instead of hidden"
 
 
 def test_no_markers_hides_the_family_without_touching_the_candles(chart, qapp):

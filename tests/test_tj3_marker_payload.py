@@ -118,18 +118,45 @@ def _entry(text: str, created_at: str, *, origin: str = "", entry_id: str = "", 
     return row
 
 
-def _decision(symbol: str, *, verdict: str, stamp: str, side: str = "LONG"):
-    """A decision row exactly as `day_review_service` maps one forward."""
+def _mentor(hour_utc: str, *, kind: str = "m5_d1", **extra):
+    """The `mentor` payload as `trade_mentor_card._mentor_payload` writes it.
+
+    Its real keys TODAY are `slot_id`, `prompt_kind`, `scheduled_at`,
+    `responded_at` and `context` - there is no `observation` and no
+    `prediction` until TJ-14A splits the card. All three stamps are the SAME
+    instant here (a reply typed on the hour), so no test below quietly pins
+    WHICH of them a marker is placed at; that choice is the builder's.
+    """
+    payload = {
+        "slot_id": f"{SESSION}-{hour_utc[11:13]}{hour_utc[14:16]}-{kind}",
+        "prompt_kind": kind,
+        "scheduled_at": hour_utc,
+        "responded_at": hour_utc,
+        "context": {"schema": "trade_mentor_context_v1", "readings": []},
+    }
+    payload.update(extra)
+    return payload
+
+
+def _decision(symbol: str, *, verdict: str, stamp: str, side: str = "LONG",
+              capture_id: str | None = None, source: str = "annotations",
+              category: str = "chart_review"):
+    """A decision row exactly as `day_review_service` maps one forward.
+
+    `capture_id` is PRESENT AND EMPTY on every row the pick-feedback and
+    swing-favorite readers produce (`daily_recap_reader`), so a builder that
+    uses it as the marker's id without a fallback loses those rows.
+    """
     return {
         "session_date": SESSION,
         "symbol": symbol,
         "side": side,
-        "category": "chart_review",
+        "category": category,
         "verdict": verdict,
-        "source": "annotations",
+        "source": source,
         "timeframe": "M5",
         "stamp": stamp,
-        "capture_id": f"cap-{symbol}-{verdict}",
+        "capture_id": f"cap-{symbol}-{verdict}" if capture_id is None else capture_id,
         "reason": "extended",
         "decision_session": SESSION,
     }
@@ -224,6 +251,19 @@ def test_no_bars_means_no_markers_rather_than_a_marker_at_zero():
     ) == ()
 
 
+# -- the vocabulary ----------------------------------------------------------
+
+
+def test_every_kind_the_plan_names_is_declared():
+    """`plan.md` TJ-3 change 1 names ten. The eleventh is the prediction."""
+    import day_review_markers
+
+    assert set(day_review_markers.MARKER_KINDS) >= {
+        "note", "mentor", "forecast", "like", "pass", "veto",
+        "click_away", "claim", "trade_open", "trade_close",
+    }
+
+
 # -- the benchmark chart -----------------------------------------------------
 
 
@@ -239,8 +279,7 @@ def test_the_benchmark_chart_carries_notes_mentor_answers_the_forecast_and_trade
             "2026-09-18T15:00:00+00:00",
             origin=market_journal.ORIGIN_TRADE_MENTOR,
             entry_id="e-mentor",
-            mentor={"slot_id": f"{SESSION}-0800-m5_d1", "prompt_kind": "m5_d1",
-                    "observation": "choppy"},
+            mentor=_mentor("2026-09-18T15:00:00+00:00"),
         ),
         _entry(
             "someone else's brief",
@@ -311,47 +350,76 @@ def test_a_machine_row_never_gets_a_marker():
     assert [marker["ref_id"] for marker in markers] == ["e-mine"]
 
 
+def test_a_legacy_row_with_no_mentor_key_at_all_is_still_a_note():
+    """Pre-Phase-0.31 rows predate `mentor`, and `entries_about` still returns them.
+
+    "no prompt asked for this" and "this key did not exist yet" are two
+    different absences; neither is a reason to lose the trader's words.
+    """
+    import day_review_markers
+
+    legacy = _entry("an old thought", "2026-09-18T17:12:00+00:00", entry_id="e-old")
+    legacy.pop("mentor")
+
+    markers = day_review_markers.benchmark_markers(_m5_bars(), entries=[legacy])
+
+    assert [(marker["ref_id"], marker["kind"]) for marker in markers] == [
+        ("e-old", "note")
+    ]
+
+
 def test_an_observation_only_read_and_a_prediction_get_different_kinds():
     """A description is not a prediction (TJ-14 item 1), and the chart says so.
 
     The prediction kind's NAME is the builder's choice; that the two are not the
-    same glyph is not. `mentor` is present and EMPTY on a plain note, holds
-    `observation` on a described read, and `prediction` only when the trader
-    actually clicked a direction.
+    same glyph is not. Three real shapes sit side by side here: the row the card
+    writes TODAY (slot keys only, no `observation`, no `prediction`), the
+    TJ-14A row that carries `observation` and nothing more, and the TJ-14A row
+    where the trader actually clicked a direction. Only the third is a call.
     """
     import day_review_markers
     import market_journal
 
     bars = _m5_bars()
-    observed = _entry(
+    today = _entry(
         "chop, no edge",
         "2026-09-18T15:00:00+00:00",
         origin=market_journal.ORIGIN_TRADE_MENTOR,
+        entry_id="e-today",
+        mentor=_mentor("2026-09-18T15:00:00+00:00"),
+    )
+    observed = _entry(
+        "still chop",
+        "2026-09-18T15:30:00+00:00",
+        origin=market_journal.ORIGIN_TRADE_MENTOR,
         entry_id="e-observed",
-        mentor={"slot_id": f"{SESSION}-0800-m5_d1", "prompt_kind": "m5_d1",
-                "observation": "chop, no edge"},
+        mentor=_mentor("2026-09-18T15:30:00+00:00", observation="still chop"),
     )
     predicted = _entry(
         "fading into the close",
         "2026-09-18T16:00:00+00:00",
         origin=market_journal.ORIGIN_TRADE_MENTOR,
         entry_id="e-predicted",
-        mentor={
-            "slot_id": f"{SESSION}-0900-m5", "prompt_kind": "m5",
-            "observation": "",
-            "prediction": {"direction": "down", "horizon": "rest_of_day",
-                           "confidence": "medium", "because": "no bid"},
-        },
+        mentor=_mentor(
+            "2026-09-18T16:00:00+00:00",
+            kind="m5",
+            observation="",
+            prediction={"direction": "down", "horizon": "rest_of_day",
+                        "confidence": "medium", "because": "no bid"},
+        ),
     )
 
     kinds = {
         marker["ref_id"]: marker["kind"]
         for marker in day_review_markers.benchmark_markers(
-            bars, entries=[observed, predicted]
+            bars, entries=[today, observed, predicted]
         )
     }
 
-    assert kinds["e-observed"] == "mentor"
+    assert kinds["e-today"] == "mentor"
+    assert kinds["e-observed"] == "mentor", (
+        "a described read was promoted to a call it never made"
+    )
     assert kinds["e-predicted"] != kinds["e-observed"], (
         "a clicked prediction draws the same glyph as a description"
     )
@@ -429,6 +497,56 @@ def test_a_names_chart_carries_only_that_names_trades():
 
     assert {marker["ref_id"] for marker in markers} == {"t-aaa"}
     assert _by_kind(markers) == {"trade_open", "trade_close"}
+
+
+def test_a_decision_with_an_empty_capture_id_still_gets_a_usable_ref_id():
+    """Every pick-feedback and swing-favorite row has `capture_id` EMPTY.
+
+    `daily_recap_reader` passes `capture_id=""` for both sources, so a builder
+    that hands the page an empty `ref_id` hands it a marker nothing can select
+    and a page that cannot tell two of them apart.
+    """
+    import day_review_markers
+
+    decisions = [
+        _decision("AAA", verdict="not_today", stamp="2026-09-18T17:12:00+00:00",
+                  capture_id="", source="pick_feedback", category="pick"),
+        _decision("AAA", verdict="like", stamp="2026-09-18T17:32:00+00:00",
+                  capture_id="", source="pick_feedback", category="pick"),
+    ]
+
+    markers = day_review_markers.symbol_markers("AAA", _m5_bars(), decisions=decisions)
+
+    assert len(markers) == 2
+    ids = [str(marker["ref_id"]) for marker in markers]
+    assert all(ref.strip() for ref in ids), ids
+    assert len(set(ids)) == 2, "two decisions share one id"
+
+
+def test_a_verdict_the_plan_did_not_name_never_invents_a_kind():
+    """`dislike`, `not_today` and `swing_favorite` are real and unlisted.
+
+    They come back from `daily_recap_reader._decisions` on any real session.
+    Whatever the builder decides to draw them as, the kind is one it declared -
+    a chart that draws a glyph nobody can read is worse than one that does not.
+    """
+    import day_review_markers
+
+    decisions = [
+        _decision("AAA", verdict="dislike", stamp="2026-09-18T17:12:00+00:00",
+                  capture_id="", source="pick_feedback", category="pick"),
+        _decision("AAA", verdict="not_today", stamp="2026-09-18T17:17:00+00:00",
+                  capture_id="", source="pick_feedback", category="pick"),
+        _decision("AAA", verdict="swing_favorite", stamp="2026-09-18T17:22:00+00:00",
+                  capture_id="", source="swing_favorites", category="swing"),
+    ]
+
+    for marker in day_review_markers.symbol_markers(
+        "AAA", _m5_bars(), decisions=decisions
+    ):
+        assert marker["kind"] in day_review_markers.MARKER_KINDS, marker
+        assert str(marker["label"]).strip(), marker
+        assert str(marker["ref_id"]).strip(), marker
 
 
 def test_a_name_is_matched_whatever_case_it_was_written_in():

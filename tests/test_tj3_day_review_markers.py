@@ -135,11 +135,12 @@ def _walkaway_day():
             state="measured",
         )
 
-    day = WalkawayDay(rejected=(_row("AAA", "veto"),),
-                      liked_not_traded=(_row("BBB", "like"),))
-    object.__setattr__(day, "sentences", {})
-    object.__setattr__(day, "skill", None)
-    return day
+    return WalkawayDay(
+        rejected=(_row("AAA", "veto"),),
+        liked_not_traded=(_row("BBB", "like"),),
+        sentences={},
+        skill=None,
+    )
 
 
 def _page_payload():
@@ -351,6 +352,7 @@ def test_rendering_puts_the_payloads_markers_on_the_one_spy_chart(panel):
 def test_rendering_builds_no_marker_payload_on_the_paint_path(panel, monkeypatch):
     """Markers are built on the worker. The paint path formats and computes nothing."""
     import day_review_markers
+    import ui.panels.day_review_panel as page
 
     def _forbidden(*_args, **_kwargs):
         raise AssertionError("a marker payload was built on the Qt thread")
@@ -359,6 +361,13 @@ def test_rendering_builds_no_marker_payload_on_the_paint_path(panel, monkeypatch
     monkeypatch.setattr(day_review_markers, "symbol_markers", _forbidden)
 
     panel.render(_page_payload())
+
+    # A module-level `from day_review_markers import ...` in the page would
+    # bind the real function before any patch could reach it, so the panel's
+    # namespace is checked too: the builder is not a thing this file holds.
+    assert not hasattr(page, "benchmark_markers")
+    assert not hasattr(page, "symbol_markers")
+    assert not hasattr(page, "day_review_markers")
 
 
 def test_rendering_twice_starts_no_read_and_keeps_one_chart(panel):
