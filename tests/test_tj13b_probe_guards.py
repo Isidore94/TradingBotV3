@@ -624,7 +624,16 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # `theta_pick_grading`. This guard is about the e8c04f88 set and the 12-14
     # move, so the new slot is pinned where it sits and then set aside.
     assert slate[slate.index("theta_pick_grading") + 1] == "read_grades_mature"
-    today = tuple(name for name in slate if name != "read_grades_mature")
+    # LEAD AMENDMENT 2026-09-20 (TJ-4 integration): ONE new stage-2 slot,
+    # `day_review_narration`, directly BEFORE `ticker_briefs` - gate #158 wants
+    # the day story finished before 23:30 Pacific and the briefs reserve 120
+    # minutes. Same treatment: pinned where it sits, then set aside, because
+    # this guard is about the e8c04f88 set and the 12-14 move.
+    assert slate[slate.index("ticker_briefs") - 1] == "day_review_narration"
+    today = tuple(
+        name for name in slate
+        if name not in ("read_grades_mature", "day_review_narration")
+    )
 
     assert len(today) == len(pinned_at_e8c04f88)
     assert set(today) == set(pinned_at_e8c04f88), "a slot was added or removed"

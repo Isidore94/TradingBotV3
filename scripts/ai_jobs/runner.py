@@ -564,6 +564,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     from ai_jobs import (
         briefs,
         cohorts,
+        day_review_narration,
         digest,
         enrichment,
         evidence_report,
@@ -917,6 +918,26 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             # attempts at ONE session a week. plan.md §12.3: set max_attempts,
             # never 0.
             max_attempts=3,
+        ),
+        # TJ-4, APPENDED INSIDE stage 2 and deliberately AHEAD of the briefs.
+        # Gate #158 reads the ledger for a day story finished before 23:30
+        # Pacific and `ticker_briefs` reserves 120 minutes in front of it, so
+        # the story goes first. It cannot move further forward: two existing
+        # pins say `ai_summary` sits directly after `measured_report`
+        # (`test_ws_10d_market_story.py`, `test_ws_rp_shared_report.py`), and
+        # decision 0018's stage boundaries do not move for a new slot. It reads
+        # only the deterministic day pack, and a failure preserves the last
+        # verified story.
+        JobSlot(
+            name="day_review_narration",
+            run=day_review_narration.run_day_review_narration,
+            reserve_minutes=10.0,
+            description=(
+                "Grounded overnight story of one session, plus the rolling D1 "
+                "view of what the trader believes lately"
+            ),
+            max_attempts=3,
+            uses_model=True,
         ),
         JobSlot(
             name="ticker_briefs",

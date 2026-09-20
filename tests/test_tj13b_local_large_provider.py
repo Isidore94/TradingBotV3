@@ -375,6 +375,12 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
     move inside positions 12-14, and
     `test_tj13b_probe_guards.py::test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14`
     is what proves that is all it is. TJ-13B itself still touches no slate.
+
+    LEAD AMENDMENT 2026-09-20 (TJ-4 integration), beside the TJ-10 one below:
+    TJ-4 registers `day_review_narration` INSIDE stage 2, ahead of
+    `ticker_briefs` - gate #158 wants the day story finished before 23:30
+    Pacific and the briefs reserve 120 minutes. `ai_summary` is the weekend-only
+    slot, so on a weeknight the day story is the first slot of stage 2.
     """
     from ai_jobs import runner
 
@@ -397,6 +403,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "miss_contrast",
         "market_story_rollups",
         "measured_report",
+        # LEAD AMENDMENT 2026-09-20 (TJ-4 integration): the day story, inside
+        # stage 2 and ahead of the briefs.
+        "day_review_narration",
         "ticker_briefs",
         "market_story_narration",
         "journal_enrichment",

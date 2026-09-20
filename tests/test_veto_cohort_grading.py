@@ -635,7 +635,11 @@ def test_the_scope_can_be_selected_on_demand():
         "market_story_rollups",
         "measured_report",
         # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
+        # TJ-4 (2026-09-20) appends the day story inside the stage, ahead of the
+        # briefs: gate #158 wants it finished before 23:30 Pacific and the
+        # briefs reserve 120 minutes.
         "ai_summary",
+        "day_review_narration",
         "ticker_briefs",
         "market_story_narration",
         # Stage 3. LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run

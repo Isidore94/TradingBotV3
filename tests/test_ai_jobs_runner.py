@@ -342,6 +342,13 @@ EXPECTED_SLOT_ORDER = (
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.
     "ai_summary",
+    # TJ-4 (2026-09-20): the overnight day story and the rolling D1 view.
+    # Appended INSIDE stage 2 and deliberately AHEAD of `ticker_briefs`: gate
+    # #158 reads the ledger for a day story finished before 23:30 Pacific, and
+    # the briefs reserve 120 minutes in front of it. It cannot go further
+    # forward either - `ai_summary` sits directly after `measured_report` and
+    # two other pins say so.
+    "day_review_narration",
     "ticker_briefs",
     "market_story_narration",
     # stage 3 - the model-gated slots, unchanged
