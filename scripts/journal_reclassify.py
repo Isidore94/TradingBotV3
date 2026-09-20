@@ -487,6 +487,20 @@ def print_report(plan: Mapping[str, Any], *, applied: bool, stream=None) -> None
         )
     if not plan["cash_days"]:
         write("  (none)")
+    covers = _stored_cover_rows(before.rows)
+    if covers:
+        write(
+            f"  ...and {len(covers)} stored fill(s) still spelled COV, whose cash this build "
+            "ALREADY reads correctly:"
+        )
+        write(
+            "     the buy set held COVER and not COV, so each of them used to count as money "
+            "coming IN."
+        )
+        write(
+            "     That correction is in the code, not in this run, so it is not in the "
+            "before/after above."
+        )
     write()
 
     total_before = sum(float(trade.get("net_pnl") or 0.0) for trade in before.trades)
@@ -502,6 +516,11 @@ def print_report(plan: Mapping[str, Any], *, applied: bool, stream=None) -> None
     if not applied:
         write()
         write("Nothing was written. Run again with --apply to move the stored rows.")
+
+
+def _stored_cover_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Fills still holding Questrade's own ``COV`` spelling."""
+    return [row for row in rows if str(row.get("side") or "").strip().upper() == "COV"]
 
 
 def _group_of(trade: Mapping[str, Any]) -> tuple[str, str, str, str, str]:
