@@ -5,18 +5,33 @@ great moves that day or the next day, then I want to know about it."* TJ-11 put
 those names on the Day Review page. This slot asks the next question of the same
 rows - **what did they have in common?** - and answers it with arithmetic only.
 
-Four rules it is built around:
+Six rules it is built around:
 
+* **D1 only** (fix round, 2026-09-19). Its features are the D1 scan's and its
+  ruler is the D1 swing ruler, so it judges D1 decisions and nothing else.
+  Measured over the 20 sessions ending 2026-09-18 the population was 1,026 M5
+  against 1,013 D1: pooling them printed one `like` rate over 320 D1 and 358 M5
+  decisions, and named an all-M5 `not_today` group the night's top finding.
+  Every other timeframe is COUNTED in ``excluded_by_timeframe`` and named in the
+  pack's sentence; a row with no timeframe is counted separately and never read
+  as D1.
 * **Point in time.** The features are the ones the D1 scan had AT the decision:
-  the LAST scan row at or before the decision's own stamp, on the decision's own
-  session. A decision with no such row is counted under
-  ``no_point_in_time_scan`` and contributes no feature at all - never a later
-  scan's, which is a number the trader could not have been looking at.
+  the LAST scan row for ``(symbol, side)`` at or before the decision's own
+  stamp, from the decision's own session or the ONE exchange session before it
+  (:data:`MAX_SCAN_AGE_SESSIONS`) - never older, never later - with the age
+  carried on the row and counted in the group. A decision with no such row is
+  counted under ``no_point_in_time_scan`` and contributes no feature at all.
   ``run_timestamp`` in `d1_features_history.csv` is NAIVE desk wall time
   (`master_avwap_lib/runner.py` stamps ``datetime.now()``) and an annotation's
   stamp is ZONED, so the desk zone is ATTACHED to the naive side through
   `ui.annotations.pass_bars.attach_desk_zone` and the aware side is never
   stripped.
+* **Two floors, and they are different floors.** `MIN_REPORTABLE_N` gates the
+  group's RATE; `evidence_contrast.MIN_CONTRAST_SIDE_N` gates a FEATURE, whose
+  population is only the decisions that also carried a scan row. A group is a
+  leader only with a reportable rate AND at least one feature over the feature
+  floor; one with a reportable rate and no such feature keeps its row and its
+  rate and says ``no feature had enough rows on both sides``.
 * **Streamed, never materialised.** That file is 709 MB and 264 columns wide on
   the live desk. :func:`stream_feature_rows` is a lazy `csv` walk filtered by
   ``run_date``; nothing here builds a list of the file, and no `pandas` frame of
@@ -172,25 +187,51 @@ def _window_sessions(session: str, count: int) -> tuple[str, ...]:
 
 
 def _group_key(verdict: str, reason: str) -> tuple[str, str]:
-    """(verdict, reason_code) for a rejection; ONE group for the likes.
+    """``(verdict, reason_code)`` - and only a VETO has a reason code.
 
-    A like has no reason code - its ``reason`` is the trader's free-text note -
-    so the likes pool into one group. Rejections pool by ``reason_code`` ACROSS
-    vocabulary versions: a code is never reused, so a code means one thing, and
-    the pack says the versions are pooled (lead decision, 2026-09-19).
+    A veto's ``reason`` is a code from the versioned veto vocabulary, so vetoes
+    group by it, pooled ACROSS vocabulary versions: a code is never reused, so a
+    code means one thing (lead decision, 2026-09-19).
+
+    Every other verdict's ``reason`` is FREE TEXT - the trader's own note - and
+    grouping on it makes one group per sentence. On the live 2026-09-18 window
+    `dislike` alone split into ``"[other] rejecting 1stdev"`` and ``"... the
+    1stdev"``, two groups of one, each immune to any floor because a group of
+    one is never compared with anything (reviewer, 2026-09-19). So they group by
+    the verdict alone and carry an empty reason code.
     """
     name = str(verdict or "").strip().lower()
-    if name in walkaway_day.LIKES:
-        return ("like", "")
-    return (name, str(reason or "").strip())
+    if name == "veto":
+        return ("veto", str(reason or "").strip())
+    return (name, "")
+
+
+#: The ONE timeframe this pack judges. Its features are the D1 scan's and its
+#: ruler is TJ-11's five-exchange-session swing horizon.
+JUDGED_TIMEFRAME = "D1"
 
 
 def _decision_rows(
     decisions: Iterable[Mapping[str, Any]] | None, window: Sequence[str]
-) -> list[dict[str, Any]]:
-    """The decisions that BELONG to the window, in Day Review's own mapping."""
+) -> tuple[list[dict[str, Any]], dict[str, int], int]:
+    """``(judged rows, excluded by timeframe, rows with no timeframe)``.
+
+    **This pack judges D1 decisions only** (fix round, 2026-09-19). The first
+    build pooled every timeframe and the population was not what it was assumed
+    to be: measured over the 20 sessions ending 2026-09-18 it was **1,026 M5
+    against 1,013 D1** (plus 4 H1 and 2 "5M"), `like` was 320 D1 and 358 M5
+    printed as ONE rate, and the pack's top-named leader - `not_today` - was
+    **317 of 317 M5 decisions**, every one of them judged on a five-session
+    swing horizon with D1-scan features it never had.
+
+    Nothing is assumed away: the other timeframes are COUNTED in
+    ``excluded_by_timeframe`` and the pack says the number in a sentence, and a
+    row with no timeframe at all is counted separately rather than read as D1.
+    """
     inside = {str(value)[:10] for value in window}
     out: list[dict[str, Any]] = []
+    excluded: dict[str, int] = {}
+    no_timeframe = 0
     for row in decisions or ():
         if not isinstance(row, Mapping):
             continue
@@ -202,35 +243,72 @@ def _decision_rows(
         session = walkaway_day._row_session(row)
         if session not in inside:
             continue
+        timeframe = str(row.get("timeframe") or "").strip().upper()
+        if not timeframe:
+            no_timeframe += 1
+            continue
+        if timeframe != JUDGED_TIMEFRAME:
+            excluded[timeframe] = excluded.get(timeframe, 0) + 1
+            continue
         out.append({**row, "_session": session})
-    return out
+    return out, excluded, no_timeframe
+
+
+#: How many exchange sessions back a point-in-time scan row may come from.
+#:
+#: ZERO would be the strictest reading of "the scan at the decision", and it is
+#: what the first build did - but the scan does not run when the trader clicks.
+#: Measured on the live 2026-09-18 window: scans ran at roughly 07:00-07:50,
+#: 10:01, 12:45 and 13:00 desk time, and on some sessions only once, so an
+#: evening or pre-market decision has no same-session scan at all and **305 of
+#: 435 likes had no features** (reviewer, 2026-09-19). One session back is what
+#: the trader was actually looking at in the evening or before the open. Two
+#: would be a different day's picture, so it is refused.
+MAX_SCAN_AGE_SESSIONS = 1
+
+
+def _previous_session(session: str) -> str:
+    try:
+        return market_calendar.previous_session(date.fromisoformat(str(session)[:10])).isoformat()
+    except (ValueError, market_calendar.SessionCalendarError):
+        return ""
 
 
 def _point_in_time_features(
     rows: Sequence[Mapping[str, Any]], features: Any
-) -> dict[int, dict[str, Any]]:
-    """``{decision index: feature mapping}`` from the LAST scan at or before it.
+) -> dict[int, tuple[dict[str, Any], int]]:
+    """``{decision index: (feature mapping, scan age in sessions)}``.
 
-    One streamed pass over the history. Nothing is held but the best row found
-    so far per decision, so the memory cost is the POPULATION, never the file.
+    The LAST scan row for ``(symbol, side)`` at or before the decision's own
+    stamp, from the decision's own session or the ONE exchange session before
+    it - never older, never later. The age is carried so the pack can say which
+    it used rather than leaving the reader to assume.
+
+    One streamed pass over the history; the window simply starts one session
+    earlier. Nothing is held but the best row found so far per decision, so the
+    memory cost is the POPULATION, never the file.
     """
     if features is None:
         return {}
-    wanted: dict[tuple[str, str, str], list[int]] = {}
+    wanted: dict[tuple[str, str, str], list[tuple[int, int]]] = {}
     stamps: dict[int, datetime] = {}
+    previous: dict[str, str] = {}
     for index, row in enumerate(rows):
         moment = _aware(row.get("stamp") or row.get("created_at"))
         if moment is None:
             continue
-        key = (
-            str(row.get("symbol") or "").strip().upper(),
-            str(row.get("side") or "").strip().upper(),
-            str(row.get("_session") or "")[:10],
-        )
-        if not key[0] or not key[2]:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = str(row.get("side") or "").strip().upper()
+        session = str(row.get("_session") or "")[:10]
+        if not symbol or not session:
             continue
         stamps[index] = moment
-        wanted.setdefault(key, []).append(index)
+        if session not in previous:
+            previous[session] = _previous_session(session)
+        for age, run_date in enumerate((session, previous[session])):
+            if not run_date or age > MAX_SCAN_AGE_SESSIONS:
+                continue
+            wanted.setdefault((symbol, side, run_date), []).append((index, age))
     if not wanted:
         return {}
 
@@ -244,7 +322,7 @@ def _point_in_time_features(
             if isinstance(row, Mapping) and str(row.get("run_date") or "")[:10] in sessions
         )
 
-    best: dict[int, tuple[datetime, dict[str, Any]]] = {}
+    best: dict[int, tuple[datetime, dict[str, Any], int]] = {}
     for scan in stream:
         key = (
             str(scan.get("symbol") or "").strip().upper(),
@@ -258,22 +336,41 @@ def _point_in_time_features(
         if ran_at is None:
             continue
         mapping: dict[str, Any] | None = None
-        for index in indexes:
+        for index, age in indexes:
             if ran_at > stamps[index]:
                 # It did not exist when the trader clicked.
                 continue
             held = best.get(index)
+            # The LATEST scan at or before the stamp wins, which is also what
+            # prefers a same-session row over yesterday's without a second rule.
             if held is not None and held[0] >= ran_at:
                 continue
             if mapping is None:
                 mapping = _feature_mapping(scan)
-            best[index] = (ran_at, mapping)
-    return {index: mapping for index, (_at, mapping) in best.items()}
+            best[index] = (ran_at, mapping, age)
+    return {index: (mapping, age) for index, (_at, mapping, age) in best.items()}
 
 
 # ---------------------------------------------------------------------------
 # the pack
 # ---------------------------------------------------------------------------
+
+
+def _timeframe_sentence(excluded: Mapping[str, int], no_timeframe: int) -> str:
+    """What this pack did NOT judge, said in words rather than left to a field."""
+    parts = [
+        f"{count} {name}"
+        for name, count in sorted(excluded.items(), key=lambda pair: (-pair[1], pair[0]))
+        if count
+    ]
+    if no_timeframe:
+        parts.append(f"{no_timeframe} with no timeframe recorded")
+    if not parts:
+        return f"Every decision in the window was {JUDGED_TIMEFRAME}."
+    return (
+        f"{', '.join(parts)} decision(s) are not judged here: this pack uses "
+        f"{JUDGED_TIMEFRAME}-scan features and the {JUDGED_TIMEFRAME} swing ruler."
+    )
 
 
 def build_pack(
@@ -295,7 +392,7 @@ def build_pack(
     session = str(session_date or "")[:10]
     moment = now or datetime.now()
     window = _window_sessions(session, window_sessions)
-    rows = _decision_rows(decisions, window)
+    rows, excluded_by_timeframe, no_timeframe = _decision_rows(decisions, window)
     bars = daily_bars or {}
     last_session = walkaway_day._last_completed(moment)
 
@@ -326,6 +423,8 @@ def build_pack(
                 "pending": 0,
                 "unmeasured": 0,
                 "no_point_in_time_scan": 0,
+                "scan_same_session": 0,
+                "scan_prior_session": 0,
                 "misses": 0,
                 "correct": 0,
                 "_a": [],
@@ -344,9 +443,8 @@ def build_pack(
 
         daily = _daily(symbol)
         atr = walkaway_day._daily_atr([pair for pair in daily if pair[0] <= decision_day])
-        # The D1 ruler, whatever the decision was made on: the features are the
-        # D1 scan's and the horizon is TJ-11's five exchange sessions. Said in
-        # the pack's `ruler` field rather than assumed by a reader.
+        # The D1 ruler for a D1 decision. Every other timeframe was excluded
+        # above rather than pooled under it.
         reading = walkaway_day._d1_reading(
             daily, decision_day, side, atr=atr, last_session=last_session
         )
@@ -359,16 +457,18 @@ def build_pack(
         bucket["measured"] += 1
         ran = reading.verdict == real_miss.RUN
         bucket["misses" if ran else "correct"] += 1
-        mapping = features_by_index.get(index)
-        if mapping is None:
+        joined = features_by_index.get(index)
+        if joined is None:
             bucket["no_point_in_time_scan"] += 1
             continue
+        mapping, age = joined
+        bucket["scan_prior_session" if age else "scan_same_session"] += 1
         bucket["_a" if ran else "_b"].append(mapping)
 
     built: list[dict[str, Any]] = []
     for key in sorted(groups):
         bucket = groups[key]
-        labels = LIKE_LABELS if key[0] == "like" else VETO_LABELS
+        labels = LIKE_LABELS if key[0] in walkaway_day.LIKES else VETO_LABELS
         comparison = evidence_contrast.contrast(
             bucket.pop("_a"), bucket.pop("_b"), label_a=labels[0], label_b=labels[1]
         )
@@ -381,24 +481,43 @@ def build_pack(
                 "name": key[1] or key[0],
                 "label_a": comparison["label_a"],
                 "label_b": comparison["label_b"],
+                # The two CONTRAST populations, as fields at this level too: the
+                # group's `n` is decisions and these are the rows that actually
+                # carried features, and a reader must never have to infer one
+                # from the other (reviewer, 2026-09-19).
+                "n_a": comparison["n_a"],
+                "n_b": comparison["n_b"],
                 "rate": cell["rate"],
                 "low": cell["low"],
                 "high": cell["high"],
                 "reportable": cell["reportable"],
                 "compared": comparison["compared"],
+                "thin": comparison["thin"],
+                "min_side": comparison["min_side"],
+                "min_total": comparison["min_total"],
                 "top": comparison["top"],
                 "statement": comparison["statement"],
                 "features": comparison["features"],
+                "thin_features": comparison["thin_features"],
                 "unmeasured_features": list(comparison["unmeasured_features"]),
                 "floor_note": (
                     "" if cell["reportable"] else f"too few to call (n={bucket['measured']})"
+                ),
+                "feature_note": (
+                    ""
+                    if comparison["features"]
+                    else "no feature had enough rows on both sides"
                 ),
             }
         )
 
     over_floor = [group for group in built if group["reportable"]]
+    # A leader needs BOTH floors: a reportable RATE and at least one feature
+    # that cleared the feature floor. `sma_incoming` cleared the first and was
+    # named off four rows against one (reviewer, 2026-09-19).
+    eligible = [group for group in over_floor if group["features"]]
     ranked = sorted(
-        over_floor,
+        eligible,
         key=lambda group: (
             -max(
                 (abs(float(row["auc"]) - 0.5) for row in group["features"] if row["auc"] is not None),
@@ -411,9 +530,16 @@ def build_pack(
 
     if leaders:
         headline = (
-            f"observational, not causal: top {len(leaders)} of {len(over_floor)} group(s) "
-            f"over the floor of {evidence_stats.MIN_REPORTABLE_N} measured decisions - "
-            + ", ".join(leaders)
+            f"observational, not causal: top {len(leaders)} of {len(eligible)} group(s) "
+            f"with both a reportable rate ({evidence_stats.MIN_REPORTABLE_N} measured "
+            f"decisions) and at least one feature over the feature floor "
+            f"({evidence_contrast.MIN_CONTRAST_SIDE_N} rows a side) - " + ", ".join(leaders)
+        )
+    elif over_floor:
+        headline = (
+            f"observational, not causal: {len(over_floor)} group(s) reached the floor of "
+            f"{evidence_stats.MIN_REPORTABLE_N} measured decisions, but no feature had "
+            "enough rows on both sides, so no reason is named and nothing is ranked"
         )
     else:
         headline = (
@@ -423,9 +549,9 @@ def build_pack(
         )
     statement = (
         f"{headline}. {len(built)} group(s) over {len(window)} session(s) ending "
-        f"{session}; a group under the floor keeps its row and its counts and is "
-        "never ranked. A rate counts CLOSED horizons only; open ones are printed "
-        "as pending and are in neither half."
+        f"{session}; a group or a feature under its floor keeps its row and its "
+        "counts and is never ranked. A rate counts CLOSED horizons only; open "
+        f"ones are printed as pending and are in neither half. {_timeframe_sentence(excluded_by_timeframe, no_timeframe)}"
     )
 
     return {
@@ -436,11 +562,20 @@ def build_pack(
         "window_first_session": window[0],
         "real_miss_rule": real_miss.REAL_MISS_V1,
         "ruler": "d1_sessions",
+        "timeframe": JUDGED_TIMEFRAME,
         "horizon_sessions": max(walkaway_day.HORIZONS),
         "decisions": len(rows),
+        "excluded_by_timeframe": dict(sorted(excluded_by_timeframe.items())),
+        "no_timeframe": int(no_timeframe),
+        "max_scan_age_sessions": MAX_SCAN_AGE_SESSIONS,
+        "feature_floor": {
+            "min_side": evidence_contrast.MIN_CONTRAST_SIDE_N,
+            "min_total": evidence_stats.MIN_REPORTABLE_N,
+        },
         "pooling": (
-            "reason codes are pooled ACROSS vocabulary versions: a code is never "
-            "reused, so a code means one thing"
+            "VETO reason codes are pooled ACROSS vocabulary versions: a code is "
+            "never reused, so a code means one thing. Every other verdict groups "
+            "by the verdict alone - its reason is the trader's free text, not a code"
         ),
         "fundamentals": (
             "the desk's own fundamentals only - earnings dates and the pasted "
@@ -663,6 +798,23 @@ def run_miss_contrast(
     moment = now or datetime.now()
     size = int(window_sessions or evidence_stats.LATELY_SESSIONS)
 
+    # A pack keyed to nothing is worse than no pack: it published
+    # `miss_contrast-.json`, one file that every later session would supersede
+    # and no reader could date (reviewer, 2026-09-19). Refuse, loudly, and write
+    # nothing - the runner records the failure and the next firing retries.
+    try:
+        date.fromisoformat(session)
+    except ValueError:
+        return {
+            "status": "failed",
+            "model": "",
+            "reason": (
+                f"refusing to build a contrast pack for session_date "
+                f"{session_date!r}: a pack must be keyed to a readable date"
+            ),
+            "outputs": [],
+        }
+
     try:
         window = _window_sessions(session, size)
     except (ValueError, market_calendar.SessionCalendarError) as exc:
@@ -677,7 +829,7 @@ def run_miss_contrast(
         decisions, note = _read_decisions(window)
         if note:
             notes.append(note)
-    rows = _decision_rows(decisions, window)
+    rows, _excluded, _no_timeframe = _decision_rows(decisions, window)
 
     if features is None:
         path, note = _features_path()
@@ -721,9 +873,11 @@ def run_miss_contrast(
             "outputs": [],
         }
 
+    skipped = sum(pack["excluded_by_timeframe"].values()) + pack["no_timeframe"]
     reason = (
-        f"contrasted {pack['decisions']} decision(s) in {len(pack['groups'])} group(s) "
-        f"over {size} session(s) ending {session}"
+        f"contrasted {pack['decisions']} {JUDGED_TIMEFRAME} decision(s) in "
+        f"{len(pack['groups'])} group(s) over {size} session(s) ending {session}; "
+        f"{skipped} decision(s) on other timeframes not judged"
     )
     if notes:
         reason = f"{reason}; {'; '.join(notes)}"

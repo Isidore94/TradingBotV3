@@ -16,8 +16,14 @@ What a contrast is, exactly:
 * a rank key of ``abs(auc - 0.5)`` descending, ties by feature NAME ascending.
   **No group size, no median magnitude and no R statistic may enter that key**
   (gate #43: a SIZE rule orders a bounded view, a RESULT never does);
+* a FEATURE floor, which is not the group's floor (see
+  :data:`MIN_CONTRAST_SIDE_N`): a feature is ranked only with at least ten rows
+  on each side and `MIN_REPORTABLE_N` across both, and one under that is named
+  with its two counts in `thin_features`, carries no AUC and never enters
+  `features`;
 * a statement that says `observational` and `top K of N` every time it is read,
-  so "the top three" is never mistaken for "the only three".
+  plus how many more were too thin to call, so "the top three" is never
+  mistaken for "the only three".
 
 And what it refuses to do:
 
@@ -53,6 +59,26 @@ DEFAULT_TOP = 3
 #: one that did not. TJ-16 and the likes half pass their own.
 LABEL_A = "real_miss"
 LABEL_B = "correct_rejection"
+
+#: The FEATURE floor: how many rows a feature needs on the THIN side before it
+#: may be ranked at all (fix round, 2026-09-19).
+#:
+#: The group floor was never the feature floor. `MIN_REPORTABLE_N` gates the
+#: RATE, whose denominator is every measured decision - but a feature is only
+#: measured on the decisions that also carried a point-in-time scan row, and on
+#: the live 2026-09-18 window that was a different and much smaller number:
+#: `veto / sma_incoming` had 30 measured decisions and so cleared the rate
+#: floor, then named `atr20` a leader off **four rows against one**, at an AUC
+#: of exactly 1.0 - which is what four-against-one always gives when the four
+#: happen to sit above the one. `too_extended_from_base` did the same at three
+#: against twenty-seven.
+#:
+#: So a feature is RANKED only with at least this many rows on EACH side and at
+#: least `MIN_REPORTABLE_N` across both. Under that it is still NAMED, with its
+#: two counts, in `thin_features` - hiding it would say it was never looked at -
+#: but it carries no AUC, never enters `features`, and can never make its group
+#: a leader.
+MIN_CONTRAST_SIDE_N = 10
 
 #: Text a CSV writes for "nothing was measured here". None of these is a value.
 _NOT_A_NUMBER = frozenset({"", "n/a", "na", "none", "null", "nan", "-", "--"})
@@ -104,11 +130,18 @@ def contrast(
     label_b: str = LABEL_B,
     features: Sequence[str] | None = None,
     top: int = DEFAULT_TOP,
+    min_side: int = MIN_CONTRAST_SIDE_N,
+    min_total: int = MIN_REPORTABLE_N,
 ) -> dict[str, Any]:
     """Contrast two groups of feature mappings. Pure; see the module docstring.
 
     ``features`` names the columns to consider; ``None`` means every column
     either group carries, in name order so the walk is deterministic.
+
+    ``min_side`` and ``min_total`` are the FEATURE floor (see
+    :data:`MIN_CONTRAST_SIDE_N`): a feature is ranked only with at least
+    ``min_side`` measurements on each side and ``min_total`` across both. One
+    under it is named in ``thin_features`` with both counts and no AUC.
     """
     rows_a = _mappings(group_a)
     rows_b = _mappings(group_b)
@@ -119,7 +152,10 @@ def contrast(
     else:
         names = [str(name) for name in features]
 
+    floor_side = max(0, int(min_side))
+    floor_total = max(0, int(min_total))
     measured: list[dict[str, Any]] = []
+    thin: list[dict[str, Any]] = []
     unmeasured: list[str] = []
     for name in names:
         values_a = _values(rows_a, name)
@@ -130,13 +166,27 @@ def contrast(
             # skipped is a feature the reader assumes was looked at.
             unmeasured.append(name)
             continue
+        count_a, count_b = len(values_a), len(values_b)
+        if min(count_a, count_b) < floor_side or count_a + count_b < floor_total:
+            # Named with both counts and NO AUC: four against one is 1.0 every
+            # time the four sit above the one, and a statistic that cannot be
+            # wrong is not evidence.
+            thin.append(
+                {
+                    "feature": name,
+                    "n_a": count_a,
+                    "n_b": count_b,
+                    "note": "too few to call",
+                }
+            )
+            continue
         measured.append(
             {
                 "feature": name,
                 "median_a": statistics.median(values_a),
                 "median_b": statistics.median(values_b),
-                "n_a": len(values_a),
-                "n_b": len(values_b),
+                "n_a": count_a,
+                "n_b": count_b,
                 # The desk's ONE rank statistic, CALLED (PCT-3's precedent).
                 "auc": compression_calibration.auc(values_a, values_b),
             }
@@ -153,9 +203,10 @@ def contrast(
 
     statement = (
         f"observational, not causal: top {len(ranked)} of {compared} feature(s) "
-        f"measured on both sides, {label_a} (n={len(rows_a)}) against "
-        f"{label_b} (n={len(rows_b)}); ranked by |AUC-0.5| then feature name, "
-        "never by group size and never by an R statistic"
+        f"compared; {len(thin)} more too thin to call (under {floor_side} rows on "
+        f"a side, or under {floor_total} across both), {label_a} (n={len(rows_a)}) "
+        f"against {label_b} (n={len(rows_b)}); ranked by |AUC-0.5| then feature "
+        "name, never by group size and never by an R statistic"
     )
     return {
         "label_a": str(label_a),
@@ -163,9 +214,13 @@ def contrast(
         "n_a": len(rows_a),
         "n_b": len(rows_b),
         "compared": compared,
+        "thin": len(thin),
+        "min_side": floor_side,
+        "min_total": floor_total,
         "top": limit,
         "statement": statement,
         "unmeasured_features": tuple(sorted(unmeasured)),
+        "thin_features": sorted(thin, key=lambda row: row["feature"]),
         "features": ranked,
     }
 
@@ -199,6 +254,7 @@ __all__ = [
     "DEFAULT_TOP",
     "LABEL_A",
     "LABEL_B",
+    "MIN_CONTRAST_SIDE_N",
     "contrast",
     "measurement",
     "rate",
