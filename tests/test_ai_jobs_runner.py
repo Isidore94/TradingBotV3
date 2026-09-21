@@ -374,6 +374,9 @@ EXPECTED_SLOT_ORDER = (
     "journal_enrichment",
     "review_policy_draft",
     "setup_research",
+    # TJ-6 (2026-09-20), appended LAST inside stage 3: it reads what the rest of
+    # the night wrote and feeds nothing.
+    "improvement_ideas",
 )
 
 

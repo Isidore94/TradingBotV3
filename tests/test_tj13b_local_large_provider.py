@@ -418,7 +418,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "market_story_narration",
         "journal_enrichment",
         "review_policy_draft",
+        # TJ-6 (2026-09-20) appended after `setup_research`, last of stage 3.
         "setup_research",
+        "improvement_ideas",
     )
     assert tuple(slot.name for slot in runner.slots_for("weeknight")) == expected
 

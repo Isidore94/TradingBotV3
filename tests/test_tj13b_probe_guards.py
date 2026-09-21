@@ -640,6 +640,10 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         "prediction_contrast",
         "day_review_narration",
         "observation_tags",
+        # TJ-6 (2026-09-20): a new stage-3 slot is pinned where it sits by
+        # `EXPECTED_SLOT_ORDER` and then set aside here, because this guard is
+        # about the set of slots as it stood at e8c04f88.
+        "improvement_ideas",
     )
     today = tuple(name for name in slate if name not in set_aside)
 

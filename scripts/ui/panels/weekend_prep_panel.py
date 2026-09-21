@@ -50,6 +50,7 @@ import weekend_strength
 from ui.services import journal_feed
 from ui.read_worker import ReadWorker, join_worker
 from ui.widgets.data_table import apply_width_rule_to_table_widget
+from ui.widgets.ideas_card import IdeasCard as _IdeasCard
 from ui.services import weekend_prep_service as prep_service
 from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
 
@@ -543,6 +544,12 @@ class WeekReviewPage(_StepPage):
         self._layout.addLayout(cards_row)
         self._layout.addWidget(self.week_story, 1)
         self._layout.addWidget(_ten_row_table(self.strip))
+        # TJ-6: the ideas the trader KEPT, each with the measurable frozen at
+        # the keep beside the same number now. The same widget Day Review uses,
+        # fed from the same ONE payload; it states its own floor as a size hint,
+        # so the ten-row floor above still has exactly one owner in this file.
+        self.ideas_card = _IdeasCard(self)
+        self._layout.addWidget(self.ideas_card)
         self._layout.addWidget(self.summary, 1)
         self._finish_layout()
         self._render(prep_service.empty_week_payload())
@@ -593,6 +600,14 @@ class WeekReviewPage(_StepPage):
             self.summary.setPlainText(stated)
         self.statusChanged.emit(f"week review unavailable: {message}")
 
+    def shutdown(self) -> None:
+        """This page's read worker, and the ideas card's write worker."""
+        super().shutdown()
+        try:
+            self.ideas_card.shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            logging.debug("The ideas card could not be shut down.", exc_info=True)
+
     # -- rendering, all of it on values the worker already read ------------
     def _render(self, payload) -> None:
         body = dict(payload or {})
@@ -605,6 +620,8 @@ class WeekReviewPage(_StepPage):
             card.show_row(rows[index] if index < len(rows) else {})
         self.week_story.setPlainText(self._story_text(body))
         self._render_strip(body.get("strip") or {})
+        self.ideas_card.set_session(self.service.weekend)
+        self.ideas_card.show_ideas(list(body.get("ideas") or ()))
         self.summary.setPlainText("\n".join(self._summary_lines(body, rows)))
 
     def _story_text(self, body) -> str:

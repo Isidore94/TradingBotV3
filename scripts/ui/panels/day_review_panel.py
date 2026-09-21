@@ -127,8 +127,13 @@ NO_CHART_NOTE = (
     "TJ-2 brings past sessions."
 )
 
-#: The ideas card, until TJ-6.
-NO_IDEAS_YET = "Nothing yet - the desk's AI starts speaking in TJ-6."
+#: What the ideas section says on a session the night had nothing to say about.
+#: Since TJ-6 the card itself is what speaks; this is the line that stands in
+#: its place, and "nothing yet" is a different sentence from "nothing worked".
+NO_IDEAS_YET = (
+    "Nothing yet - the desk's AI writes up to three ideas a night, each one "
+    "citing your own sessions, and you keep or dismiss each one here."
+)
 
 #: The ONE walk-away table TJ-1 ships. TJ-2 brings the other three.
 WALKAWAY_TITLE = "Passed, and it ran"
@@ -971,9 +976,19 @@ class DayReviewPanel(QFrame):
         body.addLayout(self._name_chart_layout, 1)
 
     def _build_ideas(self) -> None:
+        """The note and the card. Exactly ONE of them is ever on screen.
+
+        The card opens no store: its rows arrive in the same payload as
+        everything else on this page (TJ-6), and its Keep / Dismiss write runs
+        on its own worker.
+        """
+        from ui.widgets.ideas_card import IdeasCard
+
         self.ideas_note = QLabel(NO_IDEAS_YET)
         self.ideas_note.setObjectName("SectionSubtitle")
         self.ideas_note.setWordWrap(True)
+        self.ideas_card = IdeasCard(self)
+        self.ideas_card.setVisible(False)
 
     def _section(self, title: str, *widgets, stretch_last: bool = False) -> QWidget:
         holder = QWidget()
@@ -1152,7 +1167,9 @@ class DayReviewPanel(QFrame):
         self.traded_section = self._section(
             "What you traded", self.trades_note, self.trades_table
         )
-        self.ideas_section = self._section("Ideas from the desk's AI", self.ideas_note)
+        self.ideas_section = self._section(
+            "Ideas from the desk's AI", self.ideas_note, self.ideas_card
+        )
         self.bottom_row = QWidget()
         row = QHBoxLayout(self.bottom_row)
         row.setContentsMargins(0, 0, 0, 0)
@@ -1582,11 +1599,24 @@ class DayReviewPanel(QFrame):
         )
         self._name_charts = dict(payload.get("name_charts") or {})
         self._refresh_name_chart()
+        self._render_ideas(session, list(payload.get("ideas") or []))
         for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
             self._backfill_bars_for(str(exit_session))
         error = str(payload.get("error") or "")
         self.status.setText(error or f"Day Review: {session}")
         self.statusChanged.emit(self.status.text())
+
+    def _render_ideas(self, session: str, rows: list) -> None:
+        """TJ-6: the night's suggestions, or the line that says there are none.
+
+        The rows were READ on the worker with the rest of the payload. A
+        dismissed idea is already gone by the time they arrive - this formats
+        what it is handed and decides nothing.
+        """
+        self.ideas_card.set_session(session)
+        self.ideas_card.show_ideas(rows)
+        self.ideas_card.setVisible(bool(rows))
+        self.ideas_note.setVisible(not rows)
 
     def _render_story(self, story: Any) -> None:
         """The deterministic facts, under the fixed "no story yet" line.
@@ -2580,6 +2610,12 @@ class DayReviewPanel(QFrame):
                 # Bounded: a desk that will not close is worse than an index
                 # nobody collected, and the index is rebuildable.
                 worker.wait(2000)
+        # The ideas card's write is the trader's own click, so it is waited for
+        # (bounded) rather than abandoned.
+        try:
+            self.ideas_card.shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
 
 
 __all__ = [

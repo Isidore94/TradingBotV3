@@ -407,6 +407,17 @@ DAY_REVIEW_DIR = PERSISTENT_DATA_DIR / "day_review"
 # nothing in the running system reads it to detect, score, rank, gate or alert
 # (plan.md sec 5).
 DAY_REVIEW_READS_DIR = DAY_REVIEW_DIR / "reads"
+# The desk AI's ideas (TJ-6). `ai_ideas.jsonl` is the NIGHT's half: append-only,
+# one row per idea sighting, folded by `idea_id` on read so a repeat keeps every
+# earlier sighting on disk. `ai_ideas_state.json` is the TRADER's half: one entry
+# per idea the trader kept or dismissed, and a kept `process` idea carries the
+# measurable's frozen baseline beside it. The two are separate files because
+# they have different writers - no nightly job may ever write the state file.
+# Suggestions only: nothing in the running system reads either of these to
+# detect, score, rank, gate, alert, or to change a watchlist, Focus, the review
+# queue or `review_policy.json` (plan.md sec 5).
+AI_IDEAS_FILE = PERSISTENT_DATA_DIR / "ai_ideas.jsonl"
+AI_IDEAS_STATE_FILE = PERSISTENT_DATA_DIR / "ai_ideas_state.json"
 # Append-only JSONL of the trader's hand-vetted swing picks - "today's best
 # swing targets", typed at the end of a session into the strip under the M5
 # alert list. One row per action: an add carries (session_date, symbol, side,
