@@ -8309,6 +8309,131 @@ packs stores nothing, loads no model and records `skipped` with its counts. **Th
 feature working, not the gate passing**: gate #150 is unreadable until a night has written
 packs and a story for the sessions it reads.
 
+## TJ-7 - a mood is reported, never acted on (2026-09-20, packet TJ-7)
+
+The long form behind the CLAUDE.md rule *"A mood is a field the desk REPORTS."* TJ-7 was
+the LAST building packet of Phase 0.33; with its merge (`b63db7af`, guard amendment
+`ae7c06c7`, follow-up merge `0a0a0be4`) every building packet of the phase sits on
+`lead/p033-integration2`.
+
+**A mood is the softest evidence the desk will ever hold, so its fence is structural.** It
+is the trader's own word about themselves, it arrives after the session more often than not,
+and there is no honest version of *"the desk traded differently because you said you felt
+rushed."* So TJ-7 ships fields, a strip, a pack section, a context field and one line on a
+page — and nothing that can act.
+
+**Three absences mean the same thing and all three read `None`:** the key ABSENT (43 of the
+84 live journal rows on 2026-09-20), the key PRESENT and EMPTY (a row written after TJ-7
+with nothing clicked — the precedent is `"mentor": {}` on 13 September rows), and the key
+set to `None`. A reader that turned any of them into a neutral 3 would invent a feeling
+nobody had. The live desk held ZERO moods when the packet landed, which is why the first
+thing the trader sees is a COUNT of nothing — **"No mood recorded yet for this session (n
+0)."** — and never a percentage.
+
+**The point-in-time rule is the one that makes this hard.** The mood the trader clicks is on
+the session's LAST card, after the trade and usually after the close; the 07:02 read was
+made by someone who had not felt it yet. So `market_read_grades.context_for` carries only
+the mood already recorded AT OR BEFORE the stamp and `unmeasured` otherwise — a later one
+would be hindsight dressed as a measurement, and `prediction_contrast` walks every scalar in
+that block, so it would rank the trader's own outcome knowledge as a feature of their skill.
+The same rule from the other side: a mood typed in the evening is kept, counted and LABELLED
+(`written_after_the_session`), because the partition a later reader needs is a label and
+never a deletion.
+
+**The writer is LOUD for the same reason `PredictionTimeframeError` is:** an append-only
+ledger has no second chance, so a 201-character process note is REFUSED rather than
+shortened, the UI caps its own input, and `is_publishable` asks the question again where
+every write passes through — a row assembled as a dict literal never calls `build_entry`.
+`scripts/trader_state_tags.py` owns the cap and the picklist on `ai_jobs.observation_tags`'
+loader rules: the declared version equals the number in the FILENAME, a duplicate code
+raises, an older version reads back by number, and a code is never renamed or reused.
+
+**The invariant was re-proven by TRACING, not by reading source.** The reviewer enumerated
+every module that can reach a mood — eleven: `market_journal.py`, `day_review_pack.py`,
+`market_read_grades.py`, `mentor_questions.py`, `ui/widgets/mood_strip.py`,
+`ui/widgets/trade_mentor_card.py`, `ui/panels/day_review_panel.py`,
+`ui/services/day_review_service.py`, `ui/services/market_journal_service.py`, and the two
+evidence builders `ai_jobs/week_review_narration.py` and `ai_jobs/improvement_ideas.py`.
+**Not one is a detector, a score, an alert, a watchlist, Focus, the review queue,
+`review_learning` or a cohort grader.** The five modules that touch `review_policy.json` —
+`review_policy.py` (`load_review_policy` / `save_review_policy` / `draft_policy_from_state`),
+`ai_jobs/policy_draft.py`, `review_guidance.py` and `review_capture_audit.py` — import none
+of `market_journal`, `day_review_pack`, `trader_state_tags` or `ui.widgets.mood_strip`, and
+`context_for` has exactly ONE caller, the Day Review worker. **The tagger's blindness was
+reproduced, not asserted:** `tagger.notes_for` over a row scored 1, tagged `tilted`, carrying
+the process note *"I was furious about the gap"* returns notes whose fields are exactly
+`tagger.FIELDS`, and `json.dumps(tagger.build_evidence(notes))` contains no `tilted`, no
+process note, no `"mood"` and no `state_tags`.
+
+**A misclick is not an answer.** The faces shipped as an exclusive `QButtonGroup`, and Qt
+will not un-check the checked member of one; meanwhile the Mentor's `save_questions` reads
+"a score is set" as "the trader touched the strip". A finger that landed on 2 instead of 3
+therefore filed a mood nobody meant, permanently, in an append-only ledger, with no way back
+to "nothing selected" except saving it (reviewer round 1, 2026-09-20). One face at a time is
+now enforced in the widget's own handler and a second click on the selected face clears it,
+the way a chip toggles off — and the clear is provably identical to never having touched the
+strip: the Mentor files nothing at all, and the journal tab writes the untouched row byte for
+byte. Two smaller rules came out of the same round. A mood is the TRADER's own click, so
+`build_entry` refuses one on a machine-written row rather than relying only on the structural
+scan of the call sites — it asks `is_machine_entry`, the ONE rule for what a machine row is,
+so a new machine origin is fenced the day it is added. And a mood's `source_id` is derived
+from the ROW and from nothing else (`day_review_pack.mood_source_id`), so the page's section
+and the night's pack name the same row the same way; the page still BUILDS its own section
+rather than reading the written pack, because a mood typed in the evening arrives after the
+post-close pack was written, and a stale line on that very save is what gate #151 asks the
+trader to look at.
+
+**The guard lesson.** The packet's own green guard,
+`test_nothing_writes_a_mood_into_review_policy`, flagged ANY file under `scripts/` whose
+SOURCE held both `review_policy` and a mood word. Three of the modules the packet REQUIRED
+TJ-7 to touch state that very invariant in prose, and so does `ai_jobs/improvement_ideas.py`,
+which gains the `mood` evidence key — so the guard was **unsatisfiable by its own packet**.
+The builder took the only move open to him (a builder may not weaken a test) and reworded
+four shipped docstrings; the cost was that the canonical, searchable token
+`review_policy.json` left three modules that state a `plan.md` sec-5 invariant, so the next
+`grep review_policy.json` audit would miss them. The reviewer named the fix rather than
+making it, and the lead's amendment `ae7c06c7` narrowed the guard to **CONTACT with the
+policy** — a module that imports, loads, drafts or saves it (five today, asserted non-empty)
+and also handles a mood — and restored all four sentences. A structural guard that greps two
+tokens in one file's source is a guard on WORDS; a guard on importers is a guard on the
+invariant.
+
+**What changes on the Mentor card.** Only on the session's LAST card, and only while
+`day_close` is one of the (at most three) budgeted questions: under the `Followed the plan?`
+row, a line reading *"How were you? (optional)"*, five numbered buttons 1-5, and eight chips
+(Calm, Focused, Rushed, FOMO, Tilted, Bored, Tired, Confident) in two rows of four — one row
+of eight made the strip the widest thing in Day Review's right column and re-weighted TJ-1L's
+saved 55/45 split. Nothing is pre-selected, ever; a third chip refuses to stay down; the
+chosen face clicked again turns off and the tooltip says so (*"3 of 5 - click again to
+clear"*). **Save is unchanged** — TJ-9's gate counts material fields and an untouched strip,
+or a touched one, leaves `save_answers_button` exactly as it was. `Save answers` files the
+mood WITH the plan answer, or on its own if the trader clicked a face and left the question
+alone; `followed_plan` is taken only from the three plan answers, because the same combo also
+offers TJ-9's four answer states and *"not remembered"* is not *"I did not follow the plan"*.
+`Stop asking this` on that row still only RETIRES: a retirement is not an answer, so a face
+clicked on a row being silenced files nothing (reproduced: `{'ok': True, 'saved': 0,
+'retired': 1}`). Once filed, the strip goes with the question and is never asked twice for
+one row. TJ-7 is also what made TJ-14B's *"a section with answer widgets is never rebuilt"*
+rule bite on the questions box: `set_questions` rebuilt every row on every call, which would
+have dropped a half-clicked face. It now MERGES — same widget objects, rows no longer asked
+dropped one at a time, order restored by moving widgets. The one cosmetic consequence, left
+as a recorded follow-up: a subject re-offered with the SAME `(kind, subject_id)` but a
+CHANGED `prompt` or `options` keeps the OLD label and combo items. No shipped kind varies
+either for a fixed `subject_id` today, so it is latent; it is documented in the code at
+`trade_mentor_card.set_questions`.
+
+**What nobody built, and the gate that stands in for it.** Nothing forbids the night pairing
+a mood with a RESULT: the week package carries `mood` beside `misses` and `walkaway_totals`,
+and the verifier only re-checks that a citation is in `allowed_source_ids`, so *"you lose when
+tired"* would pass. The one live fence today is TJ-6's — `improvement_ideas.MEASURABLES` is
+CLOSED and mood is not in it, so a `process` idea naming a mood is DROPPED. Gate **#175**
+(the first Saturday after a week that carries a mood: the package holds the `mood` section
+with session-qualified ids and the story cites one or says nothing, never a mood paired with
+a result) stands until a narration rule is built. Gate **#151**'s own citation half is
+UNREADABLE until a night has written a pack AND a story for a session carrying a mood; on
+2026-09-20 the live day-review folder held zero packs, so the honest first reading is
+`narrated 0 of N` — the feature working, not the gate passing.
+
 ## TJ-3 - a mark sits on a bar only when it happened DURING that bar (2026-09-19, packet TJ-3)
 
 The long form behind the CLAUDE.md rule *"A note marker sits on a bar only when it

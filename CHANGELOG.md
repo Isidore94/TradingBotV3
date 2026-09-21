@@ -1672,6 +1672,57 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **A mood is a field the desk REPORTS, and nothing acts on it (TJ-7, 2026-09-20, branch
+  `claude/tj7-mood-fields`, merged into `lead/p033-integration2` `b63db7af`, lead guard
+  amendment `ae7c06c7`, follow-up merge `0a0a0be4`).** `market_journal` carries ONE
+  additive row key `mood` (schema `trader_mood_v1`): a 1-5 `score` off `MOOD_SCALE`, at
+  most two `state_tags`, and a `process` block (`followed_plan` yes/partly/no or nothing,
+  a `note` of at most 200 characters). It is `{}` on a row nobody clicked, ABSENT on every
+  row written before the packet and NEVER a default — all three absences read `None` — and
+  `market_journal.mood_of` and the point-in-time `mood_at` are its ONLY readers.
+  `MoodFieldError` is LOUD at `build_entry` and the same question is asked AGAIN at
+  `is_publishable`, the gate every write passes through: a score off `MOOD_SCALE`, a bool,
+  a tag outside the versioned closed vocabulary, more tags than the cap, an unknown plan
+  answer, a process note over 200 characters REFUSED and never truncated, and a mood on a
+  MACHINE-written row refused through `is_machine_entry`'s own rule
+  (`MACHINE_MOOD_REFUSAL`). The vocabulary is
+  `ui/annotations/vocabularies/state_tags_v1.json` with its own loader
+  `scripts/trader_state_tags.py`, which OWNS the cap (`MAX_STATE_TAGS`) and the picklist on
+  `ai_jobs.observation_tags`' loader rules: the declared version equals the number in the
+  FILENAME, a duplicate code raises, an older version reads back by number, a code is never
+  renamed or reused, and no test asserts a literal `vocab_version`. ONE strip
+  (`scripts/ui/widgets/mood_strip.py`) serves BOTH surfaces — the Trade Mentor's `day_close`
+  question hook and the desk's journal tab — optional, with nothing ever pre-selected and
+  every click takeable back: a second click on the selected face CLEARS it (the faces are
+  deliberately NOT an exclusive `QButtonGroup`, because Qt will not un-check the checked
+  member of one and a misclick would otherwise have no way home), after which the strip is
+  indistinguishable from one nobody touched. It never greys TJ-9's Save, a mood clicked with
+  no plan answer is STILL FILED, it rides the `day_close` kind (`mentor_questions.KIND_DAY_CLOSE`
+  — no new registry kind, so the budget of three does not move), and
+  `TradeMentorCard.set_questions` became a MERGE for the WHOLE questions box, so a
+  half-clicked answer survives the same questions being offered again. The day pack gains a
+  `mood` section whose citable ids are minted through the ONE seam
+  `day_review_pack.mood_source_id` — shared with the Day Review payload, so one row has one
+  id wherever its section is built — each item PROJECTED through the load-bearing
+  `MOOD_ITEM_FIELDS`, in time order, inside `allowed_source_ids`, with a clock-free
+  `inputs_hash` that MOVES when a mood moves; `MOOD_EMPTY_STATEMENT` / `mood_statement` are
+  the ONE formatter, and Day Review prints ONE mood line off the ONE payload the worker
+  builds. `week_review_narration.EVIDENCE_KEYS` and `improvement_ideas.EVIDENCE_KEYS` each
+  gained exactly ONE name, `mood`, and neither gained a `MEASURABLES` entry — a kept
+  `process` idea can never be checked against how the trader felt.
+  `market_read_grades.context_for(..., mood_entries=)` takes only the mood recorded AT OR
+  BEFORE the read's stamp, else `unmeasured`. **The tagger never sees a mood**, and nothing
+  here reaches a detector, score, alert, watchlist, Focus, the review queue,
+  `review_learning`, a cohort grader or `review_policy.json`; no outcome selects, ranks or
+  pre-fills one. TJ-7 adds NO nightly slot, so the NINE slot-order pins do not move, and
+  source selftest stays **97/97** (89 lazily-imported engine modules plus 8 asset checks,
+  verified in `scripts/selftest.py`). Tests: `tests/test_tj7_journal_fields.py`,
+  `tests/test_tj7_state_tags_vocabulary.py`, `tests/test_tj7_mood_strip_is_optional.py`,
+  `tests/test_tj7_day_pack_and_narration.py`, `tests/test_tj7_evidence_lists.py`,
+  `tests/test_tj7_point_in_time_and_no_outcome.py`,
+  `tests/test_tj7_reported_never_acted_on.py`, `tests/test_tj7_day_review_mood_line.py`,
+  `tests/test_tj7_review1_followups.py`, `tests/tj7_support.py`. Rule: DESK_INTERNALS
+  "TJ-7". Gates #151 and #175 owed.
 - **The read grader, the prediction ledger and the congruence lines (TJ-10, 2026-09-20,
   branch `claude/tj10-read-grader`, merged into `lead/p033-integration2` `57b44ca9`).**
   `scripts/market_read_grades.py` grades what the trader said the market would do against
@@ -3567,6 +3618,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-20 - TJ-7: a mood is reported, never acted on - and every building packet of Phase 0.33 is merged (branch `claude/tj7-mood-fields`, tip `bcfdd918`, merged into `lead/p033-integration2` `b63db7af`, lead guard amendment `ae7c06c7`, follow-up merge `0a0a0be4`)
+
+A mood is the softest evidence the desk will ever hold - the trader's own word about themselves, usually written after the session - so TJ-7 ships FIELDS and a fence, not a finding. **Reviewer GO in round 1** at `83318aa2` with no blockers; six advisories, three of which the lead took as a follow-up merged at `0a0a0be4`. What it is: ONE additive `market_journal` row key `mood` (schema `trader_mood_v1`) holding a 1-5 `score`, at most two `state_tags` from the versioned closed vocabulary `state_tags_v1.json` and a `process` block (`followed_plan`, a `note` of at most 200 characters). Three absences mean the same thing and all three read `None` - the key ABSENT (43 of the 84 live journal rows on 2026-09-20), the key PRESENT and EMPTY (a row written after TJ-7 with nothing clicked) and the key `None` - because a reader that turned any of them into a neutral 3 would invent a feeling nobody had. **The writer is LOUD**, at `build_entry` and again at `is_publishable`, so a row assembled as a dict literal is refused too: a score off `MOOD_SCALE`, a bool, an unknown or over-cap tag, an unknown plan answer, and a 201-character process note REFUSED rather than shortened - an append-only ledger has no second chance, and the UI caps its own input. `scripts/trader_state_tags.py` OWNS the cap (`MAX_STATE_TAGS`, read at call time) and the picklist, on `ai_jobs.observation_tags`' loader rules. ONE strip (`scripts/ui/widgets/mood_strip.py`) serves both surfaces: on the Mentor it is TJ-14's `day_close` question's hook, NOT its own widget, so the budget of three does not move and no second registry kind needs a second consumer; on the desk's journal tab it sits under the new-entry box. Nothing is pre-selected, TJ-9's Save gate is untouched, a mood clicked with the plan question left alone is STILL FILED (a click the trader made is never thrown away), and `followed_plan` is taken only from the three plan answers because the same combo also offers TJ-9's four answer states and "not remembered" is not "I did not follow the plan". **The point-in-time rule is the hard one:** the mood is clicked on the session's LAST card, after the trade and usually after the close, so `market_read_grades.context_for(..., mood_entries=)` carries only the mood recorded AT OR BEFORE the read's stamp and `unmeasured` otherwise - a later one would be hindsight dressed as a measurement, and `prediction_contrast` walks every scalar in that block. A mood typed in the evening is kept, counted and LABELLED (`written_after_the_session`), because the partition a later reader needs is a label and never a deletion. The day pack's `mood` section mints citable, time-ordered ids through the ONE seam `day_review_pack.mood_source_id` (shared with the Day Review payload) and projects each item through `MOOD_ITEM_FIELDS`, with a clock-free `inputs_hash` that moves when a mood moves; `week_review_narration.EVIDENCE_KEYS` and `improvement_ideas.EVIDENCE_KEYS` each gained the ONE key `mood` because the week and the ideas cannot cite what they were not handed - and NEITHER gained a `MEASURABLES` entry, so no kept `process` idea can be checked against how the trader felt. **The invariant was re-proven by tracing importers, not by reading source:** the eleven modules that can reach a mood include no detector, score, alert, watchlist, Focus, review queue, `review_learning` or cohort grader, `context_for` has exactly ONE caller (the Day Review worker), and the tagger's request body carries no mood at all (a row scored 1, tagged `tilted`, with the note "I was furious about the gap" produces evidence containing none of it). **Review 1's cost, and the lead's amendment.** The tester's green guard `test_nothing_writes_a_mood_into_review_policy` flagged ANY file under `scripts/` whose SOURCE held both `review_policy` and a mood word - and three of the modules the packet REQUIRED TJ-7 to touch state that very invariant in prose, so the guard was unsatisfiable by its own packet. The builder took the only move open to him (he may not weaken a test) and reworded four shipped docstrings; the cost was that the canonical, searchable token `review_policy.json` left three modules that state a `plan.md` sec-5 invariant. The lead's amendment `ae7c06c7` narrows the guard to CONTACT with the policy - a module that imports, loads, drafts or saves it (five today, asserted non-empty) and also handles a mood - and restores all four sentences. **The follow-up (`0a0a0be4`, 16 new tests, 10 red before):** a misclick is not an answer. The faces shipped as an exclusive `QButtonGroup`, Qt will not un-check the checked member of one, and `save_questions` reads "a score is set" as "the trader touched the strip", so a finger that landed on 2 instead of 3 filed a mood nobody meant, permanently. One face at a time is now enforced in the widget's own handler and a second click on the selected face clears it, provably identical to never having touched the strip; `build_entry` refuses a mood on a machine row through `is_machine_entry`'s own rule so a new machine origin is fenced the day it is added; and `mood_source_id` is the ONE id seam the pack and the page mint through, while the page still BUILDS its own section rather than reading the written pack, because an evening mood arrives after the post-close pack was written. On today's desk the trader reads *"No mood recorded yet for this session (n 0)."* - a count, never a percentage, because the live journal held 84 rows and ZERO moods. TJ-7 adds NO nightly slot (the NINE order pins do not move); `ruff` clean; source selftest **97/97**. **With this merge every BUILDING packet of Phase 0.33 is on `lead/p033-integration2`; none of it is on `main`.** Gates #151 (three parts, its citation half unreadable until a night writes a pack and a story for a session carrying a mood) and the new **#175** owed. Long form: DESK_INTERNALS "TJ-7".
 
 ### 2026-09-20 - TJ-6: an idea is a suggestion, and a night asks once (branch `claude/tj6-ideas`, tip `d78945f0`, merged into `lead/p033-integration2` `a7809d7c`, ninth pin `be435cd7`, lead fix `41d3f759`)
 
