@@ -359,6 +359,7 @@ def _day_block(session: str, pack: Mapping[str, Any] | None, story: Mapping[str,
                 ids.append(row["source_id"])
 
     walkaway = pack.get("walkaway") if isinstance(pack.get("walkaway"), Mapping) else {}
+    trades = pack.get("trades") if isinstance(pack.get("trades"), Mapping) else {}
     block = {
         "session": session,
         "has_facts": True,
@@ -366,6 +367,15 @@ def _day_block(session: str, pack: Mapping[str, Any] | None, story: Mapping[str,
         "said": said,
         "reads": reads,
         "report_card": lines,
+        # Counted over the day's WHOLE read list, never over the bounded copy
+        # above: a tally taken from a truncated list is a number nobody
+        # measured. TJ-5's day card prints this one.
+        "tally": _tally_rows(read_rows),
+        "said_counts": {
+            "observations": sum(1 for row in said_rows if _text(row.get("kind")) == "observation"),
+            "predictions": sum(1 for row in said_rows if _text(row.get("kind")) == "prediction"),
+        },
+        "trades": {"n": int(trades.get("n") or 0)},
         "walkaway_counts": dict(walkaway.get("counts") or {}),
         "story": {
             "headline": _text(story.get("headline")),
@@ -379,27 +389,36 @@ def _day_block(session: str, pack: Mapping[str, Any] | None, story: Mapping[str,
     return block, ids
 
 
-def _tally(packs: Mapping[str, Mapping[str, Any]]) -> dict[str, int]:
-    """``right``/``wrong``/``unresolved``/``n`` over the packs that EXIST.
+def _tally_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """``right``/``wrong``/``unresolved``/``n`` over graded read rows.
 
     `pending <date>` and `unmeasured:<reason>` are unresolved, never wrong: a
-    read nobody could close is not a read the trader got wrong.
+    read nobody could close is not a read the trader got wrong. The verdict
+    vocabulary is IMPORTED from its owner, never spelled here.
     """
     import market_read_grades as grades
 
     right = wrong = other = 0
-    for pack in packs.values():
-        for row in (pack or {}).get("reads") or ():
-            if not isinstance(row, Mapping):
-                continue
-            verdict = _text(row.get("verdict"))
-            if verdict == grades.VERDICT_RIGHT:
-                right += 1
-            elif verdict == grades.VERDICT_WRONG:
-                wrong += 1
-            else:
-                other += 1
+    for row in rows or ():
+        if not isinstance(row, Mapping):
+            continue
+        verdict = _text(row.get("verdict"))
+        if verdict == grades.VERDICT_RIGHT:
+            right += 1
+        elif verdict == grades.VERDICT_WRONG:
+            wrong += 1
+        else:
+            other += 1
     return {"right": right, "wrong": wrong, "unresolved": other, "n": right + wrong + other}
+
+
+def _tally(packs: Mapping[str, Mapping[str, Any]]) -> dict[str, int]:
+    """The same tally over every pack the week HAS. A missing day adds nothing."""
+    total = {"right": 0, "wrong": 0, "unresolved": 0, "n": 0}
+    for pack in packs.values():
+        for key, value in _tally_rows((pack or {}).get("reads") or ()).items():
+            total[key] += value
+    return total
 
 
 def _walkaway_totals(packs: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:

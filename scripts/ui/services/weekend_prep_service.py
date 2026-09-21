@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -469,6 +469,306 @@ def build_weekend_board(
     return build_weekend_boards(
         timeframe, downloader=downloader, symbols=symbols, now=now
     )[side]
+
+
+# ---------------------------------------------------------------------------
+# TJ-5 - the Week Review payload, and the deterministic week / month strip
+# ---------------------------------------------------------------------------
+#: *"TJ-12's report-card lines re-cut by exchange week for the LAST FOUR WEEKS
+#: and for the calendar month to date"* (`plan.md` §12.4 TJ-5 change 3). Four
+#: entries, not "however many had facts": a week that vanished because nothing
+#: was packed would read as a week that never happened.
+WEEK_STRIP_WEEKS = 4
+
+#: The ONE payload the Week Review page renders. Every key is present on a
+#: first paint, a failed read and a quiet week alike - the page has one render
+#: and no special cases (TJ-1's `empty_payload` rule).
+WEEK_PAYLOAD_KEYS: tuple[str, ...] = (
+    "week_id",
+    "sessions",
+    "sessions_with_facts",
+    "sessions_missing",
+    "cards",
+    "week_story",
+    "walkaway",
+    "strip",
+    "tendencies",
+    "misses",
+    "callouts",
+    #: Reserved for TJ-6's kept ideas. The key exists so the page has one shape
+    #: before that packet lands; nothing writes it here.
+    "ideas",
+)
+
+#: The index the small day chart draws. One symbol, from TJ-2's durable session
+#: bars - never a fetch, and never the lake.
+WEEK_CHART_SYMBOL = "SPY"
+
+#: How many points one small chart carries. A session is ~78 completed M5 bars;
+#: this is the ceiling, and a longer tape is thinned evenly rather than cut, so
+#: the shape of the day survives.
+WEEK_CHART_POINTS = 120
+
+
+def empty_week_payload(week_id: str = "") -> dict[str, Any]:
+    """Every :data:`WEEK_PAYLOAD_KEYS` key, and nothing in any of them."""
+    return {
+        "week_id": str(week_id or ""),
+        "sessions": [],
+        "sessions_with_facts": [],
+        "sessions_missing": [],
+        "cards": [],
+        "week_story": {},
+        "walkaway": {},
+        "strip": {"weeks": (), "month_to_date": {}},
+        "tendencies": [],
+        "misses": {},
+        "callouts": [],
+        "ideas": [],
+    }
+
+
+def _default_ledger_path():
+    """The AI job ledger, or ``None``. It never CREATES the store.
+
+    `ai_jobs.ledger.ledger_path()` defaults to ``create=True``; a reader whose
+    honest answer may be "night status unknown" may not make a store in order
+    to say so (`day_review_service._ledger_path` is the precedent).
+    """
+    try:
+        from ai_jobs import ledger
+
+        path = ledger.ledger_path(create=False)
+    except Exception:  # noqa: BLE001 - no store is "unknown", never a failure
+        return None
+    return path if path is not None and Path(path).exists() else None
+
+
+def _stored_card(session: str, pack: Any, ledger_path):
+    """One session's report card, from the lines the PACK stored (TJ-12/TJ-4).
+
+    A pack cannot be turned back into a `day_report_card.build` input - that
+    needs TJ-11's `WalkawayDay` object - and it does not need to be: the pack
+    carries the BUILT lines with all of their integers.
+
+    `how_fresh` is asked HERE, per session, because it is deliberately not in
+    the pack: it describes the machine's night, and its text moves every time
+    the job ledger gains a row. It is always handed a SESSION - `_slot_verdicts`
+    guards with ``if session and ...``, so an empty one pools every night the
+    ledger tail holds and a five-day window would multiply its own `n` by five.
+    """
+    import day_report_card
+
+    lines = [
+        dict(line)
+        for line in ((pack or {}).get("report_card") or {}).get("lines") or ()
+        if isinstance(line, dict) and line.get("key") in day_report_card.PACK_LINE_KEYS
+    ]
+    lines.append(
+        day_report_card.how_fresh({"session": session, "ledger_path": ledger_path})
+    )
+    return day_report_card.ReportCard(session=session, lines=tuple(lines))
+
+
+def _window_block(
+    sessions: Sequence[str], *, root, ledger_path, label_key: str, label: str
+) -> dict[str, Any]:
+    """One strip cell: the window's sessions, which of them have facts, its lines."""
+    import day_report_card
+    import day_review_pack
+
+    packs: dict[str, Any] = {}
+    for session in sessions:
+        pack = day_review_pack.read_pack(session, root=root)
+        if isinstance(pack, dict) and pack:
+            packs[session] = pack
+    cards = [
+        _stored_card(session, packs[session], ledger_path)
+        for session in sessions
+        if session in packs
+    ]
+    pooled = day_report_card.week_from_cards(cards)
+    return {
+        label_key: label,
+        "sessions": tuple(sessions),
+        "sessions_with_facts": tuple(session for session in sessions if session in packs),
+        "lines": [dict(line) for line in pooled.lines],
+    }
+
+
+def week_strip(*, friday: str, root=None, ledger_path=None) -> dict[str, Any]:
+    """TJ-12's lines re-cut by week and by month. Deterministic, no model.
+
+    `plan.md` §12.4 TJ-5 change 3: *"same functions, longer window, `n` on every
+    cell, a week under its floor named and not ranked. No new page, no model."*
+    The pooling is `day_report_card.week_from_cards` and nothing here computes a
+    statistic of its own - ``rate_lb`` is the ONE Wilson, on the POOLED pair.
+
+    Weeks are NEWEST FIRST and there are always :data:`WEEK_STRIP_WEEKS` of
+    them, each named with its own week id even when it holds nothing at all.
+    """
+    from ai_jobs import week_review_narration as week_module
+
+    anchor = date.fromisoformat(str(friday)[:10])
+    if ledger_path is None:
+        ledger_path = _default_ledger_path()
+
+    weeks: list[dict[str, Any]] = []
+    for index in range(WEEK_STRIP_WEEKS):
+        end = anchor - timedelta(days=7 * index)
+        sessions = [
+            day for day in week_module.week_sessions(end.isoformat())
+            if day <= anchor.isoformat()
+        ]
+        weeks.append(
+            _window_block(
+                sessions,
+                root=root,
+                ledger_path=ledger_path,
+                label_key="week_id",
+                label=week_module.week_id(end.isoformat()),
+            )
+        )
+
+    month_sessions = _month_to_date_sessions(anchor)
+    month = _window_block(
+        month_sessions,
+        root=root,
+        ledger_path=ledger_path,
+        label_key="month_id",
+        label=f"{anchor.year:04d}-{anchor.month:02d}",
+    )
+    return {"weeks": tuple(weeks), "month_to_date": month}
+
+
+def _month_to_date_sessions(anchor: date) -> list[str]:
+    """The exchange sessions of ``anchor``'s month, up to and including it.
+
+    Nothing before the first of the month, nothing after the anchor: a month to
+    date that reached into the previous month would be a different window
+    wearing this one's name.
+    """
+    out: list[str] = []
+    cursor = anchor.replace(day=1)
+    while cursor <= anchor:
+        try:
+            keep = market_calendar.is_session(cursor)
+        except Exception:  # noqa: BLE001 - an unanswerable calendar keeps weekdays
+            keep = cursor.weekday() < 5
+        if keep:
+            out.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return out
+
+
+def _spy_points(session: str, root) -> list[dict[str, Any]]:
+    """The session's SPY closes, thinned to :data:`WEEK_CHART_POINTS`.
+
+    TJ-2's durable parquet only. Nothing is fetched: a page that reached a
+    provider on open would be five network calls behind a tab click.
+    """
+    try:
+        import day_review_bars
+
+        bars = day_review_bars.read_session_bars(session, root=root)
+    except Exception:  # noqa: BLE001 - no tape is an empty chart, never a failure
+        logging.debug("Day Review bars for %s were unreadable.", session, exc_info=True)
+        return []
+    rows = list((bars or {}).get(WEEK_CHART_SYMBOL) or ())
+    if not rows:
+        return []
+    step = max(1, len(rows) // WEEK_CHART_POINTS)
+    return [
+        {"t": str(row.get("dt") or ""), "c": float(row.get("close") or 0.0)}
+        for row in rows[::step]
+        if row.get("close") is not None
+    ][:WEEK_CHART_POINTS]
+
+
+def _said_vs_did(day: Mapping[str, Any]) -> str:
+    """What the trader CALLED beside what they TRADED. Counting, never a verdict."""
+    called = int((day.get("said_counts") or {}).get("predictions") or 0)
+    traded = int((day.get("trades") or {}).get("n") or 0)
+    said = f"You called {called} thing(s)" if called else "You called nothing"
+    did = f"took {traded} trade(s)" if traded else "took nothing"
+    return f"{said} and {did}."
+
+
+def _week_callouts() -> list[str]:
+    """The review-learning callouts this page has printed since R8.
+
+    Kept, and kept on the WORKER: `build_review_learning_state` was the 8.45 s
+    freeze this page's reader exists for (fluidity capture, 2026-08-25). A store
+    it cannot read says so in one line rather than costing the whole week page -
+    the five day cards and the week story are a different question.
+    """
+    from ui.panels import weekend_prep_panel
+
+    try:
+        from evidence_stats import WEEK_SESSIONS
+        from review_learning import build_review_learning_state
+
+        state = build_review_learning_state(window_sessions=WEEK_SESSIONS)
+    except Exception as exc:  # noqa: BLE001
+        logging.debug("The review-learning state was unreadable.", exc_info=True)
+        return [f"Week callouts unavailable: {exc}"]
+    return list(weekend_prep_panel.callout_lines(state))
+
+
+def read_week_review(
+    *, friday: str = "", root=None, ledger_path=None, now: datetime | None = None
+) -> dict[str, Any]:
+    """ONE payload for the Week Review page. Every store this page opens.
+
+    Called on the page's worker and nowhere else. It builds no pack, no report
+    card and no narration - it READS what the night wrote, and the numbers are
+    the night's own: `week_review_narration.build_week_inputs` is the same
+    function the Saturday slot narrates from, so the page and the story cannot
+    disagree about how many days had facts.
+    """
+    from ai_jobs import week_review_narration as week_module
+
+    anchor = str(friday or "")[:10] or weekend_id(now)
+    if ledger_path is None:
+        ledger_path = _default_ledger_path()
+
+    inputs = week_module.build_week_inputs(anchor, root=root, ledger_path=ledger_path)
+    stored = week_module.read_week_narration(inputs["week_id"], root=root) or {}
+
+    cards: list[dict[str, Any]] = []
+    for day in inputs.get("days") or ():
+        session = str(day.get("session") or "")
+        has_facts = bool(day.get("has_facts"))
+        story = day.get("story") or {}
+        chased = str((story.get("chased_against_news") or {}).get("verdict") or "")
+        cards.append(
+            {
+                "session": session,
+                "has_facts": has_facts,
+                "headline": str(story.get("headline") or ""),
+                "tally": dict(day.get("tally") or {}) if has_facts else {},
+                "chased": chased or ("unknown" if has_facts else "unmeasured"),
+                "said_vs_did": _said_vs_did(day) if has_facts else "",
+                "spy_bars": _spy_points(session, root) if has_facts else [],
+            }
+        )
+
+    payload = empty_week_payload(inputs["week_id"])
+    payload.update(
+        {
+            "sessions": list(inputs.get("sessions") or ()),
+            "sessions_with_facts": list(inputs.get("sessions_with_facts") or ()),
+            "sessions_missing": list(inputs.get("sessions_missing") or ()),
+            "cards": cards,
+            "week_story": dict(stored),
+            "walkaway": dict(inputs.get("walkaway_totals") or {}),
+            "strip": week_strip(friday=anchor, root=root, ledger_path=ledger_path),
+            "tendencies": list(inputs.get("tendencies") or ()),
+            "misses": dict(inputs.get("misses") or {}),
+            "callouts": _week_callouts(),
+        }
+    )
+    return payload
 
 
 def _run_weekly_prep() -> str:
