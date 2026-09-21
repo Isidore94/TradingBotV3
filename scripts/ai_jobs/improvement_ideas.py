@@ -1440,9 +1440,9 @@ def _write_asked_marker(
         "stored": int(stored),
         "counts": dict(counts),
     }
+    temporary = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(path.name + ".tmp")
         temporary.write_text(
             json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
             encoding="utf-8",
@@ -1450,6 +1450,11 @@ def _write_asked_marker(
         os.replace(temporary, path)
     except OSError:
         _log.debug("The asked marker could not be written.", exc_info=True)
+        # Review round 2: a failed rename left the temp file beside the store.
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
         return None
     return path
 

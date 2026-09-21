@@ -263,3 +263,26 @@ class _Stub:
 
     def import_daily_forecast(self, **kwargs):
         return {"ok": True, "entry": {"entry_id": "mj-stub-0002"}}
+
+
+def test_a_marker_whose_rename_fails_leaves_no_temp_file_behind(tmp_path, monkeypatch):
+    """LEAD, review round 2: `_write_asked_marker` is allowed to fail (the
+    runner's already-done check is the first guard) but not to litter - a
+    failed `os.replace` used to leave `ai_ideas_asked.json.tmp` beside the
+    trader's ideas store."""
+    import project_paths
+    from ai_jobs import improvement_ideas as ideas
+
+    monkeypatch.setattr(project_paths, "AI_IDEAS_FILE", tmp_path / "ai_ideas.jsonl", raising=False)
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(ideas.os, "replace", _refuse)
+
+    written = ideas._write_asked_marker(
+        "2026-09-18", "hash", model="m", stored=0, counts={}, now=None
+    )
+
+    assert written is None
+    assert list(tmp_path.glob("*.tmp")) == []
