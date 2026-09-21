@@ -346,6 +346,15 @@ class TradeMentorCard(QWidget):
         self._exit_states: dict[str, str] = {}
         self._exit_state_buttons: dict[str, dict[str, QPushButton]] = {}
         self._exit_sessions: dict[str, str] = {}
+        # From here down the key is the READING's identity - `check.exit_key`,
+        # `<trade_id>@<exit_session>` - and never the trade id: a trade can have
+        # exited in two sessions and been read twice, and one map per trade
+        # would have let a Confirm sign off the other session's words (review 2
+        # blocker 1). The maps above are the trade section's own and stay keyed
+        # by trade, because a card asks about ONE exit session per trade.
+        self._exit_rewrite_boxes: dict[str, QPlainTextEdit] = {}
+        self._exit_rewrite_original: dict[str, str] = {}
+        self._exit_rewrite_saves: dict[str, QPushButton] = {}
         self._exit_draft_rows: dict[str, QWidget] = {}
         self._exit_draft_labels: dict[str, QLabel] = {}
         self._exit_confirm_buttons: dict[str, QPushButton] = {}
@@ -930,6 +939,9 @@ class TradeMentorCard(QWidget):
             self._exit_correction_rows,
             self._exit_correction_inputs,
             self._exit_drafts,
+            self._exit_rewrite_boxes,
+            self._exit_rewrite_original,
+            self._exit_rewrite_saves,
         ):
             held.pop(key, None)
         self._exit_writing.discard(key)
@@ -980,8 +992,16 @@ class TradeMentorCard(QWidget):
         fields and the exit boxes of the trade section, and this row is in
         neither.
         """
+        import trade_mentor_trade_check as check
+
         detail = dict(getattr(subject, "detail", {}) or {})
-        trade_id = str(detail.get("trade_id") or subject.subject_id)
+        trade_id = str(detail.get("trade_id") or "")
+        session = str(detail.get("exit_session") or "")
+        # The reading's OWN identity, so a trade that exited in two sessions
+        # gets two rows and a Confirm signs off the words it is under.
+        key = str(detail.get("key") or subject.subject_id or check.exit_key(trade_id, session))
+        if not trade_id:
+            trade_id = check.split_exit_key(key)[0]
         row = QWidget(self.questions_box)
         stack = QVBoxLayout(row)
         stack.setContentsMargins(0, 0, 0, 0)
@@ -999,16 +1019,19 @@ class TradeMentorCard(QWidget):
         # The card's own draft widgets, so Confirm and Correct are the SAME
         # seam wherever the row is drawn - one write in flight, both verbs grey
         # for the whole of it, every ending settling them.
-        self._exit_drafts[trade_id] = {
+        self._exit_drafts[key] = {
+            "key": key,
             "trade_id": trade_id,
-            "exit_session": str(detail.get("exit_session") or ""),
+            "exit_session": session,
             "note_id": str(detail.get("note_id") or ""),
             "fields": dict(detail.get("fields") or {}),
+            "raw_text": said,
         }
-        self._exit_sessions.setdefault(trade_id, str(detail.get("exit_session") or ""))
-        self._draft_question_rows.add(trade_id)
-        self._add_exit_draft_row(trade_id, row, stack)
-        self._refresh_exit_draft_line(trade_id)
+        self._draft_question_rows.add(key)
+        self._add_exit_draft_row(key, row, stack)
+        self._refresh_exit_draft_line(key)
+        if said:
+            self._add_rewrite_verb(key, session, said, row, stack, standalone=True)
         return row, None
 
     def _build_question_row(self, subject) -> tuple[QWidget, QComboBox | None]:
@@ -1251,6 +1274,9 @@ class TradeMentorCard(QWidget):
             "_exit_correction_rows",
             "_exit_correction_inputs",
             "_exit_drafts",
+            "_exit_rewrite_boxes",
+            "_exit_rewrite_original",
+            "_exit_rewrite_saves",
         ):
             setattr(
                 self,
@@ -1305,6 +1331,9 @@ class TradeMentorCard(QWidget):
             self._exit_correction_rows,
             self._exit_correction_inputs,
             self._exit_drafts,
+            self._exit_rewrite_boxes,
+            self._exit_rewrite_original,
+            self._exit_rewrite_saves,
         ):
             held.pop(key, None)
         self._exit_writing.discard(key)
@@ -1443,21 +1472,20 @@ class TradeMentorCard(QWidget):
         owed = {str(question.trade_id): question for question in task.trades}
         for trade_id in [key for key in self._trade_blocks if key not in owed]:
             self._drop_trade_block(trade_id)
-        # TJ-9E. ONE read of the night's drafts and of the trader's own
-        # confirmed rows for the whole section, before any widget is built: a
-        # per-trade read here would be six file reads and six table walks on
-        # the Qt thread for a six-trade morning.
-        self._exit_drafts = self._read_exit_drafts(owed.values())
+        # TJ-9E. The readings waiting for these rows get their ONE row first,
+        # in the questions block, so the exit half of a trade block knows to
+        # say nothing about an exit whose words are already on the card above.
+        self._ensure_exit_draft_rows(owed.values())
         for trade_id, question in owed.items():
             if trade_id in self._trade_blocks:
                 continue
             self._add_trade_block(question, task)
         # A ONE-LINE STATE is always rewritten; a section with ANSWER WIDGETS
         # is never rebuilt (TJ-9's own card rule). The draft line is the former:
-        # a draft that landed overnight has to appear on a row the trader may
-        # already have typed into, without touching what they typed.
-        for trade_id in owed:
-            self._refresh_exit_draft_line(trade_id)
+        # a reading that landed overnight has to appear beside a row the trader
+        # may already have typed into, without touching what they typed.
+        for key in list(self._draft_question_rows):
+            self._refresh_exit_draft_line(key)
         has_rows = bool(self._answer_inputs)
         self.trade_check_box.setVisible(has_rows)
         self.save_answers_button.setVisible(has_rows)
@@ -1557,9 +1585,16 @@ class TradeMentorCard(QWidget):
             # built, which is what makes `_exit_is_open` False and keeps the
             # answered question out of the Save gate (review 1 blocker 5 - the
             # box used to come back EMPTY on the next card of the same morning
-            # and grey Save until they retyped it). The draft line below is
-            # still built, because the night's reading of THOSE words is what
-            # the trader confirms.
+            # and grey Save until they retyped it).
+            #
+            # A WAITING READING HAS ONE HOME, and it is the draft row in the
+            # questions block (review 2 blocker 2: drawn in both places, the
+            # trader saw two copies of the same question and one Confirm that
+            # no longer responded). So when a reading is waiting for this
+            # (trade, session) the exit half of this row says NOTHING at all -
+            # the row above already shows the same words.
+            if check.exit_key(trade_id, session) in self._exit_drafts:
+                return
             said = str(getattr(question, "exit_note", "") or "").strip()
             state = str(getattr(question, "exit_answer_state", "") or "")
             answered = QLabel(
@@ -1572,7 +1607,12 @@ class TradeMentorCard(QWidget):
             answered.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             block_layout.addWidget(answered)
             self._exit_prompts[trade_id] = answered
-            self._add_exit_draft_row(trade_id, block, block_layout)
+            if said:
+                # The ONE door to a second note. Until now an explained exit was
+                # read-only and Correct edited the FIELDS, so the supersede path
+                # `save_exit_note` documents had no way for the trader to reach
+                # it (review 2 advisory 2).
+                self._add_rewrite_verb(trade_id, session, said, block, block_layout)
             return
 
         box_holder = QWidget(block)
@@ -1615,7 +1655,122 @@ class TradeMentorCard(QWidget):
         self._exit_prompts[trade_id] = prompt
         self._exit_state_buttons[trade_id] = buttons
         self._exit_states.setdefault(trade_id, "")
-        self._add_exit_draft_row(trade_id, block, block_layout)
+
+    def _add_rewrite_verb(
+        self, key, session, said, block, block_layout, *, standalone: bool = False
+    ) -> None:
+        """`Rewrite` - the trader's door to a SECOND note about one exit.
+
+        It reopens ONE box, pre-filled with the words already on disk, and the
+        save appends a superseding `EXIT_NOTE_RAW` row: the first row stays
+        byte-identical, because a trader changing their mind is the interesting
+        part. Nothing is written if the words come back unchanged - clicking
+        Rewrite and thinking better of it is not a new note.
+
+        Until now there was no door at all (review 2 advisory 2): since an
+        explained exit went read-only, `save_exit_note`'s documented supersede
+        path had no way for the trader to reach it, and Correct edits the three
+        FIELDS rather than the words.
+
+        Two homes, because a reading's row has no Save of its own: on the trade
+        section the box IS that row's exit box and the section's Save writes
+        it, and on a draft row (`standalone`) it carries its own `Save these
+        words`, which writes through the same one-write-in-flight worker the
+        two verbs use.
+        """
+        row = QWidget(block)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        button = QPushButton("Rewrite", row)
+        button.setObjectName("MentorExitRewriteButton")
+        button.setToolTip(
+            "Say it again in different words. The first note stays exactly as "
+            "you wrote it; the new one supersedes it."
+        )
+        button.clicked.connect(
+            lambda _checked=False, k=str(key): self._open_exit_rewrite(k)
+        )
+        layout.addWidget(button)
+        layout.addStretch(1)
+        block_layout.addWidget(row)
+
+        box = QPlainTextEdit(block)
+        box.setObjectName("MentorExitNoteBox")
+        box.setMaximumHeight(72)
+        box.setPlainText(str(said or ""))
+        box.setVisible(False)
+        block_layout.addWidget(box)
+        self._exit_rewrite_boxes[str(key)] = box
+        self._exit_rewrite_original[str(key)] = str(said or "")
+        if standalone:
+            save = QPushButton("Save these words", block)
+            save.setVisible(False)
+            save.clicked.connect(
+                lambda _checked=False, k=str(key): self._save_exit_rewrite(k)
+            )
+            block_layout.addWidget(save)
+            self._exit_rewrite_saves[str(key)] = save
+            box.textChanged.connect(
+                lambda k=str(key): self._refresh_rewrite_gate(k)
+            )
+        else:
+            self._exit_sessions[str(key)] = str(session or "")
+            box.textChanged.connect(self._refresh_save_gate)
+
+    def _refresh_rewrite_gate(self, key: str) -> None:
+        """A standalone rewrite saves WORDS or nothing."""
+        save = self._exit_rewrite_saves.get(str(key))
+        box = self._exit_rewrite_boxes.get(str(key))
+        if save is None or box is None:
+            return
+        try:
+            save.setEnabled(bool(str(box.toPlainText() or "").strip()))
+        except RuntimeError:  # pragma: no cover - widget already torn down
+            pass
+
+    def _open_exit_rewrite(self, key: str) -> None:
+        """Show the pre-filled box. From here it is an ordinary exit box."""
+        name = str(key)
+        box = self._exit_rewrite_boxes.get(name)
+        if box is None or box.isVisibleTo(self):
+            return
+        box.setVisible(True)
+        save = self._exit_rewrite_saves.get(name)
+        if save is not None:
+            save.setVisible(True)
+            self._refresh_rewrite_gate(name)
+        else:
+            # The trade section's own exit box from here on: the section's Save
+            # writes it and `_exit_is_open` gates on it like any other.
+            self._exit_boxes[name] = box
+        self._refresh_save_gate()
+
+    def _save_exit_rewrite(self, key: str) -> bool:
+        """A superseding note from a draft row, through the ONE write seam."""
+        import trade_mentor_trade_check as check
+
+        name = str(key)
+        box = self._exit_rewrite_boxes.get(name)
+        draft = dict(self._exit_drafts.get(name) or {})
+        body = str(box.toPlainText() or "").strip() if box is not None else ""
+        if not body or body == str(self._exit_rewrite_original.get(name) or "").strip():
+            self._set_status("Nothing changed, so nothing was written.")
+            return False
+        store = self._exit_store(name)
+        trade_id = str(draft.get("trade_id") or check.split_exit_key(name)[0])
+        session = str(draft.get("exit_session") or check.split_exit_key(name)[1])
+        moment = self._now()
+        return self._start_exit_write(
+            name,
+            lambda: {
+                "ok": True,
+                **check.save_exit_note(
+                    store, trade_id, body, exit_session=session, now=moment
+                ),
+            },
+            "Saving your new words…",
+        )
 
     def _add_exit_draft_row(self, trade_id: str, block, block_layout) -> None:
         """The night's reading, with the trader's two verbs.
@@ -1731,55 +1886,63 @@ class TradeMentorCard(QWidget):
         }
         return row
 
-    def _read_exit_drafts(self, questions) -> dict[str, dict[str, Any]]:
-        """The night's PROVISIONAL drafts for the rows on this card.
+    def _ensure_exit_draft_rows(self, questions) -> None:
+        """Make sure every reading waiting for a row on this card HAS its one row.
 
-        One read per distinct exit session - normally one - and the trader's
-        own confirmed rows come back in the SAME read, so a draft they have
-        already signed off is never offered again. A draft is the machine's
-        reading: it is shown, it is never counted as the trader's, and a
-        failure here costs the line and nothing else.
+        A WAITING READING HAS ONE HOME - the draft row in the questions block -
+        whichever seam noticed it (review 2 blocker 2). `set_questions` puts it
+        there from the registry's lane; this puts it there for a caller that
+        only builds the trade section, which is how four pinned tests drive the
+        card and how a host would reach a reading on a morning whose questions
+        were built before the statement landed. Either way the row is created
+        ONCE, under the reading's own `(trade, session)` key, so there is one
+        Confirm, one draft line and one copy of the trader's words.
+
+        It never raises: a missing pack is simply no reading.
         """
         import trade_mentor_trade_check as check
 
-        sessions: dict[str, list[str]] = {}
-        for question in questions:
-            session = str(getattr(question, "exit_session", "") or "")
-            if session:
-                sessions.setdefault(session, []).append(str(question.trade_id))
-        found: dict[str, dict[str, Any]] = {}
-        if not sessions:
-            return found
-        store = self._trade_store
-        for session, trade_ids in sessions.items():
-            confirmed: dict[str, Any] = {}
-            if store is not None:
-                try:
-                    confirmed = dict(check.exit_notes_for_session(store, session))
-                except Exception:  # noqa: BLE001 - the line never costs the card
-                    logging.debug("Exit notes unreadable for the card.", exc_info=True)
+        sessions = {
+            str(getattr(question, "exit_session", "") or "")
+            for question in questions
+            if str(getattr(question, "exit_session", "") or "")
+        }
+        store = self._exit_store()
+        if not sessions or store is None:
+            return
+        for session in sorted(sessions):
             try:
-                from ai_jobs import exit_note_fields
-
-                stored = exit_note_fields.read_latest(
-                    session, root=self._exit_drafts_root
+                waiting = check.waiting_exit_drafts(
+                    store, session, sessions=1, root=self._exit_drafts_root
                 )
-            except Exception:  # noqa: BLE001 - a missing pack is simply no draft
+            except Exception:  # noqa: BLE001 - a reading never costs the card
                 logging.debug("Exit drafts unreadable for the card.", exc_info=True)
-                stored = {}
-            wanted = set(trade_ids)
-            for draft in (stored or {}).get("drafts") or ():
-                if not isinstance(draft, Mapping):
-                    continue
-                trade_id = str(draft.get("trade_id") or "")
-                if trade_id not in wanted:
-                    continue
-                if (confirmed.get(trade_id) or {}).get("exit_fields"):
-                    # Already the trader's. A draft they signed off is not
-                    # offered a second time.
-                    continue
-                found[trade_id] = dict(draft)
-        return found
+                continue
+            for row in waiting:
+                self._ensure_draft_question_row(row)
+
+    def _ensure_draft_question_row(self, detail: Mapping[str, Any]) -> None:
+        """One waiting reading, in the questions block, exactly once."""
+        import mentor_questions
+
+        key = str(detail.get("key") or "")
+        if not key or key in self._draft_question_rows:
+            return
+        subject = mentor_questions.Subject(
+            kind=EXIT_DRAFT_KIND,
+            subject_id=key,
+            prompt=(
+                f"{detail.get('symbol') or ''} - you exited on "
+                f"{detail.get('exit_session') or ''}. Is that what happened?"
+            ).strip(),
+            detail=dict(detail),
+        )
+        row, combo = self._build_exit_draft_question(subject)
+        index = self._questions_layout.count()
+        self._questions_layout.insertWidget(index, row)
+        self._question_rows[(EXIT_DRAFT_KIND, key)] = row
+        self._question_inputs[(EXIT_DRAFT_KIND, key)] = (subject, combo)
+        self.questions_box.setVisible(True)
 
     def _exit_draft_sentence(self, draft: Mapping[str, Any]) -> str:
         """The night's reading as ONE line, in the trader's own vocabulary."""
@@ -1844,20 +2007,63 @@ class TradeMentorCard(QWidget):
         prompt = self._exit_prompts.get(str(trade_id))
         return prompt.text() if prompt is not None else ""
 
+    def draft_key(self, value: str) -> str:
+        """The reading key behind `value`, which may be a bare trade id.
+
+        A reading is identified by `(trade_id, exit_session)`. A caller that
+        knows only the trade gets the reading on the card for it - and ``""``
+        when the trade has TWO waiting readings, because guessing which one
+        they meant is how a Confirm signs off the wrong session's words.
+        """
+        text = str(value or "")
+        if text in self._exit_drafts or text in self._exit_draft_labels:
+            return text
+        prefix = f"{text}@"
+        matches = sorted(
+            {key for key in self._exit_draft_labels if key.startswith(prefix)}
+            | {key for key in self._exit_drafts if key.startswith(prefix)}
+        )
+        return matches[0] if len(matches) == 1 else ""
+
     def exit_draft_line(self, trade_id: str) -> str:
-        """The night's reading as the card shows it, or ``""``."""
-        label = self._exit_draft_labels.get(str(trade_id))
+        """The night's reading as the card shows it, or ``""``.
+
+        Takes a reading KEY or a bare trade id; see :meth:`draft_key`.
+        """
+        label = self._exit_draft_labels.get(self.draft_key(trade_id))
         return label.text() if label is not None else ""
 
     def exit_confirm_button(self, trade_id: str):
-        return self._exit_confirm_buttons.get(str(trade_id))
+        return self._exit_confirm_buttons.get(self.draft_key(trade_id))
 
     def exit_correct_button(self, trade_id: str):
-        return self._exit_correct_buttons.get(str(trade_id))
+        return self._exit_correct_buttons.get(self.draft_key(trade_id))
+
+    def exit_rewrite_button(self, trade_id: str):
+        """The `Rewrite` verb for one exit - a reading key OR a trade id."""
+        key = self.draft_key(trade_id)
+        row = self._exit_rewrite_boxes.get(key) or self._exit_rewrite_boxes.get(
+            str(trade_id)
+        )
+        if row is None:
+            return None
+        holder = row.parentWidget()
+        for button in (holder.findChildren(QPushButton) if holder is not None else ()):
+            if button.objectName() == "MentorExitRewriteButton":
+                return button
+        return None
+
+    def exit_rewrite_box(self, trade_id: str):
+        """The pre-filled box `Rewrite` opens, or ``None``."""
+        key = self.draft_key(trade_id)
+        return self._exit_rewrite_boxes.get(key) or self._exit_rewrite_boxes.get(
+            str(trade_id)
+        )
 
     def exit_write_in_flight(self, trade_id: str) -> bool:
         """Is a journal write for this exit running right now?"""
-        return str(trade_id) in self._exit_writing
+        key = self.draft_key(trade_id)
+        return (key or str(trade_id)) in self._exit_writing
 
     def exit_answer_state(self, trade_id: str) -> str:
         """Which answer state this exit carries instead of words, or ``""``."""
@@ -2183,7 +2389,7 @@ class TradeMentorCard(QWidget):
         key = str(trade_id)
         if key in self._exit_writing:
             return False
-        if self._exit_store() is None:
+        if self._exit_store(key) is None:
             self._set_status("the trade journal is not available here")
             return False
         self._exit_writing.add(key)
@@ -2208,14 +2414,18 @@ class TradeMentorCard(QWidget):
         if save is not None:
             save.setEnabled(bool(enabled))
 
-    def _exit_store(self):
-        """The journal the exit verbs write through, wherever the row is drawn.
+    def _exit_store(self, key: Any = None):
+        """The journal THIS row's verbs write through.
 
-        TJ-9E: a waiting-reading row lives in the QUESTIONS area, which the
-        host hands its own store, and the trade section is not on the card at
-        all on a morning whose reviewed session has nothing open. Same store,
-        two seams.
+        The store the ROW came from wins (review 2 advisory 6): a waiting
+        reading is offered by `set_questions`, which is handed the questions
+        store, and writing its confirmation into the trade store put the row in
+        a different database from the draft it signed off. In production both
+        are `JournalStore()` over the same file; the order is still the honest
+        one, and with no key at all the trade section's store leads.
         """
+        if key is not None and str(key) in self._draft_question_rows:
+            return self._question_store if self._question_store is not None else self._trade_store
         return self._trade_store if self._trade_store is not None else self._question_store
 
     def _confirm_exit_draft(self, trade_id: str) -> bool:
@@ -2227,11 +2437,15 @@ class TradeMentorCard(QWidget):
         if not draft:
             self._set_status("there is no draft to confirm")
             return False
-        store = self._exit_store()
+        store = self._exit_store(key)
+        # BOTH halves of the identity travel: the writer refuses a note that
+        # does not belong to this (trade, session), so a Confirm cannot sign
+        # off the other session's words (review 2 blocker 1).
+        owner = str(draft.get("trade_id") or check.split_exit_key(key)[0])
         moment = self._now()
         return self._start_exit_write(
             key,
-            lambda: check.confirm_exit_fields(store, key, draft, now=moment),
+            lambda: check.confirm_exit_fields(store, owner, draft, now=moment),
             "Saving your exit fields…",
         )
 
@@ -2291,19 +2505,22 @@ class TradeMentorCard(QWidget):
             ).split(";")
             if part.strip()
         )
-        store = self._exit_store()
+        store = self._exit_store(key)
         draft = dict(self._exit_drafts.get(key) or {})
+        owner = str(draft.get("trade_id") or check.split_exit_key(key)[0])
         moment = self._now()
         return self._start_exit_write(
             key,
             lambda: check.correct_exit_fields(
                 store,
-                key,
+                owner,
                 why=why,
                 felt=felt,
                 watching=watching,
                 now=moment,
-                exit_session=str(draft.get("exit_session") or self._exit_sessions.get(key) or ""),
+                exit_session=str(
+                    draft.get("exit_session") or check.split_exit_key(key)[1]
+                ),
                 note_id=str(draft.get("note_id") or ""),
             ),
             "Saving your version…",
@@ -2358,6 +2575,11 @@ class TradeMentorCard(QWidget):
             body = str(box.toPlainText() or "").strip()
             state = self.exit_answer_state(trade_id)
             if not body and not state:
+                continue
+            if body and body == str(self._exit_rewrite_original.get(trade_id) or "").strip():
+                # `Rewrite` opened, thought better of, and left as it was. A
+                # second identical note is not a supersede, it is noise in an
+                # append-only store.
                 continue
             try:
                 check.save_exit_note(

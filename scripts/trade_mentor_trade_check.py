@@ -1365,6 +1365,34 @@ def exit_fields(store: Any, trade_id: str) -> dict[str, Any]:
     return _confirmed_row(rows[-1])
 
 
+#: What separates the two halves of an exit's identity in its string key.
+EXIT_KEY_SEPARATOR = "@"
+
+
+def exit_key(trade_id: Any, exit_session: Any) -> str:
+    """The identity of ONE exit: ``<trade_id>@<exit_session>``.
+
+    A reading, a note and a confirmed row all belong to a (trade, SESSION) and
+    never to a trade: 13 live trades have closing legs on two dates, and the
+    packet's own correction 6 says each half is drafted separately and
+    confirmed separately. Keyed by the trade alone, the second reading was
+    silently dropped - not offered, not carried, not said - and a Confirm could
+    have signed off the other session's words (review 2 blocker 1).
+
+    ONE helper, used by the registry as `Subject.subject_id` and by every map
+    the card keys a reading under, so the two can never disagree about what a
+    reading IS.
+    """
+    return f"{str(trade_id or '')}{EXIT_KEY_SEPARATOR}{str(exit_session or '')[:10]}"
+
+
+def split_exit_key(key: Any) -> tuple[str, str]:
+    """``(trade_id, exit_session)``, or ``(key, "")`` for a bare trade id."""
+    text = str(key or "")
+    trade_id, _sep, session = text.partition(EXIT_KEY_SEPARATOR)
+    return trade_id, session
+
+
 def offer_window(session: Any, sessions: int = EXIT_DRAFT_OFFER_SESSIONS) -> tuple[str, ...]:
     """The `sessions` exchange sessions ending at `session`, OLDEST first.
 
@@ -1411,6 +1439,13 @@ def waiting_exit_drafts(
     has no words behind it any more, or which names a trade this store cannot
     see, is skipped rather than shown as an empty card row.
 
+    **A SUPERSEDED reading is not offered either.** The draft has to name the
+    LATEST note of its (trade, session): a second note is the trader changing
+    their mind, and a reading of the old words shown above the new ones - with
+    quotes that are not in them - is worse than no reading at all (review 2
+    advisory 3). It stays on disk; the night drafts the new note as a fresh
+    one, because its already-drafted check is per `note_id`.
+
     Never raises: an unreadable pack is no drafts, which is also the honest
     state of a desk whose night has never run.
     """
@@ -1420,6 +1455,11 @@ def waiting_exit_drafts(
     notes = exit_notes_by_session(store, window)
     out: list[dict[str, Any]] = []
     for day in window:
+        # A session nobody wrote a note in cannot carry a reading, so it is not
+        # worth a file read (review 2 advisory 5: the pack reads were the cost).
+        day_notes = notes.get(day) or {}
+        if not day_notes:
+            continue
         try:
             from ai_jobs import exit_note_fields
 
@@ -1431,11 +1471,15 @@ def waiting_exit_drafts(
             if not isinstance(draft, Mapping):
                 continue
             trade_id = str(draft.get("trade_id") or "")
-            note = (notes.get(day) or {}).get(trade_id) or {}
+            note = day_notes.get(trade_id) or {}
             if not trade_id or not note or note.get("exit_fields"):
+                continue
+            if str(draft.get("note_id") or "") != str(note.get("note_id") or ""):
+                # A reading of words the trader has since rewritten.
                 continue
             out.append(
                 {
+                    "key": exit_key(trade_id, day),
                     "trade_id": trade_id,
                     "symbol": str(draft.get("symbol") or note.get("symbol") or ""),
                     "exit_session": day,
@@ -1479,6 +1523,25 @@ def _stored_value(value: Any, *, coded: bool) -> dict[str, Any]:
     return out
 
 
+def _note_belongs(store: Any, trade_id: str, exit_session: str, note_id: str) -> bool:
+    """Is `note_id` a note of THIS (trade, session)? Fails closed.
+
+    A reading is identified by (trade, EXIT SESSION), and a trade can have two
+    of them (review 2 blocker 1). A confirmed row citing the other session's
+    note would say the trader signed off words they never saw, so the writer
+    checks rather than trusting its caller. An unreadable store answers False:
+    refusing a write the desk cannot justify is the safe direction.
+    """
+    wanted = str(note_id or "")
+    if not wanted:
+        return False
+    return any(
+        row.get("note_id") == wanted
+        and row.get("exit_session") == str(exit_session or "")[:10]
+        for row in exit_notes(store, trade_id)
+    )
+
+
 def _write_exit_fields(
     store: Any,
     trade_id: str,
@@ -1489,7 +1552,21 @@ def _write_exit_fields(
     source: str,
     moment: datetime,
 ) -> dict[str, Any]:
-    """The ONE writer of a confirmed exit row. The trader's act, never a job's."""
+    """The ONE writer of a confirmed exit row. The trader's act, never a job's.
+
+    It REFUSES a `note_id` that is not a note of this (trade, session): both
+    halves of a reading's identity travel with every click, and a row that
+    cited the wrong half would be the desk claiming the trader confirmed words
+    they were never shown.
+    """
+    if note_id and not _note_belongs(store, trade_id, exit_session, note_id):
+        return {
+            "ok": False,
+            "reason": (
+                f"note {note_id!r} is not an exit note of this trade's "
+                f"{exit_session or 'unnamed'} exit"
+            ),
+        }
     payload = {
         "fields": dict(fields),
         "exit_session": str(exit_session or "")[:10],

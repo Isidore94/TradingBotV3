@@ -416,6 +416,21 @@ def _trigger_trade_label(state: Mapping[str, Any]) -> list[Subject]:
 EXIT_DRAFT_OPTIONS = ("confirm", "correct")
 
 
+def _exit_key(trade_id: Any, session: Any) -> str:
+    """`trade_mentor_trade_check.exit_key`, imported at CALL time.
+
+    This module stays pure and import-light; the identity of an exit belongs to
+    the module that writes one.
+    """
+    try:
+        import trade_mentor_trade_check as check
+
+        return check.exit_key(trade_id, session)
+    except Exception:  # noqa: BLE001 - a lane row that names its own key wins
+        logging.debug("The exit key helper is unreadable.", exc_info=True)
+        return f"{_text(trade_id)}@{_text(session)[:10]}"
+
+
 def _trigger_exit_draft_review(state: Mapping[str, Any]) -> list[Subject]:
     """One row per exit draft the night left waiting for the trader.
 
@@ -428,15 +443,21 @@ def _trigger_exit_draft_review(state: Mapping[str, Any]) -> list[Subject]:
     seen: set[str] = set()
     for row in _rows(state, "exit_drafts"):
         trade_id = _text(row.get("trade_id"))
-        if not trade_id or trade_id in seen:
-            continue
-        seen.add(trade_id)
         symbol = _text(row.get("symbol"))
         session = _text(row.get("exit_session"))
+        # The identity of a reading is (trade, EXIT SESSION), never the trade:
+        # a trade can have closed in two sessions and been read twice, and
+        # de-duplicating by trade id dropped the second one silently - not
+        # offered, not carried, not said (review 2 blocker 1). The key comes
+        # from the ONE helper that builds it.
+        key = _text(row.get("key")) or _exit_key(trade_id, session)
+        if not trade_id or key in seen:
+            continue
+        seen.add(key)
         subjects.append(
             Subject(
                 kind="exit_draft_review",
-                subject_id=trade_id,
+                subject_id=key,
                 options=_with_answer_states(*EXIT_DRAFT_OPTIONS),
                 prompt=_text(row.get("prompt"))
                 or f"{symbol} - you exited on {session}. Is that what happened?".strip(),
@@ -445,6 +466,7 @@ def _trigger_exit_draft_review(state: Mapping[str, Any]) -> list[Subject]:
                 # them. The registry decides WHICH drafts are offered and how
                 # many; it never renders one and never writes one.
                 detail={
+                    "key": key,
                     "trade_id": trade_id,
                     "symbol": symbol,
                     "exit_session": session,

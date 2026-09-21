@@ -202,6 +202,8 @@ def test_wednesdays_card_offers_mondays_reading_although_it_reviews_tuesday(
     assert [row["trade_id"] for row in lane] == [trade_id], lane
     assert lane[0]["exit_session"] == MONDAY
     assert lane[0]["raw_text"] == fx.EXIT_NOTE
+    key = check.exit_key(trade_id, MONDAY)
+    assert lane[0]["key"] == key
 
     import mentor_questions
 
@@ -209,18 +211,20 @@ def test_wednesdays_card_offers_mondays_reading_although_it_reviews_tuesday(
     result = mentor_questions.pending(state, slot)
     offered = [item for item in result.asked if item.kind == "exit_draft_review"]
     assert len(offered) == 1, [item.kind for item in result.asked]
+    # The subject IS the reading, not the trade (review 2 blocker 1).
+    assert offered[0].subject_id == key
 
     card = window.trading_panel.alert_center.chart_review.mentor_card
     card.show_slot(slot)
     card.set_questions(result, store=store, service=window.trade_mentor_service)
 
-    assert "DAYT" in card.question_prompt_text("exit_draft_review", trade_id)
-    assert MONDAY in card.question_prompt_text("exit_draft_review", trade_id)
+    assert "DAYT" in card.question_prompt_text("exit_draft_review", key)
+    assert MONDAY in card.question_prompt_text("exit_draft_review", key)
     assert card.exit_draft_line(trade_id).strip(), "no draft line was drawn"
     assert card.exit_confirm_button(trade_id) is not None
     assert card.exit_correct_button(trade_id) is not None
     # It is NOT a combo: a reading is confirmed or corrected, never picked.
-    assert card.question_box("exit_draft_review", trade_id) is None
+    assert card.question_box("exit_draft_review", key) is None
 
 
 def test_confirm_writes_one_row_and_the_next_card_offers_nothing(
@@ -261,6 +265,7 @@ def test_the_card_drops_the_row_the_moment_the_trader_confirms(
     import time
 
     import mentor_questions
+    import trade_mentor_trade_check as check
 
     store, ids, root = _monday_exit_drafted(tmp_path)
     _point_the_lane_at(monkeypatch, root)
@@ -283,7 +288,429 @@ def test_the_card_drops_the_row_the_moment_the_trader_confirms(
     assert card.exit_write_in_flight(trade_id) is False, "the card never settled"
     assert "not" not in card.status_label.text().lower(), card.status_label.text()
     assert card.exit_draft_line(trade_id) == "", "the signed-off row stayed"
-    assert card.question_box("exit_draft_review", trade_id) is None
+    assert card.question_box("exit_draft_review", check.exit_key(trade_id, MONDAY)) is None
+
+
+# ---------------------------------------------------------------------------
+# review 2 blocker 1 - a reading belongs to (trade, EXIT SESSION)
+# ---------------------------------------------------------------------------
+def _two_session_exit_drafted(tmp_path):
+    """ONE trade, half closed Monday and half closed Tuesday, read twice.
+
+    The live shape of 13 of the journal's 216 trades, and the one the packet's
+    own correction 6 says is "drafted separately, confirmed separately".
+    """
+    import trade_mentor_trade_check as check
+
+    store = fx.new_store(tmp_path)
+    fx.mark_covered(store, MONDAY)
+    fx.mark_covered(store, TUESDAY.isoformat())
+    store.upsert_executions(
+        [
+            _execution("TWO-1", symbol="SCLO", side="BUY", qty=100, price=40.0,
+                       timestamp=f"{MONDAY}T07:31:00"),
+            _execution("TWO-2", symbol="SCLO", side="SELL", qty=40, price=41.0,
+                       timestamp=f"{MONDAY}T10:05:00"),
+            _execution("TWO-3", symbol="SCLO", side="SELL", qty=60, price=43.0,
+                       timestamp=f"{TUESDAY.isoformat()}T10:05:00"),
+        ]
+    )
+    store.rebuild_trades(refresh_tags=False)
+    trade_id = str(store.list_trades(trade_date=TUESDAY.isoformat())[0]["trade_id"])
+    assert check.exit_sessions(store, trade_id) == (MONDAY, TUESDAY.isoformat())
+
+    root = tmp_path / "packs"
+    for index, session in enumerate((MONDAY, TUESDAY.isoformat())):
+        check.save_exit_note(
+            store,
+            trade_id,
+            f"{fx.EXIT_NOTE} ({session})",
+            exit_session=session,
+            now=datetime.fromisoformat(f"2026-09-15T09:0{index}:00-04:00"),
+        )
+        _night(store, session, root)
+    return store, trade_id, root
+
+
+def test_a_trade_read_twice_is_offered_twice_one_row_per_exit_session(
+    tmp_path, monkeypatch, window
+):
+    """Review 2 blocker 1. Hand-counted: 2 exit sessions, 2 readings, 2 rows.
+
+    Keyed by the trade alone the second reading was never offered, never
+    carried and never said - it simply stayed `provisional` for good.
+    """
+    import mentor_questions
+    import trade_mentor_trade_check as check
+
+    store, trade_id, root = _two_session_exit_drafted(tmp_path)
+    _point_the_lane_at(monkeypatch, root)
+
+    lane = window._mentor_exit_drafts(store, WEDNESDAY.isoformat())
+    assert [row["exit_session"] for row in lane] == [MONDAY, TUESDAY.isoformat()], lane
+    assert [row["key"] for row in lane] == [
+        check.exit_key(trade_id, MONDAY),
+        check.exit_key(trade_id, TUESDAY.isoformat()),
+    ]
+
+    slot, state = _state(window, store, WEDNESDAY)
+    result = mentor_questions.pending(state, slot)
+    offered = [item for item in result.asked if item.kind == "exit_draft_review"]
+    assert len(offered) == 2, [item.subject_id for item in offered]
+
+    card = window.trading_panel.alert_center.chart_review.mentor_card
+    card.show_slot(slot)
+    card.set_questions(result, store=store, service=window.trade_mentor_service)
+
+    for session in (MONDAY, TUESDAY.isoformat()):
+        key = check.exit_key(trade_id, session)
+        assert card.exit_confirm_button(key) is not None, session
+        assert session in card.question_prompt_text("exit_draft_review", key)
+        assert f"({session})" in card.question_prompt_text("exit_draft_review", key)
+    # And a caller that knows only the trade is REFUSED rather than guessing.
+    assert card.draft_key(trade_id) == ""
+
+
+def test_each_confirm_signs_off_its_own_session_words(tmp_path, monkeypatch, window):
+    """Hand-counted: 2 confirms, 2 rows, each citing ITS OWN note and session.
+
+    The writer refuses a note that does not belong to the (trade, session) it
+    is asked to confirm, so this cannot pass by accident.
+    """
+    import trade_mentor_trade_check as check
+
+    store, trade_id, root = _two_session_exit_drafted(tmp_path)
+    _point_the_lane_at(monkeypatch, root)
+    lane = {row["exit_session"]: row for row in
+            window._mentor_exit_drafts(store, WEDNESDAY.isoformat())}
+
+    for session, draft in lane.items():
+        result = check.confirm_exit_fields(
+            store, trade_id, draft,
+            now=datetime.fromisoformat("2026-09-16T09:05:00-04:00"),
+        )
+        assert result["ok"] is True, result
+
+    rows = store.list_opportunity_events(
+        trade_id=trade_id, event_type=check.EVENT_EXIT_FIELDS, limit=100
+    )
+    assert len(rows) == 2, rows
+    by_session = {row["payload"]["exit_session"]: row["payload"] for row in rows}
+    assert set(by_session) == {MONDAY, TUESDAY.isoformat()}
+    notes = {note["exit_session"]: note["note_id"] for note in check.exit_notes(store, trade_id)}
+    for session, payload in by_session.items():
+        assert payload["note_id"] == notes[session], (session, payload)
+
+
+def test_the_writer_refuses_a_note_from_the_other_session(tmp_path, monkeypatch, window):
+    """The guard itself. Hand-counted: 1 refusal, 0 rows written."""
+    import trade_mentor_trade_check as check
+
+    store, trade_id, root = _two_session_exit_drafted(tmp_path)
+    _point_the_lane_at(monkeypatch, root)
+    lane = {row["exit_session"]: row for row in
+            window._mentor_exit_drafts(store, WEDNESDAY.isoformat())}
+
+    crossed = dict(lane[MONDAY])
+    crossed["note_id"] = lane[TUESDAY.isoformat()]["note_id"]
+    result = check.confirm_exit_fields(
+        store, trade_id, crossed,
+        now=datetime.fromisoformat("2026-09-16T09:05:00-04:00"),
+    )
+    assert result["ok"] is False, result
+    assert "not an exit note" in str(result["reason"]), result
+    assert store.list_opportunity_events(
+        trade_id=trade_id, event_type=check.EVENT_EXIT_FIELDS, limit=100
+    ) == []
+
+
+def test_over_budget_the_second_reading_is_carried_and_said(tmp_path, monkeypatch, window):
+    """What is over budget is COUNTED and CARRIED, never dropped - including
+    when both readings belong to ONE trade. Hand-counted: 4 readings on 2
+    trades, 3 asked, 1 carried and named."""
+    import mentor_questions
+
+    store, trade_id, root = _two_session_exit_drafted(tmp_path)
+    other = _day_trade(store, "OTHR", MONDAY)
+    import trade_mentor_trade_check as check
+
+    check.save_exit_note(
+        store, other, fx.EXIT_NOTE, exit_session=MONDAY,
+        now=datetime.fromisoformat("2026-09-15T09:30:00-04:00"),
+    )
+    _day_trade(store, "THRD", TUESDAY.isoformat())
+    third = str(
+        [row for row in store.list_trades(trade_date=TUESDAY.isoformat())
+         if str(row.get("symbol")) == "THRD"][0]["trade_id"]
+    )
+    check.save_exit_note(
+        store, third, fx.EXIT_NOTE, exit_session=TUESDAY.isoformat(),
+        now=datetime.fromisoformat("2026-09-15T09:40:00-04:00"),
+    )
+    _night(store, MONDAY, root)
+    _night(store, TUESDAY.isoformat(), root)
+    _point_the_lane_at(monkeypatch, root)
+
+    lane = window._mentor_exit_drafts(store, WEDNESDAY.isoformat())
+    assert len(lane) == 4, [(row["symbol"], row["exit_session"]) for row in lane]
+
+    slot, state = _state(window, store, WEDNESDAY)
+    result = mentor_questions.pending(state, slot)
+    assert len(result.asked) == mentor_questions.BUDGET, result.asked
+    seen = {
+        item.subject_id
+        for item in (*result.asked, *result.carried)
+        if item.kind == "exit_draft_review"
+    }
+    # EVERY reading is either asked or carried. Before this the second reading
+    # of one trade was in neither: it was dropped by a de-duplication on the
+    # trade id and nothing anywhere counted it.
+    assert seen == {row["key"] for row in lane}, sorted(seen)
+    assert "exit reading" in result.waiting_note.lower(), result.waiting_note
+
+
+# ---------------------------------------------------------------------------
+# review 2 blocker 2 - a waiting reading has ONE home
+# ---------------------------------------------------------------------------
+def _widget_counts(card) -> dict[str, int]:
+    """Confirm buttons, draft lines and "You wrote:" labels in the WHOLE tree."""
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    confirms = [
+        button for button in card.findChildren(QPushButton) if button.text() == "Confirm"
+    ]
+    labels = [label.text() for label in card.findChildren(QLabel)]
+    return {
+        "confirms": len(confirms),
+        "draft_lines": len([text for text in labels if text.startswith("The night read")]),
+        "you_wrote": len([text for text in labels if text.startswith("You wrote:")]),
+    }
+
+
+def _card_with_an_entry_gap(tmp_path, monkeypatch, window):
+    """One trade with FOUR open entry fields and a waiting reading on its exit.
+
+    The morning the trader most often meets: a trade they did not finish
+    answering, and the night has read the exit note they did write.
+    """
+    store, ids, root = _monday_exit_drafted(tmp_path)
+    _point_the_lane_at(monkeypatch, root)
+    slot, state = _state(window, store, TUESDAY)
+    card = window.trading_panel.alert_center.chart_review.mentor_card
+    card.show_slot(slot)
+    return card, store, ids["DAYT"], root, slot, state
+
+
+def test_a_reading_is_drawn_exactly_once_in_either_call_order(
+    tmp_path, monkeypatch, window
+):
+    """Review 2 blocker 2. Hand-counted: 1 Confirm, 1 draft line, 1 "You
+    wrote:" after EVERY order - questions then section, section then questions,
+    and a merge of a fresh task on top.
+
+    Before this both seams drew the reading into the SAME bookkeeping slots, so
+    the trader saw two copies of the question and the first copy's Confirm
+    stopped responding.
+    """
+    import mentor_questions
+    import trade_mentor_trade_check as check
+
+    card, store, trade_id, root, slot, state = _card_with_an_entry_gap(
+        tmp_path, monkeypatch, window
+    )
+    task = check.build_task(store, TUESDAY)
+    result = mentor_questions.pending(state, slot)
+
+    card.set_questions(result, store=store, service=window.trade_mentor_service)
+    assert _widget_counts(card) == {"confirms": 1, "draft_lines": 1, "you_wrote": 1}
+
+    card.set_trade_check(task, store=store, drafts_root=root)
+    assert _widget_counts(card) == {"confirms": 1, "draft_lines": 1, "you_wrote": 1}
+
+    # A fresh task on the next slot of the same session MERGES, and still one.
+    card.set_trade_check(check.build_task(store, TUESDAY), store=store, drafts_root=root)
+    assert _widget_counts(card) == {"confirms": 1, "draft_lines": 1, "you_wrote": 1}
+
+
+def test_the_section_alone_still_reaches_the_reading_exactly_once(
+    tmp_path, monkeypatch, window
+):
+    """The other order: a caller that builds only the trade section.
+
+    The reading still has ONE home - the questions block - and the trade
+    section says nothing about that exit, because the words are already on the
+    card above.
+    """
+    import trade_mentor_trade_check as check
+
+    card, store, trade_id, root, _slot, _state_payload = _card_with_an_entry_gap(
+        tmp_path, monkeypatch, window
+    )
+    card.set_trade_check(check.build_task(store, TUESDAY), store=store, drafts_root=root)
+
+    assert _widget_counts(card) == {"confirms": 1, "draft_lines": 1, "you_wrote": 1}
+    key = check.exit_key(trade_id, MONDAY)
+    assert card.exit_confirm_button(key) is not None
+    assert card.exit_note_box(trade_id) is None, "the answered exit was asked again"
+
+
+def test_clearing_the_trade_section_never_drops_a_write_in_flight(
+    tmp_path, monkeypatch, window
+):
+    """Review 2 advisory 4, which blocker 2's one-home rule removes.
+
+    Hand-counted: a Confirm in flight, `_clear_trade_check()`, and the flag is
+    STILL True - the reading's row is not part of the trade section and its
+    write is not the section's to forget.
+    """
+    import threading
+    import time
+
+    import trade_mentor_trade_check as check
+
+    card, store, trade_id, root, _slot, _payload = _card_with_an_entry_gap(
+        tmp_path, monkeypatch, window
+    )
+    card.set_trade_check(check.build_task(store, TUESDAY), store=store, drafts_root=root)
+    key = check.exit_key(trade_id, MONDAY)
+
+    started = threading.Event()
+    release = threading.Event()
+    real = check.confirm_exit_fields
+
+    def _slow(*args, **kwargs):
+        started.set()
+        assert release.wait(20.0)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(check, "confirm_exit_fields", _slow)
+    card.exit_confirm_button(key).click()
+    assert started.wait(20.0)
+
+    card._clear_trade_check()
+    assert card.exit_write_in_flight(key) is True, "the in-flight write was forgotten"
+
+    release.set()
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline and card.exit_write_in_flight(key):
+        _app.processEvents()
+    assert card.exit_write_in_flight(key) is False
+
+
+# ---------------------------------------------------------------------------
+# review 2 advisories 2 and 3 - rewriting, and a reading of words that changed
+# ---------------------------------------------------------------------------
+def test_a_superseded_reading_is_not_offered_and_the_night_reads_the_new_words(
+    tmp_path, monkeypatch, window
+):
+    """Review 2 advisory 3. Hand-counted through the whole sequence:
+    note -> night -> 1 offered; second note -> 0 offered; night -> 1 offered,
+    and it is a reading of the NEW words."""
+    import trade_mentor_trade_check as check
+
+    store, ids, root = _monday_exit_drafted(tmp_path)
+    _point_the_lane_at(monkeypatch, root)
+    trade_id = ids["DAYT"]
+    assert len(window._mentor_exit_drafts(store, WEDNESDAY.isoformat())) == 1
+
+    check.save_exit_note(
+        store, trade_id, fx.SECOND_EXIT_NOTE, exit_session=MONDAY,
+        now=datetime.fromisoformat("2026-09-15T10:00:00-04:00"),
+    )
+    assert window._mentor_exit_drafts(store, WEDNESDAY.isoformat()) == [], (
+        "a reading of words the trader rewrote was still offered"
+    )
+
+    # The night reads the NEW note: its already-drafted check is per note_id.
+    from ai_jobs import exit_note_fields
+
+    waiting = exit_note_fields.notes_waiting(store, MONDAY, root=root)
+    assert [note["text"] for note in waiting] == [fx.SECOND_EXIT_NOTE], waiting
+    out = exit_note_fields.run_exit_note_fields(
+        session_date=MONDAY, now=TUESDAY_NIGHT, root=root, store=store,
+        request=fx.fake_request(
+            {"fields": {"why": fx.value(
+                "I needed the capital",
+                __import__("exit_reasons").codes()[1],
+                text=fx.SECOND_EXIT_NOTE,
+            )}}
+        ),
+    )
+    assert out["status"] == "ok", out
+    lane = window._mentor_exit_drafts(store, WEDNESDAY.isoformat())
+    assert len(lane) == 1, lane
+    assert lane[0]["raw_text"] == fx.SECOND_EXIT_NOTE
+
+
+def test_rewrite_appends_a_superseding_note_and_leaves_the_first_alone(
+    tmp_path, monkeypatch, window
+):
+    """Review 2 advisory 2: the supersede path finally has a door.
+
+    Hand-counted: 2 `EXIT_NOTE_RAW` rows afterwards, row 0 byte-identical, and
+    the reading of the old words gone from the lane.
+    """
+    import time
+
+    import mentor_questions
+    import trade_mentor_trade_check as check
+
+    card, store, trade_id, root, slot, state = _card_with_an_entry_gap(
+        tmp_path, monkeypatch, window
+    )
+    card.set_questions(
+        mentor_questions.pending(state, slot),
+        store=store,
+        service=window.trade_mentor_service,
+    )
+    key = check.exit_key(trade_id, MONDAY)
+    before = [dict(row) for row in store.list_opportunity_events(
+        trade_id=trade_id, event_type=check.EVENT_EXIT_NOTE_RAW, limit=100
+    )]
+    assert len(before) == 1
+
+    assert card.exit_rewrite_box(key).isVisibleTo(card) is False
+    card.exit_rewrite_button(key).click()
+    assert card.exit_rewrite_box(key).toPlainText() == fx.EXIT_NOTE
+    card.exit_rewrite_box(key).setPlainText(fx.SECOND_EXIT_NOTE)
+    card._save_exit_rewrite(key)
+
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline and card.exit_write_in_flight(key):
+        _app.processEvents()
+
+    after = store.list_opportunity_events(
+        trade_id=trade_id, event_type=check.EVENT_EXIT_NOTE_RAW, limit=100
+    )
+    assert len(after) == 2, after
+    assert dict(after[0]) == before[0], "the first note was rewritten"
+    assert after[1]["payload"]["raw_text"] == fx.SECOND_EXIT_NOTE
+    assert window._mentor_exit_drafts(store, WEDNESDAY.isoformat()) == []
+
+
+def test_rewrite_left_unchanged_writes_nothing(tmp_path, monkeypatch, window):
+    """Clicking Rewrite and thinking better of it is not a new note.
+
+    Hand-counted: 1 `EXIT_NOTE_RAW` row before and after, on both seams.
+    """
+    import mentor_questions
+    import trade_mentor_trade_check as check
+
+    card, store, trade_id, root, slot, state = _card_with_an_entry_gap(
+        tmp_path, monkeypatch, window
+    )
+    card.set_questions(
+        mentor_questions.pending(state, slot),
+        store=store,
+        service=window.trade_mentor_service,
+    )
+    key = check.exit_key(trade_id, MONDAY)
+    card.exit_rewrite_button(key).click()
+    assert card._save_exit_rewrite(key) is False
+    assert "nothing" in card.status_label.text().lower(), card.status_label.text()
+    assert len(store.list_opportunity_events(
+        trade_id=trade_id, event_type=check.EVENT_EXIT_NOTE_RAW, limit=100
+    )) == 1
 
 
 # ---------------------------------------------------------------------------

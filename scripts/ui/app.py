@@ -1272,10 +1272,18 @@ class MainWindow(QMainWindow):
             # kind shipped AWAKE with nothing feeding this key, so lead
             # decision 7's budget clause could never fire (review 1 advisory
             # 2). The window ends at the CARD's own session, never the reviewed
-            # one, because a draft is offered on its own clock. Measured on
-            # this worker over a 201-trade scratch journal: 4.5 ms for the
-            # whole five-session window - TWO `opportunity_events` queries for
-            # all of it plus one small pack read per session.
+            # one, because a draft is offered on its own clock.
+            #
+            # MEASURED, on the Qt thread at card-show time, over a 201-trade
+            # scratch journal carrying 20 drafts: **1.4 ms** for the lane.
+            # Review 2 advisory 5 measured 14.7 ms and it was right - five pack
+            # files were read whatever the journal said. Two
+            # `opportunity_events` queries now cover the WHOLE window and a
+            # session nobody wrote a note in costs no file read at all, which
+            # is four of the five reads gone on an ordinary morning.
+            # `_mentor_annotation_lane` above already reads a file here, so
+            # this is the same class of cost and not a new one; it stays on
+            # this thread this round by decision.
             "exit_drafts": self._mentor_exit_drafts(store, session),
             "answered": self._mentor_answered(store, (session, reviewed)),
             "retired": self.trade_mentor_service.retired_subjects(),

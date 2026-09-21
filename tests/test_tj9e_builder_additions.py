@@ -510,11 +510,19 @@ def test_the_ride_asks_again_while_an_exit_is_unexplained(tmp_path, monkeypatch)
 
     Driven through the real `MainWindow` method with the two counts stubbed at
     the SERVICE, so what is under test is the predicate and not the journal.
+
+    The THIRD clause is stubbed OUT (review 2 advisory 1): `fills_current_to`
+    answers the reviewed date, so the freshness clause is False and only the
+    two counts can make this True. Without that this test passed whatever the
+    exit clause did - disabling the clause left it green, which is a test that
+    cannot fail.
     """
+    from datetime import date as _date
+
     from ui.app import MainWindow
 
     class _Slot:
-        scheduled_at = datetime(2026, 9, 14, 11, 0)
+        scheduled_at = datetime(2026, 9, 15, 11, 0)
 
     class _Service:
         def __init__(self, unlabelled, exits):
@@ -529,10 +537,21 @@ def test_the_ride_asks_again_while_an_exit_is_unexplained(tmp_path, monkeypatch)
 
     import trade_mentor_trade_check as check
 
+    reviewed = check.previous_exchange_session(_Slot.scheduled_at.date())
+    monkeypatch.setattr(
+        check, "fills_current_to", lambda *_a, **_k: _date.fromisoformat(reviewed)
+    )
+
     window = MainWindow.__new__(MainWindow)
+    # NOTHING owed: the statement has landed and both counts are zero.
+    window.trade_mentor_service = _Service(0, 0)
+    assert MainWindow._trade_check_is_owed(window, check, _Slot()) is False
+
+    # Only the EXIT count is above zero - the clause this packet added.
     window.trade_mentor_service = _Service(0, 1)
     assert MainWindow._trade_check_is_owed(window, check, _Slot()) is True
 
+    # And TJ-9's own clause still answers on its own.
     window.trade_mentor_service = _Service(1, 0)
     assert MainWindow._trade_check_is_owed(window, check, _Slot()) is True
 
@@ -689,14 +708,20 @@ def _swing_with_a_draft(tmp_path):
 def test_an_answered_exit_is_shown_back_and_never_asked_again(tmp_path):
     """Review 1 blocker 5. Hand-counted: 1 note, 0 boxes, 1 read-only line.
 
-    The trader wrote the words an hour ago. The row is still on the card for
-    its four entry gaps, so the exit shows what they WROTE and asks nothing -
-    before this, the box came back empty, greyed Save, and could only be
-    cleared by retyping the same sentence into a second `EXIT_NOTE_RAW` row.
+    The trader wrote the words an hour ago and the night has NOT read them yet.
+    The row is still on the card for its four entry gaps, so the exit shows
+    what they WROTE and asks nothing - before this, the box came back empty,
+    greyed Save, and could only be cleared by retyping the same sentence into a
+    second `EXIT_NOTE_RAW` row.
     """
     import trade_mentor_trade_check as check
 
-    store, trade_id, root = _swing_with_a_draft(tmp_path)
+    store, ids = fx.ready_store(tmp_path)
+    trade_id = ids[fx.DAY_TRADE]
+    check.save_exit_note(
+        store, trade_id, fx.EXIT_NOTE, exit_session=fx.REVIEWED,
+        now=datetime.fromisoformat("2026-09-14T09:05:00-04:00"),
+    )
     task = check.build_task(store, fx.SESSION_TODAY)
     row = [item for item in task.trades if item.trade_id == trade_id]
     assert len(row) == 1, [(q.symbol, q.missing) for q in task.trades]
@@ -704,10 +729,37 @@ def test_an_answered_exit_is_shown_back_and_never_asked_again(tmp_path):
     assert row[0].exit_note == fx.EXIT_NOTE, row[0]
 
     card = _card(tmp_path)
-    card.set_trade_check(task, store=store, drafts_root=root)
+    card.set_trade_check(task, store=store, drafts_root=tmp_path / "no-packs")
     assert card.exit_note_box(trade_id) is None, "the answered exit was asked again"
     assert fx.EXIT_NOTE in card.exit_prompt_text(trade_id)
     assert card._exit_is_open(trade_id) is False
+    # And the door to a SECOND note is there (review 2 advisory 2).
+    assert card.exit_rewrite_button(trade_id) is not None
+
+
+def test_when_a_reading_waits_the_trade_section_says_nothing_about_that_exit(tmp_path):
+    """Review 2 blocker 2's other half: ONE home, and it is the draft row.
+
+    Hand-counted: 1 "You wrote:" on the whole card, and it is the reading's -
+    the trade section adds no second copy of the same words.
+    """
+    from PySide6.QtWidgets import QLabel
+
+    import trade_mentor_trade_check as check
+
+    store, trade_id, root = _swing_with_a_draft(tmp_path)
+    task = check.build_task(store, fx.SESSION_TODAY)
+
+    card = _card(tmp_path)
+    card.set_trade_check(task, store=store, drafts_root=root)
+
+    said = [
+        label.text() for label in card.findChildren(QLabel)
+        if label.text().startswith("You wrote:")
+    ]
+    assert len(said) == 1, said
+    assert card.exit_note_box(trade_id) is None
+    assert card.exit_draft_line(check.exit_key(trade_id, fx.REVIEWED)).strip()
 
 
 def test_an_explained_exit_with_no_entry_gap_leaves_the_card(tmp_path):
