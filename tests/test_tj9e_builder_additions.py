@@ -14,12 +14,16 @@ fail-before-fix proof recorded in the commit that introduced it:
    dates). One box per (trade, exit session), two `EXIT_NOTE_RAW` rows with
    different `exit_session` values, each drafted and confirmed separately.
 
-And FOUR guarantees whose tester-written pins cannot pass on this desk for
-reasons that belong to the pin rather than to the code. None of those four
-tests was edited - the builder reported each with its measurement and left it
-red - and none of the four guarantees is allowed to go unpinned because of
-that, so each is re-stated below in the form that can be true. Every one of
-them names the tester's test and what is wrong with it.
+FOUR guarantees whose tester-written pins could not pass on this desk for
+reasons that belonged to the pin rather than to the code. The builder edited
+none of them and reported each with its measurement; the LEAD then amended all
+four (2026-09-21) and the reviewer judged every amendment sound. The re-pins
+below stay: they say the same things in a second shape, and two of them are
+now the only green statement of their guarantee.
+
+And FIVE more, one per blocker of review round 1 - the shared-store seam, the
+report card's wiring, the ride, an answered exit, and the money fence's own
+value allow-list. Each names the blocker it answers.
 """
 
 from __future__ import annotations
