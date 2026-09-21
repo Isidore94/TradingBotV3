@@ -75,6 +75,15 @@ LINE_TARGETS: dict[str, str] = {
     "how_fresh": "status",
 }
 
+#: The lines that go into TJ-4's day pack, and therefore into what the night's
+#: story is allowed to cite. `how_fresh` is DELIBERATELY absent: it describes
+#: the MACHINE's night rather than the trader's day, and its text moves every
+#: time the job ledger gains a row - inside the pack's hashed `body` that would
+#: move `inputs_hash` and buy a model call to re-narrate the same session night
+#: after night. The other five are facts OF THE DAY, and when one of them really
+#: moves (a D1 horizon matures) the hash SHOULD move.
+PACK_LINE_KEYS: tuple[str, ...] = tuple(key for key in LINE_KEYS if key != "how_fresh")
+
 #: How many ledger rows the freshness line may look at. The live ledger measured
 #: 1,256,082 bytes on 2026-09-20, and a night writes a few dozen rows: a tail is
 #: all this line can use, and a whole-file read on the Day Review worker is a
@@ -925,6 +934,35 @@ def build(day_inputs: Mapping[str, Any]) -> ReportCard:
     return ReportCard(session=_text(inputs.get("session"))[:10], lines=lines)
 
 
+def pack_card(card: Any) -> ReportCard | None:
+    """The card as TJ-4's day pack may hold it, or ``None`` when there is none.
+
+    The ONE seam for :data:`PACK_LINE_KEYS`. `day_review_pack.build_pack` is
+    deliberately NOT where this lives: it carries whatever it is handed, so a
+    caller with a whole card still gets a whole card, and the decision about
+    what the NIGHT may cite is made here, once, by the module that owns what a
+    line is.
+
+    Takes a :class:`ReportCard` or the plain mapping the Day Review payload
+    carries one as. A line the desk could not build goes in AS WHAT IT IS - a
+    night that narrated around a hole would be telling the trader about a day
+    the desk never measured.
+    """
+    lines = getattr(card, "lines", None)
+    session = _text(getattr(card, "session", ""))
+    if lines is None and isinstance(card, Mapping):
+        lines = card.get("lines")
+        session = _text(card.get("session"))
+    kept = tuple(
+        dict(line)
+        for line in (lines or ())
+        if isinstance(line, Mapping) and _text(line.get("key")) in PACK_LINE_KEYS
+    )
+    if not kept:
+        return None
+    return ReportCard(session=session, lines=kept)
+
+
 # ---------------------------------------------------------------------------
 # the week re-cut (TJ-5's strip reads this)
 # ---------------------------------------------------------------------------
@@ -1153,10 +1191,13 @@ def week(sessions: Sequence[Mapping[str, Any]]) -> ReportCard:
 
 
 __all__ = [
+    "DESK_ORIGIN_LANES_READ",
     "LEDGER_TAIL_BYTES",
     "LEDGER_TAIL_ROWS",
     "LINE_KEYS",
     "LINE_TARGETS",
+    "ORIGIN_LANES",
+    "PACK_LINE_KEYS",
     "ReportCard",
     "build",
     "congruence_line",
@@ -1164,6 +1205,7 @@ __all__ = [
     "how_fresh",
     "long_hold_lines",
     "missed_line",
+    "pack_card",
     "process_line",
     "week",
     "your_reads_line",

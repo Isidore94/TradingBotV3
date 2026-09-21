@@ -760,6 +760,7 @@ class DayReviewService:
         rebuildable, and the night says "no story yet" rather than narrating a
         half-built day.
         """
+        import day_report_card
         import day_review_pack
 
         session = str(session_date or "")[:10]
@@ -788,6 +789,13 @@ class DayReviewService:
                 reads=data.get("reads") or (),
                 congruence=data.get("congruence") or (),
                 trades=data.get("trades") or [],
+                # TJ-12: the card this session's payload already carries, so the
+                # night's story can cite a line of it. `pack_card` is the ONE
+                # seam that decides what the pack may hold - `How fresh` stays
+                # out, because it describes the machine's night and its text
+                # moves whenever the job ledger gains a row, which inside the
+                # hashed body would re-narrate the same day every night.
+                report_card=day_report_card.pack_card(data.get("report_card")),
                 now=now,
             )
             day_review_pack.write_pack(pack)
