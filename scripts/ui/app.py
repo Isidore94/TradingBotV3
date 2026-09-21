@@ -1271,57 +1271,43 @@ class MainWindow(QMainWindow):
             # opinion about it on whatever thread the card was built on. The
             # kind shipped AWAKE with nothing feeding this key, so lead
             # decision 7's budget clause could never fire (review 1 advisory
-            # 2). Measured on this worker: one glob plus one small JSON read
-            # for the pack, and the two `opportunity_events` queries the card's
-            # own draft line already makes.
-            "exit_drafts": self._mentor_exit_drafts(store, reviewed),
+            # 2). The window ends at the CARD's own session, never the reviewed
+            # one, because a draft is offered on its own clock. Measured on
+            # this worker: TWO `opportunity_events` queries for the whole
+            # five-session window plus one small pack read per session.
+            "exit_drafts": self._mentor_exit_drafts(store, session),
             "answered": self._mentor_answered(store, (session, reviewed)),
             "retired": self.trade_mentor_service.retired_subjects(),
             "carried": getattr(self, "_mentor_carried", ()),
         }
 
     @staticmethod
-    def _mentor_exit_drafts(store, reviewed: str) -> list:
-        """The night's exit drafts the trader has NOT signed off yet (TJ-9E).
+    def _mentor_exit_drafts(store, session: str) -> list:
+        """The night's exit readings the trader has NOT signed off yet (TJ-9E).
 
-        One row per waiting draft, which is what makes `exit_draft_review` a
-        real budgeted question instead of a registry promise nothing keeps. A
-        draft the trader already confirmed or corrected is not offered again -
-        the confirmed rows come back in the SAME session-wide read the card
-        uses, so this costs one extra pack read and no extra store walk.
+        The lane behind `exit_draft_review`, and the reason the Confirm click
+        exists at all: a draft is offered on its OWN clock
+        (`check.EXIT_DRAFT_OFFER_SESSIONS`, walked on the exchange calendar),
+        never on the session the card happens to be reviewing. The trade exits
+        Monday, the note is typed on TUESDAY's card, TUESDAY NIGHT drafts it,
+        and Wednesday's card reviews Tuesday - where Monday's trade is not a
+        row at all.
 
-        Never raises and never guesses: an unreadable pack is no drafts, which
-        is also the honest first state of a desk that has never run the slot.
+        `session` is the CARD's own session, so the window is the trader's last
+        five sessions ending today. The rule and the reads live in
+        `trade_mentor_trade_check`; this is the seam that hands them to a pure
+        registry, because a trigger that opened a store would be a second
+        opinion about it on whatever thread the card was built on.
+
+        Never raises: a lane never costs the card.
         """
-        session = str(reviewed or "")[:10]
-        if not session:
-            return []
         try:
             import trade_mentor_trade_check as check
-            from ai_jobs import exit_note_fields
 
-            stored = exit_note_fields.read_latest(session) or {}
-            drafts = [row for row in stored.get("drafts") or () if isinstance(row, dict)]
-            if not drafts:
-                return []
-            notes = check.exit_notes_for_session(store, session)
+            return list(check.waiting_exit_drafts(store, str(session or "")[:10]))
         except Exception:  # noqa: BLE001 - a lane never costs the card
             logging.debug("Mentor exit-draft lane unreadable.", exc_info=True)
             return []
-        out: list[dict] = []
-        for draft in drafts:
-            trade_id = str(draft.get("trade_id") or "")
-            if not trade_id or (notes.get(trade_id) or {}).get("exit_fields"):
-                continue
-            out.append(
-                {
-                    "trade_id": trade_id,
-                    "symbol": str(draft.get("symbol") or ""),
-                    "exit_session": str(draft.get("exit_session") or session),
-                    "note_id": str(draft.get("note_id") or ""),
-                }
-            )
-        return out
 
     @staticmethod
     def _mentor_annotation_lane(days) -> list:

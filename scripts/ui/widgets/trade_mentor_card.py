@@ -85,6 +85,12 @@ SKIP_TRADER = "trader_skip"
 #: lazily on this card's seams; the two being the same string is asserted.
 DAY_CLOSE_KIND = "day_close"
 
+#: TJ-9E's waiting-reading row, the one budgeted question the card DRAWS
+#: itself rather than as a combo. Spelled here for the same reason
+#: `DAY_CLOSE_KIND` is - `mentor_questions` is imported lazily on this card's
+#: seams - and asserted to be the registry's own string.
+EXIT_DRAFT_KIND = "exit_draft_review"
+
 _QUESTIONS = {
     "m5": "What do you see on the 5-minute tape right now?",
     KIND_M5_D1: "What do you see on the 5-minute tape right now?",
@@ -348,6 +354,10 @@ class TradeMentorCard(QWidget):
         self._exit_correction_inputs: dict[str, dict[str, Any]] = {}
         #: trade_id -> the night's PROVISIONAL draft, as read from the pack.
         self._exit_drafts: dict[str, dict[str, Any]] = {}
+        #: trade_ids whose draft row lives in the QUESTIONS area rather than in
+        #: the trade section. They are offered on the draft's own clock, so
+        #: they must survive the trade section being cleared and rebuilt.
+        self._draft_question_rows: set[str] = set()
         #: trade_ids with a journal write in flight. One at a time, per trade.
         self._exit_writing: set[str] = set()
         self._exit_drafts_root = None
@@ -906,7 +916,27 @@ class TradeMentorCard(QWidget):
             self._render_internals()
 
     # -- TJ-14B: the few questions the desk is missing an answer to ---------
+    def _forget_draft_question(self, trade_id: str) -> None:
+        """Forget a waiting-reading row's widgets. The DRAFT is untouched."""
+        key = str(trade_id)
+        if key not in self._draft_question_rows:
+            return
+        self._draft_question_rows.discard(key)
+        for held in (
+            self._exit_draft_rows,
+            self._exit_draft_labels,
+            self._exit_confirm_buttons,
+            self._exit_correct_buttons,
+            self._exit_correction_rows,
+            self._exit_correction_inputs,
+            self._exit_drafts,
+        ):
+            held.pop(key, None)
+        self._exit_writing.discard(key)
+
     def _clear_questions(self) -> None:
+        for trade_id in list(self._draft_question_rows):
+            self._forget_draft_question(trade_id)
         self._question_inputs = {}
         self._question_rows = {}
         self._mood_strip = None
@@ -924,6 +954,8 @@ class TradeMentorCard(QWidget):
         """Take ONE question off the card and forget its widgets."""
         row = self._question_rows.pop(key, None)
         self._question_inputs.pop(key, None)
+        if isinstance(key, tuple) and len(key) == 2 and str(key[0]) == EXIT_DRAFT_KIND:
+            self._forget_draft_question(str(key[1]))
         if row is None:
             return
         if self._mood_strip is not None and self._mood_strip.parent() is row:
@@ -932,9 +964,59 @@ class TradeMentorCard(QWidget):
         row.setParent(None)
         row.deleteLater()
 
-    def _build_question_row(self, subject) -> tuple[QWidget, QComboBox]:
+    def _build_exit_draft_question(self, subject) -> tuple[QWidget, None]:
+        """TJ-9E's draft row, offered on its OWN clock - not a combo at all.
+
+        A waiting reading is not a question the trader answers in a word: it is
+        what the night made of the words they wrote, and the two verbs are
+        Confirm and Correct. So this row is the symbol, the exit date, the
+        trader's own note read-only, the ONE draft line and the card's existing
+        draft widgets - and it returns NO combo, which is how
+        :meth:`save_questions` knows there is nothing here for
+        `record_answer` to write (it refuses this kind anyway: the card's two
+        buttons are the ONE writer of a confirmed exit row).
+
+        It never greys Save: `save_answers_button` counts TJ-9's material
+        fields and the exit boxes of the trade section, and this row is in
+        neither.
+        """
+        detail = dict(getattr(subject, "detail", {}) or {})
+        trade_id = str(detail.get("trade_id") or subject.subject_id)
+        row = QWidget(self.questions_box)
+        stack = QVBoxLayout(row)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(2)
+        heading = QLabel(str(getattr(subject, "prompt", "") or ""), row)
+        heading.setWordWrap(True)
+        stack.addWidget(heading)
+        said = str(detail.get("raw_text") or "").strip()
+        if said:
+            words = QLabel(f"You wrote: {said}", row)
+            words.setObjectName("MutedLabel")
+            words.setWordWrap(True)
+            words.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            stack.addWidget(words)
+        # The card's own draft widgets, so Confirm and Correct are the SAME
+        # seam wherever the row is drawn - one write in flight, both verbs grey
+        # for the whole of it, every ending settling them.
+        self._exit_drafts[trade_id] = {
+            "trade_id": trade_id,
+            "exit_session": str(detail.get("exit_session") or ""),
+            "note_id": str(detail.get("note_id") or ""),
+            "fields": dict(detail.get("fields") or {}),
+        }
+        self._exit_sessions.setdefault(trade_id, str(detail.get("exit_session") or ""))
+        self._draft_question_rows.add(trade_id)
+        self._add_exit_draft_row(trade_id, row, stack)
+        self._refresh_exit_draft_line(trade_id)
+        return row, None
+
+    def _build_question_row(self, subject) -> tuple[QWidget, QComboBox | None]:
         """One question's widgets: the prompt, the combo, and TJ-7's strip."""
         import mentor_questions
+
+        if str(subject.kind) == EXIT_DRAFT_KIND:
+            return self._build_exit_draft_question(subject)
 
         row = QWidget(self.questions_box)
         stack = QVBoxLayout(row)
@@ -1030,9 +1112,22 @@ class TradeMentorCard(QWidget):
         self.save_questions_button.setVisible(True)
 
     def question_box(self, kind: str, subject_id: str):
-        """The combo one question is answered in, or ``None``."""
+        """The combo one question is answered in, or ``None``.
+
+        ``None`` for TJ-9E's waiting-reading row, which is not answered in a
+        word: it carries Confirm and Correct instead.
+        """
         entry = self._question_inputs.get((str(kind), str(subject_id)))
         return entry[1] if entry else None
+
+    def question_prompt_text(self, kind: str, subject_id: str) -> str:
+        """What one question's row SAYS, or ``""`` when it is not on the card."""
+        row = self._question_rows.get((str(kind), str(subject_id)))
+        if row is None:
+            return ""
+        return " ".join(
+            label.text() for label in row.findChildren(QLabel) if label.text()
+        )
 
     # -- TJ-7: the optional mood strip on the day_close question ------------
     def mood_button(self, score):
@@ -1070,6 +1165,12 @@ class TradeMentorCard(QWidget):
         mood = self.mood_answer()
         touched_the_strip = mood["mood"] is not None or bool(mood["state_tags"])
         for (kind, subject_id), (subject, combo) in list(self._question_inputs.items()):
+            if combo is None:
+                # TJ-9E's waiting-reading row. It has no combo because it is
+                # not answered in a word: its two verbs write through the
+                # card's own Confirm / Correct, and `record_answer` refuses
+                # this kind for exactly that reason. Nothing to file here.
+                continue
             chosen = str(combo.currentData() or "")
             carries_a_mood = kind == DAY_CLOSE_KIND and self._mood_strip is not None
             if not chosen and not (carries_a_mood and touched_the_strip):
@@ -1119,6 +1220,14 @@ class TradeMentorCard(QWidget):
         return {"ok": not failures, "saved": saved, "retired": retired, "failures": failures}
 
     def _clear_trade_check(self) -> None:
+        """Drop the trade section. A WAITING-READING row is not part of it.
+
+        TJ-9E: a draft row in the questions area is offered on the draft's own
+        clock and belongs to `set_questions`, so the exit maps are filtered
+        rather than emptied - clearing them wholesale would orphan that row's
+        Confirm and Correct buttons while the widgets stayed on the card.
+        """
+        kept = set(self._draft_question_rows)
         self._answer_inputs = {}
         self._trade_questions = {}
         self._raw_trade_inputs = {}
@@ -1130,18 +1239,25 @@ class TradeMentorCard(QWidget):
         self._trade_blocks = {}
         self._trade_headings = {}
         self._exit_boxes = {}
-        self._exit_prompts = {}
         self._exit_states = {}
         self._exit_state_buttons = {}
-        self._exit_sessions = {}
-        self._exit_draft_rows = {}
-        self._exit_draft_labels = {}
-        self._exit_confirm_buttons = {}
-        self._exit_correct_buttons = {}
-        self._exit_correction_rows = {}
-        self._exit_correction_inputs = {}
-        self._exit_drafts = {}
-        self._exit_writing = set()
+        for held in (
+            "_exit_prompts",
+            "_exit_sessions",
+            "_exit_draft_rows",
+            "_exit_draft_labels",
+            "_exit_confirm_buttons",
+            "_exit_correct_buttons",
+            "_exit_correction_rows",
+            "_exit_correction_inputs",
+            "_exit_drafts",
+        ):
+            setattr(
+                self,
+                held,
+                {key: value for key, value in getattr(self, held).items() if key in kept},
+            )
+        self._exit_writing = {key for key in self._exit_writing if key in kept}
         self.save_answers_button.setEnabled(False)
         while self._trade_check_layout.count():
             item = self._trade_check_layout.takeAt(0)
@@ -1172,6 +1288,10 @@ class TradeMentorCard(QWidget):
         self._setup_choice_boxes.pop(key, None)
         self._trade_headings.pop(key, None)
         self._setup_confirmed.discard(key)
+        if key in self._draft_question_rows:
+            # Its exit widgets belong to a waiting-reading row in the questions
+            # area, which this block does not own and must not take with it.
+            return
         for held in (
             self._exit_boxes,
             self._exit_prompts,
@@ -2063,7 +2183,7 @@ class TradeMentorCard(QWidget):
         key = str(trade_id)
         if key in self._exit_writing:
             return False
-        if self._trade_store is None:
+        if self._exit_store() is None:
             self._set_status("the trade journal is not available here")
             return False
         self._exit_writing.add(key)
@@ -2088,6 +2208,16 @@ class TradeMentorCard(QWidget):
         if save is not None:
             save.setEnabled(bool(enabled))
 
+    def _exit_store(self):
+        """The journal the exit verbs write through, wherever the row is drawn.
+
+        TJ-9E: a waiting-reading row lives in the QUESTIONS area, which the
+        host hands its own store, and the trade section is not on the card at
+        all on a morning whose reviewed session has nothing open. Same store,
+        two seams.
+        """
+        return self._trade_store if self._trade_store is not None else self._question_store
+
     def _confirm_exit_draft(self, trade_id: str) -> bool:
         """The trader's one click. The night's reading becomes THEIR record."""
         import trade_mentor_trade_check as check
@@ -2097,7 +2227,7 @@ class TradeMentorCard(QWidget):
         if not draft:
             self._set_status("there is no draft to confirm")
             return False
-        store = self._trade_store
+        store = self._exit_store()
         moment = self._now()
         return self._start_exit_write(
             key,
@@ -2161,7 +2291,7 @@ class TradeMentorCard(QWidget):
             ).split(";")
             if part.strip()
         )
-        store = self._trade_store
+        store = self._exit_store()
         draft = dict(self._exit_drafts.get(key) or {})
         moment = self._now()
         return self._start_exit_write(
@@ -2189,12 +2319,18 @@ class TradeMentorCard(QWidget):
                 f"the exit fields were NOT saved: {record.get('reason') or 'nothing was written'}"
             )
             return
-        # The question is answered, so the line stops offering it.
+        # The question is answered, so the line stops offering it - and a
+        # waiting-reading row leaves the card entirely. Once Confirmed or
+        # Corrected a draft is gone for good: the signed-off row is the fact,
+        # and the lane that offers drafts filters on it.
         self._exit_drafts.pop(key, None)
         row = self._exit_correction_rows.get(key)
         if row is not None:
             row.setVisible(False)
         self._refresh_exit_draft_line(key)
+        if key in self._draft_question_rows:
+            self._drop_question_row((EXIT_DRAFT_KIND, key))
+            self.questions_box.setVisible(bool(self._question_inputs))
         self._set_status("Your exit fields are saved.")
 
     def _exit_write_failed(self, trade_id: str, reason: str) -> None:

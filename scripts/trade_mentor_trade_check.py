@@ -123,6 +123,26 @@ EXIT_PROMPT = "Why did you exit? What did you feel? What were you watching?"
 #: the night slot, which re-checks it against this number.
 MAX_EXIT_WATCHING = 3
 
+#: How long the night's reading of an exit note stays ON OFFER, in exchange
+#: sessions walked on the calendar (review 1 blocker: draft reachability).
+#:
+#: A draft is offered on its OWN, independent of the session a card happens to
+#: be reviewing, because the timeline never lines up: the trade exits Monday,
+#: the trader types the note on TUESDAY's 09:00 card (which reviews Monday),
+#: Tuesday NIGHT drafts it - and Wednesday's card reviews TUESDAY, where
+#: Monday's trade is not a row at all. Without a window of its own the Confirm
+#: click would never appear, which is half of what the trader asked for:
+#: *"ideally we can just write it out and the AI fills this stuff in
+#: overnight"*.
+#:
+#: Five, the desk's own week (`evidence_stats.WEEK_SESSIONS`), because a
+#: reading of what the trader wrote is worth confirming while they still
+#: remember the trade and stops being worth interrupting them for after that.
+#: Past the window a draft is no longer OFFERED; it stays on disk as
+#: `provisional`, it is still counted as unexplained-but-drafted in the report
+#: card's clause, and NOTHING is ever confirmed by age.
+EXIT_DRAFT_OFFER_SESSIONS = 5
+
 #: Why an exit note could not claim `same_session`. Two reasons, and neither is
 #: ever a guess: a date-only fill has no moment for the note to be before, and
 #: an unreadable leg list is uncertainty.
@@ -1240,40 +1260,58 @@ def exit_notes(store: Any, trade_id: str) -> list[dict[str, Any]]:
     return [_note_row(row) for row in rows]
 
 
-def exit_notes_for_session(store: Any, session: str) -> dict[str, dict[str, Any]]:
-    """``{trade_id: the session's exit note}`` in ONE read of the whole table.
+def exit_notes_by_session(
+    store: Any, sessions: Any
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """``{session: {trade_id: note}}`` for several sessions in TWO reads.
 
-    Session-wide rather than per trade: a six-trade morning would otherwise be
-    six walks of an append-only table on a Qt worker, and the Day Review page
-    reads this once for the whole day.
+    The append-only table is walked ONCE for the words and once for what the
+    trader signed off, however many sessions are asked for: a five-session
+    window is a card-build cost and five separate session reads would be five
+    walks of the same table on the Qt thread.
 
     The LAST note for a (trade, session) wins - a superseding note is the
     trader's latest word - and the trade's CONFIRMED fields travel on the same
     row, so a caller that wants both does not open the table twice. A trade
     that exited in two sessions appears under each session with its own note.
     """
-    wanted = str(session or "")[:10]
-    notes: dict[str, dict[str, Any]] = {}
+    wanted = [str(day or "")[:10] for day in (sessions or ()) if str(day or "")[:10]]
+    out: dict[str, dict[str, dict[str, Any]]] = {day: {} for day in wanted}
     if not wanted:
-        return notes
+        return out
+    days = set(wanted)
     try:
         rows = store.list_opportunity_events(
             event_type=EVENT_EXIT_NOTE_RAW, limit=10000
         )
     except Exception:  # noqa: BLE001 - an unreadable table is no notes
         logging.debug("Session exit notes unreadable.", exc_info=True)
-        return notes
+        return out
     for row in rows:
         note = _note_row(row)
-        if note["exit_session"] != wanted or not note["trade_id"]:
+        if note["exit_session"] not in days or not note["trade_id"]:
             continue
-        notes[note["trade_id"]] = note
-    if not notes:
-        return notes
-    confirmed = _confirmed_exit_rows(store, wanted)
-    for trade_id, note in notes.items():
-        note["exit_fields"] = dict(confirmed.get(trade_id) or {})
-    return notes
+        out[note["exit_session"]][note["trade_id"]] = note
+    if not any(out.values()):
+        return out
+    confirmed = _confirmed_exit_rows(store, days)
+    for day, notes in out.items():
+        for trade_id, note in notes.items():
+            note["exit_fields"] = dict((confirmed.get(day) or {}).get(trade_id) or {})
+    return out
+
+
+def exit_notes_for_session(store: Any, session: str) -> dict[str, dict[str, Any]]:
+    """``{trade_id: the session's exit note}`` in ONE read of the whole table.
+
+    Session-wide rather than per trade: a six-trade morning would otherwise be
+    six walks of an append-only table on a Qt worker, and the Day Review page
+    reads this once for the whole day.
+    """
+    wanted = str(session or "")[:10]
+    if not wanted:
+        return {}
+    return exit_notes_by_session(store, (wanted,)).get(wanted, {})
 
 
 def _confirmed_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -1288,10 +1326,12 @@ def _confirmed_row(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _confirmed_exit_rows(store: Any, session: str) -> dict[str, dict[str, Any]]:
-    """``{trade_id: the trader's confirmed fields}`` for one session, in ONE read."""
-    wanted = str(session or "")[:10]
-    out: dict[str, dict[str, Any]] = {}
+def _confirmed_exit_rows(store: Any, sessions: Any) -> dict[str, dict[str, Any]]:
+    """``{session: {trade_id: the trader's confirmed fields}}``, in ONE read."""
+    days = {str(day or "")[:10] for day in (sessions or ()) if str(day or "")[:10]}
+    out: dict[str, dict[str, Any]] = {day: {} for day in days}
+    if not days:
+        return out
     try:
         rows = store.list_opportunity_events(event_type=EVENT_EXIT_FIELDS, limit=10000)
     except Exception:  # noqa: BLE001 - an unreadable table is nothing confirmed
@@ -1300,9 +1340,9 @@ def _confirmed_exit_rows(store: Any, session: str) -> dict[str, dict[str, Any]]:
     for row in rows:
         record = _confirmed_row(row)
         trade_id = str(row.get("trade_id") or "")
-        if not trade_id or record["exit_session"] != wanted:
+        if not trade_id or record["exit_session"] not in days:
             continue
-        out[trade_id] = record
+        out[record["exit_session"]][trade_id] = record
     return out
 
 
@@ -1323,6 +1363,90 @@ def exit_fields(store: Any, trade_id: str) -> dict[str, Any]:
     if not rows:
         return {}
     return _confirmed_row(rows[-1])
+
+
+def offer_window(session: Any, sessions: int = EXIT_DRAFT_OFFER_SESSIONS) -> tuple[str, ...]:
+    """The `sessions` exchange sessions ending at `session`, OLDEST first.
+
+    Walked on the exchange calendar, never in calendar days: a Monday card
+    reaching back five days would reach back three sessions. A calendar that
+    cannot answer falls back to days, which is WIDER than the truth and so
+    never silently narrows the window.
+    """
+    try:
+        cursor = date.fromisoformat(str(session or "")[:10])
+    except ValueError:
+        return ()
+    days = [cursor]
+    for _step in range(max(0, int(sessions) - 1)):
+        try:
+            from market_calendar import previous_session
+
+            cursor = previous_session(cursor)
+        except Exception:  # noqa: BLE001 - an unanswerable calendar walks days
+            logging.debug("The exchange calendar could not walk back.", exc_info=True)
+            from datetime import timedelta
+
+            cursor = cursor - timedelta(days=1)
+        days.append(cursor)
+    return tuple(day.isoformat() for day in reversed(days))
+
+
+def waiting_exit_drafts(
+    store: Any,
+    session: Any,
+    *,
+    sessions: int = EXIT_DRAFT_OFFER_SESSIONS,
+    root: Any = None,
+) -> list[dict[str, Any]]:
+    """Every UNCONFIRMED exit draft still on offer, OLDEST FIRST.
+
+    The lane behind the `exit_draft_review` question. It is keyed to the
+    trader's CLOCK and not to whatever session the card is reviewing - see
+    :data:`EXIT_DRAFT_OFFER_SESSIONS` for why the two never line up - and it
+    reads the window in TWO store queries plus one small pack read per session.
+
+    A draft the trader has already Confirmed or Corrected is GONE: the
+    signed-off row is the fact and nothing is offered twice. A draft whose note
+    has no words behind it any more, or which names a trade this store cannot
+    see, is skipped rather than shown as an empty card row.
+
+    Never raises: an unreadable pack is no drafts, which is also the honest
+    state of a desk whose night has never run.
+    """
+    window = offer_window(session, sessions)
+    if not window:
+        return []
+    notes = exit_notes_by_session(store, window)
+    out: list[dict[str, Any]] = []
+    for day in window:
+        try:
+            from ai_jobs import exit_note_fields
+
+            stored = exit_note_fields.read_latest(day, root=root) or {}
+        except Exception:  # noqa: BLE001 - a missing pack is simply no draft
+            logging.debug("Exit drafts unreadable for %s.", day, exc_info=True)
+            continue
+        for draft in stored.get("drafts") or ():
+            if not isinstance(draft, Mapping):
+                continue
+            trade_id = str(draft.get("trade_id") or "")
+            note = (notes.get(day) or {}).get(trade_id) or {}
+            if not trade_id or not note or note.get("exit_fields"):
+                continue
+            out.append(
+                {
+                    "trade_id": trade_id,
+                    "symbol": str(draft.get("symbol") or note.get("symbol") or ""),
+                    "exit_session": day,
+                    "note_id": str(draft.get("note_id") or ""),
+                    "raw_text": str(note.get("raw_text") or ""),
+                    "fields": dict(draft.get("fields") or {}),
+                    "status": str(draft.get("status") or ""),
+                    "drafted_at": str(draft.get("drafted_at") or ""),
+                }
+            )
+    return out
 
 
 def _exit_vocabularies() -> tuple[tuple[str, ...], tuple[str, ...]]:

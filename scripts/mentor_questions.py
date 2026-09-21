@@ -431,17 +431,26 @@ def _trigger_exit_draft_review(state: Mapping[str, Any]) -> list[Subject]:
         if not trade_id or trade_id in seen:
             continue
         seen.add(trade_id)
+        symbol = _text(row.get("symbol"))
+        session = _text(row.get("exit_session"))
         subjects.append(
             Subject(
                 kind="exit_draft_review",
                 subject_id=trade_id,
                 options=_with_answer_states(*EXIT_DRAFT_OPTIONS),
                 prompt=_text(row.get("prompt"))
-                or f"{_text(row.get('symbol'))} - is that why you exited?".strip(),
+                or f"{symbol} - you exited on {session}. Is that what happened?".strip(),
+                # Everything the card needs to DRAW the row, carried on the
+                # subject: the trader's own words and the night's reading of
+                # them. The registry decides WHICH drafts are offered and how
+                # many; it never renders one and never writes one.
                 detail={
                     "trade_id": trade_id,
-                    "exit_session": _text(row.get("exit_session")),
+                    "symbol": symbol,
+                    "exit_session": session,
                     "note_id": _text(row.get("note_id")),
+                    "raw_text": _text(row.get("raw_text")),
+                    "fields": dict(row.get("fields") or {}),
                 },
             )
         )
@@ -1027,11 +1036,22 @@ def pending(state: Mapping[str, Any], slot: Any) -> CardQuestions:
     ranked = sorted(owed, key=lambda item: (_priority_of(item.kind), item.kind))
     asked = tuple(ranked[:BUDGET])
     carried = tuple(ranked[BUDGET:])
-    note = (
-        f"{len(carried)} more waiting - they come back on the next card."
-        if carried
-        else ""
-    )
+    # TJ-9E: a carried exit READING is named, because it is not a question the
+    # trader can answer in a word - it is something the night wrote about what
+    # they said, and "1 more waiting" would not tell them there is a reading of
+    # their own note they have not seen. `sorted` is stable, so the oldest
+    # draft of the lane is the first offered and the newest is the one carried.
+    readings = sum(1 for item in carried if item.kind == "exit_draft_review")
+    parts = []
+    if carried:
+        parts.append(f"{len(carried)} more waiting - they come back on the next card.")
+    if readings:
+        parts.append(
+            f"{readings} more exit reading(s) waiting."
+            if readings != len(carried)
+            else f"That is {readings} exit reading(s)."
+        )
+    note = " ".join(parts)
     return CardQuestions(asked=asked, forced=tuple(forced), carried=carried, waiting_note=note)
 
 

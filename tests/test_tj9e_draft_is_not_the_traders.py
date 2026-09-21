@@ -223,34 +223,65 @@ def test_the_draft_line_costs_a_budget_slot_only_when_a_draft_waits():
 def test_the_draft_line_never_greys_save(tmp_path):
     """A waiting draft is something to LOOK at, not a field to fill.
 
-    Hand-counted: the swing's exit box is the only gate. With a draft waiting
-    and the box filled, Save is green - a draft nobody clicked must never be
-    able to hold the morning hostage.
+    LEAD-GRANTED AMENDMENT 2026-09-21 (review 1). The BODY is rewritten because
+    its premise died with blocker 5: an exit the trader has explained is
+    ANSWERED and is never asked again, and a draft only exists where a note
+    does - so "the swing's exit box is the only gate" can no longer be staged
+    at all. With the lead's earlier amendment (answer the four entry fields
+    first) the row had nothing open on it and left the card entirely; without
+    it, Save was grey for TJ-9's own forced reason and the test could not see
+    what the DRAFT does either way. Both hunks are gone.
+
+    The shape that CAN say it: one trade with a waiting, unconfirmed draft, and
+    the rest of the card's rows still open. Answer them and Save goes green
+    with that draft still unclicked. Hand-counted: 6 rows, 1 of them carrying
+    the draft, 0 of them waiting on it.
     """
     import trade_mentor_trade_check as check
 
     root = tmp_path / "packs"
-    store, trade_id = _drafted(tmp_path, root)
-    # LEAD AMENDMENT 2026-09-21: `swing_with_money` never answers the swing's
-    # four ENTRY fields, so Save was grey for TJ-9's own forced reason and this
-    # test could not see what the DRAFT does. Answer them first (the way
-    # `tj9e_support` does elsewhere), so the docstring's hand count is true:
-    # the exit box is the only gate left.
-    check.save_answers(
-        store,
-        trade_id,
-        {name: {"state": check.ANSWER_NOT_REMEMBERED} for name in check.MATERIAL_FIELDS},
+    store, ids = fx.ready_store(tmp_path)
+    drafted = ids[fx.DAY_TRADE]
+    check.save_exit_note(
+        store, drafted, fx.EXIT_NOTE, exit_session=fx.REVIEWED, now=MONDAY_MORNING
     )
+    _publish_draft(store, root)
     task = check.build_task(store, fx.SESSION_TODAY)
 
     card = _card(tmp_path)
     card.set_trade_check(task, store=store, drafts_root=root)
-    assert card.exit_draft_line(trade_id).strip(), "no draft line was shown"
+    assert card.exit_draft_line(drafted).strip(), "no draft line was shown"
+    assert card.save_answers_button.isEnabled() is False, (
+        "the other rows are still open"
+    )
 
-    card.exit_note_box(trade_id).setPlainText(fx.EXIT_NOTE)
+    for trade_id, fields in card._answer_inputs.items():
+        for combo, _text in fields.values():
+            combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
+        if card.exit_note_box(trade_id) is not None:
+            card.set_exit_answer_state(trade_id, check.ANSWER_NOT_REMEMBERED)
+
     assert card.save_answers_button.isEnabled() is True, (
         "a waiting draft greyed Save"
     )
+
+
+def _publish_draft(store, night_root: Path):
+    """One night's draft over whatever exit notes `store` holds."""
+    import exit_reasons
+    import trader_state_tags
+    from ai_jobs import exit_note_fields
+
+    out = exit_note_fields.run_exit_note_fields(
+        session_date=fx.REVIEWED,
+        now=datetime.fromisoformat("2026-09-14T02:00:00-04:00"),
+        root=night_root,
+        store=store,
+        request=fx.fake_request(
+            fx.good_reply(exit_reasons.codes()[0], trader_state_tags.codes()[:1])
+        ),
+    )
+    assert out["status"] == "ok", out
 
 
 def test_one_write_is_in_flight_and_every_ending_re_enables_the_buttons(tmp_path, monkeypatch):
