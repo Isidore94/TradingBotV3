@@ -2729,6 +2729,77 @@ They are evidence and must not be loaded as context.
   `tests/test_tj4_review2_fixes.py`, `tests/test_tj4_redo_one_at_a_time.py`,
   `tests/test_tj4_redo_session_cli.py`, `tests/tj4_support.py`. Rule: DESK_INTERNALS "TJ-4";
   slot position: decision 0018 addendum 2026-09-20. Gate #148 owed.
+- **The Day Review report card - six lines that measure nothing and say what they could not
+  see (TJ-12, 2026-09-20).** One trader-facing page area and two Mentor question kinds woken:
+  nothing here reaches a detector, score, alert, watchlist, Focus, the review queue or
+  `review_policy.json`.
+  `scripts/day_report_card.py` is PURE - no store, no Qt, no clock of its own - and
+  `build(day_inputs) -> ReportCard` returns SIX lines in the fixed order `LINE_KEYS`
+  (`did_well`, `missed`, `your_reads`, `congruence`, `process`, `how_fresh`), each
+  `{key, text, n, measured, target}` and each resolving its click through `LINE_TARGETS`.
+  **It computes NO new statistic**: every number is READ from the owner that measured it -
+  `walkaway_day`'s `REAL_MISS_V1` verdicts, its sentences and its skill cells' own `low`;
+  `prediction_ledger.your_reads`' integers; `market_read_grades.congruence_lines`;
+  `trade_origin.planned_state` with the trade row's own `label_provenance`. The best setup
+  family is chosen by the ONE Wilson **lower bound**, never the rate, and none under
+  `MIN_REPORTABLE_N` is named; a line whose input the desk does not have SAYS so and prints no
+  number, and `n - measured` never enters a rate. The DAY lines deliberately carry no
+  `rate_lb`; only `week(sessions)` computes one, from POOLED counts once per session (never
+  the mean of two days' rates), and it names its floor - that re-cut is TJ-5's week /
+  four-week / month strip. **Every line is guarded on its own** (`_guarded` /
+  `_unreadable_line`): one owner raising costs its own sentence (`could not be read: ...`,
+  `measured_ok: False`, `measured` staying an integer 0) and the other five still say what
+  they measured. `did_well`'s `n` is the `liked_not_traded` table alone - the table its click
+  opens - with claimed D1 picks said separately.
+  `how_fresh` names when the story was written, how far the VERIFIED fills reach
+  (`trade_mentor_trade_check.fills_current_to`; an absence is not a date), which session the
+  reads were graded through, and any overnight slot the ledger says went wrong. **A ledger
+  `status` is a vocabulary `ai_jobs/ledger.py` OWNS and this module re-spells none of it**:
+  `STATUS_OK` and `ATTEMPT_STATUSES` are IMPORTED, `skipped` / `manual_test` / a `correction`
+  row decide nothing, `failed` and `degraded` are named SEPARATELY, and the **LAST deciding
+  row wins**, so a slot that failed and recovered is not named and one that ran and then
+  failed is. The ledger is read TAIL-ONLY through an EXPLICIT path (`LEDGER_TAIL_ROWS` 500,
+  `ai_jobs.ledger.recent_rows` for a small file) and past `LEDGER_TAIL_BYTES` (256 KB) the
+  tail is SEEKED from the end inside `day_report_card`; the file is opened exactly once
+  either way and `ai_jobs/ledger.py` is unchanged for its other callers. The tail says what it
+  could NOT see, so a session at or beyond its oldest row is `night_status: "unknown"` with
+  **no counts at all**, a covered session with no rows is said as `no_rows`, "none reported
+  trouble" is said only over at least one slot actually read, and a MISSING AI store is
+  `night status unknown` and **creates nothing** (`ledger_path()` defaults to `create=True`).
+  **The Process line never reads an unread store as an answer.** `trade_origin.planned_state`
+  answers `unplanned` whenever no lane row precedes the first fill, so an UNREAD lane is
+  indistinguishable from "nothing was said". While any of `ORIGIN_LANES` sits outside
+  `DESK_ORIGIN_LANES_READ` - ONE constant both lane builders build from - the line counts
+  `planned` and `no claim or like before the fill`, never a bare `unplanned`, and NAMES what
+  it could not look at, carrying `lanes_read` / `lanes_unread` so TJ-5 and the pack say the
+  same; declare every lane read and the plain wording returns on its own. The reader for the
+  two unread lanes is the follow-up **TJ-12F** (plan.md 12.4).
+  The card is built on the Day Review WORKER inside the ONE payload (TJ-1):
+  `day_review_service.PAYLOAD_KEYS` gains `report_card`, `empty_payload` carries it present
+  and falsy, and `read_day` fills it LAST inside its own guard - a failed card costs the card,
+  never the day. The page FORMATS and never calls `build` or `how_fresh`:
+  `day_review_panel.report_card_section` is a third row of the page's own column between
+  `provisional_note` and `columns`, six fixed line widgets built once and only re-texted,
+  styled in `ui/theme.qss` by object name. `day_review_pack.build_pack(..., report_card=None)`
+  keeps TJ-4's empty default and, GIVEN a card, mints one `source_id` per line from the pack's
+  ONE `_Minter` inside the hashed body - **`build_pack_for` does not yet hand it one**, so the
+  pack's `report_card` section is still the empty hook in production.
+  **Two Mentor question kinds WOKEN** (TJ-14B -> TJ-12): `trade_origin` and
+  `open_position_check` carried `dormant_until="TJ-12"` because this card is their named
+  reader, so `dormant_until` is now `""` on those two and their `consumer` strings name
+  `day_report_card.process_line` / `.long_hold_lines`; `grader_gap` (TJ-10) and
+  `quick_like_followup` (TJ-14C) stay dormant. `MainWindow._mentor_origin_lanes` really fills
+  the `decisions` and `claims` lanes, bounded to the two sessions a question can be about;
+  `ORIGIN_OPTIONS` gains `a_focus_pick` and `ORIGIN_PROMPT_CAVEAT` leads with the same words
+  the Process line uses, so the trader can answer what the desk cannot yet read.
+  `selftest.LAZY_ENGINE_MODULES` gains `day_report_card` (both the worker and the page import
+  it inside a guard that swallows an `ImportError`): source selftest **95/95 -> 96/96**.
+  Tests: `tests/test_tj12_report_card_lines.py`,
+  `tests/test_tj12_report_card_calls_the_owners.py`, `tests/test_tj12_how_fresh.py`,
+  `tests/test_tj12_week_recut.py`, `tests/test_tj12_day_review_page.py`,
+  `tests/test_tj12_pack_hook.py`, `tests/test_tj12_mentor_wake.py`,
+  `tests/test_tj12_review1_fixes.py`, `tests/test_tj12_review2_tail_window.py`,
+  `tests/tj12_support.py`. Rule: DESK_INTERNALS "TJ-12". Gates #157, #168-#170 owed.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
@@ -3369,6 +3440,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-20 - TJ-12: the report card says what it cannot see (branch `claude/tj12-report-card`, tip `1a88d4a4`, merged into `lead/p033-integration2` `843a3f02`)
+
+Trader, 2026-09-19: *"I want what I missed to be very apparent. I want what I did well with to also be very apparent."* Six lines head Day Review above the story - **Did well**, **Missed**, **Your reads**, **Congruence**, **Process**, **How fresh** - and the whole design rule is that **the card measures nothing**. Every number on it already exists somewhere on the desk with a rule behind it, so a card that re-derived a run rate would be a second opinion about `REAL_MISS_V1` and one that recomputed a Wilson would be the first thing to drift the day `swing_headline`'s z moves; `scripts/day_report_card.py` therefore READS `walkaway_day`'s verdicts, sentences and cell `low`, `prediction_ledger.your_reads`' integers, `market_read_grades.congruence_lines` and `trade_origin.planned_state`, and computes nothing of its own. The tester's fixture is a trap on purpose: `steady` is 55/100 (bound 0.4524) and `flashy` 18/30 (rate 0.60, bound 0.4232), so a card ranked on the RATE names the wrong family, and `tiny` is 9/10 - the best rate on the board and under `MIN_REPORTABLE_N`, so a card that ignored the floor names it; neither happens. A DAY line carries no `rate_lb` at all, because a Wilson over one session is a statistic the card invented; only `week()` computes one, POOLING counts once per session, and the tester's two sessions are four clicks and six on purpose because that is the only shape where pooling (4/10 = 0.400) and averaging (0.458) disagree. Every line is guarded on its own, so one owner raising costs one sentence and the other five still say what they measured. **Three review rounds by reproduction against read-only copies of the live stores - NO-GO, NO-GO, GO at `1a88d4a4` - and each one found the same defect class: unmeasured presented as fine.** Round 1, blocker 1: `How fresh` tested `status != "ok"` and named **22 slots broken for 2026-09-18 when 2 were** - 20 of them had finished `ok` hours earlier and were `skipped` by the next half-hourly pass (`daily_digest` ok at 22:02:10, skipped at 03:30:41; `weekly_synthesis` ok at 02:52:23, skipped three minutes later), and only `journal_import` (failed three times) and `ai_summary` (degraded) were really not ok. A ledger status is a vocabulary `ai_jobs/ledger.py` owns: the card now IMPORTS `STATUS_OK` and `ATTEMPT_STATUSES`, spells none of them, names `failed` and `degraded` apart (a degraded run published a real document with no narrative - calling that "nothing ran" is a different fact), and lets the **LAST deciding row win**, so a slot that failed and recovered is fine and one that ran and then failed is not. The line whose job is to say when the night failed is the one line that must never cry wolf. Round 1, blocker 2: the Process line called **30 of the trader's last 33 trades "unplanned"** (17 sessions, mean 1.8 a session) and the just-woken Mentor was about to ask about every one of them - not because the trader traded impulsively but because `planned_state` answers `unplanned` whenever nothing precedes the first fill and the desk can only read two of the four lanes. The fix is not to guess: `DESK_ORIGIN_LANES_READ` is ONE constant both lane builders build from, the line says what it DID look at and NAMES what it did not, carries `lanes_read` / `lanes_unread`, and the Mentor's prompt leads with the same caveat and offers `a_focus_pick`; the lane readers are the follow-up **TJ-12F**, and when it lands the plain wording returns on its own with no re-wording, because the sentence is chosen from what the caller DECLARED it read. Round 2, blocker 3: `night_status` was set on `target.exists()` alone, so a session whose rows fell outside the 256 KB / 500-row tail read *"0 overnight slot(s) read, 0 finished ok, none reported trouble"* - on the live ledger (1,256,082 bytes, 483 rows) that window holds 173 rows and reaches back only to 2026-09-11, so **9 of the 15 sessions the Day Review picker offers reported a clean night over 10-16 real slots each**, and the half-visible 2026-09-11 said 5 finished ok when 16 did. The tail now says what it could NOT see, and `how_fresh` has three answers: `unknown` with no counts at all past its oldest row (equal counts as unknown, because the window may have cut that night in half), `no_rows` for a covered session that is genuinely empty, and "none reported trouble" only ever over at least one slot read. No second read and no whole-file fallback - the file is opened exactly once either way, pinned - and truncation is a fact about the READ, never about the date, so a small ledger read whole still gives an old session its real counts. Why `How fresh` exists at all: a page that shows yesterday's numbers without saying the night failed is a page that lies quietly; and why it is on the worker: TJ-1's rule is ONE payload on ONE worker, so the card is another projection of that payload and the page's `render` formats six strings. A missing AI store is `unknown` and **creates nothing**, because `ledger_path()` defaults to `create=True` and the reader whose honest answer may be "I cannot see last night" must not be the thing that creates the folder it is asking about. **The wake:** `trade_origin` and `open_position_check` leave dormancy because this card is their named reader (TJ-14B's rule, decision 0021 answer 28); `grader_gap` and `quick_like_followup` stay asleep, three shipped TJ-14B assertions were AMENDED rather than weakened (the dormant set literal drops to the two still asleep while the fixture still fires all four), and `tests/tj14b_lift_dormancy.py` is untouched because lifting an already-awake kind is a no-op. `selftest.LAZY_ENGINE_MODULES` gains `day_report_card`: source selftest **95/95 -> 96/96**. No new dependency and no packaging-spec change. Merged into `lead/p033-integration2`; **not on `main`**. Live gates #157 (re-worded to six lines) and #168-#170 owed. Long form: DESK_INTERNALS "TJ-12".
 
 ### 2026-09-20 - Day Review session bars: a union-index NaN row is a hole, not a bar (branch `claude/tj2-nan-bars`, `c26c6a8f`, merged into `lead/p033-integration2` `ed62bd0a`)
 
