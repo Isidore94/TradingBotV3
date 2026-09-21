@@ -104,6 +104,13 @@ WRITES_OPPORTUNITY_EVENTS = "journal_store.opportunity_events"
 WRITES_MARKET_JOURNAL = "market_journal.entries"
 WRITES_TRADE_CHECK = "trade_mentor_trade_check.save_answers"
 WRITES_MENTOR_CARD = "market_journal.entries:mentor.prediction"
+#: TJ-9E. The night's reading of an exit note is `provisional` until the trader
+#: presses Confirm or Correct, and those two buttons are the ONE writer of the
+#: row they produce. Named here so the registry says where the answer lands;
+#: :func:`record_answer` refuses this kind for the same reason it refuses a
+#: prediction - a second writer would be a second opinion about what the trader
+#: clicked.
+WRITES_EXIT_FIELDS = "trade_mentor_trade_check.confirm_exit_fields"
 
 #: Cadences. `once` is forever, `weekly` is once per EXCHANGE week (the ISO week
 #: of the session), `daily` is once per session, `per_card` is every card.
@@ -404,6 +411,43 @@ def _trigger_trade_label(state: Mapping[str, Any]) -> list[Subject]:
     return subjects
 
 
+#: What the trader may do with a waiting exit draft. Two verbs, and there is no
+#: third: the machine's reading is theirs or it is rewritten.
+EXIT_DRAFT_OPTIONS = ("confirm", "correct")
+
+
+def _trigger_exit_draft_review(state: Mapping[str, Any]) -> list[Subject]:
+    """One row per exit draft the night left waiting for the trader.
+
+    Offers NOTHING when no draft waits, which is the honest first state - and
+    for a long time the usual one, because a draft only exists where the trader
+    wrote an exit note the night before. The rows come from the HOST, which has
+    already read the drafts file on a worker; this never opens it.
+    """
+    subjects: list[Subject] = []
+    seen: set[str] = set()
+    for row in _rows(state, "exit_drafts"):
+        trade_id = _text(row.get("trade_id"))
+        if not trade_id or trade_id in seen:
+            continue
+        seen.add(trade_id)
+        subjects.append(
+            Subject(
+                kind="exit_draft_review",
+                subject_id=trade_id,
+                options=_with_answer_states(*EXIT_DRAFT_OPTIONS),
+                prompt=_text(row.get("prompt"))
+                or f"{_text(row.get('symbol'))} - is that why you exited?".strip(),
+                detail={
+                    "trade_id": trade_id,
+                    "exit_session": _text(row.get("exit_session")),
+                    "note_id": _text(row.get("note_id")),
+                },
+            )
+        )
+    return subjects
+
+
 def _trigger_trade_origin(state: Mapping[str, Any]) -> list[Subject]:
     """A trade with nothing said about it before its first fill.
 
@@ -661,6 +705,25 @@ REGISTRY: tuple[QuestionKind, ...] = (
         # the consumer walk reports "the module does not import" forever.
         dormant_until="",
     ),
+    # TJ-9E (2026-09-21). The night read the trader's exit note and drafted
+    # three fields; this is the row that asks them to sign it off. BUDGETED -
+    # it costs one of the three only when a draft is actually waiting - and it
+    # never greys Save: a draft nobody clicked must not hold the morning
+    # hostage. AWAKE, because this packet builds its reader:
+    # `day_report_card.exit_note_counts` reads `exit_fields` to say how many of
+    # the session's exits the trader has confirmed.
+    QuestionKind(
+        kind="exit_draft_review",
+        trigger=_trigger_exit_draft_review,
+        options=_with_answer_states(*EXIT_DRAFT_OPTIONS),
+        writes=WRITES_EXIT_FIELDS,
+        consumer="day_report_card.exit_note_counts",
+        answer_key="exit_fields",
+        cadence=CADENCE_ONCE,
+        expiry="until the trader confirms or corrects the draft",
+        priority=25,
+        dormant_until="",
+    ),
     QuestionKind(
         kind="quick_like_followup",
         trigger=_trigger_quick_like_followup,
@@ -872,6 +935,7 @@ def consumer_report(kinds: Sequence[QuestionKind] | None = None) -> tuple[dict[s
         reads = _reads_key(target, kind.answer_key) if imports else False
         if imports and not reads and not reason:
             reason = f"{kind.consumer} never reads {kind.answer_key!r}"
+        dormant = bool(kind.dormant_until)
         rows.append(
             {
                 "kind": kind.kind,
@@ -879,8 +943,21 @@ def consumer_report(kinds: Sequence[QuestionKind] | None = None) -> tuple[dict[s
                 "answer_key": kind.answer_key,
                 "imports": bool(imports),
                 "reads": bool(reads),
+                # TJ-9E. The two columns above are the MEASUREMENT - does the
+                # named module import, and does it really touch the key. These
+                # two are the PROMISE: is this kind's registry entry true as
+                # written. They differ for exactly one row shape, the DORMANT
+                # one, whose entry promises no reader yet and names the packet
+                # that will build it. `grader_gap` is that shape today: TJ-10
+                # owes it a reader and nothing pretends otherwise, and a shim
+                # written to make a walk pass is the lie the walk exists to
+                # catch (this module's own rule). A LIVE kind's promise is kept
+                # only when its reader resolves AND reads the key, which is the
+                # whole check for every kind that can reach a card.
+                "resolved": bool(imports) and (bool(reads) or dormant),
+                "reads_key": bool(reads) or dormant,
                 "reason": reason,
-                "dormant": bool(kind.dormant_until),
+                "dormant": dormant,
                 "dormant_until": kind.dormant_until,
                 "budgeted": bool(kind.budgeted),
             }
@@ -992,6 +1069,15 @@ def record_answer(
         # `submit` (TJ-14A). A second writer here would be a second opinion
         # about what the trader clicked.
         return {"ok": False, "reason": "the card files a prediction with its read"}
+    if kind.writes == WRITES_EXIT_FIELDS:
+        # TJ-9E, and the same rule: the card's Confirm and Correct buttons are
+        # the ONE writer of a confirmed exit row, because a confirm is the
+        # trader's own act and `confirm_exit_fields` must have exactly one
+        # caller that is not a job.
+        return {
+            "ok": False,
+            "reason": "the card's Confirm or Correct button writes an exit's fields",
+        }
     state = _text((answer or {}).get("state"))
     if state == STOP_ASKING:
         # `Stop asking this` is not an answer and is never stored as one. The

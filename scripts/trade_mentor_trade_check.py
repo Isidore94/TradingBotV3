@@ -1087,6 +1087,7 @@ def save_exit_note(
     raw_text: str,
     *,
     exit_session: str,
+    state: str = "",
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """The trader's own words about one exit, on disk, BEFORE anything reads them.
@@ -1104,9 +1105,17 @@ def save_exit_note(
     A SECOND note on the same exit APPENDS (`opportunity_events` is immutable
     by design), so the first row stays byte-identical and the fact that the
     trader changed their mind survives.
+
+    ``state`` is the answer the trader gives INSTEAD of words - `not
+    remembered` or `not applicable`, from TJ-9's own four. It is a complete
+    answer and must stop being asked, which is why it is stored; it is not an
+    explanation, so nothing counts it as one and the night never reads it.
     """
     body = str(raw_text or "")
-    if not body.strip():
+    answer_state = str(state or "").strip()
+    if answer_state and answer_state not in ANSWER_STATES:
+        raise ValueError(f"{answer_state!r} is not one of the four answer states")
+    if not body.strip() and not answer_state:
         raise ValueError("the exit note is empty")
     session = str(exit_session or "")[:10]
     moment = now or datetime.now().astimezone()
@@ -1121,6 +1130,7 @@ def save_exit_note(
     )
     payload = {
         "raw_text": body,
+        "answer_state": answer_state,
         "exit_session": session,
         "label_provenance": provenance,
         # Why a same-session claim was REFUSED, when it was. Empty when nothing
@@ -1152,6 +1162,7 @@ def _note_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "symbol": str(row.get("symbol") or ""),
         "side": str(row.get("side") or ""),
         "raw_text": str(payload.get("raw_text") or ""),
+        "answer_state": str(payload.get("answer_state") or ""),
         "exit_session": str(payload.get("exit_session") or ""),
         "label_provenance": str(payload.get("label_provenance") or ""),
         "label_provenance_reason": str(payload.get("label_provenance_reason") or ""),

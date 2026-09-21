@@ -1,7 +1,7 @@
-r"""TJ-9E - the two things the tester did not pin, written by the BUILDER.
+r"""TJ-9E - what the tester did not pin, and what their pins could not say here.
 
-Two gaps, each with its own fail-before-fix proof recorded in the commit that
-introduced it:
+TWO GAPS the packet named and the tester left to the builder, each with its own
+fail-before-fix proof recorded in the commit that introduced it:
 
 1. **the status vocabulary has ONE owner** (the packet's CORRECTED point 2).
    The tester pinned the BEHAVIOUR - a `CLOSED_PARTIAL` trade is listed - and
@@ -13,14 +13,26 @@ introduced it:
    (the packet's CORRECTED point 6; 13 live trades have closing legs on two
    dates). One box per (trade, exit session), two `EXIT_NOTE_RAW` rows with
    different `exit_session` values, each drafted and confirmed separately.
+
+And FOUR guarantees whose tester-written pins cannot pass on this desk for
+reasons that belong to the pin rather than to the code. None of those four
+tests was edited - the builder reported each with its measurement and left it
+red - and none of the four guarantees is allowed to go unpinned because of
+that, so each is re-stated below in the form that can be true. Every one of
+them names the tester's test and what is wrong with it.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
+import threading
+import time
 from datetime import date, datetime
 from pathlib import Path
+
+import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 for _extra in (ROOT_DIR / "scripts", ROOT_DIR / "tests"):
@@ -28,6 +40,14 @@ for _extra in (ROOT_DIR / "scripts", ROOT_DIR / "tests"):
         sys.path.insert(0, str(_extra))
 
 import tj9e_support as fx  # noqa: E402
+
+pytestmark = pytest.mark.qt
+pytest.importorskip("PySide6", reason="the Trade Mentor card is Qt")
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+_app = QApplication.instance() or QApplication([])
 
 #: The Tuesday after the fixture's Monday. Its previous exchange session is the
 #: Monday, which is where the second half of the two-session exit lands.
@@ -368,3 +388,127 @@ def test_a_date_only_exit_note_is_never_a_same_session_note(tmp_path):
     assert payload["label_provenance"] == trade_origin.RECALLED_AFTER, payload
     assert payload["label_provenance_reason"] == check.REASON_DATE_ONLY_FILL, payload
     assert payload["written_after_the_session"] is True, payload
+
+
+def _card(tmp_path):
+    from ui.widgets.trade_mentor_card import TradeMentorCard
+
+    return TradeMentorCard(drafts_path=Path(tmp_path) / "drafts.json")
+
+
+def _swing_with_a_draft(tmp_path):
+    """One swing, entry ANSWERED, one exit note, and one night's draft.
+
+    `test_tj9e_draft_is_not_the_traders.py::test_the_draft_line_never_greys_save`
+    says "the swing's exit box is the only gate" - but its `_drafted` helper
+    builds the trade through `tj9e_support.swing_with_money`, which never
+    answers the four material fields, so that card really carries four
+    unanswered entry combos and Save is grey for TJ-9's own forced reason. The
+    fixture here answers the entry, which is the state the sentence describes.
+    """
+    import exit_reasons
+    import trade_mentor_trade_check as check
+    import trader_state_tags
+    from ai_jobs import exit_note_fields
+
+    store, trade_id = fx.swing_only(tmp_path)
+    check.save_exit_note(
+        store,
+        trade_id,
+        fx.EXIT_NOTE,
+        exit_session=fx.REVIEWED,
+        now=datetime.fromisoformat("2026-09-14T09:05:00-04:00"),
+    )
+    root = tmp_path / "packs"
+    out = exit_note_fields.run_exit_note_fields(
+        session_date=fx.REVIEWED,
+        now=datetime.fromisoformat("2026-09-14T02:00:00-04:00"),
+        root=root,
+        store=store,
+        request=fx.fake_request(
+            fx.good_reply(exit_reasons.codes()[0], trader_state_tags.codes()[:1])
+        ),
+    )
+    assert out["status"] == "ok", out
+    return store, trade_id, root
+
+
+def test_a_waiting_draft_never_greys_save(tmp_path):
+    """A waiting draft is something to LOOK at, not a field to fill.
+
+    Hand-counted: ONE row, no entry gap, so the exit box is the whole gate.
+    Grey with the box empty, green once words are typed - with a draft waiting
+    the whole time. A reading nobody clicked must never hold the morning
+    hostage.
+    """
+    import trade_mentor_trade_check as check
+
+    store, trade_id, root = _swing_with_a_draft(tmp_path)
+    task = check.build_task(store, fx.SESSION_TODAY)
+    assert len(task.trades) == 1, [(q.symbol, q.missing) for q in task.trades]
+    assert task.trades[0].missing == (), task.trades[0].missing
+
+    card = _card(tmp_path)
+    card.set_trade_check(task, store=store, drafts_root=root)
+    assert card.exit_draft_line(trade_id).strip(), "no draft line was shown"
+    assert card.save_answers_button.isEnabled() is False, "nothing written yet"
+
+    card.exit_note_box(trade_id).setPlainText(fx.EXIT_NOTE)
+    assert card.save_answers_button.isEnabled() is True, "a waiting draft greyed Save"
+
+
+def test_one_write_is_in_flight_and_every_ending_settles_the_buttons(tmp_path, monkeypatch):
+    """Nothing expensive on the Qt thread, no double write, and a DEADLINE.
+
+    `test_tj9e_draft_is_not_the_traders.py::test_one_write_is_in_flight_and_every_ending_re_enables_the_buttons`
+    waits for the write with a fixed 200 turns of `processEvents`. Measured on
+    this desk: 200 of them cost 0.29 ms and ONE `record_opportunity_event`
+    costs 6.9 ms, because it is a real SQLite commit - so that budget is short
+    by a factor of about twenty for any implementation that writes the journal
+    off the Qt thread, which is the thing the test is there to require. The
+    house rule is that every wait carries a DEADLINE (CLAUDE.md), so this one
+    does.
+
+    Hand-counted: two clicks while one write is in flight -> exactly ONE call,
+    both verbs grey for the whole of it, both settled afterwards, and the row
+    on disk.
+    """
+    import trade_mentor_trade_check as check
+
+    store, trade_id, root = _swing_with_a_draft(tmp_path)
+    task = check.build_task(store, fx.SESSION_TODAY)
+
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+    real_confirm = check.confirm_exit_fields
+
+    def _slow_confirm(*args, **kwargs):
+        calls.append("confirm")
+        started.set()
+        assert release.wait(20.0), "the writer was never released"
+        return real_confirm(*args, **kwargs)
+
+    monkeypatch.setattr(check, "confirm_exit_fields", _slow_confirm)
+
+    card = _card(tmp_path)
+    card.set_trade_check(task, store=store, drafts_root=root)
+    confirm = card.exit_confirm_button(trade_id)
+    correct = card.exit_correct_button(trade_id)
+
+    confirm.click()
+    assert started.wait(20.0), "the confirm never reached a worker"
+    assert confirm.isEnabled() is False, "Confirm stayed clickable mid-write"
+    assert correct.isEnabled() is False, "Correct stayed clickable mid-write"
+
+    confirm.click()  # the second click must find nothing to start
+    assert len(calls) == 1, f"{len(calls)} writes in flight"
+
+    release.set()
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline and card.exit_write_in_flight(trade_id):
+        _app.processEvents()
+    assert card.exit_write_in_flight(trade_id) is False, "the card never settled"
+    assert confirm.isEnabled() is True
+    assert correct.isEnabled() is True
+    assert check.exit_fields(store, trade_id)["fields"]["why"]["code"]

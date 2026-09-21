@@ -306,6 +306,26 @@ def trades_on(trade_date: Any) -> list[dict[str, Any]]:
     return _store().list_trades(trade_date=trade_date)
 
 
+def exit_notes_on(session: Any) -> dict[str, dict[str, Any]]:
+    """``{trade_id: the exit note}`` for one session. Worker-thread call.
+
+    TJ-9E. ONE read of the append-only table for the whole day, through the
+    SAME shared store the trades came from: a per-trade read would turn a
+    six-trade session into six walks of that table on a Qt worker, and the two
+    reads have to agree about which trades exist.
+
+    Never raises - a session with no notes and a table that will not open both
+    read as "no note", and the page says which by the keys being PRESENT and
+    EMPTY on every row.
+    """
+    import trade_mentor_trade_check as check
+
+    try:
+        return dict(check.exit_notes_for_session(_store(), str(session or "")[:10]))
+    except Exception:
+        return {}
+
+
 def load_trades(
     *,
     broker: str = "All",

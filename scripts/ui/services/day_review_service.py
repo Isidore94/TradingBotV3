@@ -306,6 +306,14 @@ class DayReviewService:
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the day's trades could not be read: {exc}")
             _log.debug("Day Review trades unreadable.", exc_info=True)
+        # TJ-9E, on this worker and from ONE read of the append-only table: the
+        # trader's own words about each exit, and - only where they CONFIRMED
+        # it - the three fields behind it. Both keys are PRESENT and EMPTY on
+        # every trade row, because a page that has to tell "no note" from "this
+        # build did not look" is reading two different absences as one. A
+        # provisional draft is deliberately NOT here: it is the machine's
+        # reading and the Day Review page shows what the trader recorded.
+        self._attach_exit_notes(session, payload["trades"], problems)
 
         # TJ-2B is another projection of the SAME worker payload.  It opens no
         # live desk store and the page never starts a second read for a table.
@@ -1383,6 +1391,31 @@ class DayReviewService:
         from ui.services.journal_feed import trades_on
 
         return list(trades_on(session))
+
+    @staticmethod
+    def _attach_exit_notes(
+        session: str, trades: list[dict[str, Any]], problems: list[str]
+    ) -> None:
+        """Put TJ-9E's two keys on every trade row. ONE read for the whole day.
+
+        Both keys go on EVERY row, including when the read failed: a reader
+        must never have to tell an absent key from an empty one. A failure
+        costs the notes and says so - never the day's trades.
+        """
+        notes: dict[str, Any] = {}
+        try:
+            from ui.services import journal_feed
+
+            notes = dict(journal_feed.exit_notes_on(session))
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"the day's exit notes could not be read: {exc}")
+            _log.debug("Day Review exit notes unreadable.", exc_info=True)
+        for row in trades or ():
+            if not isinstance(row, dict):
+                continue
+            found = notes.get(str(row.get("trade_id") or "")) or {}
+            row["exit_note"] = str(found.get("raw_text") or "")
+            row["exit_fields"] = dict(found.get("exit_fields") or {})
 
     @staticmethod
     def _provisional(session: str, now: datetime) -> bool:

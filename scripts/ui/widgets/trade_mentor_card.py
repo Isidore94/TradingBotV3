@@ -170,6 +170,34 @@ class _MentorAIWorker(QRunnable):
         self.signals.ready.emit(self.trade_id, draft)
 
 
+class _ExitWriteSignals(QObject):
+    done = Signal(str, object)
+    failed = Signal(str, str)
+
+
+class _ExitWriteWorker(QRunnable):
+    """ONE journal write for one exit, always off the Qt thread.
+
+    Every ending emits - the happy one AND a raise - because a worker whose
+    only exit is success leaves a card the trader cannot use again without
+    restarting the desk.
+    """
+
+    def __init__(self, trade_id: str, call: Callable[[], Any]) -> None:
+        super().__init__()
+        self.trade_id = str(trade_id)
+        self._call = call
+        self.signals = _ExitWriteSignals()
+
+    def run(self) -> None:
+        try:
+            result = self._call()
+        except Exception as exc:  # noqa: BLE001 - a journal write fails LOUDLY
+            self.signals.failed.emit(self.trade_id, str(exc))
+            return
+        self.signals.done.emit(self.trade_id, result)
+
+
 class TradeMentorCard(QWidget):
     """One prompt, one answer, filed once."""
 
@@ -303,6 +331,26 @@ class TradeMentorCard(QWidget):
         #: trade_ids whose setup the trader confirmed on THIS card. The combo
         #: for that field disappears, so the Save gate must stop waiting on it.
         self._setup_confirmed: set[str] = set()
+        # TJ-9E. The exit half of a row: ONE free-text box per trade, the two
+        # answer states it may carry instead of words, and the night's draft
+        # line with its two verbs. Kept in their own maps so a trade's exit
+        # widgets leave the card with that trade and with nothing else.
+        self._exit_boxes: dict[str, QPlainTextEdit] = {}
+        self._exit_prompts: dict[str, QLabel] = {}
+        self._exit_states: dict[str, str] = {}
+        self._exit_state_buttons: dict[str, dict[str, QPushButton]] = {}
+        self._exit_sessions: dict[str, str] = {}
+        self._exit_draft_rows: dict[str, QWidget] = {}
+        self._exit_draft_labels: dict[str, QLabel] = {}
+        self._exit_confirm_buttons: dict[str, QPushButton] = {}
+        self._exit_correct_buttons: dict[str, QPushButton] = {}
+        self._exit_correction_rows: dict[str, QWidget] = {}
+        self._exit_correction_inputs: dict[str, dict[str, Any]] = {}
+        #: trade_id -> the night's PROVISIONAL draft, as read from the pack.
+        self._exit_drafts: dict[str, dict[str, Any]] = {}
+        #: trade_ids with a journal write in flight. One at a time, per trade.
+        self._exit_writing: set[str] = set()
+        self._exit_drafts_root = None
         self._trade_store = None
         #: Which session's trades the section is asking about. TJ-9 item 2: an
         #: unanswered section RIDES on every later card of the same session and
@@ -1081,6 +1129,19 @@ class TradeMentorCard(QWidget):
         self._setup_confirmed = set()
         self._trade_blocks = {}
         self._trade_headings = {}
+        self._exit_boxes = {}
+        self._exit_prompts = {}
+        self._exit_states = {}
+        self._exit_state_buttons = {}
+        self._exit_sessions = {}
+        self._exit_draft_rows = {}
+        self._exit_draft_labels = {}
+        self._exit_confirm_buttons = {}
+        self._exit_correct_buttons = {}
+        self._exit_correction_rows = {}
+        self._exit_correction_inputs = {}
+        self._exit_drafts = {}
+        self._exit_writing = set()
         self.save_answers_button.setEnabled(False)
         while self._trade_check_layout.count():
             item = self._trade_check_layout.takeAt(0)
@@ -1111,9 +1172,29 @@ class TradeMentorCard(QWidget):
         self._setup_choice_boxes.pop(key, None)
         self._trade_headings.pop(key, None)
         self._setup_confirmed.discard(key)
+        for held in (
+            self._exit_boxes,
+            self._exit_prompts,
+            self._exit_states,
+            self._exit_state_buttons,
+            self._exit_sessions,
+            self._exit_draft_rows,
+            self._exit_draft_labels,
+            self._exit_confirm_buttons,
+            self._exit_correct_buttons,
+            self._exit_correction_rows,
+            self._exit_correction_inputs,
+            self._exit_drafts,
+        ):
+            held.pop(key, None)
+        self._exit_writing.discard(key)
 
-    def set_trade_check(self, task, store=None) -> None:
+    def set_trade_check(self, task, store=None, drafts_root=None) -> None:
         """Build the 09:00 card's second section from `build_task`'s answer.
+
+        `drafts_root` is where the night's exit drafts were published; ``None``
+        is the desk's own pack folder. It is a KEYWORD with a default, so every
+        existing two-argument caller is untouched.
 
         Three states, all of them said out loud:
 
@@ -1145,6 +1226,7 @@ class TradeMentorCard(QWidget):
         import trade_mentor_trade_check as check
 
         self._trade_store = store
+        self._exit_drafts_root = drafts_root
         if task is None:
             self._clear_trade_check()
             self.trade_check_label.setVisible(False)
@@ -1241,10 +1323,21 @@ class TradeMentorCard(QWidget):
         owed = {str(question.trade_id): question for question in task.trades}
         for trade_id in [key for key in self._trade_blocks if key not in owed]:
             self._drop_trade_block(trade_id)
+        # TJ-9E. ONE read of the night's drafts and of the trader's own
+        # confirmed rows for the whole section, before any widget is built: a
+        # per-trade read here would be six file reads and six table walks on
+        # the Qt thread for a six-trade morning.
+        self._exit_drafts = self._read_exit_drafts(owed.values())
         for trade_id, question in owed.items():
             if trade_id in self._trade_blocks:
                 continue
             self._add_trade_block(question, task)
+        # A ONE-LINE STATE is always rewritten; a section with ANSWER WIDGETS
+        # is never rebuilt (TJ-9's own card rule). The draft line is the former:
+        # a draft that landed overnight has to appear on a row the trader may
+        # already have typed into, without touching what they typed.
+        for trade_id in owed:
+            self._refresh_exit_draft_line(trade_id)
         has_rows = bool(self._answer_inputs)
         self.trade_check_box.setVisible(has_rows)
         self.save_answers_button.setVisible(has_rows)
@@ -1313,8 +1406,343 @@ class TradeMentorCard(QWidget):
             block_layout.addWidget(row)
             fields[name] = (combo, text_input)
         self._answer_inputs[trade_id] = fields
+        self._add_exit_ask(question, block, block_layout)
         self._trade_check_layout.addWidget(block)
         self._trade_blocks[trade_id] = block
+
+    # -- TJ-9E: the exit half of a row -------------------------------------
+    def _add_exit_ask(self, question, block, block_layout) -> None:
+        """ONE free-text box for the exit, and NOTHING to pick from.
+
+        *"ideally we can just write it out"* (trader, 2026-09-21). The three
+        fields are the NIGHT's job, and a picklist in front of the trader at
+        09:00 is the form this packet refuses - so the box's own container
+        holds a prompt, a text box and the two answer states, and no combo.
+
+        The two state buttons are how "I do not remember" and "that does not
+        apply to this trade" are said. They are answers, not a way past the
+        gate: Save opens on words OR a state, and on nothing else.
+        """
+        import trade_mentor_trade_check as check
+
+        session = str(getattr(question, "exit_session", "") or "")
+        if not session:
+            return
+        trade_id = str(question.trade_id)
+        self._exit_sessions[trade_id] = session
+
+        box_holder = QWidget(block)
+        holder_layout = QVBoxLayout(box_holder)
+        holder_layout.setContentsMargins(0, 0, 0, 0)
+        holder_layout.setSpacing(2)
+        prompt = QLabel(f"You closed this on {session}. {check.EXIT_PROMPT}", box_holder)
+        prompt.setObjectName("MutedLabel")
+        prompt.setWordWrap(True)
+        holder_layout.addWidget(prompt)
+        exit_box = QPlainTextEdit(box_holder)
+        exit_box.setObjectName("MentorExitNoteBox")
+        exit_box.setMaximumHeight(72)
+        exit_box.setPlaceholderText(
+            "In your own words. Saved exactly as you type it, before anything "
+            "reads it."
+        )
+        exit_box.textChanged.connect(self._refresh_save_gate)
+        holder_layout.addWidget(exit_box)
+
+        states = QWidget(box_holder)
+        states_layout = QHBoxLayout(states)
+        states_layout.setContentsMargins(0, 0, 0, 0)
+        states_layout.setSpacing(4)
+        buttons: dict[str, QPushButton] = {}
+        for state in (check.ANSWER_NOT_REMEMBERED, check.ANSWER_NOT_APPLICABLE):
+            button = QPushButton(state.replace("_", " "), states)
+            button.setObjectName("MentorExitStateButton")
+            button.setCheckable(True)
+            button.clicked.connect(
+                lambda _checked=False, t=trade_id, s=state: self._toggle_exit_state(t, s)
+            )
+            states_layout.addWidget(button)
+            buttons[state] = button
+        states_layout.addStretch(1)
+        holder_layout.addWidget(states)
+        block_layout.addWidget(box_holder)
+
+        self._exit_boxes[trade_id] = exit_box
+        self._exit_prompts[trade_id] = prompt
+        self._exit_state_buttons[trade_id] = buttons
+        self._exit_states.setdefault(trade_id, "")
+
+        # The draft line lives in its OWN container, so the combo the Correct
+        # editor needs is never a child of the box's parent.
+        draft_row = QWidget(block)
+        draft_layout = QVBoxLayout(draft_row)
+        draft_layout.setContentsMargins(0, 0, 0, 0)
+        draft_layout.setSpacing(2)
+        line = QLabel("", draft_row)
+        line.setObjectName("MutedLabel")
+        line.setWordWrap(True)
+        draft_layout.addWidget(line)
+        verbs = QWidget(draft_row)
+        verbs_layout = QHBoxLayout(verbs)
+        verbs_layout.setContentsMargins(0, 0, 0, 0)
+        verbs_layout.setSpacing(4)
+        confirm = QPushButton("Confirm", verbs)
+        confirm.setToolTip(
+            "Makes the night's reading YOUR record. Nothing is written until "
+            "you press this."
+        )
+        confirm.clicked.connect(
+            lambda _checked=False, t=trade_id: self._confirm_exit_draft(t)
+        )
+        correct = QPushButton("Correct", verbs)
+        correct.setToolTip("Change the three values, then save them as yours.")
+        correct.clicked.connect(
+            lambda _checked=False, t=trade_id: self._open_exit_correction(t)
+        )
+        verbs_layout.addWidget(confirm)
+        verbs_layout.addWidget(correct)
+        verbs_layout.addStretch(1)
+        draft_layout.addWidget(verbs)
+        draft_layout.addWidget(self._build_exit_correction(trade_id, draft_row))
+        draft_row.setVisible(False)
+        block_layout.addWidget(draft_row)
+
+        self._exit_draft_rows[trade_id] = draft_row
+        self._exit_draft_labels[trade_id] = line
+        self._exit_confirm_buttons[trade_id] = confirm
+        self._exit_correct_buttons[trade_id] = correct
+
+    def _build_exit_correction(self, trade_id: str, parent) -> QWidget:
+        """The three values, opened for edit. Hidden until Correct is pressed.
+
+        The codes are still the two CLOSED vocabularies - a corrected row is
+        still a row a later reader has to interpret - and the quotes are free
+        text, because they are the trader's own words about what they watched.
+        """
+        import exit_reasons
+        import trader_state_tags
+
+        row = QWidget(parent)
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        why_line = QWidget(row)
+        why_layout = QHBoxLayout(why_line)
+        why_layout.setContentsMargins(0, 0, 0, 0)
+        why_layout.setSpacing(4)
+        why_layout.addWidget(QLabel("why", why_line))
+        why = QComboBox(why_line)
+        try:
+            for code in exit_reasons.codes():
+                why.addItem(exit_reasons.label_for(code) or code, code)
+        except Exception:  # noqa: BLE001 - an unreadable picklist offers nothing
+            logging.debug("Exit reasons unreadable.", exc_info=True)
+        why_layout.addWidget(why, 1)
+        layout.addWidget(why_line)
+
+        felt_line = QWidget(row)
+        felt_layout = QHBoxLayout(felt_line)
+        felt_layout.setContentsMargins(0, 0, 0, 0)
+        felt_layout.setSpacing(4)
+        felt_layout.addWidget(QLabel("felt", felt_line))
+        felt_buttons: dict[str, QPushButton] = {}
+        try:
+            for code in trader_state_tags.codes():
+                chip = QPushButton(trader_state_tags.label_for(code) or code, felt_line)
+                chip.setObjectName("MentorExitFeltChip")
+                chip.setCheckable(True)
+                felt_layout.addWidget(chip)
+                felt_buttons[code] = chip
+        except Exception:  # noqa: BLE001 - TJ-7's list is the only list
+            logging.debug("State tags unreadable.", exc_info=True)
+        felt_layout.addStretch(1)
+        layout.addWidget(felt_line)
+
+        watching = QLineEdit(row)
+        watching.setPlaceholderText(
+            "what you were watching, separated by ; (up to three)"
+        )
+        layout.addWidget(watching)
+
+        save = QPushButton("Save my version", row)
+        save.clicked.connect(
+            lambda _checked=False, t=trade_id: self._save_exit_correction(t)
+        )
+        layout.addWidget(save)
+
+        row.setVisible(False)
+        self._exit_correction_rows[trade_id] = row
+        self._exit_correction_inputs[trade_id] = {
+            "why": why,
+            "felt": felt_buttons,
+            "watching": watching,
+            "save": save,
+        }
+        return row
+
+    def _read_exit_drafts(self, questions) -> dict[str, dict[str, Any]]:
+        """The night's PROVISIONAL drafts for the rows on this card.
+
+        One read per distinct exit session - normally one - and the trader's
+        own confirmed rows come back in the SAME read, so a draft they have
+        already signed off is never offered again. A draft is the machine's
+        reading: it is shown, it is never counted as the trader's, and a
+        failure here costs the line and nothing else.
+        """
+        import trade_mentor_trade_check as check
+
+        sessions: dict[str, list[str]] = {}
+        for question in questions:
+            session = str(getattr(question, "exit_session", "") or "")
+            if session:
+                sessions.setdefault(session, []).append(str(question.trade_id))
+        found: dict[str, dict[str, Any]] = {}
+        if not sessions:
+            return found
+        store = self._trade_store
+        for session, trade_ids in sessions.items():
+            confirmed: dict[str, Any] = {}
+            if store is not None:
+                try:
+                    confirmed = dict(check.exit_notes_for_session(store, session))
+                except Exception:  # noqa: BLE001 - the line never costs the card
+                    logging.debug("Exit notes unreadable for the card.", exc_info=True)
+            try:
+                from ai_jobs import exit_note_fields
+
+                stored = exit_note_fields.read_latest(
+                    session, root=self._exit_drafts_root
+                )
+            except Exception:  # noqa: BLE001 - a missing pack is simply no draft
+                logging.debug("Exit drafts unreadable for the card.", exc_info=True)
+                stored = {}
+            wanted = set(trade_ids)
+            for draft in (stored or {}).get("drafts") or ():
+                if not isinstance(draft, Mapping):
+                    continue
+                trade_id = str(draft.get("trade_id") or "")
+                if trade_id not in wanted:
+                    continue
+                if (confirmed.get(trade_id) or {}).get("exit_fields"):
+                    # Already the trader's. A draft they signed off is not
+                    # offered a second time.
+                    continue
+                found[trade_id] = dict(draft)
+        return found
+
+    def _exit_draft_sentence(self, draft: Mapping[str, Any]) -> str:
+        """The night's reading as ONE line, in the trader's own vocabulary."""
+        import exit_reasons
+        import trader_state_tags
+
+        fields = draft.get("fields") if isinstance(draft, Mapping) else None
+        if not isinstance(fields, Mapping) or not fields:
+            return ""
+        parts: list[str] = []
+        why = fields.get("why")
+        if isinstance(why, Mapping) and str(why.get("code") or ""):
+            code = str(why["code"])
+            try:
+                label = exit_reasons.label_for(code) or code
+            except Exception:  # noqa: BLE001
+                label = code
+            parts.append(f"You exited because: {label}")
+        felt = [
+            str((row or {}).get("code") or "")
+            for row in fields.get("felt") or ()
+            if isinstance(row, Mapping) and str((row or {}).get("code") or "")
+        ]
+        if felt:
+            try:
+                names = [trader_state_tags.label_for(code) or code for code in felt]
+            except Exception:  # noqa: BLE001
+                names = felt
+            parts.append("felt: " + ", ".join(names))
+        watching = [
+            str((row or {}).get("quote") or "")
+            for row in fields.get("watching") or ()
+            if isinstance(row, Mapping) and str((row or {}).get("quote") or "")
+        ]
+        if watching:
+            parts.append("watching: " + "; ".join(watching))
+        if not parts:
+            return ""
+        return (
+            "The night read your note - "
+            + " - ".join(parts)
+            + ". Nothing is recorded as yours until you press Confirm."
+        )
+
+    def _refresh_exit_draft_line(self, trade_id: str) -> None:
+        """Rewrite ONE row's draft line. Never touches what the trader typed."""
+        key = str(trade_id)
+        row = self._exit_draft_rows.get(key)
+        label = self._exit_draft_labels.get(key)
+        if row is None or label is None:
+            return
+        sentence = self._exit_draft_sentence(self._exit_drafts.get(key) or {})
+        label.setText(sentence)
+        row.setVisible(bool(sentence))
+
+    def exit_note_box(self, trade_id: str):
+        """The ONE free-text box an exit is answered in, or ``None``."""
+        return self._exit_boxes.get(str(trade_id))
+
+    def exit_prompt_text(self, trade_id: str) -> str:
+        """What the exit ask says, or ``""`` for a row with no exit."""
+        prompt = self._exit_prompts.get(str(trade_id))
+        return prompt.text() if prompt is not None else ""
+
+    def exit_draft_line(self, trade_id: str) -> str:
+        """The night's reading as the card shows it, or ``""``."""
+        label = self._exit_draft_labels.get(str(trade_id))
+        return label.text() if label is not None else ""
+
+    def exit_confirm_button(self, trade_id: str):
+        return self._exit_confirm_buttons.get(str(trade_id))
+
+    def exit_correct_button(self, trade_id: str):
+        return self._exit_correct_buttons.get(str(trade_id))
+
+    def exit_write_in_flight(self, trade_id: str) -> bool:
+        """Is a journal write for this exit running right now?"""
+        return str(trade_id) in self._exit_writing
+
+    def exit_answer_state(self, trade_id: str) -> str:
+        """Which answer state this exit carries instead of words, or ``""``."""
+        return str(self._exit_states.get(str(trade_id)) or "")
+
+    def set_exit_answer_state(self, trade_id: str, state: str) -> None:
+        """Say `not remembered` / `not applicable` instead of writing words.
+
+        ``""`` clears it: the Save gate is a STATE and not a latch, exactly as
+        it is for the four entry fields, so taking the answer back closes the
+        gate again.
+        """
+        import trade_mentor_trade_check as check
+
+        key = str(trade_id)
+        chosen = str(state or "")
+        if chosen and chosen not in check.ANSWER_STATES:
+            raise ValueError(f"{chosen!r} is not one of the four answer states")
+        self._exit_states[key] = chosen
+        for name, button in (self._exit_state_buttons.get(key) or {}).items():
+            button.setChecked(name == chosen)
+        self._refresh_save_gate()
+
+    def _toggle_exit_state(self, trade_id: str, state: str) -> None:
+        current = self.exit_answer_state(trade_id)
+        self.set_exit_answer_state(trade_id, "" if current == state else state)
+
+    def _exit_is_open(self, trade_id: str) -> bool:
+        """Is this row's exit still unanswered? Words OR a state closes it."""
+        key = str(trade_id)
+        if key not in self._exit_boxes:
+            return False
+        if self.exit_answer_state(key):
+            return False
+        return not str(self._exit_boxes[key].toPlainText() or "").strip()
 
     def _trade_heading(self, question, task) -> str:
         """`AAPL LONG - today (2026-09-14)` / `MSFT SHORT - 2026-09-11`.
@@ -1476,7 +1904,13 @@ class TradeMentorCard(QWidget):
         return result
 
     def _pending_answers(self) -> int:
-        """How many listed fields are still open. Zero means Save may arm."""
+        """How many listed fields are still open. Zero means Save may arm.
+
+        TJ-9E: an EXIT box counts as one of them. It is forced like the rest -
+        Save stays grey until it holds words or an answer state - and a WAITING
+        DRAFT is not a field: a reading nobody clicked must never be able to
+        hold the morning hostage.
+        """
         open_fields = 0
         for trade_id, fields in self._answer_inputs.items():
             confirmed = str(trade_id) in self._setup_confirmed
@@ -1485,6 +1919,8 @@ class TradeMentorCard(QWidget):
                     continue
                 if not str(combo.currentData() or ""):
                     open_fields += 1
+            if self._exit_is_open(trade_id):
+                open_fields += 1
         return open_fields
 
     def _refresh_save_gate(self, *_args) -> None:
@@ -1578,8 +2014,164 @@ class TradeMentorCard(QWidget):
             "You can use the fields by hand. " + str(reason or "")
         )
 
+    # -- TJ-9E: the trader's two clicks on a waiting draft ------------------
+    def _start_exit_write(self, trade_id: str, call: Callable[[], Any], busy: str) -> bool:
+        """Start ONE journal write for one exit, off the Qt thread.
+
+        ONE write in flight per exit: a second click while one is running
+        starts nothing, both verbs are grey for the whole of it, and EVERY
+        ending - including a raise - settles them again.
+        """
+        key = str(trade_id)
+        if key in self._exit_writing:
+            return False
+        if self._trade_store is None:
+            self._set_status("the trade journal is not available here")
+            return False
+        self._exit_writing.add(key)
+        self._set_exit_buttons_enabled(key, False)
+        self._set_status(busy)
+        worker = _ExitWriteWorker(key, call)
+        worker.signals.done.connect(self._exit_write_done)
+        worker.signals.failed.connect(self._exit_write_failed)
+        QThreadPool.globalInstance().start(worker)
+        return True
+
+    def _set_exit_buttons_enabled(self, trade_id: str, enabled: bool) -> None:
+        key = str(trade_id)
+        for held in (
+            self._exit_confirm_buttons,
+            self._exit_correct_buttons,
+        ):
+            button = held.get(key)
+            if button is not None:
+                button.setEnabled(bool(enabled))
+        save = (self._exit_correction_inputs.get(key) or {}).get("save")
+        if save is not None:
+            save.setEnabled(bool(enabled))
+
+    def _confirm_exit_draft(self, trade_id: str) -> bool:
+        """The trader's one click. The night's reading becomes THEIR record."""
+        import trade_mentor_trade_check as check
+
+        key = str(trade_id)
+        draft = dict(self._exit_drafts.get(key) or {})
+        if not draft:
+            self._set_status("there is no draft to confirm")
+            return False
+        store = self._trade_store
+        moment = self._now()
+        return self._start_exit_write(
+            key,
+            lambda: check.confirm_exit_fields(store, key, draft, now=moment),
+            "Saving your exit fields…",
+        )
+
+    def _open_exit_correction(self, trade_id: str) -> None:
+        """Open the three values for edit, pre-filled with the night's reading."""
+        key = str(trade_id)
+        row = self._exit_correction_rows.get(key)
+        if row is None:
+            return
+        if not row.isVisibleTo(self._exit_draft_rows.get(key) or self):
+            self._prefill_exit_correction(key)
+        row.setVisible(True)
+
+    def _prefill_exit_correction(self, trade_id: str) -> None:
+        inputs = self._exit_correction_inputs.get(str(trade_id)) or {}
+        fields = (self._exit_drafts.get(str(trade_id)) or {}).get("fields") or {}
+        why = inputs.get("why")
+        drafted = fields.get("why") if isinstance(fields, Mapping) else None
+        if why is not None and isinstance(drafted, Mapping):
+            index = why.findData(str(drafted.get("code") or ""))
+            if index >= 0:
+                why.setCurrentIndex(index)
+        felt_codes = {
+            str((row or {}).get("code") or "")
+            for row in (fields.get("felt") or () if isinstance(fields, Mapping) else ())
+            if isinstance(row, Mapping)
+        }
+        for code, chip in (inputs.get("felt") or {}).items():
+            chip.setChecked(code in felt_codes)
+        watching = inputs.get("watching")
+        if watching is not None:
+            quotes = [
+                str((row or {}).get("quote") or "")
+                for row in (
+                    fields.get("watching") or () if isinstance(fields, Mapping) else ()
+                )
+                if isinstance(row, Mapping)
+            ]
+            watching.setText("; ".join(quote for quote in quotes if quote))
+
+    def _save_exit_correction(self, trade_id: str) -> bool:
+        """The trader's own three values, written through the same one writer."""
+        import trade_mentor_trade_check as check
+
+        key = str(trade_id)
+        inputs = self._exit_correction_inputs.get(key) or {}
+        why_box = inputs.get("why")
+        why = str(why_box.currentData() or "") if why_box is not None else ""
+        felt = tuple(
+            code for code, chip in (inputs.get("felt") or {}).items() if chip.isChecked()
+        )
+        watching_box = inputs.get("watching")
+        watching = tuple(
+            part.strip()
+            for part in str(
+                watching_box.text() if watching_box is not None else ""
+            ).split(";")
+            if part.strip()
+        )
+        store = self._trade_store
+        draft = dict(self._exit_drafts.get(key) or {})
+        moment = self._now()
+        return self._start_exit_write(
+            key,
+            lambda: check.correct_exit_fields(
+                store,
+                key,
+                why=why,
+                felt=felt,
+                watching=watching,
+                now=moment,
+                exit_session=str(draft.get("exit_session") or self._exit_sessions.get(key) or ""),
+                note_id=str(draft.get("note_id") or ""),
+            ),
+            "Saving your version…",
+        )
+
+    def _exit_write_done(self, trade_id: str, result: object) -> None:
+        key = str(trade_id)
+        self._exit_writing.discard(key)
+        self._set_exit_buttons_enabled(key, True)
+        record = dict(result) if isinstance(result, Mapping) else {}
+        if not record.get("ok"):
+            self._set_status(
+                f"the exit fields were NOT saved: {record.get('reason') or 'nothing was written'}"
+            )
+            return
+        # The question is answered, so the line stops offering it.
+        self._exit_drafts.pop(key, None)
+        row = self._exit_correction_rows.get(key)
+        if row is not None:
+            row.setVisible(False)
+        self._refresh_exit_draft_line(key)
+        self._set_status("Your exit fields are saved.")
+
+    def _exit_write_failed(self, trade_id: str, reason: str) -> None:
+        key = str(trade_id)
+        self._exit_writing.discard(key)
+        self._set_exit_buttons_enabled(key, True)
+        self._set_status(f"the exit fields were NOT saved: {reason}")
+
     def save_trade_check(self) -> dict[str, Any]:
-        """File every field the trader actually answered, and nothing else."""
+        """File every field the trader actually answered, and nothing else.
+
+        RAW FIRST: the exit notes go to the journal BEFORE the entry answers.
+        The trader's own sentence is the thing this card exists to collect, and
+        a failure in the entry half must never be able to lose it.
+        """
         import trade_mentor_trade_check as check
 
         store = self._trade_store
@@ -1587,6 +2179,26 @@ class TradeMentorCard(QWidget):
             return {"ok": False, "reason": "the trade journal is not available here"}
         moment = self._now()
         saved = 0
+        notes = 0
+        for trade_id, box in list(self._exit_boxes.items()):
+            body = str(box.toPlainText() or "").strip()
+            state = self.exit_answer_state(trade_id)
+            if not body and not state:
+                continue
+            try:
+                check.save_exit_note(
+                    store,
+                    trade_id,
+                    body,
+                    exit_session=self._exit_sessions.get(trade_id, ""),
+                    state=state,
+                    now=moment,
+                )
+                notes += 1
+            except Exception as exc:  # noqa: BLE001 - a journal write is LOUD
+                logging.warning("Exit note not saved for %s: %s", trade_id, exc)
+                self._set_status(f"your words were NOT saved: {exc}")
+                return {"ok": False, "reason": str(exc)}
         for trade_id, fields in self._answer_inputs.items():
             answers: dict[str, dict[str, Any]] = {}
             for name, (combo, text_input) in fields.items():
@@ -1616,7 +2228,7 @@ class TradeMentorCard(QWidget):
                 logging.warning("Recalled fields not saved for %s: %s", trade_id, exc)
                 self._set_status(f"answers NOT saved: {exc}")
                 return {"ok": False, "reason": str(exc)}
-        if not saved:
+        if not saved and not notes:
             self._set_status("Nothing was answered, so nothing was filed.")
             return {"ok": False, "reason": "no field was answered"}
         self._clear_trade_check()
@@ -1625,11 +2237,12 @@ class TradeMentorCard(QWidget):
         # The section rides on later cards of the same session (TJ-9 item 2),
         # so the heading has to stop describing questions that are now answered
         # - a later hour no longer wipes it on its way in.
-        self.trade_check_label.setText(
-            f"Yesterday's trades: {saved} remembered field(s) filed, labelled as recalled."
-        )
-        self._set_status(f"{saved} remembered field(s) filed, labelled as recalled.")
-        return {"ok": True, "fields": saved}
+        said = f"{saved} remembered field(s) filed, labelled as recalled"
+        if notes:
+            said = f"{said}; {notes} exit note(s) saved in your own words"
+        self.trade_check_label.setText(f"Yesterday's trades: {said}.")
+        self._set_status(f"{said}.")
+        return {"ok": True, "fields": saved, "exit_notes": notes}
 
     def give_a_read(self, now: datetime | None = None) -> MentorSlot:
         """The manual door, open at all times - no slot has to be due.

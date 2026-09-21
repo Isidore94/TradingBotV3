@@ -444,6 +444,64 @@ def _not_judged(trade: Mapping[str, Any]) -> str:
     return ""
 
 
+def _has_an_exit(trade: Mapping[str, Any]) -> bool:
+    """Did this trade close any of its position? TJ-9E's denominator.
+
+    Read off the assembled row's own `quantity_closed` rather than by opening
+    the leg table: the card is built from rows a caller already has, and a
+    per-trade query here would turn a six-trade session into six more reads on
+    a worker. An OPEN position that nobody has touched has nothing to explain.
+    """
+    try:
+        return float(trade.get("quantity_closed") or 0.0) > 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def exit_note_counts(
+    rows: Sequence[Mapping[str, Any]], exit_notes: Mapping[str, Any] | None
+) -> tuple[int | None, int, int | None, str]:
+    """``(K, N, confirmed, the clause)`` - INTEGERS ONLY, and never a zero for
+    an unread lane.
+
+    ``K`` is how many of the session's exits the trader wrote a note about and
+    ``confirmed`` how many of THOSE they have since signed off, said
+    separately because a draft nobody clicked is not the trader's. There is no
+    rate at any count: a fraction of five exits is not a statistic about a
+    trader, and printing one would be exactly the thing ground rule 10's floor
+    exists to stop.
+    """
+    total = sum(1 for trade in rows if _has_an_exit(trade))
+    if exit_notes is None:
+        return (
+            None,
+            total,
+            None,
+            f"Exits explained: unmeasured - nobody opened the exit notes ({total} exit(s)).",
+        )
+    notes = dict(exit_notes)
+    explained = [
+        trade for trade in rows
+        if _has_an_exit(trade)
+        # WORDS. "I do not remember" is a complete ANSWER and stops the
+        # question being asked, but it is not an explanation and nothing here
+        # counts it as one.
+        and _text((notes.get(_text(trade.get("trade_id"))) or {}).get("raw_text"))
+    ]
+    confirmed = sum(
+        1
+        for trade in explained
+        if (notes.get(_text(trade.get("trade_id"))) or {}).get("exit_fields")
+    )
+    return (
+        len(explained),
+        total,
+        confirmed,
+        f"Exits explained {len(explained)} of {total}, "
+        f"{confirmed} of those confirmed by you.",
+    )
+
+
 def process_line(
     trades: Sequence[Mapping[str, Any]] | None,
     *,
@@ -452,6 +510,7 @@ def process_line(
     mentor_answers: Sequence[Mapping[str, Any]] | None = (),
     walkaway: Any = None,
     open_positions: Sequence[Mapping[str, Any]] | None = (),
+    exit_notes: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What the trader DID: planned or not, labelled or not, judged or not.
 
@@ -473,6 +532,17 @@ def process_line(
     ``trade_origin`` question: where the desk could not tell where a trade came
     from and ASKED, the trader's own answer is filed under that key and is read
     back here. A row with no answer is not an answer.
+
+    ``exit_notes`` is TJ-9E's lane and follows the SAME declared-rather-than-
+    guessed rule as ``lanes_read``: ``None`` means the caller did not open the
+    notes, which reads ``unmeasured``, never "0 of 5". A mapping - the answer
+    of `trade_mentor_trade_check.exit_notes_for_session` - gives
+    ``exits explained K of N`` in INTEGERS ONLY. No rate is printed at any
+    count, so no reporting floor arises: K is the exits the trader explained
+    and N the exits there were, and a fraction of five is not a statistic about
+    anybody. N counts trades that CLOSED something, because a position nobody
+    closed has no exit to explain and counting it would say the trader is worse
+    at explaining than they are.
     """
     rows = [trade for trade in (trades or ()) if isinstance(trade, Mapping)]
     answers: dict[str, str] = {}
@@ -489,12 +559,18 @@ def process_line(
     )
     unread = tuple(name for name in ORIGIN_LANES if name not in read)
     holds = long_hold_lines(open_positions, mentor_answers=mentor_answers)
+    exits_explained, exits_n, exits_confirmed, exits_clause = exit_note_counts(
+        rows, exit_notes
+    )
     if not rows:
         return _line(
             "process",
-            "Process: no trades on this session - nothing to judge.",
+            "Process: no trades on this session - nothing to judge. " + exits_clause,
             0,
             0,
+            exits_explained=exits_explained,
+            exits_n=exits_n,
+            exits_confirmed=exits_confirmed,
             planned=0,
             unplanned=0,
             unmeasured=0,
@@ -585,11 +661,15 @@ def process_line(
         parts.append(f"Left on the table was measured on {len(left)} closed position(s).")
     if holds:
         parts.append(f"{len(holds)} open position(s) held past {walkaway_day.LONG_HOLD_SESSIONS} sessions.")
+    parts.append(exits_clause)
     return _line(
         "process",
         " ".join(parts),
         n,
         n - unmeasured,
+        exits_explained=exits_explained,
+        exits_n=exits_n,
+        exits_confirmed=exits_confirmed,
         planned=states.get(trade_origin.PLANNED, 0),
         unplanned=states.get(trade_origin.UNPLANNED, 0),
         unmeasured=unmeasured,
