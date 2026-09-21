@@ -340,6 +340,28 @@ class TradeMentorService(QObject):
             logging.debug("Unlabelled trade count unreadable.", exc_info=True)
             return 0
 
+    def unexplained_exits(self, session: str, *, store=None) -> int:
+        """How many exits ON `session` the trader has not explained (TJ-9E).
+
+        The same shape and the same promise as :meth:`unlabelled_trades` - a
+        COUNT and nothing else, off the poll path, and an unreadable journal
+        answers 0 rather than a guess. It is a SECOND number because it is a
+        second question: a swing whose four entry fields were answered the
+        morning after it opened has nothing unlabelled about it and can still
+        have an exit nobody has explained (review 1 blocker 4).
+        """
+        try:
+            import trade_mentor_trade_check as check
+
+            if store is None:
+                from journal_store import JournalStore
+
+                store = JournalStore()
+            return check.unexplained_exit_count(store, str(session))
+        except Exception:  # noqa: BLE001 - a count never costs the desk
+            logging.debug("Unexplained exit count unreadable.", exc_info=True)
+            return 0
+
     def slots_now(self, now: datetime | None = None) -> tuple[MentorSlot, ...]:
         return slots_for_session(self._local(now or self._clock()).date())
 

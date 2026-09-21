@@ -182,6 +182,17 @@ class TradeQuestion:
     #: SESSION and not a boolean because a trade can exit in two of them - 13
     #: live trades do - and each half is its own question on its own morning.
     exit_session: str = ""
+    #: Has that exit already been answered - words OR an answer state? An
+    #: answered exit is never asked again (review 1 blocker 5: the box came
+    #: back EMPTY on the next card of the same morning and greyed Save, so the
+    #: trader had to retype what they had written an hour before). The row can
+    #: still be on the card for an entry gap, and then it shows the words the
+    #: trader wrote, read-only.
+    exit_answered: bool = False
+    #: What they wrote, so the card can show it back without a second read.
+    exit_note: str = ""
+    #: Or the answer state they gave instead of words.
+    exit_answer_state: str = ""
 
 
 @dataclass(frozen=True)
@@ -589,6 +600,10 @@ def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | No
         return None
 
     claims = claimed_setup_rows(reviewed)
+    # ONE session-wide read of the exit notes, before the loop: an exit the
+    # trader has already explained is ANSWERED and is never asked again, and
+    # asking that per trade would be a walk of the append-only table per row.
+    answered_exits = exit_notes_for_session(store, reviewed) if trades else {}
     questions: list[TradeQuestion] = []
     for trade in trades:
         status = str(trade.get("status") or "").upper()
@@ -605,7 +620,10 @@ def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | No
         # continue` is what meant nothing ever asked about its exit. Live, 116
         # of 180 closed trades exit on a day other than the one they opened.
         exit_session = reviewed if reviewed in exit_sessions(store, trade_id) else ""
-        if not gaps and not exit_session:
+        answered = dict(answered_exits.get(trade_id) or {}) if exit_session else {}
+        # An answered exit closes its question the way an answered field does.
+        # The row survives only while something on it is still OPEN.
+        if not gaps and (not exit_session or answered):
             continue
         guess, lane = setup_guess_for(trade, claims) if "setup" in gaps else ("", "")
         questions.append(
@@ -619,9 +637,33 @@ def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | No
                 opened_at=str(trade.get("opened_at") or ""),
                 trade_date=str(trade.get("trade_date") or reviewed),
                 exit_session=exit_session,
+                exit_answered=bool(answered),
+                exit_note=str(answered.get("raw_text") or ""),
+                exit_answer_state=str(answered.get("answer_state") or ""),
             )
         )
     return questions
+
+
+def unexplained_exit_count(store: Any, session: str) -> int:
+    """How many exits ON `session` the trader has not explained yet.
+
+    The other half of :func:`unlabelled_trade_count`, and a SEPARATE number on
+    purpose (review 1 blocker 4). The count a badge prints and the predicate
+    that decides whether the 09:00 section RIDES were briefly the same
+    function: narrowing it to material fields made a swing whose entries were
+    answered long ago count zero, so an exit nobody explained was asked once at
+    09:00 and never again if that card was missed. Both numbers are owed, and
+    the desk asks again while EITHER is above zero.
+
+    An unreadable list answers 0 rather than a guess: uncertainty is never a
+    count.
+    """
+    return sum(
+        1
+        for question in questions_for_session(store, str(session)[:10]) or ()
+        if question.exit_session and not question.exit_answered
+    )
 
 
 def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> TradeCheckTask:
@@ -698,7 +740,9 @@ def unlabelled_trade_count(store: Any, session: str) -> int:
     MATERIAL FIELDS ONLY. Since TJ-9E a row also comes back for an unexplained
     EXIT, which is a different question with a different answer; counting one
     as "unlabelled" would make a fully labelled trade read as unlabelled
-    forever in the Journal's completeness view.
+    forever in the Journal's completeness view. The exits have their own count
+    (:func:`unexplained_exit_count`) and BOTH are owed - see that docstring for
+    why they are two numbers and not one.
     """
     return sum(
         1
@@ -1417,7 +1461,16 @@ def correct_exit_fields(
     A code outside them RAISES rather than being stored: a corrected row is
     still a row a later reader has to interpret, and the one thing worse than a
     machine's wrong code is a code nobody can look up at all. The quotes are
-    free text - they are the trader's own words about what they were watching.
+    free text - they are the trader's own words about what they were watching,
+    so they carry `span: []` and `quote: ""`, and `source: "correct"` on the
+    row is what tells a grounded value from a free one.
+
+    `exit_session` and `note_id` are RESOLVED from the trade's own latest exit
+    note when a caller does not pass them, and a trade with no note at all
+    RAISES (review 1 advisory 5). They used to default to ``""``, which wrote a
+    row that joined to nothing: both readers key on the session, so a row
+    without one shows no confirmed fields anywhere and looks like a confirm
+    that never happened.
     """
     why_codes, felt_codes = _exit_vocabularies()
     chosen = str(why or "").strip()
@@ -1430,6 +1483,19 @@ def correct_exit_fields(
     quotes = [str(text or "").strip() for text in (watching or ()) if str(text or "").strip()]
     if len(quotes) > MAX_EXIT_WATCHING:
         raise ValueError(f"an exit carries at most {MAX_EXIT_WATCHING} things watched")
+    session = str(exit_session or "")[:10]
+    note = str(note_id or "")
+    if not session or not note:
+        latest = (exit_notes(store, trade_id) or [None])[-1]
+        if latest is None:
+            raise ValueError(
+                "there is no exit note on this trade to correct; a corrected row "
+                "with no session joins to nothing"
+            )
+        session = session or str(latest.get("exit_session") or "")
+        note = note or str(latest.get("note_id") or "")
+    if not session:
+        raise ValueError("a corrected exit row must name the session its exit is in")
     stored: dict[str, Any] = {
         "felt": [{"code": code, "span": [], "quote": ""} for code in feelings],
         "watching": quotes,
@@ -1440,8 +1506,8 @@ def correct_exit_fields(
         store,
         trade_id,
         stored,
-        exit_session=exit_session,
-        note_id=note_id,
+        exit_session=session,
+        note_id=note,
         source="correct",
         moment=now or datetime.now().astimezone(),
     )

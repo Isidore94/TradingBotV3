@@ -1431,6 +1431,30 @@ class TradeMentorCard(QWidget):
         trade_id = str(question.trade_id)
         self._exit_sessions[trade_id] = session
 
+        if bool(getattr(question, "exit_answered", False)):
+            # ALREADY ANSWERED. The row is only still here for an entry gap, so
+            # the exit shows what the trader WROTE and asks nothing: no box is
+            # built, which is what makes `_exit_is_open` False and keeps the
+            # answered question out of the Save gate (review 1 blocker 5 - the
+            # box used to come back EMPTY on the next card of the same morning
+            # and grey Save until they retyped it). The draft line below is
+            # still built, because the night's reading of THOSE words is what
+            # the trader confirms.
+            said = str(getattr(question, "exit_note", "") or "").strip()
+            state = str(getattr(question, "exit_answer_state", "") or "")
+            answered = QLabel(
+                f"You wrote: {said}" if said else
+                f"You answered this exit: {state.replace('_', ' ')}",
+                block,
+            )
+            answered.setObjectName("MutedLabel")
+            answered.setWordWrap(True)
+            answered.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            block_layout.addWidget(answered)
+            self._exit_prompts[trade_id] = answered
+            self._add_exit_draft_row(trade_id, block, block_layout)
+            return
+
         box_holder = QWidget(block)
         holder_layout = QVBoxLayout(box_holder)
         holder_layout.setContentsMargins(0, 0, 0, 0)
@@ -1471,9 +1495,15 @@ class TradeMentorCard(QWidget):
         self._exit_prompts[trade_id] = prompt
         self._exit_state_buttons[trade_id] = buttons
         self._exit_states.setdefault(trade_id, "")
+        self._add_exit_draft_row(trade_id, block, block_layout)
 
-        # The draft line lives in its OWN container, so the combo the Correct
-        # editor needs is never a child of the box's parent.
+    def _add_exit_draft_row(self, trade_id: str, block, block_layout) -> None:
+        """The night's reading, with the trader's two verbs.
+
+        Its OWN container, so the combo the Correct editor needs is never a
+        child of the note box's parent - "just write it out" means nothing to
+        pick from on the exit ITSELF.
+        """
         draft_row = QWidget(block)
         draft_layout = QVBoxLayout(draft_row)
         draft_layout.setContentsMargins(0, 0, 0, 0)
@@ -1736,7 +1766,15 @@ class TradeMentorCard(QWidget):
         self.set_exit_answer_state(trade_id, "" if current == state else state)
 
     def _exit_is_open(self, trade_id: str) -> bool:
-        """Is this row's exit still unanswered? Words OR a state closes it."""
+        """Is this row's exit still unanswered? THE one predicate.
+
+        Three ways it is closed, and the Save gate, the card and a later reader
+        all ask exactly here (review 1 blocker 5): the trade had no exit in the
+        reviewed session at all, the trader ANSWERED it on an earlier card - in
+        which case no box was built and the words are shown read-only - or they
+        have just typed words or clicked one of the two answer states into the
+        box that is here.
+        """
         key = str(trade_id)
         if key not in self._exit_boxes:
             return False

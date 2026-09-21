@@ -202,6 +202,20 @@ def test_an_answered_check_does_not_come_back_on_a_later_slot(desk):
     check.save_answers(
         store, trade_id, {"target": {"state": check.ANSWER_NO_FIXED_TARGET, "text": ""}}
     )
+    # TJ-9E AMENDMENT 2026-09-21 (review 1 blocker 4, the lead's own decision).
+    # This round trip CLOSED in the reviewed session, so since TJ-9E it also
+    # carries a forced EXIT question - and an exit nobody has explained keeps
+    # the check OWED on every later slot, which is exactly what blocker 4 asked
+    # for ("miss the 09:00 card and that exit is never asked about again").
+    # "All labelled" therefore now means the exit too; without this line the
+    # test asserts that an UNANSWERED question brings nothing back, which is
+    # the opposite of what it is here to say.
+    check.save_exit_note(
+        store,
+        trade_id,
+        "took it off at the measured move",
+        exit_session=REVIEWED,
+    )
 
     window._show_trade_mentor_prompt(slot_at(SESSION_TODAY, 10))
 

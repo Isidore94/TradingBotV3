@@ -339,10 +339,16 @@ def test_the_request_body_holds_the_words_the_symbol_the_side_and_two_code_lists
     assert _why_code() in sent and _felt_codes(1)[0] in sent, "both code lists travel"
 
     assert _forbidden_keys(body) == [], _forbidden_keys(body)
-    for number in (
-        fx.MONEY_ENTRY_PRICE, fx.MONEY_EXIT_PRICE, fx.MONEY_NET_PNL, fx.MONEY_QUANTITY,
-    ):
-        assert str(number) not in sent, f"{number} reached the prompt"
+    # LEAD-GRANTED AMENDMENT 2026-09-21 (review 1 blocker 2): this searched the
+    # whole serialised body for `str(number)`, and the body carries
+    # `evidence_hash` - a sha256 over a RANDOM note id. `MONEY_QUANTITY` was
+    # `73`, which a fresh digest contains about half the time, so the packet's
+    # headline fence failed 4 runs in 8 with nothing leaking. The money values
+    # are now hex-proof and the search is `fx.money_that_leaked`, which strips
+    # the long hex ids and matches the quantity on word boundaries. It is
+    # STRICTER, not looser: it reports every value it finds instead of stopping
+    # at the first.
+    assert fx.money_that_leaked(body) == [], fx.money_that_leaked(body)
 
 
 def test_the_evidence_package_carries_these_keys_and_no_others(tmp_path):

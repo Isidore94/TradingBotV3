@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -317,10 +318,255 @@ def test_the_request_body_holds_the_words_and_no_money_serialised_honestly(tmp_p
 
     leaked = night_slot._forbidden_keys(body)
     assert leaked == [], leaked
-    for number in (
-        fx.MONEY_ENTRY_PRICE, fx.MONEY_EXIT_PRICE, fx.MONEY_NET_PNL, fx.MONEY_QUANTITY,
-    ):
-        assert str(number) not in sent, f"{number} reached the prompt"
+    # LEAD-GRANTED AMENDMENT 2026-09-21 (review 1 blocker 2): hash-independent.
+    # See `tj9e_support.money_that_leaked`.
+    assert fx.money_that_leaked(body) == [], fx.money_that_leaked(body)
+
+
+def test_every_leaf_value_in_the_evidence_is_one_the_desk_can_name(tmp_path):
+    """The fence on the VALUES, not just the keys (review 1 blocker 2).
+
+    `test_the_evidence_package_carries_these_keys_and_no_others` is a key-set
+    equality, and the reviewer proved it PASSES with `" pnl 3972.66 at 191.83"`
+    appended to `exit_session` - a key set cannot see a number smuggled inside
+    a value. So every leaf here is asserted EQUAL to the thing it came from:
+    the note's five fields are the note's five fields, the two picklists are
+    what their loaders return, the instructions are the module's, and the two
+    ids are hex derived from all of it. There is nowhere left to put a price.
+
+    Hand-counted: 5 note leaves, 2 vocabularies, 3 housekeeping keys.
+    """
+    import exit_reasons
+    import trader_state_tags
+    from ai_jobs import exit_note_fields
+
+    store, _trade_id = fx.swing_with_money(tmp_path)
+    notes = exit_note_fields.notes_waiting(store, fx.REVIEWED)
+    assert len(notes) == 1, notes
+    note = notes[0]
+
+    evidence = exit_note_fields.build_evidence(note)
+
+    assert evidence["note"] == {
+        "note_id": note["note_id"],
+        "text": note["text"],
+        "symbol": note["symbol"],
+        "side": note["side"],
+        "exit_session": note["exit_session"],
+    }
+    assert evidence["instructions"] == exit_note_fields.INSTRUCTIONS
+    why = exit_reasons.load_vocabulary()
+    felt = trader_state_tags.load_vocabulary()
+    assert evidence["vocabularies"] == {
+        "why": {
+            "vocabulary_id": why["vocabulary_id"],
+            "vocab_version": why["vocab_version"],
+            "entries": [dict(entry) for entry in why["entries"]],
+        },
+        "felt": {
+            "vocabulary_id": felt["vocabulary_id"],
+            "vocab_version": felt["vocab_version"],
+            "max_codes": exit_note_fields.MAX_FELT,
+            "entries": [dict(entry) for entry in felt["entries"]],
+        },
+        "watching": {"max_quotes": exit_note_fields.MAX_WATCHING},
+    }
+    assert re.fullmatch(r"[0-9a-f]{64}", str(evidence["evidence_hash"]))
+    assert str(evidence["package_id"]) == (
+        f"exit-note-fields:{str(evidence['evidence_hash'])[:16]}"
+    )
+    assert set(evidence) == {
+        "package_id", "evidence_hash", "instructions", "note", "vocabularies"
+    }
+
+
+def test_the_value_fence_catches_money_smuggled_into_a_value(tmp_path, monkeypatch):
+    """The reviewer's own injection, as a standing test.
+
+    `" pnl 3972.66 at 191.83"` appended to `exit_session` passes a key-set
+    equality. It must not pass this one - and it must not pass
+    `money_that_leaked` on the wire either.
+    """
+    from ai_jobs import exit_note_fields
+
+    store, _trade_id = fx.swing_with_money(tmp_path)
+    note = dict(exit_note_fields.notes_waiting(store, fx.REVIEWED)[0])
+    note["exit_session"] = f"{note['exit_session']} pnl 97795.54 at 191.83"
+
+    evidence = exit_note_fields.build_evidence(note)
+
+    assert evidence["note"]["exit_session"] != fx.REVIEWED, "the injection vanished"
+    assert fx.money_that_leaked(evidence) == [
+        str(fx.MONEY_ENTRY_PRICE),
+        str(fx.MONEY_NET_PNL),
+    ], fx.money_that_leaked(evidence)
+
+
+def test_the_exit_read_never_opens_the_shared_store_itself(tmp_path, monkeypatch):
+    """Review 1 blocker 1, as a standing test.
+
+    `journal_feed._store()` caches a module-global store for the life of the
+    process, so whoever calls it FIRST decides which store the whole run uses -
+    and runs its `initialize_schema()` migration on that caller's thread. Three
+    Day-Review test files stub `DayReviewService._trades`; the exit-note read
+    then cached a FAKE store and every later `JournalPanel` in the pytest
+    process died on `db_path`, 32 errors that are green on base.
+
+    Hand-counted: 0 calls to `_store` when the trades read returns nothing, the
+    two keys still absent from a payload with no rows, and the payload SAYS it
+    did not look.
+    """
+    from ui.services import journal_feed
+    from ui.services.day_review_service import DayReviewService
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        journal_feed, "_store", lambda: calls.append("store") or (_ for _ in ()).throw(
+            AssertionError("the exit-note read opened the shared store")
+        )
+    )
+    service = DayReviewService()
+    monkeypatch.setattr(service, "_trades", lambda *a, **k: [])
+    monkeypatch.setattr(service, "_read_recap", lambda *a, **k: object())
+
+    payload = service.read_day(fx.REVIEWED, now=datetime(2026, 9, 14, 9, 0))
+
+    assert calls == [], calls
+    assert payload["trades"] == []
+    assert "exit notes were not read" in str(payload.get("error") or ""), payload.get("error")
+
+
+def test_the_report_card_counts_the_notes_this_payload_opened(tmp_path, monkeypatch):
+    """Review 1 blocker 3: the line is WIRED, through `read_day`.
+
+    `day_report_card.build` is the only production caller of `process_line` and
+    never passed `exit_notes=`, so the live page said "nobody opened the exit
+    notes" on the payload that had just opened every one of them. Tested here
+    through `read_day` rather than by calling `process_line` - which is how the
+    hole got through the first time.
+
+    Hand-counted: 6 trades, 5 with an exit, 2 explained.
+    """
+    import trade_mentor_trade_check as check
+    from ui.services import journal_feed
+    from ui.services.day_review_service import DayReviewService
+
+    store, ids = fx.ready_store(tmp_path)
+    monkeypatch.setattr(journal_feed, "_store", lambda: store)
+    for symbol in (fx.SWING, fx.DAY_TRADE):
+        check.save_exit_note(
+            store, ids[symbol], fx.EXIT_NOTE, exit_session=fx.REVIEWED,
+            now=datetime.fromisoformat("2026-09-14T09:05:00-04:00"),
+        )
+
+    service = DayReviewService()
+    monkeypatch.setattr(service, "_read_recap", lambda *a, **k: object())
+    payload = service.read_day(fx.REVIEWED, now=datetime(2026, 9, 14, 9, 0))
+
+    line = [
+        row for row in (payload["report_card"] or {}).get("lines") or ()
+        if str(row.get("key")) == "process"
+    ]
+    assert len(line) == 1, payload["report_card"]
+    assert line[0]["exits_explained"] == 2, line[0]
+    assert line[0]["exits_n"] == fx.EXIT_BOXES_EXPECTED, line[0]
+    assert "exits explained 2 of 5" in str(line[0]["text"]).lower(), line[0]["text"]
+    assert "nobody opened the exit notes" not in str(line[0]["text"]).lower()
+
+
+def test_an_unexplained_exit_keeps_the_check_owed_on_a_later_slot(tmp_path, monkeypatch):
+    """Review 1 blocker 4, through the REAL ride seam.
+
+    A swing closed in the reviewed session with every entry field answered is
+    not UNLABELLED, and it still has an exit nobody has explained. Before this
+    the desk decided nothing was owed and returned before `set_trade_check`, so
+    a trader who was away at 09:00 was never asked about that exit at all.
+
+    Hand-counted: unlabelled 0, unexplained exits 1, owed TRUE; after the note
+    is written, unexplained exits 0 and owed FALSE.
+    """
+    import trade_mentor_trade_check as check
+    from ui.services.trade_mentor_service import TradeMentorService
+
+    store, trade_id = fx.swing_only(tmp_path)
+    service = TradeMentorService()
+
+    assert service.unlabelled_trades(fx.REVIEWED, store=store) == 0
+    assert service.unexplained_exits(fx.REVIEWED, store=store) == 1
+
+    check.save_exit_note(
+        store, trade_id, fx.EXIT_NOTE, exit_session=fx.REVIEWED,
+        now=datetime.fromisoformat("2026-09-14T09:05:00-04:00"),
+    )
+    assert service.unexplained_exits(fx.REVIEWED, store=store) == 0
+
+
+def test_the_ride_asks_again_while_an_exit_is_unexplained(tmp_path, monkeypatch):
+    """The same blocker at the seam that decides it: `_trade_check_is_owed`.
+
+    Driven through the real `MainWindow` method with the two counts stubbed at
+    the SERVICE, so what is under test is the predicate and not the journal.
+    """
+    from ui.app import MainWindow
+
+    class _Slot:
+        scheduled_at = datetime(2026, 9, 14, 11, 0)
+
+    class _Service:
+        def __init__(self, unlabelled, exits):
+            self._unlabelled = unlabelled
+            self._exits = exits
+
+        def unlabelled_trades(self, *_a, **_k):
+            return self._unlabelled
+
+        def unexplained_exits(self, *_a, **_k):
+            return self._exits
+
+    import trade_mentor_trade_check as check
+
+    window = MainWindow.__new__(MainWindow)
+    window.trade_mentor_service = _Service(0, 1)
+    assert MainWindow._trade_check_is_owed(window, check, _Slot()) is True
+
+    window.trade_mentor_service = _Service(1, 0)
+    assert MainWindow._trade_check_is_owed(window, check, _Slot()) is True
+
+
+def test_the_exit_draft_question_is_fed_and_can_fire(tmp_path, monkeypatch):
+    """Review 1 advisory 2: the registry kind had no lane behind it.
+
+    `mentor_questions.exit_draft_review` reads `state["exit_drafts"]` and
+    nothing on the desk set that key, so lead decision 7's budget clause could
+    never fire. Hand-counted: 1 waiting draft -> 1 subject; the same draft once
+    CONFIRMED -> 0.
+    """
+    import mentor_questions
+    import trade_mentor_trade_check as check
+    from ai_jobs import exit_note_fields
+    from ui.app import MainWindow
+
+    store, trade_id, root = _swing_with_a_draft(tmp_path)
+    # The lane reads the desk's OWN pack folder; point it at this test's.
+    real_read = exit_note_fields.read_latest
+    monkeypatch.setattr(
+        exit_note_fields,
+        "read_latest",
+        lambda session, root=None: real_read(session, root=root if root is not None else globals()["_PACKS"]),
+    )
+    globals()["_PACKS"] = root
+
+    lane = MainWindow._mentor_exit_drafts(store, fx.REVIEWED)
+    assert [row["trade_id"] for row in lane] == [trade_id], lane
+    assert mentor_questions._trigger_exit_draft_review({"exit_drafts": lane})
+
+    check.confirm_exit_fields(
+        store,
+        trade_id,
+        exit_note_fields.draft_for(trade_id, fx.REVIEWED, root=root),
+        now=datetime.fromisoformat("2026-09-14T09:30:00-04:00"),
+    )
+    assert MainWindow._mentor_exit_drafts(store, fx.REVIEWED) == []
 
 
 def test_a_date_only_exit_note_is_never_a_same_session_note(tmp_path):
@@ -397,21 +643,24 @@ def _card(tmp_path):
 
 
 def _swing_with_a_draft(tmp_path):
-    """One swing, entry ANSWERED, one exit note, and one night's draft.
+    """One swing with an ENTRY GAP, one exit note, and one night's draft.
 
-    `test_tj9e_draft_is_not_the_traders.py::test_the_draft_line_never_greys_save`
-    says "the swing's exit box is the only gate" - but its `_drafted` helper
-    builds the trade through `tj9e_support.swing_with_money`, which never
-    answers the four material fields, so that card really carries four
-    unanswered entry combos and Save is grey for TJ-9's own forced reason. The
-    fixture here answers the entry, which is the state the sentence describes.
+    The entry is deliberately NOT answered. Since review 1 blocker 5 an exit
+    the trader has explained is ANSWERED - it is not asked again - so a row
+    whose entry is complete AND whose exit is explained is not on the card at
+    all. A draft therefore only ever appears beside a row that is still listed
+    for some other reason, which is the entry gap here.
     """
     import exit_reasons
     import trade_mentor_trade_check as check
     import trader_state_tags
     from ai_jobs import exit_note_fields
 
-    store, trade_id = fx.swing_only(tmp_path)
+    store, _ids = fx.ready_store(tmp_path)
+    trade_id = str(
+        [row for row in store.list_trades(trade_date=fx.REVIEWED)
+         if str(row.get("symbol")) == fx.DAY_TRADE][0]["trade_id"]
+    )
     check.save_exit_note(
         store,
         trade_id,
@@ -433,27 +682,80 @@ def _swing_with_a_draft(tmp_path):
     return store, trade_id, root
 
 
-def test_a_waiting_draft_never_greys_save(tmp_path):
-    """A waiting draft is something to LOOK at, not a field to fill.
+def test_an_answered_exit_is_shown_back_and_never_asked_again(tmp_path):
+    """Review 1 blocker 5. Hand-counted: 1 note, 0 boxes, 1 read-only line.
 
-    Hand-counted: ONE row, no entry gap, so the exit box is the whole gate.
-    Grey with the box empty, green once words are typed - with a draft waiting
-    the whole time. A reading nobody clicked must never hold the morning
-    hostage.
+    The trader wrote the words an hour ago. The row is still on the card for
+    its four entry gaps, so the exit shows what they WROTE and asks nothing -
+    before this, the box came back empty, greyed Save, and could only be
+    cleared by retyping the same sentence into a second `EXIT_NOTE_RAW` row.
     """
     import trade_mentor_trade_check as check
 
     store, trade_id, root = _swing_with_a_draft(tmp_path)
     task = check.build_task(store, fx.SESSION_TODAY)
-    assert len(task.trades) == 1, [(q.symbol, q.missing) for q in task.trades]
-    assert task.trades[0].missing == (), task.trades[0].missing
+    row = [item for item in task.trades if item.trade_id == trade_id]
+    assert len(row) == 1, [(q.symbol, q.missing) for q in task.trades]
+    assert row[0].exit_answered is True, row[0]
+    assert row[0].exit_note == fx.EXIT_NOTE, row[0]
+
+    card = _card(tmp_path)
+    card.set_trade_check(task, store=store, drafts_root=root)
+    assert card.exit_note_box(trade_id) is None, "the answered exit was asked again"
+    assert fx.EXIT_NOTE in card.exit_prompt_text(trade_id)
+    assert card._exit_is_open(trade_id) is False
+
+
+def test_an_explained_exit_with_no_entry_gap_leaves_the_card(tmp_path):
+    """The other half of blocker 5: nothing open, nothing asked.
+
+    Hand-counted: the swing has 0 entry gaps and 1 exit; before the note it is
+    ONE row, after the note it is NONE - and `unexplained_exit_count` moves
+    from 1 to 0 with it.
+    """
+    import trade_mentor_trade_check as check
+
+    store, trade_id = fx.swing_only(tmp_path)
+    assert check.unexplained_exit_count(store, fx.REVIEWED) == 1
+    assert len(check.build_task(store, fx.SESSION_TODAY).trades) == 1
+
+    check.save_exit_note(
+        store, trade_id, fx.EXIT_NOTE, exit_session=fx.REVIEWED,
+        now=datetime.fromisoformat("2026-09-14T09:05:00-04:00"),
+    )
+
+    assert check.unexplained_exit_count(store, fx.REVIEWED) == 0
+    assert check.build_task(store, fx.SESSION_TODAY).trades == ()
+
+
+def test_a_waiting_draft_never_greys_save(tmp_path):
+    """A waiting draft is something to LOOK at, not a field to fill.
+
+    Hand-counted: ONE row with four entry gaps and an answered exit. Grey while
+    a field is open, green the moment the last one is answered - with the draft
+    waiting the whole time. A reading nobody clicked must never be able to hold
+    the morning hostage.
+    """
+    import trade_mentor_trade_check as check
+
+    store, trade_id, root = _swing_with_a_draft(tmp_path)
+    task = check.build_task(store, fx.SESSION_TODAY)
 
     card = _card(tmp_path)
     card.set_trade_check(task, store=store, drafts_root=root)
     assert card.exit_draft_line(trade_id).strip(), "no draft line was shown"
-    assert card.save_answers_button.isEnabled() is False, "nothing written yet"
+    assert card.save_answers_button.isEnabled() is False, "nothing answered yet"
 
-    card.exit_note_box(trade_id).setPlainText(fx.EXIT_NOTE)
+    for name, (combo, _text) in card._answer_inputs[trade_id].items():
+        combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
+    for other, fields in card._answer_inputs.items():
+        if other == trade_id:
+            continue
+        for combo, _text in fields.values():
+            combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
+        box = card.exit_note_box(other)
+        if box is not None:
+            card.set_exit_answer_state(other, check.ANSWER_NOT_REMEMBERED)
     assert card.save_answers_button.isEnabled() is True, "a waiting draft greyed Save"
 
 

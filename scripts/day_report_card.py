@@ -1008,6 +1008,12 @@ def build(day_inputs: Mapping[str, Any]) -> ReportCard:
             mentor_answers=inputs.get("mentor_answers") or (),
             walkaway=walkaway,
             open_positions=inputs.get("open_positions") or (),
+            # TJ-9E. `None` - the default - is "nobody opened the exit notes",
+            # which the line SAYS; a mapping is the read the Day Review worker
+            # already made. Never `or {}`: an empty mapping is "the desk looked
+            # and the trader has explained none of them", and the two are
+            # different facts (review 1 blocker 3).
+            exit_notes=inputs.get("exit_notes"),
         ),
         _guarded("how_fresh", how_fresh, inputs.get("freshness")),
     )

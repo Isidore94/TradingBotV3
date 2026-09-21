@@ -82,6 +82,7 @@ WHAT IS MODELLED AS IT REALLY IS
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -339,12 +340,57 @@ def day_trade_only(tmp_path: Path) -> tuple[Any, str]:
 #: Prices and a P&L no JSON grammar hint, span offset or token count can collide
 #: with. They exist so "this number is not in the request body" is a real
 #: assertion rather than a coincidence about small integers.
-MONEY_ENTRY_PRICE = 137.41
-MONEY_EXIT_PRICE = 191.83
-MONEY_QUANTITY = 73
-#: Hand-computed: (191.83 - 137.41) * 73 = 3972.66, and the fixture charges no
-#: commission or fees, so the trade's `net_pnl` is that number exactly.
-MONEY_NET_PNL = 3972.66
+#:
+#: LEAD-GRANTED AMENDMENT 2026-09-21 (review 1 blocker 2). `MONEY_QUANTITY` was
+#: `73`, and the guard that says no money reached the prompt searched the WHOLE
+#: serialised body - which carries `evidence_hash`, a sha256 whose input
+#: includes a random `note_id`. About half of all runs produced a digest
+#: containing the characters `73`, so the packet's headline fence was pinned by
+#: a test that failed 4 times in 8 while nothing leaked. Every value here now
+#: carries a decimal point or is long enough that a hex collision is not the
+#: likely explanation, and :func:`money_that_leaked` searches a copy of the body
+#: with the long hex ids removed, matching the quantity on WORD BOUNDARIES.
+MONEY_ENTRY_PRICE = 191.83
+MONEY_EXIT_PRICE = 205.17
+MONEY_QUANTITY = 7331
+#: Hand-computed: (205.17 - 191.83) * 7331 = 97795.54, and the fixture charges
+#: no commission or fees, so the trade's `net_pnl` is that number exactly.
+MONEY_NET_PNL = 97795.54
+
+#: A run of hex long enough to be an ID rather than a number the desk wrote: a
+#: sha256 digest, the 16-character `package_id` suffix, or a 32-character event
+#: id. Money never lives inside one, and a two-digit or four-digit string does,
+#: often enough to break a guard half the time.
+_HEX_ID = re.compile(r"[0-9a-fA-F]{16,}")
+
+
+def wire_text(body: Any) -> str:
+    """The request body as it goes on the wire, with the long hex IDS removed.
+
+    Not a looser search: it removes only runs of 16+ hex characters, which are
+    identifiers by construction. Everything the desk actually wrote - the
+    note, the symbol, the side, every code, every number - survives.
+    """
+    return _HEX_ID.sub("<id>", json.dumps(body, default=str, ensure_ascii=False))
+
+
+def money_that_leaked(body: Any) -> list[str]:
+    """Every money value of :func:`swing_with_money` that reached the wire.
+
+    ``[]`` is the only acceptable answer. The three prices carry a decimal
+    point so they cannot hide inside anything else; the quantity is matched on
+    WORD BOUNDARIES, so `7331` inside a longer number or an id is not a leak
+    and `7331` standing alone is.
+    """
+    text = wire_text(body)
+    found = [
+        str(value)
+        for value in (MONEY_ENTRY_PRICE, MONEY_EXIT_PRICE, MONEY_NET_PNL)
+        if str(value) in text
+    ]
+    if re.search(rf"(?<![0-9a-fA-F.]){MONEY_QUANTITY}(?![0-9a-fA-F.])", text):
+        found.append(str(MONEY_QUANTITY))
+    return found
 
 
 def swing_with_money(tmp_path: Path) -> tuple[Any, str]:
@@ -526,5 +572,5 @@ __all__ = [
     "fake_post", "fake_request", "good_reply", "mark_covered", "new_store",
     "ready_store", "slot_at", "span_of", "swing_only", "day_trade_only", "value",
     "MONEY_ENTRY_PRICE", "MONEY_EXIT_PRICE", "MONEY_NET_PNL", "MONEY_QUANTITY",
-    "notes_waiting_store", "swing_with_money",
+    "money_that_leaked", "notes_waiting_store", "swing_with_money", "wire_text",
 ]

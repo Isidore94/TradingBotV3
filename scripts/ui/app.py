@@ -1182,14 +1182,25 @@ class MainWindow(QMainWindow):
         at all.
 
         It is owed when the reviewed session still has an unlabelled trade, or
-        when its broker statement has not landed (item 6's line has to ride
-        too). A session whose trades are all answered brings nothing back.
-        AWAY needs no test here: the service records the absence and never
-        emits `promptDue`, so an ordinary slot in AWAY does not reach this.
+        an EXIT nobody has explained (TJ-9E), or when its broker statement has
+        not landed (item 6's line has to ride too). A session whose trades are
+        all answered brings nothing back. AWAY needs no test here: the service
+        records the absence and never emits `promptDue`, so an ordinary slot in
+        AWAY does not reach this.
+
+        The exit count is asked SEPARATELY and not folded into the unlabelled
+        one, because they are two questions: a swing whose four entry fields
+        were answered the morning after it opened is not unlabelled and can
+        still have an exit nobody explained. Review 1 blocker 4 is what one
+        number costs - a trader who was away at 09:00, or who dismissed the
+        card, was never asked about that exit at all, and the next morning the
+        reviewed session has moved on.
         """
         try:
             reviewed = check.previous_exchange_session(slot.scheduled_at.date())
             if self.trade_mentor_service.unlabelled_trades(reviewed) > 0:
+                return True
+            if self.trade_mentor_service.unexplained_exits(reviewed) > 0:
                 return True
             from journal_store import JournalStore
 
@@ -1255,10 +1266,62 @@ class MainWindow(QMainWindow):
             # every trade came from.
             **self._mentor_origin_lanes((session, reviewed)),
             "ai_question": self._mentor_ai_question(),
+            # TJ-9E, and it is a LANE like every other one here: the registry
+            # is pure, so a trigger that opened a store would be a second
+            # opinion about it on whatever thread the card was built on. The
+            # kind shipped AWAKE with nothing feeding this key, so lead
+            # decision 7's budget clause could never fire (review 1 advisory
+            # 2). Measured on this worker: one glob plus one small JSON read
+            # for the pack, and the two `opportunity_events` queries the card's
+            # own draft line already makes.
+            "exit_drafts": self._mentor_exit_drafts(store, reviewed),
             "answered": self._mentor_answered(store, (session, reviewed)),
             "retired": self.trade_mentor_service.retired_subjects(),
             "carried": getattr(self, "_mentor_carried", ()),
         }
+
+    @staticmethod
+    def _mentor_exit_drafts(store, reviewed: str) -> list:
+        """The night's exit drafts the trader has NOT signed off yet (TJ-9E).
+
+        One row per waiting draft, which is what makes `exit_draft_review` a
+        real budgeted question instead of a registry promise nothing keeps. A
+        draft the trader already confirmed or corrected is not offered again -
+        the confirmed rows come back in the SAME session-wide read the card
+        uses, so this costs one extra pack read and no extra store walk.
+
+        Never raises and never guesses: an unreadable pack is no drafts, which
+        is also the honest first state of a desk that has never run the slot.
+        """
+        session = str(reviewed or "")[:10]
+        if not session:
+            return []
+        try:
+            import trade_mentor_trade_check as check
+            from ai_jobs import exit_note_fields
+
+            stored = exit_note_fields.read_latest(session) or {}
+            drafts = [row for row in stored.get("drafts") or () if isinstance(row, dict)]
+            if not drafts:
+                return []
+            notes = check.exit_notes_for_session(store, session)
+        except Exception:  # noqa: BLE001 - a lane never costs the card
+            logging.debug("Mentor exit-draft lane unreadable.", exc_info=True)
+            return []
+        out: list[dict] = []
+        for draft in drafts:
+            trade_id = str(draft.get("trade_id") or "")
+            if not trade_id or (notes.get(trade_id) or {}).get("exit_fields"):
+                continue
+            out.append(
+                {
+                    "trade_id": trade_id,
+                    "symbol": str(draft.get("symbol") or ""),
+                    "exit_session": str(draft.get("exit_session") or session),
+                    "note_id": str(draft.get("note_id") or ""),
+                }
+            )
+        return out
 
     @staticmethod
     def _mentor_annotation_lane(days) -> list:
