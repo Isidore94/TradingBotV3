@@ -387,6 +387,18 @@ class _WeekDayCard(QFrame):
         self.session = str(body.get("session") or "")
         label = self.session or "no session this exchange week"
         self.heading.setText(label)
+        if not self.session:
+            # A day that does not EXIST is not a day that was not packed. A
+            # holiday week has four sessions, and "no session this exchange
+            # week: not packed - the desk has no facts for this day" is a
+            # double negative about a day nobody was ever going to measure
+            # (reviewer advisory 4, 2026-09-20). One sentence, and no more.
+            self.headline.setText("")
+            self.tally.setText("")
+            self.chased.setText("")
+            self.said_vs_did.setText("")
+            self.chart.set_points(())
+            return
         if not body.get("has_facts"):
             self.headline.setText(
                 f"{label}: not packed - the desk has no facts for this day."
@@ -433,14 +445,21 @@ def week_strip_cell(line) -> str:
     head = f"n {int(line.get('n') or 0)} · measured {int(line.get('measured') or 0)}"
     rate = line.get("rate")
     if rate is None:
-        return head
-    if not line.get("meets_floor"):
-        return f"{head} · too few to call"
-    bound = line.get("rate_lb")
-    tail = f"{float(rate) * 100:.0f}%"
-    if bound is not None:
-        tail += f" (bound {float(bound):.2f})"
-    return f"{head} · {tail}"
+        body = head
+    elif not line.get("meets_floor"):
+        body = f"{head} · too few to call"
+    else:
+        bound = line.get("rate_lb")
+        tail = f"{float(rate) * 100:.0f}%"
+        if bound is not None:
+            tail += f" (bound {float(bound):.2f})"
+        body = f"{head} · {tail}"
+    # A day the desk could not READ is not a quiet day, and a cell that dropped
+    # the marker could not be told apart from one (reviewer advisory 2).
+    unreadable = tuple(line.get("unreadable_sessions") or ())
+    if unreadable:
+        body += f" · {len(unreadable)} day(s) could not be read"
+    return body
 
 
 class WeekReviewPage(_StepPage):
@@ -663,14 +682,22 @@ class WeekReviewPage(_StepPage):
             )
         walkaway = dict(body.get("walkaway") or {})
         counts = dict(walkaway.get("counts") or {})
-        if counts:
-            lines += ["", "WALK-AWAY THIS WEEK (counts, over the days that were packed)"]
+        packed = int(walkaway.get("sessions") or 0)
+        if not packed:
+            # Five zeros with the qualifier UNDER them read as a week in which
+            # the trader did nothing. With no packed session there is nothing to
+            # total at all, so the sentence is the whole answer (reviewer
+            # advisory 5, 2026-09-20).
+            lines += ["", "WALK-AWAY THIS WEEK: no session packed yet."]
+        elif counts:
+            # The qualifier LEADS: it is what makes the numbers under it honest.
+            lines += [
+                "",
+                f"WALK-AWAY THIS WEEK - counts over {packed} packed session(s), "
+                f"n {int(walkaway.get('n') or 0)}",
+            ]
             for name, value in counts.items():
                 lines.append(f"  {str(name).replace('_', ' ')}: {int(value or 0)}")
-            lines.append(
-                f"  n {int(walkaway.get('n') or 0)} over "
-                f"{int(walkaway.get('sessions') or 0)} packed session(s)"
-            )
         tendencies = list(body.get("tendencies") or ())
         if tendencies:
             lines += ["", "WHAT THE DESK MEASURED ABOUT YOUR CALLS"]

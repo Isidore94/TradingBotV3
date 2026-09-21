@@ -106,15 +106,26 @@ MAX_WATCH = 5
 MAX_SOURCES = 512
 
 #: How long one week-story call may take. The week story is one document on the
-#: largest local model the desk owns, and the slot's `reserve_minutes` is
-#: derived from the probe measurement rather than from this number.
+#: largest local model the desk owns.
 TIMEOUT_SECONDS = 1800
+
+#: What the reserve holds BEYOND the call itself: the model load, the schema
+#: validation, the grounding checks and the write.
+#:
+#: A reserve equal to the timeout is a reserve for the call and nothing else, so
+#: a call that runs to its own timeout leaves no room for any of that and the
+#: slot ends past the window it reserved against (reviewer advisory 1,
+#: 2026-09-20). The default below is DERIVED from :data:`TIMEOUT_SECONDS` so the
+#: two cannot drift apart when either is retuned.
+RESERVE_MARGIN_MINUTES = 10.0
 
 #: What the slot reserves when the large model has NEVER been measured
 #: (TJ-13B). Declared, not guessed at call time: with no probe row the week
 #: story runs on the MEDIUM model, which is the tier `ai_summary` and the day
-#: story already reserve minutes against.
-DEFAULT_RESERVE_MINUTES = 30.0
+#: story already reserve minutes against. A MEASURED probe still wins - its
+#: number is the load plus one bounded answer at the measured rate, which is the
+#: same arithmetic this default approximates.
+DEFAULT_RESERVE_MINUTES = TIMEOUT_SECONDS / 60.0 + RESERVE_MARGIN_MINUTES
 
 WEEK_NARRATION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -1064,6 +1075,7 @@ __all__ = [
     "MAX_ITEMS_PER_DAY",
     "MIN_NARRATED_DAYS",
     "PROMPT_VERSION",
+    "RESERVE_MARGIN_MINUTES",
     "SCHEMA",
     "SCHEMA_NAME",
     "TENDENCY_LIMIT",

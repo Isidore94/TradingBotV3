@@ -1142,10 +1142,17 @@ def _pool_cards(
     Every number here is a SUM of integers the day lines already carried, and
     the only statistic is `_rate_keys`' pooled Wilson. Nothing is re-measured
     and nothing is ranked.
+
+    A day whose line the desk could NOT build contributes nothing to any count -
+    it never did - but it is NAMED on the pooled line (``unreadable_sessions``,
+    and a clause in the text). Dropping the marker made an unreadable day
+    indistinguishable from a quiet one, which is the quiet-lie shape
+    `_unreadable_line` exists to prevent (reviewer advisory 2, 2026-09-20).
     """
     names = tuple(sessions)
     count = len(names)
     label = f"over {count} session(s)"
+    unreadable = _unreadable_sessions(cards)
 
     def _sum(key: str, field_name: str) -> int:
         return sum(int(line.get(field_name) or 0) for line in _pooled(cards, key))
@@ -1277,11 +1284,48 @@ def _pool_cards(
         )
     )
 
+    for line in lines:
+        named = unreadable.get(line["key"], ())
+        # PRESENT and EMPTY when every day was readable: a reader has one shape
+        # either way, and an absent key would be a third state to handle.
+        line["unreadable_sessions"] = named
+        if named:
+            line["text"] = (
+                line["text"].rstrip()
+                + f" {len(named)} day(s) could not be read: "
+                + ", ".join(named)
+                + "."
+            )
+
     return ReportCard(
         session=names[-1] if names else "",
         lines=tuple(lines),
         sessions=names,
     )
+
+
+def _unreadable_sessions(cards: Sequence[Any]) -> dict[str, tuple[str, ...]]:
+    """``{line key: the sessions whose line the desk could not build}``.
+
+    `_unreadable_line` marks its line ``measured_ok: False``; every other line
+    leaves the key absent. A card with no session of its own cannot be named,
+    so it is counted into the marker only when it has one - and the names are
+    de-duplicated and ordered, because two readers of the same window must read
+    the same sentence.
+    """
+    found: dict[str, list[str]] = {}
+    for card in cards or ():
+        session = _card_session(card)
+        for line in _card_lines(card):
+            if line.get("measured_ok") is not False:
+                continue
+            key = _text(line.get("key"))
+            if not key or not session:
+                continue
+            bucket = found.setdefault(key, [])
+            if session not in bucket:
+                bucket.append(session)
+    return {key: tuple(sorted(names)) for key, names in found.items()}
 
 
 __all__ = [
