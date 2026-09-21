@@ -254,12 +254,55 @@ def test_the_page_says_no_mood_recorded_when_the_payload_has_none(panel):
 
 
 def test_the_page_reads_the_one_payload_once(panel):
-    """TJ-1: ONE payload on ONE worker. The mood line adds no second read."""
+    """STATED GREEN GUARD - it passes on the un-fixed code and must go on
+    passing (reviewer advisory 5, 2026-09-20: as first written it could not
+    fail at all, so it is now an EXACT count through a spy).
+
+    TJ-1's rule: Day Review reads ONE payload on ONE worker. `render` is
+    formatting, so the number of reads it causes is exactly ZERO - a
+    `_render_mood` that reached for `self.service.read_day` would fail this.
+    """
     service = panel.service
     assert isinstance(service, _StubService)
-    before = service.reads
+    service.reads = 0
+
     panel.render(_payload_with_a_mood())
-    assert service.reads == before, "rendering must not ask the service for anything"
+    panel.render(_payload_with_a_mood())
+
+    assert service.reads == 0, "rendering asked the service for something"
+    assert panel.mood_line.text() == _payload_with_a_mood()["mood"]["line"]
+
+
+def test_the_payloads_mood_ids_are_the_packs_own_ids(monkeypatch):
+    """Reviewer advisory 6: the payload mints with its OWN minter, so the ids
+    have to be PROVEN equal to the pack's rather than assumed. Both go through
+    `day_review_pack.mood_source_id`, which derives an id from the ROW and from
+    nothing else - so a citation resolves against either.
+
+    The written pack is deliberately NOT read by the worker: a mood typed in
+    the evening arrives after the post-close pack was written, and a page that
+    read the pack would show a stale line on the very save gate #151 asks the
+    trader to make.
+    """
+    import day_review_pack
+    import tj4_support as fx4
+
+    moods = [
+        fx.row_with_a_mood(entry_id="mj-a", stamp=fx.pacific(7, 30), score=2),
+        fx.row_with_a_mood(entry_id="mj-b", stamp=fx.pacific(12, 55), score=4),
+    ]
+    payload = _wire(monkeypatch, moods).read_day(SESSION, now=NOW)
+
+    inputs = fx4.pack_inputs()
+    inputs["entries"] = list(inputs["entries"]) + moods
+    pack = day_review_pack.build_pack(SESSION, now=fx4.AFTER_THE_CLOSE, **inputs)
+
+    payload_ids = [item["source_id"] for item in payload["mood"]["recorded"]]
+    pack_ids = [item["source_id"] for item in pack["mood"]["recorded"]]
+
+    assert payload_ids == pack_ids, "the page and the night name the same row differently"
+    for source_id in payload_ids:
+        assert source_id in day_review_pack.allowed_source_ids(pack)
 
 
 def _payload_with_a_mood():

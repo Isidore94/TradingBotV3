@@ -406,8 +406,13 @@ def _report_card(card: Any, session: str, mint: _Minter) -> dict[str, Any]:
 #: shows: a count of nothing, said plainly, with no invented rate behind it.
 MOOD_EMPTY_STATEMENT = "No mood recorded yet for this session (n 0)."
 
-#: The fields one recorded mood travels with. `written_after_the_session` is
-#: the row's OWN label, computed by the writer and never recomputed here.
+#: The fields one recorded mood travels with, and the ONE list they are built
+#: from - :func:`mood_section` projects each item through this tuple, so a field
+#: added to the builder without being named here simply does not ship, and the
+#: constant can never drift from the rows again (reviewer advisory 2,
+#: 2026-09-20: it listed eight names while the items carried nine).
+#: `written_after_the_session` is the row's OWN label, computed by the writer
+#: and never recomputed here.
 MOOD_ITEM_FIELDS: tuple[str, ...] = (
     "entry_id",
     "at",
@@ -416,8 +421,20 @@ MOOD_ITEM_FIELDS: tuple[str, ...] = (
     "followed_plan",
     "note",
     "written_after_the_session",
+    "vocab_version",
     "source_id",
 )
+
+
+def mood_source_id(entry_id: Any, fallback: Any = "") -> str:
+    """The base a mood's `source_id` is minted from. ONE seam, one rule.
+
+    A mood id is derived from the ROW it points at and from nothing else, so
+    the pack's minter and any other caller building the same section over the
+    same entries mint the SAME id - the Day Review payload's ids and the pack's
+    agree, and a citation resolves against either (reviewer advisory 6).
+    """
+    return f"mood:{_text(entry_id) or _text(fallback)}"
 
 
 def mood_section(
@@ -444,19 +461,20 @@ def mood_section(
         if recorded is None:
             continue
         entry_id = _text(entry.get("entry_id"))
-        items.append(
-            {
-                "entry_id": entry_id,
-                "at": _text(entry.get("created_at")),
-                "score": recorded.score,
-                "state_tags": list(recorded.state_tags),
-                "followed_plan": recorded.followed_plan,
-                "note": recorded.note,
-                "written_after_the_session": bool(recorded.recorded_after_the_session),
-                "vocab_version": recorded.vocab_version,
-                "source_id": minter.mint(f"mood:{entry_id or len(items)}"),
-            }
-        )
+        built = {
+            "entry_id": entry_id,
+            "at": _text(entry.get("created_at")),
+            "score": recorded.score,
+            "state_tags": list(recorded.state_tags),
+            "followed_plan": recorded.followed_plan,
+            "note": recorded.note,
+            "written_after_the_session": bool(recorded.recorded_after_the_session),
+            "vocab_version": recorded.vocab_version,
+            "source_id": minter.mint(mood_source_id(entry_id, len(items))),
+        }
+        # Projected through the CONSTANT, so the constant is load-bearing
+        # rather than decorative: a field nobody named here does not ship.
+        items.append({name: built[name] for name in MOOD_ITEM_FIELDS})
     if not items:
         return {}
     return {"n": len(items), "recorded": items}
@@ -805,6 +823,7 @@ __all__ = [
     "clear_redo",
     "default_root",
     "mood_section",
+    "mood_source_id",
     "mood_statement",
     "pack_path",
     "read_pack",
