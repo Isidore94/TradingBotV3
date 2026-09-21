@@ -1672,6 +1672,68 @@ They are evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **The Mentor tells an EXIT from an ENTRY (TJ-9E, 2026-09-21, branch
+  `claude/tj9e-exit-notes`, merged into `lead/p033-integration2` `7230b30d`).** An ENTRY is
+  unchanged - the same four material fields, the same four answer states, the same day-time
+  `trade_mentor_ai` draft. An EXIT is any trade with a closing fill in the reviewed session,
+  whenever it opened, and it is ONE forced free-text box ("Why did you exit? What did you
+  feel? What were you watching?") with two small answer-state buttons and no dropdown; the
+  row survives an EMPTY `missing`, so a swing closed yesterday is asked about at all for the
+  first time (116 of 180 live closed trades exit on a day they did not open). A scale-out
+  inside one session is ONE ask however many fills; closing legs on two dates are two asks on
+  two mornings. The words are an append-only `EXIT_NOTE_RAW` row written BEFORE anything
+  reads them - a blank is refused, a store that cannot append RAISES, a second note appends
+  and never rewrites - and provenance is ruled by the EXIT's session, never the first fill's,
+  a date-only exit never `same_session`. The nightly stage-2 slot `exit_note_fields`
+  (`scripts/ai_jobs/exit_note_fields.py`, between `week_review_narration` and
+  `ticker_briefs`) reads each waiting note once on the local MEDIUM model and DRAFTS three
+  fields: `why`, ONE code from the new closed versioned vocabulary `scripts/exit_reasons.py`
+  + `ui/annotations/vocabularies/exit_reasons_v1.json`; `felt`, up to
+  `trader_state_tags.MAX_STATE_TAGS` codes from TJ-7's OWN feelings list through ITS loader;
+  and `watching`, up to `MAX_WATCHING` (3) EXACT quotes. Every value carries a character span
+  that must reproduce its quote. The request is built from an ALLOW-LIST holding the note's
+  words, the symbol, the side and the two code lists and NOTHING else - no price, no P&L, no
+  R, no fill, no later bar - `verify_reply` re-checks every bound itself (key sets at three
+  levels, both vocabularies, both counts, a repeated value, the span), one bad value rejects
+  the WHOLE reply and leaves the prior file byte-identical, nothing waiting means NO model
+  call, there is one call per note with the window re-asked before each call after the first,
+  and at most `EXIT_NOTES_PER_NIGHT` (20) notes a night, oldest first, the rest counted and
+  said. A reading is `provisional` until the trader's own Confirm or Correct, which is the
+  ONE writer of an `EXIT_NOTE_FIELDS` row (a corrected value carries `span: []`, `quote: ""`
+  and `source: "correct"`); its identity is `check.exit_key` = `<trade_id>@<exit session>`,
+  so a trade that exited twice (13 live) is read and confirmed twice and the writer refuses a
+  note from the other session. A waiting reading has ONE home - the draft row in the
+  questions area, never a second copy in the trade section - and is offered on its OWN clock
+  for `EXIT_DRAFT_OFFER_SESSIONS` (5) exchange sessions by the REGISTRY's budget of three
+  (`exit_draft_review`, AWAY prompting nothing, the rest said and carried), never against
+  words the trader has since REWRITTEN, never confirmed by age; `Rewrite` is the one door to
+  a second note. An exit with a note or an answer state is ANSWERED and never asked again,
+  and `unexplained_exit_count` (separate from `unlabelled_trade_count`) makes the 09:00 check
+  RIDE on a later delivered slot. Readers: Day Review's trades section carries `exit_note`
+  and `exit_fields` on every row, and `day_report_card.exit_note_counts` prints "exits
+  explained K of N, C of those confirmed by you" in INTEGERS only (`unmeasured` when nobody
+  opened the notes). Also in this work: `journal_store` now NAMES the three trade statuses it
+  writes (`TRADE_STATUS_CLOSED`, `TRADE_STATUS_CLOSED_PARTIAL`, `TRADE_STATUS_OPEN`) and the
+  Mentor imports them instead of its own copy, which spelled the half-exited state
+  `PARTIALLY_CLOSED` and hid all seven live `CLOSED_PARTIAL` trades from the 09:00 check.
+  Nothing here reaches a detector, score, alert, watchlist, Focus, the review queue or
+  `review_policy.json`. Long form: DESK_INTERNALS "TJ-9E". Gates #176-#180 owed.
+- **An answered trade is stored at once and never asked again (the per-trade Mentor Save,
+  2026-09-21, branch `claude/mentor-stores-answers-2026-09-21` `0caf2bba`, merged into
+  `lead/p033-integration2` `182f3e08`).** From the trader's own report on TJ-9's first live
+  morning. The 09:00 trade check's forced Save gate is PER TRADE: `_open_fields` asks what is
+  still open on ONE trade, each block carries `Save this trade`, the bottom Save files every
+  answered trade through `save_trade_check(only=)`, `_answered_trades` and
+  `_drop_trade_block` take a filed trade off the card while a half-answered one keeps its
+  exact widgets. `_field_answer` reads words typed beside a blank dropdown as an answer
+  (`not_supplied`, with what it was) and the trade's ONE raw note as the answer to every
+  field still open on it, the note saved verbatim as `RECALLED_RAW` first;
+  `MainWindow._mentor_answered` finds a trade's answer by `trade_id`, so a `once` question
+  does not return when the position closes and `trade_date` moves. TJ-9E's forced exit box is
+  one more FIELD of its trade inside that gate (`_open_fields` asks `_exit_is_open`, the one
+  predicate) and filing a trade writes its exit note FIRST. Still forced: a trade cannot be
+  half filed. Merged on the trader's instruction to combine the day's work, with NO reviewer
+  round of its own - a review is OWED (plan.md). Gate #181 owed.
 - **A mood is a field the desk REPORTS, and nothing acts on it (TJ-7, 2026-09-20, branch
   `claude/tj7-mood-fields`, merged into `lead/p033-integration2` `b63db7af`, lead guard
   amendment `ae7c06c7`, follow-up merge `0a0a0be4`).** `market_journal` carries ONE
@@ -3619,9 +3681,13 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 
 ## Recent changes (the last two build days)
 
-### 2026-09-21 - the Mentor stores an answered trade and stops asking (branch `claude/mentor-stores-answers-2026-09-21`, NOT merged)
+### 2026-09-21 - TJ-9E: the Mentor tells an exit from an entry, and a reading is the trader's only by their click (branch `claude/tj9e-exit-notes`, tip `1876bb08`, merged into `lead/p033-integration2` `7230b30d`)
 
-From the trader's report on TJ-9's first live morning; the live journal held ONE `RECALLED` row. The 09:00 trade check's Save gate is now PER TRADE (`TradeMentorCard._open_fields`, a `Save this trade` button per block, the bottom Save files every answered trade, `_drop_trade_block` takes a filed trade off the card alone); `_field_answer` reads words typed beside a blank dropdown as `not_supplied` and the trade's one raw note as the answer to its still-open fields (note saved verbatim as `RECALLED_RAW` first); `MainWindow._mentor_answered` also reads `NOTE` answers by `trade_id`, so a `once` question about a trade does not return when its `trade_date` moves. Tests: `tests/test_mentor_stores_an_answered_trade.py`. Long form: DESK_INTERNALS, TJ-9's 2026-09-21 paragraph.
+The trader, the same morning: *"trade mentor should be able to differentiate between trade entrys and exits. trade exits should ask for 'why did you exit, what emotions did you have, what technicals were you observing' ideally we can just write it out and the AI fills this stuff in overnight. trade entrys are good the way they are"*. Everything follows from the last sentence: entries are untouched, and an exit is ONE box the trader writes in while the STRUCTURE is the night's job. **Four review rounds by reproduction - NO-GO, NO-GO, NO-GO, GO at `1876bb08`** - closed nine blockers. Round 1: the builder's "these 33 errors are a pre-existing artefact" was REFUTED by running the base (`journal_feed._store()` caches a module-global store for the life of the process, so the new exit-note read cached a FAKE store from three Day-Review test files and killed every later `JournalPanel`; base ran the same selection 368 passed, 0 errors); an outcome-fence guard that searched for "73" inside a body carrying a sha256 was a coin flip; an unwired report-card clause; an exit that never made the check RIDE; and an exit the trader had already explained asked again with a blank box. Round 2: a reading keyed by the TRADE lost the second reading of a trade that exited in two sessions - identity is `(trade_id, exit session)` through `check.exit_key` - and a reading drawn in both the questions area and the trade section gave the trader two copies whose first Confirm stopped responding. Round 3: the trade section kept its OWN list of readings and bypassed the registry's budget and ordering - **THE REGISTRY alone decides which readings are offered and how many**, whichever seam noticed them. Between rounds 1 and 2 the builder fixed the thing that made the feature reachable at all: the timeline never lines up - a trade exits MONDAY, the note is typed on TUESDAY's 09:00 card, TUESDAY NIGHT drafts it, and WEDNESDAY's card reviews TUESDAY, where Monday's trade is not a row - so `waiting_exit_drafts` walks `EXIT_DRAFT_OFFER_SESSIONS` (5) exchange sessions ending at the CARD's own session, independently of the session the card reviews. What shipped is the inventory entry above. Measured by the reviewer on a 201-trade scratch journal carrying 20 drafts: the lane read 12.2 ms on the first call then ~4 ms warm, the registry decision ~0.45 ms warm, and on the ordinary morning - questions delivered first - the seam costs 7 microseconds. Reviewer gates at `1876bb08`: `tests/test_tj9e_*.py` 105 passed; the round-1 Mentor selection (`tj9`, `tj14b`, `tj12`, `tj7`) 368 passed, 0 errors; all of that plus the nine order files and `test_tj13a_night_slates.py` in ONE process 697 passed; ruff clean; source selftest 97/97; `scripts/trade_mentor_ai.py` diff EMPTY over the whole branch (the entry path is untouched, as the trader asked); no ask-first file, no new `.md`. Recorded, NOT touched: `setup_environment_evidence.py:480` and three CLOSED-only filters still spell the partly-closed status wrongly, and `ai_summary._journal_source` lists `opportunity_events` with no type filter so an exit note's words can ride into a `journal_review` narration beside `net_pnl` - the exit TAGGER is blind by construction, a NARRATION is not (plan.md follow-ups). Gates #176-#180 owed. Long form: DESK_INTERNALS "TJ-9E".
+
+### 2026-09-21 - the Mentor stores an answered trade and stops asking (branch `claude/mentor-stores-answers-2026-09-21` `0caf2bba`, merged into `lead/p033-integration2` `182f3e08` - NO reviewer round of its own, a review is OWED)
+
+From the trader's report on TJ-9's first live morning; the live journal held ONE `RECALLED` row. The 09:00 trade check's Save gate is now PER TRADE (`TradeMentorCard._open_fields`, a `Save this trade` button per block, the bottom Save files every answered trade, `_drop_trade_block` takes a filed trade off the card alone); `_field_answer` reads words typed beside a blank dropdown as `not_supplied` and the trade's one raw note as the answer to its still-open fields (note saved verbatim as `RECALLED_RAW` first); `MainWindow._mentor_answered` also reads `NOTE` answers by `trade_id`, so a `once` question about a trade does not return when its `trade_date` moves. Tests: `tests/test_mentor_stores_an_answered_trade.py`. **Merged onto TJ-9E at `182f3e08` on the trader's instruction to combine the day's work**: both branches rewrote the same gate in `trade_mentor_card.py` (nine conflict hunks, three files), the lead kept this branch's per-field / per-trade shape as THE gate and folded TJ-9E's one forced exit box into it as one more field of its trade (filing a trade writes its exit note FIRST), and added `tests/test_tj9e_per_trade_save.py` for the seam neither branch could test - an open exit greys its own trade and no other, filing one trade leaves the other's half-typed words alone, and the words are on disk before the entry answers even when the entry half fails. It had NO reviewer round of its own; a review is OWED (plan.md). Gate #181 owed. Long form: DESK_INTERNALS, TJ-9's 2026-09-21 paragraph.
 
 ### 2026-09-20 - TJ-7: a mood is reported, never acted on - and every building packet of Phase 0.33 is merged (branch `claude/tj7-mood-fields`, tip `bcfdd918`, merged into `lead/p033-integration2` `b63db7af`, lead guard amendment `ae7c06c7`, follow-up merge `0a0a0be4`)
 

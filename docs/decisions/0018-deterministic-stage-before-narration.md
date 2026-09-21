@@ -355,3 +355,40 @@ were `tests/test_ai_jobs_runner.py`, `tests/test_veto_cohort_grading.py`,
 `tests/test_tj13b_local_large_provider.py` and `tests/test_tj13b_probe_guards.py`
 (the name went into `set_aside`, never into `pinned_at_e8c04f88`); the ninth was
 found by the full suite, in a file TJ-6 never touched.
+
+**EXTENDED again 2026-09-21 (TJ-9E): `exit_note_fields` joins stage 2 between
+`week_review_narration` and `ticker_briefs`, and TEN places pin slot order.**
+`exit_note_fields` (TJ-9E, merged into `lead/p033-integration2` `7230b30d`) reads
+the exit notes the trader typed that morning and drafts `why` / `felt` /
+`watching` from their own words. **Stage 2 now reads, IN THIS ORDER:
+`ai_summary, day_review_narration, observation_tags, week_review_narration,
+exit_note_fields, ticker_briefs`** — so the slots that may sit between
+`ai_summary` and `ticker_briefs` are `day_review_narration`, `observation_tags`,
+`week_review_narration` and `exit_note_fields`, and nothing else. It went AFTER
+`week_review_narration` rather than beside `observation_tags`, which is the job
+it most resembles, for one reason: TJ-5's eighth pin asserts the ADJACENCY
+`observation_tags` → `week_review_narration` → `ticker_briefs`, and nothing in
+the week story reads exit fields in this packet, so keeping that trio intact
+costs nothing. It is ahead of `ticker_briefs` because the briefs reserve 120
+minutes and a reading the trader is offered the next morning should not wait
+behind them. It is model-gated (`uses_model=True`, no `model_free_kwargs`, so
+`--force` may not buy it the daytime clock), it is NOT in `WEEKEND_ONLY_SLOTS`
+(every night kind that carries model slots runs it; Sunday only what is owed,
+per TJ-13A), a night with no waiting note answers before any model load, and it
+makes at most `EXIT_NOTES_PER_NIGHT` (20) calls, one per note, with the window
+re-asked before each call after the first. **Nothing it writes reaches a
+detector, score, alert, watchlist, Focus, the review queue or
+`review_policy.json`**, and nothing it drafts counts as the trader's until they
+press Confirm or Correct. **The TENTH order pin is
+`tests/test_tj9e_night_slot.py`**, which pins the new position directly. The ten
+pins are therefore `tests/test_ai_jobs_runner.py`,
+`tests/test_veto_cohort_grading.py`, `tests/test_ws_10d_market_story.py`,
+`tests/test_ws_rp_shared_report.py`, `tests/test_tj13b_local_large_provider.py`,
+`tests/test_tj13b_probe_guards.py`, `tests/test_opt_in_evidence_scopes.py`,
+`tests/test_tj5_week_slot_and_slate.py`, `tests/test_setup_research_pipeline.py`
+and `tests/test_tj9e_night_slot.py`. The files amended at this merge were
+`tests/test_ai_jobs_runner.py`, `tests/test_veto_cohort_grading.py`,
+`tests/test_opt_in_evidence_scopes.py` (whose `allowed` list gained the FOURTH
+name, its LEAD AMENDMENT comment kept truthful),
+`tests/test_tj13b_local_large_provider.py`, `tests/test_tj13b_probe_guards.py`
+and `tests/test_tj5_week_slot_and_slate.py`.

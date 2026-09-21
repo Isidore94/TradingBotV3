@@ -314,7 +314,7 @@ steps are unchanged.
   of writing) stays green; `ruff` clean; smoke 7/7; `launch_gui.py --selftest` count
   compared when a new lazily-imported module lands (frozen-exe rebuild triggers 3/4).
   **A packet that adds or MOVES a runner slot runs `-k "slot or stage or slate or order"`
-  plus the NINE order pins, not only `tests/test_ai_jobs_runner.py`** (its
+  plus the TEN order pins, not only `tests/test_ai_jobs_runner.py`** (its
   `EXPECTED_SLOT_ORDER`) — `tests/test_veto_cohort_grading.py`,
   `tests/test_ws_10d_market_story.py`, `tests/test_ws_rp_shared_report.py`,
   `tests/test_tj13b_local_large_provider.py`, `tests/test_tj13b_probe_guards.py`,
@@ -327,7 +327,11 @@ steps are unchanged.
   `tests/test_setup_research_pipeline.py` (the NINTH, 2026-09-20 at TJ-6's merge: its
   `test_setup_research_is_appended_to_the_nightly_slate` used to assert `setup_research` is
   the LAST slot and now says `setup_research` ends stage 3 with **only `improvement_ideas`
-  allowed to follow it**, so a tenth slot appended at the end of the night fails there).
+  allowed to follow it**, so a tenth slot appended at the end of the night fails there), plus
+  `tests/test_tj9e_night_slot.py` (the TENTH, 2026-09-21 at TJ-9E's merge: it pins
+  `exit_note_fields` in stage 2 BETWEEN `week_review_narration` and `ticker_briefs`, which is
+  now the full stage-2 order `ai_summary, day_review_narration, observation_tags,
+  week_review_narration, exit_note_fields, ticker_briefs`).
   TJ-15's targeted runs were green while three order assertions elsewhere were red; TJ-5's
   targeted runs were green while R4's one-owner minimum-height pin in another packet's test
   was red; TJ-6's targeted runs were green while this ninth pin, in a file it never touched,
@@ -1689,7 +1693,7 @@ the session and nowhere else, with TJ-9's three-day morning catch-up going FIRST
 not-ready morning and not spending one of them; and the overnight question appears as a
 CLICK once a day, with the old `One thing to test: ...` line not printed beside it.
 
-##### TJ-9E - the Mentor tells an EXIT from an ENTRY (AUTHORIZED by the trader 2026-09-21, IN BUILD)
+##### TJ-9E - the Mentor tells an EXIT from an ENTRY (BUILT and MERGED 2026-09-21, `7230b30d`)
 
 Trader, 2026-09-21: *"trade mentor should be able to differentiate between trade entrys and exits. trade
 exits should ask for 'why did you exit, what emotions did you have, what technicals were you observing'
@@ -1704,6 +1708,46 @@ later bar in the request); the next morning the trader Confirms or Corrects, and
 as theirs before that click. Readers: Day Review's trades section and the report card's Process line
 ("exits explained K of N"). Fixed on the way: the partly-closed status string the 09:00 check never
 matched. Not in it: the day pack / stories / contrasts reading exit fields (a recorded follow-up).
+
+**MERGED into `lead/p033-integration2` as `7230b30d`, branch tip `1876bb08`, after FOUR review rounds by
+reproduction: NO-GO, NO-GO, NO-GO, GO in round 4** (nine blockers closed; the merge commit's message says
+round 4 "was still running" - the GO arrived minutes later, at `1876bb08`, and nothing moved after it).
+The slot sits in stage 2 between `week_review_narration` and `ticker_briefs` (decision 0018's 2026-09-21
+addendum); **the slot-order pins are TEN files now** (12.3), the tenth being
+`tests/test_tj9e_night_slot.py`. Gates **#176-#180** owed.
+
+**Beside it, merged the same day: the per-trade Mentor Save** (branch `claude/mentor-stores-answers-2026-09-21`
+`0caf2bba`, merge `182f3e08`) - a trader-directed fix from their own report ("if i answer the questions
+about a trade please then dont ask for it again just store that info"), built by a second session and
+**merged WITHOUT any reviewer round of its own**, on the trader's instruction to combine the day's work.
+The lead resolved nine conflict hunks across three files against TJ-9E and added
+`tests/test_tj9e_per_trade_save.py`. **A REVIEW IS OWED on `0caf2bba` and on the conflict resolution**
+(`_field_answer`, `_open_fields`, `_answered_trades`, `save_trade_check(only=)`, `_drop_trade_block`, and
+the exit box folded in as one more field of its trade). Gate **#181** owed.
+
+**Follow-ups recorded at this merge, none built and none authorized:**
+
+1. **The day pack, the day story, the week story and the contrasts do not read exit fields yet.** Deliberate:
+   a late note must not force a night to re-narrate a session it already wrote.
+2. **The partly-closed status string is still spelled wrongly in four places TJ-9E did not touch** -
+   `scripts/setup_environment_evidence.py:480` (which tests `{"PARTIAL", "PARTLY_CLOSED",
+   "PARTIALLY_CLOSED"}`, none of which the assembler writes, so all seven live `CLOSED_PARTIAL` trades
+   classify as OPEN and `STATUS_PARTLY_CLOSED` is dead code) and the CLOSED-only filters at
+   `scripts/ui/panels/weekend_prep_panel.py:2426` and `:4076` and `scripts/ui/services/journal_feed.py:1076`.
+   All pre-existing. **The first may be scoring-side, so it is ASK-FIRST**; each should adopt
+   `journal_store`'s named status constants in the file that owns it.
+3. **The raw exit words leave the TJ-9E lane through a pre-existing door.** `ai_summary._journal_source`
+   lists `opportunity_events` with NO `event_type` filter and copies each payload into `lifecycle_events`
+   of the `journal_review` scope, so an `EXIT_NOTE_RAW` row's words can ride into a narration package that
+   also carries `net_pnl` and prices. The exit TAGGER is blind by construction; a NARRATION is not. The
+   identical traffic already exists for `RECALLED_RAW`; TJ-9E neither widened nor closed that door. A
+   follow-up decides whether to filter.
+4. **The ENTRY-side AI draft loads the local model BY DAY.** `trade_mentor_ai.extract_draft`, run from the
+   card whenever the trader submits raw text, has no `ai_jobs.window` gate. Left alone deliberately - the
+   trader said entries are good the way they are - and flagged here so nobody reads it as an oversight.
+5. **`journal_feed._store()` is a module-global cache**: the FIRST caller in a process decides which
+   `JournalStore` the whole run uses. It cost TJ-9E a review round (32 errors in three other packets' test
+   files, green on base). Worth an owner.
 
 ##### TJ-12F — Read the Focus-add and armed-alert lanes (PLANNED, not scheduled)
 

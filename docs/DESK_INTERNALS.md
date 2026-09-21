@@ -5155,8 +5155,10 @@ the position closes, so a `once` question (`trade_origin`) came back on the clos
 card - it now also reads by `trade_id`, first, so a same-day row still wins the stamp a
 daily kind compares. Still forced: a trade cannot be half filed, and `not remembered` is
 still a complete answer. NOT changed: the four states, the writer, `planned_*` never
-written. Known overlap: TJ-9E (in build the same morning) edits the same gate; its exit box
-belongs inside `_open_fields`.
+written. **Merged onto TJ-9E as `182f3e08`, with no reviewer round of its own and a review
+owed**: the overlap the paragraph above anticipated was resolved by folding TJ-9E's forced
+exit box into `_open_fields` as one more field of its trade - see "TJ-9E ... The per-trade
+Save, merged onto it the same day". The live gate is **#181**.
 
 **Item 7 left this packet.** The Questrade instrument work became packet TJ-9Q - see
 "TJ-9Q - a sold put is recorded backwards" below.
@@ -8457,6 +8459,195 @@ a result) stands until a narration rule is built. Gate **#151**'s own citation h
 UNREADABLE until a night has written a pack AND a story for a session carrying a mood; on
 2026-09-20 the live day-review folder held zero packs, so the honest first reading is
 `narrated 0 of N` — the feature working, not the gate passing.
+
+## TJ-9E - the Mentor tells an exit from an entry (2026-09-21, packet TJ-9E)
+
+The long form behind the CLAUDE.md rule *"An ENTRY keeps its four fields and an EXIT is ONE
+box the NIGHT reads."* Trader, 2026-09-21, in their own words: *"trade mentor should be able
+to differentiate between trade entrys and exits. trade exits should ask for 'why did you
+exit, what emotions did you have, what technicals were you observing' ideally we can just
+write it out and the AI fills this stuff in overnight. trade entrys are good the way they
+are."* Merged as `7230b30d` (branch tip `1876bb08`) after FOUR review rounds by reproduction:
+NO-GO, NO-GO, NO-GO, **GO in round 4**.
+
+Everything follows from the last sentence and the phrase before it. An entry is a form the
+trader already answers, and they said it is fine. An exit is a paragraph they would rather
+just write. So the exit ask is ONE box, and the structure is the NIGHT's job.
+
+**Why the row exists at all.** The packet believed `list_trades(trade_date=...)` keyed on a
+trade's OPEN date, so a swing closed yesterday never reached this morning's card. Not true:
+`journal_store.py:2134` matches opened, closed OR trade date. What dropped it was
+`questions_for_session`'s `if not gaps: continue` - a trade whose four entry fields were
+answered the morning after it OPENED had nothing left to ask, so nothing ever asked about its
+exit. **116 of 180 live closed trades exit on a different day from the one they opened**, so
+that was the majority case. An exit row now survives an EMPTY `missing`.
+
+**One ask per (trade, session).** A scale-out is ordinary - 70 live trades have more than one
+closing leg - and a scale-out spanning two sessions is real: **13 live trades exit across two
+sessions**. The seam is `exit_sessions`, which folds a trade's closing fills to the
+market-local DATES they happened on. Two fills on Friday are ONE question; a Friday fill plus
+a Monday fill are TWO questions on two mornings, each with its own `EXIT_NOTE_RAW` row, its
+own draft and its own Confirm.
+
+**Raw first, and loud.** `save_exit_note` writes the trader's sentence before anything reads
+it, refuses a blank, and lets a store error propagate - a journal write is the one evidence
+store CLAUDE.md allows to fail the thing it records. A second note APPENDS; the first row
+stays byte-identical, because a trader changing their mind is the interesting part.
+
+**A different ruler for an exit.** `trade_origin.trade_session` is the session of the FIRST
+FILL. That is right for a remembered stop and wrong for an exit, so `_exit_note_provenance`
+measures against the EXIT's own session. The date-only test is `trade_origin`'s WIDER one -
+midnight in the stamp's own offset OR market-local - rather than
+`journal_trade_shape.is_date_only`, which asks the market-local question alone: the live
+journal holds `2026-07-16T00:00:00-07:00`, a broker row with no clock time that the narrower
+rule reads as a fill at three in the morning in New York. Two of 616 live executions are
+date-only and one of them is a closing leg, so the case is reachable today.
+
+**The night is blind to the outcome, structurally.** `build_evidence` is BUILT from the
+note's five fields and the two picklists; it has no way to reach a price, a fill, a later bar
+or a grade, so there is no key anyone can forget to delete. The trade's own P&L is one join
+away in the same store - and a draft derived from the result is not a reading of the words,
+it is a rationalisation. `verify_reply` re-checks every bound itself, because a JSON schema
+is a grammar hint and never a guard: the key sets at all three levels, both vocabularies,
+both counts, a repeated value, and the span, which is a CHARACTER offset (the fixture note
+carries an en dash precisely so a byte-based implementation lands in the wrong place).
+
+**A draft is never the trader's.** 33 live trades carry a `provisional` setup tag and exactly
+ONE a confirmed one; that is what a machine guess which silently retires a question does. So
+a reading is `provisional` in the journal's own word, shown as the night's reading, counted
+nowhere as the trader's, never greying Save, and it leaves the card the moment they press
+Confirm or Correct. Those two buttons are the ONE writer of an `EXIT_NOTE_FIELDS` row, and a
+value the trader typed carries `span: []`, `quote: ""` and `source: "correct"` - the only
+thing that tells a grounded reading from the trader's own words.
+
+**An exit's feelings are not the session's mood.** TJ-7's vocabulary is read through TJ-7's
+own loader, so there is ONE list of feelings on the desk - but the GRAIN is different, so a
+confirmed exit row carries no `mood` and no `state_tags` key at any depth, and nothing copies
+one into the other.
+
+### The timeline is why reachability was a blocker
+
+The Confirm click could never arrive, and the reason is a calendar, not a bug in a widget:
+
+* the trade exits **MONDAY**;
+* the note is typed on **TUESDAY's 09:00 card**, which reviews Monday;
+* **TUESDAY NIGHT** drafts it;
+* **WEDNESDAY's card reviews TUESDAY** - and Monday's trade is not a row on it at all.
+
+Worse, since round 1's blocker 5 an exit the trader has EXPLAINED is ANSWERED, so a row with
+nothing else open leaves the card entirely. A reading offered only where its trade is listed
+is a reading nobody is ever offered. So `waiting_exit_drafts` walks
+`EXIT_DRAFT_OFFER_SESSIONS` (5) exchange sessions ending at the CARD's own session, oldest
+first, INDEPENDENTLY of the session the card reviews, dropping anything already Confirmed or
+Corrected; the host builds that lane (`MainWindow._mentor_exit_drafts`). A draft past the
+window is no longer OFFERED, stays on disk as `provisional` and is still counted by the
+report card - **nothing is ever confirmed by age**.
+
+**A reading's identity is `(trade_id, EXIT SESSION)`, never the trade** (review 2). `exit_key`
+builds `<trade_id>@<exit session>`, `Subject.subject_id` IS it, and every card map a reading
+lives in is keyed by it. Keyed by the trade, the second reading of a two-session trade was
+dropped in silence: not offered, not carried, not said, `provisional` for good.
+
+**A waiting reading has ONE HOME** - the draft row in the questions area. The trade section
+never draws a draft line or the two verbs; given `drafts_root` it ENSURES the reading has its
+row in the questions area instead. Drawn in both places, the trader saw two copies of the
+question and the first copy's Confirm stopped responding.
+
+**THE REGISTRY decides which readings are offered and how many, always** (review 3). A
+waiting reading costs one of TJ-14B's three, competes with every other budgeted question by
+priority, and obeys AWAY - and that is true whichever seam noticed it. Without that rule four
+waiting readings drew four rows on a card whose own sentence said four were still waiting and
+whose registry had offered none, because `trade_origin` had taken the budget.
+
+**A superseded reading is never offered**: a draft has to name the LATEST note of its (trade,
+session), or the trader would be shown a reading - and quotes - of words they had already
+rewritten. `Rewrite` is the one door to that second note: it reopens ONE box pre-filled with
+the words on disk, unchanged words write nothing, and the old reading stops being offered.
+
+### The status vocabulary had no owner
+
+`trade_mentor_trade_check._SESSION_STATUSES` spelled the half-exited state
+`PARTIALLY_CLOSED`. Nothing on this desk has ever written that string: the assembler stamps
+`CLOSED_PARTIAL` (`journal_store._finalize_trade_state`). **Seven live trades - every one the
+trader had taken half off - were dropped by that filter and were never asked about at 09:00.**
+The repair is a vocabulary with ONE owner: `journal_store` names the three statuses it writes
+(`TRADE_STATUS_CLOSED`, `TRADE_STATUS_CLOSED_PARTIAL`, `TRADE_STATUS_OPEN`) and the Mentor
+imports them. `journal_bulk_tag.PARTIAL_STATUS`, `journal_reclassify.OPEN_STATUSES`,
+`setup_environment_evidence.py:480` and three CLOSED-only filters still spell their own
+copies; each should adopt the same constants, in the file that owns it (plan.md follow-up 2 -
+the first may be scoring-side and is ASK-FIRST).
+
+### What the trader actually sees
+
+**Tomorrow's 09:00 card.** Under "Yesterday's trades", every trade of the reviewed session -
+including, for the first time, the ones whose entry fields were already answered and the
+seven half-exited ones that were invisible. A trade that CLOSED something yesterday carries,
+under its entry fields, one line - *"You closed this on <date>. Why did you exit? What did you
+feel? What were you watching?"* - one empty box, and two small buttons, `not remembered` and
+`not applicable`. That trade's own `Save this trade` stays grey until every entry field is
+answered AND its exit box holds words or one of those two buttons. There is no reading yet:
+nothing was read last night, because no note existed. The honest first state is *"Exits
+explained 0 of N, 0 of those confirmed by you"*.
+
+**The morning after.** Monday's trade is not in Tuesday's session and is not in the trades
+list - and the reading is offered anyway, in the questions area, as its own row:
+
+> AAPL - you exited on 2026-09-14. Is that what happened?
+> You wrote: I took it off when the 50 day cracked - felt rushed after the open and I was
+> watching the volume dry up on the retest.
+> The night read your note - You exited because: Stop hit - felt: Rushed - watching: the
+> volume dry up on the retest. Nothing is recorded as yours until you press Confirm.
+> [ Confirm ] [ Correct ]
+
+**Confirm** writes ONE row and the block disappears for good, on every later card.
+**Correct** opens a why list, the eight TJ-7 feeling chips and a one-line "what you were
+watching" box, then `Save my version`. **Rewrite** reopens the box with the old words in it
+when they want to say it differently. Neither verb greys Save; while one is writing both are
+grey and the status line says so, including on a failure. At most three readings a card - a
+fourth is counted in the note ("1 more exit reading(s) waiting.") and comes back on the next
+one. On the Day Review page each trade row now carries the trader's own exit sentence, and
+the three fields beside it once they confirmed them.
+
+### The lessons this packet paid for
+
+* **A builder's "pre-existing artefact" claim is checked by running the BASE.** 33 errors were
+  called a cross-file fixture artefact after the selection was run twice on the BRANCH and
+  read as "identical both times, so not mine". The base ran the same selection 368 passed, 0
+  errors: `journal_feed._store()` caches a module-global store for the life of the process,
+  three Day-Review test files stub the trades read, and the new exit-note read then cached a
+  FAKE store that killed every later `JournalPanel`. **A comparison that never includes the
+  base is not a comparison.**
+* **A guard that searches for a number inside a body carrying a sha256 is a coin flip.** The
+  outcome fence looked for "73" and `MONEY_QUANTITY` was 73: it failed 4 runs in 8 with
+  nothing leaking. Money fixtures carry a decimal point, and the search strips runs of 16+ hex
+  characters first.
+* **One identity for one thing.** A reading keyed by the trade silently lost the second
+  reading of a trade that exited twice; a reading drawn in two places gave two copies whose
+  first Confirm stopped responding.
+* **The registry alone decides what is asked.** A seam that keeps its own list of what to
+  offer bypasses the budget, the ordering and AWAY, however correct each row on it is.
+* **Wait on a DEADLINE, not on a count of `processEvents` turns**: measured here, 200 turns
+  cost 0.29 ms and one `record_opportunity_event` costs 6.9 ms - a test that passes under load
+  and fails alone.
+
+### The per-trade Save, merged onto it the same day (`182f3e08`)
+
+The trader's parallel report - *"if i answer the questions about a trade please then dont ask
+for it again just store that info"* - was built by a SECOND session on
+`claude/mentor-stores-answers-2026-09-21` (`0caf2bba`) and had **no reviewer round of its
+own**; it is merged on the trader's instruction to combine the day's work, and **a review is
+owed**. Both branches rewrote the same gate. The lead's resolution over nine conflict hunks
+in three files: the peer's per-field / per-trade shape IS the gate (`_field_answer`,
+`_open_fields`, `_answered_trades`, a Save per block, `save_trade_check(only=)`), and TJ-9E's
+ONE forced exit box is **one more FIELD of its trade** - `_open_fields` asks `_exit_is_open`,
+the one predicate, `_drop_trade_block` forgets the block's own exit widgets, and filing a
+trade writes its exit note FIRST (`_save_exit_note_of`) and then its entry answers.
+`MainWindow` keeps both lanes: TJ-9E's `exit_drafts` and the peer's answered-`trade_ids`.
+`tests/test_tj9e_per_trade_save.py` pins the seam neither branch could test on its own - an
+open exit greys its OWN trade and no other, filing one trade leaves the other's half-typed
+words alone, and the words are on disk before the entry answers even when the entry half
+fails. Gate #181 reads that: answer one trade, press its Save, and it is stored at once,
+leaves the card, and is not asked again on the next card.
 
 ## TJ-3 - a mark sits on a bar only when it happened DURING that bar (2026-09-19, packet TJ-3)
 
