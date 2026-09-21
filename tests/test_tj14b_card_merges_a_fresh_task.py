@@ -182,11 +182,17 @@ def test_a_half_answered_row_keeps_its_widgets_when_another_trade_is_added(desk)
     assert combo.currentData() == check.ANSWER_NOT_REMEMBERED
     assert text_input.text() == "I was watching the open"
 
-    # The gate is recomputed over ALL the rows now on the card.
+    # The gate is recomputed over ALL the rows now on the card - and it is PER
+    # TRADE (trader 2026-09-21): an answered trade is stored on its own, and
+    # the trade added beside it stays grey until IT is answered.
     _answer_every_field(card, today)
-    assert card.save_answers_button.isEnabled() is False, "the added trade is still open"
+    assert card._trade_save_buttons[today].isEnabled() is True
+    assert card._trade_save_buttons[yesterday].isEnabled() is False, (
+        "the added trade is still open"
+    )
+    assert card.save_answers_button.isEnabled() is True, "one answered trade can be stored"
     _answer_every_field(card, yesterday)
-    assert card.save_answers_button.isEnabled() is True
+    assert card._trade_save_buttons[yesterday].isEnabled() is True
 
 
 # ---------------------------------------------------------------------------
