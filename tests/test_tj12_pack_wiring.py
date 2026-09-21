@@ -101,15 +101,27 @@ def _ledger(tmp_path: Path, *, extra: int = 0) -> Path:
     )
 
 
+#: Which scratch roots already hold the session's graded clicks. The read
+#: ledger is APPEND-ONLY, so writing it twice inside one test would change
+#: `your_reads` as well as the AI ledger - and a hash test whose fixture moved
+#: two things at once proves nothing about either.
+_PREPARED: set[str] = set()
+
+
+def _inputs(tmp_path: Path, *, extra: int = 0) -> dict:
+    key = str(tmp_path)
+    if key not in _PREPARED:
+        fx.one_session_of_clicks(tmp_path)
+        _PREPARED.add(key)
+    return fx.day_inputs(tmp_path, ledger_path=_ledger(tmp_path, extra=extra))
+
+
 def _payload(tmp_path: Path, *, extra: int = 0, card=None) -> dict:
     """A Day Review payload shaped exactly as `read_day` hands one back."""
     import day_report_card
     from ui.services.day_review_service import empty_payload
 
-    fx.one_session_of_clicks(tmp_path)
-    built = card or day_report_card.build(
-        fx.day_inputs(tmp_path, ledger_path=_ledger(tmp_path, extra=extra))
-    )
+    built = card or day_report_card.build(_inputs(tmp_path, extra=extra))
     payload = empty_payload(SESSION)
     payload["report_card"] = {
         "session": built.session,
