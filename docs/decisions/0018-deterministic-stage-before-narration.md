@@ -324,3 +324,34 @@ so a new stage-2 slot inserted anywhere among those three fails there even when
 `EXPECTED_SLOT_ORDER` has been updated. The three files amended at this merge
 were `tests/test_ai_jobs_runner.py`, `tests/test_veto_cohort_grading.py` and
 `tests/test_opt_in_evidence_scopes.py`; the other five needed no edit.
+
+**EXTENDED again 2026-09-20 (TJ-6): stage 3 now ends
+`…, setup_research, improvement_ideas`, and NINE places pin slot order.**
+`improvement_ideas` (TJ-6, merged into `lead/p033-integration2` `a7809d7c`) is
+appended LAST inside stage 3, behind `setup_research` — a later phase appending
+inside its own stage, which is this decision's rule. It is model-gated
+(`uses_model=True`, no `model_free_kwargs`, so `--force` may not buy it the
+daytime clock), `max_attempts=2`, `RESERVE_MINUTES = 10.0`, and it is NOT in
+`WEEKEND_ONLY_SLOTS`: the packet says up to three ideas A NIGHT, so every
+night's slate carries it and Sunday offers it only when the weekend left it
+owed. It sits at the END because it READS what the night just wrote — the day
+packs, the stories and the contrast packs — and because it is the one slot whose
+output nothing else consumes: **nothing it writes reaches a detector, score,
+alert, watchlist, Focus, the review queue or `review_policy.json`**, and only
+the trader's own click on the card keeps an idea. A night with nothing to cite
+answers `skipped` BEFORE any model load; a night that asked ends `ok` (with an
+asked marker beside the store) so the 30-minute task asks once.
+**The NINTH order pin is `tests/test_setup_research_pipeline.py`** (lead
+amendment `be435cd7`): its `test_setup_research_is_appended_to_the_nightly_slate`
+asserted `setup_research` was the LAST slot outright and now asserts that
+`setup_research` still ends stage 3 with **only `improvement_ideas` allowed to
+follow it**, and that it still sits after `review_policy_draft`. The nine pins
+are therefore `tests/test_ai_jobs_runner.py`, `tests/test_veto_cohort_grading.py`,
+`tests/test_ws_10d_market_story.py`, `tests/test_ws_rp_shared_report.py`,
+`tests/test_tj13b_local_large_provider.py`, `tests/test_tj13b_probe_guards.py`,
+`tests/test_opt_in_evidence_scopes.py`, `tests/test_tj5_week_slot_and_slate.py`
+and `tests/test_setup_research_pipeline.py`. The four files amended at this merge
+were `tests/test_ai_jobs_runner.py`, `tests/test_veto_cohort_grading.py`,
+`tests/test_tj13b_local_large_provider.py` and `tests/test_tj13b_probe_guards.py`
+(the name went into `set_aside`, never into `pinned_at_e8c04f88`); the ninth was
+found by the full suite, in a file TJ-6 never touched.
