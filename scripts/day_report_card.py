@@ -584,14 +584,61 @@ def _tail_rows(path: Any, limit: int) -> list[dict[str, Any]]:
     return rows[-max(1, int(limit)):]
 
 
+def _slot_verdicts(rows: Sequence[Mapping[str, Any]], session: str) -> dict[str, str]:
+    """``{job: the status that DECIDED it}`` for one night. The owner's words.
+
+    `ai_jobs/ledger.py` owns this vocabulary and this reads its constants rather
+    than spelling any of them:
+
+    * ``STATUS_OK`` is the only completion (``CANONICAL_COMPLETION_STATUSES``);
+    * ``ATTEMPT_STATUSES`` - failed and degraded - is the owner's own "something
+      went wrong" set, and the two are reported SEPARATELY: a degraded run
+      published a real document with no narrative, and calling that "nothing
+      ran" is a different fact;
+    * ``STATUS_SKIPPED``, ``STATUS_MANUAL`` and ``STATUS_CORRECTION`` DECIDE
+      NOTHING. A skip is what the runner writes when the window or the
+      already-done check says there is nothing to do, and it is written every
+      half hour for the rest of the night. Reading one as a failure named 22 of
+      2026-09-18's slots broken when 20 of them had finished `ok` hours earlier
+      (reviewer, 2026-09-20, on a copy of the live 1.2 MB ledger).
+
+    The LAST deciding row wins: a slot that failed and then recovered is fine,
+    and one that ran and then failed is not - a later skip cannot undo either.
+    """
+    import ai_jobs.ledger as ledger
+
+    deciding = frozenset({ledger.STATUS_OK}) | frozenset(ledger.ATTEMPT_STATUSES)
+    verdicts: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if row.get("noncanonical"):
+            # A correction is commentary about a run, not a run.
+            continue
+        if session and _text(row.get("session_date"))[:10] != session:
+            continue
+        job = _text(row.get("job"))
+        if not job:
+            continue
+        status = _text(row.get("status"))
+        # Every slot the night TOUCHED is counted, even when nothing it wrote
+        # decides anything: `n` is what was looked at, not what went wrong.
+        verdicts.setdefault(job, "")
+        if status in deciding:
+            verdicts[job] = status
+    return verdicts
+
+
 def how_fresh(freshness: Mapping[str, Any] | None) -> dict[str, Any]:
     """What the card rests on: when the story was written, how far the fills
     reach, which session the reads were graded through, and any overnight slot
-    whose LAST row for the session is not ``ok``.
+    the ledger says went wrong - by name, and by WHICH way it went wrong.
 
     A missing AI store is ``night status unknown`` and CREATES NOTHING. Unknown
     is not "fine": a night nobody can see is a night nobody checked.
     """
+    import ai_jobs.ledger as ledger
+
     facts = dict(freshness or {})
     session = _text(facts.get("session"))
     story = _text(facts.get("story_written_at"))
@@ -605,7 +652,7 @@ def how_fresh(freshness: Mapping[str, Any] | None) -> dict[str, Any]:
     ]
 
     path = facts.get("ledger_path")
-    last: dict[str, str] = {}
+    verdicts: dict[str, str] = {}
     night_status = "unknown"
     if path is not None:
         from pathlib import Path
@@ -614,33 +661,41 @@ def how_fresh(freshness: Mapping[str, Any] | None) -> dict[str, Any]:
         # `exists` never creates; `ledger_path()` would have made the folder.
         if target.exists():
             night_status = "read"
-            for row in _tail_rows(target, LEDGER_TAIL_ROWS):
-                if not isinstance(row, Mapping):
-                    continue
-                if row.get("noncanonical"):
-                    # A correction is commentary about a run, not a run.
-                    continue
-                if session and _text(row.get("session_date"))[:10] != session:
-                    continue
-                job = _text(row.get("job"))
-                if job:
-                    last[job] = _text(row.get("status"))
-    failed = tuple(sorted(job for job, status in last.items() if status != "ok"))
+            verdicts = _slot_verdicts(_tail_rows(target, LEDGER_TAIL_ROWS), session)
+    ok = tuple(sorted(job for job, status in verdicts.items() if status == ledger.STATUS_OK))
+    failed = tuple(
+        sorted(job for job, status in verdicts.items() if status == ledger.STATUS_FAILED)
+    )
+    degraded = tuple(
+        sorted(job for job, status in verdicts.items() if status == ledger.STATUS_DEGRADED)
+    )
+    named = tuple(sorted(failed + degraded))
     if night_status == "unknown":
         parts.append("night status unknown - the desk has no AI job ledger to read")
-    elif failed:
+    elif named:
+        trouble = []
+        if failed:
+            trouble.append("failed: " + ", ".join(failed))
+        if degraded:
+            trouble.append("degraded: " + ", ".join(degraded))
         parts.append(
-            f"{len(last)} overnight slot(s) read; these did not finish ok: "
-            + ", ".join(failed)
+            f"{len(verdicts)} overnight slot(s) read, {len(ok)} finished ok; "
+            + "; ".join(trouble)
         )
     else:
-        parts.append(f"{len(last)} overnight slot(s) read, every one finished ok")
+        parts.append(
+            f"{len(verdicts)} overnight slot(s) read, {len(ok)} finished ok, "
+            "none reported trouble"
+        )
     return _line(
         "how_fresh",
         "; ".join(parts) + ".",
-        len(last),
-        len(last),
-        failed_slots=failed,
+        len(verdicts),
+        len(verdicts),
+        failed_slots=named,
+        slots_failed=failed,
+        slots_degraded=degraded,
+        slots_ok=len(ok),
         night_status=night_status,
     )
 
