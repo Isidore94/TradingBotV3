@@ -633,13 +633,19 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # reads in the morning), then TJ-16's word tagger, then the briefs with
     # their 120-minute reserve (a weeknight has no `ai_summary`).
     assert slate[slate.index("miss_contrast") + 1] == "prediction_contrast"
-    assert slate[slate.index("ticker_briefs") - 2] == "day_review_narration"
-    assert slate[slate.index("ticker_briefs") - 1] == "observation_tags"
+    # LEAD AMENDMENT 2026-09-21 (TJ-9E): a FOURTH stage-2 slot, the exit-note
+    # reader, registered after `week_review_narration` - which a weeknight does
+    # not carry - so on this slate it sits directly before the briefs and the
+    # two-step chain becomes a three-step one.
+    assert slate[slate.index("ticker_briefs") - 3] == "day_review_narration"
+    assert slate[slate.index("ticker_briefs") - 2] == "observation_tags"
+    assert slate[slate.index("ticker_briefs") - 1] == "exit_note_fields"
     set_aside = (
         "read_grades_mature",
         "prediction_contrast",
         "day_review_narration",
         "observation_tags",
+        "exit_note_fields",
         # TJ-6 (2026-09-20): a new stage-3 slot is pinned where it sits by
         # `EXPECTED_SLOT_ORDER` and then set aside here, because this guard is
         # about the set of slots as it stood at e8c04f88.

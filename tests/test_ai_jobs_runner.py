@@ -368,6 +368,11 @@ EXPECTED_SLOT_ORDER = (
     # is in `runner.WEEKEND_ONLY_SLOTS`, so `slots_for("weeknight")` never
     # offers it and Sunday picks it up only when Saturday left it unfinished.
     "week_review_narration",
+    # TJ-9E (2026-09-21): the night's reading of the trader's own exit note.
+    # A local MEDIUM model slot, so it is in stage 2 - after the week story
+    # because TJ-5 pins that name DIRECTLY after `observation_tags`, and before
+    # `ticker_briefs`, whose two hours of reserve it must not queue behind.
+    "exit_note_fields",
     "ticker_briefs",
     "market_story_narration",
     # stage 3 - the model-gated slots, unchanged

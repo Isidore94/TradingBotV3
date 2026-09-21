@@ -17,6 +17,7 @@ introduced it:
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -190,16 +191,18 @@ def test_the_night_drafts_each_session_of_a_two_session_exit_on_its_own(tmp_path
     )
 
     reply = fx.good_reply(exit_reasons.codes()[0], trader_state_tags.codes()[:1])
-    second = fx.good_reply(
-        exit_reasons.codes()[1],
-        trader_state_tags.codes()[:1],
-        watching=("the capital for the open",),
-        text=fx.SECOND_EXIT_NOTE,
-    )
-    second["fields"]["why"] = fx.value(
-        "I needed the capital", exit_reasons.codes()[1], text=fx.SECOND_EXIT_NOTE
-    )
-    second["fields"]["felt"] = []
+    # Built by hand against the SECOND note's own words: it says why and
+    # nothing about a feeling, so `felt` is absent rather than guessed.
+    second = {
+        "fields": {
+            "why": fx.value(
+                "I needed the capital", exit_reasons.codes()[1], text=fx.SECOND_EXIT_NOTE
+            ),
+            "watching": [
+                fx.value("the capital for the open", text=fx.SECOND_EXIT_NOTE)
+            ],
+        }
+    }
 
     first_calls: list[dict] = []
     out = exit_note_fields.run_exit_note_fields(
@@ -228,3 +231,140 @@ def test_the_night_drafts_each_session_of_a_two_session_exit_on_its_own(tmp_path
     assert friday["fields"]["why"]["code"] == exit_reasons.codes()[0]
     assert monday["fields"]["why"]["code"] == exit_reasons.codes()[1]
     assert friday["note_id"] != monday["note_id"]
+
+
+# ---------------------------------------------------------------------------
+# the two guarantees whose tester-written pins cannot pass on this desk
+#
+# Both tester lines are reported to the lead as wrong literals and NEITHER was
+# edited. Neither guarantee is allowed to go unpinned because of that, so each
+# is re-pinned here in the form that can actually be true.
+# ---------------------------------------------------------------------------
+def test_the_request_body_holds_the_words_and_no_money_serialised_honestly(tmp_path):
+    """The outcome fence, on the EXACT body the fake endpoint received.
+
+    The same assertion as
+    `test_tj9e_night_slot.py::test_the_request_body_holds_the_words_the_symbol_the_side_and_two_code_lists`,
+    with ONE difference: the note is looked for AS IT IS ENCODED.
+
+    The fixture note carries an en dash on purpose, and the shared provider
+    path embeds the evidence with `json.dumps` at its default
+    ``ensure_ascii=True`` (`ai_summary._local_schema_prompt`), so the prompt
+    carries ``\\u2013`` where the note has the dash. ``EXIT_NOTE in
+    json.dumps(body)`` is therefore False for every possible implementation -
+    including one that sends the trader's words untouched, which is what this
+    proves the slot does. The model still SEES the dash: it decodes the JSON
+    string it was handed.
+
+    Hand-counted: 1 model call, 0 forbidden keys at any depth, 0 of the four
+    money strings anywhere in the body.
+    """
+    import exit_reasons
+    import test_tj9e_night_slot as night_slot
+    import trader_state_tags
+    from ai_jobs import exit_note_fields
+
+    store, _trade_id = fx.swing_with_money(tmp_path)
+    calls: list[dict] = []
+    why = exit_reasons.codes()[0]
+    felt = trader_state_tags.codes()[0]
+
+    with night_slot._live_settings():
+        out = exit_note_fields.run_exit_note_fields(
+            session_date=fx.REVIEWED,
+            now=night_slot.NIGHT,
+            root=tmp_path / "packs",
+            store=store,
+            post=fx.fake_post(fx.good_reply(why, (felt,)), calls),
+        )
+    assert out["status"] == "ok", out
+    assert len(calls) == 1, calls
+
+    body = calls[0]["json"]
+    sent = json.dumps(body, default=str, ensure_ascii=False)
+    #: The prompt the model is actually handed. The note is looked for HERE and
+    #: in the form the evidence JSON carries it - the dash escaped, every other
+    #: character its own. Not a looser check: the same characters, spelled the
+    #: way the wire spells them, in the string the model decodes.
+    prompt = " ".join(str(row.get("content") or "") for row in body["messages"])
+
+    assert json.dumps(fx.EXIT_NOTE)[1:-1] in prompt, (
+        "the model must see the trader's own words"
+    )
+    assert fx.SWING in sent, "the symbol travels"
+    assert "LONG" in sent, "the side travels"
+    assert why in sent and felt in sent, "both code lists travel"
+
+    leaked = night_slot._forbidden_keys(body)
+    assert leaked == [], leaked
+    for number in (
+        fx.MONEY_ENTRY_PRICE, fx.MONEY_EXIT_PRICE, fx.MONEY_NET_PNL, fx.MONEY_QUANTITY,
+    ):
+        assert str(number) not in sent, f"{number} reached the prompt"
+
+
+def test_a_date_only_exit_note_is_never_a_same_session_note(tmp_path):
+    """The live DRAM shape: a closing fill stamped midnight in its OWN offset.
+
+    `test_tj9e_row_shapes.py::test_a_date_only_exit_is_asked_and_its_note_is_never_same_session`
+    asserts `journal_trade_shape.is_date_only` is True for its fixture's
+    closing leg. That fill is written through `manual_execution_from_fields`,
+    which attaches the DESK's local zone to a naive stamp - Pacific here - so
+    the stored row is ``2026-09-11T00:00:00-07:00`` and that function, which
+    asks the MARKET-LOCAL question alone, reads it as a fill at 03:00 in New
+    York. The tester's line is therefore true only on an Eastern desk. It is
+    reported rather than edited; this pins the BEHAVIOUR it was guarding, over
+    exactly the shape the live journal holds (`trade_origin._is_midnight`'s own
+    docstring records the DRAM row at ``2026-07-16T00:00:00-07:00``).
+
+    Hand-counted: 1 trade, 1 date-only closing leg, and a note typed on the
+    exit's own date that is still NOT `same_session`.
+    """
+    import trade_mentor_trade_check as check
+    import trade_origin
+    from journal_importers import manual_execution_from_fields
+
+    def _row(execution_id, side, qty, price, stamp):
+        return manual_execution_from_fields(
+            {
+                "broker": "MANUAL",
+                "account_number": fx.ACCOUNT,
+                "symbol": fx.DATE_ONLY_EXIT,
+                "side": side,
+                "quantity": qty,
+                "price": price,
+                "timestamp": stamp,
+                "security_type": "STK",
+                "currency": "USD",
+                "commission": 0,
+                "fees": 0,
+                "execution_id": execution_id,
+            }
+        )
+
+    store = fx.new_store(tmp_path)
+    fx.mark_covered(store, fx.REVIEWED)
+    store.upsert_executions(
+        [
+            _row("DO-1", "BUY", 100, 60.0, f"{fx.PRIOR}T08:15:00-04:00"),
+            # Midnight in its OWN offset, which is how the desk really stores a
+            # broker row that carries no clock time.
+            _row("DO-2", "SELL", 100, 61.0, f"{fx.REVIEWED}T00:00:00-07:00"),
+        ]
+    )
+    store.rebuild_trades(refresh_tags=False)
+    trade_id = str(store.list_trades(trade_date=fx.REVIEWED)[0]["trade_id"])
+
+    written = check.save_exit_note(
+        store,
+        trade_id,
+        fx.EXIT_NOTE,
+        exit_session=fx.REVIEWED,
+        # Typed on the exit's OWN date - the only moment a naive rule could
+        # call `same_session`.
+        now=datetime.fromisoformat(f"{fx.REVIEWED}T11:00:00-04:00"),
+    )
+    payload = written["payload"]
+    assert payload["label_provenance"] == trade_origin.RECALLED_AFTER, payload
+    assert payload["label_provenance_reason"] == check.REASON_DATE_ONLY_FILL, payload
+    assert payload["written_after_the_session"] is True, payload

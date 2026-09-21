@@ -148,6 +148,17 @@ OPPORTUNITY_EVENT_TYPES = {
     # Exact next-morning words, saved before the local model prepares a
     # schema-checked recalled-field draft. It is evidence, never a plan field.
     "RECALLED_RAW",
+    # TJ-9E. The trader's own words about ONE exit, in one free-text box, saved
+    # the moment Save is pressed and before anything reads them. Append-only: a
+    # second note on the same exit APPENDS and the first row stays exactly as
+    # it was written, because a trader changing their mind is the interesting
+    # part. `scripts/trade_mentor_trade_check.py` is its only writer.
+    "EXIT_NOTE_RAW",
+    # The three fields behind one exit - why, felt, watching - as the TRADER
+    # confirmed or corrected them. The night's reading of the words is a
+    # PROVISIONAL draft in a pack file and never a row here: only the trader's
+    # own click writes this type, the same way `trade_annotations` is theirs.
+    "EXIT_NOTE_FIELDS",
 }
 
 

@@ -414,6 +414,11 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # stage 2 model slot. A weeknight has no `ai_summary`, so it sits
         # directly before `ticker_briefs` here.
         "observation_tags",
+        # LEAD AMENDMENT 2026-09-21 (TJ-9E): the exit-note reader, a stage 2
+        # model slot registered after `week_review_narration` - which a
+        # weeknight does not carry - so here it sits between the word tagger
+        # and the briefs.
+        "exit_note_fields",
         "ticker_briefs",
         "market_story_narration",
         "journal_enrichment",
