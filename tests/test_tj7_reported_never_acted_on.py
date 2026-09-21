@@ -111,13 +111,33 @@ def test_no_detector_score_alert_watchlist_focus_or_review_module_reads_a_mood()
 def test_nothing_writes_a_mood_into_review_policy():
     """`review_policy.json` ranks and annotates; it has no suppression field and
     it gains no mood field either."""
+    # LEAD AMENDMENT 2026-09-20 (TJ-7 integration, on the reviewer's advice):
+    # this used to flag any file whose SOURCE held both `review_policy` and a
+    # mood word. Three modules the packet REQUIRED TJ-7 to touch state this very
+    # invariant in prose ("...never reaches `review_policy.json`"), so the guard
+    # was unsatisfiable by its own packet and the builder had to reword shipped
+    # docstrings to pass it. The rule it protects is about CONTACT, not words:
+    # a module that imports, loads, drafts or saves the policy may not also
+    # handle a mood. The reviewer proved the same thing by tracing importers.
+    policy_contact = (
+        "import review_policy",
+        "from review_policy",
+        "REVIEW_POLICY_FILE",
+        "save_review_policy",
+        "load_review_policy",
+        "draft_policy_from_state",
+    )
     hits: list[str] = []
+    touching: list[str] = []
     for path in SCRIPTS_DIR.rglob("*.py"):
         source = path.read_text(encoding="utf-8", errors="replace")
-        if "review_policy" not in source:
+        if not any(token in source for token in policy_contact):
             continue
+        touching.append(str(path.relative_to(SCRIPTS_DIR)))
         if "mood" in source or "state_tags" in source:
             hits.append(str(path.relative_to(SCRIPTS_DIR)))
+    # The narrowed scan must still SEE the policy's own modules, or it guards nothing.
+    assert touching, "no module touches the review policy - the contact tokens went stale"
     assert not hits, hits
 
 

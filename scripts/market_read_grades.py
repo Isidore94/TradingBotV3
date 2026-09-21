@@ -3,8 +3,8 @@ lines (TJ-10).
 
 Decision 0021 answer 14: *"'Were you right' is a MEASURED row, never a model's
 opinion."* Nothing in this module calls a model, opens a network, touches a
-detector, a score, an alert, a watchlist, Focus, the review queue or the
-review policy file. It is arithmetic over bars that were handed to it.
+detector, a score, an alert, a watchlist, Focus, the review queue or
+`review_policy.json`. It is arithmetic over bars that were handed to it.
 
 Five rules hold it to evidence rather than interpretation.
 
