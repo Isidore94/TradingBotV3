@@ -7950,6 +7950,114 @@ and `graded 0 of 0 reads` is a true sentence about a day nobody made a call on.
   2), reversing the deliberate fail-open comment the round-1 code carried. Intended by the
   lead's "one shared rule" decision, and the validated NYSE range is 2000-2032.
 
+## TJ-12 - the report card, and why every line quotes somebody else (2026-09-20, packet TJ-12)
+
+The trader, 2026-09-19: *"I want what I missed to be very apparent. I want what I did well
+with to also be very apparent."* The card is the answer, and its whole design rule is that
+**it measures nothing**. Six lines head Day Review above the story - Did well, Missed, Your
+reads, Congruence, Process, How fresh - and each one is a quotation with a count beside it.
+
+**Why no new statistic.** Every number on this card already exists somewhere on the desk with
+a rule behind it. A card that re-derived a run rate would be a second opinion about
+`REAL_MISS_V1`; one that recomputed a Wilson would be a second interval over the same numbers
+and the first thing to drift the day `swing_headline`'s z moves. So `did_well` prints
+`walkaway_day`'s own `liked_not_traded` sentence and its skill sentence, and the family it
+names carries that CELL's own `low`. The tester's fixture is deliberately a trap: `steady` is
+55/100 (bound 0.4524) and `flashy` is 18/30 (rate 0.60, bound 0.4232), so a card ranked on the
+RATE names the wrong family, and `tiny` is 9/10 - the best rate on the board and under the
+floor, so a card that ignored `MIN_REPORTABLE_N` names it. Neither happens.
+
+**Why the DAY line carries no `rate_lb` and the WEEK line does.** A Wilson over one session is
+a statistic the card invented. A week POOLS: the tester's two sessions are four clicks and six
+on purpose, because that is the only shape where pooling (4/10 = 0.400) and averaging (0.458)
+disagree. `week()` sums the counts, de-duplicates the session, and computes the ONE Wilson
+from the pooled pair.
+
+**A ledger status is a vocabulary this module does not own.** The first build tested
+`status != "ok"` and named **22 slots broken for 2026-09-18; 2 were**. Twenty of them had
+finished `ok` hours earlier and were `skipped` by the next half-hourly pass - `daily_digest`
+ok at 22:02:10 and skipped at 03:30:41, `weekly_synthesis` ok at 02:52:23 and skipped three
+minutes later. Only `journal_import` (failed three times) and `ai_summary` (degraded) were
+really not ok. `ai_jobs/ledger.py` owns this vocabulary: `STATUS_OK` is the only completion,
+`ATTEMPT_STATUSES` is the owner's own "something went wrong" set, and a skip is what the
+runner writes whenever the window or the already-done check says there is nothing to do. So
+the card reads the owner's constants and spells none of them, names `failed` and `degraded`
+SEPARATELY (a degraded run published a real document with no narrative - calling that "nothing
+ran" is a different fact), and lets the LAST deciding row win, so a slot that failed and
+recovered is fine and one that ran and then failed is not. **The line whose job is to say when
+the night failed is the one line that must never cry wolf.**
+
+**A night the window cannot reach is `unknown`, never quiet.** The second build set
+`night_status` on `target.exists()` alone, so a session whose rows fell outside the tail read
+*"0 overnight slot(s) read, 0 finished ok, none reported trouble"*. On the live ledger
+(1,256,082 bytes, 483 rows) the 256 KB / 500-row window holds **173 rows and reaches back only
+to 2026-09-11**, so **9 of the 15 sessions the Day Review picker offers** reported a clean
+night over 10-16 real slots each, and 2026-09-11 was half-visible and said 5 finished ok when
+16 did. Same defect class as the status bug, in the same line. `_tail_rows` now returns a
+`_LedgerTail` that says whether the read TRUNCATED and the oldest `session_date` it saw, and
+`how_fresh` has three answers: **unknown** past that edge (the asked session `<=` the oldest,
+because the window may have cut that night in half - exactly the 2026-09-11 case), with no
+failed slots and **no slot counts at all**, since a count there would measure the window and
+not the night; **`no_rows`** for a covered session that is genuinely empty; and "none reported
+trouble" only ever over at least one slot actually read. There is no second read and no
+whole-file fallback - the file is opened exactly once either way - and truncation is a fact
+about the READ, never about the date, so a small ledger read whole still gives an old session
+its real counts.
+
+**An unread lane is not an answer.** `trade_origin.planned_state` says `unplanned` whenever
+nothing precedes the first fill - and the desk can only read two of the four lanes, so **30 of
+the trader's 33 trades since 2026-08-20 came back `unplanned`** (17 sessions, mean 1.8 a
+session) and the woken Mentor was about to ask about every one of them. Missing data read as
+confirmation is exactly what plan.md sec 5 forbids, and the fix is not to guess: the card says
+what it DID look at, names what it did not (`DESK_ORIGIN_LANES_READ`, one constant both lane
+builders build from), carries `lanes_read` / `lanes_unread` so TJ-5 and the pack say the same,
+and the question leads with the same caveat and offers `a_focus_pick`. When **TJ-12F** fills
+the two lanes the plain wording comes back on its own - no re-wording, because the sentence is
+chosen from what the caller DECLARED it read.
+
+**Why `How fresh` exists and why it reads a tail.** The trader's second look added it: a page
+that shows yesterday's numbers without saying the night failed is a page that lies quietly. It
+names the story's stamp, the last session the desk has VERIFIED fill coverage for
+(`trade_mentor_trade_check.fills_current_to` - an absence is NOT a date, so it says "no
+verified coverage yet" rather than printing today), the session the reads were graded through,
+and any slot whose LAST deciding row for the session is not `ok`. `ai_jobs.ledger.recent_rows`
+reads the whole file before slicing it, which is right for the runner and wrong for one
+sentence on a page, so past `LEDGER_TAIL_BYTES` (256 KB) `day_report_card` seeks the tail
+itself and `ai_jobs/ledger.py` is left unchanged for its other callers. And a missing store is
+`unknown`, never "fine": `ledger_path()` defaults to `create=True`, so the reader whose honest
+answer may be "I cannot see last night" must not be the thing that creates the folder it is
+asking about.
+
+**Why it is on the worker.** TJ-1's rule: Day Review reads ONE payload on ONE worker. The card
+is another projection of that payload, not a second read. The two file reads it needs - the
+read ledger through `prediction_ledger.your_reads` (so the tally travels as integers and the
+page counts nothing) and the job ledger's tail - belong to `read_day` and to nowhere else. The
+page's `render` formats six strings. Every line is guarded on its own, so one owner raising
+costs its own sentence (`could not be read: ...`, `measured_ok: False`) and a failed card
+costs the card, never the day.
+
+**Why the wake happened here.** `mentor_questions` registers a kind with `dormant_until`
+naming the packet that builds its reader, because a question whose answer nothing reads is the
+trader's time spent for nothing (decision 0021 answer 28). TJ-12 IS that packet for
+`trade_origin` and `open_position_check`, so the field is cleared and the lane is filled.
+Filling the lane is not optional: `planned_state` answers `unplanned` when nothing was said,
+and an unread store looks exactly like nothing said - waking the kind with an empty lane would
+have asked the trader where EVERY trade came from.
+
+**What changes for the trader on MONDAY, once this is live.** The card heads Day Review, so
+the first thing on the page is what they did well and what they missed, each with its `n` and
+each clickable to the table it came from, and `How fresh` says underneath whether last night's
+work actually ran. On the Mentor card (DESK / EVENING / OFF, never AWAY) two new questions
+become possible: *where did this trade come from* about a trade the desk cannot connect to any
+claim or like before its first fill - about **two a session** on the last 17 sessions'
+evidence, comfortably inside the budget of three, asked once per trade, with `Stop asking
+this` always available and the prompt SAYING that Focus adds and armed alerts are not read
+yet - and *is the thesis intact* once a week about a position still open past five exchange
+sessions. An unanswered long hold reports as `unanswered`, never as "the thesis is intact",
+which is a claim nobody made. And the Process line no longer hands the trader a daily
+scoreboard calling them impulsive: it says *"2 planned (a claim or like before the first
+fill), 1 with no claim or like before the fill"* and then names the lanes it could not read.
+
 ## TJ-3 - a mark sits on a bar only when it happened DURING that bar (2026-09-19, packet TJ-3)
 
 The long form behind the CLAUDE.md rule *"A note marker sits on a bar only when it
