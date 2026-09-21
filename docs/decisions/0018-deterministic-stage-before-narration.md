@@ -303,3 +303,24 @@ them, and nothing else. The order pins to run are therefore SEVEN files —
 `tests/test_ws_rp_shared_report.py`, `tests/test_tj13b_local_large_provider.py`,
 `tests/test_tj13b_probe_guards.py` and `tests/test_opt_in_evidence_scopes.py` —
 with `-k "slot or stage or slate or order"` beside them.
+
+**EXTENDED 2026-09-20 (TJ-5): the pair now holds THREE slots, and there is an
+eighth pin.** `week_review_narration` (TJ-5, merged into
+`lead/p033-integration2` `1b9d77e0`) joins stage 2 between `observation_tags`
+and `ticker_briefs`, so the slots that may sit between `ai_summary` and
+`ticker_briefs` are, IN THIS ORDER: **`day_review_narration`,
+`observation_tags`, `week_review_narration`** — and nothing else. It is ahead of
+the briefs because they reserve 120 minutes while the week story is what the
+trader opens Weekend Prep to read, and it cannot move further forward because
+`measured_report` sits directly before `ai_summary` and two files pin that pair.
+It is SATURDAY-slate only, through the EXISTING `runner.WEEKEND_ONLY_SLOTS` and
+no second constant, and Sunday offers it only when Saturday attempted it and did
+not finish. It loads a local model (`uses_model=True`, no `model_free_kwargs`,
+so `--force` may not buy it the daytime clock) and its reserve is
+`TIMEOUT_SECONDS / 60 + RESERVE_MARGIN_MINUTES`. **`tests/test_tj5_week_slot_and_slate.py`
+is now an EIGHTH order pin that a future slot packet must respect**: it asserts
+the ADJACENCY `observation_tags` → `week_review_narration` → `ticker_briefs`,
+so a new stage-2 slot inserted anywhere among those three fails there even when
+`EXPECTED_SLOT_ORDER` has been updated. The three files amended at this merge
+were `tests/test_ai_jobs_runner.py`, `tests/test_veto_cohort_grading.py` and
+`tests/test_opt_in_evidence_scopes.py`; the other five needed no edit.
