@@ -4639,6 +4639,30 @@ trader already had, only wider and now useless. The y-range comes from the VISIB
 The log/linear decision still asks EVERY bar, though: a non-positive bar off the left edge is
 one pan away, and flipping the scale under the trader mid-drag is worse than opening linear.
 
+**The visible window MOVES, and since 2026-09-21 the scale moves with it.** The first build
+framed the y-range once, in `set_data`, and nothing ever framed it again. The trader's words
+for the result: *"when i scroll back on the visual charts i want things to get smaller so i
+can see more, right now it just moves the chart to the left and squishes things."* Two causes.
+(1) Every older candle a scroll brought in was drawn against the opening window's prices -
+measured on the fixture: bars down to 65.71 on screen under a scale that stopped at 162.40 -
+so they were clipped and squeezed sideways, never smaller. (2) pyqtgraph's wheel zooms x
+around the CURSOR, and with the newest candle on screen half of every zoom-out went into the
+empty space to its right, so the chart slid left. Now `CandleChart.wheelEvent` owns the wheel:
+**the newest candle, when it is in view, is the anchor and the whole zoom goes into the
+past**; elsewhere in the tape the cursor is the anchor as before; the span is held between
+`_MIN_VISIBLE_BARS` (10) and the whole payload; the per-notch step is pyqtgraph's own, so the
+feel did not change. `_refit_y_to_visible` re-frames the prices from the candles ON SCREEN
+after every wheel notch and every manual drag (`sigRangeChangedManually`), through `_frame_y` -
+the ONE place the 5% padding and the earnings headroom are applied, shared with `set_data`.
+The y axis is not mouse-driven, so there is no hand-set scale to trample. A malformed bar
+still gets no vote (`bar_integrity.scale_vote`, the per-bar judgement `price_range` pools,
+indexed lazily ONCE per payload into two arrays so a notch is two slices rather than a pass
+over a thousand dicts on the Qt thread); nothing trustworthy in view leaves the scale where
+it was. Levels and overlays still get no vote, a programmatic `setXRange` (Load older's
+`restore_bar_span`) is not a manual change and re-frames nothing, and panning still does not
+recompute levels. Tests: `tests/test_chart_wheel_zoom.py`, through the viewport a real mouse
+uses.
+
 **Levels from the payload.** `chart_levels.horizontal_levels` filters store levels to the
 chart's price range and then applies a clutter budget per bucket. Handed a four-year range it
 admits four-year-old levels, and they compete for that budget with the lines the trader can

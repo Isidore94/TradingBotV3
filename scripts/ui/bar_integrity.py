@@ -155,6 +155,23 @@ def range_outliers(
     ]
 
 
+def scale_vote(bar: Mapping[str, Any]) -> tuple[float, float, bool] | None:
+    """One bar's ``(low, high, well_formed)`` say in the price scale.
+
+    ``None`` when its low/high cannot stand at all. The judgement
+    :func:`price_range` pools, exposed per bar so a chart that re-frames while
+    the trader zooms can index it ONCE per payload instead of re-judging every
+    visible bar on every wheel notch.
+    """
+    low = _price(bar, "low")
+    high = _price(bar, "high")
+    if low is None or high is None or not isfinite(low) or not isfinite(high):
+        return None
+    if high < low:
+        return None
+    return (low, high, bar_defect(bar) is None)
+
+
 def price_range(bars: Sequence[Mapping[str, Any]]) -> tuple[float, float] | None:
     """(low, high) across the bars a chart may take its scale from.
 
@@ -167,13 +184,11 @@ def price_range(bars: Sequence[Mapping[str, Any]]) -> tuple[float, float] | None
     trusted: list[tuple[float, float]] = []
     salvaged: list[tuple[float, float]] = []
     for bar in bars or ():
-        low = _price(bar, "low")
-        high = _price(bar, "high")
-        if low is None or high is None or not isfinite(low) or not isfinite(high):
+        vote = scale_vote(bar)
+        if vote is None:
             continue
-        if high < low:
-            continue
-        (trusted if bar_defect(bar) is None else salvaged).append((low, high))
+        low, high, well_formed = vote
+        (trusted if well_formed else salvaged).append((low, high))
     pool = trusted or salvaged
     if not pool:
         return None

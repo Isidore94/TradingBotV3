@@ -1275,6 +1275,18 @@ They are evidence and must not be loaded as context.
   price. Cached snapshots for the selected symbol still render immediately.
   Tests: `tests/test_chart_symbol_isolation.py`; acceptance and delivery state are
   recorded in `CURRENT_CHECKPOINT.md`. No detector, score or provider change.
+- **Scrolling back on a chart shows MORE of it (trader, 2026-09-21; `candle_chart.py`).**
+  `CandleChart.wheelEvent` owns the wheel: with the newest candle in view it is the ANCHOR and
+  the whole zoom goes into the past (pyqtgraph's cursor anchor spent half of every zoom-out on
+  the empty space to its right, so the chart slid left); elsewhere the cursor is the anchor;
+  the span is held between `_MIN_VISIBLE_BARS` (10) and the whole payload. After every wheel
+  notch and every manual drag `_refit_y_to_visible` takes the price scale from the candles ON
+  SCREEN through `_frame_y` (the one framing rule, shared with `set_data`), so older candles
+  get smaller instead of being clipped against the opening window's prices. A malformed bar
+  gets no vote (`bar_integrity.scale_vote`, indexed lazily once per payload), nothing
+  trustworthy in view leaves the scale alone, levels and overlays still get no vote, and a
+  programmatic range change re-frames nothing. Long form: DESK_INTERNALS "Three things that
+  would have been wrong". Tests: `tests/test_chart_wheel_zoom.py`.
 - **The chart's bars and the chart's view are two different numbers (WS-CH, WISHLIST 10H,
   2026-09-13, sweep branch).** `chart_snapshot.D1_HISTORY_SESSIONS` (1,000, about four NYSE
   years) is how far back a daily payload REACHES and `D1_DEFAULT_SESSIONS` (90) is how many bars
@@ -3618,6 +3630,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-21 - Scrolling back on a chart shows more of it (branch `claude/chart-wheel-zoom-2026-09-21`, NOT on `main`)
+
+The trader: *"when i scroll back on the visual charts i want things to get smaller so i can see more, right now it just moves the chart to the left and squishes things."* `CandleChart` framed its price scale once, on open, and let pyqtgraph zoom x around the cursor. Now the wheel anchors on the newest candle when it is in view, and the price scale re-frames from the candles on screen after every wheel notch and manual drag. Presentation only: no detector, score, alert, level or payload changed. Nine new tests (six red before), driven through the viewport. Inventory: "Charts, review, alerts, and phone surfaces".
 
 ### 2026-09-20 - TJ-7: a mood is reported, never acted on - and every building packet of Phase 0.33 is merged (branch `claude/tj7-mood-fields`, tip `bcfdd918`, merged into `lead/p033-integration2` `b63db7af`, lead guard amendment `ae7c06c7`, follow-up merge `0a0a0be4`)
 
