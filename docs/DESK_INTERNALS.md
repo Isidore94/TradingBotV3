@@ -8058,6 +8058,135 @@ which is a claim nobody made. And the Process line no longer hands the trader a 
 scoreboard calling them impulsive: it says *"2 planned (a claim or like before the first
 fill), 1 with no claim or like before the fill"* and then names the lanes it could not read.
 
+## TJ-5 - the week is five days, and a day nobody packed is not a quiet day (2026-09-20, packet TJ-5)
+
+The trader asked for *"5 of these days collated into one tab … to see if I was right, to see
+if I chased in bad news environments, and to compare what I actually said to what I did"*
+(2026-09-17). Weekend Prep's first step is that tab. The shape is TJ-1's: ONE payload, ONE
+worker, one render and no special cases - `reload()` on this page used to BE the read, and
+was the worst measured stall on the desk (8.45 s of frozen GUI, fluidity capture
+2026-08-25).
+
+**Five cards, always.** A card is a DAY, not a pack. The live day-review folder held three
+session folders and ZERO `pack.json` on 2026-09-20, so the first thing the trader sees is
+`0 of 5 sessions have facts` - and that has to read as honest rather than broken. A day with
+no pack says `not packed` and its tally says `no reads graded`; it is never blank (which
+reads as a quiet day) and never zeroed (`0 right of 0` is a measurement nobody made). A day
+that does not EXIST - the fifth weekday of a holiday week - shows its heading alone rather
+than the double negative *"no session this exchange week: not packed"*.
+
+**The page computes nothing.** Every number on it was computed by the module that owns it.
+The week-level numbers come from `week_review_narration.build_week_inputs` - the SAME
+function the Saturday slot narrates from - so the page and the story cannot disagree about
+how many days had facts. The strip's pooling is `day_report_card.week_from_cards`. The
+tests prove the boundary by monkeypatching `day_review_pack.build_pack`,
+`day_report_card.build`, `day_report_card.week` and `run_week_review_narration` to RAISE;
+the page still renders. The day chart's bars come from TJ-2's durable parquet only
+(`day_review_bars.read_session_bars`): a page that reached a provider on open would be five
+network calls behind a tab click.
+
+**Why `week_from_cards` exists.** `day_report_card.week(sessions)` needs TJ-11's
+`WalkawayDay` OBJECTS: `_rows_of` is `getattr(walkaway, name, ())` and `_skill_window` reads
+`walkaway.skill`. A day pack carries neither - it carries the BUILT lines with all of their
+integers. So the week cannot be re-cut by re-reading twenty packs and calling `week()`. The
+pooling therefore lives once, in the module that owns what a line IS, and `week()` delegates
+to it. The half it cannot do is the best FAMILY, which needs the walk-away skill cells: a
+week pooled from cards names no best family and SAYS why
+(`day_report_card.NO_FAMILY_FROM_CARDS`), because a best of five day-winners is a ranking of
+days, not of families.
+
+**An unreadable day is not a quiet day.** `day_report_card._unreadable_line` marks a line
+the desk could not build (`measured_ok: False`) so the page says which of the six sentences
+failed rather than showing six placeholders. Pooled into a week, that marker used to be
+DROPPED and the cell read `n 0 / measured 0` - which is exactly what a day the trader did
+nothing on looks like. `_pool_cards` now carries `unreadable_sessions` on every pooled line
+(present and empty when there are none) and says `K day(s) could not be read` when there are
+any. The COUNTS do not move: a day nobody could read measured nothing, and adding it to `n`
+would invent a denominator. `week()` and `week_from_cards` share `_pool_cards`, so TJ-12's
+own week path gained the marker in the same edit with every TJ-12 test untouched and green.
+
+**`how_fresh` is asked per session, by the strip.** It is deliberately not in the day pack:
+it describes the machine's night and its text moves every time the job ledger gains a row,
+which inside the pack's hashed body would move `inputs_hash` and buy a model call to
+re-narrate the same session night after night. `_slot_verdicts` guards with
+`if session and …`, so an EMPTY session pools every night the ledger tail holds - a five-day
+window built that way would multiply its own `n` by five (the advisory TJ-12's third review
+round recorded for this packet). The strip therefore builds each day's card from the pack's
+five stored lines and asks `how_fresh` itself, with that session, through a ledger opened
+`create=False`: a reader whose honest answer may be *"night status unknown"* may not make a
+store in order to say so.
+
+### The week story: one call, and a schema is still not a guard
+
+`week_review_narration` is TJ-4's pattern at week scale. Its inputs are the five packs, the
+five day stories, the weekly rollup and TJ-15's/TJ-16's contrast packs; `EVIDENCE_KEYS` is a
+closed tuple and a test asserts that no bar or lake name can be in it. Each day travels
+BOUNDED - at most `MAX_ITEMS_PER_DAY` said items and read rows - and what did not fit is
+COUNTED and said in the day's `omitted` block, never silently dropped; a day's `tally` is
+counted over its WHOLE read list, never the bounded copy. Every citation is
+SESSION-QUALIFIED (`week_source_id`, separator `/`): each pack mints ids with its own
+minter, so `said:<entry>:prediction` repeats across the five and an unqualified citation in
+a week story would name two rows. The bounds handed to the provider come from the input
+(`_schema_for`) and are re-checked afterwards in `check_week_narration` - `maxItems` and
+`additionalProperties` are a grammar hint to the decoder, never a guard, and three packets
+shipped that bug on 2026-09-20 alone. A rejection costs the NIGHT and never the file the
+trader read last Saturday.
+
+The reviewer attacked the narration **21 times and was rejected 21 times** - a fourth
+tendency when three were offered, a tendency `n` bent by one, an invented and a duplicated
+tendency cell, `were_you_right.right` plus one, an empty headline, empty `sources`, an id
+from a session outside the week, the SAME id unqualified, extra keys at depths 1, 2 and 3,
+10,000-item arrays and 9,000-character strings - with the prior week file byte-identical
+after every one, no `.tmp` left behind and the status always `ledger.STATUS_FAILED`. A
+replay of LAST week's own valid reply is rejected on its first out-of-week id. Below the
+floor (`MIN_NARRATED_DAYS` = 3) the slot writes a deterministic scaffold holding
+`narrated K of 5` with a falsy `narration` and status `skipped`, and loads no model at all -
+measured at **0 model calls**; a run that does narrate makes exactly **one**, and a second
+run on an unchanged hash makes **none**.
+
+**A reserve is not a timeout.** The unmeasured default was 30 minutes beside a 1,800 s
+timeout - the same thirty minutes - so a call that ran to its own timeout consumed the whole
+reserve and left nothing for the model load, the validation and the write.
+`DEFAULT_RESERVE_MINUTES` is derived from `TIMEOUT_SECONDS` plus `RESERVE_MARGIN_MINUTES`
+(40 min), so the two cannot drift, and a TJ-13B probe measurement still overrides both.
+
+**Which model.** `provider.week_review_plan()` answers `may_run_large: False` until TJ-13B's
+probe row exists. That costs the LARGE model and never the story (lead decision, 2026-09-19:
+the trader wants a week story every Saturday), so the slot asks the MEDIUM tier and the
+plan's reason is written to the row under `provider.LEDGER_FIELD`. `openai` is refused by
+the provider seam before anything is sent, and the slot records a FAILED row carrying that
+sentence rather than crashing the night.
+
+**Cost, measured and not repaired.** On a desk-sized scratch tree (20 sessions of packs,
+191,930 bytes) the whole payload took **0.029 s** with a traced peak of **0.5 MB** and came
+to 11,904 bytes of JSON - but it made **37 `read_pack` calls per page open** for at most 20
+unique sessions, because the four week windows, the month-to-date and `build_week_inputs`
+each re-read. That is RECORDED here rather than repaired: it is 29 ms today and it scales
+with real pack size, so it is the first thing to look at if this page ever feels slow.
+
+**The lesson from integration.** A targeted run cannot see a source-count pin in another
+packet's test. The sparkline set a minimum height of its own; R4's one-owner rule for the
+table floor is pinned by counting the SETTERS
+(`test_the_ten_row_floor_is_one_constant`), so a second setter in a new widget broke a test
+in a file TJ-5 never touched and no `-k tj5` run could ever have shown it. The lead's full
+suite on the trial merge caught it and the fix (`e93ffe49`) states the floor as a size HINT
+instead. When a packet adds a widget with a size rule, the full suite is the only proof.
+
+**What the trader reads first, on a desk with zero packs.** Today's live
+`C:\TradingBotData\day_review\sessions\` holds three session folders and no `pack.json` at
+all, so the page opens on `0 of 5 sessions have facts`; five cards each reading
+`<date>: not packed - the desk has no facts for this day.` with `no reads graded`, chased
+`unmeasured`, said vs did `unmeasured` and an empty chart; the week-story panel reading
+*"No week story yet. The Saturday night slot writes it from the week's own packs; nothing is
+fetched or narrated by this page."* (after the first Saturday night it reads *"No week story
+yet - narrated 0 of 5. The night writes one once three of the week's days have a story of
+their own; below that the desk says the count rather than narrating days nobody
+measured."*);
+a week/month strip whose every cell says `n 0 - measured 0` with `how_fresh` reading the
+night status it can actually see; and a summary saying `WALK-AWAY THIS WEEK: no session
+packed yet.` with the unpacked days named. Nothing on that page claims a measurement. It
+reads as a desk waiting for its first packs, which is what it is.
+
 ## TJ-3 - a mark sits on a bar only when it happened DURING that bar (2026-09-19, packet TJ-3)
 
 The long form behind the CLAUDE.md rule *"A note marker sits on a bar only when it

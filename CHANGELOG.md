@@ -2803,6 +2803,57 @@ They are evidence and must not be loaded as context.
   `tests/test_tj12_pack_hook.py`, `tests/test_tj12_mentor_wake.py`,
   `tests/test_tj12_review1_fixes.py`, `tests/test_tj12_review2_tail_window.py`,
   `tests/tj12_support.py`. Rule: DESK_INTERNALS "TJ-12". Gates #157, #168-#170 owed.
+- **Week Review - the week the trader opens Weekend Prep to read (TJ-5, 2026-09-20).**
+  Weekend Prep's FIRST step becomes five DAY CARDS (headline, were-you-right tally, chased
+  flag, said-vs-did line and a small SPY sparkline), the overnight week story, the week's
+  walk-away totals and a deterministic strip of TJ-12's report-card lines re-cut by exchange
+  week for four weeks and for the calendar month to date. A day nobody packed is NAMED and
+  its tally reads `no reads graded`, never a zero; a day whose report-card line the desk
+  could NOT build is carried on the pooled line and in the strip cell as
+  `unreadable_sessions` (present and empty when there are none) and adds nothing to any
+  count - dropping that marker made an unreadable day indistinguishable from a quiet one.
+  **The page computes nothing**: ONE payload
+  (`ui/services/weekend_prep_service.read_week_review`, with `week_strip` and the
+  review-learning callouts inside it) arrives on the page's own worker and `WeekReviewPage`
+  renders it - single-flight, five sparklines built once and only repainted, and
+  `day_review_pack.build_pack`, `day_report_card.build`, `day_report_card.week` and
+  `run_week_review_narration` all monkeypatched to RAISE in its tests. `how_fresh` is asked
+  per session BY THE STRIP, always WITH a session (it is deliberately absent from the day
+  pack, whose hashed body it would move every night).
+  **Pooling lives in ONE place**: `day_report_card.week_from_cards(cards)` (additive to
+  TJ-12's module, the same arithmetic `week(sessions)` now delegates to) pools the stored
+  lines' INTEGERS once per session with the ONE Wilson on the pooled pair, prints no rate
+  under `MIN_REPORTABLE_N`, and names NO best family - a best of five day-winners is a
+  ranking of days, not of families (`NO_FAMILY_FROM_CARDS`).
+  New overnight slot **`week_review_narration`** (`scripts/ai_jobs/week_review_narration.py`):
+  decision 0018 stage 2, directly after `observation_tags` and directly before
+  `ticker_briefs`, on the SATURDAY slate only through the EXISTING
+  `runner.WEEKEND_ONLY_SLOTS` (Sunday picks it up only when Saturday left it owed), reserve
+  `TIMEOUT_SECONDS / 60 + RESERVE_MARGIN_MINUTES` (40 min) so a call that runs to its own
+  timeout still leaves room for the model load and the write, a measured probe still winning.
+  Its `EVIDENCE_KEYS` is CLOSED - the five day packs, the five day stories, the weekly
+  market-story rollup and TJ-15's/TJ-16's contrast packs, and a test proves no bar, lake or
+  journal-stream section can join it. Every bound comes from the INPUT (`_schema_for`) and is
+  RE-CHECKED after the reply (`check_week_narration`); every citation is SESSION-QUALIFIED
+  (`week_source_id`, separator `/`), because each pack mints ids with its own minter. A
+  fourth tendency, a tendency quoting an `n` its cell does not carry, a `were_you_right`
+  triple that is not the measured one, a citation the week does not hold or an empty headline
+  rejects the WHOLE answer and leaves last Saturday's file byte-identical; an unchanged hash
+  publishes nothing and costs no call. Fewer than `MIN_NARRATED_DAYS` (3) narrated days
+  writes a deterministic scaffold saying `narrated K of 5`, status `skipped`, and loads NO
+  model; a run that does narrate makes exactly ONE model call, on the MEDIUM local model
+  until TJ-13B's probe row exists, with the reason in the row under `provider.LEDGER_FIELD`
+  (`model_attribution.fallback_reason`). `openai` stays a setting that is off: the provider
+  seam refuses it before anything is sent and the slot records a FAILED row with that
+  sentence. Output `DAY_REVIEW_DIR/week/<YYYY-Www>.json`. `ai_jobs.provider._local_setting`
+  reads a setting through BOTH import identities of `project_paths` (production has one
+  file; under pytest `scripts/` is both a path entry and a package).
+  `selftest.LAZY_ENGINE_MODULES` gains `ai_jobs.week_review_narration`: source selftest
+  **96/96 -> 97/97**. Tests: `tests/test_tj5_week_narration.py`,
+  `tests/test_tj5_week_slot_and_slate.py`, `tests/test_tj5_week_strip.py`,
+  `tests/test_tj5_week_review_page.py`, `tests/test_tj5_review1_followups.py`,
+  `tests/tj5_support.py`. Rule: DESK_INTERNALS "TJ-5"; slot position: decision 0018 addendum
+  2026-09-20. Gates #149, #170 and #171 owed.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
@@ -3443,6 +3494,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-20 - TJ-5: the week pools counts and narrates only its own packs (branch `claude/tj5-week-review`, tip `e93ffe49`, merged into `lead/p033-integration2` `1b9d77e0`)
+
+Trader, 2026-09-17: *"5 of these days collated into one tab … to see if I was right, to see if I chased in bad news environments, and to compare what I actually said to what I did."* Weekend Prep's first step is now that tab, and three rules make it honest. **(1) The page computes nothing.** ONE payload on ONE worker, single-flight, five sparklines built once and only repainted; every number on the page was computed by the module that owns it, and the tests prove it by monkeypatching `build_pack`, `day_report_card.build`, `week` and `run_week_review_narration` to RAISE while the page still renders. **(2) A day nobody packed, and a day nobody could read, are two different things, and neither is a quiet day.** An unpacked day says `not packed` with `no reads graded` - never blank, never `0 right of 0`, which is a measurement nobody made - and an unreadable report-card line is carried as `unreadable_sessions` on the pooled line and said in the cell, while the COUNTS do not move (adding it to `n` would invent a denominator). **(3) The week pools in one place.** `day_report_card.week(sessions)` needs TJ-11's `WalkawayDay` OBJECTS, which a pack does not carry, so the week could not be re-cut by re-reading packs; `day_report_card.week_from_cards` pools the stored lines' integers once per session with the ONE Wilson on the pooled pair and `week()` delegates to it. The half it cannot do is the best FAMILY - that needs the walk-away skill cells - so a week pooled from cards names none and SAYS why. The Saturday-only `week_review_narration` slot is TJ-4's pattern at week scale: a closed `EVIDENCE_KEYS` (no bars, no lake, no journal stream), bounds taken from the input and RE-CHECKED by the verifier after the reply, session-qualified source ids (each pack mints ids with its own minter, so an unqualified citation in a week story would name two rows), whole rejection with the prior file byte-identical, an unchanged-hash skip, and below three narrated days a deterministic scaffold reading `narrated K of 5` with ZERO model calls. **Reviewer GO in round 1** at `f7fac9cb`: 21 attacks on the narration, 21 whole rejections, the prior week file byte-identical after every one and no `.tmp` left behind; the payload measured 0.029 s and 0.5 MB of peak on a 20-session tree; 37 `read_pack` calls per page open were RECORDED, not repaired. The follow-up `ea8f8bdc` took five cheap advisories, each with the test that catches it: the unmeasured reserve became `TIMEOUT_SECONDS / 60 + RESERVE_MARGIN_MINUTES` (40 min, so a call that runs to its own 30-minute timeout no longer eats the whole reserve), the unreadable-day marker stopped being dropped, and a holiday card and the zero-pack summary read plainly. **Lead amendment `e93ffe49`:** the week sparkline states its floor as a size HINT rather than a second minimum-height setter - the full suite on the trial merge caught it breaking R4's one-owner pin `test_the_ten_row_floor_is_one_constant`, which no targeted run could see, because a source-count pin lives in another packet's test. On a desk with zero packs the page reads `0 of 5 sessions have facts` and *"No week story yet. The Saturday night slot writes it from the week's own packs; nothing is fetched or narrated by this page."* - which is what the live store holds today. Long form: DESK_INTERNALS "TJ-5".
 
 ### 2026-09-20 - TJ-12: the report card says what it cannot see (branch `claude/tj12-report-card`, tip `1a88d4a4`, merged into `lead/p033-integration2` `843a3f02`)
 
