@@ -648,6 +648,11 @@ def test_the_scope_can_be_selected_on_demand():
         # stage 2 after `ai_summary` (the `measured_report` / `ai_summary` pair
         # stays adjacent) and before the two-hour briefs.
         "observation_tags",
+        # TJ-5 (2026-09-20): the week story, appended inside stage 2 directly
+        # after the word tagger and before the two-hour briefs. Saturday only
+        # (`runner.WEEKEND_ONLY_SLOTS`); this slate is `default_slots()`, which
+        # is the order WITHIN a night and holds every slot.
+        "week_review_narration",
         "ticker_briefs",
         "market_story_narration",
         # Stage 3. LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run

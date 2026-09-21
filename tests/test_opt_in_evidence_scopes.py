@@ -104,13 +104,15 @@ def test_the_scope_can_be_selected_on_demand(scope):
     # asserts the journal pair still leads and the narration pair is intact.
     names = [slot.name for slot in slots]
     assert names[:2] == ["journal_import", "journal_auto_tag"]
-    # LEAD AMENDMENT 2026-09-20 (TJ-4 + TJ-16 integration): this line used to
-    # say `ai_summary` sits DIRECTLY before `ticker_briefs`. The pair keeps its
-    # ORDER, but two short stage-2 slots now sit between them on purpose: the
-    # day story (gate #158 wants it finished before 23:30 Pacific, and the
-    # briefs reserve 120 minutes) and then the word tagger. Nothing else may.
+    # LEAD AMENDMENT 2026-09-20 (TJ-4 + TJ-16 integration, extended by TJ-5):
+    # this line used to say `ai_summary` sits DIRECTLY before `ticker_briefs`.
+    # The pair keeps its ORDER, but three stage-2 slots now sit between them on
+    # purpose: the day story (gate #158 wants it finished before 23:30 Pacific,
+    # and the briefs reserve 120 minutes), the word tagger, and then TJ-5's
+    # week story - the Saturday-only slot the trader actually opens Weekend
+    # Prep to read. Nothing else may.
     between = names[names.index("ai_summary") + 1:names.index("ticker_briefs")]
-    allowed = ["day_review_narration", "observation_tags"]
+    allowed = ["day_review_narration", "observation_tags", "week_review_narration"]
     assert between == [name for name in allowed if name in between]
     assert names.index("daily_digest") < names.index("ai_summary")
     # And the override is per-call: building again without it is untouched.

@@ -22,8 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QThread, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QPointF, QSize, QThread, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -50,6 +50,7 @@ import weekend_strength
 from ui.services import journal_feed
 from ui.read_worker import ReadWorker, join_worker
 from ui.widgets.data_table import apply_width_rule_to_table_widget
+from ui.services import weekend_prep_service as prep_service
 from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
 
 #: How many folded RS/RW rows one bucket may show in the week review. A cap
@@ -284,54 +285,304 @@ def callout_lines(state) -> list[str]:
     return lines
 
 
+_WEEK_SPARKLINE_MIN_PX = 44
+_WEEK_SPARKLINE_MAX_PX = 64
+
+
+class _WeekSparkline(QWidget):
+    """One session's index closes as a line. Built ONCE per card and reused.
+
+    Deliberately not a pyqtgraph plot: five plots on one page is five scenes,
+    five view boxes and five stylesheet passes for a thumbnail nobody
+    interacts with, and `plan.md` sec 5's rule is that nothing expensive
+    belongs on the Qt thread. This paints ONE polyline from numbers the worker
+    already read; `set_points` stores and calls `update()`, so a refresh is a
+    repaint and never a rebuild, and the widget identity survives every one.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._closes: list[float] = []
+        self.setMaximumHeight(_WEEK_SPARKLINE_MAX_PX)
+
+    # LEAD AMENDMENT 2026-09-20 (TJ-5 integration): the thumbnail's floor is a
+    # SIZE HINT, the way a custom-painted widget states one. A second
+    # minimum-height setter call in this file broke R4's pin that the ten-row
+    # TABLE floor has ONE owner (`test_the_ten_row_floor_is_one_constant`) -
+    # the full suite caught it, the targeted runs could not.
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt's name
+        return QSize(0, _WEEK_SPARKLINE_MIN_PX)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt's name
+        return QSize(120, _WEEK_SPARKLINE_MIN_PX)
+
+    def set_points(self, rows) -> None:
+        closes: list[float] = []
+        for row in rows or ():
+            try:
+                closes.append(float(row.get("c")))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        self._closes = closes
+        self.update()
+
+    @property
+    def points(self) -> tuple[float, ...]:
+        return tuple(self._closes)
+
+    def paintEvent(self, event) -> None:  # pragma: no cover - painting
+        if len(self._closes) < 2:
+            return
+        low = min(self._closes)
+        high = max(self._closes)
+        span = (high - low) or 1.0
+        width = max(1, self.width() - 4)
+        height = max(1, self.height() - 6)
+        step = width / (len(self._closes) - 1)
+        polygon = QPolygonF(
+            [
+                QPointF(2 + index * step, 3 + height * (1.0 - (value - low) / span))
+                for index, value in enumerate(self._closes)
+            ]
+        )
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(QPen(QColor("#5aa9e6"), 1.4))
+            painter.drawPolyline(polygon)
+        finally:
+            painter.end()
+
+
+class _WeekDayCard(QFrame):
+    """ONE day of the reviewed week: headline, tally, chased, said-vs-did, chart.
+
+    A card is a DAY, not a pack. A week with three packs still has five cards,
+    and the two nobody packed SAY so: a blank card reads as a quiet day and a
+    zeroed tally reads as "you were right 0 of 0", which is a measurement
+    nobody made (`plan.md` sec 5 - missing data is uncertainty, never
+    confirmation).
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("WeekDayCard")
+        self.setFrameShape(QFrame.StyledPanel)
+        self.session = ""
+        self.heading = QLabel("")
+        self.heading.setObjectName("SectionSubtitle")
+        self.headline = QLabel("")
+        self.headline.setWordWrap(True)
+        self.tally = QLabel("")
+        self.chased = QLabel("")
+        self.chased.setWordWrap(True)
+        self.said_vs_did = QLabel("")
+        self.said_vs_did.setWordWrap(True)
+        #: Built here, ONCE, and only ever repainted. `plan.md` TJ-5 change 1:
+        #: "a small SPY chart, built once on open and reused".
+        self.chart = _WeekSparkline(self)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(6, 6, 6, 6)
+        box.setSpacing(3)
+        for widget in (
+            self.heading,
+            self.headline,
+            self.tally,
+            self.chased,
+            self.said_vs_did,
+            self.chart,
+        ):
+            box.addWidget(widget)
+        self.show_row({})
+
+    def show_row(self, row) -> None:
+        """Render one payload card. Diffs text; never rebuilds a widget."""
+        body = dict(row or {})
+        self.session = str(body.get("session") or "")
+        label = self.session or "no session this exchange week"
+        self.heading.setText(label)
+        if not self.session:
+            # A day that does not EXIST is not a day that was not packed. A
+            # holiday week has four sessions, and "no session this exchange
+            # week: not packed - the desk has no facts for this day" is a
+            # double negative about a day nobody was ever going to measure
+            # (reviewer advisory 4, 2026-09-20). One sentence, and no more.
+            self.headline.setText("")
+            self.tally.setText("")
+            self.chased.setText("")
+            self.said_vs_did.setText("")
+            self.chart.set_points(())
+            return
+        if not body.get("has_facts"):
+            self.headline.setText(
+                f"{label}: not packed - the desk has no facts for this day."
+            )
+            # NOT a zeroed tally: "0 right of 0" is a measurement nobody made.
+            self.tally.setText("no reads graded")
+            self.chased.setText("chased against the news: unmeasured")
+            self.said_vs_did.setText("said vs did: unmeasured")
+            self.chart.set_points(())
+            return
+        headline = str(body.get("headline") or "").strip()
+        self.headline.setText(
+            headline or f"{label}: packed; the night has not written a story yet."
+        )
+        tally = body.get("tally") or {}
+        if tally:
+            self.tally.setText(
+                f"Right {int(tally.get('right') or 0)}"
+                f" · Wrong {int(tally.get('wrong') or 0)}"
+                f" · Unresolved {int(tally.get('unresolved') or 0)}"
+                f" (n {int(tally.get('n') or 0)})"
+            )
+        else:
+            self.tally.setText("no reads graded")
+        self.chased.setText(
+            "chased against the news: "
+            + (str(body.get("chased") or "").strip() or "unmeasured")
+        )
+        self.said_vs_did.setText(
+            str(body.get("said_vs_did") or "").strip() or "said vs did: unmeasured"
+        )
+        self.chart.set_points(body.get("spy_bars") or ())
+
+
+def week_strip_cell(line) -> str:
+    """One strip cell, in the units its line was measured in.
+
+    Decision 0016's clause, applied here: a cell UNDER the floor keeps its
+    integers and is named as too few to call - it is never printed as a rate,
+    and it is never ranked against a cell that met the floor.
+    """
+    if not line:
+        return "not read"
+    head = f"n {int(line.get('n') or 0)} · measured {int(line.get('measured') or 0)}"
+    rate = line.get("rate")
+    if rate is None:
+        body = head
+    elif not line.get("meets_floor"):
+        body = f"{head} · too few to call"
+    else:
+        bound = line.get("rate_lb")
+        tail = f"{float(rate) * 100:.0f}%"
+        if bound is not None:
+            tail += f" (bound {float(bound):.2f})"
+        body = f"{head} · {tail}"
+    # A day the desk could not READ is not a quiet day, and a cell that dropped
+    # the marker could not be told apart from one (reviewer advisory 2).
+    unreadable = tuple(line.get("unreadable_sessions") or ())
+    if unreadable:
+        body += f" · {len(unreadable)} day(s) could not be read"
+    return body
+
+
 class WeekReviewPage(_StepPage):
-    """Step 1: what happened, from the review-learning state and the RS extremes."""
+    """Step 1: the week the trader opens Weekend Prep to read (TJ-5 change 1).
+
+    *"5 of these days collated into one tab ... to see if I was right, to see if
+    I chased in bad news environments, and to compare what I actually said to
+    what I did"* (trader, 2026-09-17).
+
+    Five day cards, the overnight week story, the deterministic week / month
+    strip and the week's own totals - and **it computes none of it**. One
+    payload arrives from `weekend_prep_service.read_week_review` on this page's
+    worker, and this class renders it. The page opens no store, builds no pack,
+    no report card and no narration: a pack build or a model load behind a tab
+    click is the whole reason the night window exists.
+    """
 
     def __init__(self, service, parent=None) -> None:
         super().__init__("week_review", service, parent)
+        import day_report_card
+        from evidence_stats import WEEK_SESSIONS
+
         monday, friday = service.week_bounds
-        self.subtitle.setText(f"Week of {monday} to {friday}. Refresh reads the week's decisions.")
+        self.subtitle.setText(
+            f"Week of {monday} to {friday}. Five days, the week's story, and the "
+            "same report-card lines re-cut by week and by month."
+        )
         self.refresh_button = QPushButton("Refresh week")
         self.refresh_button.clicked.connect(self.reload)
-        self.summary = QTextBrowser()
         # A separate slot for "refreshing" and for a stated failure, so neither
         # has to be written over the content the page is already showing.
         self.refresh_note = QLabel("")
         self.refresh_note.setWordWrap(True)
+        #: The FIRST honest sentence on the page: K of 5.
+        self.facts_note = QLabel("")
+        self.facts_note.setObjectName("SectionSubtitle")
+        self.facts_note.setWordWrap(True)
+
+        self._line_keys = tuple(day_report_card.LINE_KEYS)
+        #: Exactly `evidence_stats.WEEK_SESSIONS` cards, built once. A card is a
+        #: DAY; a week with three packs still has five of them.
+        self.day_cards = tuple(_WeekDayCard(self) for _ in range(int(WEEK_SESSIONS)))
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(6)
+        for card in self.day_cards:
+            cards_row.addWidget(card, 1)
+
+        self.week_story = QTextBrowser()
+        self.strip = QTableWidget(len(self._line_keys), prep_service.WEEK_STRIP_WEEKS + 1)
+        self.strip.setVerticalHeaderLabels(
+            [key.replace("_", " ") for key in self._line_keys]
+        )
+        self.strip.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.summary = QTextBrowser()
+
         self._worker: _ReadWorker | None = None
+        #: ONE read at a time, cleared by EVERY ending - including a raise.
+        self._reading = False
+
         # V2 item 2a: the per-page Refresh button is GONE FROM THE LAYOUT.
         # One Refresh at the top of the tab drives every page now. The
         # button object stays because `reload()` still enables and disables
         # it as its own single-flight guard - what changed is that the
         # trader no longer has to find five of them.
         self._layout.addWidget(self.refresh_note)
+        self._layout.addWidget(self.facts_note)
+        self._layout.addLayout(cards_row)
+        self._layout.addWidget(self.week_story, 1)
+        self._layout.addWidget(_ten_row_table(self.strip))
         self._layout.addWidget(self.summary, 1)
         self._finish_layout()
+        self._render(prep_service.empty_week_payload())
 
     def reload(self) -> None:
-        """Start the week's reads on this page's worker. Single-flight.
+        """Start the ONE week read on this page's worker. Single-flight.
 
         This method used to BE the read: `build_review_learning_state` plus two
         RS log scans, straight through the click that selected the page. It was
         the worst measured stall on the desk - 8.45 s with the whole GUI frozen
-        (fluidity capture, 2026-08-25).
+        (fluidity capture, 2026-08-25). A second click while the first is still
+        reading starts nothing, and the button stays disabled until EVERY
+        ending has answered.
         """
-        if self._worker is not None and self._worker.isRunning():
+        if self._reading:
             return
+        self._reading = True
         self.refresh_button.setEnabled(False)
         self.refresh_note.setText("Refreshing the week...")
-        worker = _ReadWorker(self._build_summary_text, self)
-        worker.finished_with.connect(self._on_summary_ready)
-        worker.failed.connect(self._on_summary_failed)
+        friday = self.service.weekend
+        worker = _ReadWorker(
+            lambda: prep_service.read_week_review(friday=friday), self
+        )
+        worker.finished_with.connect(self._on_week_ready)
+        worker.failed.connect(self._on_week_failed)
         self._worker = worker
         worker.start()
 
-    def _on_summary_ready(self, text: object) -> None:  # pragma: no cover - signal seam
+    def _on_week_ready(self, payload: object) -> None:
+        self._reading = False
         self.refresh_button.setEnabled(True)
         self.refresh_note.setText("")
-        self.summary.setPlainText(str(text))
+        try:
+            self._render(payload if isinstance(payload, dict) else {})
+        except Exception as exc:  # noqa: BLE001 - a render that raises still answers
+            logging.debug("The Week Review page could not be drawn.", exc_info=True)
+            self.refresh_note.setText(f"Week review could not be drawn: {exc}")
 
-    def _on_summary_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+    def _on_week_failed(self, message: str) -> None:
+        self._reading = False
         self.refresh_button.setEnabled(True)
         stated = f"Week review unavailable: {message}"
         self.refresh_note.setText(stated)
@@ -342,41 +593,158 @@ class WeekReviewPage(_StepPage):
             self.summary.setPlainText(stated)
         self.statusChanged.emit(f"week review unavailable: {message}")
 
-    def _build_summary_text(self) -> str:
-        """Every store this page reads, and no widget. Runs on the worker."""
-        from evidence_stats import WEEK_SESSIONS
-        from review_learning import build_review_learning_state
+    # -- rendering, all of it on values the worker already read ------------
+    def _render(self, payload) -> None:
+        body = dict(payload or {})
+        sessions = list(body.get("sessions") or ())
+        facts = list(body.get("sessions_with_facts") or ())
+        total = len(sessions) or len(self.day_cards)
+        self.facts_note.setText(f"{len(facts)} of {total} sessions have facts")
+        rows = list(body.get("cards") or ())
+        for index, card in enumerate(self.day_cards):
+            card.show_row(rows[index] if index < len(rows) else {})
+        self.week_story.setPlainText(self._story_text(body))
+        self._render_strip(body.get("strip") or {})
+        self.summary.setPlainText("\n".join(self._summary_lines(body, rows)))
 
-        # R4 B6: SESSIONS, through the exchange calendar. This asked for the last
-        # 7 CALENDAR days under a heading that says "Week of <Mon> to <Fri>", so
-        # a holiday week measured four sessions and still called itself a week.
-        state = build_review_learning_state(window_sessions=WEEK_SESSIONS)
-        lines = [f"Week of {self.service.week_bounds[0]} to {self.service.week_bounds[1]}", ""]
-        for key in ("takes", "skips", "rejects", "watch_conversion"):
-            value = state.get(key) if isinstance(state, dict) else None
-            if value is None:
-                continue
-            lines.append(f"{key.replace('_', ' ').title()}: {value if not isinstance(value, list) else len(value)}")
-        # The callouts are the point of this page and used to print as two
-        # integers. "Blind Spots: 3" is a number a reader cannot act on; the
-        # scoreboard has always known WHICH segments and by how much, and
-        # `review_learning.render_report` already prints them. This is the same
-        # information as a table, built here on the worker.
-        lines += callout_lines(state)
-        # The recorded, accepted v1 limitation - stated where it is read, not
-        # buried in a spec nobody opens on a Saturday.
-        lines += ["", "Episodes fold on (trade_date, symbol): two setups in one name on one day read as one."]
+    def _story_text(self, body) -> str:
+        story = dict(body.get("week_story") or {})
+        narration = story.get("narration") or {}
+        counted = str(story.get("narrated") or "").strip()
+        if not narration:
+            if story.get("scaffold"):
+                return (
+                    f"No week story yet - {counted or 'too few narrated days'}. The "
+                    "night writes one once three of the week's days have a story of "
+                    "their own; below that the desk says the count rather than "
+                    "narrating days nobody measured."
+                )
+            return (
+                "No week story yet. The Saturday night slot writes it from the "
+                "week's own packs; nothing is fetched or narrated by this page."
+            )
+        lines = [str(narration.get("headline") or "").strip()]
+        if counted:
+            lines.append(counted)
+        lines += ["", str(narration.get("what_happened") or "").strip()]
+        tendencies = list(narration.get("tendencies") or ())
+        if tendencies:
+            lines += ["", "TENDENCIES (each quoting its own cell and n)"]
+            for item in tendencies:
+                lines.append(
+                    f"  {str(item.get('text') or '')} [n {int(item.get('n') or 0)}]"
+                )
+        process = str(narration.get("process_pattern") or "").strip()
+        if process:
+            lines += ["", process]
+        watch = [str(item) for item in narration.get("next_week_watch") or ()]
+        if watch:
+            lines += ["", "NEXT WEEK"] + [f"  {item}" for item in watch]
+        return "\n".join(lines)
+
+    def _render_strip(self, strip) -> None:
+        """The week / month strip, cell by cell. Items are reused, never rebuilt."""
+        blocks = list(strip.get("weeks") or ())
+        month = strip.get("month_to_date") or {}
+        if month:
+            blocks.append(month)
+        if not blocks:
+            blocks = [{}]
+        if self.strip.columnCount() != len(blocks):
+            self.strip.setColumnCount(len(blocks))
+        self.strip.setHorizontalHeaderLabels(
+            [
+                str(block.get("week_id") or block.get("month_id") or "")
+                for block in blocks
+            ]
+        )
+        for row, key in enumerate(self._line_keys):
+            for column, block in enumerate(blocks):
+                line = next(
+                    (
+                        item
+                        for item in block.get("lines") or ()
+                        if str(item.get("key") or "") == key
+                    ),
+                    None,
+                )
+                self._set_cell(row, column, week_strip_cell(line))
+
+    def _set_cell(self, row: int, column: int, text: str) -> None:
+        item = self.strip.item(row, column)
+        if item is None:
+            item = QTableWidgetItem(text)
+            self.strip.setItem(row, column, item)
+            return
+        if item.text() != text:
+            item.setText(text)
+
+    def _summary_lines(self, body, rows) -> list[str]:
+        lines = [
+            f"Week of {self.service.week_bounds[0]} to {self.service.week_bounds[1]}",
+            "",
+        ]
+        missing = list(body.get("sessions_missing") or ())
+        if missing:
+            lines.append(
+                "Not packed, so not measured: " + ", ".join(str(day) for day in missing)
+            )
+        if len(rows) > len(self.day_cards):
+            lines.append(
+                f"{len(rows) - len(self.day_cards)} further session(s) in this week "
+                "are not shown as cards."
+            )
+        walkaway = dict(body.get("walkaway") or {})
+        counts = dict(walkaway.get("counts") or {})
+        packed = int(walkaway.get("sessions") or 0)
+        if not packed:
+            # Five zeros with the qualifier UNDER them read as a week in which
+            # the trader did nothing. With no packed session there is nothing to
+            # total at all, so the sentence is the whole answer (reviewer
+            # advisory 5, 2026-09-20).
+            lines += ["", "WALK-AWAY THIS WEEK: no session packed yet."]
+        elif counts:
+            # The qualifier LEADS: it is what makes the numbers under it honest.
+            lines += [
+                "",
+                f"WALK-AWAY THIS WEEK - counts over {packed} packed session(s), "
+                f"n {int(walkaway.get('n') or 0)}",
+            ]
+            for name, value in counts.items():
+                lines.append(f"  {str(name).replace('_', ' ')}: {int(value or 0)}")
+        tendencies = list(body.get("tendencies") or ())
+        if tendencies:
+            lines += ["", "WHAT THE DESK MEASURED ABOUT YOUR CALLS"]
+            for item in tendencies:
+                lines.append(f"  {str(item.get('text') or '')}")
+        misses = dict(body.get("misses") or {})
+        groups = list(misses.get("groups") or ())
+        if groups:
+            lines += ["", "WHAT THE MISSES HAD IN COMMON"]
+            for group in groups:
+                lines.append(
+                    f"  {group.get('verdict', '?')} / {group.get('reason', '?')}: "
+                    f"{group.get('runs', '?')} ran of {group.get('n', '?')}"
+                )
+            thin = list(misses.get("thin_features") or ())
+            if thin:
+                lines.append("  too thin to call: " + ", ".join(str(item) for item in thin))
+        lines += list(body.get("callouts") or ())
+        lines += [
+            "",
+            "Episodes fold on (trade_date, symbol): two setups in one name on one "
+            "day read as one.",
+        ]
         # V2 item 2c: THE RS/RW EXTREMES LEFT THIS TAB. They are two long text
         # blocks about which names and groups led the tape, and the desk has a
         # board for exactly that question - the RS/RW section, which V1 moved
         # into the alert column beside the Strength board. Printing them here as
-        # prose was the second-largest part of the wall of text the trader named,
-        # and it duplicated a live surface with a Saturday snapshot.
+        # prose was the second-largest part of the wall of text the trader
+        # named, and it duplicated a live surface with a Saturday snapshot.
         #
         # The two prose builders that printed them are GONE from this page; the
         # log SCANS are kept, uncalled, and say so in their own docstrings.
-        return "\n".join(lines)
-
+        return lines
 
 
 #: The nine views of the Focus Review page (packet G1, 2026-09-06), in the

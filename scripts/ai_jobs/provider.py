@@ -59,11 +59,39 @@ LEDGER_FIELD = "model_attribution"
 DEFAULT_TIMEOUT_SECONDS = 900
 
 
-def week_review_provider() -> str:
-    """Which provider the week story asks for. Default: the large local model."""
+def _local_setting(key: str, default: Any = "") -> Any:
+    """One setting, read through BOTH import identities of ``project_paths``.
+
+    There is one settings FILE and, inside a running desk, one module. Under
+    pytest there are two: ``scripts/`` is on ``sys.path`` and also importable as
+    a package, so ``project_paths`` and ``scripts.project_paths`` are two module
+    objects over the same file. ``ai_summary`` binds the first at import time;
+    ``ai_jobs.store._paths()`` and ``ai_jobs.window._paths()`` - the seam the
+    rest of this package reads its settings through - hand back the second.
+
+    A reader that asks only one of them is invisible to half the desk's tests:
+    TJ-13B's patch the ``ai_summary`` side, TJ-5's slot tests patch the
+    ``ai_jobs`` side, and both are asking the same question of the same file.
+    So ask the package's own seam first and fall back to ``ai_summary``'s
+    binding. In production the two answers are the same value, read from the
+    same file, and only ONE of them is ever consulted for a value that exists.
+    """
+    try:
+        from ai_jobs import store
+
+        value = store._paths().get_local_setting(key, None)
+    except Exception:  # noqa: BLE001 - an unreadable settings seam is not a setting
+        value = None
+    if value is not None:
+        return value
     import ai_summary
 
-    raw = str(ai_summary.get_local_setting(WEEK_REVIEW_PROVIDER_SETTING, "") or "").strip().lower()
+    return ai_summary.get_local_setting(key, default)
+
+
+def week_review_provider() -> str:
+    """Which provider the week story asks for. Default: the large local model."""
+    raw = str(_local_setting(WEEK_REVIEW_PROVIDER_SETTING, "") or "").strip().lower()
     if not raw:
         return LOCAL_LARGE
     if raw not in WEEK_REVIEW_PROVIDERS:
