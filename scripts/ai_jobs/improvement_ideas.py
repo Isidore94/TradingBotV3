@@ -126,6 +126,42 @@ PACK_LOOKBACK_SESSIONS = 5
 STATUS_KEPT = "kept"
 STATUS_DISMISSED = "dismissed"
 
+#: Why one idea was dropped. Codes rather than sentences, because they are
+#: COUNTED per reason into the slot's ledger row - a post-mortem that says "two
+#: dropped" and not which two is a number nobody can act on (reviewer advisory
+#: 2, 2026-09-20).
+DROP_NOT_AN_OBJECT = "not_an_object"
+DROP_UNKNOWN_KIND = "unknown_kind"
+DROP_NO_TEXT = "no_text"
+DROP_TOO_LONG = "too_long"
+DROP_NO_EVIDENCE = "no_evidence"
+DROP_NO_MEASURABLE = "no_measurable"
+DROP_UNKNOWN_MEASURABLE = "unknown_measurable"
+DROP_REPEATED_IN_ANSWER = "repeated_in_answer"
+
+DROP_CODES: tuple[str, ...] = (
+    DROP_NOT_AN_OBJECT,
+    DROP_UNKNOWN_KIND,
+    DROP_NO_TEXT,
+    DROP_TOO_LONG,
+    DROP_NO_EVIDENCE,
+    DROP_NO_MEASURABLE,
+    DROP_UNKNOWN_MEASURABLE,
+    DROP_REPEATED_IN_ANSWER,
+)
+
+#: The marker the night leaves when it ASKED and stored nothing.
+#:
+#: A slot that called the model and then answered `skipped` with no artifact
+#: re-asks on every one of the scheduled task's sixteen passes: `skipped` is in
+#: neither `ledger.CANONICAL_COMPLETION_STATUSES` nor `ledger.ATTEMPT_STATUSES`,
+#: so neither the runner's already-done check nor `max_attempts` ever bites
+#: (reviewer, 2026-09-20, reproduced). So a night that ASKED is a night that is
+#: DONE: it ends `ok`, and this marker is the artifact that says so - beside the
+#: store, never inside it (two tester tests count the store's raw lines) and
+#: never in the trader's state file, which the night may not write.
+ASKED_MARKER_SCHEMA = "improvement_ideas_asked_v1"
+
 #: What a checked idea can say. Every one of them is arithmetic over two stored
 #: readings; none of them is a grade of the advice.
 VERDICT_TOO_FEW = "too few to call"
@@ -134,6 +170,9 @@ VERDICT_UNMEASURED = "unmeasured"
 VERDICT_HIGHER = "higher than at the keep"
 VERDICT_LOWER = "lower than at the keep"
 VERDICT_SAME = "the same as at the keep"
+#: Both sides over the floor, and their Wilson intervals OVERLAP. Two numbers
+#: that differ by less than their own uncertainty have not moved.
+VERDICT_NO_CHANGE = "no clear change"
 
 #: What separates a session from the id it qualifies, exactly as TJ-5's week
 #: story does it: each day pack mints its ids with its OWN minter, so
@@ -319,6 +358,12 @@ def _state_path() -> Path:
     return Path(project_paths.AI_IDEAS_STATE_FILE)
 
 
+def _asked_path() -> Path:
+    """``ai_ideas_asked.json``, beside the store. Resolved at CALL time too."""
+    path = _ideas_path()
+    return path.with_name(f"{path.stem}_asked.json")
+
+
 # ---------------------------------------------------------------------------
 # the measurables - what a `process` idea may name
 # ---------------------------------------------------------------------------
@@ -395,6 +440,10 @@ def _report_card_rate(reader, *, name: str, end_session: str, sessions: int) -> 
     return {
         "measurable": name,
         "value": (runs / measured) if measured else None,
+        # The numerator travels with the rate: an interval needs the two
+        # INTEGERS, and reconstructing hits from a stored float is a rounding
+        # error waiting to be printed as a change.
+        "hits": runs,
         "n": measured,
         "measured": bool(measured),
         "window_sessions": int(sessions),
@@ -432,6 +481,7 @@ def _veto_real_miss_rate(reader, *, name: str, end_session: str, sessions: int) 
         return {
             "measurable": name,
             "value": (misses / measured) if measured else None,
+            "hits": misses,
             "n": measured,
             "measured": bool(measured),
             "window_sessions": int(pack.get("window_sessions") or sessions),
@@ -880,23 +930,23 @@ def drop_reason(item: Any) -> str:
     check (AMENDED 2026-09-19).
     """
     if not isinstance(item, Mapping):
-        return "it was not an object"
+        return DROP_NOT_AN_OBJECT
     text = _text(item.get("text"))
     kind = _text(item.get("kind"))
     measurable = _text(item.get("measurable"))
     evidence = [_text(cited) for cited in item.get("evidence") or () if _text(cited)]
     if kind not in IDEA_KINDS:
-        return f"{kind!r} is not a kind of idea"
+        return DROP_UNKNOWN_KIND
     if not text:
-        return "it says nothing"
+        return DROP_NO_TEXT
     if len(text) > MAX_IDEA_CHARS:
-        return f"it is {len(text)} characters, over the cap of {MAX_IDEA_CHARS}"
+        return DROP_TOO_LONG
     if not evidence:
-        return "it cites nothing"
+        return DROP_NO_EVIDENCE
     if kind == "process" and not measurable:
-        return "a process idea that names no measurable cannot be checked"
+        return DROP_NO_MEASURABLE
     if kind == "process" and measurable not in measurable_names():
-        return f"{measurable!r} is not a measurable the desk computes"
+        return DROP_UNKNOWN_MEASURABLE
     return ""
 
 
@@ -1077,29 +1127,70 @@ def checked_ideas(*, end_session: Any = "") -> tuple[dict[str, Any], ...]:
             _text(baseline.get("measurable")) or _text(row.get("measurable")),
             end_session=session or _text(row.get("session_date")),
         )
-        item["before"] = dict(baseline)
-        item["after"] = dict(after)
-        item["verdict"] = _verdict(baseline, after)
+        item["before"] = with_interval(baseline)
+        item["after"] = with_interval(after)
+        item["verdict"] = _verdict(item["before"], item["after"])
         out.append(item)
     return tuple(out)
 
 
+def with_interval(reading: Mapping[str, Any]) -> dict[str, Any]:
+    """A copy of one reading carrying the ONE Wilson interval its counts imply.
+
+    `evidence_contrast.rate` is the desk's own interval (the ONE Wilson, z 1.96,
+    through `walkaway_day._wilson`) and it is IMPORTED rather than re-derived.
+    Nothing is re-measured here: `low` and `high` are arithmetic over the two
+    integers the reading already carried, which is what makes it safe to add
+    them to a baseline that was frozen before this code existed.
+    """
+    body = dict(reading or {})
+    total = int(body.get("n") or 0)
+    if not bool(body.get("measured")) or total <= 0:
+        return body
+    hits = body.get("hits")
+    if hits is None:
+        try:
+            hits = round(float(body.get("value") or 0.0) * total)
+        except (TypeError, ValueError):
+            return body
+    from evidence_contrast import rate as _rate
+
+    cell = _rate(hits, total)
+    body["hits"] = int(hits)
+    body["low"] = cell["low"]
+    body["high"] = cell["high"]
+    body["reportable"] = bool(cell["reportable"])
+    return body
+
+
 def _verdict(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
-    """Two stored readings, compared. Arithmetic, never a grade of the advice."""
+    """Two stored readings, compared. Arithmetic, never a grade of the advice.
+
+    A difference is only SAID when the two Wilson intervals do not overlap.
+    Before this rule 0.5000 (n 30) against 0.5001 (n 50,000) printed "higher
+    than at the keep" on the Week Review card (reviewer, 2026-09-20) - two
+    samples that disagree about nothing, one of them a thousand times the size
+    of the other. Overlapping intervals are "no clear change", and nothing here
+    is ever called an improvement: this compares one measurable with itself and
+    says nothing about why it moved.
+    """
     if not bool(before.get("measured")) or not bool(after.get("measured")):
         return VERDICT_UNMEASURED
     floor = evidence_stats.MIN_REPORTABLE_N
     if int(before.get("n") or 0) < floor or int(after.get("n") or 0) < floor:
         return VERDICT_TOO_FEW
+    first = with_interval(before)
+    second = with_interval(after)
     try:
-        moved = float(after.get("value")) - float(before.get("value"))
-    except (TypeError, ValueError):
+        low_a, high_a = float(first["low"]), float(first["high"])
+        low_b, high_b = float(second["low"]), float(second["high"])
+    except (KeyError, TypeError, ValueError):
         return VERDICT_UNMEASURED
-    if moved > 0:
+    if low_b > high_a:
         return VERDICT_HIGHER
-    if moved < 0:
+    if high_b < low_a:
         return VERDICT_LOWER
-    return VERDICT_SAME
+    return VERDICT_NO_CHANGE
 
 
 # ---------------------------------------------------------------------------
@@ -1217,10 +1308,16 @@ def usable_ideas(
     counts = {"offered": len(list(offered)), "dropped": 0, "dismissed": 0, "repeats": 0}
     minted: set[str] = set()
     stamp = _moment(now)
+    reasons: dict[str, int] = {}
+
+    def _drop(code: str) -> None:
+        counts["dropped"] += 1
+        reasons[code] = reasons.get(code, 0) + 1
+
     for item in offered:
         refused = drop_reason(item)
         if refused:
-            counts["dropped"] += 1
+            _drop(refused)
             _log.debug("An idea was dropped: %s", refused)
             continue
         text = _text(item.get("text"))
@@ -1235,7 +1332,7 @@ def usable_ideas(
             counts["dismissed"] += 1
             continue
         if normal in minted:
-            counts["dropped"] += 1
+            _drop(DROP_REPEATED_IN_ANSWER)
             continue
         minted.add(normal)
         earlier = seen.get(normal)
@@ -1275,7 +1372,36 @@ def usable_ideas(
                 "inputs_hash": inputs_hash,
             }
         )
+    # Per REASON, so the ledger row says WHICH two were dropped and not just
+    # that two were (reviewer advisory 2). Present and empty when none were.
+    counts["drop_reasons"] = dict(sorted(reasons.items()))
     return rows, counts
+
+
+def _offer_counts(summary: Any) -> dict[str, Any]:
+    """What a REJECTED answer held, counted. Never raises - it is a post-mortem.
+
+    A rejection stores nothing, so `usable_ideas` never runs and its counts do
+    not exist; these are read straight off the reply so the ledger row says how
+    many ideas came back and how many of them were usable.
+    """
+    rows = summary.get("ideas") if isinstance(summary, Mapping) else None
+    rows = list(rows) if isinstance(rows, (list, tuple)) else []
+    reasons: dict[str, int] = {}
+    usable = 0
+    for row in rows:
+        code = drop_reason(row)
+        if code:
+            reasons[code] = reasons.get(code, 0) + 1
+        else:
+            usable += 1
+    return {
+        "offered": len(rows),
+        "usable": usable,
+        "stored": 0,
+        "rejected": True,
+        "drop_reasons": dict(sorted(reasons.items())),
+    }
 
 
 def _append(rows: Sequence[Mapping[str, Any]]) -> Path:
@@ -1288,12 +1414,65 @@ def _append(rows: Sequence[Mapping[str, Any]]) -> Path:
     return path
 
 
+def read_asked_marker() -> dict[str, Any]:
+    """The record of the last night that ASKED. ``{}`` when there is none."""
+    payload = _read_json(_asked_path())
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _write_asked_marker(
+    session: str, inputs_hash: str, *, model: str, stored: int, counts: Mapping[str, Any], now
+) -> Path | None:
+    """Record that tonight was ASKED. Temp-and-rename, one file, superseding.
+
+    Never fails the night: the runner's own already-done check is the first
+    guard and this is the second, so a marker that could not be written costs a
+    belt and keeps the braces.
+    """
+    path = _asked_path()
+    payload = {
+        "schema": ASKED_MARKER_SCHEMA,
+        "session_date": session,
+        "inputs_hash": inputs_hash,
+        "prompt_version": PROMPT_VERSION,
+        "asked_at": _moment(now),
+        "model": model,
+        "stored": int(stored),
+        "counts": dict(counts),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except OSError:
+        _log.debug("The asked marker could not be written.", exc_info=True)
+        return None
+    return path
+
+
 def _already_tonight(rows: Sequence[Mapping[str, Any]], session: str, inputs_hash: str) -> bool:
-    return any(
+    """Has tonight's evidence already been asked about?
+
+    Two answers, because a night that STORED something and a night that stored
+    nothing both count as asked: a stored row carries the hash it was minted
+    from, and a night with nothing to store leaves the marker instead.
+    """
+    if any(
         _text(row.get("session_date"))[:10] == session
         and _text(row.get("inputs_hash")) == inputs_hash
         and _text(row.get("prompt_version")) == PROMPT_VERSION
         for row in rows
+    ):
+        return True
+    marker = read_asked_marker()
+    return (
+        _text(marker.get("session_date"))[:10] == session
+        and _text(marker.get("inputs_hash")) == inputs_hash
+        and _text(marker.get("prompt_version")) == PROMPT_VERSION
     )
 
 
@@ -1340,6 +1519,27 @@ def run_improvement_ideas(
             "outputs": [str(_ideas_path())],
         }
 
+    # NOTHING TO CITE -> NO MODEL LOAD. Every idea must cite an id the night
+    # carries, so a window with no packs in it can produce nothing but a whole
+    # rejection - and the honest answer is "tonight carries nothing to cite",
+    # not "the model lied" (reviewer advisory 4, 2026-09-20). This is the state
+    # the desk is in today: the live day-review folder holds zero packs. A
+    # pre-model skip repeating every pass costs a ledger row and a few file
+    # reads, which is what `week_review_narration`'s own floor branch costs.
+    if not list(inputs.get("allowed_source_ids") or ()):
+        with_facts = len(list(inputs.get("sessions_with_facts") or ()))
+        total = len(list(inputs.get("sessions") or ()))
+        return {
+            "status": ledger.STATUS_SKIPPED,
+            "model": "",
+            "reason": (
+                f"tonight carries nothing to cite: {with_facts} of {total} session(s) "
+                f"ending {session} have facts, so no model was loaded"
+            ),
+            "outputs": [],
+            "extra": {"sessions": total, "sessions_with_facts": with_facts, "asked": False},
+        }
+
     schema = schema_for(inputs)
     evidence = build_evidence(inputs)
     if request is None:
@@ -1381,11 +1581,16 @@ def run_improvement_ideas(
         check_ideas(body, inputs)
     except Exception as exc:  # noqa: BLE001 - a breach rejects the answer WHOLE
         _log.debug("Tonight's ideas were rejected.", exc_info=True)
+        # A rejection is an ATTEMPT (`ledger.ATTEMPT_STATUSES`), so it is capped
+        # at `max_attempts` by the runner and leaves NO marker - the next pass
+        # is allowed to try again. Its counts travel with it, because "rejected"
+        # without what it held is a post-mortem nobody can do (advisory 2).
         return {
             "status": ledger.STATUS_FAILED,
             "model": "",
             "reason": f"tonight's ideas were rejected and nothing was stored: {exc}",
             "outputs": [],
+            "extra": _offer_counts((result or {}).get("summary")),
         }
 
     dismissed = _dismissed_forms(stored, read_state())
@@ -1404,11 +1609,21 @@ def run_improvement_ideas(
         f"{counts['repeats']} seen before"
     )
     if not rows:
+        # ASKED ONCE IS DONE. The model was loaded and answered; that this
+        # night had nothing worth keeping is a finished night, not an unfinished
+        # one, and `ok` is the only status the runner's already-done check
+        # understands (`ledger.CANONICAL_COMPLETION_STATUSES`). The marker is
+        # the artifact, so the slot's own unchanged-hash skip arms too.
+        marker = _write_asked_marker(
+            session, digest, model=answered, stored=0, counts=counts, now=now
+        )
         return {
-            "status": ledger.STATUS_SKIPPED,
+            "status": ledger.STATUS_OK,
             "model": answered,
-            "reason": f"nothing was stored for {session}: {said}",
-            "outputs": [],
+            "reason": (
+                f"asked once: 0 of {counts['offered']} ideas kept for {session} - {said}"
+            ),
+            "outputs": [str(marker)] if marker else [],
             "extra": dict(counts),
         }
     try:
@@ -1422,6 +1637,9 @@ def run_improvement_ideas(
             "outputs": [],
             "extra": dict(counts),
         }
+    _write_asked_marker(
+        session, digest, model=answered, stored=len(rows), counts=counts, now=now
+    )
     return {
         "status": ledger.STATUS_OK,
         "model": answered,
@@ -1438,6 +1656,7 @@ __all__ = [
     "IDEAS_PROGRAM_CARD",
     "IDEAS_SESSIONS",
     "IDEA_KINDS",
+    "DROP_CODES",
     "IdeasRejected",
     "MAX_EVIDENCE_PER_IDEA",
     "MAX_IDEAS_PER_NIGHT",
@@ -1471,4 +1690,5 @@ __all__ = [
     "sessions_ending",
     "source_id",
     "usable_ideas",
+    "with_interval",
 ]

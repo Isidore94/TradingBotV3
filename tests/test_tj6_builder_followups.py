@@ -45,6 +45,50 @@ def night(tmp_path, monkeypatch):
     return fx.install_stores(monkeypatch, tmp_path, write_the_week=False)
 
 
+def _reading(value: float, n: int) -> dict:
+    return {
+        "measurable": "report_card_did_well_rate",
+        "value": float(value),
+        "n": int(n),
+        "measured": True,
+        "window_sessions": fx.lately_sessions(),
+    }
+
+
+def test_two_readings_that_overlap_are_not_called_a_change(night):
+    """Review 1 advisory 5, reproduced: 0.5000 (n 30) against 0.5001 (n 50,000)
+    printed "higher than at the keep" - two samples that disagree about nothing.
+
+    Hand-counted: both sides are over the floor (30), their Wilson intervals
+    overlap, so the verdict is "no clear change". A difference is only SAID when
+    the intervals do not overlap - 0.10 (n 400) against 0.60 (n 400) do not.
+    """
+    from ai_jobs import improvement_ideas as ideas
+
+    assert ideas._verdict(_reading(0.5000, 30), _reading(0.5001, 50_000)) == (
+        ideas.VERDICT_NO_CHANGE
+    )
+    assert ideas._verdict(_reading(0.10, 400), _reading(0.60, 400)) == ideas.VERDICT_HIGHER
+    assert ideas._verdict(_reading(0.60, 400), _reading(0.10, 400)) == ideas.VERDICT_LOWER
+    # Under the floor on either side it is still the exact words the packet
+    # names, and an unreadable side is never compared at all.
+    thin = fx.thin_reading()
+    assert ideas._verdict(_reading(0.30, 400), _reading(thin["value"], thin["n"])) == (
+        ideas.VERDICT_TOO_FEW
+    )
+    assert ideas._verdict(
+        _reading(0.30, 400), {"measured": False, "value": None, "n": 0}
+    ) == ideas.VERDICT_UNMEASURED
+    # The interval is the desk's OWN Wilson, not a second one.
+    import evidence_contrast
+
+    banded = ideas.with_interval(_reading(0.25, 400))
+    assert (banded["low"], banded["high"]) == (
+        evidence_contrast.rate(100, 400)["low"],
+        evidence_contrast.rate(100, 400)["high"],
+    )
+
+
 def test_a_second_keep_never_re_freezes_the_baseline(night, monkeypatch):
     """Hand-counted: keep at n 34, click again while the number reads n 41, and
     the stored baseline is still 34 - with the state file byte-identical."""
@@ -124,6 +168,49 @@ def test_the_day_page_shows_the_card_or_the_line_and_never_both():
     finally:
         panel.shutdown()
         panel.deleteLater()
+
+
+@pytest.mark.qt
+def test_a_row_that_arrives_mid_write_comes_in_disabled():
+    """Review 1 advisory 1: a row added while a write is in flight had LIVE
+    buttons, and its click was swallowed with nothing said.
+
+    Hand-counted: one write in flight, a second render adding a row -> all four
+    buttons disabled; after the write answers, all four live.
+    """
+    import threading
+    import time
+
+    from ui.widgets.ideas_card import IdeasCard
+
+    gate = threading.Event()
+    started = threading.Event()
+
+    def _writer(idea_id, status):
+        started.set()
+        gate.wait(5.0)
+        return {"idea_id": idea_id, "status": status}
+
+    card = IdeasCard(writer=_writer)
+    try:
+        card.show_ideas(SESSION_ROWS)
+        card.rows[0].keep_button.click()
+        assert started.wait(5.0)
+        card.show_ideas(SESSION_ROWS + [dict(SESSION_ROWS[0], idea_id="idea:2026-09-18:2", text="Two.")])
+        assert len(card.rows) == 2
+        assert [row.keep_button.isEnabled() for row in card.rows] == [False, False]
+        assert [row.dismiss_button.isEnabled() for row in card.rows] == [False, False]
+        gate.set()
+        deadline = time.perf_counter() + 5.0
+        while time.perf_counter() < deadline and card.is_writing():
+            _app.processEvents()
+            time.sleep(0.01)
+        _app.processEvents()
+        assert [row.keep_button.isEnabled() for row in card.rows] == [True, True]
+    finally:
+        gate.set()
+        card.shutdown()
+        card.deleteLater()
 
 
 @pytest.mark.qt

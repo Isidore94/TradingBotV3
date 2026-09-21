@@ -36,6 +36,7 @@ from typing import Any, Callable, Mapping, Sequence
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+import evidence_stats
 from ai_jobs import improvement_ideas
 from ui import theme
 from ui.read_worker import ReadWorker, join_worker
@@ -158,15 +159,28 @@ class _IdeaRow(QWidget):
 
 
 def _reading(reading: Mapping[str, Any]) -> str:
-    """One stored reading, with its own `n`. Never a percentage of nothing."""
+    """One stored reading. Never a rate under the floor, never a bare number.
+
+    Three states and no fourth: nobody measured it; too few to call, which
+    prints the COUNT and no rate at all (a rate from nine decisions read beside
+    the words "too few to call" is the number the eye keeps); or the rate with
+    its own `n` and the ONE Wilson interval the desk already computes.
+    """
     if not reading or not bool(reading.get("measured")):
         return "unmeasured"
+    total = int(reading.get("n") or 0)
+    if total < evidence_stats.MIN_REPORTABLE_N:
+        return f"too few to call (n {total})"
     value = reading.get("value")
     try:
         body = f"{float(value):.2f}"
     except (TypeError, ValueError):
         return "unmeasured"
-    return f"{body} (n {int(reading.get('n') or 0)})"
+    try:
+        band = f" [{float(reading['low']):.2f}-{float(reading['high']):.2f}]"
+    except (KeyError, TypeError, ValueError):
+        band = ""
+    return f"{body}{band} (n {total})"
 
 
 class IdeasCard(QWidget):
@@ -250,6 +264,11 @@ class IdeasCard(QWidget):
             widget.deleteLater()
             self._by_id.pop(key, None)
         self.rows = tuple(order)
+        # A row that ARRIVES while a write is in flight comes in disabled. Its
+        # buttons would otherwise be live, the click would be swallowed by the
+        # single-flight guard, and the trader would click and see nothing happen
+        # and nothing say why (reviewer advisory 1, 2026-09-20).
+        self._set_enabled(not self._writing)
         self.empty_note.setVisible(not self.rows)
         self._refresh_summary()
 
