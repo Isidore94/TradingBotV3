@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QPointF, QThread, Qt, Signal
+from PySide6.QtCore import QPointF, QSize, QThread, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -285,6 +285,10 @@ def callout_lines(state) -> list[str]:
     return lines
 
 
+_WEEK_SPARKLINE_MIN_PX = 44
+_WEEK_SPARKLINE_MAX_PX = 64
+
+
 class _WeekSparkline(QWidget):
     """One session's index closes as a line. Built ONCE per card and reused.
 
@@ -299,8 +303,18 @@ class _WeekSparkline(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._closes: list[float] = []
-        self.setMinimumHeight(44)
-        self.setMaximumHeight(64)
+        self.setMaximumHeight(_WEEK_SPARKLINE_MAX_PX)
+
+    # LEAD AMENDMENT 2026-09-20 (TJ-5 integration): the thumbnail's floor is a
+    # SIZE HINT, the way a custom-painted widget states one. A second
+    # minimum-height setter call in this file broke R4's pin that the ten-row
+    # TABLE floor has ONE owner (`test_the_ten_row_floor_is_one_constant`) -
+    # the full suite caught it, the targeted runs could not.
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt's name
+        return QSize(0, _WEEK_SPARKLINE_MIN_PX)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt's name
+        return QSize(120, _WEEK_SPARKLINE_MIN_PX)
 
     def set_points(self, rows) -> None:
         closes: list[float] = []
