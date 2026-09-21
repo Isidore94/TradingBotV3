@@ -1167,7 +1167,7 @@ class MainWindow(QMainWindow):
             if not is_check_slot and not carrying and not self._trade_check_is_owed(check, slot):
                 return
 
-            card.set_trade_check(task, store=store)
+            card.set_trade_check(task, store=store, auto_mode=self._auto_mode_now())
         except Exception:  # noqa: BLE001 - the read still stands without it
             logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
 
@@ -1275,14 +1275,15 @@ class MainWindow(QMainWindow):
             # one, because a draft is offered on its own clock.
             #
             # MEASURED, on the Qt thread at card-show time, over a 201-trade
-            # scratch journal carrying 20 drafts: **1.4 ms** for the lane.
-            # Review 2 advisory 5 measured 14.7 ms and it was right - five pack
-            # files were read whatever the journal said. Two
-            # `opportunity_events` queries now cover the WHOLE window and a
-            # session nobody wrote a note in costs no file read at all, which
-            # is four of the five reads gone on an ordinary morning.
-            # `_mentor_annotation_lane` above already reads a file here, so
-            # this is the same class of cost and not a new one; it stays on
+            # scratch journal carrying 20 drafts: **about 4 ms warm** for the
+            # lane, 1.4-1.8 ms on a small journal, and **12.7 ms on the FIRST
+            # call** of the process, where the imports and the first statement
+            # are paid. ONE pack read: two `opportunity_events` queries cover
+            # the whole five-session window, and a session nobody wrote a note
+            # in costs no file read at all. Review 2 measured 14.7 ms against
+            # the older shape, which read five pack files whatever the journal
+            # said. `_mentor_annotation_lane` above already reads a file here,
+            # so this is the same class of cost and not a new one; it stays on
             # this thread this round by decision.
             "exit_drafts": self._mentor_exit_drafts(store, session),
             "answered": self._mentor_answered(store, (session, reviewed)),

@@ -598,6 +598,186 @@ def test_clearing_the_trade_section_never_drops_a_write_in_flight(
 
 
 # ---------------------------------------------------------------------------
+# review 3 - the REGISTRY decides which readings and how many, always
+# ---------------------------------------------------------------------------
+def _four_unanswered_day_trades(tmp_path, monkeypatch):
+    """Four trades closed Monday, entry fields never answered, a note on each.
+
+    The reviewer's reproduction. `trade_origin` fires for all four at priority
+    20, so the budget of three is spent before an exit reading is reached and
+    the registry offers NONE of them - while the card's own note says four are
+    waiting.
+    """
+    store, ids, root = _monday_exit_drafted(
+        tmp_path, symbols=("AAAA", "BBBB", "CCCC", "DDDD")
+    )
+    _point_the_lane_at(monkeypatch, root)
+    return store, ids, root
+
+
+def test_the_section_never_draws_more_readings_than_the_registry_offered(
+    tmp_path, monkeypatch, window
+):
+    """THE BLOCKER. Hand-counted: the registry offers 0 exit readings here, so
+    the card carries 0 - and its own waiting note stays true.
+
+    Before this the trade section drew its own list: 4 Confirms on a card whose
+    sentence said four were still waiting, and none of them had been offered.
+    """
+    import mentor_questions
+    import trade_mentor_trade_check as check
+
+    store, _ids, root = _four_unanswered_day_trades(tmp_path, monkeypatch)
+    slot, state = _state(window, store, TUESDAY)
+    result = mentor_questions.pending(state, slot)
+    offered = [item for item in result.asked if item.kind == "exit_draft_review"]
+    assert offered == [], [item.subject_id for item in offered]
+    assert "exit reading" in result.waiting_note.lower(), result.waiting_note
+
+    card = window.trading_panel.alert_center.chart_review.mentor_card
+    card.show_slot(slot)
+    card.set_questions(result, store=store, service=window.trade_mentor_service)
+    card.set_trade_check(
+        check.build_task(store, TUESDAY), store=store, drafts_root=root
+    )
+
+    assert _widget_counts(card)["confirms"] == 0, _widget_counts(card)
+    assert "exit reading" in card.questions_label.text().lower(), (
+        card.questions_label.text()
+    )
+
+
+def test_the_section_alone_asks_the_registry_and_keeps_the_budget(
+    tmp_path, monkeypatch, window
+):
+    """A caller that builds ONLY the trade section still obeys the budget.
+
+    Hand-counted: 4 readings waiting, 3 rows drawn OLDEST FIRST, and the card
+    SAYS the fourth is still waiting. It asks `mentor_questions.pending` - the
+    same function, the same budget, the same ordering - never a list of its
+    own.
+    """
+    import mentor_questions
+    import trade_mentor_trade_check as check
+
+    store, ids, root = _four_unanswered_day_trades(tmp_path, monkeypatch)
+    slot, _state_payload = _state(window, store, TUESDAY)
+
+    card = window.trading_panel.alert_center.chart_review.mentor_card
+    card.show_slot(slot)
+    card.set_trade_check(
+        check.build_task(store, TUESDAY), store=store, drafts_root=root
+    )
+
+    assert mentor_questions.BUDGET == 3
+    counts = _widget_counts(card)
+    assert counts["confirms"] == 3, counts
+    assert counts["draft_lines"] == 3, counts
+    drawn = [
+        key for key in (check.exit_key(ids[symbol], MONDAY)
+                        for symbol in ("AAAA", "BBBB", "CCCC", "DDDD"))
+        if card.exit_confirm_button(key) is not None
+    ]
+    assert drawn == [check.exit_key(ids[symbol], MONDAY)
+                     for symbol in ("AAAA", "BBBB", "CCCC")], drawn
+    assert "1" in card.questions_label.text(), card.questions_label.text()
+    assert "exit reading" in card.questions_label.text().lower()
+
+
+def test_away_draws_no_reading_through_the_section_seam_either(
+    tmp_path, monkeypatch, window
+):
+    """AWAY prompts nothing, wherever the question came from.
+
+    The rule lives in the registry, and the section seam asks the registry -
+    so it inherits it rather than keeping a second copy. Hand-counted: 4
+    readings waiting, 0 rows.
+    """
+    import trade_mentor_trade_check as check
+
+    store, _ids, root = _four_unanswered_day_trades(tmp_path, monkeypatch)
+    slot, _payload = _state(window, store, TUESDAY, auto_mode="AWAY")
+
+    card = window.trading_panel.alert_center.chart_review.mentor_card
+    card.show_slot(slot)
+    card.set_trade_check(
+        check.build_task(store, TUESDAY), store=store, drafts_root=root,
+        auto_mode="AWAY",
+    )
+
+    assert _widget_counts(card)["confirms"] == 0, _widget_counts(card)
+
+
+def test_both_call_orders_end_with_the_registrys_own_answer(
+    tmp_path, monkeypatch, window
+):
+    """Order independence, over the case that used to break it.
+
+    Hand-counted: questions-then-section and section-then-questions both end
+    at the registry's answer - 0 readings here - and the same task twice
+    changes nothing.
+    """
+    import mentor_questions
+    import trade_mentor_trade_check as check
+
+    store, _ids, root = _four_unanswered_day_trades(tmp_path, monkeypatch)
+    slot, state = _state(window, store, TUESDAY)
+    result = mentor_questions.pending(state, slot)
+    task = check.build_task(store, TUESDAY)
+    card = window.trading_panel.alert_center.chart_review.mentor_card
+
+    card.show_slot(slot)
+    card.set_questions(result, store=store, service=window.trade_mentor_service)
+    card.set_trade_check(task, store=store, drafts_root=root)
+    forwards = _widget_counts(card)
+
+    card.show_slot(slot)
+    card.set_trade_check(task, store=store, drafts_root=root)
+    card.set_questions(result, store=store, service=window.trade_mentor_service)
+    backwards = _widget_counts(card)
+
+    card.set_trade_check(check.build_task(store, TUESDAY), store=store, drafts_root=root)
+    again = _widget_counts(card)
+
+    assert forwards == backwards == again, (forwards, backwards, again)
+    assert forwards["confirms"] == 0, forwards
+
+
+def test_the_next_card_offers_the_readings_once_the_origin_questions_are_answered(
+    tmp_path, monkeypatch, window
+):
+    """The morning after: the budget frees up and the readings arrive.
+
+    Hand-counted: with the four origin questions retired, the registry offers
+    3 readings and says 1 more is waiting - which is the desk's own rule about
+    what is over budget, now reaching the readings too.
+    """
+    import mentor_questions
+
+    store, _ids, root = _four_unanswered_day_trades(tmp_path, monkeypatch)
+    slot, state = _state(window, store, TUESDAY)
+    payload = dict(state)
+    # The trader answered where those four trades came from yesterday, so that
+    # kind asks nothing today. Nothing else about the card changes.
+    payload["retired"] = tuple(
+        f"trade_origin:{subject.subject_id}"
+        for subject in mentor_questions._trigger_trade_origin(payload)
+    )
+
+    result = mentor_questions.pending(payload, slot)
+    offered = [item for item in result.asked if item.kind == "exit_draft_review"]
+    carried = [item for item in result.carried if item.kind == "exit_draft_review"]
+    assert len(offered) == 3, [item.subject_id for item in offered]
+    assert len(carried) == 1, [item.subject_id for item in carried]
+
+    card = window.trading_panel.alert_center.chart_review.mentor_card
+    card.show_slot(slot)
+    card.set_questions(result, store=store, service=window.trade_mentor_service)
+    assert _widget_counts(card)["confirms"] == 3
+    assert "1" in card.questions_label.text(), card.questions_label.text()
+
+
+# ---------------------------------------------------------------------------
 # review 2 advisories 2 and 3 - rewriting, and a reading of words that changed
 # ---------------------------------------------------------------------------
 def test_a_superseded_reading_is_not_offered_and_the_night_reads_the_new_words(

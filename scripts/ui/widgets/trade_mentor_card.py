@@ -370,6 +370,15 @@ class TradeMentorCard(QWidget):
         #: trade_ids with a journal write in flight. One at a time, per trade.
         self._exit_writing: set[str] = set()
         self._exit_drafts_root = None
+        #: Has the REGISTRY spoken for this delivery? `set_questions` is that
+        #: decision, in either call order; while it is False the trade section
+        #: asks the registry for one rather than drawing its own list.
+        self._questions_decided = False
+        #: The Auto mode this card was built in. AWAY prompts nothing, and the
+        #: rule lives in the registry - this is only how it reaches it when the
+        #: trade section is the seam that asks.
+        self._auto_mode = ""
+
         self._trade_store = None
         #: Which session's trades the section is asking about. TJ-9 item 2: an
         #: unanswered section RIDES on every later card of the same session and
@@ -833,6 +842,7 @@ class TradeMentorCard(QWidget):
         """
         self._stash_draft()
         self._slot = slot
+        self._questions_decided = False
         # A prompt owns its own snapshot.  Saving while the worker is still
         # running records that absence now; a later result cannot mutate a
         # journal row that already exists.
@@ -1095,6 +1105,10 @@ class TradeMentorCard(QWidget):
         """
         self._question_store = store
         self._question_service = service
+        # THE REGISTRY HAS SPOKEN for this delivery. Marked before anything is
+        # drawn, so a `set_trade_check` in either order defers to it rather
+        # than drawing a second, longer list of its own (review 3).
+        self._questions_decided = True
         asked = tuple(getattr(result, "asked", ()) or ()) if result is not None else ()
         note = str(getattr(result, "waiting_note", "") or "") if result is not None else ""
         if not asked:
@@ -1338,12 +1352,14 @@ class TradeMentorCard(QWidget):
             held.pop(key, None)
         self._exit_writing.discard(key)
 
-    def set_trade_check(self, task, store=None, drafts_root=None) -> None:
+    def set_trade_check(self, task, store=None, drafts_root=None, auto_mode="") -> None:
         """Build the 09:00 card's second section from `build_task`'s answer.
 
         `drafts_root` is where the night's exit drafts were published; ``None``
-        is the desk's own pack folder. It is a KEYWORD with a default, so every
-        existing two-argument caller is untouched.
+        is the desk's own pack folder. `auto_mode` is the Auto mode this card
+        is being built in, so a reading this seam asks the registry about
+        inherits AWAY's "prompt nothing" rule. Both are KEYWORDS with defaults,
+        so every existing two-argument caller is untouched.
 
         Three states, all of them said out loud:
 
@@ -1376,6 +1392,8 @@ class TradeMentorCard(QWidget):
 
         self._trade_store = store
         self._exit_drafts_root = drafts_root
+        if auto_mode:
+            self._auto_mode = str(auto_mode)
         if task is None:
             self._clear_trade_check()
             self.trade_check_label.setVisible(False)
@@ -1719,13 +1737,21 @@ class TradeMentorCard(QWidget):
             box.textChanged.connect(self._refresh_save_gate)
 
     def _refresh_rewrite_gate(self, key: str) -> None:
-        """A standalone rewrite saves WORDS or nothing."""
+        """A standalone rewrite saves NEW words or nothing.
+
+        Grey while the box is empty AND while it still holds exactly what is
+        already on disk: a Save that is offered and then refuses is not this
+        desk's shape, and clicking Rewrite and thinking better of it is not a
+        new note (review 3 advisory 2).
+        """
         save = self._exit_rewrite_saves.get(str(key))
         box = self._exit_rewrite_boxes.get(str(key))
         if save is None or box is None:
             return
+        words = str(box.toPlainText() or "").strip()
+        original = str(self._exit_rewrite_original.get(str(key)) or "").strip()
         try:
-            save.setEnabled(bool(str(box.toPlainText() or "").strip()))
+            save.setEnabled(bool(words) and words != original)
         except RuntimeError:  # pragma: no cover - widget already torn down
             pass
 
@@ -1898,7 +1924,46 @@ class TradeMentorCard(QWidget):
         ONCE, under the reading's own `(trade, session)` key, so there is one
         Confirm, one draft line and one copy of the trader's words.
 
+        **It decides NOTHING about which readings or how many.** THE REGISTRY
+        decides, always (review 3): when a decision has already been delivered
+        for this card - `set_questions`, in either order - this seam does
+        nothing at all, because that decision has already drawn exactly what it
+        offered. When no decision has been delivered it asks the SAME registry
+        function for one, over the same lane with the same budget, the same
+        ordering and the same AWAY rule.
+
+        Without that it drew its own list: four waiting readings gave four rows
+        on a card whose own note said "4 more exit reading(s) waiting" and
+        whose registry had offered none, because `trade_origin` had taken the
+        budget. A card that contradicts its own sentence is worse than a card
+        that asks nothing.
+
         It never raises: a missing pack is simply no reading.
+        """
+        if self._questions_decided:
+            # The registry has already spoken for this delivery.
+            return
+        rows = self._waiting_exit_readings(questions)
+        if not rows:
+            return
+        result = self._registry_decision_for(rows)
+        for subject in getattr(result, "asked", ()) or ():
+            if str(getattr(subject, "kind", "")) != EXIT_DRAFT_KIND:
+                continue
+            self._ensure_draft_question_row(dict(getattr(subject, "detail", {}) or {}))
+        note = str(getattr(result, "waiting_note", "") or "")
+        if note:
+            # What is over budget is COUNTED and SAID, here as everywhere.
+            self.questions_label.setText(note)
+            self.questions_label.setVisible(True)
+
+    def _waiting_exit_readings(self, questions) -> list[dict[str, Any]]:
+        """The readings waiting for the SESSIONS this trade section lists.
+
+        Deliberately narrow: this seam can only see the sessions the section
+        is about. A reading from an earlier session is reachable through the
+        registry lane the host builds and never through here - two seams, two
+        questions.
         """
         import trade_mentor_trade_check as check
 
@@ -1909,17 +1974,42 @@ class TradeMentorCard(QWidget):
         }
         store = self._exit_store()
         if not sessions or store is None:
-            return
+            return []
+        rows: list[dict[str, Any]] = []
         for session in sorted(sessions):
             try:
-                waiting = check.waiting_exit_drafts(
-                    store, session, sessions=1, root=self._exit_drafts_root
+                rows.extend(
+                    check.waiting_exit_drafts(
+                        store, session, sessions=1, root=self._exit_drafts_root
+                    )
                 )
             except Exception:  # noqa: BLE001 - a reading never costs the card
                 logging.debug("Exit drafts unreadable for the card.", exc_info=True)
-                continue
-            for row in waiting:
-                self._ensure_draft_question_row(row)
+        return rows
+
+    def _registry_decision_for(self, rows):
+        """Ask `mentor_questions.pending` which of `rows` this card may carry.
+
+        The SAME function the host asks, over a state carrying this one lane:
+        the budget of three, the ordering and AWAY's "prompt nothing" all come
+        from the registry rather than from a second opinion here.
+        """
+        import mentor_questions
+
+        state = {
+            "session": self._trade_check_session,
+            "now": getattr(self._slot, "scheduled_at", None) or self._now(),
+            "auto_mode": self._auto_mode,
+            "exit_drafts": rows,
+            "carried": (),
+            "retired": (),
+            "answered": (),
+        }
+        try:
+            return mentor_questions.pending(state, self._slot)
+        except Exception:  # noqa: BLE001 - a reading never costs the card
+            logging.debug("The exit-reading decision could not be made.", exc_info=True)
+            return mentor_questions.CardQuestions()
 
     def _ensure_draft_question_row(self, detail: Mapping[str, Any]) -> None:
         """One waiting reading, in the questions block, exactly once."""
