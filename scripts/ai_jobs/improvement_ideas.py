@@ -1058,6 +1058,9 @@ def checked_ideas(*, end_session: Any = "") -> tuple[dict[str, Any], ...]:
             "kind": kind,
             "text": _text(row.get("text")),
             "measurable": _text(row.get("measurable")),
+            # Every row here IS kept - the card shows the same rows on both
+            # pages and reads this key to count them.
+            "status": STATUS_KEPT,
             "kept_at": _text(record.get("at")),
             "before": {},
             "after": {},
