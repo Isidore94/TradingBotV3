@@ -2782,8 +2782,11 @@ They are evidence and must not be loaded as context.
   `provisional_note` and `columns`, six fixed line widgets built once and only re-texted,
   styled in `ui/theme.qss` by object name. `day_review_pack.build_pack(..., report_card=None)`
   keeps TJ-4's empty default and, GIVEN a card, mints one `source_id` per line from the pack's
-  ONE `_Minter` inside the hashed body - **`build_pack_for` does not yet hand it one**, so the
-  pack's `report_card` section is still the empty hook in production.
+  ONE `_Minter` inside the hashed body. **`build_pack_for` hands it the session's card since the
+  follow-up `c37d5673` (merged `ccecf320`)** through ONE seam, `day_report_card.pack_card` /
+  `PACK_LINE_KEYS`: the five DAY lines go in and `How fresh` stays OUT, because it describes the
+  machine's night, its text moves with every ledger row, and inside the hashed body it would
+  re-narrate the same session night after night.
   **Two Mentor question kinds WOKEN** (TJ-14B -> TJ-12): `trade_origin` and
   `open_position_check` carried `dormant_until="TJ-12"` because this card is their named
   reader, so `dormant_until` is now `""` on those two and their `consumer` strings name

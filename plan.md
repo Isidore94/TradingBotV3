@@ -1116,9 +1116,9 @@ real misses and their shared reason), **Your reads** (TJ-10 tally), **Congruence
 AMENDED block below). Pure
 `scripts/day_report_card.py` over the day's ONE payload (AS BUILT: the card is minted on the
 Day Review worker inside `read_day`, not read back out of the pack; `build_pack` accepts a
-`report_card=` and mints one `source_id` per line, but **`build_pack_for` does not yet hand
-it one**, so the pack's `report_card` section is still the empty TJ-4 hook in production -
-recorded, not repaired, and TJ-5's to wire if its strip wants it); computes no new statistic;
+`report_card=` and mints one `source_id` per line, and **`build_pack_for` hands it the
+session's card since the follow-up `c37d5673`** - five day lines through
+`day_report_card.pack_card`, `How fresh` kept out of the hashed body); computes no new statistic;
 a line whose input is missing says so. TJ-5's strip re-cuts the same lines by week and month.
 
 **AMENDED 2026-09-19 (trader, second look):** the **Did well** and **Missed** lines quote
