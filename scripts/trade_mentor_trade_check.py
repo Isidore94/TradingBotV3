@@ -72,6 +72,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+import journal_store
+
 #: The four material fields, in the order they are asked. `missing` is built in
 #: this order so a trade with nothing recorded reads the same way every morning.
 MATERIAL_FIELDS = ("thesis", "stop", "target", "setup")
@@ -104,8 +106,16 @@ TRADE_CAP_DEFAULT = 3
 EVENT_RECALLED = "RECALLED"
 EVENT_RECALLED_RAW = "RECALLED_RAW"
 
-#: The status values that mean the trade touched the session.
-_SESSION_STATUSES = ("CLOSED", "OPEN", "PARTIALLY_CLOSED")
+#: The status values that mean the trade touched the session, READ FROM THE
+#: WRITER (`journal_store.TRADE_STATUSES`) rather than spelled here.
+#:
+#: This tuple used to hold `PARTIALLY_CLOSED`, which nothing on the desk has
+#: ever written: the assembler stamps `CLOSED_PARTIAL`
+#: (`journal_store._finalize_trade_state`). Seven live trades - every one the
+#: trader had half exited - were therefore dropped by the filter below and were
+#: never asked about at 09:00. A second spelling of somebody else's vocabulary
+#: is a defect waiting for a rename, so this is the import and not a copy.
+_SESSION_STATUSES = journal_store.TRADE_STATUSES
 
 REASON_NOT_READY = "journal not ready"
 

@@ -49,6 +49,28 @@ TAG_STATUS_CONFIRMED = "confirmed"
 TAG_STATUS_PROVISIONAL = "provisional"
 TAG_STATUS_NEEDS_REVIEW = "needs_review"
 
+#: The three statuses the ASSEMBLER stamps on a trade, named here because this
+#: module writes them (TJ-9E, 2026-09-21).
+#:
+#: They were bare literals inside :meth:`JournalStore._finalize_trade_state`, so
+#: a reader that needed to know what a trade's status can be had to guess -
+#: and one did: `trade_mentor_trade_check` spelled the half-exited state
+#: ``PARTIALLY_CLOSED``, which nothing anywhere writes, and all seven live
+#: ``CLOSED_PARTIAL`` trades were invisible to the 09:00 forced trade check.
+#: A vocabulary the writer does not name is a vocabulary every reader re-spells.
+#:
+#: `journal_bulk_tag.PARTIAL_STATUS` and `journal_reclassify.OPEN_STATUSES` are
+#: the same strings named locally; they should adopt these constants, which is
+#: a separate edit in the file that owns each of them.
+TRADE_STATUS_CLOSED = "CLOSED"
+TRADE_STATUS_CLOSED_PARTIAL = "CLOSED_PARTIAL"
+TRADE_STATUS_OPEN = "OPEN"
+TRADE_STATUSES = (
+    TRADE_STATUS_CLOSED,
+    TRADE_STATUS_CLOSED_PARTIAL,
+    TRADE_STATUS_OPEN,
+)
+
 #: The adjustment action the bulk tagger appends for every tag it applies.
 #: Assembly never reads it - it is not in ``EXECUTION_ADJUSTMENT_ACTIONS`` and
 #: it is not ``FORCE_CLOSE`` - so it is an audit record and nothing else.
@@ -1296,7 +1318,7 @@ class JournalStore:
             """,
             (f"trade:{trade_id}:taken", *common[:4], trade.get("opened_at") or _now_iso(), common[4], payload, _now_iso()),
         )
-        if str(trade.get("status") or "").upper() == "CLOSED" and trade.get("closed_at"):
+        if str(trade.get("status") or "").upper() == TRADE_STATUS_CLOSED and trade.get("closed_at"):
             close_payload = _json_dumps(
                 {
                     "average_exit_price": trade.get("average_exit_price"),
@@ -1959,14 +1981,14 @@ class JournalStore:
     def _finalize_trade_state(self, trade: dict[str, Any]) -> dict[str, Any]:
         flat = abs(float(trade["position_qty"])) <= EPSILON
         if flat:
-            status = "CLOSED"
+            status = TRADE_STATUS_CLOSED
         elif float(trade["quantity_closed"]) > EPSILON:
             # B1. A position that has been half exited is not the same thing as
             # one nobody has touched, and the trader cannot act on the second
             # reading of the first.
-            status = "CLOSED_PARTIAL"
+            status = TRADE_STATUS_CLOSED_PARTIAL
         else:
-            status = "OPEN"
+            status = TRADE_STATUS_OPEN
         closed_at = str(trade["last_at"] or "") if flat else ""
         if trade.get("forced_closed"):
             reconcile_status = "FORCED_CLOSED"
