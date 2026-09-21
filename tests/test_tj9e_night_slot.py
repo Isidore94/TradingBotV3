@@ -312,9 +312,28 @@ def test_the_request_body_holds_the_words_the_symbol_the_side_and_two_code_lists
     assert len(calls) == 1, calls
 
     body = calls[0]["json"]
-    sent = json.dumps(body, default=str)
+    # LEAD AMENDMENT 2026-09-21: `json.dumps` escapes non-ASCII by default and
+    # the fixture note carries an en dash ON PURPOSE (the multi-byte case), so
+    # `EXIT_NOTE in sent` could not be true for any implementation. Serialise
+    # the way the words really travel. The shared provider path also embeds
+    # the evidence as a JSON STRING inside a chat message, so the note sits one
+    # layer down, escaped again: unwrap every message's content before looking.
+    layers = [json.dumps(body, default=str, ensure_ascii=False)]
+    for message in body.get("messages") or ():
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str):
+            continue
+        layers.append(content)
+        try:
+            layers.append(json.dumps(json.loads(content), default=str, ensure_ascii=False))
+        except ValueError:
+            pass
+    sent = " ".join(layers)
 
-    assert fx.EXIT_NOTE in sent, "the model must see the trader's own words"
+    # The evidence is embedded in the prompt as JSON text, so the en dash may
+    # arrive escaped (\u2013): the words are there either way.
+    escaped = json.dumps(fx.EXIT_NOTE)[1:-1]
+    assert fx.EXIT_NOTE in sent or escaped in sent, "the model must see the trader's own words"
     assert fx.SWING in sent, "the symbol travels"
     assert "LONG" in sent, "the side travels"
     assert _why_code() in sent and _felt_codes(1)[0] in sent, "both code lists travel"

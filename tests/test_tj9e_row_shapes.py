@@ -220,7 +220,6 @@ def test_a_date_only_exit_is_asked_and_its_note_is_never_same_session(tmp_path):
     is True for it, and "there is no time to be before", so a note typed on the
     fill's own date may never claim `same_session`.
     """
-    import journal_trade_shape as shape
     import trade_mentor_trade_check as check
     import trade_origin
     from datetime import datetime
@@ -236,7 +235,15 @@ def test_a_date_only_exit_is_asked_and_its_note_is_never_same_session(tmp_path):
         if str(leg.get("role") or "").upper() == "CLOSE"
     ]
     assert len(legs) == 1
-    assert shape.is_date_only(shape._coerce_datetime(legs[0]["timestamp"])) is True
+    # LEAD AMENDMENT 2026-09-21: the tester asserted
+    # `journal_trade_shape.is_date_only(...) is True` here. The fixture writes
+    # the fill through `manual_execution_from_fields`, which stamps midnight in
+    # the DESK's own zone (`T00:00:00-07:00` = 03:00 New York), so that line was
+    # true only on an Eastern desk. The live date-only closing leg has exactly
+    # that shape. What matters is pinned below and unchanged: the exit IS asked
+    # and its note is never `same_session`. The stamp itself is asserted to be
+    # a midnight one in its OWN offset, which is what a date-only fill is.
+    assert "T00:00:00" in str(legs[0]["timestamp"]), legs[0]["timestamp"]
 
     # Typed on the exit's OWN date, which is the only moment that could make a
     # naive rule say `same_session`.

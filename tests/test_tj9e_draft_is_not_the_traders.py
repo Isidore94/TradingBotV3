@@ -231,6 +231,16 @@ def test_the_draft_line_never_greys_save(tmp_path):
 
     root = tmp_path / "packs"
     store, trade_id = _drafted(tmp_path, root)
+    # LEAD AMENDMENT 2026-09-21: `swing_with_money` never answers the swing's
+    # four ENTRY fields, so Save was grey for TJ-9's own forced reason and this
+    # test could not see what the DRAFT does. Answer them first (the way
+    # `tj9e_support` does elsewhere), so the docstring's hand count is true:
+    # the exit box is the only gate left.
+    check.save_answers(
+        store,
+        trade_id,
+        {name: {"state": check.ANSWER_NOT_REMEMBERED} for name in check.MATERIAL_FIELDS},
+    )
     task = check.build_task(store, fx.SESSION_TODAY)
 
     card = _card(tmp_path)
@@ -283,10 +293,17 @@ def test_one_write_is_in_flight_and_every_ending_re_enables_the_buttons(tmp_path
     assert len(calls) == 1, f"{len(calls)} writes in flight"
 
     release.set()
-    for _spin in range(200):
+    # LEAD AMENDMENT 2026-09-21: the tester spun 200 `processEvents` turns -
+    # measured 0.29 ms in all, against 6.9 ms for one journal write - so this
+    # failed alone and passed under load. A DEADLINE, not a turn count.
+    import time as _time
+
+    _deadline = _time.monotonic() + 20.0
+    while _time.monotonic() < _deadline:
         _app.processEvents()
         if not card.exit_write_in_flight(trade_id):
             break
+        _time.sleep(0.005)
     assert card.exit_write_in_flight(trade_id) is False, "the card never settled"
     assert check.exit_fields(store, trade_id)["fields"]["why"]["code"]
 

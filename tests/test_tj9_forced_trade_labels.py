@@ -205,6 +205,12 @@ def test_save_is_disabled_until_every_listed_field_holds_a_value_or_an_answer_st
     assert card.save_answers_button.isEnabled() is False, "target is still open"
 
     combos["target"].setCurrentIndex(combos["target"].findData(check.ANSWER_NOT_REMEMBERED))
+    # LEAD AMENDMENT 2026-09-21 (TJ-9E, the trader's own request): a round-trip
+    # trade now also carries ONE forced EXIT box - "Why did you exit? What did
+    # you feel? What were you watching?" - so Save waits on it as it waits on
+    # the entry fields. One click answers it; what this test pins is unchanged.
+    assert card.save_answers_button.isEnabled() is False, "the exit box is still open"
+    card.set_exit_answer_state(trade_id, check.ANSWER_NOT_REMEMBERED)
     assert card.save_answers_button.isEnabled() is True
 
     # And going back to the blank "-" closes it again: the gate is a state, not

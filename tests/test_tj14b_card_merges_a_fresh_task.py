@@ -185,6 +185,13 @@ def test_a_half_answered_row_keeps_its_widgets_when_another_trade_is_added(desk)
     # The gate is recomputed over ALL the rows now on the card.
     _answer_every_field(card, today)
     assert card.save_answers_button.isEnabled() is False, "the added trade is still open"
+    # LEAD AMENDMENT 2026-09-21 (TJ-9E, the trader's own request): a round-trip
+    # trade now also carries ONE forced EXIT box - "Why did you exit? What did
+    # you feel? What were you watching?" - so Save waits on it as it waits on
+    # the entry fields. One click answers it; what this test pins is unchanged.
+    for _trade in (today, yesterday):
+        if card.exit_note_box(_trade) is not None:
+            card.set_exit_answer_state(_trade, check.ANSWER_NOT_REMEMBERED)
     _answer_every_field(card, yesterday)
     assert card.save_answers_button.isEnabled() is True
 
