@@ -694,8 +694,17 @@ def unlabelled_trade_count(store: Any, session: str) -> int:
     the session's OWN trades, so a caller does not have to know which morning
     the card would have reviewed them on. An unreadable list answers 0 rather
     than a guess: uncertainty is never a count.
+
+    MATERIAL FIELDS ONLY. Since TJ-9E a row also comes back for an unexplained
+    EXIT, which is a different question with a different answer; counting one
+    as "unlabelled" would make a fully labelled trade read as unlabelled
+    forever in the Journal's completeness view.
     """
-    return len(questions_for_session(store, str(session)[:10]) or ())
+    return sum(
+        1
+        for question in questions_for_session(store, str(session)[:10]) or ()
+        if question.missing
+    )
 
 
 def confirm_setup(
