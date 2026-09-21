@@ -401,6 +401,98 @@ def _report_card(card: Any, session: str, mint: _Minter) -> dict[str, Any]:
     return {"session": _text(stamped) or session, "lines": items}
 
 
+#: What the page says when the trader has clicked nothing. The live desk holds
+#: ZERO moods (read-only count, 2026-09-20), so this is the FIRST thing TJ-7
+#: shows: a count of nothing, said plainly, with no invented rate behind it.
+MOOD_EMPTY_STATEMENT = "No mood recorded yet for this session (n 0)."
+
+#: The fields one recorded mood travels with. `written_after_the_session` is
+#: the row's OWN label, computed by the writer and never recomputed here.
+MOOD_ITEM_FIELDS: tuple[str, ...] = (
+    "entry_id",
+    "at",
+    "score",
+    "state_tags",
+    "followed_plan",
+    "note",
+    "written_after_the_session",
+    "source_id",
+)
+
+
+def mood_section(
+    entries: Iterable[Mapping[str, Any]], mint: _Minter | None = None
+) -> dict[str, Any]:
+    """TJ-7's `mood` section: what the trader said about themselves, in time order.
+
+    `{}` when nobody clicked anything, which is the same shape TJ-4 shipped the
+    hook as - a row whose `mood` key is absent, `None` or `{}` is NOT a mood and
+    is never a neutral 3. A mood typed in the evening is kept, counted and
+    LABELLED (`written_after_the_session`): the partition a later reader needs
+    is a label, never a deletion.
+
+    Nothing here computes a statistic. The section is REPORTED - no detector,
+    score, alert, watchlist, Focus list, review queue or policy file reads it,
+    and no outcome selects or ranks what it holds.
+    """
+    import market_journal
+
+    minter = mint if mint is not None else _Minter()
+    items: list[dict[str, Any]] = []
+    for entry in _entry_rows(entries):
+        recorded = market_journal.mood_of(entry)
+        if recorded is None:
+            continue
+        entry_id = _text(entry.get("entry_id"))
+        items.append(
+            {
+                "entry_id": entry_id,
+                "at": _text(entry.get("created_at")),
+                "score": recorded.score,
+                "state_tags": list(recorded.state_tags),
+                "followed_plan": recorded.followed_plan,
+                "note": recorded.note,
+                "written_after_the_session": bool(recorded.recorded_after_the_session),
+                "vocab_version": recorded.vocab_version,
+                "source_id": minter.mint(f"mood:{entry_id or len(items)}"),
+            }
+        )
+    if not items:
+        return {}
+    return {"n": len(items), "recorded": items}
+
+
+def mood_statement(pack: Mapping[str, Any]) -> str:
+    """ONE readable line for a session's moods. Counts, never a rate.
+
+    `n` sits beside the count and no percentage is ever printed: one session is
+    one session, and a "100% calm" day would be a statistic built from a single
+    click. A mood written after the close SAYS so on the line.
+    """
+    import market_journal
+
+    section = (pack or {}).get("mood")
+    items = list((section or {}).get("recorded") or ()) if isinstance(section, Mapping) else []
+    if not items:
+        return MOOD_EMPTY_STATEMENT
+    latest = items[-1]
+    parts = [f"{len(items)} mood note(s) this session (n {len(items)})."]
+    score = latest.get("score")
+    parts.append(
+        f"Latest: {int(score)} of {len(market_journal.MOOD_SCALE)}."
+        if isinstance(score, int) and not isinstance(score, bool)
+        else "Latest: no face clicked."
+    )
+    tags = [str(code) for code in (latest.get("state_tags") or ())]
+    if tags:
+        parts.append("Felt: " + ", ".join(tags) + ".")
+    answer = _text(latest.get("followed_plan"))
+    parts.append(f"Followed the plan: {answer}." if answer else "Followed the plan: not answered.")
+    if latest.get("written_after_the_session"):
+        parts.append("Written after the session.")
+    return " ".join(parts)
+
+
 def _reads(reads: Iterable[Mapping[str, Any]], mint: _Minter) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for index, row in enumerate(reads or ()):
@@ -494,7 +586,10 @@ def build_pack(
         # TJ-12's six lines when the caller built them, and TJ-7's hook. Both
         # present and falsy when nobody handed one in, never absent.
         "report_card": _report_card(report_card, session, mint),
-        "mood": {},
+        # TJ-7: what the trader said about themselves, from the entries this
+        # pack was already handed. `{}` for a session with none, which is the
+        # shape TJ-4 shipped the hook as.
+        "mood": mood_section(entries, mint),
     }
     body["inputs_hash"] = hashlib.sha256(
         json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -537,6 +632,11 @@ def allowed_source_ids(pack: Mapping[str, Any]) -> tuple[str, ...]:
     trades = (pack or {}).get("trades")
     if isinstance(trades, Mapping):
         for row in trades.get("rows") or ():
+            if isinstance(row, Mapping):
+                _add(row.get("source_id"))
+    mood = (pack or {}).get("mood")
+    if isinstance(mood, Mapping):
+        for row in mood.get("recorded") or ():
             if isinstance(row, Mapping):
                 _add(row.get("source_id"))
     return tuple(seen)
@@ -695,6 +795,8 @@ __all__ = [
     "KIND_OBSERVATION",
     "KIND_PREDICTION",
     "LIST_SECTIONS",
+    "MOOD_EMPTY_STATEMENT",
+    "MOOD_ITEM_FIELDS",
     "SCHEMA",
     "SECTIONS",
     "WALKAWAY_POPULATIONS",
@@ -702,6 +804,8 @@ __all__ = [
     "build_pack",
     "clear_redo",
     "default_root",
+    "mood_section",
+    "mood_statement",
     "pack_path",
     "read_pack",
     "redo_path",

@@ -59,7 +59,7 @@ the card nothing: the card never waits for it, and a fill a late pull lands is
 asked about on the NEXT card.
 
 Nothing in this module reaches a detector, a score, a gate, an alert, a
-watchlist, Focus, the review queue or ``review_policy.json`` (plan.md sec 5).
+watchlist, Focus, the review queue or the review policy file (plan.md sec 5).
 """
 
 from __future__ import annotations

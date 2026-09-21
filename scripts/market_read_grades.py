@@ -3,8 +3,8 @@ lines (TJ-10).
 
 Decision 0021 answer 14: *"'Were you right' is a MEASURED row, never a model's
 opinion."* Nothing in this module calls a model, opens a network, touches a
-detector, a score, an alert, a watchlist, Focus, the review queue or
-`review_policy.json`. It is arithmetic over bars that were handed to it.
+detector, a score, an alert, a watchlist, Focus, the review queue or the
+review policy file. It is arithmetic over bars that were handed to it.
 
 Five rules hold it to evidence rather than interpretation.
 
@@ -817,6 +817,7 @@ def context_for(
     d1_labels: Mapping[str, Any] | None = None,
     prior_grades: Iterable[Mapping[str, Any]] = (),
     latest_d1_click: Mapping[str, Any] | None = None,
+    mood_entries: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """What the desk looked like AT THE STAMP, and nothing after it.
 
@@ -824,6 +825,13 @@ def context_for(
     when it has one, else a rebuild through
     `trade_mentor_context.internals_at` - there is never a second builder. A
     field the desk cannot measure reads :data:`UNMEASURED`.
+
+    `mood_entries` is TJ-7's one addition and it is POINT-IN-TIME like every
+    other field here: the score of the latest mood already recorded at or
+    before the stamp, else :data:`UNMEASURED`. The mood the trader clicks is
+    usually on the session's LAST card, after the trade and often after the
+    close, so a later one filled in here would be hindsight dressed as a
+    measurement - and a contrast walks every scalar in this block.
     """
     import trade_mentor_context
 
@@ -858,7 +866,30 @@ def context_for(
         "previous_call_verdict": _previous_verdict(prior_grades, stamp),
         "confidence": str(row.get("confidence") or "") or UNMEASURED,
         "direction": str(row.get("direction") or "") or UNMEASURED,
+        "mood": _mood_at(mood_entries, stamp),
     }
+
+
+def _mood_at(entries: Iterable[Mapping[str, Any]], stamp: datetime | None) -> Any:
+    """The mood score the read was made KNOWING, or :data:`UNMEASURED`.
+
+    Never a zero and never a later mood. `market_journal.mood_at` compares with
+    `astimezone` and is the ONE reader; a block with no face clicked is a
+    process answer, not a score, and reads `unmeasured` here.
+    """
+    if stamp is None:
+        return UNMEASURED
+    try:
+        import market_journal
+
+        recorded = market_journal.mood_at(entries or (), stamp)
+    except Exception:  # noqa: BLE001 - an unreadable mood is unmeasured, never a zero
+        _log.debug("A mood could not be read for a context snapshot.", exc_info=True)
+        return UNMEASURED
+    score = getattr(recorded, "score", None)
+    if isinstance(score, bool) or not isinstance(score, int):
+        return UNMEASURED
+    return score
 
 
 def _bars_through(bars: Sequence[Any], stamp: datetime | None) -> list[Any]:

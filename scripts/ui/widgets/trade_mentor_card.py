@@ -32,7 +32,7 @@ view has not changed for two hours" becomes indistinguishable from "I only ever
 said it once".
 
 Nothing here reaches a detector, a score, a gate, an alert, a watchlist, Focus,
-the review queue or `review_policy.json`, and nothing here pushes to a phone.
+the review queue or the review policy file, and nothing here pushes to a phone.
 """
 
 from __future__ import annotations

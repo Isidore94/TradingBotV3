@@ -15,7 +15,7 @@ every rule that packet learned the hard way is repeated here:
 THE HARD INVARIANT
 ------------------
 **An idea is a SUGGESTION.** Nothing written here is read by a detector, a
-score, an alert, a watchlist, Focus, the review queue or `review_policy.json`;
+score, an alert, a watchlist, Focus, the review queue or the review policy file;
 no job writes `WISHLIST.md` or `plan.md`; and a KEEP is the TRADER's click -
 :func:`keep_idea` and :func:`dismiss_idea` are the card's writers and no nightly
 job may call them (`tests/test_tj6_keep_is_the_traders_act.py` proves it over the
