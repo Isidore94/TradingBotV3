@@ -977,10 +977,32 @@ def _wilson(hits: int, total: int) -> float | None:
     return swing_headline.wilson_lower_bound(hits, total) if total > 0 else None
 
 
-def _pooled(cards: Sequence[ReportCard], key: str) -> list[Mapping[str, Any]]:
+def _card_lines(card: Any) -> tuple[Mapping[str, Any], ...]:
+    """One card's lines, whether it is a `ReportCard` or the mapping one stores as.
+
+    TJ-5's week strip pools the lines a day PACK stored (`day_review_pack`'s
+    `report_card` section), which are plain dicts by the time they come off
+    disk. A pooling function that only understood the dataclass would need the
+    caller to rebuild one, and a rebuilt card is a second opinion about what a
+    line said.
+    """
+    lines = getattr(card, "lines", None)
+    if lines is None and isinstance(card, Mapping):
+        lines = card.get("lines")
+    return tuple(line for line in (lines or ()) if isinstance(line, Mapping))
+
+
+def _card_session(card: Any) -> str:
+    session = getattr(card, "session", None)
+    if session is None and isinstance(card, Mapping):
+        session = card.get("session")
+    return _text(session)[:10]
+
+
+def _pooled(cards: Sequence[Any], key: str) -> list[Mapping[str, Any]]:
     out: list[Mapping[str, Any]] = []
     for card in cards:
-        for line in card.lines:
+        for line in _card_lines(card):
             if line.get("key") == key:
                 out.append(line)
     return out
@@ -1024,12 +1046,31 @@ def _pooled_families(days: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None
     return sorted(candidates, key=lambda cell: (-cell["low"], cell["setup_family"]))[0]
 
 
+#: What a week pooled from STORED cards says where `week()` names a best family.
+#:
+#: A stored line carries that DAY's best family and its own two integers; five
+#: day-winners are five different questions answered once each, and picking the
+#: best of them is a ranking of days, not of families (lead decision, TJ-5,
+#: 2026-09-20). The per-family cells live on TJ-11's walk-away object, which a
+#: pack does not carry, so a week built from cards says what it could not do.
+NO_FAMILY_FROM_CARDS = (
+    " No best setup family over this window: pooling families needs the walk-away "
+    "skill cells, and a stored card carries only that day's own winner - a best of "
+    "five day-winners would be a ranking of days, not of families."
+)
+
+
 def week(sessions: Sequence[Mapping[str, Any]]) -> ReportCard:
     """The same six lines over a LIST of sessions - TJ-5's week / month strip.
 
     Same functions, longer window, ``n`` everywhere. A week POOLS counts and
     computes the ONE Wilson from the pooled pair; it never averages two days'
     rates, which on days of unequal length is a different number.
+
+    This is the path for a caller that still has TJ-11's `WalkawayDay` objects,
+    so it can pool the family cells too. A caller holding only the BUILT lines -
+    TJ-5's week strip, reading them back out of the day packs - uses
+    :func:`week_from_cards`, which is the same pooling without that half.
     """
     # ONE row per session: a window handed the same day twice must not pool it
     # twice, or a week's `n` is a fact about the caller rather than the trader
@@ -1045,8 +1086,64 @@ def week(sessions: Sequence[Mapping[str, Any]]) -> ReportCard:
         if name:
             seen.add(name)
         days.append(dict(day))
-    cards = [build(day) for day in days]
-    names = tuple(_text(day.get("session"))[:10] for day in days)
+    return _pool_cards(
+        [build(day) for day in days],
+        sessions=tuple(_text(day.get("session"))[:10] for day in days),
+        best_family=_pooled_families(days),
+        no_family_clause=(
+            " No setup family has enough measured names over this window - too few "
+            "to call."
+        ),
+    )
+
+
+def week_from_cards(cards: Sequence[Any]) -> ReportCard:
+    """The same pooling, over cards that were BUILT once and stored (TJ-5).
+
+    TJ-5's week strip reads TJ-12's lines back out of the day packs: the pack
+    carries the built line with all of its integers, and rebuilding a card from
+    a pack is impossible anyway (`build` needs TJ-11's `WalkawayDay` object,
+    which a pack does not hold). The arithmetic lives HERE rather than in the
+    page's service so there is ONE place that knows what pooling a line means -
+    the module that owns what a line is (lead decision, 2026-09-20).
+
+    Takes `ReportCard`s or the mappings a pack stores them as. Duplicate
+    sessions are pooled once, first occurrence winning, exactly as :func:`week`
+    does. It names NO best family and says why: see :data:`NO_FAMILY_FROM_CARDS`.
+    """
+    kept: list[Any] = []
+    names: list[str] = []
+    seen: set[str] = set()
+    for card in cards or ():
+        name = _card_session(card)
+        if name and name in seen:
+            continue
+        if name:
+            seen.add(name)
+        kept.append(card)
+        names.append(name)
+    return _pool_cards(
+        kept,
+        sessions=tuple(names),
+        best_family=None,
+        no_family_clause=NO_FAMILY_FROM_CARDS,
+    )
+
+
+def _pool_cards(
+    cards: Sequence[Any],
+    *,
+    sessions: Sequence[str],
+    best_family: Mapping[str, Any] | None,
+    no_family_clause: str,
+) -> ReportCard:
+    """Pool the six lines of several cards into one. Counting and ONE Wilson.
+
+    Every number here is a SUM of integers the day lines already carried, and
+    the only statistic is `_rate_keys`' pooled Wilson. Nothing is re-measured
+    and nothing is ranked.
+    """
+    names = tuple(sessions)
     count = len(names)
     label = f"over {count} session(s)"
 
@@ -1059,7 +1156,7 @@ def week(sessions: Sequence[Mapping[str, Any]]) -> ReportCard:
     n = _sum("did_well", "n")
     measured = _sum("did_well", "measured")
     runs = _sum("did_well", "runs")
-    best = _pooled_families(days)
+    best = dict(best_family) if best_family else None
     text = (
         f"Did well {label}: {runs} real run(s) of {measured} measured, {n} considered"
         + _floor_clause(measured)
@@ -1071,10 +1168,7 @@ def week(sessions: Sequence[Mapping[str, Any]]) -> ReportCard:
             f"{best['runs']} of {best['measured']} measured (bound {best['low']:.2f})."
         )
     else:
-        text += (
-            " No setup family has enough measured names over this window - too few "
-            "to call."
-        )
+        text += no_family_clause
     lines.append(
         _line("did_well", text, n, measured, runs=runs, best_family=best, **_rate_keys(runs, measured))
     )
@@ -1196,6 +1290,7 @@ __all__ = [
     "LEDGER_TAIL_ROWS",
     "LINE_KEYS",
     "LINE_TARGETS",
+    "NO_FAMILY_FROM_CARDS",
     "ORIGIN_LANES",
     "PACK_LINE_KEYS",
     "ReportCard",
@@ -1208,5 +1303,6 @@ __all__ = [
     "pack_card",
     "process_line",
     "week",
+    "week_from_cards",
     "your_reads_line",
 ]

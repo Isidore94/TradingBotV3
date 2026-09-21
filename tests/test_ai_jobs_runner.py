@@ -362,6 +362,12 @@ EXPECTED_SLOT_ORDER = (
     # before `ticker_briefs`, whose two hours of reserve it must not queue
     # behind for seconds of work.
     "observation_tags",
+    # TJ-5 (2026-09-20): the week story, `plan.md` §12.4 TJ-13 item 9's Stage 2
+    # position - directly after the word tagger and directly before the briefs,
+    # whose 120 minutes of reserve it must not queue behind. SATURDAY ONLY: it
+    # is in `runner.WEEKEND_ONLY_SLOTS`, so `slots_for("weeknight")` never
+    # offers it and Sunday picks it up only when Saturday left it unfinished.
+    "week_review_narration",
     "ticker_briefs",
     "market_story_narration",
     # stage 3 - the model-gated slots, unchanged

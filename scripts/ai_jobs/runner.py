@@ -619,6 +619,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         read_grades_mature,
         setup_research,
         theta_grading,
+        week_review_narration,
     )
     from journal_runner import run_nightly_journal_import
     from market_story_rollups import run_market_story_rollups
@@ -1039,6 +1040,35 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=3,
             uses_model=True,
         ),
+        # TJ-5 (2026-09-20), APPENDED INSIDE stage 2, DIRECTLY after
+        # `observation_tags` and DIRECTLY before `ticker_briefs`. That is the
+        # position `plan.md` §12.4 TJ-13 item 9 lists for it.
+        #
+        # Ahead of the briefs because they reserve 120 minutes and the week
+        # story is the thing the trader OPENS on a Saturday; it cannot move
+        # further forward either, because `measured_report` sits directly before
+        # `ai_summary` and two other files pin that pair.
+        #
+        # It is on the SATURDAY slate only: `WEEKEND_ONLY_SLOTS` is the seam
+        # that takes a slot off the weeknight slate, and a weeknight that loaded
+        # the largest model the desk owns would have a session behind it and
+        # another in front. Sunday picks it up through `_owed_slot_names` when
+        # Saturday attempted it and did not finish.
+        #
+        # `uses_model=True` and NO `model_free_kwargs`: there is no half of a
+        # week STORY that runs without a model. The deterministic week and month
+        # strip is TJ-5 change 3, it lives on the page and it calls nothing.
+        JobSlot(
+            name="week_review_narration",
+            run=week_review_narration.run_week_review_narration,
+            reserve_minutes=week_review_narration.reserve_minutes(),
+            description=(
+                "The week the trader reads on a Saturday - five day cards "
+                "narrated as one grounded story, on the large local model"
+            ),
+            max_attempts=3,
+            uses_model=True,
+        ),
         JobSlot(
             name="ticker_briefs",
             run=briefs.run_ticker_briefs,
@@ -1116,12 +1146,18 @@ NIGHT_SATURDAY = "saturday"
 NIGHT_SUNDAY = "sunday"
 NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 
-#: The slot that leaves the weeknight slate entirely (plan.md TJ-13 item 8).
+#: The slots that leave the weeknight slate entirely (plan.md TJ-13 item 8).
 #: Measured on the live ledger, 2026-09-19: `ai_summary` ran 12,453-18,540 s a
 #: night and ended `degraded_no_narrative` on 09-15, 09-16, 09-17 and 09-18. It
 #: is the slot the night cannot afford five times a week, so it runs once, on
 #: the Saturday slate, with the whole weekend night in front of it.
-WEEKEND_ONLY_SLOTS = ("ai_summary",)
+#:
+#: TJ-5's `week_review_narration` joins it (2026-09-20) rather than growing a
+#: second constant beside it: this tuple already MEANS "off the weeknight
+#: slate, on Saturday, on Sunday only when owed", which is exactly the week
+#: story's cadence. It is weekly work on the largest local model the desk owns,
+#: and a Tuesday night has a session behind it and another in front.
+WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
 #: ENDS at `measured_report`, which closes that stage today; a later packet
