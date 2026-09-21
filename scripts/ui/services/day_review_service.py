@@ -77,6 +77,11 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # the ONE read, never a second one, and the page formats it without ever
     # calling `day_report_card.build` itself.
     "report_card",
+    # TJ-6: the night's ideas for this session, with whatever the trader has
+    # already decided about each one. READ here, on the worker, in a few
+    # kilobytes - the card never opens a store of its own, and a suggestion is
+    # all any of these rows will ever be.
+    "ideas",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -175,6 +180,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "day_story": None,
         "d1_view": None,
         "report_card": {},
+        "ideas": [],
     }
 
 
@@ -484,6 +490,16 @@ class DayReviewService:
             )
         except Exception:  # noqa: BLE001 - a card never costs the day
             _log.debug("The Day Review report card could not be built.", exc_info=True)
+        # TJ-6: the night's suggestions, in their own guard - one unreadable
+        # store costs one section. A dismissed idea is already gone by the time
+        # the rows arrive here; nothing on this page ever writes one.
+        try:
+            from ai_jobs import improvement_ideas
+
+            payload["ideas"] = [dict(row) for row in improvement_ideas.ideas_for_session(session)]
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"the desk's ideas could not be read: {exc}")
+            _log.debug("Day Review ideas unreadable.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload

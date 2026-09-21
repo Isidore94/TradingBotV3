@@ -608,6 +608,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         digest,
         enrichment,
         evidence_report,
+        improvement_ideas,
         journal_auto_tag,
         market_story_narration,
         measured_report_publish,
@@ -1135,6 +1136,33 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=20.0,
             description="Stop/target recipe research with five-timeframe market context",
             max_attempts=3,
+            uses_model=True,
+        ),
+        # TJ-6 (2026-09-20), APPENDED LAST, inside stage 3.
+        #
+        # Last because it READS what the rest of the night wrote - the packs,
+        # the day stories, TJ-15's contrast pack - and feeds nothing. Nothing in
+        # the night runs after it, so a night that ran out of window loses the
+        # suggestions and never the evidence.
+        #
+        # `uses_model=True` and no `model_free_kwargs`: there is no half of an
+        # IDEA that runs without a model, so a forced daytime run records
+        # SKIPPED and loads nothing (TJ-13A item 1). It is NOT in
+        # `WEEKEND_ONLY_SLOTS` - the packet says up to three ideas A NIGHT.
+        #
+        # What it writes is a SUGGESTION and nothing else: no detector, score,
+        # alert, watchlist, Focus, review queue or `review_policy.json` reads
+        # the ideas store, and a KEEP is the trader's own click on the card.
+        JobSlot(
+            name="improvement_ideas",
+            run=improvement_ideas.run_improvement_ideas,
+            reserve_minutes=improvement_ideas.RESERVE_MINUTES,
+            description=(
+                "Up to three grounded suggestions a night - each citing the "
+                "trader's own evidence, and a process idea naming the one "
+                "measurable that will check it"
+            ),
+            max_attempts=2,
             uses_model=True,
         ),
     ]
