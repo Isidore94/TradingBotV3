@@ -641,7 +641,30 @@ def long_hold_lines(
 # ---------------------------------------------------------------------------
 # 6. How fresh
 # ---------------------------------------------------------------------------
-def _tail_rows(path: Any, limit: int) -> list[dict[str, Any]]:
+@dataclass(frozen=True)
+class _LedgerTail:
+    """What one bounded read of the ledger saw, AND what it could not see.
+
+    A tail that only handed back rows let the card say "no overnight slots ran"
+    about a night that simply fell out of the window: on the live 1.2 MB ledger
+    the 256 KB window holds 173 of 483 rows and reaches back to 2026-09-11, so 9
+    of the 15 sessions the picker offers read "none reported trouble" over 10-16
+    real slots (reviewer, 2026-09-20). A reader that cannot say where its own
+    sight ends cannot tell silence from absence, and plan.md sec 5 is that
+    missing data is uncertainty, never confirmation.
+    """
+
+    rows: tuple[Mapping[str, Any], ...] = ()
+    #: Was there more file than this read looked at?
+    truncated: bool = False
+    #: The oldest ``session_date`` in :attr:`rows`, or ``""``. When the read
+    #: TRUNCATED, this is the edge of the card's sight - and the night it names
+    #: may itself have been cut in half, so it is inside the blind spot, not
+    #: outside it.
+    oldest_session: str = ""
+
+
+def _tail_rows(path: Any, limit: int) -> _LedgerTail:
     """The LAST ``limit`` ledger rows, without reading a megabyte for a sentence.
 
     Small files go through `ai_jobs.ledger.recent_rows`, the owner's own bounded
@@ -650,19 +673,27 @@ def _tail_rows(path: Any, limit: int) -> list[dict[str, Any]]:
     not make one. A big file is SEEKED from the end here rather than read whole:
     `recent_rows` reads the whole file and then slices, which is right for the
     runner and wrong for a line on a page. `ai_jobs/ledger.py` is unchanged.
+
+    The file is opened ONCE either way. Answering "I cannot see that night" by
+    opening it again would have paid the whole 1.2 MB to say so.
     """
     import ai_jobs.ledger as ledger
 
     from pathlib import Path
 
     target = Path(path)
+    wanted = max(1, int(limit))
     try:
         size = target.stat().st_size
     except OSError:
-        return []
+        return _LedgerTail()
     if size <= LEDGER_TAIL_BYTES:
-        return list(ledger.recent_rows(limit, path=target))
-    rows: list[dict[str, Any]] = []
+        rows = list(ledger.recent_rows(wanted, path=target))
+        # `recent_rows` slices to the last `wanted` and never says how many it
+        # dropped, so a full window is read as "there may be more" - the
+        # conservative half, which is the honest half here.
+        return _tail_of(rows, truncated=len(rows) >= wanted)
+    rows = []
     try:
         with open(target, "rb") as handle:
             handle.seek(size - LEDGER_TAIL_BYTES)
@@ -680,8 +711,20 @@ def _tail_rows(path: Any, limit: int) -> list[dict[str, Any]]:
                 if isinstance(row, dict):
                     rows.append(row)
     except OSError:
-        return []
-    return rows[-max(1, int(limit)):]
+        return _LedgerTail()
+    # Bytes were left behind by definition, and the row slice may drop more.
+    return _tail_of(rows[-wanted:], truncated=True)
+
+
+def _tail_of(rows: Sequence[Mapping[str, Any]], *, truncated: bool) -> _LedgerTail:
+    oldest = ""
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        session = _text(row.get("session_date"))[:10]
+        if len(session) == 10 and (not oldest or session < oldest):
+            oldest = session
+    return _LedgerTail(tuple(rows), truncated, oldest)
 
 
 def _slot_verdicts(rows: Sequence[Mapping[str, Any]], session: str) -> dict[str, str]:
@@ -754,14 +797,24 @@ def how_fresh(freshness: Mapping[str, Any] | None) -> dict[str, Any]:
     path = facts.get("ledger_path")
     verdicts: dict[str, str] = {}
     night_status = "unknown"
+    beyond_the_tail = False
     if path is not None:
         from pathlib import Path
 
         target = Path(path)
         # `exists` never creates; `ledger_path()` would have made the folder.
         if target.exists():
-            night_status = "read"
-            verdicts = _slot_verdicts(_tail_rows(target, LEDGER_TAIL_ROWS), session)
+            tail = _tail_rows(target, LEDGER_TAIL_ROWS)
+            # A session the window could not reach is UNKNOWN, never a quiet
+            # night. The oldest session the tail returned is itself inside the
+            # blind spot - the window may have cut that night in half, which is
+            # exactly what 2026-09-11 did (5 slots shown, 16 real).
+            beyond_the_tail = tail.truncated and (
+                not tail.oldest_session or (bool(session) and session <= tail.oldest_session)
+            )
+            if not beyond_the_tail:
+                verdicts = _slot_verdicts(tail.rows, session)
+                night_status = "read" if verdicts else "no_rows"
     ok = tuple(sorted(job for job, status in verdicts.items() if status == ledger.STATUS_OK))
     failed = tuple(
         sorted(job for job, status in verdicts.items() if status == ledger.STATUS_FAILED)
@@ -770,8 +823,18 @@ def how_fresh(freshness: Mapping[str, Any] | None) -> dict[str, Any]:
         sorted(job for job, status in verdicts.items() if status == ledger.STATUS_DEGRADED)
     )
     named = tuple(sorted(failed + degraded))
-    if night_status == "unknown":
+    if beyond_the_tail:
+        # No counts at all: a number here would be a measurement of the window,
+        # not of the night.
+        parts.append(
+            "night status unknown for this session (older than the ledger tail)"
+        )
+    elif night_status == "unknown":
         parts.append("night status unknown - the desk has no AI job ledger to read")
+    elif night_status == "no_rows":
+        # Covered by the window and genuinely empty. Saying "0 read, none
+        # reported trouble" would read as a clean night, which is a claim.
+        parts.append("no overnight rows for this session")
     elif named:
         trouble = []
         if failed:

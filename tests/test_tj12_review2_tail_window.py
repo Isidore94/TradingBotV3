@@ -31,6 +31,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -72,24 +74,49 @@ def _row(job: str, status: str, session: str, minute: int) -> dict:
     }
 
 
+#: Rows per session in the big fixture. Sized so the byte window lands INSIDE
+#: `EDGE_SESSION`, which is the live shape: 2026-09-11 was half-visible.
+ROWS_PER_SESSION = 300
+
+
+def _write_rows(path: Path, rows) -> Path:
+    """The ledger's OWN writer, in ONE call.
+
+    `ai_jobs.ledger.append_row` fsyncs per row, which is right for a nightly job
+    and 900 fsyncs for a fixture about a byte window. This is the same
+    `diagnostics.artifact_io` writer it calls, handed every row at once.
+    """
+    from diagnostics.artifact_io import append_jsonl_rows
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    append_jsonl_rows(path, [dict(row) for row in rows], fsync=False)
+    return path
+
+
 def _big_ledger(tmp_path: Path) -> Path:
     """A ledger LARGER than the byte window, oldest session first.
 
-    Each session writes enough padded rows that the 256 KB tail cannot reach
-    back to `OLD_SESSION` - the live shape in miniature.
+    The window has to START inside `EDGE_SESSION`: `NEW_SESSION`'s rows alone
+    fit, `NEW` plus `EDGE` do not. Both are plain facts about the FILE, checked
+    here so the fixture cannot drift into a regime where the test would pass for
+    the wrong reason.
     """
     import ai_jobs.ledger as ledger
     import day_report_card
 
     rows = []
     for session in (OLD_SESSION, EDGE_SESSION, NEW_SESSION):
-        for index in range(160):
+        for index in range(ROWS_PER_SESSION):
             rows.append(_row(f"slot_{index:03d}", ledger.STATUS_OK, session, index))
-    path = fx.write_ledger_file(
-        tmp_path / "ai_store" / "logs" / "ai_job_ledger.jsonl", rows
-    )
+    path = _write_rows(tmp_path / "ai_store" / "logs" / "ai_job_ledger.jsonl", rows)
     assert path.stat().st_size > day_report_card.LEDGER_TAIL_BYTES, (
         "the fixture has to be bigger than the window it is about"
+    )
+    lines = path.read_bytes().splitlines(keepends=True)
+    newest = sum(len(line) for line in lines[-ROWS_PER_SESSION:])
+    two = sum(len(line) for line in lines[-2 * ROWS_PER_SESSION:])
+    assert newest < day_report_card.LEDGER_TAIL_BYTES < two, (
+        "the window must start inside the middle session, as it does live"
     )
     return path
 
@@ -115,14 +142,25 @@ def _fresh(path: Path, session: str) -> dict:
     return fx.freshness_facts(ledger_path=path, session=session)
 
 
+@pytest.fixture(scope="module")
+def big(tmp_path_factory) -> Path:
+    """Built ONCE: it is a fixed file, and every test asks it a question."""
+    return _big_ledger(tmp_path_factory.mktemp("big_ledger"))
+
+
+@pytest.fixture(scope="module")
+def small(tmp_path_factory) -> Path:
+    return _small_ledger(tmp_path_factory.mktemp("small_ledger"))
+
+
 # ---------------------------------------------------------------------------
 # the blocker
 # ---------------------------------------------------------------------------
-def test_a_session_older_than_the_tail_is_unknown_not_a_clean_night(tmp_path):
+def test_a_session_older_than_the_tail_is_unknown_not_a_clean_night(big, small):
     """The nine picker sessions that said "none reported trouble"."""
     import day_report_card
 
-    line = day_report_card.how_fresh(_fresh(_big_ledger(tmp_path), OLD_SESSION))
+    line = day_report_card.how_fresh(_fresh(big, OLD_SESSION))
 
     assert line["night_status"] == "unknown"
     assert line["failed_slots"] == ()
@@ -133,7 +171,7 @@ def test_a_session_older_than_the_tail_is_unknown_not_a_clean_night(tmp_path):
     assert "finished ok" not in lowered, "no slot counts may be printed"
 
 
-def test_the_boundary_session_is_unknown_because_the_window_may_have_halved_it(tmp_path):
+def test_the_boundary_session_is_unknown_because_the_window_may_have_halved_it(big, small):
     """2026-09-11 said 5 slots finished ok when 16 really did.
 
     The oldest session the tail returned is the one the window CUT, so it is
@@ -141,7 +179,7 @@ def test_the_boundary_session_is_unknown_because_the_window_may_have_halved_it(t
     """
     import day_report_card
 
-    line = day_report_card.how_fresh(_fresh(_big_ledger(tmp_path), EDGE_SESSION))
+    line = day_report_card.how_fresh(_fresh(big, EDGE_SESSION))
 
     assert line["night_status"] == "unknown"
     assert line["failed_slots"] == ()
@@ -149,26 +187,26 @@ def test_the_boundary_session_is_unknown_because_the_window_may_have_halved_it(t
     assert "older than the ledger tail" in line["text"].lower(), line["text"]
 
 
-def test_a_session_inside_the_window_still_counts_normally(tmp_path):
+def test_a_session_inside_the_window_still_counts_normally(big, small):
     """Today and the last few sessions - what the trader opens 95% of the time."""
     import day_report_card
 
-    line = day_report_card.how_fresh(_fresh(_big_ledger(tmp_path), NEW_SESSION))
+    line = day_report_card.how_fresh(_fresh(big, NEW_SESSION))
 
     assert line["night_status"] == "read"
-    assert line["n"] == 160
-    assert line["slots_ok"] == 160
+    assert line["n"] == ROWS_PER_SESSION
+    assert line["slots_ok"] == ROWS_PER_SESSION
     assert "none reported trouble" in line["text"].lower(), line["text"]
 
 
-def test_a_whole_file_read_never_calls_an_old_session_unknown(tmp_path):
+def test_a_whole_file_read_never_calls_an_old_session_unknown(big, small):
     """Nothing was out of sight, so the counts are real however old the session.
 
     `truncated` is a fact about the READ, never about the date.
     """
     import day_report_card
 
-    line = day_report_card.how_fresh(_fresh(_small_ledger(tmp_path), OLD_SESSION))
+    line = day_report_card.how_fresh(_fresh(small, OLD_SESSION))
 
     assert line["night_status"] == "read"
     assert line["n"] == 2
@@ -177,7 +215,7 @@ def test_a_whole_file_read_never_calls_an_old_session_unknown(tmp_path):
     assert "failed: ticker_briefs" in line["text"], line["text"]
 
 
-def test_a_session_the_window_covers_but_holds_no_rows_for_says_so(tmp_path):
+def test_a_session_the_window_covers_but_holds_no_rows_for_says_so(big, small):
     """Inside the window and genuinely empty is a THIRD answer.
 
     "0 read, none reported trouble" reads as a clean night; "no overnight rows
@@ -185,7 +223,7 @@ def test_a_session_the_window_covers_but_holds_no_rows_for_says_so(tmp_path):
     """
     import day_report_card
 
-    line = day_report_card.how_fresh(_fresh(_small_ledger(tmp_path), "2026-09-17"))
+    line = day_report_card.how_fresh(_fresh(small, "2026-09-17"))
 
     assert line["night_status"] == "no_rows"
     assert line["n"] == 0 and line["measured"] == 0
@@ -194,12 +232,10 @@ def test_a_session_the_window_covers_but_holds_no_rows_for_says_so(tmp_path):
     assert "none reported trouble" not in line["text"].lower(), line["text"]
 
 
-def test_none_reported_trouble_is_only_ever_said_over_at_least_one_slot(tmp_path):
+def test_none_reported_trouble_is_only_ever_said_over_at_least_one_slot(big, small, tmp_path):
     """The wording rule, over every state this line has."""
     import day_report_card
 
-    big = _big_ledger(tmp_path)
-    small = _small_ledger(tmp_path)
     lines = [
         day_report_card.how_fresh(_fresh(big, OLD_SESSION)),
         day_report_card.how_fresh(_fresh(big, EDGE_SESSION)),
@@ -221,7 +257,7 @@ def test_none_reported_trouble_is_only_ever_said_over_at_least_one_slot(tmp_path
             assert line["n"] == 0, line["text"]
 
 
-def test_the_tail_reports_its_own_truncation_and_oldest_session(tmp_path):
+def test_the_tail_reports_its_own_truncation_and_oldest_session(big, small):
     """The seam the rule rests on, asserted directly - and NO second read.
 
     A reader that answered "unknown" by opening the file again would have paid
@@ -229,20 +265,20 @@ def test_the_tail_reports_its_own_truncation_and_oldest_session(tmp_path):
     """
     import day_report_card
 
-    big = day_report_card._tail_rows(_big_ledger(tmp_path), day_report_card.LEDGER_TAIL_ROWS)
-    small = day_report_card._tail_rows(_small_ledger(tmp_path), day_report_card.LEDGER_TAIL_ROWS)
+    windowed = day_report_card._tail_rows(big, day_report_card.LEDGER_TAIL_ROWS)
+    whole = day_report_card._tail_rows(small, day_report_card.LEDGER_TAIL_ROWS)
 
-    assert big.truncated is True
-    assert big.oldest_session >= EDGE_SESSION, big.oldest_session
-    assert small.truncated is False
-    assert small.oldest_session == OLD_SESSION
-    assert len(big.rows) <= day_report_card.LEDGER_TAIL_ROWS
+    assert windowed.truncated is True
+    assert windowed.oldest_session == EDGE_SESSION, windowed.oldest_session
+    assert whole.truncated is False
+    assert whole.oldest_session == OLD_SESSION
+    assert len(windowed.rows) <= day_report_card.LEDGER_TAIL_ROWS
 
 
-def test_the_unknown_answer_opens_the_file_exactly_once(tmp_path, monkeypatch):
+def test_the_unknown_answer_opens_the_file_exactly_once(big, monkeypatch):
     import day_report_card
 
-    path = _big_ledger(tmp_path)
+    path = big
     opened: list[str] = []
     real_open = open
 
