@@ -1689,6 +1689,22 @@ the session and nowhere else, with TJ-9's three-day morning catch-up going FIRST
 not-ready morning and not spending one of them; and the overnight question appears as a
 CLICK once a day, with the old `One thing to test: ...` line not printed beside it.
 
+##### TJ-9E - the Mentor tells an EXIT from an ENTRY (AUTHORIZED by the trader 2026-09-21, IN BUILD)
+
+Trader, 2026-09-21: *"trade mentor should be able to differentiate between trade entrys and exits. trade
+exits should ask for 'why did you exit, what emotions did you have, what technicals were you observing'
+ideally we can just write it out and the AI fills this stuff in overnight. trade entrys are good the way
+they are"*. Packet `.claude/packets/TJ-9E.md`, branch `claude/tj9e-exit-notes`, needs TJ-9, TJ-14B, TJ-16,
+TJ-7 (all merged). An ENTRY keeps today's four fields untouched. An EXIT (any trade with an exit fill in
+the reviewed session, whenever it opened) is ONE forced free-text box; the words are saved RAW at once,
+append-only; a NIGHT slot `exit_note_fields` (stage 2, after `observation_tags`) drafts three fields -
+`why` from a new closed vocabulary, `felt` from TJ-7's existing feelings vocabulary, `watching` as exact
+quotes - each grounded in a span of the trader's own words and BLIND to the outcome (no P&L, R, price or
+later bar in the request); the next morning the trader Confirms or Corrects, and a draft is never counted
+as theirs before that click. Readers: Day Review's trades section and the report card's Process line
+("exits explained K of N"). Fixed on the way: the partly-closed status string the 09:00 check never
+matched. Not in it: the day pack / stories / contrasts reading exit fields (a recorded follow-up).
+
 ##### TJ-12F — Read the Focus-add and armed-alert lanes (PLANNED, not scheduled)
 
 **PLANNED, not started; surfaced by the TJ-12 review round 1 and NOT scheduled into a wave.**
