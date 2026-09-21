@@ -130,6 +130,12 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # launch and then fail the first time the trader opened Day Review.
     "day_review_pack",
     "ai_jobs.day_review_narration",
+    # TJ-5: the week story. Reached through a FUNCTION-LEVEL import on the
+    # Weekend Prep worker - `weekend_prep_service.read_week_review` and
+    # `week_strip` both import it inside themselves - and by the nightly slate,
+    # which imports it inside `default_slots()`. A bundle missing it would
+    # launch fine and fail the first Saturday the trader opened Weekend Prep.
+    "ai_jobs.week_review_narration",
     # Phase 0.32: Daily Recap imports this inside its report worker for the
     # published next-test card. A frozen desk without it would launch and fail
     # only when Review opens, so make the reach explicit.
