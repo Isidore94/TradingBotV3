@@ -119,9 +119,27 @@ LONG_HOLD_SESSIONS = 5
 #: How many questions a card may ask beyond the forced rows.
 BUDGET = 3
 
-#: The four origins the trader is offered. A closed set: a free-text origin
-#: cannot be counted.
-ORIGIN_OPTIONS = ("planned_off_the_desk", "an_alert", "impulse", "other")
+#: The origins the trader is offered. A closed set: a free-text origin cannot
+#: be counted. ``a_focus_pick`` was added by TJ-12 review 1 because the desk
+#: cannot yet READ the Focus lane (`day_report_card.DESK_ORIGIN_LANES_READ`,
+#: filled by TJ-12F), so a pick the trader took off their own Focus list is a
+#: real answer the desk would otherwise have no way of hearing.
+ORIGIN_OPTIONS = (
+    "planned_off_the_desk",
+    "a_focus_pick",
+    "an_alert",
+    "impulse",
+    "other",
+)
+
+#: What the question SAYS about its own blindness. A question that asked "where
+#: did this come from?" without saying the desk cannot see two of the four
+#: places it could have come from would be blaming the trader for the desk's
+#: unread stores (reviewer, 2026-09-20).
+ORIGIN_PROMPT_CAVEAT = (
+    "The desk saw no claim or like before this trade - it cannot read Focus "
+    "adds or armed alerts yet."
+)
 
 #: The three answers to "is the thesis still intact?".
 OPEN_POSITION_OPTIONS = ("thesis_intact", "weakening", "exit_planned")
@@ -419,7 +437,10 @@ def _trigger_trade_origin(state: Mapping[str, Any]) -> list[Subject]:
                 kind="trade_origin",
                 subject_id=trade_id,
                 options=_with_answer_states(*ORIGIN_OPTIONS),
-                prompt=f"Where did {_text(row.get('symbol')) or trade_id} come from?",
+                prompt=(
+                    f"{ORIGIN_PROMPT_CAVEAT} Where did "
+                    f"{_text(row.get('symbol')) or trade_id} come from?"
+                ),
                 detail={"trade_id": trade_id, "symbol": _text(row.get("symbol"))},
             )
         )

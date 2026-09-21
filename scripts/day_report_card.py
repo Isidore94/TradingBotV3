@@ -41,6 +41,7 @@ Four rules it keeps, all of them plan.md sec 5's:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -48,6 +49,8 @@ import evidence_stats
 import real_miss
 import trade_origin
 import walkaway_day
+
+_log = logging.getLogger(__name__)
 
 #: The six lines, in the order the packet names them. `how_fresh` is the sixth
 #: and smaller one the trader added on the second look (AMENDED 2026-09-19).
@@ -83,6 +86,34 @@ LEDGER_TAIL_ROWS = 500
 #: then slices it. Its behaviour is unchanged for its other callers; this is the
 #: bound that keeps ONE sentence from reading a megabyte on a worker.
 LEDGER_TAIL_BYTES = 256 * 1024
+
+#: The four lanes `trade_origin.planned_state` reads, in its own argument order.
+#: Named here because two lane builders - the desk's Mentor card and the Day
+#: Review worker - have to DECLARE which of them they opened, and two literals
+#: in two files is how they come to disagree.
+ORIGIN_LANES: tuple[str, ...] = ("decisions", "claims", "focus_adds", "armed")
+
+#: What the desk can actually read TODAY. `focus_picks` has no public reader
+#: that hands back a row carrying a stamp key `trade_origin` understands
+#: (`_episode_started_at` is private and membership-derived) and the armed-alert
+#: rows are built per caller, so both are unread until **TJ-12F**.
+#:
+#: This is not a detail: `planned_state` answers ``unplanned`` whenever no lane
+#: row precedes the first fill, so an UNREAD lane is indistinguishable from
+#: "nothing was said" - missing data read as confirmation, which plan.md sec 5
+#: forbids. Measured on the live journal 2026-09-20: 30 of the trader's 33
+#: trades since 2026-08-20 read ``unplanned`` for exactly this reason. So the
+#: card never prints a bare "unplanned" while a lane is unread; it says what it
+#: DID look at, and names what it did not.
+DESK_ORIGIN_LANES_READ: tuple[str, ...] = ("decisions", "claims")
+
+#: How each lane reads in a sentence.
+_LANE_WORDS = {
+    "decisions": "likes and vetoes",
+    "claims": "claimed picks",
+    "focus_adds": "Focus adds",
+    "armed": "armed alerts",
+}
 
 #: The instrument words a trade may name itself with. An option's premium is not
 #: the underlying's move (`journal_exposure`'s rule), so it is NOT judged here.
@@ -209,9 +240,18 @@ def _best_family(window: Mapping[str, Any] | None) -> dict[str, Any] | None:
 # 1. Did well
 # ---------------------------------------------------------------------------
 def did_well_line(walkaway: Any) -> dict[str, Any]:
-    """The likes and claims that really ran, beside TJ-11's base rate."""
-    rows = _rows_of(walkaway, "liked_not_traded") + _rows_of(walkaway, "claimed_d1")
+    """The likes that really ran, beside TJ-11's base rate.
+
+    ``n`` is the ``liked_not_traded`` table and ONLY that table, because that is
+    the table the line's click opens: gate #157 asks that the numbers on the
+    card match the tables under them, and a count that pooled two tables while
+    pointing at one could not (reviewer, 2026-09-20). Claimed D1 picks are said
+    separately, with their own count and their own table.
+    """
+    rows = _rows_of(walkaway, "liked_not_traded")
+    claimed = _rows_of(walkaway, "claimed_d1")
     n, measured, runs = _verdict_counts(rows)
+    claimed_n, claimed_measured, claimed_runs = _verdict_counts(claimed)
     if walkaway is None:
         return _line(
             "did_well",
@@ -219,11 +259,21 @@ def did_well_line(walkaway: Any) -> dict[str, Any]:
             0,
             0,
             runs=0,
+            claimed=0,
+            claimed_measured=0,
+            claimed_runs=0,
             best_family=None,
         )
     window = _skill_window(walkaway)
     best = _best_family(window)
     parts = [_sentence(walkaway, "liked_not_traded") or f"You liked {n}."]
+    if claimed_n:
+        # Its own count and its own table: the click on this line opens
+        # `liked_not_traded`, so the headline number has to be that table's.
+        parts.append(
+            f"Plus {claimed_n} claimed D1 pick(s) in their own table - "
+            f"{claimed_runs} real run(s) of {claimed_measured} measured."
+        )
     sentence = _skill_sentence(walkaway)
     if sentence:
         parts.append(sentence)
@@ -244,6 +294,9 @@ def did_well_line(walkaway: Any) -> dict[str, Any]:
         n,
         measured,
         runs=runs,
+        claimed=claimed_n,
+        claimed_measured=claimed_measured,
+        claimed_runs=claimed_runs,
         best_family=best,
     )
 
@@ -386,6 +439,7 @@ def process_line(
     trades: Sequence[Mapping[str, Any]] | None,
     *,
     origin_lanes: Mapping[str, Any] | None = None,
+    lanes_read: Sequence[str] | None = None,
     mentor_answers: Sequence[Mapping[str, Any]] | None = (),
     walkaway: Any = None,
     open_positions: Sequence[Mapping[str, Any]] | None = (),
@@ -397,6 +451,14 @@ def process_line(
     is authoritative for money and blind to time). The label ages come from the
     row's own `label_provenance`, written by TJ-9; a row with the key PRESENT
     and EMPTY is an OLD row and counts as unlabelled, never as a third age.
+
+    ``lanes_read`` is what the CALLER opened, declared rather than guessed - an
+    empty lane and an unread one look identical from here, and the difference is
+    the whole meaning of the number. While any of :data:`ORIGIN_LANES` is
+    unread, the line says ``no claim or like before the fill`` and NAMES what it
+    could not look at; with all four declared read it says ``unplanned`` plainly
+    again. The COUNTS keep their names either way, so TJ-9's own readers see
+    exactly what they always saw.
 
     This is also the reader `mentor_questions.REGISTRY` names for the
     ``trade_origin`` question: where the desk could not tell where a trade came
@@ -412,6 +474,11 @@ def process_line(
         said = _text(row.get("trade_origin"))
         if subject and said:
             answers[subject] = said
+    read = tuple(
+        name for name in ORIGIN_LANES
+        if name in (DESK_ORIGIN_LANES_READ if lanes_read is None else tuple(lanes_read))
+    )
+    unread = tuple(name for name in ORIGIN_LANES if name not in read)
     holds = long_hold_lines(open_positions, mentor_answers=mentor_answers)
     if not rows:
         return _line(
@@ -426,6 +493,9 @@ def process_line(
             label_provenance={name: 0 for name in trade_origin.LABEL_PROVENANCES},
             not_judged=0,
             told_us=0,
+            origin_answers={},
+            lanes_read=read,
+            lanes_unread=unread,
             long_holds=holds,
         )
     lanes = dict(origin_lanes or {})
@@ -439,11 +509,14 @@ def process_line(
     unlabelled = 0
     not_judged: list[str] = []
     told_us = 0
+    said: dict[str, int] = {}
     for trade in rows:
         state = trade_origin.planned_state(trade, decisions, claims, focus_adds, armed)
         states[state] = states.get(state, 0) + 1
-        if answers.get(_text(trade.get("trade_id"))):
+        answer = answers.get(_text(trade.get("trade_id")))
+        if answer:
             told_us += 1
+            said[answer] = said.get(answer, 0) + 1
         age = _text(trade.get("label_provenance"))
         confirmed = _text(trade.get("tag_status")).lower() == "confirmed"
         if confirmed and age in provenance:
@@ -456,11 +529,28 @@ def process_line(
 
     n = len(rows)
     unmeasured = states.get(trade_origin.UNMEASURED, 0)
-    parts = [
-        f"Process: {n} trade(s) - {states.get(trade_origin.PLANNED, 0)} planned, "
-        f"{states.get(trade_origin.UNPLANNED, 0)} unplanned, "
-        f"{unmeasured} unmeasured (a date-only fill has no time to plan against)."
-    ]
+    without = states.get(trade_origin.UNPLANNED, 0)
+    if unread:
+        # Never a bare "unplanned" while a lane is unread: the desk can only say
+        # what it LOOKED at, and it says which doors it could not open.
+        parts = [
+            f"Process: {n} trade(s) - {states.get(trade_origin.PLANNED, 0)} planned "
+            f"(a claim or like before the first fill), {without} with no claim or "
+            f"like before the fill, {unmeasured} unmeasured (a date-only fill has "
+            "no time to plan against).",
+            "Read for this: "
+            + " and ".join(_LANE_WORDS.get(name, name) for name in read)
+            + ". "
+            + " and ".join(_LANE_WORDS.get(name, name) for name in unread)
+            + " are not read yet (TJ-12F), so a trade with nothing said before "
+            "it is not proof there was no plan.",
+        ]
+    else:
+        parts = [
+            f"Process: {n} trade(s) - {states.get(trade_origin.PLANNED, 0)} planned, "
+            f"{without} unplanned, "
+            f"{unmeasured} unmeasured (a date-only fill has no time to plan against)."
+        ]
     labelled = n - unlabelled
     parts.append(
         f"{labelled} labelled ("
@@ -468,7 +558,14 @@ def process_line(
         + f"), {unlabelled} unlabelled."
     )
     if told_us:
-        parts.append(f"{told_us} you told the desk where it came from.")
+        parts.append(
+            f"{told_us} you told the desk where it came from ("
+            + ", ".join(
+                f"{name.replace('_', ' ')} {count}"
+                for name, count in sorted(said.items())
+            )
+            + ")."
+        )
     if not_judged:
         parts.append(f"{len(not_judged)} not judged here - " + "; ".join(not_judged) + ".")
     left = [
@@ -491,6 +588,9 @@ def process_line(
         label_provenance=provenance,
         not_judged=len(not_judged),
         told_us=told_us,
+        origin_answers=said,
+        lanes_read=read,
+        lanes_unread=unread,
         long_holds=holds,
     )
 
@@ -703,27 +803,61 @@ def how_fresh(freshness: Mapping[str, Any] | None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # the card
 # ---------------------------------------------------------------------------
+def _unreadable_line(key: str, exc: BaseException) -> dict[str, Any]:
+    """One line that could not be built, SAYING so - and costing only itself.
+
+    A guard around the WHOLE card loses six sentences and leaves the page
+    showing six placeholders with nothing saying anything failed (reviewer,
+    2026-09-20): the quiet-lie shape `How fresh` exists to prevent. ``measured``
+    stays an integer count, as it is on the other five lines, and
+    ``measured_ok`` is what says this line measured nothing at all.
+    """
+    reason = f"{type(exc).__name__}: {exc}"
+    return _line(
+        key,
+        f"{key.replace('_', ' ').capitalize()}: could not be read: {reason[:160]}",
+        0,
+        0,
+        measured_ok=False,
+        unreadable=reason,
+    )
+
+
+def _guarded(key: str, builder, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    try:
+        return builder(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - one owner never costs five lines
+        _log.debug("The %s report-card line could not be built.", key, exc_info=True)
+        return _unreadable_line(key, exc)
+
+
 def build(day_inputs: Mapping[str, Any]) -> ReportCard:
     """The six lines for ONE session, from what the worker already read.
 
     PURE apart from :func:`how_fresh`'s bounded ledger tail: every other input
     is a value the Day Review worker opened once, inside the ONE payload.
+
+    Every line is guarded on ITS OWN: an owner that raises costs its own
+    sentence and says so, and the other five still say what they measured.
     """
     inputs = dict(day_inputs or {})
     walkaway = inputs.get("walkaway")
     lines = (
-        did_well_line(walkaway),
-        missed_line(walkaway),
-        your_reads_line(inputs.get("your_reads")),
-        congruence_line(inputs.get("congruence")),
-        process_line(
+        _guarded("did_well", did_well_line, walkaway),
+        _guarded("missed", missed_line, walkaway),
+        _guarded("your_reads", your_reads_line, inputs.get("your_reads")),
+        _guarded("congruence", congruence_line, inputs.get("congruence")),
+        _guarded(
+            "process",
+            process_line,
             inputs.get("trades") or (),
             origin_lanes=inputs.get("origin_lanes"),
+            lanes_read=inputs.get("origin_lanes_read"),
             mentor_answers=inputs.get("mentor_answers") or (),
             walkaway=walkaway,
             open_positions=inputs.get("open_positions") or (),
         ),
-        how_fresh(inputs.get("freshness")),
+        _guarded("how_fresh", how_fresh, inputs.get("freshness")),
     )
     return ReportCard(session=_text(inputs.get("session"))[:10], lines=lines)
 
@@ -796,7 +930,20 @@ def week(sessions: Sequence[Mapping[str, Any]]) -> ReportCard:
     computes the ONE Wilson from the pooled pair; it never averages two days'
     rates, which on days of unequal length is a different number.
     """
-    days = [dict(day) for day in (sessions or ()) if isinstance(day, Mapping)]
+    # ONE row per session: a window handed the same day twice must not pool it
+    # twice, or a week's `n` is a fact about the caller rather than the trader
+    # (reviewer, 2026-09-20). First occurrence wins, order kept.
+    days: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for day in sessions or ():
+        if not isinstance(day, Mapping):
+            continue
+        name = _text(day.get("session"))[:10]
+        if name and name in seen:
+            continue
+        if name:
+            seen.add(name)
+        days.append(dict(day))
     cards = [build(day) for day in days]
     names = tuple(_text(day.get("session"))[:10] for day in days)
     count = len(names)

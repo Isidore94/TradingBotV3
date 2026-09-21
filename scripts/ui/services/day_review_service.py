@@ -703,6 +703,7 @@ class DayReviewService:
             for row in (decisions or ())
             if isinstance(row, Mapping)
         ]
+        loaded = {"decisions": decision_lane, "claims": list(claims or ())}
         story = payload.get("day_story")
         card = day_report_card.build(
             {
@@ -711,15 +712,19 @@ class DayReviewService:
                 "your_reads": tally,
                 "congruence": payload.get("congruence") or (),
                 "trades": payload.get("trades") or [],
+                # WHICH lanes this read opened, declared rather than inferred:
+                # an unread lane and an empty one look identical to
+                # `trade_origin.planned_state`, and the Process line has to say
+                # which doors it could not open. The list is
+                # `day_report_card.DESK_ORIGIN_LANES_READ` - ONE constant, so
+                # the desk's Mentor lane and this worker cannot disagree.
                 "origin_lanes": {
-                    "decisions": decision_lane,
-                    "claims": list(claims or ()),
-                    # The Focus and armed lanes are not part of ONE Day Review
-                    # read; a trade planned only through them reads `unplanned`
-                    # here, which is why the line prints its `n` beside it.
-                    "focus_adds": (),
-                    "armed": (),
+                    name: loaded.get(name, ())
+                    if name in day_report_card.DESK_ORIGIN_LANES_READ
+                    else ()
+                    for name in day_report_card.ORIGIN_LANES
                 },
+                "origin_lanes_read": day_report_card.DESK_ORIGIN_LANES_READ,
                 "freshness": {
                     "session": session,
                     "story_written_at": (

@@ -1293,13 +1293,23 @@ class MainWindow(QMainWindow):
         (nothing was said about that name, as far as the desk can tell) and
         never takes the Mentor card down.
 
-        `focus_adds` and `armed` are named and EMPTY, deliberately: neither
+        Which lanes are really read is `day_report_card.DESK_ORIGIN_LANES_READ`
+        and is declared THERE, once, because the Day Review worker builds the
+        same lanes and the card has to say which doors were opened. An unread
+        lane is indistinguishable from "nothing was said" to
+        `trade_origin.planned_state`, so the card names it rather than printing
+        a bare `unplanned` (reviewer, 2026-09-20: 30 of the trader's 33 trades
+        since 2026-08-20 read `unplanned` for exactly this reason).
+
+        `focus_adds` and `armed` are named and EMPTY until **TJ-12F**: neither
         store has a public reader that hands back a row with the stamp key
-        `trade_origin` reads, and inventing one is a different packet's work. A
-        trade planned only through a Focus add or an armed alert is therefore
-        asked once - `CADENCE_ONCE` - and the trader's own answer is what the
-        Process line then reads.
+        `trade_origin` reads, and inventing one is that packet's work. A trade
+        planned only through a Focus add or an armed alert is therefore asked
+        once - `CADENCE_ONCE` - and the trader's own answer is what the Process
+        line then reads.
         """
+        import day_report_card
+
         wanted = [str(value)[:10] for value in days if str(value or "").strip()]
         decisions: list[dict] = []
         try:
@@ -1317,11 +1327,12 @@ class MainWindow(QMainWindow):
             ]
         except Exception:  # noqa: BLE001 - an unreadable store says nothing
             logging.debug("Mentor claim lane unreadable.", exc_info=True)
+        loaded = {"decisions": decisions, "claims": claims}
         return {
-            "decisions": decisions,
-            "claims": claims,
-            "focus_adds": (),
-            "armed": (),
+            name: loaded.get(name, ())
+            if name in day_report_card.DESK_ORIGIN_LANES_READ
+            else ()
+            for name in day_report_card.ORIGIN_LANES
         }
 
     @staticmethod
