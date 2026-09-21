@@ -1617,11 +1617,32 @@ class DayReviewPanel(QFrame):
         self._name_charts = dict(payload.get("name_charts") or {})
         self._refresh_name_chart()
         self._render_ideas(session, list(payload.get("ideas") or []))
+        self._render_mood(payload.get("mood"))
         for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
             self._backfill_bars_for(str(exit_session))
         error = str(payload.get("error") or "")
         self.status.setText(error or f"Day Review: {session}")
         self.statusChanged.emit(self.status.text())
+
+    def _render_mood(self, section: Any) -> None:
+        """TJ-7 / live gate #151: ONE line about the trader, from ONE payload.
+
+        The line was FORMATTED on the worker (`day_review_pack.mood_statement`),
+        so this pushes a string and computes nothing on the Qt thread: no
+        builder call, no model call, no second read of the journal. A session
+        with nothing clicked reads "No mood recorded yet ... (n 0)" - a count,
+        never a percentage - and a mood typed in the evening says so on the
+        line, because `written_after_the_session` is a LABEL and not a reason
+        to hide one.
+        """
+        import day_review_pack
+
+        line = ""
+        if isinstance(section, Mapping):
+            line = str(section.get("line") or "")
+            if not line:
+                line = day_review_pack.mood_statement({"mood": section})
+        self.mood_line.setText(line or day_review_pack.MOOD_EMPTY_STATEMENT)
 
     def _render_ideas(self, session: str, rows: list) -> None:
         """TJ-6: the night's suggestions, or the line that says there are none.

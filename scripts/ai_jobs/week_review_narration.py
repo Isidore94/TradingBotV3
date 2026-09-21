@@ -88,7 +88,18 @@ EVIDENCE_KEYS: tuple[str, ...] = (
     "misses",
     "rollup",
     "walkaway_totals",
+    # TJ-7's ONE addition, and it travels under its OWN name rather than being
+    # smuggled into `days` or `rollup`: the week's story may say "you said
+    # rushed on Tuesday" only if it was handed the row and its citable id.
+    # REPORTED, never acted on - the model narrates it and grades nothing.
+    "mood",
 )
+
+#: How many mood rows one session contributes to the week's package. A mood is
+#: one or two clicks a day; the bound exists so a session that was clicked a
+#: dozen times cannot crowd out the other four, and what does not fit is
+#: COUNTED and said (TJ-13A's bounded-package rule).
+MAX_MOODS_PER_DAY = 4
 
 #: How many of a day's own items travel in the week's evidence, per kind. The
 #: week is five days wide, so a per-day budget is what keeps one busy session
@@ -400,6 +411,57 @@ def _day_block(session: str, pack: Mapping[str, Any] | None, story: Mapping[str,
     return block, ids
 
 
+def _moods(packs: Mapping[str, Mapping[str, Any]], sessions: Sequence[str]):
+    """TJ-7's `mood` section for the week: what the trader said about themselves.
+
+    Returns ``(section, ids)``. Every row is a row a PACK already carried, with
+    its id session-qualified so a citation names ONE row of ONE day, bounded at
+    :data:`MAX_MOODS_PER_DAY` per session with the remainder COUNTED. A session
+    with no pack contributes nothing and is named in ``sessions_missing``; a
+    session with a pack and no mood contributes nothing either - and neither is
+    a zero.
+
+    Nothing here computes a statistic, ranks a day or pairs a mood with an
+    outcome. It is evidence the story may quote, and that is all it is.
+    """
+    rows: list[dict[str, Any]] = []
+    ids: list[str] = []
+    omitted = 0
+    for session in sessions:
+        section = (packs.get(session) or {}).get("mood")
+        recorded = list((section or {}).get("recorded") or ()) if isinstance(section, Mapping) else []
+        omitted += max(0, len(recorded) - MAX_MOODS_PER_DAY)
+        for item in recorded[:MAX_MOODS_PER_DAY]:
+            if not isinstance(item, Mapping):
+                continue
+            source_id = week_source_id(session, item.get("source_id"))
+            rows.append(
+                {
+                    "session": session,
+                    "at": _text(item.get("at")),
+                    "score": item.get("score"),
+                    "state_tags": list(item.get("state_tags") or ()),
+                    "followed_plan": _text(item.get("followed_plan")),
+                    "note": _text(item.get("note")),
+                    "written_after_the_session": bool(item.get("written_after_the_session")),
+                    "source_id": source_id,
+                }
+            )
+            if source_id not in ids:
+                ids.append(source_id)
+    if not rows:
+        return {"n": 0, "sessions_with_a_mood": [], "recorded": [], "omitted": omitted}, []
+    return (
+        {
+            "n": len(rows),
+            "sessions_with_a_mood": sorted({row["session"] for row in rows}),
+            "recorded": rows,
+            "omitted": omitted,
+        },
+        ids,
+    )
+
+
 def _tally_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     """``right``/``wrong``/``unresolved``/``n`` over graded read rows.
 
@@ -574,6 +636,11 @@ def build_week_inputs(
             if item not in allowed:
                 allowed.append(item)
 
+    mood, mood_ids = _moods(packs, sessions)
+    for item in mood_ids:
+        if item not in allowed:
+            allowed.append(item)
+
     tendencies = _tendencies(sessions[-1] if sessions else session)
     misses = _misses(sessions[-1] if sessions else session)
     for item in tendencies:
@@ -595,6 +662,7 @@ def build_week_inputs(
         "misses": misses,
         "rollup": _rollup(week),
         "walkaway_totals": _walkaway_totals(packs),
+        "mood": mood,
     }
     body["inputs_hash"] = hashlib.sha256(
         json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")

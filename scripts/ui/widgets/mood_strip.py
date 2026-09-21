@@ -34,6 +34,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -51,6 +52,9 @@ CHIP_OBJECT_NAME = "StateTagChipButton"
 
 #: What the strip says about itself. Short, and honest about being optional.
 PROMPT = "How were you? (optional)"
+
+#: How many chips sit on one row before the next one starts.
+CHIPS_PER_ROW = 4
 
 
 class MoodStrip(QWidget):
@@ -90,12 +94,17 @@ class MoodStrip(QWidget):
         faces.addStretch(1)
         body.addLayout(faces)
 
-        chips = QHBoxLayout()
+        # The chips wrap at `CHIPS_PER_ROW`. One long row of eight would make
+        # this strip's MINIMUM width the widest thing in its column, and the
+        # column it sits in on Day Review is the trader's own words at 45% of
+        # a saved split - a strip that cannot shrink silently re-weights it.
+        chips = QGridLayout()
         chips.setContentsMargins(0, 0, 0, 0)
-        chips.setSpacing(3)
+        chips.setHorizontalSpacing(3)
+        chips.setVerticalSpacing(2)
         self._chips: dict[str, QPushButton] = {}
         self._codes: tuple[str, ...] = ()
-        for code, label in self._vocabulary():
+        for index, (code, label) in enumerate(self._vocabulary()):
             chip = QPushButton(label, self)
             chip.setObjectName(CHIP_OBJECT_NAME)
             chip.setCheckable(True)
@@ -103,8 +112,8 @@ class MoodStrip(QWidget):
             chip.setCursor(Qt.CursorShape.PointingHandCursor)
             chip.toggled.connect(lambda checked, name=code: self._on_chip(name, checked))
             self._chips[code] = chip
-            chips.addWidget(chip)
-        chips.addStretch(1)
+            chips.addWidget(chip, index // CHIPS_PER_ROW, index % CHIPS_PER_ROW)
+        chips.setColumnStretch(CHIPS_PER_ROW, 1)
         body.addLayout(chips)
 
         self._face_group.idToggled.connect(lambda _id, _on: self.changed.emit())
