@@ -608,6 +608,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         digest,
         enrichment,
         evidence_report,
+        exit_note_fields,
         improvement_ideas,
         journal_auto_tag,
         market_story_narration,
@@ -1066,6 +1067,37 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "The week the trader reads on a Saturday - five day cards "
                 "narrated as one grounded story, on the large local model"
+            ),
+            max_attempts=3,
+            uses_model=True,
+        ),
+        # TJ-9E (2026-09-21), APPENDED INSIDE stage 2, AFTER
+        # `week_review_narration` and DIRECTLY BEFORE `ticker_briefs`.
+        #
+        # That position is the lead's, and it is a choice between two working
+        # ones. The packet asked for "directly after `observation_tags`", which
+        # would split TJ-5's immediate-adjacency pin
+        # (`test_tj5_week_slot_and_slate.py`: the week story sits DIRECTLY after
+        # the word tagger). Nothing in the week story reads an exit field in
+        # this packet, so there is no dependency to buy by splitting that pair -
+        # and this slot still lands where it has to: ahead of `ticker_briefs`,
+        # whose two hours of reserve it must not queue behind for a few seconds
+        # of work per note. On a weeknight, where `week_review_narration` is
+        # weekend-only, it sits directly after `observation_tags` anyway.
+        #
+        # It loads a local MEDIUM model, so `uses_model` is declared honestly
+        # and --force may not buy it the daytime clock (TJ-13A item 1). There is
+        # no half of "read the trader's words" that runs without a model, so no
+        # `model_free_kwargs`. Nothing waiting means no model is loaded at all,
+        # and a rejected reply publishes nothing.
+        JobSlot(
+            name="exit_note_fields",
+            run=exit_note_fields.run_exit_note_fields,
+            reserve_minutes=15.0,
+            description=(
+                "Grounded why / felt / watching drafted from the trader's own "
+                "exit note - two closed vocabularies, an exact span per value, "
+                "and no outcome in the prompt"
             ),
             max_attempts=3,
             uses_model=True,

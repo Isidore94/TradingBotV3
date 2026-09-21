@@ -306,6 +306,18 @@ class DayReviewService:
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the day's trades could not be read: {exc}")
             _log.debug("Day Review trades unreadable.", exc_info=True)
+        # TJ-9E, on this worker and from ONE read of the append-only table: the
+        # trader's own words about each exit, and - only where they CONFIRMED
+        # it - the three fields behind it. Both keys are PRESENT and EMPTY on
+        # every trade row, because a page that has to tell "no note" from "this
+        # build did not look" is reading two different absences as one. A
+        # provisional draft is deliberately NOT here: it is the machine's
+        # reading and the Day Review page shows what the trader recorded.
+        #
+        # The ONE read is kept as a local and handed to the report card below,
+        # so the line that counts the notes counts the ones this payload really
+        # opened - one read for the page and the card, never two.
+        exit_notes = self._attach_exit_notes(session, payload["trades"], problems)
 
         # TJ-2B is another projection of the SAME worker payload.  It opens no
         # live desk store and the page never starts a second read for a table.
@@ -519,6 +531,7 @@ class DayReviewService:
                 payload=payload,
                 decisions=decisions,
                 claims=claims,
+                exit_notes=exit_notes,
                 now=moment,
             )
         except Exception:  # noqa: BLE001 - a card never costs the day
@@ -727,6 +740,7 @@ class DayReviewService:
         decisions,
         claims,
         now: datetime,
+        exit_notes: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """The six lines, built on THIS worker from what the payload holds.
 
@@ -774,6 +788,13 @@ class DayReviewService:
                     for name in day_report_card.ORIGIN_LANES
                 },
                 "origin_lanes_read": day_report_card.DESK_ORIGIN_LANES_READ,
+                # TJ-9E, and the SAME read `_attach_exit_notes` made a few
+                # lines above - one read for the page and the card. `None` is
+                # "nobody opened them", which the line says out loud instead of
+                # printing a zero (review 1 blocker 3: `build` never passed
+                # this, so the live page said "nobody opened the exit notes" on
+                # the payload that had just opened every one of them).
+                "exit_notes": exit_notes,
                 "freshness": {
                     "session": session,
                     "story_written_at": (
@@ -1383,6 +1404,58 @@ class DayReviewService:
         from ui.services.journal_feed import trades_on
 
         return list(trades_on(session))
+
+    @staticmethod
+    def _attach_exit_notes(
+        session: str, trades: list[dict[str, Any]], problems: list[str]
+    ) -> dict[str, Any] | None:
+        """Put TJ-9E's two keys on every trade row. ONE read for the whole day.
+
+        Returns the notes mapping the report card then COUNTS, or ``None`` when
+        no read was made - which is not the same thing as an empty mapping and
+        must not be reported as one.
+
+        **It reads nothing when the day's trades are empty, and that is not an
+        optimisation.** `journal_feed._store()` caches a module-global store for
+        the life of the process, so whoever calls it FIRST decides which store
+        the whole run uses and on which thread its `initialize_schema()`
+        migration runs. The trades came from that same store a few lines above;
+        if they did not come back, this read must not be the thing that opens
+        it. Review 1 blocker 1 is what happened without the guard: three
+        Day-Review test files stub the trades read, this read cached a FAKE
+        store, and every later `JournalPanel` in the pytest process died on
+        `db_path` - 32 errors that are green on base. A day with no trade rows
+        has no exit to explain either way.
+
+        Both keys go on EVERY row, including when the read failed: a reader
+        must never have to tell an absent key from an empty one. A failure
+        costs the notes and says so - never the day's trades.
+        """
+        rows = [row for row in (trades or ()) if isinstance(row, dict)]
+        for row in rows:
+            row["exit_note"] = ""
+            row["exit_fields"] = {}
+        if not rows:
+            # Said, never guessed: the report card's line reads `unmeasured`
+            # rather than "0 of 0" for a day nobody opened the journal for.
+            problems.append(
+                "the day's exit notes were not read: this payload opened no trades"
+            )
+            return None
+        notes: dict[str, Any] = {}
+        try:
+            from ui.services import journal_feed
+
+            notes = dict(journal_feed.exit_notes_on(session))
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"the day's exit notes could not be read: {exc}")
+            _log.debug("Day Review exit notes unreadable.", exc_info=True)
+            return None
+        for row in rows:
+            found = notes.get(str(row.get("trade_id") or "")) or {}
+            row["exit_note"] = str(found.get("raw_text") or "")
+            row["exit_fields"] = dict(found.get("exit_fields") or {})
+        return notes
 
     @staticmethod
     def _provisional(session: str, now: datetime) -> bool:

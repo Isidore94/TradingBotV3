@@ -653,6 +653,10 @@ def test_the_scope_can_be_selected_on_demand():
         # (`runner.WEEKEND_ONLY_SLOTS`); this slate is `default_slots()`, which
         # is the order WITHIN a night and holds every slot.
         "week_review_narration",
+        # TJ-9E (2026-09-21): the exit-note reader, appended inside stage 2
+        # after the week story (TJ-5 pins that DIRECTLY after the word tagger)
+        # and before the two-hour briefs.
+        "exit_note_fields",
         "ticker_briefs",
         "market_story_narration",
         # Stage 3. LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run

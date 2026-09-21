@@ -1,0 +1,72 @@
+{
+  "vocabulary_id": "exit_reasons",
+  "vocab_version": 1,
+  "description": "Why the trader closed a position, in one code (TJ-9E). The trader writes the exit in their own words; a night-only local model reads those words and DRAFTS one code from this list, with the exact span of the note that made it choose. A draft is provisional until the trader presses Confirm or Correct. These codes are REPORTED: no detector, score, alert, watchlist, Focus list, review queue or review policy file reads one, and no outcome, R statistic or verdict ever selects, ranks or pre-fills one. Codes are permanent identifiers: a code is never renamed and never reused for a different meaning, because rows already written carry it, and a later list ships as exit_reasons_v2.json beside this file.",
+  "reasons": [
+    {
+      "code": "target_hit",
+      "label": "Target hit",
+      "hint": "It reached the price you were aiming for and you took it."
+    },
+    {
+      "code": "stop_hit",
+      "label": "Stop hit",
+      "hint": "It reached the level that said you were wrong."
+    },
+    {
+      "code": "trailed_out",
+      "label": "Trailed out",
+      "hint": "You were following it up (or down) and the trail took you out."
+    },
+    {
+      "code": "time_stop",
+      "label": "Time stop",
+      "hint": "It had had long enough to work and had not, so you let it go."
+    },
+    {
+      "code": "thesis_broke",
+      "label": "The thesis broke",
+      "hint": "The reason you were in it stopped being true - the level, the trend or the story."
+    },
+    {
+      "code": "took_profit_early",
+      "label": "Took profit early",
+      "hint": "You were green and banked it before the plan said to."
+    },
+    {
+      "code": "protect_gains",
+      "label": "Protecting gains",
+      "hint": "It was giving back an open profit and you closed to keep what was left."
+    },
+    {
+      "code": "needed_the_capital",
+      "label": "Needed the capital",
+      "hint": "You wanted the buying power somewhere else."
+    },
+    {
+      "code": "news_or_event",
+      "label": "News or an event",
+      "hint": "Something happened - a headline, an earnings date, a halt - and you stepped out."
+    },
+    {
+      "code": "end_of_day",
+      "label": "End of day",
+      "hint": "You were flat by the close because it was a day trade, not because of the tape."
+    },
+    {
+      "code": "assigned_or_expired",
+      "label": "Assigned or expired",
+      "hint": "The position closed itself: an option expired, or you were assigned."
+    },
+    {
+      "code": "risk_or_size",
+      "label": "Too much risk on",
+      "hint": "The position, or the book, was bigger than you wanted to carry."
+    },
+    {
+      "code": "other",
+      "label": "Something else",
+      "hint": "None of the above. The words you wrote are still the record."
+    }
+  ]
+}

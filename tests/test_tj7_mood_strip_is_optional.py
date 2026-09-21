@@ -219,6 +219,11 @@ def test_the_strip_never_greys_the_trade_check_save(card, tmp_path):
     card.set_trade_check(check.build_task(store, SESSION), store=store)
     for combo, _text in card._answer_inputs[trade_id].values():
         combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
+    # LEAD AMENDMENT 2026-09-21 (TJ-9E, the trader's own request): a round-trip
+    # trade now also carries ONE forced EXIT box - "Why did you exit? What did
+    # you feel? What were you watching?" - so Save waits on it as it waits on
+    # the entry fields. One click answers it; what this test pins is unchanged.
+    card.set_exit_answer_state(trade_id, check.ANSWER_NOT_REMEMBERED)
     assert card.save_answers_button.isEnabled() is True
 
     subject = fx.day_close_subject(session=SESSION.isoformat())

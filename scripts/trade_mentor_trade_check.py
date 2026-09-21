@@ -72,6 +72,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+import journal_store
+
 #: The four material fields, in the order they are asked. `missing` is built in
 #: this order so a trade with nothing recorded reads the same way every morning.
 MATERIAL_FIELDS = ("thesis", "stop", "target", "setup")
@@ -104,8 +106,58 @@ TRADE_CAP_DEFAULT = 3
 EVENT_RECALLED = "RECALLED"
 EVENT_RECALLED_RAW = "RECALLED_RAW"
 
-#: The status values that mean the trade touched the session.
-_SESSION_STATUSES = ("CLOSED", "OPEN", "PARTIALLY_CLOSED")
+#: TJ-9E. The trader's own words about one EXIT, and the three fields they
+#: confirmed or corrected afterwards. Two types, because they are two different
+#: facts with two different authors: the first is what the trader wrote, the
+#: second is what they signed off. Nothing machine-written ever lands in either
+#: - the night's reading is a `provisional` draft in a pack file.
+EVENT_EXIT_NOTE_RAW = "EXIT_NOTE_RAW"
+EVENT_EXIT_FIELDS = "EXIT_NOTE_FIELDS"
+
+#: The exit ask, in the trader's own three questions (2026-09-21). ONE box and
+#: nothing to pick from: *"ideally we can just write it out and the AI fills
+#: this stuff in overnight"*.
+EXIT_PROMPT = "Why did you exit? What did you feel? What were you watching?"
+
+#: How many exact quotes an exit's `watching` may carry. A bound shared with
+#: the night slot, which re-checks it against this number.
+MAX_EXIT_WATCHING = 3
+
+#: How long the night's reading of an exit note stays ON OFFER, in exchange
+#: sessions walked on the calendar (review 1 blocker: draft reachability).
+#:
+#: A draft is offered on its OWN, independent of the session a card happens to
+#: be reviewing, because the timeline never lines up: the trade exits Monday,
+#: the trader types the note on TUESDAY's 09:00 card (which reviews Monday),
+#: Tuesday NIGHT drafts it - and Wednesday's card reviews TUESDAY, where
+#: Monday's trade is not a row at all. Without a window of its own the Confirm
+#: click would never appear, which is half of what the trader asked for:
+#: *"ideally we can just write it out and the AI fills this stuff in
+#: overnight"*.
+#:
+#: Five, the desk's own week (`evidence_stats.WEEK_SESSIONS`), because a
+#: reading of what the trader wrote is worth confirming while they still
+#: remember the trade and stops being worth interrupting them for after that.
+#: Past the window a draft is no longer OFFERED; it stays on disk as
+#: `provisional`, it is still counted as unexplained-but-drafted in the report
+#: card's clause, and NOTHING is ever confirmed by age.
+EXIT_DRAFT_OFFER_SESSIONS = 5
+
+#: Why an exit note could not claim `same_session`. Two reasons, and neither is
+#: ever a guess: a date-only fill has no moment for the note to be before, and
+#: an unreadable leg list is uncertainty.
+REASON_EXIT_LEGS_UNREADABLE = "the exit's fills could not be read"
+
+#: The status values that mean the trade touched the session, READ FROM THE
+#: WRITER (`journal_store.TRADE_STATUSES`) rather than spelled here.
+#:
+#: This tuple used to hold `PARTIALLY_CLOSED`, which nothing on the desk has
+#: ever written: the assembler stamps `CLOSED_PARTIAL`
+#: (`journal_store._finalize_trade_state`). Seven live trades - every one the
+#: trader had half exited - were therefore dropped by the filter below and were
+#: never asked about at 09:00. A second spelling of somebody else's vocabulary
+#: is a defect waiting for a rename, so this is the import and not a copy.
+_SESSION_STATUSES = journal_store.TRADE_STATUSES
 
 REASON_NOT_READY = "journal not ready"
 
@@ -145,6 +197,22 @@ class TradeQuestion:
     setup_guess_lane: str = ""
     opened_at: str = ""
     trade_date: str = ""
+    #: TJ-9E. The session this row's EXIT box is about, or ``""`` when the
+    #: trade had no closing fill in the session being reviewed. It is a
+    #: SESSION and not a boolean because a trade can exit in two of them - 13
+    #: live trades do - and each half is its own question on its own morning.
+    exit_session: str = ""
+    #: Has that exit already been answered - words OR an answer state? An
+    #: answered exit is never asked again (review 1 blocker 5: the box came
+    #: back EMPTY on the next card of the same morning and greyed Save, so the
+    #: trader had to retype what they had written an hour before). The row can
+    #: still be on the card for an entry gap, and then it shows the words the
+    #: trader wrote, read-only.
+    exit_answered: bool = False
+    #: What they wrote, so the card can show it back without a second read.
+    exit_note: str = ""
+    #: Or the answer state they gave instead of words.
+    exit_answer_state: str = ""
 
 
 @dataclass(frozen=True)
@@ -552,6 +620,10 @@ def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | No
         return None
 
     claims = claimed_setup_rows(reviewed)
+    # ONE session-wide read of the exit notes, before the loop: an exit the
+    # trader has already explained is ANSWERED and is never asked again, and
+    # asking that per trade would be a walk of the append-only table per row.
+    answered_exits = exit_notes_for_session(store, reviewed) if trades else {}
     questions: list[TradeQuestion] = []
     for trade in trades:
         status = str(trade.get("status") or "").upper()
@@ -561,7 +633,17 @@ def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | No
         if not trade_id:
             continue
         gaps = missing_fields(trade, answered_fields(store, trade_id))
-        if not gaps:
+        # TJ-9E. An EXIT in the reviewed session is a question in its own
+        # right, so the row survives an EMPTY `missing`. A swing opened last
+        # week and closed yesterday has every entry field answered already -
+        # it was asked the morning after it opened - and `if not gaps:
+        # continue` is what meant nothing ever asked about its exit. Live, 116
+        # of 180 closed trades exit on a day other than the one they opened.
+        exit_session = reviewed if reviewed in exit_sessions(store, trade_id) else ""
+        answered = dict(answered_exits.get(trade_id) or {}) if exit_session else {}
+        # An answered exit closes its question the way an answered field does.
+        # The row survives only while something on it is still OPEN.
+        if not gaps and (not exit_session or answered):
             continue
         guess, lane = setup_guess_for(trade, claims) if "setup" in gaps else ("", "")
         questions.append(
@@ -574,9 +656,34 @@ def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | No
                 setup_guess_lane=lane,
                 opened_at=str(trade.get("opened_at") or ""),
                 trade_date=str(trade.get("trade_date") or reviewed),
+                exit_session=exit_session,
+                exit_answered=bool(answered),
+                exit_note=str(answered.get("raw_text") or ""),
+                exit_answer_state=str(answered.get("answer_state") or ""),
             )
         )
     return questions
+
+
+def unexplained_exit_count(store: Any, session: str) -> int:
+    """How many exits ON `session` the trader has not explained yet.
+
+    The other half of :func:`unlabelled_trade_count`, and a SEPARATE number on
+    purpose (review 1 blocker 4). The count a badge prints and the predicate
+    that decides whether the 09:00 section RIDES were briefly the same
+    function: narrowing it to material fields made a swing whose entries were
+    answered long ago count zero, so an exit nobody explained was asked once at
+    09:00 and never again if that card was missed. Both numbers are owed, and
+    the desk asks again while EITHER is above zero.
+
+    An unreadable list answers 0 rather than a guess: uncertainty is never a
+    count.
+    """
+    return sum(
+        1
+        for question in questions_for_session(store, str(session)[:10]) or ()
+        if question.exit_session and not question.exit_answered
+    )
 
 
 def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> TradeCheckTask:
@@ -649,8 +756,19 @@ def unlabelled_trade_count(store: Any, session: str) -> int:
     the session's OWN trades, so a caller does not have to know which morning
     the card would have reviewed them on. An unreadable list answers 0 rather
     than a guess: uncertainty is never a count.
+
+    MATERIAL FIELDS ONLY. Since TJ-9E a row also comes back for an unexplained
+    EXIT, which is a different question with a different answer; counting one
+    as "unlabelled" would make a fully labelled trade read as unlabelled
+    forever in the Journal's completeness view. The exits have their own count
+    (:func:`unexplained_exit_count`) and BOTH are owed - see that docstring for
+    why they are two numbers and not one.
     """
-    return len(questions_for_session(store, str(session)[:10]) or ())
+    return sum(
+        1
+        for question in questions_for_session(store, str(session)[:10]) or ()
+        if question.missing
+    )
 
 
 def confirm_setup(
@@ -937,4 +1055,660 @@ def save_raw_reply(
         reason="raw_next_morning_reply",
         payload=payload,
         source="trade_mentor",
+    )
+
+
+# ---------------------------------------------------------------------------
+# TJ-9E - the EXIT: one box, the words first, and three fields the NIGHT drafts
+# ---------------------------------------------------------------------------
+def _close_legs(store: Any, trade_id: str) -> tuple[list[datetime], bool]:
+    """``(the trade's closing fills as aware moments, readable)``.
+
+    The moments keep their OWN offset - they are converted to market-local only
+    where a SESSION is wanted. A fill stored ``2026-09-11T00:00:00-07:00`` is a
+    broker row that carries no clock time, and converting it first would read
+    it as three in the morning in New York (`trade_origin._is_midnight`, which
+    records exactly that live row).
+
+    ``readable`` is False when the leg list could not be opened at all, which
+    is uncertainty and never an empty session.
+    """
+    try:
+        legs = store.list_trade_legs(str(trade_id))
+    except Exception:  # noqa: BLE001 - an unreadable leg list is uncertainty
+        logging.debug("Trade legs unreadable for an exit.", exc_info=True)
+        return [], False
+    import trade_origin
+
+    moments: list[datetime] = []
+    for leg in legs or ():
+        if str((leg or {}).get("role") or "").upper() != "CLOSE":
+            continue
+        moment = trade_origin._moment((leg or {}).get("timestamp"))
+        if moment is not None:
+            moments.append(moment)
+    return moments, True
+
+
+def exit_sessions(store: Any, trade_id: str) -> tuple[str, ...]:
+    """Every session this trade left part of its position in, oldest first.
+
+    A SCALE-OUT inside one session is ONE session here, however many fills it
+    took: the trader took a position off once and explains it once. Two closing
+    legs on two dates are two sessions, and each is asked on its own morning -
+    13 live trades are that shape.
+    """
+    import trade_origin
+
+    moments, _readable = _close_legs(store, trade_id)
+    days: list[str] = []
+    for moment in sorted(moments):
+        day = moment.astimezone(trade_origin.MARKET_TZ).date().isoformat()
+        if day not in days:
+            days.append(day)
+    return tuple(days)
+
+
+def _exit_note_provenance(
+    store: Any, trade_id: str, exit_session: str, moment: datetime
+) -> tuple[str, bool, str]:
+    """How old this exit note is, measured against the EXIT's own session.
+
+    NOT `trade_origin.trade_session`, which is the session of the FIRST FILL:
+    that is the right ruler for an entry field and the wrong one for an exit.
+    116 of the journal's 180 closed trades exit on a day other than the one
+    they opened, so reusing it would call a note typed on the exit's own
+    afternoon `recalled_after` - and, on a trade opened and exited in one
+    session, would be right by accident.
+
+    A DATE-ONLY exit is never `same_session`, for the reason
+    :func:`_answer_provenance` already records: a broker file is authoritative
+    for money and blind to time, the statement importer writes a date-only fill
+    at midnight, and there is no moment for the note to be before. The midnight
+    test is `trade_origin`'s WIDER one - midnight in the stamp's own offset OR
+    market-local - rather than `journal_trade_shape.is_date_only`, which asks
+    the market-local question alone. That module's own docstring records why:
+    the live DRAM row is stored ``2026-07-16T00:00:00-07:00`` and reads as a
+    fill at three in the morning in New York, which is a time that never
+    happened. An unreadable leg list is the same answer for the same reason -
+    uncertainty keeps the conservative claim.
+    """
+    import trade_origin
+
+    session = str(exit_session or "")[:10]
+    moments, readable = _close_legs(store, trade_id)
+    if not readable:
+        return trade_origin.RECALLED_AFTER, True, REASON_EXIT_LEGS_UNREADABLE
+
+    on_the_day = [
+        row
+        for row in moments
+        if row.astimezone(trade_origin.MARKET_TZ).date().isoformat() == session
+    ]
+    if on_the_day and all(trade_origin._is_midnight(row) for row in on_the_day):
+        return trade_origin.RECALLED_AFTER, True, REASON_DATE_ONLY_FILL
+
+    said_on = moment.astimezone(trade_origin.MARKET_TZ).date().isoformat()
+    if session and said_on == session:
+        return trade_origin.SAME_SESSION, False, ""
+    return trade_origin.RECALLED_AFTER, True, ""
+
+
+def save_exit_note(
+    store: Any,
+    trade_id: str,
+    raw_text: str,
+    *,
+    exit_session: str,
+    state: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """The trader's own words about one exit, on disk, BEFORE anything reads them.
+
+    RAW FIRST. Nothing is parsed, coded, scored or summarised on the way in;
+    the night's reading happens hours later against the stored row, which is
+    the whole reason the row is written first.
+
+    **A failed write is LOUD.** A journal write is the one evidence store
+    CLAUDE.md allows to fail the thing it records, and this is the trader's own
+    sentence about their own trade: swallowing it into a log would lose it. A
+    blank note is refused for the same reason - it is not a note, and storing
+    one would retire a question nobody answered.
+
+    A SECOND note on the same exit APPENDS (`opportunity_events` is immutable
+    by design), so the first row stays byte-identical and the fact that the
+    trader changed their mind survives.
+
+    ``state`` is the answer the trader gives INSTEAD of words - `not
+    remembered` or `not applicable`, from TJ-9's own four. It is a complete
+    answer and must stop being asked, which is why it is stored; it is not an
+    explanation, so nothing counts it as one and the night never reads it.
+    """
+    body = str(raw_text or "")
+    answer_state = str(state or "").strip()
+    if answer_state and answer_state not in ANSWER_STATES:
+        raise ValueError(f"{answer_state!r} is not one of the four answer states")
+    if not body.strip() and not answer_state:
+        raise ValueError("the exit note is empty")
+    session = str(exit_session or "")[:10]
+    moment = now or datetime.now().astimezone()
+    trade: Mapping[str, Any] = {}
+    try:
+        trade = store.get_trade(str(trade_id)) or {}
+    except Exception:  # noqa: BLE001 - a missing row still stores the words
+        logging.debug("Trade row unreadable for an exit note.", exc_info=True)
+        trade = {}
+    provenance, written_after, reason = _exit_note_provenance(
+        store, trade_id, session, moment
+    )
+    payload = {
+        "raw_text": body,
+        "answer_state": answer_state,
+        "exit_session": session,
+        "label_provenance": provenance,
+        # Why a same-session claim was REFUSED, when it was. Empty when nothing
+        # was refused: an absence is never a reason.
+        "label_provenance_reason": reason,
+        # COMPUTED, never backdated - the Market Journal's own rule.
+        "written_after_the_session": written_after,
+        "trade_date": str(trade.get("trade_date") or ""),
+    }
+    return store.record_opportunity_event(
+        opportunity_id=f"trade:{trade_id}",
+        event_type=EVENT_EXIT_NOTE_RAW,
+        trade_id=str(trade_id),
+        symbol=str(trade.get("symbol") or ""),
+        side=str(trade.get("direction") or ""),
+        occurred_at=moment,
+        reason="exit_note",
+        payload=payload,
+        source="trade_mentor",
+    )
+
+
+def _note_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One stored raw note, as every reader of it sees it."""
+    payload = row.get("payload") or {}
+    return {
+        "note_id": str(row.get("event_id") or ""),
+        "trade_id": str(row.get("trade_id") or ""),
+        "symbol": str(row.get("symbol") or ""),
+        "side": str(row.get("side") or ""),
+        "raw_text": str(payload.get("raw_text") or ""),
+        "answer_state": str(payload.get("answer_state") or ""),
+        "exit_session": str(payload.get("exit_session") or ""),
+        "label_provenance": str(payload.get("label_provenance") or ""),
+        "label_provenance_reason": str(payload.get("label_provenance_reason") or ""),
+        "written_after_the_session": bool(payload.get("written_after_the_session")),
+        "occurred_at": str(row.get("occurred_at") or ""),
+    }
+
+
+def exit_notes(store: Any, trade_id: str) -> list[dict[str, Any]]:
+    """Every exit note stored for one trade, OLDEST FIRST.
+
+    Oldest first because the store is append-only: "the note" is the LAST row,
+    and a reader that wants the history has it in the order it was written.
+    """
+    try:
+        rows = store.list_opportunity_events(
+            trade_id=str(trade_id), event_type=EVENT_EXIT_NOTE_RAW, limit=10000
+        )
+    except Exception:  # noqa: BLE001 - a missing store is no notes
+        logging.debug("Exit notes unreadable.", exc_info=True)
+        return []
+    return [_note_row(row) for row in rows]
+
+
+def exit_notes_by_session(
+    store: Any, sessions: Any
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """``{session: {trade_id: note}}`` for several sessions in TWO reads.
+
+    The append-only table is walked ONCE for the words and once for what the
+    trader signed off, however many sessions are asked for: a five-session
+    window is a card-build cost and five separate session reads would be five
+    walks of the same table on the Qt thread.
+
+    The LAST note for a (trade, session) wins - a superseding note is the
+    trader's latest word - and the trade's CONFIRMED fields travel on the same
+    row, so a caller that wants both does not open the table twice. A trade
+    that exited in two sessions appears under each session with its own note.
+    """
+    wanted = [str(day or "")[:10] for day in (sessions or ()) if str(day or "")[:10]]
+    out: dict[str, dict[str, dict[str, Any]]] = {day: {} for day in wanted}
+    if not wanted:
+        return out
+    days = set(wanted)
+    try:
+        rows = store.list_opportunity_events(
+            event_type=EVENT_EXIT_NOTE_RAW, limit=10000
+        )
+    except Exception:  # noqa: BLE001 - an unreadable table is no notes
+        logging.debug("Session exit notes unreadable.", exc_info=True)
+        return out
+    for row in rows:
+        note = _note_row(row)
+        if note["exit_session"] not in days or not note["trade_id"]:
+            continue
+        out[note["exit_session"]][note["trade_id"]] = note
+    if not any(out.values()):
+        return out
+    confirmed = _confirmed_exit_rows(store, days)
+    for day, notes in out.items():
+        for trade_id, note in notes.items():
+            note["exit_fields"] = dict((confirmed.get(day) or {}).get(trade_id) or {})
+    return out
+
+
+def exit_notes_for_session(store: Any, session: str) -> dict[str, dict[str, Any]]:
+    """``{trade_id: the session's exit note}`` in ONE read of the whole table.
+
+    Session-wide rather than per trade: a six-trade morning would otherwise be
+    six walks of an append-only table on a Qt worker, and the Day Review page
+    reads this once for the whole day.
+    """
+    wanted = str(session or "")[:10]
+    if not wanted:
+        return {}
+    return exit_notes_by_session(store, (wanted,)).get(wanted, {})
+
+
+def _confirmed_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    payload = row.get("payload") or {}
+    return {
+        "status": journal_store.TAG_STATUS_CONFIRMED,
+        "fields": dict(payload.get("fields") or {}),
+        "exit_session": str(payload.get("exit_session") or ""),
+        "note_id": str(payload.get("note_id") or ""),
+        "source": str(payload.get("source") or ""),
+        "confirmed_at": str(row.get("occurred_at") or ""),
+    }
+
+
+def _confirmed_exit_rows(store: Any, sessions: Any) -> dict[str, dict[str, Any]]:
+    """``{session: {trade_id: the trader's confirmed fields}}``, in ONE read."""
+    days = {str(day or "")[:10] for day in (sessions or ()) if str(day or "")[:10]}
+    out: dict[str, dict[str, Any]] = {day: {} for day in days}
+    if not days:
+        return out
+    try:
+        rows = store.list_opportunity_events(event_type=EVENT_EXIT_FIELDS, limit=10000)
+    except Exception:  # noqa: BLE001 - an unreadable table is nothing confirmed
+        logging.debug("Confirmed exit fields unreadable.", exc_info=True)
+        return out
+    for row in rows:
+        record = _confirmed_row(row)
+        trade_id = str(row.get("trade_id") or "")
+        if not trade_id or record["exit_session"] not in days:
+            continue
+        out[record["exit_session"]][trade_id] = record
+    return out
+
+
+def exit_fields(store: Any, trade_id: str) -> dict[str, Any]:
+    """What the TRADER confirmed about one exit, or ``{}``.
+
+    ``{}`` is the honest answer while a draft is waiting: a machine reading is
+    never counted as the trader's, which is the rule 33 provisional tags and
+    exactly one confirmed one already taught this desk.
+    """
+    try:
+        rows = store.list_opportunity_events(
+            trade_id=str(trade_id), event_type=EVENT_EXIT_FIELDS, limit=10000
+        )
+    except Exception:  # noqa: BLE001 - a missing store is nothing confirmed
+        logging.debug("Confirmed exit fields unreadable.", exc_info=True)
+        return {}
+    if not rows:
+        return {}
+    return _confirmed_row(rows[-1])
+
+
+#: What separates the two halves of an exit's identity in its string key.
+EXIT_KEY_SEPARATOR = "@"
+
+
+def exit_key(trade_id: Any, exit_session: Any) -> str:
+    """The identity of ONE exit: ``<trade_id>@<exit_session>``.
+
+    A reading, a note and a confirmed row all belong to a (trade, SESSION) and
+    never to a trade: 13 live trades have closing legs on two dates, and the
+    packet's own correction 6 says each half is drafted separately and
+    confirmed separately. Keyed by the trade alone, the second reading was
+    silently dropped - not offered, not carried, not said - and a Confirm could
+    have signed off the other session's words (review 2 blocker 1).
+
+    ONE helper, used by the registry as `Subject.subject_id` and by every map
+    the card keys a reading under, so the two can never disagree about what a
+    reading IS.
+    """
+    return f"{str(trade_id or '')}{EXIT_KEY_SEPARATOR}{str(exit_session or '')[:10]}"
+
+
+def split_exit_key(key: Any) -> tuple[str, str]:
+    """``(trade_id, exit_session)``, or ``(key, "")`` for a bare trade id."""
+    text = str(key or "")
+    trade_id, _sep, session = text.partition(EXIT_KEY_SEPARATOR)
+    return trade_id, session
+
+
+def offer_window(session: Any, sessions: int = EXIT_DRAFT_OFFER_SESSIONS) -> tuple[str, ...]:
+    """The `sessions` exchange sessions ending at `session`, OLDEST first.
+
+    Walked on the exchange calendar, never in calendar days: a Monday card
+    reaching back five days would reach back three sessions. A calendar that
+    cannot answer falls back to days, which is WIDER than the truth and so
+    never silently narrows the window.
+    """
+    try:
+        cursor = date.fromisoformat(str(session or "")[:10])
+    except ValueError:
+        return ()
+    days = [cursor]
+    for _step in range(max(0, int(sessions) - 1)):
+        try:
+            from market_calendar import previous_session
+
+            cursor = previous_session(cursor)
+        except Exception:  # noqa: BLE001 - an unanswerable calendar walks days
+            logging.debug("The exchange calendar could not walk back.", exc_info=True)
+            from datetime import timedelta
+
+            cursor = cursor - timedelta(days=1)
+        days.append(cursor)
+    return tuple(day.isoformat() for day in reversed(days))
+
+
+def waiting_exit_drafts(
+    store: Any,
+    session: Any,
+    *,
+    sessions: int = EXIT_DRAFT_OFFER_SESSIONS,
+    root: Any = None,
+) -> list[dict[str, Any]]:
+    """Every UNCONFIRMED exit draft still on offer, OLDEST FIRST.
+
+    The lane behind the `exit_draft_review` question. It is keyed to the
+    trader's CLOCK and not to whatever session the card is reviewing - see
+    :data:`EXIT_DRAFT_OFFER_SESSIONS` for why the two never line up - and it
+    reads the window in TWO store queries plus one small pack read per session.
+
+    A draft the trader has already Confirmed or Corrected is GONE: the
+    signed-off row is the fact and nothing is offered twice. A draft whose note
+    has no words behind it any more, or which names a trade this store cannot
+    see, is skipped rather than shown as an empty card row.
+
+    **A SUPERSEDED reading is not offered either.** The draft has to name the
+    LATEST note of its (trade, session): a second note is the trader changing
+    their mind, and a reading of the old words shown above the new ones - with
+    quotes that are not in them - is worse than no reading at all (review 2
+    advisory 3). It stays on disk; the night drafts the new note as a fresh
+    one, because its already-drafted check is per `note_id`.
+
+    Never raises: an unreadable pack is no drafts, which is also the honest
+    state of a desk whose night has never run.
+    """
+    window = offer_window(session, sessions)
+    if not window:
+        return []
+    notes = exit_notes_by_session(store, window)
+    out: list[dict[str, Any]] = []
+    for day in window:
+        # A session nobody wrote a note in cannot carry a reading, so it is not
+        # worth a file read (review 2 advisory 5: the pack reads were the cost).
+        day_notes = notes.get(day) or {}
+        if not day_notes:
+            continue
+        try:
+            from ai_jobs import exit_note_fields
+
+            stored = exit_note_fields.read_latest(day, root=root) or {}
+        except Exception:  # noqa: BLE001 - a missing pack is simply no draft
+            logging.debug("Exit drafts unreadable for %s.", day, exc_info=True)
+            continue
+        for draft in stored.get("drafts") or ():
+            if not isinstance(draft, Mapping):
+                continue
+            trade_id = str(draft.get("trade_id") or "")
+            note = day_notes.get(trade_id) or {}
+            if not trade_id or not note or note.get("exit_fields"):
+                continue
+            if str(draft.get("note_id") or "") != str(note.get("note_id") or ""):
+                # A reading of words the trader has since rewritten.
+                continue
+            out.append(
+                {
+                    "key": exit_key(trade_id, day),
+                    "trade_id": trade_id,
+                    "symbol": str(draft.get("symbol") or note.get("symbol") or ""),
+                    "exit_session": day,
+                    "note_id": str(draft.get("note_id") or ""),
+                    "raw_text": str(note.get("raw_text") or ""),
+                    "fields": dict(draft.get("fields") or {}),
+                    "status": str(draft.get("status") or ""),
+                    "drafted_at": str(draft.get("drafted_at") or ""),
+                }
+            )
+    return out
+
+
+def _exit_vocabularies() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(why codes, felt codes)`` - each read from the module that OWNS it.
+
+    `trader_state_tags` is TJ-7's feelings vocabulary and there is exactly one
+    on this desk: an exit's feeling and a session's mood are different GRAINS
+    of the same words, and a second list would let the two drift.
+    """
+    import exit_reasons
+    import trader_state_tags
+
+    return tuple(exit_reasons.codes()), tuple(trader_state_tags.codes())
+
+
+def _stored_value(value: Any, *, coded: bool) -> dict[str, Any]:
+    """One field value as it is STORED on the trader's confirmed row.
+
+    `span` and `quote` are PRESENT and EMPTY for a value the trader typed
+    themselves: a reader that has to tell "the trader wrote this" from "this
+    build did not record it" is reading two different absences as one.
+    """
+    row = dict(value or {}) if isinstance(value, Mapping) else {}
+    out: dict[str, Any] = {
+        "span": list(row.get("span") or ()),
+        "quote": str(row.get("quote") or ""),
+    }
+    if coded:
+        out["code"] = str(row.get("code") or "")
+    return out
+
+
+def _note_belongs(store: Any, trade_id: str, exit_session: str, note_id: str) -> bool:
+    """Is `note_id` a note of THIS (trade, session)? Fails closed.
+
+    A reading is identified by (trade, EXIT SESSION), and a trade can have two
+    of them (review 2 blocker 1). A confirmed row citing the other session's
+    note would say the trader signed off words they never saw, so the writer
+    checks rather than trusting its caller. An unreadable store answers False:
+    refusing a write the desk cannot justify is the safe direction.
+    """
+    wanted = str(note_id or "")
+    if not wanted:
+        return False
+    return any(
+        row.get("note_id") == wanted
+        and row.get("exit_session") == str(exit_session or "")[:10]
+        for row in exit_notes(store, trade_id)
+    )
+
+
+def _write_exit_fields(
+    store: Any,
+    trade_id: str,
+    fields: Mapping[str, Any],
+    *,
+    exit_session: str,
+    note_id: str,
+    source: str,
+    moment: datetime,
+) -> dict[str, Any]:
+    """The ONE writer of a confirmed exit row. The trader's act, never a job's.
+
+    It REFUSES a `note_id` that is not a note of this (trade, session): both
+    halves of a reading's identity travel with every click, and a row that
+    cited the wrong half would be the desk claiming the trader confirmed words
+    they were never shown.
+    """
+    if note_id and not _note_belongs(store, trade_id, exit_session, note_id):
+        return {
+            "ok": False,
+            "reason": (
+                f"note {note_id!r} is not an exit note of this trade's "
+                f"{exit_session or 'unnamed'} exit"
+            ),
+        }
+    payload = {
+        "fields": dict(fields),
+        "exit_session": str(exit_session or "")[:10],
+        "note_id": str(note_id or ""),
+        # `confirm` or `correct` - what the trader DID, so a later reader can
+        # tell a signed-off draft from one they rewrote.
+        "source": str(source or ""),
+        "status": journal_store.TAG_STATUS_CONFIRMED,
+    }
+    row = store.record_opportunity_event(
+        opportunity_id=f"trade:{trade_id}",
+        event_type=EVENT_EXIT_FIELDS,
+        trade_id=str(trade_id),
+        occurred_at=moment,
+        reason=f"exit_fields:{source}",
+        payload=payload,
+        source="trade_mentor",
+    )
+    return {"ok": True, "fields": dict(fields), "event_id": str(row.get("event_id") or "")}
+
+
+def confirm_exit_fields(
+    store: Any,
+    trade_id: str,
+    draft: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """The trader's one click: the night's reading becomes THEIR record.
+
+    A confirm is an APPEND. The draft file is not touched and not rewritten -
+    what the machine said stays readable beside what the trader signed - and
+    the codes are re-checked against the two closed vocabularies here, because
+    a row a later reader has to interpret must carry a code that list still
+    holds.
+    """
+    body = dict(draft or {})
+    fields = body.get("fields")
+    if not isinstance(fields, Mapping) or not fields:
+        return {"ok": False, "reason": "there is nothing to confirm"}
+    why_codes, felt_codes = _exit_vocabularies()
+
+    stored: dict[str, Any] = {}
+    why = fields.get("why")
+    if isinstance(why, Mapping):
+        code = str(why.get("code") or "")
+        if code not in why_codes:
+            return {"ok": False, "reason": f"{code!r} is not an exit reason this desk knows"}
+        stored["why"] = {**_stored_value(why, coded=True), "code": code}
+    felt_rows = fields.get("felt")
+    if isinstance(felt_rows, (list, tuple)):
+        kept = []
+        for value in felt_rows:
+            code = str((value or {}).get("code") or "") if isinstance(value, Mapping) else ""
+            if code not in felt_codes:
+                return {"ok": False, "reason": f"{code!r} is not a feeling this desk knows"}
+            kept.append({**_stored_value(value, coded=True), "code": code})
+        stored["felt"] = kept
+    watching = fields.get("watching")
+    if isinstance(watching, (list, tuple)):
+        # Stored as the QUOTES themselves: the span was the night's proof that
+        # it did not invent them, and the trader's own correction has no span.
+        stored["watching"] = [
+            str((value or {}).get("quote") or "") if isinstance(value, Mapping) else str(value)
+            for value in watching
+        ][:MAX_EXIT_WATCHING]
+    if not stored:
+        return {"ok": False, "reason": "there is nothing to confirm"}
+    return _write_exit_fields(
+        store,
+        trade_id,
+        stored,
+        exit_session=str(body.get("exit_session") or body.get("session_date") or ""),
+        note_id=str(body.get("note_id") or ""),
+        source="confirm",
+        moment=now or datetime.now().astimezone(),
+    )
+
+
+def correct_exit_fields(
+    store: Any,
+    trade_id: str,
+    *,
+    why: str = "",
+    felt: Any = (),
+    watching: Any = (),
+    now: datetime | None = None,
+    exit_session: str = "",
+    note_id: str = "",
+) -> dict[str, Any]:
+    """The trader rewrites the three values. Still the two closed vocabularies.
+
+    A code outside them RAISES rather than being stored: a corrected row is
+    still a row a later reader has to interpret, and the one thing worse than a
+    machine's wrong code is a code nobody can look up at all. The quotes are
+    free text - they are the trader's own words about what they were watching,
+    so they carry `span: []` and `quote: ""`, and `source: "correct"` on the
+    row is what tells a grounded value from a free one.
+
+    `exit_session` and `note_id` are RESOLVED from the trade's own latest exit
+    note when a caller does not pass them, and a trade with no note at all
+    RAISES (review 1 advisory 5). They used to default to ``""``, which wrote a
+    row that joined to nothing: both readers key on the session, so a row
+    without one shows no confirmed fields anywhere and looks like a confirm
+    that never happened.
+    """
+    why_codes, felt_codes = _exit_vocabularies()
+    chosen = str(why or "").strip()
+    if chosen and chosen not in why_codes:
+        raise ValueError(f"{chosen!r} is not an exit reason this desk knows")
+    feelings = [str(code or "").strip() for code in (felt or ()) if str(code or "").strip()]
+    for code in feelings:
+        if code not in felt_codes:
+            raise ValueError(f"{code!r} is not a feeling this desk knows")
+    quotes = [str(text or "").strip() for text in (watching or ()) if str(text or "").strip()]
+    if len(quotes) > MAX_EXIT_WATCHING:
+        raise ValueError(f"an exit carries at most {MAX_EXIT_WATCHING} things watched")
+    session = str(exit_session or "")[:10]
+    note = str(note_id or "")
+    if not session or not note:
+        latest = (exit_notes(store, trade_id) or [None])[-1]
+        if latest is None:
+            raise ValueError(
+                "there is no exit note on this trade to correct; a corrected row "
+                "with no session joins to nothing"
+            )
+        session = session or str(latest.get("exit_session") or "")
+        note = note or str(latest.get("note_id") or "")
+    if not session:
+        raise ValueError("a corrected exit row must name the session its exit is in")
+    stored: dict[str, Any] = {
+        "felt": [{"code": code, "span": [], "quote": ""} for code in feelings],
+        "watching": quotes,
+    }
+    if chosen:
+        stored["why"] = {"code": chosen, "span": [], "quote": ""}
+    return _write_exit_fields(
+        store,
+        trade_id,
+        stored,
+        exit_session=session,
+        note_id=note,
+        source="correct",
+        moment=now or datetime.now().astimezone(),
     )

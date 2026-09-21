@@ -1167,7 +1167,7 @@ class MainWindow(QMainWindow):
             if not is_check_slot and not carrying and not self._trade_check_is_owed(check, slot):
                 return
 
-            card.set_trade_check(task, store=store)
+            card.set_trade_check(task, store=store, auto_mode=self._auto_mode_now())
         except Exception:  # noqa: BLE001 - the read still stands without it
             logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
 
@@ -1182,14 +1182,25 @@ class MainWindow(QMainWindow):
         at all.
 
         It is owed when the reviewed session still has an unlabelled trade, or
-        when its broker statement has not landed (item 6's line has to ride
-        too). A session whose trades are all answered brings nothing back.
-        AWAY needs no test here: the service records the absence and never
-        emits `promptDue`, so an ordinary slot in AWAY does not reach this.
+        an EXIT nobody has explained (TJ-9E), or when its broker statement has
+        not landed (item 6's line has to ride too). A session whose trades are
+        all answered brings nothing back. AWAY needs no test here: the service
+        records the absence and never emits `promptDue`, so an ordinary slot in
+        AWAY does not reach this.
+
+        The exit count is asked SEPARATELY and not folded into the unlabelled
+        one, because they are two questions: a swing whose four entry fields
+        were answered the morning after it opened is not unlabelled and can
+        still have an exit nobody explained. Review 1 blocker 4 is what one
+        number costs - a trader who was away at 09:00, or who dismissed the
+        card, was never asked about that exit at all, and the next morning the
+        reviewed session has moved on.
         """
         try:
             reviewed = check.previous_exchange_session(slot.scheduled_at.date())
             if self.trade_mentor_service.unlabelled_trades(reviewed) > 0:
+                return True
+            if self.trade_mentor_service.unexplained_exits(reviewed) > 0:
                 return True
             from journal_store import JournalStore
 
@@ -1255,10 +1266,58 @@ class MainWindow(QMainWindow):
             # every trade came from.
             **self._mentor_origin_lanes((session, reviewed)),
             "ai_question": self._mentor_ai_question(),
+            # TJ-9E, and it is a LANE like every other one here: the registry
+            # is pure, so a trigger that opened a store would be a second
+            # opinion about it on whatever thread the card was built on. The
+            # kind shipped AWAKE with nothing feeding this key, so lead
+            # decision 7's budget clause could never fire (review 1 advisory
+            # 2). The window ends at the CARD's own session, never the reviewed
+            # one, because a draft is offered on its own clock.
+            #
+            # MEASURED, on the Qt thread at card-show time, over a 201-trade
+            # scratch journal carrying 20 drafts: **about 4 ms warm** for the
+            # lane, 1.4-1.8 ms on a small journal, and **12.7 ms on the FIRST
+            # call** of the process, where the imports and the first statement
+            # are paid. ONE pack read: two `opportunity_events` queries cover
+            # the whole five-session window, and a session nobody wrote a note
+            # in costs no file read at all. Review 2 measured 14.7 ms against
+            # the older shape, which read five pack files whatever the journal
+            # said. `_mentor_annotation_lane` above already reads a file here,
+            # so this is the same class of cost and not a new one; it stays on
+            # this thread this round by decision.
+            "exit_drafts": self._mentor_exit_drafts(store, session),
             "answered": self._mentor_answered(store, (session, reviewed)),
             "retired": self.trade_mentor_service.retired_subjects(),
             "carried": getattr(self, "_mentor_carried", ()),
         }
+
+    @staticmethod
+    def _mentor_exit_drafts(store, session: str) -> list:
+        """The night's exit readings the trader has NOT signed off yet (TJ-9E).
+
+        The lane behind `exit_draft_review`, and the reason the Confirm click
+        exists at all: a draft is offered on its OWN clock
+        (`check.EXIT_DRAFT_OFFER_SESSIONS`, walked on the exchange calendar),
+        never on the session the card happens to be reviewing. The trade exits
+        Monday, the note is typed on TUESDAY's card, TUESDAY NIGHT drafts it,
+        and Wednesday's card reviews Tuesday - where Monday's trade is not a
+        row at all.
+
+        `session` is the CARD's own session, so the window is the trader's last
+        five sessions ending today. The rule and the reads live in
+        `trade_mentor_trade_check`; this is the seam that hands them to a pure
+        registry, because a trigger that opened a store would be a second
+        opinion about it on whatever thread the card was built on.
+
+        Never raises: a lane never costs the card.
+        """
+        try:
+            import trade_mentor_trade_check as check
+
+            return list(check.waiting_exit_drafts(store, str(session or "")[:10]))
+        except Exception:  # noqa: BLE001 - a lane never costs the card
+            logging.debug("Mentor exit-draft lane unreadable.", exc_info=True)
+            return []
 
     @staticmethod
     def _mentor_annotation_lane(days) -> list:

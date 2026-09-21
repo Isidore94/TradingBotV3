@@ -135,7 +135,13 @@ def test_the_week_story_sits_in_stage_two_between_the_tags_and_the_briefs():
     names = [slot.name for slot in runner.default_slots()]
     assert SLOT in names, f"{SLOT} is not a registered slot: {names}"
     assert names[names.index("observation_tags") + 1] == SLOT
-    assert names[names.index(SLOT) + 1] == "ticker_briefs"
+    # LEAD AMENDMENT 2026-09-21 (TJ-9E): the week story is still the slot
+    # DIRECTLY after the word tagger - the pin this packet was asked not to
+    # split - and the briefs are still what it sits in front of, now with
+    # TJ-9E's exit-note reader between them. That slot is seconds of work per
+    # note and must not queue behind the briefs' 120 minutes either.
+    assert names[names.index(SLOT) + 1] == "exit_note_fields"
+    assert names[names.index("exit_note_fields") + 1] == "ticker_briefs"
     # It is in stage 2, which means AFTER the slot that closes stage 1.
     assert names.index(SLOT) > names.index(runner._STAGE_ONE_LAST_SLOT)
 
