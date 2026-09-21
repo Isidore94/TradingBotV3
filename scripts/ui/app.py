@@ -1286,7 +1286,11 @@ class MainWindow(QMainWindow):
             # so this is the same class of cost and not a new one; it stays on
             # this thread this round by decision.
             "exit_drafts": self._mentor_exit_drafts(store, session),
-            "answered": self._mentor_answered(store, (session, reviewed)),
+            "answered": self._mentor_answered(
+                store,
+                (session, reviewed),
+                trade_ids=[str(row.get("trade_id") or "") for row in trades],
+            ),
             "retired": self.trade_mentor_service.retired_subjects(),
             "carried": getattr(self, "_mentor_carried", ()),
         }
@@ -1466,16 +1470,48 @@ class MainWindow(QMainWindow):
         return {}
 
     @staticmethod
-    def _mentor_answered(store, days) -> dict:
+    def _mentor_answered(store, days, trade_ids=()) -> dict:
         """Which questions already have an answer, so none is asked twice.
 
         Two stores, because two kinds file their answers as the trader's own
         dated Market Journal row (`day_close`, `ai_question`) and the rest as
         append-only annotation rows. Both reads are bounded to the sessions a
         question can be about.
+
+        **An answer about a TRADE is found by the trade, never only by the day
+        it was given on** (trader 2026-09-21: *"dont ask for it again just store
+        that info"*). A trade's `trade_date` MOVES - an open position answered
+        on Monday closes on Thursday and lands back on Thursday's card - and a
+        read keyed on the answer's own date could not see Monday's row, so a
+        `once` question came back. Read FIRST, so a same-day row still wins
+        the stamp a daily kind compares.
         """
         answered: dict[str, dict] = {}
         import mentor_questions
+
+        def _keep(rows) -> None:
+            for row in rows:
+                payload = row.get("payload") or {}
+                kind = str(payload.get("mentor_question_kind") or "")
+                subject_id = str(payload.get("subject_id") or "")
+                if kind and subject_id:
+                    answered[f"{kind}:{subject_id}"] = {
+                        "answered_at": str(row.get("occurred_at") or "")[:10]
+                    }
+
+        for trade_id in dict.fromkeys(str(value or "").strip() for value in trade_ids):
+            if not trade_id:
+                continue
+            try:
+                _keep(
+                    store.list_opportunity_events(
+                        trade_id=trade_id,
+                        event_type=mentor_questions.EVENT_MENTOR_ANSWER,
+                        limit=1000,
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                logging.debug("Mentor answers unreadable for %s.", trade_id, exc_info=True)
 
         for day in days:
             if not str(day or "").strip():
@@ -1489,14 +1525,7 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 logging.debug("Mentor answers unreadable for %s.", day, exc_info=True)
                 continue
-            for row in rows:
-                payload = row.get("payload") or {}
-                kind = str(payload.get("mentor_question_kind") or "")
-                subject_id = str(payload.get("subject_id") or "")
-                if kind and subject_id:
-                    answered[f"{kind}:{subject_id}"] = {
-                        "answered_at": str(row.get("occurred_at") or "")[:10]
-                    }
+            _keep(rows)
         try:
             from ui.services.market_journal_service import shared_journal_service
 

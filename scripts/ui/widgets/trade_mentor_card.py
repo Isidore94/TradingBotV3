@@ -91,6 +91,11 @@ DAY_CLOSE_KIND = "day_close"
 #: seams - and asserted to be the registry's own string.
 EXIT_DRAFT_KIND = "exit_draft_review"
 
+#: What a field says when the trade's ONE raw note is its answer. The note is
+#: stored verbatim beside it (`RECALLED_RAW`), so this names it and never
+#: paraphrases it.
+RAW_NOTE_ANSWER_TEXT = "answered in the raw note"
+
 _QUESTIONS = {
     "m5": "What do you see on the 5-minute tape right now?",
     KIND_M5_D1: "What do you see on the 5-minute tape right now?",
@@ -331,6 +336,15 @@ class TradeMentorCard(QWidget):
         self._raw_trade_inputs: dict[str, QPlainTextEdit] = {}
         self._ai_draft_buttons: dict[str, QPushButton] = {}
         self._ai_drafts: dict[str, dict[str, dict[str, Any]]] = {}
+        #: trade_id -> that trade's OWN Save. A trade the trader has answered is
+        #: filed on its own and never waits for the other trades on the card.
+        self._trade_save_buttons: dict[str, QPushButton] = {}
+        #: trade_id -> the raw note already stored verbatim, so Save never
+        #: files the same words twice.
+        self._raw_saved: dict[str, str] = {}
+        #: How many fields this session's section has filed so far, so the
+        #: closing line counts the whole morning and not just the last click.
+        self._trade_fields_filed = 0
         self._setup_confirm_buttons: dict[str, QPushButton] = {}
         #: trade_id -> the vocabulary list the confirm button sits beside.
         self._setup_choice_boxes: dict[str, QComboBox] = {}
@@ -421,7 +435,7 @@ class TradeMentorCard(QWidget):
             "becomes the plan you typed before the trade, and 'no stop' is "
             "never written as a stop at zero."
         )
-        self.save_answers_button.clicked.connect(self.save_trade_check)
+        self.save_answers_button.clicked.connect(lambda _checked=False: self.save_trade_check())
         self.save_answers_button.setVisible(False)
         self.save_answers_button.setEnabled(False)
 
@@ -1270,6 +1284,9 @@ class TradeMentorCard(QWidget):
         self._raw_trade_inputs = {}
         self._ai_draft_buttons = {}
         self._ai_drafts = {}
+        self._trade_save_buttons = {}
+        self._raw_saved = {}
+        self._trade_fields_filed = 0
         self._setup_confirm_buttons = {}
         self._setup_choice_boxes = {}
         self._setup_confirmed = set()
@@ -1324,9 +1341,26 @@ class TradeMentorCard(QWidget):
         self._raw_trade_inputs.pop(key, None)
         self._ai_draft_buttons.pop(key, None)
         self._ai_drafts.pop(key, None)
+        self._trade_save_buttons.pop(key, None)
+        self._raw_saved.pop(key, None)
         self._setup_confirm_buttons.pop(key, None)
         self._setup_choice_boxes.pop(key, None)
         self._trade_headings.pop(key, None)
+        # LEAD, integrating TJ-9E with the per-trade Save (2026-09-21): the
+        # trade section's OWN exit maps are keyed by trade and their widgets
+        # live inside the block that was just deleted. A reading's maps are
+        # keyed `<trade>@<session>` and live in the questions block - not here.
+        for name in (
+            "_exit_boxes",
+            "_exit_prompts",
+            "_exit_states",
+            "_exit_state_buttons",
+            "_exit_sessions",
+            "_exit_rewrite_boxes",
+            "_exit_rewrite_original",
+            "_exit_rewrite_saves",
+        ):
+            getattr(self, name).pop(key, None)
         self._setup_confirmed.discard(key)
         if key in self._draft_question_rows:
             # Its exit widgets belong to a waiting-reading row in the questions
@@ -1455,7 +1489,8 @@ class TradeMentorCard(QWidget):
         )
         self.trade_check_label.setText(
             f"Yesterday's trades ({task.reviewed_session}), missing fields only - "
-            f"all {len(task.trades)}. Save stays off until each one is answered."
+            f"all {len(task.trades)}. Answer one trade, press its Save, and it is "
+            "stored and never asked again."
             + remainder
             + (
                 f" {len(same_session)} of them filled TODAY - labelling those "
@@ -1540,6 +1575,9 @@ class TradeMentorCard(QWidget):
             "Tell me in one note: why, stop/invalidation, target, and setup. "
             "Your exact words are saved before local AI fills the draft."
         )
+        # Words typed here ARE an answer (trader 2026-09-21): they open this
+        # trade's Save, so the gate listens to the note as well as the combos.
+        raw_box.textChanged.connect(self._refresh_save_gate)
         block_layout.addWidget(raw_box)
         ai_button = QPushButton("Fill missing fields with local AI", block)
         ai_button.clicked.connect(
@@ -1566,13 +1604,25 @@ class TradeMentorCard(QWidget):
             # rather than counting clicks.
             combo.currentIndexChanged.connect(self._refresh_save_gate)
             text_input = QLineEdit(row)
-            text_input.setPlaceholderText("in your own words (optional)")
+            text_input.setPlaceholderText("in your own words - typing here is an answer")
+            text_input.textChanged.connect(self._refresh_save_gate)
             row_layout.addWidget(combo)
             row_layout.addWidget(text_input, 1)
             block_layout.addWidget(row)
             fields[name] = (combo, text_input)
         self._answer_inputs[trade_id] = fields
         self._add_exit_ask(question, block, block_layout)
+        save_button = QPushButton("Save this trade", block)
+        save_button.setToolTip(
+            "Stores what you answered about THIS trade now. A stored answer is "
+            "never asked again, and the other trades stay on the card."
+        )
+        save_button.setEnabled(False)
+        save_button.clicked.connect(
+            lambda _checked=False, trade_id=trade_id: self.save_trade_check(trade_id)
+        )
+        block_layout.addWidget(save_button)
+        self._trade_save_buttons[trade_id] = save_button
         self._trade_check_layout.addWidget(block)
         self._trade_blocks[trade_id] = block
 
@@ -2357,32 +2407,77 @@ class TradeMentorCard(QWidget):
         )
         return result
 
-    def _pending_answers(self) -> int:
-        """How many listed fields are still open. Zero means Save may arm.
+    def _field_answer(self, trade_id: str, name: str) -> dict[str, Any]:
+        """What ONE field holds right now, or ``{}`` when it holds nothing.
 
-        TJ-9E: an EXIT box counts as one of them. It is forced like the rest -
-        Save stays grey until it holds words or an answer state - and a WAITING
-        DRAFT is not a field: a reading nobody clicked must never be able to
-        hold the morning hostage.
+        Three ways to answer, in this order (trader 2026-09-21: *"if i answer
+        the questions about a trade please then dont ask for it again just
+        store that info"*):
+
+        * an explicit state in the combo, with whatever was typed beside it;
+        * words typed beside a combo left on "-". That is `not supplied` by its
+          own definition - it was never written down, and here is what it was -
+          and before this the words were silently thrown away;
+        * the trade's one raw note. The note answers every field still open on
+          that trade, the row says so, and the note itself is stored verbatim
+          beside it.
         """
+        import trade_mentor_trade_check as check
+
+        controls = self._answer_inputs.get(str(trade_id), {}).get(name)
+        if controls is None:
+            return {}
+        combo, text_input = controls
+        state = str(combo.currentData() or "")
+        text = text_input.text().strip()
+        if state:
+            return {"state": state, "text": text}
+        if text:
+            return {"state": check.ANSWER_NOT_SUPPLIED, "text": text}
+        raw_box = self._raw_trade_inputs.get(str(trade_id))
+        if raw_box is not None and raw_box.toPlainText().strip():
+            return {"state": check.ANSWER_NOT_SUPPLIED, "text": RAW_NOTE_ANSWER_TEXT}
+        return {}
+
+    def _open_fields(self, trade_id: str) -> int:
+        """How many of ONE trade's listed fields are still open."""
+        confirmed = str(trade_id) in self._setup_confirmed
         open_fields = 0
-        for trade_id, fields in self._answer_inputs.items():
-            confirmed = str(trade_id) in self._setup_confirmed
-            for name, (combo, _text_input) in fields.items():
-                if name == "setup" and confirmed:
-                    continue
-                if not str(combo.currentData() or ""):
-                    open_fields += 1
-            if self._exit_is_open(trade_id):
+        for name in self._answer_inputs.get(str(trade_id), {}):
+            if name == "setup" and confirmed:
+                continue
+            if not self._field_answer(trade_id, name):
                 open_fields += 1
+        # TJ-9E: the ONE forced exit box counts as a field of its trade. A
+        # WAITING READING is not one - a draft nobody clicked never gates Save.
+        if self._exit_is_open(trade_id):
+            open_fields += 1
         return open_fields
 
+    def _pending_answers(self) -> int:
+        """How many listed fields are still open, over every trade on the card."""
+        return sum(self._open_fields(trade_id) for trade_id in self._answer_inputs)
+
+    def _answered_trades(self) -> list[str]:
+        """The trades whose every listed field holds an answer, in card order."""
+        return [
+            trade_id for trade_id in self._answer_inputs if self._open_fields(trade_id) == 0
+        ]
+
     def _refresh_save_gate(self, *_args) -> None:
-        """Forced means the button is grey until every field is answered."""
+        """Forced is PER TRADE: a trade's Save is grey until its fields are answered.
+
+        The gate used to be one button over every field of every trade on the
+        card, so a morning with five trades needed twenty answers before a
+        single one was stored - and the live journal held ONE recalled row. A
+        trade the trader has answered is now stored on its own; the card's
+        bottom Save files every answered trade at once.
+        """
         try:
-            self.save_answers_button.setEnabled(
-                bool(self._answer_inputs) and self._pending_answers() == 0
-            )
+            answered = set(self._answered_trades())
+            for trade_id, button in self._trade_save_buttons.items():
+                button.setEnabled(trade_id in answered)
+            self.save_answers_button.setEnabled(bool(answered))
         except RuntimeError:  # pragma: no cover - widget already torn down
             pass
 
@@ -2408,6 +2503,7 @@ class TradeMentorCard(QWidget):
         except Exception as exc:  # noqa: BLE001 - journal writes fail loudly
             self._set_status(f"Your words were NOT saved: {exc}")
             return
+        self._raw_saved[trade_id] = body
         if button is not None:
             button.setEnabled(False)
             button.setText("Local AI is filling the draft…")
@@ -2646,12 +2742,45 @@ class TradeMentorCard(QWidget):
         self._set_exit_buttons_enabled(key, True)
         self._set_status(f"the exit fields were NOT saved: {reason}")
 
-    def save_trade_check(self) -> dict[str, Any]:
-        """File every field the trader actually answered, and nothing else.
+    def _save_exit_note_of(self, check: Any, store: Any, trade_id: str, moment: datetime) -> int:
+        """File ONE trade's exit note, if its box holds one. Returns 1 or 0.
 
-        RAW FIRST: the exit notes go to the journal BEFORE the entry answers.
-        The trader's own sentence is the thing this card exists to collect, and
-        a failure in the entry half must never be able to lose it.
+        Raises on a failed write: a journal write is the one evidence store
+        that fails LOUDLY, and the caller says so and stops.
+        """
+        box = self._exit_boxes.get(str(trade_id))
+        if box is None:
+            return 0
+        body = str(box.toPlainText() or "").strip()
+        state = self.exit_answer_state(trade_id)
+        if not body and not state:
+            return 0
+        if body and body == str(self._exit_rewrite_original.get(trade_id) or "").strip():
+            # `Rewrite` opened, thought better of, and left as it was. A second
+            # identical note is not a supersede, it is noise in an append-only store.
+            return 0
+        check.save_exit_note(
+            store,
+            trade_id,
+            body,
+            exit_session=self._exit_sessions.get(trade_id, ""),
+            state=state,
+            now=moment,
+        )
+        return 1
+
+    def save_trade_check(self, only: str = "") -> dict[str, Any]:
+        """File every ANSWERED trade - or just `only` - and take it off the card.
+
+        A trade is filed when each of its listed fields holds an answer
+        (:meth:`_field_answer`); a trade still half open stays on the card with
+        its widgets untouched, and costs the answered ones nothing. What is
+        stored is read back by `trade_mentor_trade_check.answered_fields`, so a
+        filed trade is never asked about again.
+
+        RAW FIRST (TJ-9E): a filed trade's EXIT NOTE goes to the journal before
+        its entry answers. The trader's own sentence is the thing this card
+        exists to collect, and a failure in the entry half must never lose it.
         """
         import trade_mentor_trade_check as check
 
@@ -2661,41 +2790,29 @@ class TradeMentorCard(QWidget):
         moment = self._now()
         saved = 0
         notes = 0
-        for trade_id, box in list(self._exit_boxes.items()):
-            body = str(box.toPlainText() or "").strip()
-            state = self.exit_answer_state(trade_id)
-            if not body and not state:
+        filed: list[str] = []
+        wanted = [str(only)] if str(only or "") else self._answered_trades()
+        for trade_id in wanted:
+            if trade_id not in self._answer_inputs or self._open_fields(trade_id):
                 continue
-            if body and body == str(self._exit_rewrite_original.get(trade_id) or "").strip():
-                # `Rewrite` opened, thought better of, and left as it was. A
-                # second identical note is not a supersede, it is noise in an
-                # append-only store.
-                continue
+            confirmed = trade_id in self._setup_confirmed
             try:
-                check.save_exit_note(
-                    store,
-                    trade_id,
-                    body,
-                    exit_session=self._exit_sessions.get(trade_id, ""),
-                    state=state,
-                    now=moment,
-                )
-                notes += 1
+                notes += self._save_exit_note_of(check, store, trade_id, moment)
             except Exception as exc:  # noqa: BLE001 - a journal write is LOUD
                 logging.warning("Exit note not saved for %s: %s", trade_id, exc)
                 self._set_status(f"your words were NOT saved: {exc}")
                 return {"ok": False, "reason": str(exc)}
-        for trade_id, fields in self._answer_inputs.items():
             answers: dict[str, dict[str, Any]] = {}
-            for name, (combo, text_input) in fields.items():
-                state = str(combo.currentData() or "")
-                if not state:
+            for name, (_combo, text_input) in self._answer_inputs[trade_id].items():
+                if name == "setup" and confirmed:
                     continue
-                answer = {"state": state, "text": text_input.text().strip()}
+                answer = self._field_answer(trade_id, name)
+                if not answer:
+                    continue
                 ai_answer = self._ai_drafts.get(trade_id, {}).get(name, {})
                 if (
                     ai_answer
-                    and str(ai_answer.get("state") or "") == state
+                    and str(ai_answer.get("state") or "") == answer["state"]
                     and str(ai_answer.get("text") or ai_answer.get("source_span") or "").strip()
                     == text_input.text().strip()
                 ):
@@ -2705,30 +2822,55 @@ class TradeMentorCard(QWidget):
                         source_span=str(ai_answer.get("source_span") or ""),
                     )
                 answers[name] = answer
-            if not answers:
-                continue
             try:
-                check.save_answers(store, trade_id, answers, now=moment)
-                saved += len(answers)
+                raw_box = self._raw_trade_inputs.get(trade_id)
+                body = raw_box.toPlainText() if raw_box is not None else ""
+                if body.strip() and self._raw_saved.get(trade_id) != body:
+                    # The exact words first, as the AI door does: a field that
+                    # says it was answered in the note must have a note to name.
+                    question = self._trade_questions.get(trade_id)
+                    check.save_raw_reply(
+                        store,
+                        trade_id,
+                        body,
+                        missing=tuple(getattr(question, "missing", ()) or ()),
+                        now=moment,
+                    )
+                    self._raw_saved[trade_id] = body
+                if answers:
+                    check.save_answers(store, trade_id, answers, now=moment)
+                    saved += len(answers)
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Recalled fields not saved for %s: %s", trade_id, exc)
                 self._set_status(f"answers NOT saved: {exc}")
                 return {"ok": False, "reason": str(exc)}
-        if not saved and not notes:
+            filed.append(trade_id)
+        if not saved and not filed and not notes:
             self._set_status("Nothing was answered, so nothing was filed.")
             return {"ok": False, "reason": "no field was answered"}
+        for trade_id in filed:
+            self._drop_trade_block(trade_id)
+        total = self._trade_fields_filed + saved
+        self._trade_fields_filed = total
+        if self._answer_inputs:
+            self._refresh_save_gate()
+            self._set_status(
+                f"{saved} field(s) stored and not asked again. "
+                f"{len(self._answer_inputs)} trade(s) still open."
+            )
+            return {"ok": True, "fields": saved, "trades": filed}
         self._clear_trade_check()
         self.trade_check_box.setVisible(False)
         self.save_answers_button.setVisible(False)
         # The section rides on later cards of the same session (TJ-9 item 2),
         # so the heading has to stop describing questions that are now answered
         # - a later hour no longer wipes it on its way in.
-        said = f"{saved} remembered field(s) filed, labelled as recalled"
+        said = f"{total} remembered field(s) filed, labelled as recalled"
         if notes:
             said = f"{said}; {notes} exit note(s) saved in your own words"
         self.trade_check_label.setText(f"Yesterday's trades: {said}.")
         self._set_status(f"{said}.")
-        return {"ok": True, "fields": saved, "exit_notes": notes}
+        return {"ok": True, "fields": saved, "trades": filed, "exit_notes": notes}
 
     def give_a_read(self, now: datetime | None = None) -> MentorSlot:
         """The manual door, open at all times - no slot has to be due.

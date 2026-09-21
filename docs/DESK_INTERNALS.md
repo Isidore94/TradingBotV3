@@ -5134,6 +5134,30 @@ today); it wants a per-session cache before the log grows. `_journal_retry_date`
 in-memory only, so a restart before 10:00 allows a second morning pull. And one guard test
 passes on un-fixed code.
 
+**2026-09-21, its first live morning: forced became PER TRADE, because nothing was being
+stored.** The trader: *"trade mentor asks me about my trades over and over despite me
+already answering. if i answer the questions about a trade please then dont ask for it
+again just store that info."* A copy of the live journal at 09:02 PT held ONE `RECALLED`
+row ever, zero `RECALLED_RAW` and no setup confirmed from the card - while that morning's
+card listed five trades (three from 2026-09-18, two closing today), so its ONE Save needed
+twenty dropdowns before a single answer was filed. Three causes, each with a red test in
+`tests/test_mentor_stores_an_answered_trade.py`: (1) the gate spanned every field of every
+trade - it is now `_open_fields` per trade, each block has its own `Save this trade`, the
+bottom Save files every ANSWERED trade, and a filed trade leaves the card alone through
+`_drop_trade_block` while a half-answered one keeps its exact widgets; (2) words typed
+beside a dropdown left on `-` were thrown away, and so was a raw note nobody sent to the
+local AI - `_field_answer` now reads typed words as `not_supplied` (its own definition: never
+written down, and here is what it was) and the trade's ONE raw note as the answer to the
+fields still open on it, the note saved verbatim as `RECALLED_RAW` first and each such row
+saying `answered in the raw note`, never a paraphrase; (3) `MainWindow._mentor_answered`
+found a `NOTE` answer only by the DAY it was given on, and a trade's `trade_date` MOVES when
+the position closes, so a `once` question (`trade_origin`) came back on the closing day's
+card - it now also reads by `trade_id`, first, so a same-day row still wins the stamp a
+daily kind compares. Still forced: a trade cannot be half filed, and `not remembered` is
+still a complete answer. NOT changed: the four states, the writer, `planned_*` never
+written. Known overlap: TJ-9E (in build the same morning) edits the same gate; its exit box
+belongs inside `_open_fields`.
+
 **Item 7 left this packet.** The Questrade instrument work became packet TJ-9Q - see
 "TJ-9Q - a sold put is recorded backwards" below.
 

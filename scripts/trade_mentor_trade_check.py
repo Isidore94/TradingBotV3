@@ -12,8 +12,16 @@ becomes something the trader stops doing, and a task nobody does records nothing
 **Forced, at 09:00** (TJ-9, trader 2026-09-19: *"I want to be forced to label my
 trades around 0900 as per trade mentor"*). Every trade of the reviewed session
 is listed - the cap of three was five minutes of questions and the trader asked
-for all of them - and the card's Save stays grey until each listed field holds a
-value or one of the four explicit answer states.
+for all of them - and a trade's Save stays grey until each of ITS listed fields
+holds a value or one of the four explicit answer states.
+
+**Forced is PER TRADE, and an answered trade is stored at once** (trader
+2026-09-21: *"if i answer the questions about a trade please then dont ask for
+it again just store that info"*). The gate was one button over every field of
+every trade on the card, and the live journal held ONE `RECALLED` row: nothing
+the trader answered was reaching the store. Each trade now has its own Save;
+words typed beside a blank dropdown are `not supplied` - its own definition - and
+the trade's one raw note answers the fields still open on it, stored verbatim.
 
 **A machine guess is not an answer.** 33 live trades carry a `provisional` tag
 and exactly one carries a confirmed one. A provisional tag used to retire the
