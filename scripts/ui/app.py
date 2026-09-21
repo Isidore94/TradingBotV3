@@ -1273,8 +1273,9 @@ class MainWindow(QMainWindow):
             # decision 7's budget clause could never fire (review 1 advisory
             # 2). The window ends at the CARD's own session, never the reviewed
             # one, because a draft is offered on its own clock. Measured on
-            # this worker: TWO `opportunity_events` queries for the whole
-            # five-session window plus one small pack read per session.
+            # this worker over a 201-trade scratch journal: 4.5 ms for the
+            # whole five-session window - TWO `opportunity_events` queries for
+            # all of it plus one small pack read per session.
             "exit_drafts": self._mentor_exit_drafts(store, session),
             "answered": self._mentor_answered(store, (session, reviewed)),
             "retired": self.trade_mentor_service.retired_subjects(),
