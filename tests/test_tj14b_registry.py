@@ -51,22 +51,25 @@ def test_every_registered_kind_names_a_consumer_that_reads_its_answer():
 
     assert report, "the registry is empty"
     # AMENDED by the builder under the lead's decision of 2026-09-19 (TJ-14B
-    # decision 1): three kinds ship DORMANT because the reader that will consume
-    # them is another packet's (`trade_origin` / `open_position_check` -> TJ-12,
-    # `grader_gap` -> TJ-10). `pending()` never puts a dormant kind on a live
-    # card, so the rule this test pins - nothing ASKED that nothing reads - is
-    # unchanged; a dormant kind is excluded here instead of being given a shim
-    # reader nobody calls, which is the lie the walk exists to catch.
+    # decision 1): a kind ships DORMANT while the reader that will consume it is
+    # another packet's. `pending()` never puts a dormant kind on a live card, so
+    # the rule this test pins - nothing ASKED that nothing reads - is unchanged;
+    # a dormant kind is excluded here instead of being given a shim reader
+    # nobody calls, which is the lie the walk exists to catch.
+    #
+    # AMENDED AGAIN 2026-09-20 (lead, TJ-12): `trade_origin` and
+    # `open_position_check` are AWAKE - TJ-12 shipped their reader, so they are
+    # now inside `broken`'s reach and have to pass the probe for real.
     broken = {
         kind: row.get("reason") or row
         for kind, row in report.items()
         if not row.get("dormant") and not (row.get("imports") and row.get("reads"))
     }
     assert broken == {}, f"kinds whose consumer cannot use the answer: {broken}"
+    for woken in ("trade_origin", "open_position_check"):
+        assert report[woken]["imports"] and report[woken]["reads"], report[woken]["reason"]
     dormant = {kind for kind, row in report.items() if row.get("dormant")}
     assert dormant == {
-        "trade_origin",
-        "open_position_check",
         "grader_gap",
         # Review blocker 2: its named consumer reads `claimed_setup_id` off
         # `trader_annotations.jsonl` rows, and the answer is filed as an

@@ -374,6 +374,33 @@ def _skill(walkaway: Any, session: str, mint: _Minter) -> dict[str, Any]:
     return {**body, "source_id": mint.mint(f"skill:{session}")}
 
 
+def _report_card(card: Any, session: str, mint: _Minter) -> dict[str, Any]:
+    """TJ-12's six lines, each citable on its own.
+
+    The pack computes nothing here: the card arrives BUILT from
+    `day_report_card.build`, on the Day Review worker, and this only mints the
+    ids a narration may quote. A caller with no card leaves the hook exactly as
+    TJ-4 shipped it - an empty mapping, never an invented card.
+    """
+    lines = getattr(card, "lines", None)
+    if lines is None and isinstance(card, Mapping):
+        lines = card.get("lines")
+    if not lines:
+        return {}
+    items: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        if not isinstance(line, Mapping):
+            continue
+        key = _text(line.get("key")) or str(index)
+        items.append({**_plain(dict(line)), "source_id": mint.mint(f"report_card:{key}")})
+    if not items:
+        return {}
+    stamped = getattr(card, "session", "")
+    if not stamped and isinstance(card, Mapping):
+        stamped = card.get("session") or ""
+    return {"session": _text(stamped) or session, "lines": items}
+
+
 def _reads(reads: Iterable[Mapping[str, Any]], mint: _Minter) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for index, row in enumerate(reads or ()):
@@ -436,6 +463,7 @@ def build_pack(
     reads: Iterable[Mapping[str, Any]] = (),
     congruence: Iterable[Mapping[str, Any]] = (),
     trades: Iterable[Mapping[str, Any]] = (),
+    report_card: Any = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """One session's evidence, as the night's story is allowed to see it.
@@ -463,8 +491,9 @@ def build_pack(
         "reads": _reads(reads, mint),
         "congruence": _congruence(congruence, mint),
         "trades": _trades(trades, mint),
-        # TJ-12 and TJ-7's hooks. Present and falsy, never absent.
-        "report_card": {},
+        # TJ-12's six lines when the caller built them, and TJ-7's hook. Both
+        # present and falsy when nobody handed one in, never absent.
+        "report_card": _report_card(report_card, session, mint),
         "mood": {},
     }
     body["inputs_hash"] = hashlib.sha256(
@@ -500,6 +529,11 @@ def allowed_source_ids(pack: Mapping[str, Any]) -> tuple[str, ...]:
     skill = (pack or {}).get("skill")
     if isinstance(skill, Mapping):
         _add(skill.get("source_id"))
+    card = (pack or {}).get("report_card")
+    if isinstance(card, Mapping):
+        for line in card.get("lines") or ():
+            if isinstance(line, Mapping):
+                _add(line.get("source_id"))
     trades = (pack or {}).get("trades")
     if isinstance(trades, Mapping):
         for row in trades.get("rows") or ():

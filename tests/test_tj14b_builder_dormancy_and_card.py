@@ -81,10 +81,17 @@ def lifted(monkeypatch):
 
 
 def test_a_dormant_kind_never_reaches_a_live_card_however_loudly_it_triggers():
-    """Two unplanned trades and a month-old open position are exactly what
-    `trade_origin` and `open_position_check` fire on. Their readers are TJ-12's,
-    so the trader is not asked - a click whose answer nothing reads is their
-    time spent for nothing."""
+    """A grader gap and a traded quick like are exactly what `grader_gap` and
+    `quick_like_followup` fire on. Their readers are TJ-10's and TJ-14C's, so
+    the trader is not asked - a click whose answer nothing reads is their time
+    spent for nothing.
+
+    AMENDED 2026-09-20 (lead, TJ-12): the two trade kinds in this fixture are
+    AWAKE now - TJ-12 shipped `day_report_card.process_line` and
+    `long_hold_lines` - so the set this asserts about is the two that are still
+    asleep. The fixture is unchanged: it still fires all four, which is what
+    makes the assertion mean something.
+    """
     import mentor_questions
 
     payload = state(
@@ -111,8 +118,6 @@ def test_a_dormant_kind_never_reaches_a_live_card_however_loudly_it_triggers():
     owed = keys_of(result.asked) | keys_of(result.carried)
 
     assert {kind for kind, _ in owed} & {
-        "trade_origin",
-        "open_position_check",
         "grader_gap",
         "quick_like_followup",
     } == set()
@@ -127,9 +132,10 @@ def test_a_dormant_kind_is_still_fully_described_and_names_its_packet():
 
     report = {row["kind"]: row for row in mentor_questions.consumer_report()}
 
+    # AMENDED 2026-09-20 (lead, TJ-12): the two TJ-12 kinds are AWAKE and are
+    # asserted awake in `tests/test_tj12_mentor_wake.py`. The two still asleep
+    # are still fully described here, which is the rule this test pins.
     for name, packet in (
-        ("trade_origin", "TJ-12"),
-        ("open_position_check", "TJ-12"),
         ("grader_gap", "TJ-10"),
         # Review blocker 2: the key IS read, but off another store's rows.
         ("quick_like_followup", "TJ-14C"),

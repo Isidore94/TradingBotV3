@@ -18,15 +18,19 @@ store nobody opens is the trader's time spent for nothing, which is exactly what
 the trader's words rule out.
 
 **A question is ASKED only when its answer has a reader** (lead decision,
-2026-09-19; decision 0021 answer 28). Three kinds are fully described here -
-trigger, options, store, answer key and the consumer they WILL have - and carry
+2026-09-19; decision 0021 answer 28). A kind is fully described here - trigger,
+options, store, answer key and the consumer it WILL have - and carries
 ``dormant_until`` naming the packet that builds that reader:
 
 ============================  ==============  =========================================
 kind                          dormant until   why
 ============================  ==============  =========================================
-``trade_origin``              TJ-12           the planned-vs-unplanned Process line
-``open_position_check``       TJ-12           the long-hold rows
+``trade_origin``              **AWAKE**       TJ-12 shipped the Process line
+                                              (``day_report_card.process_line``),
+                                              2026-09-20
+``open_position_check``       **AWAKE**       TJ-12 shipped the long-hold rows
+                                              (``day_report_card.long_hold_lines``),
+                                              2026-09-20
 ``grader_gap``                TJ-10           no deterministic reader emits a gap yet
 ``quick_like_followup``       TJ-14C          its answer is an ``opportunity_events``
                                               row and ``like_cohort.like_pick_rows``
@@ -115,9 +119,27 @@ LONG_HOLD_SESSIONS = 5
 #: How many questions a card may ask beyond the forced rows.
 BUDGET = 3
 
-#: The four origins the trader is offered. A closed set: a free-text origin
-#: cannot be counted.
-ORIGIN_OPTIONS = ("planned_off_the_desk", "an_alert", "impulse", "other")
+#: The origins the trader is offered. A closed set: a free-text origin cannot
+#: be counted. ``a_focus_pick`` was added by TJ-12 review 1 because the desk
+#: cannot yet READ the Focus lane (`day_report_card.DESK_ORIGIN_LANES_READ`,
+#: filled by TJ-12F), so a pick the trader took off their own Focus list is a
+#: real answer the desk would otherwise have no way of hearing.
+ORIGIN_OPTIONS = (
+    "planned_off_the_desk",
+    "a_focus_pick",
+    "an_alert",
+    "impulse",
+    "other",
+)
+
+#: What the question SAYS about its own blindness. A question that asked "where
+#: did this come from?" without saying the desk cannot see two of the four
+#: places it could have come from would be blaming the trader for the desk's
+#: unread stores (reviewer, 2026-09-20).
+ORIGIN_PROMPT_CAVEAT = (
+    "The desk saw no claim or like before this trade - it cannot read Focus "
+    "adds or armed alerts yet."
+)
 
 #: The three answers to "is the thesis still intact?".
 OPEN_POSITION_OPTIONS = ("thesis_intact", "weakening", "exit_planned")
@@ -415,7 +437,10 @@ def _trigger_trade_origin(state: Mapping[str, Any]) -> list[Subject]:
                 kind="trade_origin",
                 subject_id=trade_id,
                 options=_with_answer_states(*ORIGIN_OPTIONS),
-                prompt=f"Where did {_text(row.get('symbol')) or trade_id} come from?",
+                prompt=(
+                    f"{ORIGIN_PROMPT_CAVEAT} Where did "
+                    f"{_text(row.get('symbol')) or trade_id} come from?"
+                ),
                 detail={"trade_id": trade_id, "symbol": _text(row.get("symbol"))},
             )
         )
@@ -623,12 +648,17 @@ REGISTRY: tuple[QuestionKind, ...] = (
         trigger=_trigger_trade_origin,
         options=_with_answer_states(*ORIGIN_OPTIONS),
         writes=WRITES_OPPORTUNITY_EVENTS,
-        consumer="report_card.process_line",
+        consumer="day_report_card.process_line",
         answer_key="trade_origin",
         cadence=CADENCE_ONCE,
         expiry="never - a trade's origin does not change",
         priority=20,
-        dormant_until="TJ-12",
+        # AWAKE since TJ-12 (lead, 2026-09-20): the Process line on the Day
+        # Review report card reads this answer. The module is
+        # `scripts/day_report_card.py`, which is the name the packet gave the
+        # file; the registry has to name the module that actually imports, or
+        # the consumer walk reports "the module does not import" forever.
+        dormant_until="",
     ),
     QuestionKind(
         kind="quick_like_followup",
@@ -668,12 +698,15 @@ REGISTRY: tuple[QuestionKind, ...] = (
         trigger=_trigger_open_position_check,
         options=_with_answer_states(*OPEN_POSITION_OPTIONS),
         writes=WRITES_OPPORTUNITY_EVENTS,
-        consumer="report_card.long_hold_lines",
+        consumer="day_report_card.long_hold_lines",
         answer_key="open_position_state",
         cadence=CADENCE_WEEKLY,
         expiry="one exchange week",
         priority=50,
-        dormant_until="TJ-12",
+        # AWAKE since TJ-12 (lead, 2026-09-20): `day_report_card.long_hold_lines`
+        # reads this answer and reports an unanswered position as UNANSWERED -
+        # never as "the thesis is intact", which is a claim nobody made.
+        dormant_until="",
     ),
     QuestionKind(
         kind="ai_question",

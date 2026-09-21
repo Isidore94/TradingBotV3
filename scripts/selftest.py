@@ -64,6 +64,11 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "ui.services.bar_cache",
     # TJ-2B's Day Review worker imports this only after the page opens.
     "walkaway_day",
+    # TJ-12: the report card that HEADS Day Review. Both the worker and the
+    # page import it lazily, and both guards around it swallow an ImportError -
+    # so a frozen bundle missing it would show the trader a card of
+    # placeholders rather than failing at launch.
+    "day_report_card",
     # TJ-14B: the Mentor's question registry. Imported lazily inside the Qt
     # slot, so a frozen bundle missing it would lose every question on the
     # first card of the day rather than at launch - and the guard around it
