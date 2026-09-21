@@ -1,0 +1,47 @@
+{
+  "vocabulary_id": "state_tags",
+  "vocab_version": 1,
+  "description": "How the trader was, in their own word, for one session (TJ-7). A closed picklist of at most two chips beside a 1-5 face, clicked by the trader and by nobody else. These codes are REPORTED: no detector, score, alert, watchlist, Focus list, review queue or review policy file reads one, and no outcome ever selects, ranks or pre-fills one. Codes are permanent identifiers: a code is never renamed and never reused for a different meaning, because rows already written carry it, and a later list ships as state_tags_v2.json beside this file.",
+  "tags": [
+    {
+      "code": "calm",
+      "label": "Calm",
+      "hint": "Settled. The tape moved and it did not move you."
+    },
+    {
+      "code": "focused",
+      "label": "Focused",
+      "hint": "On the plan, on the names you meant to watch, for the whole session."
+    },
+    {
+      "code": "rushed",
+      "label": "Rushed",
+      "hint": "Hurrying the clicks - late to the desk, behind the tape, or crowded by something off the screen."
+    },
+    {
+      "code": "fomo",
+      "label": "FOMO",
+      "hint": "Afraid of missing it. Chasing something already gone, or reaching for a name because it was moving."
+    },
+    {
+      "code": "tilted",
+      "label": "Tilted",
+      "hint": "Angry or rattled after a loss, a miss or a mistake, and still trading."
+    },
+    {
+      "code": "bored",
+      "label": "Bored",
+      "hint": "Nothing to do and taking something anyway."
+    },
+    {
+      "code": "tired",
+      "label": "Tired",
+      "hint": "Short on sleep or worn down by the day; reading slower than usual."
+    },
+    {
+      "code": "confident",
+      "label": "Confident",
+      "hint": "Sure of the read and sizing or holding like it."
+    }
+  ]
+}

@@ -239,6 +239,208 @@ def prediction_of(entry: Mapping[str, Any]) -> Prediction | None:
     )
 
 
+# ---------------------------------------------------------------------------
+# A mood is a field the desk REPORTS - TJ-7 change 1
+# ---------------------------------------------------------------------------
+#: The stored block's own name. A schema id is a permanent identifier.
+MOOD_SCHEMA = "trader_mood_v1"
+#: Five faces. Not a scale anyone averages here - TJ-7 ships the bones only and
+#: mood-vs-outcome statistics are a later, trader-directed phase.
+MOOD_SCALE = (1, 2, 3, 4, 5)
+#: `Followed the plan:` - the three answers, plus the fourth state "nothing
+#: clicked", which stores ``""`` and is never a default "yes" or "no".
+FOLLOWED_PLAN_VALUES = ("yes", "partly", "no")
+#: The number `plan.md` TJ-7 change 1 names. 200 stores; 201 is refused.
+PROCESS_NOTE_MAX = 200
+
+
+class MoodFieldError(ValueError):
+    """A mood nobody could have clicked. Never stored, never truncated.
+
+    The writer is LOUD for the same reason :class:`PredictionTimeframeError` is:
+    this ledger is append-only, so a row written wrong is wrong forever. A UI
+    caps its own input; a caller that gets past the cap gets an exception rather
+    than a quietly shortened note.
+    """
+
+
+@dataclass(frozen=True)
+class Mood:
+    """One recorded mood, exactly as it was clicked. The ONE read shape.
+
+    `recorded_after_the_session` is READ off the row's own
+    `written_after_the_session`, which :func:`build_entry` COMPUTES and never
+    backdates - it is a LABEL on a mood typed in the evening, never a reason to
+    drop one.
+    """
+
+    score: int | None
+    state_tags: tuple[str, ...]
+    followed_plan: str
+    note: str
+    vocab_version: int | None
+    recorded_after_the_session: bool
+    at: datetime | None
+    entry_id: str
+    schema: str = MOOD_SCHEMA
+
+
+def _state_tag_owner():
+    """The vocabulary module, read AT CALL TIME. One owner of the cap."""
+    import trader_state_tags
+
+    return trader_state_tags
+
+
+def _check_mood_block(block: Any) -> str:
+    """``""`` when this stored block is clickable, else the sentence that says why.
+
+    Asked by :func:`build_mood` before anything is stored and again by
+    :func:`is_publishable`, because a row assembled as a dict literal never
+    calls the writer.
+    """
+    if block is None or not isinstance(block, Mapping) or not block:
+        return ""
+    owner = _state_tag_owner()
+    score = block.get("score")
+    if score is not None:
+        if isinstance(score, bool) or not isinstance(score, int) or score not in MOOD_SCALE:
+            return (
+                f"a mood of {score!r} is not one of {list(MOOD_SCALE)}; nobody "
+                "could have clicked it"
+            )
+    raw_tags = block.get("state_tags") or ()
+    if isinstance(raw_tags, (str, bytes)):
+        return "a mood's state_tags is a list of codes, never one string"
+    tags = [str(code) for code in raw_tags]
+    cap = int(owner.MAX_STATE_TAGS)
+    if len(tags) > cap:
+        return f"a mood carries at most {cap} state_tags, not {len(tags)}"
+    known = set(owner.codes())
+    unknown = [code for code in tags if code not in known]
+    if unknown:
+        return f"a mood carries no state_tags outside its vocabulary: {unknown}"
+    process = block.get("process")
+    if process is not None and not isinstance(process, Mapping):
+        return "a mood's process is a block with followed_plan and note"
+    answer = str((process or {}).get("followed_plan") or "")
+    if answer and answer not in FOLLOWED_PLAN_VALUES:
+        return (
+            f"a mood's followed_plan is one of {list(FOLLOWED_PLAN_VALUES)} or "
+            f"nothing at all, never {answer!r}"
+        )
+    note = str((process or {}).get("note") or "")
+    if len(note) > PROCESS_NOTE_MAX:
+        return (
+            f"a mood's process note is at most {PROCESS_NOTE_MAX} characters; "
+            f"this one is {len(note)} and is refused rather than shortened"
+        )
+    return ""
+
+
+def build_mood(
+    *,
+    score: Any = None,
+    state_tags: Iterable[str] = (),
+    followed_plan: Any = "",
+    note: Any = "",
+) -> dict[str, Any]:
+    """The stored `mood` block for one row, validated. Raises, never truncates.
+
+    Every part is optional in both directions: a trader who clicks a face and
+    nothing else, and one who answers `Followed the plan?` and clicks no face,
+    have each given a complete answer. What is missing stores as `None` or
+    `""` - never as a neutral 3 and never as a "no".
+    """
+    tags = tuple(str(code).strip() for code in (state_tags or ()) if str(code).strip())
+    plan_answer = str(followed_plan or "").strip().lower()
+    body = str(note or "")
+    block: dict[str, Any] = {
+        "schema": MOOD_SCHEMA,
+        "score": score,
+        "state_tags": list(tags),
+        "process": {"followed_plan": plan_answer, "note": body},
+    }
+    problem = _check_mood_block(block)
+    if problem:
+        raise MoodFieldError(problem)
+    # Stamped from the vocabulary itself, at write time, so a row stays
+    # interpretable against exactly the list that produced it.
+    block["vocab_version"] = int(_state_tag_owner().load_vocabulary()["vocab_version"])
+    return block
+
+
+def mood_of(entry: Mapping[str, Any]) -> Mood | None:
+    """The mood on one entry, or ``None``. The ONE reader.
+
+    Three absences mean the same thing and all three answer ``None``: the key
+    ABSENT (every row written before TJ-7 - 43 of the 84 live rows on
+    2026-09-20), the key PRESENT and EMPTY (a row written after TJ-7 with
+    nothing clicked, the same shape as `"mentor": {}`), and the key set to
+    `None`. A reader that turned any of them into a neutral 3 would invent a
+    feeling nobody had.
+    """
+    if not isinstance(entry, Mapping):
+        return None
+    block = entry.get("mood")
+    if not isinstance(block, Mapping) or not block:
+        return None
+    process = block.get("process") if isinstance(block.get("process"), Mapping) else {}
+    score = block.get("score")
+    if isinstance(score, bool) or not isinstance(score, int) or score not in MOOD_SCALE:
+        score = None
+    version = block.get("vocab_version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        version = None
+    return Mood(
+        score=score,
+        state_tags=tuple(str(code) for code in (block.get("state_tags") or ())),
+        followed_plan=str((process or {}).get("followed_plan") or ""),
+        note=str((process or {}).get("note") or ""),
+        vocab_version=version,
+        recorded_after_the_session=bool(entry.get("written_after_the_session")),
+        at=_entry_moment(entry),
+        entry_id=str(entry.get("entry_id") or ""),
+        schema=str(block.get("schema") or MOOD_SCHEMA),
+    )
+
+
+def _entry_moment(entry: Mapping[str, Any]) -> datetime | None:
+    """One row's `created_at` as an AWARE moment, or ``None``."""
+    raw = str(entry.get("created_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        moment = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.astimezone()
+
+
+def mood_at(entries: Iterable[Mapping[str, Any]], stamp: datetime) -> Mood | None:
+    """The mood already recorded AT `stamp`, or ``None``. Point-in-time.
+
+    The mood the trader clicks is usually on the session's last card - after
+    the trade, and often after the close. A read made at 07:02 was made by
+    someone who had not felt it yet, so a later mood is not context for it: it
+    would be hindsight dressed as a measurement. Compared with `astimezone`,
+    never by stripping a zone off either side.
+    """
+    if stamp is None:
+        return None
+    edge = stamp if stamp.tzinfo else stamp.astimezone()
+    best: Mood | None = None
+    for entry in entries or ():
+        mood = mood_of(entry)
+        if mood is None or mood.at is None:
+            continue
+        if mood.at.astimezone(timezone.utc) > edge.astimezone(timezone.utc):
+            continue
+        if best is None or mood.at.astimezone(timezone.utc) >= best.at.astimezone(timezone.utc):
+            best = mood
+    return best
+
+
 def _now(value: datetime | None = None) -> datetime:
     moment = value or datetime.now(timezone.utc)
     if moment.tzinfo is None:
@@ -273,6 +475,9 @@ def build_entry(
     supersedes: str = "",
     mentor: Mapping[str, Any] | None = None,
     reaffirms: str = "",
+    mood: Any = None,
+    state_tags: Iterable[str] = (),
+    process: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One journal entry.
 
@@ -291,6 +496,12 @@ def build_entry(
     "Read unchanged" restates. It is deliberately NOT `supersedes`: superseding
     would hide the read it reaffirms, and "I still think what I thought at 09:00"
     is a new observation at 11:00, not a correction of the old one.
+
+    `mood`, `state_tags` and `process` are TJ-7's three optional arguments and
+    they store as ONE additive key, `mood` - present and empty when nothing was
+    clicked, ABSENT on every row written before this packet. They move no other
+    field on the row and they do not enter `entry_id`: a mood is a field ON an
+    entry, never part of what names it.
     """
     moment = _now(now)
     created_at = moment.astimezone(timezone.utc).isoformat(timespec="seconds")
@@ -313,6 +524,24 @@ def build_entry(
         else f"{timeframe_text}|{(clicked or {}).get('horizon') or ''}"
         if isinstance(clicked, Mapping)
         else ""
+    )
+    # Nothing clicked is `{}`, not a default mood. `mood is None` rather than
+    # `not mood`, because a mood of 0 is a REFUSAL and must reach the writer.
+    clicked_a_mood = mood is not None or bool(state_tags) or process is not None
+    if process is not None and not isinstance(process, Mapping):
+        raise MoodFieldError(
+            "a mood's process is a block with followed_plan and note, not "
+            f"{type(process).__name__}"
+        )
+    mood_block = (
+        build_mood(
+            score=mood,
+            state_tags=state_tags,
+            followed_plan=(process or {}).get("followed_plan"),
+            note=(process or {}).get("note"),
+        )
+        if clicked_a_mood
+        else {}
     )
     return {
         "event_type": "entry",
@@ -341,6 +570,10 @@ def build_entry(
         # yet" is reading two different absences as one.
         "mentor": dict(mentor or {}),
         "reaffirms": str(reaffirms or ""),
+        # TJ-7. Present and empty for the same reason `mentor` is: a reader
+        # that has to tell "nothing was clicked" from "this key did not exist
+        # yet" is reading two different absences as one.
+        "mood": mood_block,
     }
 
 
@@ -465,6 +698,13 @@ def is_publishable(entry: Mapping[str, Any]) -> tuple[bool, str]:
         # write passes through - a row assembled as a dict literal reaches here
         # without ever calling `build_entry`.
         return False, mismatch
+    # TJ-7, asked at the same gate and for the same reason: a row assembled as
+    # a dict literal reaches here without ever calling `build_entry`, and an
+    # append-only ledger has no second chance at a mood nobody could have
+    # clicked.
+    bad_mood = _check_mood_block(entry.get("mood"))
+    if bad_mood:
+        return False, bad_mood
     if not str(entry.get("text") or "").strip() and prediction_of(entry) is None:
         return False, "an empty entry is not a thought; nothing is stored"
     if not str(entry.get("session_date") or "").strip():

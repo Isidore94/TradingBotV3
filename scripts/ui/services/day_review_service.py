@@ -82,6 +82,11 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # kilobytes - the card never opens a store of its own, and a suggestion is
     # all any of these rows will ever be.
     "ideas",
+    # TJ-7: what the trader said about THEMSELVES this session, built on this
+    # worker from the entries the payload already holds and formatted into one
+    # line here. The page prints it and reads nothing of its own - no builder,
+    # no model, no second pass over the journal on the Qt thread.
+    "mood",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -181,6 +186,9 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "d1_view": None,
         "report_card": {},
         "ideas": [],
+        # TJ-7. Empty until the trader clicks something; the `line` is what the
+        # page prints, and it says "no mood recorded yet" rather than nothing.
+        "mood": {},
     }
 
 
@@ -243,6 +251,21 @@ class DayReviewService:
             _log.debug("Day Review entries unreadable.", exc_info=True)
         payload["entries"] = entries
         payload["forecast"] = self._forecast(entries)
+        # TJ-7, on this worker and from the entries already in hand: the
+        # session's moods and the ONE line the page prints. A mood is REPORTED -
+        # nothing here ranks, scores or acts on one - and a section that cannot
+        # be built costs the line, never the day.
+        try:
+            import day_review_pack
+
+            section = day_review_pack.mood_section(entries)
+            payload["mood"] = {
+                **section,
+                "line": day_review_pack.mood_statement({"mood": section}),
+            }
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"the session's mood could not be read: {exc}")
+            _log.debug("Day Review mood unreadable.", exc_info=True)
 
         try:
             payload["story"] = self.journal.daily_story(session)
@@ -1100,6 +1123,11 @@ class DayReviewService:
                     d1_labels=labels,
                     prior_grades=prior_grades,
                     latest_d1_click=latest_d1 if latest_d1 is not row else None,
+                    # TJ-7: the session's own entries, so the snapshot can carry
+                    # the mood the read was made KNOWING. `context_for` takes
+                    # only the one recorded AT OR BEFORE the stamp - the mood
+                    # clicked at the close is not context for an 07:02 read.
+                    mood_entries=entries or (),
                 )
             except Exception as exc:  # noqa: BLE001
                 # A CLICK whose snapshot cannot be built is NOT stored this pass

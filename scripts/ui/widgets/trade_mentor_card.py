@@ -32,7 +32,7 @@ view has not changed for two hours" becomes indistinguishable from "I only ever
 said it once".
 
 Nothing here reaches a detector, a score, a gate, an alert, a watchlist, Focus,
-the review queue or `review_policy.json`, and nothing here pushes to a phone.
+the review queue or the review policy file, and nothing here pushes to a phone.
 """
 
 from __future__ import annotations
@@ -78,6 +78,12 @@ from trade_mentor_schedule import (
 #: every absence reason the service records: "I looked and had nothing to say"
 #: is a different fact from "nobody was there".
 SKIP_TRADER = "trader_skip"
+
+#: TJ-7's optional strip hangs off exactly ONE question kind, and the name is
+#: the registry's own (`mentor_questions.KIND_DAY_CLOSE`). It is spelled here
+#: rather than imported at module scope because `mentor_questions` is imported
+#: lazily on this card's seams; the two being the same string is asserted.
+DAY_CLOSE_KIND = "day_close"
 
 _QUESTIONS = {
     "m5": "What do you see on the 5-minute tape right now?",
@@ -318,6 +324,11 @@ class TradeMentorCard(QWidget):
         self.questions_box.setVisible(False)
         #: (kind, subject_id) -> (Subject, the combo holding its answer)
         self._question_inputs: dict[tuple[str, str], tuple[Any, QComboBox]] = {}
+        # The row widget behind each question, so `set_questions` can MERGE:
+        # a subject already on the card keeps its widgets and their values.
+        self._question_rows: dict[tuple[str, str], QWidget] = {}
+        # TJ-7's strip, when this card is asking `day_close`. `None` otherwise.
+        self._mood_strip: Any = None
         self._question_store = None
         self._question_service = None
         self.save_questions_button = QPushButton("Save these answers")
@@ -849,6 +860,8 @@ class TradeMentorCard(QWidget):
     # -- TJ-14B: the few questions the desk is missing an answer to ---------
     def _clear_questions(self) -> None:
         self._question_inputs = {}
+        self._question_rows = {}
+        self._mood_strip = None
         self.questions_label.setVisible(False)
         self.questions_box.setVisible(False)
         self.save_questions_button.setVisible(False)
@@ -858,6 +871,57 @@ class TradeMentorCard(QWidget):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
+
+    def _drop_question_row(self, key) -> None:
+        """Take ONE question off the card and forget its widgets."""
+        row = self._question_rows.pop(key, None)
+        self._question_inputs.pop(key, None)
+        if row is None:
+            return
+        if self._mood_strip is not None and self._mood_strip.parent() is row:
+            self._mood_strip = None
+        self._questions_layout.removeWidget(row)
+        row.setParent(None)
+        row.deleteLater()
+
+    def _build_question_row(self, subject) -> tuple[QWidget, QComboBox]:
+        """One question's widgets: the prompt, the combo, and TJ-7's strip."""
+        import mentor_questions
+
+        row = QWidget(self.questions_box)
+        stack = QVBoxLayout(row)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(2)
+
+        line = QWidget(row)
+        row_layout = QHBoxLayout(line)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+        prompt = QLabel(str(getattr(subject, "prompt", "") or subject.kind), line)
+        prompt.setWordWrap(True)
+        combo = QComboBox(line)
+        # "-" first, so a question the trader did not touch stays unasked
+        # rather than being filed as whatever happened to be at index 0.
+        combo.addItem("-", "")
+        for option in tuple(getattr(subject, "options", ()) or ()):
+            combo.addItem(str(option).replace("_", " "), str(option))
+        if combo.findData(mentor_questions.STOP_ASKING) < 0:
+            combo.addItem("stop asking this", mentor_questions.STOP_ASKING)
+        row_layout.addWidget(prompt, 1)
+        row_layout.addWidget(combo)
+        stack.addWidget(line)
+
+        if str(subject.kind) == DAY_CLOSE_KIND:
+            # TJ-7 change 2 as AMENDED: on the Mentor the strip is NOT its own
+            # widget - it is this question's hook, asked once on the session's
+            # last card beside `Followed the plan`. It is OPTIONAL: it never
+            # touches `save_answers_button`'s gate, which counts TJ-9's material
+            # fields and nothing else.
+            from ui.widgets.mood_strip import MoodStrip
+
+            self._mood_strip = MoodStrip(row)
+            stack.addWidget(self._mood_strip)
+        return row, combo
 
     def set_questions(self, result, *, store=None, service=None) -> None:
         """Draw this card's questions - at most three, plus what is waiting.
@@ -869,13 +933,19 @@ class TradeMentorCard(QWidget):
         Every question carries `Stop asking this`, which retires that ONE
         subject through `TradeMentorService.stop_asking` - the single writer -
         and writes no answer at all.
+
+        It MERGES rather than rebuilds (TJ-14B's card rule, and TJ-7 is why it
+        bites here): a subject already on the card keeps its SAME widgets and
+        everything clicked into them. A rebuild would silently drop a face the
+        trader had chosen and a combo they had set, and the trader would have
+        no way to know it had happened.
         """
-        self._clear_questions()
         self._question_store = store
         self._question_service = service
         asked = tuple(getattr(result, "asked", ()) or ()) if result is not None else ()
         note = str(getattr(result, "waiting_note", "") or "") if result is not None else ""
         if not asked:
+            self._clear_questions()
             if note:
                 self.questions_label.setText(note)
                 self.questions_label.setVisible(True)
@@ -886,30 +956,22 @@ class TradeMentorCard(QWidget):
         )
         self.questions_label.setVisible(True)
 
-        import mentor_questions
+        wanted = {(str(subject.kind), str(subject.subject_id)): subject for subject in asked}
+        for key in [key for key in self._question_inputs if key not in wanted]:
+            self._drop_question_row(key)
 
-        for subject in asked:
-            row = QWidget(self.questions_box)
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(4)
-            prompt = QLabel(str(getattr(subject, "prompt", "") or subject.kind), row)
-            prompt.setWordWrap(True)
-            combo = QComboBox(row)
-            # "-" first, so a question the trader did not touch stays unasked
-            # rather than being filed as whatever happened to be at index 0.
-            combo.addItem("-", "")
-            for option in tuple(getattr(subject, "options", ()) or ()):
-                combo.addItem(str(option).replace("_", " "), str(option))
-            if combo.findData(mentor_questions.STOP_ASKING) < 0:
-                combo.addItem("stop asking this", mentor_questions.STOP_ASKING)
-            row_layout.addWidget(prompt, 1)
-            row_layout.addWidget(combo)
-            self._questions_layout.addWidget(row)
-            self._question_inputs[(str(subject.kind), str(subject.subject_id))] = (
-                subject,
-                combo,
-            )
+        for index, subject in enumerate(asked):
+            key = (str(subject.kind), str(subject.subject_id))
+            existing = self._question_inputs.get(key)
+            if existing is None:
+                row, combo = self._build_question_row(subject)
+                self._question_rows[key] = row
+            else:
+                row, combo = self._question_rows[key], existing[1]
+            # A subject can change its prompt or its detail between cards; the
+            # WIDGETS and what is in them do not.
+            self._question_inputs[key] = (subject, combo)
+            self._questions_layout.insertWidget(index, row)
             if str(subject.kind) == "ai_question":
                 # The overnight question is now a CLICK with an answer and a
                 # once-a-day rule. Before TJ-14B the same sentence was printed
@@ -924,12 +986,32 @@ class TradeMentorCard(QWidget):
         entry = self._question_inputs.get((str(kind), str(subject_id)))
         return entry[1] if entry else None
 
+    # -- TJ-7: the optional mood strip on the day_close question ------------
+    def mood_button(self, score):
+        """The face for `score` on this card's strip, or ``None``."""
+        strip = self._mood_strip
+        return strip.mood_button(score) if strip is not None else None
+
+    def state_tag_button(self, code: str):
+        """The chip for `code` on this card's strip, or ``None``."""
+        strip = self._mood_strip
+        return strip.state_tag_button(code) if strip is not None else None
+
+    def mood_answer(self) -> dict[str, Any]:
+        """What the trader clicked on the strip. Nothing is ever pre-filled."""
+        strip = self._mood_strip
+        return strip.answer() if strip is not None else {"mood": None, "state_tags": ()}
+
     def save_questions(self) -> dict[str, Any]:
         """File every question the trader answered, and nothing else.
 
         A retirement is not an answer and stores none: `Stop asking this` goes
         to the service, which is the single writer of what the trader silenced.
         A writer that refuses costs its own row and never the others.
+
+        TJ-7: a mood clicked on the `day_close` strip with the plan question
+        left alone is STILL FILED. A click the trader made is never thrown away
+        because a different question on the same row went untouched.
         """
         import mentor_questions
 
@@ -937,9 +1019,12 @@ class TradeMentorCard(QWidget):
         saved = 0
         retired = 0
         failures: list[str] = []
+        mood = self.mood_answer()
+        touched_the_strip = mood["mood"] is not None or bool(mood["state_tags"])
         for (kind, subject_id), (subject, combo) in list(self._question_inputs.items()):
             chosen = str(combo.currentData() or "")
-            if not chosen:
+            carries_a_mood = kind == DAY_CLOSE_KIND and self._mood_strip is not None
+            if not chosen and not (carries_a_mood and touched_the_strip):
                 continue
             if chosen == mentor_questions.STOP_ASKING:
                 service = self._question_service
@@ -952,10 +1037,14 @@ class TradeMentorCard(QWidget):
                 except Exception as exc:  # noqa: BLE001
                     failures.append(f"{kind}: {exc}")
                 continue
+            answer: dict[str, Any] = {"state": chosen}
+            if carries_a_mood:
+                answer["mood"] = mood["mood"]
+                answer["state_tags"] = tuple(mood["state_tags"])
             try:
                 outcome = mentor_questions.record_answer(
                     subject,
-                    {"state": chosen},
+                    answer,
                     store=self._question_store,
                     now=moment,
                 )

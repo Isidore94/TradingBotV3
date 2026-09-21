@@ -15,7 +15,7 @@ every rule that packet learned the hard way is repeated here:
 THE HARD INVARIANT
 ------------------
 **An idea is a SUGGESTION.** Nothing written here is read by a detector, a
-score, an alert, a watchlist, Focus, the review queue or `review_policy.json`;
+score, an alert, a watchlist, Focus, the review queue or the review policy file;
 no job writes `WISHLIST.md` or `plan.md`; and a KEEP is the TRADER's click -
 :func:`keep_idea` and :func:`dismiss_idea` are the card's writers and no nightly
 job may call them (`tests/test_tj6_keep_is_the_traders_act.py` proves it over the
@@ -246,7 +246,17 @@ EVIDENCE_KEYS: tuple[str, ...] = (
     "measurable_readings",
     "program_card",
     "program_card_version",
+    # TJ-7's ONE addition, and the entry `plan.md` TJ-6 amendment (h) says this
+    # packet owes TJ-6: what the trader said about THEMSELVES over the window,
+    # under its own name. It is context an idea may cite, never a measurable -
+    # `MEASURABLES` is closed and gains nothing here - and no idea may pair a
+    # mood with a result, because no result is in this package at all.
+    "mood",
 )
+
+#: How many mood rows one session contributes. A mood is one or two clicks a
+#: day; what does not fit is COUNTED and said, never silently dropped.
+MAX_MOODS_PER_DAY = 4
 
 INSTRUCTIONS = (
     "Suggest at most three improvements from the evidence below and nothing "
@@ -686,6 +696,50 @@ def _day_block(session: str, pack: Mapping[str, Any] | None, story: Mapping[str,
     return block, ids
 
 
+def _moods(packs: Mapping[str, Mapping[str, Any]], sessions: Sequence[str]):
+    """TJ-7's `mood` section for the window. Returns ``(section, ids)``.
+
+    Every row came out of a PACK this night already opened, with its id
+    session-qualified so a cited mood names ONE row of ONE day. A session with
+    no pack, or a pack with no mood, contributes nothing - and neither is a
+    zero. Nothing here computes a statistic or pairs a mood with an outcome.
+    """
+    rows: list[dict[str, Any]] = []
+    ids: list[str] = []
+    omitted = 0
+    for session in sessions:
+        section = (packs.get(session) or {}).get("mood")
+        recorded = list((section or {}).get("recorded") or ()) if isinstance(section, Mapping) else []
+        omitted += max(0, len(recorded) - MAX_MOODS_PER_DAY)
+        for item in recorded[:MAX_MOODS_PER_DAY]:
+            if not isinstance(item, Mapping):
+                continue
+            cited = source_id(session, item.get("source_id"))
+            rows.append(
+                {
+                    "session": session,
+                    "at": _text(item.get("at")),
+                    "score": item.get("score"),
+                    "state_tags": list(item.get("state_tags") or ()),
+                    "followed_plan": _text(item.get("followed_plan")),
+                    "note": _text(item.get("note")),
+                    "written_after_the_session": bool(item.get("written_after_the_session")),
+                    "source_id": cited,
+                }
+            )
+            if cited not in ids:
+                ids.append(cited)
+    return (
+        {
+            "n": len(rows),
+            "sessions_with_a_mood": sorted({row["session"] for row in rows}),
+            "recorded": rows,
+            "omitted": omitted,
+        },
+        ids,
+    )
+
+
 def _day_story(session: str, root: Path) -> Mapping[str, Any]:
     from ai_jobs import day_review_narration
 
@@ -793,6 +847,11 @@ def build_ideas_inputs(
     if misses.get("source_id") and misses["source_id"] not in allowed:
         allowed.append(misses["source_id"])
 
+    mood, mood_ids = _moods(packs, sessions)
+    for item in mood_ids:
+        if item not in allowed:
+            allowed.append(item)
+
     readings = []
     for item in MEASURABLES:
         reading = measure(item.name, end_session=session)
@@ -820,6 +879,7 @@ def build_ideas_inputs(
         "measurable_readings": readings,
         "program_card": list(IDEAS_PROGRAM_CARD),
         "program_card_version": PROGRAM_CARD_VERSION,
+        "mood": mood,
     }
     body["inputs_hash"] = hashlib.sha256(
         json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
