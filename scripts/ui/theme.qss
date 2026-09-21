@@ -85,6 +85,23 @@ QPushButton#MentorConfidenceButton:checked {
     font-weight: 650;
 }
 
+/* TJ-7: the mood strip. Nothing is pre-selected, so the UNCHECKED state has to
+   read as "not answered" rather than as a quiet default - it stays secondary,
+   and only the trader's own click takes the accent. Keyed on the object name
+   here, never a per-widget stylesheet: both hosts draw the same strip. */
+QPushButton#MoodFaceButton,
+QPushButton#StateTagChipButton {
+    color: @text_secondary@;
+    padding: 2px 6px;
+}
+
+QPushButton#MoodFaceButton:checked,
+QPushButton#StateTagChipButton:checked {
+    background: @accent@;
+    color: @bg_app@;
+    font-weight: 650;
+}
+
 /* TJ-10: the Day Review read grader. A verdict is a MEASURED row, so the chip
    reads as a fact rather than as praise - `right` takes the long green, `wrong`
    the short red, `flat` and `pending` stay secondary, and an `unmeasured` one

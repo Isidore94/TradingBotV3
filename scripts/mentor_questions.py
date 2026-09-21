@@ -145,6 +145,7 @@ ORIGIN_PROMPT_CAVEAT = (
 OPEN_POSITION_OPTIONS = ("thesis_intact", "weakening", "exit_planned")
 
 #: `Followed the plan:` - the session's last card only.
+KIND_DAY_CLOSE = "day_close"
 DAY_CLOSE_OPTIONS = ("yes", "partly", "no")
 
 
@@ -1008,7 +1009,14 @@ def record_answer(
     payload.update({key: value for key, value in detail.items() if key not in payload})
 
     if kind.writes == WRITES_MARKET_JOURNAL:
-        return _record_in_journal(kind, subject, payload, journal=journal, now=moment)
+        return _record_in_journal(
+            kind,
+            subject,
+            payload,
+            journal=journal,
+            now=moment,
+            mood=_mood_fields(kind, answer, state),
+        )
     if kind.writes == WRITES_TRADE_CHECK:
         # TJ-9 owns the material-field rows, their four states and their
         # provenance. This never re-implements that writer.
@@ -1044,6 +1052,37 @@ def record_answer(
     return {"ok": True, "row": row, "answer_key": kind.answer_key}
 
 
+def _mood_fields(kind: QuestionKind, answer: Mapping[str, Any], state: str) -> dict[str, Any]:
+    """TJ-7's three journal arguments, from what the trader clicked. Or ``{}``.
+
+    The mood RIDES the `day_close` kind - it is not a registry kind of its own,
+    because a second kind would need a second consumer and a second budget slot
+    for one strip. So only that kind ever carries one, and only when something
+    was actually clicked: an untouched strip files the answer the trader DID
+    give and adds no mood block at all.
+
+    `Followed the plan?` is the process half, and it is taken only when the
+    click is one of the three plan answers: the same combo also offers TJ-9's
+    four answer states and `Stop asking this`, and "not remembered" is not
+    "I did not follow the plan".
+    """
+    import market_journal
+
+    if kind.kind != KIND_DAY_CLOSE:
+        return {}
+    score = (answer or {}).get("mood")
+    tags = tuple(str(code) for code in ((answer or {}).get("state_tags") or ()))
+    note = _text((answer or {}).get("note"))
+    followed = state if state in market_journal.FOLLOWED_PLAN_VALUES else ""
+    if score is None and not tags and not note and not followed:
+        return {}
+    return {
+        "mood": score,
+        "state_tags": tags,
+        "process": {"followed_plan": followed, "note": note},
+    }
+
+
 def _record_in_journal(
     kind: QuestionKind,
     subject: Subject,
@@ -1051,11 +1090,16 @@ def _record_in_journal(
     *,
     journal: Any,
     now: datetime,
+    mood: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """A day-close or AI-question answer is one dated Market Journal row.
 
     The Trade Mentor's own rule (CLAUDE.md): *an answer is one dated Market
     Journal row*. The words are what Day Review and the week story read.
+
+    TJ-7's mood travels as FIELDS on that same row, never as a sentence: a mood
+    parsed back out of the row's text later would be a second, drifting reader
+    of what the trader clicked.
     """
     service = journal
     if service is None:
@@ -1067,6 +1111,12 @@ def _record_in_journal(
             return {"ok": False, "reason": f"the Market Journal is not available: {exc}"}
     answer = _text(payload.get(kind.answer_key))
     body = f"{subject.prompt or kind.kind} {answer}".strip()
+    fields = dict(mood or {})
+    if not answer and fields:
+        # The trader clicked a face and left the question alone. The row still
+        # needs a sentence a page can print, and it says exactly that - the
+        # RECORD of what they felt is the fields, never these words.
+        body = f"{subject.prompt or kind.kind} (not answered; a mood was recorded)"
     result = service.write_entry(
         text=body,
         session_date=_text(subject.detail.get("session")) or _text(payload.get("session")),
@@ -1074,6 +1124,7 @@ def _record_in_journal(
         origin="trade_mentor",
         now=now,
         mentor={"mentor_question": dict(payload)},
+        **fields,
     )
     return {"ok": bool(result.get("ok")), "row": result.get("entry") or {}, "reason": result.get("reason", "")}
 

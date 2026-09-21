@@ -91,6 +91,9 @@ class MarketJournalService(QObject):
         supersedes: str = "",
         mentor: Any = None,
         reaffirms: str = "",
+        mood: Any = None,
+        state_tags: Iterable[str] = (),
+        process: Any = None,
     ) -> dict[str, Any]:
         """Write one entry. Returns the row, or a refusal that says why.
 
@@ -105,6 +108,12 @@ class MarketJournalService(QObject):
 
         Phase 0.31 passes the subject session explicitly. The ledger preserves
         it in `session_date` and records the write day separately.
+
+        `mood` / `state_tags` / `process` are TJ-7's three optional arguments,
+        also passed straight through. This stays the ONE writer: the two
+        surfaces that offer the strip - the Mentor's `day_close` question and
+        the desk's journal tab - hand it here and nowhere else, and a mood the
+        writer refuses raises exactly as a mismatched prediction horizon does.
         """
         import market_journal
 
@@ -118,6 +127,9 @@ class MarketJournalService(QObject):
             supersedes=supersedes,
             mentor=mentor,
             reaffirms=reaffirms,
+            mood=mood,
+            state_tags=state_tags,
+            process=process,
         )
         ok, reason = market_journal.is_publishable(entry)
         if not ok:

@@ -912,6 +912,21 @@ class DayReviewPanel(QFrame):
         self.after_the_fact.setObjectName("CautionLabel")
         self.after_the_fact.setWordWrap(True)
 
+        # TJ-7 change 2: the optional two-click strip beside the composer. The
+        # SAME widget the Mentor's `day_close` question draws, so the cap, the
+        # codes and the "nothing pre-selected" rule have one owner. It never
+        # gates Save - a note with no mood is the note the trader always wrote.
+        from ui.widgets.mood_strip import MoodStrip
+
+        self.mood_strip = MoodStrip()
+
+        # TJ-7 / live gate #151: ONE line saying what the trader recorded about
+        # themselves this session. It is READ off the payload the worker already
+        # builds - this page calls no builder and no model for it.
+        self.mood_line = QLabel("")
+        self.mood_line.setObjectName("SectionSubtitle")
+        self.mood_line.setWordWrap(True)
+
         import market_journal
 
         self.timeframe_picker.addItems(list(market_journal.TIMEFRAMES))
@@ -1091,8 +1106,10 @@ class DayReviewPanel(QFrame):
         self.said_section = self._section(
             "What you said",
             self.said_split,
+            self.mood_line,
             QLabel("New entry"),
             self.entry_text,
+            self.mood_strip,
             compose,
             self.after_the_fact,
         )
@@ -2496,15 +2513,36 @@ class DayReviewPanel(QFrame):
         else:
             self.after_the_fact.setText("")
 
+    # -- TJ-7: the optional mood strip beside the composer ------------------
+    def mood_button(self, score):
+        """The face for `score`, or ``None``."""
+        return self.mood_strip.mood_button(score)
+
+    def state_tag_button(self, code: str):
+        """The chip for `code`, or ``None``."""
+        return self.mood_strip.state_tag_button(code)
+
+    def mood_answer(self) -> dict:
+        """What the trader clicked. Nothing is ever pre-filled for them."""
+        return self.mood_strip.answer()
+
     def _save(self) -> None:
+        mood = self.mood_answer()
         result = self.service.write_entry(
             text=self.entry_text.toPlainText(),
             session_date=self.session_date(),
             timeframe=self.timeframe_picker.currentText(),
             origin="journal_page",
+            # TJ-7. `None` and `()` when the strip was not touched, which
+            # stores the key present and EMPTY - never a default face.
+            mood=mood["mood"],
+            state_tags=tuple(mood["state_tags"]),
         )
         if result.get("ok"):
             self.entry_text.clear()
+            # Yesterday's face is not tomorrow's: the strip goes back to
+            # nothing selected on every successful save.
+            self.mood_strip.reset()
             self.status.setText("Entry saved.")
             self._refresh_if_loaded()
         else:
