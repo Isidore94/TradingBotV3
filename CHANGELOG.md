@@ -2854,6 +2854,79 @@ They are evidence and must not be loaded as context.
   `tests/test_tj5_week_review_page.py`, `tests/test_tj5_review1_followups.py`,
   `tests/tj5_support.py`. Rule: DESK_INTERNALS "TJ-5"; slot position: decision 0018 addendum
   2026-09-20. Gates #149, #170 and #171 owed.
+- **The desk's AI has a voice, and an idea is a SUGGESTION (TJ-6, 2026-09-20).** Stage-3
+  slot `improvement_ideas` (`scripts/ai_jobs/improvement_ideas.py`), appended LAST behind
+  `setup_research`, `uses_model=True`, no `model_free_kwargs`, `RESERVE_MINUTES = 10.0`,
+  `max_attempts=2`, night-only (a forced daytime run is `skipped`) and on every night's
+  slate - it is NOT in `WEEKEND_ONLY_SLOTS`, and Sunday picks it up only when the weekend
+  left it owed. It reads the last five day packs and their stories, the window's walk-away
+  totals, TJ-15's contrast groups, the two measurables the desk really computes and the
+  checked-in 30-line `IDEAS_PROGRAM_CARD`; **`EVIDENCE_KEYS` is CLOSED** and holds no bar,
+  tape, tick, lake or warehouse section. It asks the MEDIUM local model ONCE and re-checks
+  every bound from the INPUT after the answer. **A fabricated citation or a fourth USABLE
+  idea rejects the answer WHOLE with the ideas store AND the trader's state file
+  byte-identical**; an idea with no evidence, no measurable it can be checked by, an unknown
+  kind, or text over `MAX_IDEA_CHARS` (280) is DROPPED on its own and counted by reason into
+  the ledger row (`extra.dropped`, `extra.drop_reasons`). The per-item verdict is the one
+  predicate `drop_reason`, which both the verifier and the writer use, and **the slot
+  enforces it itself**: the item schema is validated SHAPE-ONLY (`_shape_only` removes the
+  `enum` and `maxLength` that `ai_summary.validate_structured_output` would turn into whole
+  rejections), while required keys and `additionalProperties: False` still reject whole. The
+  cap of three counts **USABLE ideas, before the dismissed filter and before in-answer
+  de-duplication** - conservative by design. The model never names an idea (`idea_id` is
+  minted by the desk from the session and the normalised text) and never grades one.
+  **NOTHING TO CITE -> NO model call**: a window whose sessions carry no citable id answers
+  `skipped` BEFORE any model load ("tonight carries nothing to cite: K of N session(s) have
+  facts"), which is the desk's state today. **ASKED ONCE IS DONE**: a run that asked and
+  stored nothing ends **`ok`** ("asked once: 0 of N ideas kept") with its drop counts, so the
+  runner's own already-done check stops every later pass of the 30-minute task, and it leaves
+  an ASKED marker (`ai_ideas_asked.json`, temp-and-rename, beside the store, never in the
+  trader's state file) so the slot's unchanged-hash skip arms too; a marker write that fails
+  never fails the night and leaves no `.tmp` behind. A whole rejection is `failed`, leaves no
+  marker, carries its counts and is capped at 2.
+  `AI_IDEAS_FILE` (`ai_ideas.jsonl`) and `AI_IDEAS_STATE_FILE` (`ai_ideas_state.json`) are
+  new `project_paths` constants under `PERSISTENT_DATA_DIR`, resolved at CALL time. The ideas
+  store is APPEND-ONLY and folded by `idea_id` on read, last row winning: a repeat inside
+  `DEDUPE_SESSIONS` (60 EXCHANGE sessions, walked on the calendar) appends a row with the same
+  id and a higher `seen_count`, keeps `first_seen`, and every earlier sighting stays on disk.
+  A dismissed idea never returns, checked on the normalised TEXT - the id carries the session
+  an idea was first seen in, so a dismissal checked by id alone would expire after sixty
+  sessions. **KEEP and DISMISS are the TRADER's clicks and the card is the state file's only
+  writer**: `keep_idea` / `dismiss_idea` validate their argument and fail CLOSED, write
+  temp-and-rename with every other entry byte-identical, and a second Keep is idempotent so a
+  frozen baseline is never re-frozen; no nightly job may call either, proved structurally over
+  every `ai_jobs` module. `MEASURABLES` is a CLOSED registry of the TWO readers that exist -
+  `report_card_did_well_rate` (`day_report_card.week_from_cards` over the day packs' own
+  stored lines) and `veto_reason_real_miss_rate` (`ai_jobs.miss_contrast.read_latest`, the
+  LAST WRITTEN pack, never a contrast build behind a click) - an unknown name RAISES, and an
+  unreadable reader is `measured: False`, `value: None`, `n: 0` with its reason, never a zero.
+  Keeping a `process` idea FREEZES that measurable's reading - value, `n`, `measured`,
+  `window_sessions` and WHICH pack or which sessions it was read from - and Week Review
+  prints before and after deterministically, with no model: under
+  `evidence_stats.MIN_REPORTABLE_N` a reading prints its COUNT and no rate at all, above it
+  the rate with its `n` and the ONE Wilson interval (`evidence_contrast.rate`, IMPORTED and
+  never re-derived), and **"higher"/"lower" is said ONLY when the two intervals do not
+  overlap**, otherwise "no clear change". A kept `program` idea is listed under
+  "For WISHLIST - copy" as selectable TEXT and is never graded; nothing writes `WISHLIST.md`.
+  The card is `scripts/ui/widgets/ideas_card.py`, used by BOTH pages and fed from the ONE
+  payload each already reads on its worker (`day_review_service.PAYLOAD_KEYS` and
+  `weekend_prep_service.WEEK_PAYLOAD_KEYS` both carry `ideas`, each filled in its own guard,
+  the week reading it EXACTLY once); it diffs its rows, states its floor as a SIZE HINT
+  (`minimumSizeHint`, never a second minimum-height setter), and runs ONE write at a time off
+  the Qt thread with every Keep and Dismiss grey until EVERY ending answers, including a
+  raise and including a row that arrives mid-write. With nothing in it: "no ideas yet" and
+  `Kept 0 of 0` - two integer counts and no percentage. **Nothing TJ-6 writes reaches a
+  detector, score, alert, watchlist, Focus, the review queue or `review_policy.json`**: the
+  only modules that can see an idea are the store, the runner slot, `project_paths`, the two
+  page services, the two panels and the card. No new lazily-imported engine module, so source
+  selftest stays **97/97**. Tests: `tests/test_tj6_an_idea_is_only_a_suggestion.py`,
+  `tests/test_tj6_ideas_are_grounded.py`, `tests/test_tj6_dedupe_and_dismissed.py`,
+  `tests/test_tj6_measurables_and_the_frozen_baseline.py`,
+  `tests/test_tj6_keep_is_the_traders_act.py`, `tests/test_tj6_ideas_card.py`,
+  `tests/test_tj6_ideas_reach_both_payloads.py`, `tests/test_tj6_ideas_slot_and_slate.py`,
+  `tests/test_tj6_ideas_store_and_paths.py`, `tests/test_tj6_one_ask_a_night.py`,
+  `tests/test_tj6_builder_followups.py`, `tests/tj6_support.py`. Rule: DESK_INTERNALS "TJ-6";
+  slot position: decision 0018 addendum 2026-09-20. Gates #150, #172, #173 and #174 owed.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
@@ -3494,6 +3567,10 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-20 - TJ-6: an idea is a suggestion, and a night asks once (branch `claude/tj6-ideas`, tip `d78945f0`, merged into `lead/p033-integration2` `a7809d7c`, ninth pin `be435cd7`, lead fix `41d3f759`)
+
+Trader, 2026-09-19, about what the whole program is for: a bot that *"takes in what I do and think … mathematically deduces what parts of my thinking are profitable and unprofitable, and then effectively communicates what to keep doing and what to change."* TJ-6 is the **communicates** half, and every rule in it exists so the communication can be CHECKED. The stage-3 slot `improvement_ideas` sits LAST, behind `setup_research`, reads the last five day packs and their stories, the week's walk-away totals, TJ-15's contrast groups and a checked-in 30-line program card, asks the MEDIUM local model ONCE and writes at most three ideas to an append-only store. **A lie rejects the night; a thought that cannot be supported is dropped** - both words are the packet's own. A citation the night does not carry, or a fourth idea that would really be stored, is a bound break and the whole answer goes, store and trader state byte-identical; an idea with no evidence, no measurable or too much text is a per-IDEA judgement and is dropped alone, so a fourth unsupportable thought never costs the three good ones. The JSON schema carries the enum, the cap and `additionalProperties: False` as a GRAMMAR HINT to the decoder - never as the guard - so the slot enforces `drop_reason` itself over a SHAPE-ONLY item schema, because the shared validator would have turned two of the packet's named DROPS into whole rejections. **Advice that cannot be checked is not advice:** a `process` idea must name one of the CLOSED `MEASURABLES`, keeping it FREEZES that reading from the night's LAST WRITTEN pack and records WHICH pack, and nothing in the checking path loads a model - the model never grades its own advice. The two halves have different writers on purpose: the night writes ideas and may never touch `ai_ideas_state.json`; the card writes the state file and may never be called by a job. **Two review rounds by reproduction, NO-GO then GO at `d78945f0`.** Round 1's blocker, in plain words: **16 model calls a night on a desk with zero packs.** A night that asked and stored nothing returned `ledger.STATUS_SKIPPED` with no artifact - and `skipped` is in neither `ledger.CANONICAL_COMPLETION_STATUSES` (`{"ok"}`) nor `ledger.ATTEMPT_STATUSES`, so neither the runner's already-done check nor `max_attempts=2` bit, while the scheduled task repeats every 30 minutes for 8 hours (`register_ai_jobs_task.ps1`). The reviewer measured it: three consecutive runs whose only idea was droppable each made **one model call**, and 16 `skipped` rows left `completed_jobs` empty and the attempt cap silent - on a home folder holding **zero `pack.json`**, which is exactly the shape of the first nights after this merge. The lead's fix has two halves: **nothing to cite means NO model call** (a window with no citable id answers `skipped` before any load, saying how many sessions have facts) and **asked once is done** (a run that asked ends `ok` with its counts plus an ASKED marker beside the store). Round 2 drove all four night shapes 16 consecutive times through the REAL `runner.run_slots`: zero packs **0** model calls, all-dropped **1**, a whole rejection **2** then the cap, a normal night **1**; a corrupt, empty or stale marker fails OPEN, and a marker write that raises keeps the night `ok` and loses no idea. Round 1's two advisories became rules in the same commit: a row that arrives mid-write comes in DISABLED (a swallowed click with no status line is a trader clicking at nothing), and **a change is called higher or lower only when the two Wilson intervals do not overlap** - before the fix `0.5000 (n 30)` against `0.5001 (n 50,000)` printed *"higher than at the keep"*. **The hard invariant held under attack.** The reviewer enumerated every importer of `ai_jobs.improvement_ideas`, `ui.widgets.ideas_card` and `AI_IDEAS_*` across `scripts/`: the runner slot, the two page services, the card, the two panels and `project_paths`, and **nothing else** - no detector, score, alert, watchlist, Focus, review queue, `review_learning`, policy draft, evidence package, digest or other nightly slot; and no whole-folder sweep in `scripts/` is rooted at `PERSISTENT_DATA_DIR`, so the two files are swept by nothing. Six replies that tried to keep, dismiss, mark or path-write - `status: "kept"`, `kept: true`, `checked: true`, a model-chosen `idea_id`, an idea text naming the state file's path, an idea text ordering an edit to `WISHLIST.md` - changed nothing but the ideas store: the four extra-key replies were rejected WHOLE, the two text attacks stored an ordinary idea, and in all six `ai_ideas_state.json` came back byte-identical with `read_state()` still `{}` and no `.tmp` anywhere. The lead's ninth slot-order pin (`be435cd7`) is the full suite's finding, for the second time in one day: `tests/test_setup_research_pipeline.py` asserted `setup_research` is the LAST slot, in a file TJ-6 never touched and no targeted run could see. The lead's follow-up `41d3f759` unlinks the asked marker's temp file when the rename fails. On today's desk - no `ai_ideas.jsonl`, no `ai_ideas_state.json`, zero packs - Day Review shows the line *"Nothing yet - the desk's AI writes up to three ideas a night, each one citing your own sessions, and you keep or dismiss each one here."* and Week Review the card with `Kept 0 of 0`; the first nights record a `skipped` row with no model call at all, **which is the feature working, not the gate passing**. `ruff` clean; source selftest **97/97** (unchanged - the module is reached statically from the entry point through the card, so it needs no `LAZY_ENGINE_MODULES` entry). Merged into `lead/p033-integration2`; **not on `main`**. Gates #150, #172, #173 and #174 owed. Long form: DESK_INTERNALS "TJ-6".
 
 ### 2026-09-20 - TJ-5: the week pools counts and narrates only its own packs (branch `claude/tj5-week-review`, tip `e93ffe49`, merged into `lead/p033-integration2` `1b9d77e0`)
 

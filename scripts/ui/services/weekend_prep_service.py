@@ -768,6 +768,18 @@ def read_week_review(
             "callouts": _week_callouts(),
         }
     )
+    # TJ-6, in its OWN guard and read exactly ONCE: the ideas the trader kept,
+    # each with the baseline frozen at the keep beside the same measurable now.
+    # A store that will not open costs the ideas card and leaves the five day
+    # cards, the story and the strip exactly where they are.
+    try:
+        from ai_jobs import improvement_ideas
+
+        payload["ideas"] = [
+            dict(row) for row in improvement_ideas.checked_ideas(end_session=anchor)
+        ]
+    except Exception:  # noqa: BLE001 - one unreadable store costs one section
+        logging.debug("The kept ideas could not be read.", exc_info=True)
     return payload
 
 

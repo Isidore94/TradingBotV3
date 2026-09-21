@@ -662,6 +662,8 @@ def test_the_scope_can_be_selected_on_demand():
         "journal_enrichment",
         "review_policy_draft",
         "setup_research",
+        # TJ-6 (2026-09-20), appended LAST inside stage 3.
+        "improvement_ideas",
     ]
     # And the override is per-call: building again without it is untouched.
     # BY NAME rather than by index - decision 0018 moved the slot.

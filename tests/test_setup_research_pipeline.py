@@ -233,7 +233,14 @@ def test_setup_research_is_appended_to_the_nightly_slate():
     from ai_jobs.runner import default_slots
 
     names = [slot.name for slot in default_slots()]
-    assert names[-1] == "setup_research"
+    # LEAD AMENDMENT 2026-09-20 (TJ-6 integration): this used to say
+    # `setup_research` is the LAST slot. It is still appended at the end of
+    # stage 3 after `review_policy_draft`; the one slot a later phase appended
+    # behind it (decision 0018: a later phase appends inside its stage) is
+    # TJ-6's `improvement_ideas`. Nothing else may follow it.
+    after = names[names.index("setup_research") + 1:]
+    assert after in ([], ["improvement_ideas"]), after
+    assert names.index("setup_research") > names.index("review_policy_draft")
 
 
 def test_night_report_cannot_import_live_control_paths_and_skips_ai_below_gate(tmp_path, monkeypatch):

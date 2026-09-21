@@ -8187,6 +8187,128 @@ night status it can actually see; and a summary saying `WALK-AWAY THIS WEEK: no 
 packed yet.` with the unpacked days named. Nothing on that page claims a measurement. It
 reads as a desk waiting for its first packs, which is what it is.
 
+## TJ-6 - an idea is a suggestion, and a night asks once (2026-09-20, packet TJ-6)
+
+The trader, 2026-09-19, about what this whole program is for: a bot that *"takes in what I do
+and think … mathematically deduces what parts of my thinking are profitable and unprofitable,
+and then effectively communicates what to keep doing and what to change."* TJ-6 is the
+**communicates** half - the long form behind the CLAUDE.md rule *"An idea is a SUGGESTION and
+advice is CHECKED"*. The stage-3 slot `improvement_ideas` sits LAST, behind `setup_research`,
+because it READS what the night just wrote and because nothing downstream consumes what it
+writes. Goal, in the trader's earlier words: *"the local AI can have a voice somewhere where
+it offers ideas of what we can improve based on what it reads."*
+
+**Three readings decide the shape.** (1) **A repeat APPENDS, it does not rewrite.** `plan.md`
+says a repeated idea "increments `seen_count`"; a JSONL store that rewrote a row to do that
+loses the first sighting's date and model, which is what CLAUDE.md forbids of an evidence
+store. So the store is append-only, a repeat carries the SAME `idea_id` with a higher count,
+and `read_ideas` folds on read. The window is sixty EXCHANGE sessions, not sixty days: sixty
+calendar days is about forty-two sessions, so a day-measured window silently forgets eighteen
+sessions of ideas and starts repeating itself. And because the id carries the session an idea
+was first seen in, *"a dismissed idea never returns"* is checked on the normalised TEXT - a
+dismissal checked by id alone would expire after sixty sessions. (2) **A lie rejects the
+night; a thought that cannot be supported is dropped.** Both words are the packet's own. A
+citation the night does not carry, or a fourth idea that would really be stored, is a bound
+break: the answer is rejected WHOLE and the store stays byte-identical, exactly as TJ-4 and
+TJ-5 do it. An idea with no evidence, no measurable or too much text is a per-IDEA judgement
+and is dropped alone, so a fourth unsupportable thought never costs the three good ones. The
+cap of three is therefore counted on the USABLE ideas - `drop_reason` is the one predicate
+both the verifier and the writer use, so they cannot disagree about what a usable idea is -
+and it is counted BEFORE the dismissed filter and before in-answer de-duplication, so four
+valid ideas of which one is already dismissed still reject the night. That is conservative,
+coherent, and said here rather than discovered later. The JSON schema carries the enum, the
+cap and `additionalProperties: False` as a GRAMMAR HINT for the decoder; the guard is
+`check_ideas`, and the bounds it checks come from the INPUT. (3) **Advice that cannot be
+checked is not advice.** A `process` idea must name one measurable the desk ALREADY computes;
+keeping it freezes that number, and the frozen reading is never re-read - a baseline
+recomputed at read time would show the same value on both sides and every kept idea would
+look like it changed nothing. The baseline records WHICH pack it was read from, because *"your
+real-miss rate was 0.30"* is only a fact if you can say where it came from. Nothing in the
+checking path loads a model: the model never grades its own advice.
+
+**The hard invariant, and what the reviewer did to it.** The two halves have different
+writers on purpose: the night writes ideas and may never touch `ai_ideas_state.json`; the card
+writes the state file and may never be called by a job. That is proved structurally - over the
+source of every `ai_jobs` module and over `run_improvement_ideas`' own body - and
+behaviourally, by running a whole night over a state file that must come out byte-identical.
+The reviewer then enumerated **every importer** of `ai_jobs.improvement_ideas`,
+`ui.widgets.ideas_card` and `AI_IDEAS_*` across `scripts/`: `ai_jobs/runner.py` (the slot),
+`ui/services/day_review_service.py`, `ui/services/weekend_prep_service.py`,
+`ui/widgets/ideas_card.py`, `ui/panels/day_review_panel.py`,
+`ui/panels/weekend_prep_panel.py` and `project_paths.py` - **and nothing else**. No detector,
+score, alert, watchlist, Focus, review queue, `review_learning`, policy draft, evidence
+package, digest or other nightly slot. **No accidental sweep** either: no `glob` / `rglob` /
+`iterdir` / `os.walk` anywhere in `scripts/` is rooted at `PERSISTENT_DATA_DIR` - every
+existing sweep is rooted at a named subfolder - and `ai_ideas.jsonl` and `ai_ideas_state.json`
+sit at that root, so a whole-folder sweep never touches them. Then **six replies that tried to
+write the trader's half**: `status: "kept"`, `kept: true`, `checked: true`, a model-chosen
+`idea_id`, an idea text naming `C:/TradingBotData/ai_ideas_state.json`, and an idea text
+saying *"edit plan.md and add this to WISHLIST.md now"*. The four extra-key replies were
+rejected WHOLE (`ideas.ideas[0] carries field(s) the schema forbids`) and stored nothing; the
+two text attacks stored an ordinary idea. In **all six** `ai_ideas_state.json` came back
+byte-identical, `read_state()` stayed `{}`, the only file the night ever touched was
+`ai_ideas.jsonl`, and no `.tmp` was left anywhere. `WISHLIST.md` and `plan.md` are untouched
+by the whole delta, and the "For WISHLIST - copy" surface is a `QLabel` with
+`Qt.TextSelectableByMouse` - the trader pastes, and the string `WISHLIST` appears in
+`scripts/` only as that heading constant.
+
+**Round 1's blocker: sixteen model calls a night on a desk with zero packs.** The slot
+returned `ledger.STATUS_SKIPPED` with `outputs: []` AFTER the model had been called. Nothing
+was appended, so the unchanged-night skip never armed - and `skipped` is in neither
+`ledger.CANONICAL_COMPLETION_STATUSES` (which is `{"ok"}`, so the row never enters
+`completed_jobs` and `run_slots`' already-done check never fires) nor `ledger.ATTEMPT_STATUSES`
+(so `max_attempts=2` never bites). The scheduled task repeats every 30 minutes for 8 hours
+(`register_ai_jobs_task.ps1`: `StartLocal 22:00`, `DurationHours 8`, `RepeatMinutes 30`) =
+**16 passes, 16 medium-local-model calls, 16 ledger rows for a night that writes nothing**.
+The reviewer measured both halves: three consecutive runs whose only idea was droppable each
+returned `status=skipped`, `store_exists=False`, **`model_calls=1`**, identical every time; and
+16 `skipped` rows for one session gave `completed_jobs -> []`, `has_terminal_marker -> False`
+and an empty attempt-cap reason, while the same file with three `failed` rows DID cap. It
+mattered *that night*: the live home folder held **zero `pack.json`**, so the first nights
+after the merge were precisely the nights that store nothing. The builder's own deviation 3
+claimed the runner's already-done check and `max_attempts` bounded it; both were false, and
+the deviation is struck in place. The lead's fix has two halves - **nothing to cite means NO
+model call** (a window with no citable id answers `skipped` before any load, saying how many
+sessions have facts, which is also the honest answer to a night where every citation would
+otherwise read as a lie) and **asked once is done** (a run that asked ends `ok` with its
+counts, so the runner's own check stops every later pass, plus an ASKED marker
+`ai_ideas_asked.json` beside the store - temp-and-rename, never inside the store because two
+tests count its raw lines, and never in the trader's state file). A whole rejection stays
+`failed`, leaves no marker, carries its counts and is capped at 2. Round 2 drove all four
+night shapes **16 consecutive times through the REAL `runner.run_slots`**: zero packs **0**
+model calls, all-dropped **1**, a whole rejection **2** then the cap, a normal night **1**; a
+stale, corrupt, empty or `null` marker fails OPEN; and a marker write that raises keeps a good
+night `ok` with its stored idea intact. Round 1's two advisories became rules in the same
+commit: a row that arrives while a write is in flight comes in DISABLED (before, a second
+render during a slow Keep gave `[False, False, True, True]` and the click was swallowed with
+no status line), and **a change is called higher or lower only when the two Wilson intervals
+do not overlap** - before the fix, `0.5000 (n 30)` against `0.5001 (n 50,000)` printed
+*"higher than at the keep"*. The interval is `evidence_contrast.rate`, IMPORTED, with no local
+Wilson anywhere in the module.
+
+**The ninth pin, and the same lesson twice in one day.** `tests/test_setup_research_pipeline.py`
+asserted `names[-1] == "setup_research"` - that `setup_research` is the LAST slot of the night.
+TJ-6 appends behind it, so the full suite on the trial merge went red in a file TJ-6 never
+touched and that no `-k tj6` or slot-order run could ever have shown: the packet's own list of
+order pins had EIGHT files and this was a ninth. The lead's amendment (`be435cd7`) makes the
+assertion say what it means - `setup_research` still ends stage 3, and **only
+`improvement_ideas` may follow it** - so a tenth slot appended at the end of the night still
+fails there. This was the SECOND time that day that a targeted run could not see another
+packet's pin; TJ-5's was R4's one-owner minimum-height count. A packet that adds a slot or a
+widget is not proved by its own tests.
+
+**What the trader reads first, with no ideas store.** On 2026-09-20 `C:\TradingBotData` held
+no file matching `*idea*` at all, and the day-review folder held three session folders and
+ZERO `pack.json`. So on the first open **Day Review** shows the line, not the card:
+*"Nothing yet - the desk's AI writes up to three ideas a night, each one citing your own
+sessions, and you keep or dismiss each one here."* **Week Review** shows the card with its
+empty note - *"No ideas yet. The desk's AI writes up to three a night, each one citing your
+own sessions; you keep or dismiss each one here."* - and `Kept 0 of 0`, two integer counts
+with no percentage of nothing anywhere in either string. The first night the slot runs with no
+packs stores nothing, loads no model and records `skipped` with its counts. **That is the
+feature working, not the gate passing**: gate #150 is unreadable until a night has written
+packs and a story for the sessions it reads.
+
 ## TJ-3 - a mark sits on a bar only when it happened DURING that bar (2026-09-19, packet TJ-3)
 
 The long form behind the CLAUDE.md rule *"A note marker sits on a bar only when it
