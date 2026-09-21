@@ -255,6 +255,16 @@ class DayReviewService:
         # session's moods and the ONE line the page prints. A mood is REPORTED -
         # nothing here ranks, scores or acts on one - and a section that cannot
         # be built costs the line, never the day.
+        #
+        # The ids match the PACK's ids for the same rows, because both come
+        # from `day_review_pack.mood_section` and its one `mood_source_id`
+        # seam, which derives an id from the ROW and from nothing else
+        # (reviewer advisory 6; pinned by
+        # `test_tj7_day_review_mood_line.py::test_the_payloads_mood_ids_are_the_packs_own_ids`).
+        # The written pack is deliberately NOT read here: a mood typed in the
+        # evening arrives AFTER the post-close pack was written, and reading
+        # the pack would show the trader a stale line on the very save live
+        # gate #151 asks them to make.
         try:
             import day_review_pack
 

@@ -292,6 +292,16 @@ def _state_tag_owner():
     return trader_state_tags
 
 
+#: The sentence a machine row carrying a mood is refused with. A mood is the
+#: TRADER's own click; the desk has no feelings to record and an auto-mode flip
+#: that filed one would put a feeling in the ledger nobody had. The structural
+#: fence (`test_only_the_traders_own_surfaces_hand_a_mood_to_the_journal`) reads
+#: call sites; this one refuses the row itself (reviewer advisory 4).
+MACHINE_MOOD_REFUSAL = (
+    "a mood is the trader's own click; a machine-written row carries none"
+)
+
+
 def _check_mood_block(block: Any) -> str:
     """``""`` when this stored block is clickable, else the sentence that says why.
 
@@ -533,6 +543,11 @@ def build_entry(
             "a mood's process is a block with followed_plan and note, not "
             f"{type(process).__name__}"
         )
+    if clicked_a_mood and is_machine_entry({"origin": str(origin or "")}):
+        # `is_machine_entry` is the ONE rule for what a machine row is (TJ-1),
+        # asked here rather than re-spelled, so a new machine origin is fenced
+        # the day it is added.
+        raise MoodFieldError(MACHINE_MOOD_REFUSAL)
     mood_block = (
         build_mood(
             score=mood,
@@ -705,6 +720,8 @@ def is_publishable(entry: Mapping[str, Any]) -> tuple[bool, str]:
     bad_mood = _check_mood_block(entry.get("mood"))
     if bad_mood:
         return False, bad_mood
+    if entry.get("mood") and is_machine_entry(entry):
+        return False, MACHINE_MOOD_REFUSAL
     if not str(entry.get("text") or "").strip() and prediction_of(entry) is None:
         return False, "an empty entry is not a thought; nothing is stored"
     if not str(entry.get("session_date") or "").strip():

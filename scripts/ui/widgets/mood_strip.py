@@ -11,10 +11,14 @@ to `market_journal`'s one writer.
 
 Three rules it holds, and why each one exists:
 
-* **Nothing is ever pre-selected.** No remembered face, no default 3, no "same
-  as yesterday". A mood is the trader's own click or nothing at all - a machine
-  that filled one in would be putting words in their mouth in an append-only
-  ledger.
+* **Nothing is ever pre-selected, and every click can be taken back.** No
+  remembered face, no default 3, no "same as yesterday". A mood is the trader's
+  own click or nothing at all - a machine that filled one in would be putting
+  words in their mouth in an append-only ledger. A second click on the selected
+  face CLEARS it, the way a chip toggles off: the faces are deliberately not an
+  exclusive `QButtonGroup`, because Qt will not un-check the checked member of
+  one and a misclick would then have no way back to "nothing selected"
+  (reviewer advisory 1, 2026-09-20).
 * **The cap is the VOCABULARY's** (`trader_state_tags.MAX_STATE_TAGS`, read at
   click time). A third chip un-checks itself here rather than producing a row
   the writer would refuse at the end of the trader's typing.
@@ -79,14 +83,24 @@ class MoodStrip(QWidget):
         faces.setContentsMargins(0, 0, 0, 0)
         faces.setSpacing(3)
         self._faces: dict[int, QPushButton] = {}
+        self._settling = False
+        # NOT an exclusive QButtonGroup. Qt refuses to un-check the checked
+        # member of an exclusive group, so a MIS-CLICKED face could never be
+        # taken back: `save_questions` reads "a score is set" as "the trader
+        # touched the strip", and the only way out was to file a mood they did
+        # not mean (reviewer advisory 1, 2026-09-20). One face at a time is
+        # enforced here instead, and a second click on the SELECTED face clears
+        # it - exactly the way a chip toggles off.
         self._face_group = QButtonGroup(self)
-        self._face_group.setExclusive(True)
+        self._face_group.setExclusive(False)
         for score in market_journal.MOOD_SCALE:
             button = QPushButton(str(score), self)
             button.setObjectName(FACE_OBJECT_NAME)
             button.setCheckable(True)
             button.setChecked(False)
-            button.setToolTip(f"{score} of {len(market_journal.MOOD_SCALE)}")
+            button.setToolTip(
+                f"{score} of {len(market_journal.MOOD_SCALE)} - click again to clear"
+            )
             button.setFixedWidth(theme.px(28))
             self._face_group.addButton(button, int(score))
             self._faces[int(score)] = button
@@ -116,7 +130,7 @@ class MoodStrip(QWidget):
         chips.setColumnStretch(CHIPS_PER_ROW, 1)
         body.addLayout(chips)
 
-        self._face_group.idToggled.connect(lambda _id, _on: self.changed.emit())
+        self._face_group.idToggled.connect(self._on_face)
 
     # -- the vocabulary ----------------------------------------------------
     def _vocabulary(self) -> tuple[tuple[str, str], ...]:
@@ -180,12 +194,36 @@ class MoodStrip(QWidget):
 
     def reset(self) -> None:
         """Back to nothing selected. Yesterday's face is not tomorrow's."""
-        self._face_group.setExclusive(False)
-        for button in self._faces.values():
-            button.setChecked(False)
-        self._face_group.setExclusive(True)
-        for chip in self._chips.values():
-            chip.setChecked(False)
+        self._settling = True
+        try:
+            for button in self._faces.values():
+                button.setChecked(False)
+            for chip in self._chips.values():
+                chip.setChecked(False)
+        finally:
+            self._settling = False
+        self.changed.emit()
+
+    # -- one face at a time, and a second click clears it -------------------
+    def _on_face(self, score: int, checked: bool) -> None:
+        """Keep at most one face down, and let the trader take it back.
+
+        A misclick is not an answer. Un-checking the selected face returns the
+        strip to "nothing selected", which is the state an untouched strip is
+        in - so a save after a clear writes the same present-and-empty `mood`
+        key as a save the trader never touched.
+        """
+        if self._settling:
+            return
+        if checked:
+            self._settling = True
+            try:
+                for value, button in self._faces.items():
+                    if int(value) != int(score):
+                        button.setChecked(False)
+            finally:
+                self._settling = False
+        self.changed.emit()
 
     # -- the cap -----------------------------------------------------------
     def _on_chip(self, code: str, checked: bool) -> None:
