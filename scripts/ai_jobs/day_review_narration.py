@@ -284,15 +284,16 @@ def _narration_schema_for(pack: Mapping[str, Any]) -> dict[str, Any]:
     sources = len(day_review_pack.allowed_source_ids(pack))
     pairs = _read_explanation_pairs(pack)
     reads = len([row for row in pack.get("reads") or () if isinstance(row, Mapping)])
-    # Keep the v1 property as an optional schema hint for old provider fixtures
-    # and pinned callers.  It is not required by v2 and code rejects a reply
-    # that actually mixes it with read_explanations.
     body = _bounded_schema(
         NARRATION_JSON_SCHEMA,
         were_you_right=min(reads, MAX_GRADED_CLAIMS),
         sources=min(sources, MAX_SOURCES),
     )
     properties = body["properties"]
+    # The v2 request must have one transport only.  Legacy replies take their
+    # own strict schema after they arrive; this provider schema never offers a
+    # model the old verdict/source fields it must no longer choose.
+    properties.pop("were_you_right", None)
     required = body["required"]
     required.remove("were_you_right")
     required.append("read_explanations")

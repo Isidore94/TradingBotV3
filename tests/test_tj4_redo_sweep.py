@@ -190,7 +190,9 @@ def test_a_redo_queued_for_another_day_is_narrated_by_tonights_run(root):
     assert TWO_BACK in outcome["reason"], outcome["reason"]
     # The night's own session had not moved, so it was skipped as unchanged -
     # the sweep is the only thing that called a model.
-    assert seen == [f"day_review_narration_v1:{TWO_BACK}"], seen
+    from ai_jobs.day_review_narration import PROMPT_VERSION
+
+    assert seen == [f"{PROMPT_VERSION}:{TWO_BACK}"], seen
 
 
 def test_the_sweep_takes_the_oldest_first_and_says_how_many_are_left(root):
@@ -366,7 +368,9 @@ def test_an_operator_who_named_one_day_gets_that_day_and_no_sweep(root):
     request, seen = _spy(root)
     _run(root, request, session=YESTERDAY, only_this_session=True)
 
-    assert seen == [f"day_review_narration_v1:{YESTERDAY}"], seen
+    from ai_jobs.day_review_narration import PROMPT_VERSION
+
+    assert seen == [f"{PROMPT_VERSION}:{YESTERDAY}"], seen
     assert day_review_pack.redo_requested(YESTERDAY, root=root) is False
     assert day_review_pack.redo_requested(TWO_BACK, root=root) is True
 

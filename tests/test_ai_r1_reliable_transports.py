@@ -404,8 +404,10 @@ def test_observation_v2_allows_two_codes_but_rejects_duplicate_or_mixed_transpor
                 rows = [row, {**row, "code": vocabulary["codes"][1]}]
             elif kind == "duplicate":
                 rows = [row, dict(row)]
+            elif kind == "over_cap":
+                rows = [dict(row) for _ in range(observation_tags.MAX_TAGS + 1)]
             else:
-                rows = [{**row, "note_id": fragment["note_id"]}]
+                rows = [{**row, "extra": "forbidden"}]
             return {"model": "local-test-medium", "summary": {"tags": rows}}
         return request
 
@@ -417,7 +419,7 @@ def test_observation_v2_allows_two_codes_but_rejects_duplicate_or_mixed_transpor
     assert good["status"] == "ok", good
     assert len(observation_tags.read_latest(tag_fx.LAST_SESSION, root=good_root)["tags"]) == 2
 
-    for kind in ("duplicate", "mixed"):
+    for kind in ("duplicate", "over_cap", "extra"):
         root = tmp_path / kind
         prior = root / "verified.json"
         root.mkdir()
@@ -429,6 +431,50 @@ def test_observation_v2_allows_two_codes_but_rejects_duplicate_or_mixed_transpor
         )
         assert bad["status"] == "degraded_no_narrative", (kind, bad)
         assert prior.read_bytes() == before
+
+
+def test_observation_v2_fragments_cover_all_punctuation_without_overlimit_quotes():
+    """v2 never loses a leading mark and every offered quote stays bounded."""
+    from ai_jobs import observation_tags
+
+    for text in ("x" * 400 + " " + "y", "!!!hello.", "!" * 401):
+        spans = observation_tags._fragment_spans(text)
+        assert spans and spans[0][0] == 0 and spans[-1][1] == len(text), spans
+        assert "".join(text[start:end] for start, end in spans) == text
+        assert all(end - start <= observation_tags.MAX_FRAGMENT_LENGTH for start, end in spans)
+
+
+def test_observation_v2_evidence_has_no_result_fields():
+    """The fragment transport carries words and codes, never an outcome."""
+    from ai_jobs import observation_tags
+
+    entry = tag_fx.click_entry(
+        session=tag_fx.LAST_SESSION, hour=9, direction="up", confidence="high",
+        observation="gap and go so far.", because="",
+    )
+    evidence = observation_tags.build_evidence(
+        observation_tags.notes_for([entry]), vocabulary=observation_tags.load_vocabulary()
+    )
+
+    def keys(value):
+        if isinstance(value, dict):
+            return set(value) | set().union(*(keys(item) for item in value.values()))
+        if isinstance(value, list):
+            return set().union(*(keys(item) for item in value)) if value else set()
+        return set()
+
+    forbidden = {"verdict", "grade", "price", "bar", "outcome", "result", "move"}
+    assert not (keys(evidence) & forbidden)
+
+
+def test_day_story_v2_request_schema_excludes_legacy_verdict_fields():
+    """A v2 provider is offered explanations only; legacy replies validate later."""
+    from ai_jobs import day_review_narration as narration
+
+    schema = narration._narration_schema_for(day_fx.build())
+    assert "were_you_right" not in schema["properties"]
+    assert "were_you_right" not in schema["required"]
+    assert "read_explanations" in schema["properties"]
 
 
 def test_day_story_v2_rejects_ambiguous_input_and_names_render_cap(monkeypatch, tmp_path):
