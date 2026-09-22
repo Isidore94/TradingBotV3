@@ -200,6 +200,27 @@ def test_points_grade_uses_one_pre_close_v2_observation_and_exact_session_outcom
     assert "directional" in result.sentence().lower()
 
 
+def test_replay_separates_base_v1_history_from_reconstructed_v2_facts():
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+    replay = evidence.replay_observation(
+        fixture["report_row"],
+        reconstructed_row_facts={
+            "hv_level_blocking_count": 1,
+            "previous_close": 100.0,
+            "atr20": 2.0,
+        },
+        reconstructed_family_record={"win_rate_lb": 0.5},
+    )
+
+    assert replay["legacy"]["points_version"] == "points_v1"
+    assert replay["legacy"]["total"] == fixture["v1_expected"]["total"]
+    assert replay["reconstructed"]["points_version"] == "points_v2"
+    assert replay["reconstructed"]["sr"] == 6.0
+    assert replay["reconstructed"]["reconstructed_family_facts"] is True
+    assert replay["reconstructed"]["reconstructed_row_facts"] is True
+
+
 def test_equal_point_ties_and_session_concentration_abstain_from_a_weight_proposal():
     log_rows = []
     outcome_rows = []
