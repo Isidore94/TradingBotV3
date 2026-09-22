@@ -127,6 +127,10 @@ class AlertChartReview(QWidget):
     # "when i double tap something in the capture window ... i shouldnt get a
     # pop up note box").
     vetoRetireRequested = Signal(object)
+    # (alert, saved veto row).  The host owns watches, so a saved annotation
+    # asks it to make the one narrow exception before the ordinary veto
+    # retirement runs.
+    savedVeto = Signal(object, object)
     # (alert) - a QUICK like was recorded. A REPORT, not a request: since
     # packet T1 (trader, 2026-09-04: "i still need time to enter alerts etc.")
     # the chart STAYS for this mode, so it asks the host for no movement.
@@ -155,6 +159,7 @@ class AlertChartReview(QWidget):
     # request to REVEAL, never to change what was recorded: the host still owns
     # every store, and nothing was removed to begin with.
     revealHiddenRequested = Signal()
+    scanReviewViewToggled = Signal()
     d1LevelAlertRequested = Signal(str, str, float, str)  # symbol, direction, level, candle date
     symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
     levelArmRequested = Signal(str, str, float)  # symbol, direction, level
@@ -392,6 +397,16 @@ class AlertChartReview(QWidget):
         )
         self.hidden_button.clicked.connect(self.revealHiddenRequested)
 
+        # AR-2B shares the existing verb row: ordinary D1 scan ideas are a
+        # view choice, never a new alert state.  The host owns the backing
+        # queue and tells this compact switch what is currently held.
+        self.scan_view_button = QPushButton("")
+        self.scan_view_button.setObjectName("ScanReviewViewButton")
+        self.scan_view_button.setFlat(True)
+        self.scan_view_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.scan_view_button.setVisible(False)
+        self.scan_view_button.clicked.connect(self.scanReviewViewToggled)
+
         # Packet D1C-A's count, beside the withheld one. A claimed chart is
         # ANSWERED, not withheld, so this is a muted label and not a button:
         # there is nothing to reveal, and the row it refers to is in the setups
@@ -501,6 +516,7 @@ class AlertChartReview(QWidget):
         buttons.addWidget(self.give_a_read_button)
         buttons.addStretch(1)
         buttons.addWidget(self.hidden_button)
+        buttons.addWidget(self.scan_view_button)
         buttons.addWidget(self.claimed_skipped_label)
         buttons.addWidget(self.armed_summary)
         buttons.addWidget(self.queue_label)
@@ -608,8 +624,20 @@ class AlertChartReview(QWidget):
         self._refresh_reviewed_badge()
         if self.alert is None:
             return
-        if event_type == EVENT_VETO and not self.capture_rail.veto_keeps_chart():
-            self.vetoRetireRequested.emit(self.alert)
+        if event_type == EVENT_VETO:
+            # A delayed rail delivery must never turn a row captured on AAPL
+            # into a retirement of the next chart.  Both identity dimensions
+            # are on every saved veto row, and a missing/mismatched one is no
+            # request at all.
+            row_symbol = str(row.get("symbol") or "").strip().upper()
+            row_side = str(row.get("side") or "").strip().upper()
+            alert_symbol = str(self.alert.symbol or "").strip().upper()
+            alert_side = str(self.alert.side or "").strip().upper()
+            if row_symbol != alert_symbol or row_side != alert_side:
+                return
+            self.savedVeto.emit(self.alert, dict(row))
+            if not self.capture_rail.veto_keeps_chart():
+                self.vetoRetireRequested.emit(self.alert)
         elif event_type == EVENT_LIKE_CLAIM:
             if like_mode_of(row) == LIKE_MODE_QUICK:
                 self.likeRecorded.emit(self.alert)
@@ -704,7 +732,7 @@ class AlertChartReview(QWidget):
         except Exception:  # noqa: BLE001 - a failed placement keeps the chart
             return None
 
-    def _on_veto_day_trade(self, _row: dict) -> None:
+    def _on_veto_day_trade(self, row: dict) -> None:
         """Vetoed the D1, keeping the name for an M5 trade.
 
         The plain veto's own retire verb is suppressed for this one commit:
@@ -716,6 +744,12 @@ class AlertChartReview(QWidget):
         no pop up note box" covers this verb too).
         """
         if self.alert is not None:
+            row_symbol = str(row.get("symbol") or "").strip().upper()
+            row_side = str(row.get("side") or "").strip().upper()
+            alert_symbol = str(self.alert.symbol or "").strip().upper()
+            alert_side = str(self.alert.side or "").strip().upper()
+            if row_symbol != alert_symbol or row_side != alert_side:
+                return
             self.vetoDayTradeRequested.emit(self.alert)
 
     def _reviewed_symbols(self) -> set:
@@ -1178,6 +1212,14 @@ class AlertChartReview(QWidget):
             self.hidden_button.setText(
                 f"{count} hidden (inside yesterday's range / wrong side of VWAP or SMA) - show"
             )
+
+    def set_scan_review_view(self, *, show_all: bool, hidden_count: int = 0) -> None:
+        """Reflect the AR-2B D1 scan view without owning its queue."""
+        hidden_count = max(0, int(hidden_count or 0))
+        self.scan_view_button.setVisible(bool(hidden_count) or bool(show_all))
+        self.scan_view_button.setText(
+            "My alerts" if show_all else f"Show all ({hidden_count})"
+        )
 
     def set_claimed_skipped_count(self, count: int = 0) -> None:
         """The honest line about the repeat D1 charts a claim is holding back.
