@@ -383,8 +383,8 @@ def test_every_table_on_the_page_stretches_its_last_column(panel):
     from PySide6.QtWidgets import QHeaderView
 
     tables = panel.findChildren(QTableWidget)
-    # Five walk-away populations (TJ-11 added the fifth) plus "What you traded".
-    assert len(tables) == 6, [table.objectName() for table in tables]
+    # Five walk-away populations, market calls, and entries and exits.
+    assert len(tables) == 7, [table.objectName() for table in tables]
     for table in tables:
         header = table.horizontalHeader()
         assert header.stretchLastSection() is True, table

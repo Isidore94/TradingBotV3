@@ -51,6 +51,7 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     "rejected_that_worked",
     "walkaway",
     "trades",
+    "trade_reviews",
     "forecast",
     "spy_m5_bars",
     # TJ-3: where the trader's own words sit on each tape, resolved to a bar
@@ -71,6 +72,7 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # in a few kilobytes. Building either on the desk would be a 14 GB model
     # load in front of the trader, which is what the night window exists for.
     "day_story",
+    "story_freshness",
     "d1_view",
     # TJ-12: the six-line report card that HEADS the page. Built LAST, on this
     # worker, from what the payload ended up with - it is another projection of
@@ -175,6 +177,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "rejected_that_worked": (),
         "walkaway": None,
         "trades": [],
+        "trade_reviews": [],
         "forecast": {},
         "spy_m5_bars": [],
         "spy_markers": (),
@@ -183,6 +186,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "reads": (),
         "congruence": (),
         "day_story": None,
+        "story_freshness": {"state": "missing", "reason": "no saved facts yet"},
         "d1_view": None,
         "report_card": {},
         "ideas": [],
@@ -235,6 +239,7 @@ class DayReviewService:
         payload = empty_payload(session)
         moment = now or datetime.now()
         problems: list[str] = []
+        core_unread: list[str] = []
         # Bound HERE so the marker build at the end of this method is safe when
         # the walk-away block below - which is what fills them - raised before it
         # reached them. Both are plain locals of this method; that block binds
@@ -248,6 +253,7 @@ class DayReviewService:
             entries = list(self.journal.entries_about(session))
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the journal entries could not be read: {exc}")
+            core_unread.append("journal entries")
             _log.debug("Day Review entries unreadable.", exc_info=True)
         payload["entries"] = entries
         payload["forecast"] = self._forecast(entries)
@@ -281,6 +287,7 @@ class DayReviewService:
             payload["story"] = self.journal.daily_story(session)
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the story facts could not be built: {exc}")
+            core_unread.append("day facts")
             _log.debug("Day Review story unreadable.", exc_info=True)
 
         try:
@@ -295,6 +302,7 @@ class DayReviewService:
             recap = self._read_recap(session, lookback_sessions, moment)
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the walk-away tables could not be read: {exc}")
+            core_unread.append("walk-away results")
             _log.debug("Day Review walk-away unreadable.", exc_info=True)
         else:
             rejected = getattr(recap, "rejected_that_worked", None)
@@ -305,6 +313,7 @@ class DayReviewService:
             payload["trades"] = self._trades(session)
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the day's trades could not be read: {exc}")
+            core_unread.append("trades")
             _log.debug("Day Review trades unreadable.", exc_info=True)
         # TJ-9E, on this worker and from ONE read of the append-only table: the
         # trader's own words about each exit, and - only where they CONFIRMED
@@ -318,6 +327,22 @@ class DayReviewService:
         # so the line that counts the notes counts the ones this payload really
         # opened - one read for the page and the card, never two.
         exit_notes = self._attach_exit_notes(session, payload["trades"], problems)
+        if payload["trades"] and exit_notes is None:
+            core_unread.append("exit notes")
+        if payload["trades"]:
+            try:
+                from ui.services import journal_feed
+
+                payload["trade_reviews"] = journal_feed.trade_reviews_on(
+                    session, payload["trades"], exit_notes
+                )
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"the trade answers could not be read: {exc}")
+                core_unread.append("trade answers")
+                payload["trade_reviews"] = [
+                    {"trade_id": str(row.get("trade_id") or ""), "status": "unread"}
+                    for row in payload["trades"]
+                ]
 
         # TJ-2B is another projection of the SAME worker payload.  It opens no
         # live desk store and the page never starts a second read for a table.
@@ -511,6 +536,7 @@ class DayReviewService:
             payload["reads"] = reads
             payload["congruence"] = congruence
         except Exception:  # noqa: BLE001 - a verdict never costs the day
+            core_unread.append("market reads")
             _log.debug("Day Review reads could not be graded.", exc_info=True)
         # TJ-4: the night's two verified files, READ on this worker. The page
         # calls no model, no grader and no pack builder - it formats what the
@@ -535,7 +561,12 @@ class DayReviewService:
                 now=moment,
             )
         except Exception:  # noqa: BLE001 - a card never costs the day
+            core_unread.append("report card")
             _log.debug("The Day Review report card could not be built.", exc_info=True)
+        payload["pack_sources_unread"] = tuple(core_unread)
+        payload["story_freshness"] = self._story_freshness(session, payload, moment)
+        if payload["story_freshness"]["state"] != "current":
+            payload["day_story"] = None
         # TJ-6: the night's suggestions, in their own guard - one unreadable
         # store costs one section. A dismissed idea is already gone by the time
         # the rows arrive here; nothing on this page ever writes one.
@@ -684,6 +715,64 @@ class DayReviewService:
             return None
         return dict(stored)
 
+    def _story_freshness(
+        self, session: str, payload: Mapping[str, Any], now: datetime
+    ) -> dict[str, str]:
+        """Compare current worker facts, the saved pack, and its verified story."""
+        import day_review_pack
+
+        if payload.get("pack_sources_unread"):
+            return {"state": "unread", "reason": ", ".join(payload["pack_sources_unread"])}
+        try:
+            current = self._compose_pack(session, payload, now=now)
+        except Exception as exc:  # noqa: BLE001
+            return {"state": "unread", "reason": f"current facts: {exc}"}
+        saved = day_review_pack.read_pack(session)
+        if not isinstance(saved, Mapping):
+            return {"state": "missing", "reason": "no saved day facts yet"}
+        if not saved.get("inputs_hash"):
+            return {"state": "unread", "reason": "saved facts have no content stamp"}
+        if saved.get("inputs_hash") != current.get("inputs_hash"):
+            return {"state": "stale", "reason": "day facts changed since the saved story"}
+        story = payload.get("day_story")
+        if not isinstance(story, Mapping):
+            return {"state": "missing", "reason": "day facts are current; story is waiting"}
+        if story.get("inputs_hash") != saved.get("inputs_hash"):
+            return {"state": "stale", "reason": "story was written for older facts"}
+        return {"state": "current", "reason": "story matches current facts"}
+
+    def _compose_pack(
+        self, session: str, data: Mapping[str, Any], *, now: datetime | None = None
+    ) -> dict[str, Any]:
+        """The one pure pack composition used by page freshness and night write."""
+        import day_report_card
+        import day_review_pack
+
+        reviews = {
+            str(row.get("trade_id") or ""): dict(row)
+            for row in data.get("trade_reviews") or () if isinstance(row, Mapping)
+        }
+        trades = [
+            {**dict(row), "trade_review": reviews.get(str(row.get("trade_id") or ""), {})}
+            for row in data.get("trades") or () if isinstance(row, Mapping)
+        ]
+        entries = list(data.get("entries") or ())
+        return day_review_pack.build_pack(
+            session,
+            entries=entries,
+            forecast=data.get("forecast") or {},
+            story=data.get("story"),
+            environment=self._regime_shifts(session),
+            d1_label=self._d1_label_for(session),
+            internals=self._internals_marks(session, entries),
+            walkaway=data.get("walkaway"),
+            reads=data.get("reads") or (),
+            congruence=data.get("congruence") or (),
+            trades=trades,
+            report_card=day_report_card.pack_card(data.get("report_card")),
+            now=now,
+        )
+
     @staticmethod
     def _d1_view() -> dict[str, Any] | None:
         """The ONE rolling D1 view, or `None`. Not keyed to a session."""
@@ -817,6 +906,8 @@ class DayReviewService:
         *,
         payload: Mapping[str, Any] | None = None,
         now: datetime | None = None,
+        strict: bool = False,
+        root=None,
         **_kwargs,
     ) -> dict[str, Any] | None:
         """Build and store the session's day pack. The ONE named seam for it.
@@ -830,7 +921,6 @@ class DayReviewService:
         rebuildable, and the night says "no story yet" rather than narrating a
         half-built day.
         """
-        import day_report_card
         import day_review_pack
 
         session = str(session_date or "")[:10]
@@ -845,30 +935,14 @@ class DayReviewService:
         except Exception:  # noqa: BLE001 - an unreadable day builds no pack
             _log.debug("The day pack's inputs were unreadable.", exc_info=True)
             return None
-        entries = list(data.get("entries") or [])
+        if strict and data.get("pack_sources_unread"):
+            return None
         try:
-            pack = day_review_pack.build_pack(
-                session,
-                entries=entries,
-                forecast=data.get("forecast") or {},
-                story=data.get("story"),
-                environment=self._regime_shifts(session),
-                d1_label=self._d1_label_for(session),
-                internals=self._internals_marks(session, entries),
-                walkaway=data.get("walkaway"),
-                reads=data.get("reads") or (),
-                congruence=data.get("congruence") or (),
-                trades=data.get("trades") or [],
-                # TJ-12: the card this session's payload already carries, so the
-                # night's story can cite a line of it. `pack_card` is the ONE
-                # seam that decides what the pack may hold - `How fresh` stays
-                # out, because it describes the machine's night and its text
-                # moves whenever the job ledger gains a row, which inside the
-                # hashed body would re-narrate the same day every night.
-                report_card=day_report_card.pack_card(data.get("report_card")),
-                now=now,
-            )
-            day_review_pack.write_pack(pack)
+            pack = self._compose_pack(session, data, now=now)
+            saved = day_review_pack.read_pack(session, root=root)
+            if isinstance(saved, Mapping) and saved.get("inputs_hash") == pack.get("inputs_hash"):
+                return dict(saved)
+            day_review_pack.write_pack(pack, root=root)
         except Exception:  # noqa: BLE001 - a pack never costs the page
             _log.debug("The day pack could not be built.", exc_info=True)
             return None
@@ -963,12 +1037,16 @@ class DayReviewService:
         session = str(session_date or "")[:10]
         if not session or not day_review_bars.session_is_closed(session):
             return None
+        if _kwargs.get("reuse_existing"):
+            existing = day_review_bars.read_session_bars(session)
+            if existing:
+                return existing
         names = day_review_bars.decided_symbols(session, daily_recap_reader.RecapSources())
         bars = day_review_bars.fetch_session_bars(names, session)
         return day_review_bars.write_session_bars(session, bars)
 
     # -- the read grader ---------------------------------------------------
-    def build_reads_for(self, session_date: str, **kwargs) -> list[dict[str, Any]]:
+    def build_reads_for(self, session_date: str, **kwargs) -> list[dict[str, Any]] | None:
         """Grade the session's reads and APPEND them to the ledger. One seam.
 
         The named seam the post-close tick calls (`_IndexBuildWorker`, on the
@@ -986,12 +1064,13 @@ class DayReviewService:
         if not session:
             return []
         now = kwargs.get("now") or datetime.now()
+        strict = bool(kwargs.get("strict"))
         entries: list[dict[str, Any]] = []
         try:
             entries = list(self.journal.entries_about(session))
         except Exception:  # noqa: BLE001 - an unreadable ledger grades nothing
             _log.debug("The journal could not be read for grading.", exc_info=True)
-            return []
+            return None if strict else []
         decisions, claims = self._decisions_and_claims(session)
         trades: list[dict[str, Any]] = []
         try:

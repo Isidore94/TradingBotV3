@@ -149,7 +149,10 @@ def test_read_day_reads_both_verified_files_on_the_worker_and_calls_no_model(
     service = _wire(monkeypatch)
     payload = service.read_day(SESSION, now=NOW)
 
-    assert payload["day_story"]["narration"]["headline"].startswith("You called")
+    # A legacy story with no matching day pack is read but cannot be shown as
+    # current facts. The page stays read-only and makes the missing stamp clear.
+    assert payload["day_story"] is None
+    assert payload["story_freshness"]["state"] in {"missing", "unread"}
     assert payload["d1_view"]["narration"]["open_theses"][0]["still_true"] == "unknown"
 
 

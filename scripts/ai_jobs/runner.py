@@ -605,6 +605,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         briefs,
         cohorts,
         day_review_narration,
+        day_review_facts,
         digest,
         enrichment,
         evidence_report,
@@ -945,6 +946,13 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             ),
             max_attempts=3,
         ),
+        JobSlot(
+            name="day_review_facts",
+            run=day_review_facts.run_day_review_facts,
+            reserve_minutes=5.0,
+            description="Refresh current and recent Day Review facts (no model)",
+            max_attempts=3,
+        ),
         # ------------------------------------------------------------------
         # STAGE 2: narration (decision 0018, 2026-09-04)
         #
@@ -1223,7 +1231,7 @@ WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration")
 #: ENDS at `measured_report`, which closes that stage today; a later packet
 #: appending inside stage 1 lands inside this set automatically because the set
 #: is derived from the slate, not written out twice.
-_STAGE_ONE_LAST_SLOT = "measured_report"
+_STAGE_ONE_LAST_SLOT = "day_review_facts"
 
 
 def _night_evening_date(moment: datetime):

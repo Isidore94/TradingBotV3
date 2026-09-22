@@ -336,6 +336,81 @@ def exit_notes_on(session: Any) -> dict[str, dict[str, Any]]:
         return {}
 
 
+def trade_reviews_on(
+    session: str,
+    trades: list[dict[str, Any]],
+    exit_notes: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Read the trader's entry recollection and this session's exit per trade.
+
+    This runs only after ``trades_on`` opened the shared Journal store. An
+    unanswered field stays absent; a failed event read raises so the caller can
+    say *unread*, rather than claiming the trader gave no answer.
+    """
+    if not trades:
+        return []
+    import trade_mentor_trade_check as check
+
+    store = _store()
+    reviewed = str(session or "")[:10]
+    result: list[dict[str, Any]] = []
+    for trade in trades:
+        trade_id = str(trade.get("trade_id") or "")
+        raw_rows = store.list_opportunity_events(
+            trade_id=trade_id, event_type=check.EVENT_RECALLED_RAW, limit=10000
+        ) if trade_id else []
+        answer_rows = store.list_opportunity_events(
+            trade_id=trade_id, event_type=check.EVENT_RECALLED, limit=10000
+        ) if trade_id else []
+        raw = raw_rows[-1] if raw_rows else {}
+        raw_payload = raw.get("payload") or {}
+        answers: dict[str, dict[str, Any]] = {}
+        for event in answer_rows:
+            body = event.get("payload") or {}
+            field = str(body.get("field") or "")
+            if field not in check.MATERIAL_FIELDS:
+                continue
+            answers[field] = {
+                "state": str(body.get("state") or ""),
+                "text": str(body.get("text") or ""),
+                "value": body.get("value"),
+                "unit": str(body.get("unit") or ""),
+                "recorded_at": str(event.get("occurred_at") or ""),
+                "recalled_after_session": bool(body.get("recalled_after_session")),
+            }
+        note = (exit_notes or {}).get(trade_id) or {}
+        # The note owner keys by (trade, exit session). Never borrow a note
+        # from an earlier scale-out if a caller hands us a broader mapping.
+        if str(note.get("exit_session") or reviewed)[:10] != reviewed:
+            note = {}
+        result.append({
+            "trade_id": trade_id,
+            "symbol": str(trade.get("symbol") or ""),
+            "instrument": str(trade.get("instrument_type") or trade.get("asset_type") or ""),
+            "opened_at": str(trade.get("opened_at") or ""),
+            "closed_at": str(trade.get("last_closing_leg_at") or trade.get("closed_at") or ""),
+            "entry_session": str(trade.get("opened_at") or trade.get("trade_date") or "")[:10],
+            "exit_session": reviewed,
+            "net_pnl": trade.get("net_pnl"),
+            "currency": str(trade.get("currency") or ""),
+            "entry_raw": {
+                "text": str(raw_payload.get("raw_text") or ""),
+                "recorded_at": str(raw.get("occurred_at") or ""),
+                "recalled_after_session": bool(raw_payload.get("recalled_after_session")),
+            },
+            "entry_answers": answers,
+            "exit_raw": {
+                "text": str(note.get("raw_text") or ""),
+                "recorded_at": str(note.get("occurred_at") or note.get("recorded_at") or ""),
+                "written_after_the_session": bool(note.get("written_after_the_session")),
+            },
+            "exit_fields": dict(note.get("exit_fields") or {}),
+            "label_provenance": str(note.get("label_provenance") or trade.get("label_provenance") or ""),
+            "status": "read",
+        })
+    return result
+
+
 def load_trades(
     *,
     broker: str = "All",
