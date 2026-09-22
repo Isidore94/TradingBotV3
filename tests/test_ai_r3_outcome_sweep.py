@@ -282,3 +282,47 @@ def test_outcome_sweep_job_refuses_weekend_and_a_calendar_failure_before_the_fac
     assert "session" in str(weekend["reason"]).lower()
     assert broken["status"] == "failed", broken
     assert "calendar" in str(broken["reason"]).lower()
+
+
+def test_unreadable_outcomes_csv_keeps_ambiguous_finalizing_marks(monkeypatch, tmp_path):
+    """Recovery cannot call an unreadable CSV proof that a final is absent."""
+    from bounce_bot_lib import legacy
+
+    event_id = "ambiguous-final"
+    checkpoint = tmp_path / "pending_bounce_outcomes.json"
+    checkpoint.write_text(
+        json.dumps(
+            {
+                "pending": {event_id: {"event_id": event_id, "trade_date": "2026-09-18"}},
+                "finalized": {},
+                "finalizing": {event_id: "2026-09-18T14:00:00"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    outcomes = tmp_path / "outcomes.csv"
+    outcomes.mkdir()
+    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOME_STATE_JSON", checkpoint)
+    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOMES_CSV", outcomes)
+
+    bot = legacy.BounceBot.for_outcome_sweep()
+    before = checkpoint.read_bytes()
+    recovery = bot.resolve_unfinished_finalizations()
+
+    assert recovery == {"resolved_finalized": 0, "resolved_still_pending": 0, "unresolved": 1}
+    assert bot._finalizing_outcome_ids() == {event_id: "2026-09-18T14:00:00"}
+    assert checkpoint.read_bytes() == before
+
+    # The ordinary finalizer and the batch pre-read share the same fence.  They
+    # must fail closed too, without treating the unreadable directory as no row.
+    assert bot.finalize_outcome_once(event_id) == "commit_failed"
+    monkeypatch.setattr(legacy.BounceBot, "_write_outcome_coverage", lambda *_args: None)
+    sweep = bot.sweep_pending_bounce_outcomes(
+        now=datetime(2026, 9, 18, 14, 30), wait_for_scan_window=False
+    )
+
+    assert sweep["failed"] == 1
+    disk = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert event_id in disk["pending"]
+    assert event_id in disk["finalizing"]
+    assert disk["finalized"] == {}
