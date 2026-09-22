@@ -196,6 +196,38 @@ QLabel#ReviewSetupText[alertLive="true"] {
     color: @short@;
 }
 
+/* AR-2A: the same pure alert presentation classifier sets this property on
+   the chart's reason and the feed's trigger.  It never changes an alert's
+   route, queue, Focus membership or source timeframe. */
+QLabel#ReviewSetupText[alertReasonTone="muted"] {
+    color: @text_secondary@;
+}
+
+QLabel#ReviewSetupText[alertReasonTone="price"],
+QLabel#ReviewSetupText[alertReasonTone="live"] {
+    color: @short@;
+}
+
+QLabel#ReviewSetupText[alertReasonTone="focus"] {
+    color: @long@;
+}
+
+QLabel#ReviewSetupText[alertReasonTone="d1"] {
+    color: @chart_blue@;
+}
+
+QLabel#ReviewSetupText[alertReasonTone="pullback-m15"] {
+    color: @chart_yellow@;
+}
+
+QLabel#ReviewSetupText[alertReasonTone="pullback-m30"] {
+    color: @chart_purple@;
+}
+
+QLabel#ReviewSetupText[alertReasonTone="pullback-h1"] {
+    color: @chart_light_blue@;
+}
+
 QPushButton,
 QToolButton {
     background: @bg_elevated@;
@@ -440,6 +472,43 @@ QLabel#AlertSymbolPlain {
 QLabel#AlertTriggerWatch {
     color: @short@;
     font-weight: 700;
+}
+
+QLabel#AlertTrigger[alertReasonTone="muted"],
+QLabel#AlertTriggerWatch[alertReasonTone="muted"] {
+    color: @text_secondary@;
+}
+
+QLabel#AlertTrigger[alertReasonTone="price"],
+QLabel#AlertTrigger[alertReasonTone="live"],
+QLabel#AlertTriggerWatch[alertReasonTone="price"],
+QLabel#AlertTriggerWatch[alertReasonTone="live"] {
+    color: @short@;
+}
+
+QLabel#AlertTrigger[alertReasonTone="focus"],
+QLabel#AlertTriggerWatch[alertReasonTone="focus"] {
+    color: @long@;
+}
+
+QLabel#AlertTrigger[alertReasonTone="d1"],
+QLabel#AlertTriggerWatch[alertReasonTone="d1"] {
+    color: @chart_blue@;
+}
+
+QLabel#AlertTrigger[alertReasonTone="pullback-m15"],
+QLabel#AlertTriggerWatch[alertReasonTone="pullback-m15"] {
+    color: @chart_yellow@;
+}
+
+QLabel#AlertTrigger[alertReasonTone="pullback-m30"],
+QLabel#AlertTriggerWatch[alertReasonTone="pullback-m30"] {
+    color: @chart_purple@;
+}
+
+QLabel#AlertTrigger[alertReasonTone="pullback-h1"],
+QLabel#AlertTriggerWatch[alertReasonTone="pullback-h1"] {
+    color: @chart_light_blue@;
 }
 
 QToolButton#AlertFavoriteButton {

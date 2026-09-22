@@ -433,7 +433,13 @@ class _ClickableItem(QFrame):
         layout.addWidget(feed_item)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    def set_repeat_count(self, count: int, *, latest_trigger: str = "") -> None:
+    def set_repeat_count(
+        self,
+        count: int,
+        *,
+        latest_trigger: str = "",
+        latest_alert: BounceAlert | None = None,
+    ) -> None:
         """Forward R4 section 6.3's fold to the row this wrapper contains.
 
         This class wraps an ``AlertFeedItem`` rather than subclassing it, so
@@ -441,7 +447,11 @@ class _ClickableItem(QFrame):
         holds wrappers, so without this the fold silently fails over to a new
         row and the whole control does nothing.
         """
-        self.feed_item.set_repeat_count(count, latest_trigger=latest_trigger)
+        self.feed_item.set_repeat_count(
+            count,
+            latest_trigger=latest_trigger,
+            latest_alert=latest_alert,
+        )
 
     @property
     def repeat_badge(self):
@@ -1420,6 +1430,7 @@ class AlertCenterPanel(QFrame):
             item.set_repeat_count(
                 decision.repeat_count,
                 latest_trigger=alert.trigger or alert.raw_text,
+                latest_alert=alert,
             )
         except RuntimeError:
             # The C++ side was deleted (trimmed or rebuilt).
