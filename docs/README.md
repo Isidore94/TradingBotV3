@@ -1,15 +1,15 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-09-20** (archive pass: `CURRENT_CHECKPOINT.md`'s 2026-09-03 to
-2026-09-17 entries moved to `archive/CHECKPOINT_ARCHIVE_2026-09-03_2026-09-17.md` and
-`CHANGELOG.md`'s 2026-09-06 to 2026-09-18 Recent changes to
-`archive/CHANGELOG_ARCHIVE_2026-09-06_2026-09-18.md`; before that 2026-09-17,
-`plan.md` rewritten for the trader journal program, decision
-0021 added, the old roadmap archived at `archive/PLAN_ARCHIVE_2026-09-17.md`; before that
-2026-09-16, Phase 0.32 plain-language trader test guide added; before that 2026-09-12, WISHLIST 11 added `MEMORY.md` and `memory/`; `CHANGELOG.md`'s 2026-09-03 to
-2026-09-05 entries moved to `archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`).
-
-One line per file. Status and decisions live in the root control set, never here; if a
+Last reconciled: **2026-09-22** (archive pass: `CURRENT_CHECKPOINT.md`'s 2026-09-18/19 entries moved to
+`archive/CHECKPOINT_ARCHIVE_2026-09-18_2026-09-19.md`; 2026-09-03 to 2026-09-17 remain in
+`archive/CHECKPOINT_ARCHIVE_2026-09-03_2026-09-17.md`; `CHANGELOG.md`'s 2026-09-19/20
+Recent changes moved to `archive/CHANGELOG_ARCHIVE_2026-09-19_2026-09-20.md`; 2026-09-06 to
+2026-09-18 remain in `archive/CHANGELOG_ARCHIVE_2026-09-06_2026-09-18.md`; earlier history follows
+the dated records below. The 2026-09-19 restart-log heading was retained as an operational heading
+because it contains Sep 20/21 rows. Before that 2026-09-17, the old roadmap was archived and
+decision 0021 added; before that 2026-09-16, Phase 0.32 plain-language trader test guide added;
+before that 2026-09-12, WISHLIST 11 added `MEMORY.md` and `memory/`; the 2026-09-03 to
+2026-09-05 changelog entries are in `archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`.
 row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
 
 ## Root control documents
@@ -82,22 +82,22 @@ priorities and breaks every prioritisation tie. Numbering is chronological.
 
 ## Archive — evidence, never context
 
-[`archive/`](archive/) holds everything that is history: the checkpoint archives (the
-newest,
+[`archive/`](archive/) holds everything that is history: the checkpoint archives (newest,
+[`archive/CHECKPOINT_ARCHIVE_2026-09-18_2026-09-19.md`](archive/CHECKPOINT_ARCHIVE_2026-09-18_2026-09-19.md), holding 11
+dated entries from 2026-09-19 back to 2026-09-18; next,
 [`archive/CHECKPOINT_ARCHIVE_2026-09-03_2026-09-17.md`](archive/CHECKPOINT_ARCHIVE_2026-09-03_2026-09-17.md),
-holds the 78 dated entries from 2026-09-17 back to 2026-09-03), the
-five changelog archives (the newest is
+holding the 78 dated entries from 2026-09-17 back to 2026-09-03), the changelog archives (newest,
+[`archive/CHANGELOG_ARCHIVE_2026-09-19_2026-09-20.md`](archive/CHANGELOG_ARCHIVE_2026-09-19_2026-09-20.md), holding 18
+entries from 2026-09-20 back to 2026-09-19; next,
 [`archive/CHANGELOG_ARCHIVE_2026-09-06_2026-09-18.md`](archive/CHANGELOG_ARCHIVE_2026-09-06_2026-09-18.md),
-holding the 35 entries from 2026-09-18 back to 2026-09-06; beside it
-[`archive/CHANGELOG_ARCHIVE_2026-09-06.md`](archive/CHANGELOG_ARCHIVE_2026-09-06.md)
-holds the ST6 entry of the same day, archived earlier, and before them
+holding 35 entries from 2026-09-18 back to 2026-09-06; beside it
+[`archive/CHANGELOG_ARCHIVE_2026-09-06.md`](archive/CHANGELOG_ARCHIVE_2026-09-06.md) holds the ST6
+entry of the same day, archived earlier, and before them
 [`archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`](archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md)
-holds the 25 entries from 2026-09-05 back to 2026-09-03), the roadmap archives (the newest,
+holds 25 entries from 2026-09-05 back to 2026-09-03); roadmap archives (newest,
 [`archive/PLAN_ARCHIVE_2026-09-17.md`](archive/PLAN_ARCHIVE_2026-09-17.md), is the whole
-`plan.md` as it stood before the 2026-09-17 rewrite, Phases 0.5–0.32), the
-July GUI plans, the retired Desk Link design, the paste-ready
-build prompts for phases already built, and the frozen August reviews under
-`archive/analysis/`. Nothing in the code reads any of it. Open one file there to answer
+`plan.md` as it stood before the 2026-09-17 rewrite, Phases 0.5–0.32), July GUI plans,
+the retired Desk Link design, built prompts, and frozen August reviews under `archive/analysis/`.
 one specific question; never load the folder as context, and never treat an entry
 there as an open gate — open gates live only in `CURRENT_CHECKPOINT.md`. Relative
 links inside archived files were not rewritten when they moved.
