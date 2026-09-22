@@ -2886,6 +2886,22 @@ class RequestQueue:
 # BounceBot Class with GUI callback
 ##########################################
 class BounceBot(EWrapper, EClient):
+    @classmethod
+    def for_outcome_sweep(cls):
+        """Load only the durable outcome state; start no scanner or broker client.
+
+        The nightly job checks calendar and autorun before calling this factory.
+        A malformed checkpoint must fail closed rather than being quarantined by
+        the scanner's more forgiving startup loader.
+        """
+        bot = cls.__new__(cls)
+        bot._pending_outcome_lock = threading.RLock()
+        state = bot._read_checkpoint_from_disk(strict=True)
+        bot.pending_bounce_outcomes = dict(state["pending"])
+        bot._finalized_outcome_memory = dict(state["finalized"])
+        bot._finalizing_outcome_marks = dict(state["finalizing"])
+        return bot
+
     def __init__(self, gui_callback=None, start_scanning_enabled=True):
         EClient.__init__(self, self)
         self.connection_status = False
@@ -3271,7 +3287,7 @@ class BounceBot(EWrapper, EClient):
             with local_writer_lock(key, timeout_seconds=self.OUTCOME_LOCK_TIMEOUT_SECONDS):
                 yield
 
-    def _read_checkpoint_from_disk(self) -> dict:
+    def _read_checkpoint_from_disk(self, *, strict=False) -> dict:
         """The authoritative state, re-read inside the lock.
 
         In-memory state is not authoritative: another process commits to the
@@ -3288,6 +3304,10 @@ class BounceBot(EWrapper, EClient):
         payload = json.loads(INTRADAY_BOUNCE_OUTCOME_STATE_JSON.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("pending outcome checkpoint is not an object")
+        if strict:
+            for name in ("pending", "finalized", "finalizing"):
+                if name in payload and not isinstance(payload[name], dict):
+                    raise ValueError(f"pending outcome checkpoint {name} is not an object")
         return {
             "pending": payload.get("pending") if isinstance(payload.get("pending"), dict) else {},
             "finalized": payload.get("finalized") if isinstance(payload.get("finalized"), dict) else {},

@@ -67,6 +67,20 @@ def test_outcome_sweep_factory_refuses_a_bad_checkpoint_without_quarantining_or_
     assert list(tmp_path.glob("*.corrupt-*.json")) == []
 
 
+def test_outcome_sweep_factory_refuses_malformed_state_sections(monkeypatch, tmp_path):
+    from bounce_bot_lib import legacy
+
+    checkpoint = tmp_path / "pending_bounce_outcomes.json"
+    checkpoint.write_text(json.dumps({"pending": [], "finalized": {}, "finalizing": {}}), encoding="utf-8")
+    before = checkpoint.read_bytes()
+    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOME_STATE_JSON", checkpoint)
+
+    with pytest.raises(ValueError, match="pending"):
+        legacy.BounceBot.for_outcome_sweep()
+
+    assert checkpoint.read_bytes() == before
+
+
 def test_outcome_sweep_job_skips_when_disabled_or_the_canonical_sweep_is_too_early():
     """The nightly owner preserves the existing autorun and close+35 gates."""
     from ai_jobs.outcome_sweep import run_outcome_sweep
@@ -237,9 +251,9 @@ def test_outcome_sweep_job_finalizes_measured_and_unmeasured_pending_rows_once_a
     )
 
     assert first["status"] == "ok", first
-    assert first["by_terminal_kind"] == {"swept_measured": 1, "unmeasured": 1}
+    assert first["by_terminal_kind"] == {"measured_eod": 0, "measured_swept": 1, "unmeasured": 1}
     assert second["status"] == "ok", second
-    assert second["already_finalized"] == 2
+    assert second["finalized"] == 0 and second["already_finalized"] == 0
     with outcomes.open(newline="", encoding="utf-8") as handle:
         finals = [row for row in csv.DictReader(handle) if row.get("event_type") == "final"]
     assert [row["event_id"] for row in finals] == ["measured", "unmeasured"]
