@@ -1590,6 +1590,11 @@ class DayReviewPanel(QFrame):
         if self._worker is not None and self._worker.isRunning():
             if str(getattr(self._worker, "_session", "")) != str(session):
                 self._pending_day_read = (str(session), bool(backfill_bars))
+            else:
+                # The trader returned to the day this one reader already has.
+                # A previously queued different date is obsolete; leaving it
+                # here would read and then discard a day nobody selected.
+                self._pending_day_read = None
             return
         self.status.setText(LOADING_NOTE)
         if backfill_bars:
