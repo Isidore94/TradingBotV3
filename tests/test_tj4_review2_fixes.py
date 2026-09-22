@@ -368,22 +368,46 @@ def test_a_real_full_day_grading_every_read_is_accepted(root):
     assert stored["graded"] == {"reads_graded": 8, "reads_in_pack": 8}
 
 
-def test_the_schema_the_model_is_given_carries_this_packs_own_numbers(root):
-    """The model is TOLD the real bound, so it never has to choose two reads to
-    drop in silence."""
+def test_the_schema_the_model_is_given_carries_this_packs_own_read_keys(root):
+    """The v2 request closes the exact offered reads, so none are silently lost."""
     import day_review_pack
+    from ai_jobs import day_review_narration as nar
 
     pack = _full_day_pack(root)
     seen: list[dict] = []
 
     def request(**kwargs):
         seen.append(kwargs)
-        return _grade_everything(pack)
+        if kwargs.get("prompt_version") == nar.D1_VIEW_PROMPT_VERSION:
+            ids = list((kwargs.get("evidence") or {}).get("allowed_source_ids") or ())
+            return {
+                "model": "local-test-medium",
+                "summary": {"belief_now": "Long.", "open_theses": [], "sources": ids[:1]},
+            }
+        evidence = kwargs["evidence"]
+        return {
+            "model": "local-test-medium",
+            "summary": {
+                "headline": "Every read has its code-owned link.",
+                "what_happened": "SPY closed +2.00%.",
+                "what_you_thought": "You called it up, six times.",
+                "read_explanations": {
+                    read_id: "The measured link is owned by code."
+                    for read_id in evidence["read_explanations"]
+                },
+                "chased_against_news": {"verdict": "unknown", "evidence_id": ""},
+                "process": "Every card answered.",
+                "sources": list(day_review_pack.allowed_source_ids(pack)),
+            },
+        }
 
     _run(root, request)
 
     schema = seen[0]["schema"]
-    assert schema["properties"]["were_you_right"]["maxItems"] == len(pack["reads"])
+    explanations = schema["properties"]["read_explanations"]
+    assert explanations["additionalProperties"] is False
+    assert explanations["required"] == [row["source_id"] for row in pack["reads"]]
+    assert "were_you_right" not in schema["properties"]
     assert schema["properties"]["sources"]["maxItems"] == len(
         day_review_pack.allowed_source_ids(pack)
     )

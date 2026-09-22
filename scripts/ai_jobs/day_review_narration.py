@@ -42,7 +42,9 @@ _log = logging.getLogger(__name__)
 #: A session folder's name. Anything else beside the packs is not a queue entry.
 _SESSION_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
-PROMPT_VERSION = "day_review_narration_v1"
+# The stored story is deliberately still v1: readers own that shape.  v2 only
+# changes the transport so code, rather than a model, owns the measured link.
+PROMPT_VERSION = "day_review_narration_v2"
 SCHEMA = "day_review_narration_v1"
 
 D1_VIEW_PROMPT_VERSION = "d1_view_narration_v1"
@@ -177,13 +179,14 @@ D1_VIEW_JSON_SCHEMA: dict[str, Any] = {
 DAY_INSTRUCTIONS = (
     "Narrate this ONE session from the pack below and nothing else. You may not "
     "calculate a statistic, grade a call, or turn an unmeasured item into a "
-    "fact. Every verdict in were_you_right must be COPIED from the reads item "
-    "its evidence_id names - if you disagree with a measured verdict, say "
-    "nothing rather than changing it. Only a trader_said item whose kind is "
-    "'prediction' may be graded as a call; an item whose kind is 'observation' "
-    "is quoted as what the trader SAW. chased_against_news is 'unknown' unless "
-    "the forecast section states the condition you are judging. Every id in "
-    "sources must be copied exactly from allowed_source_ids."
+    "fact. `read_explanations` is a closed object: copy every offered read id "
+    "as a key and write only its short explanation. Do not supply a verdict or "
+    "choose a prediction source; code owns both measured links. Only a "
+    "trader_said item whose kind is 'prediction' may be a call; an item whose "
+    "kind is 'observation' is quoted as what the trader SAW. "
+    "chased_against_news is 'unknown' unless the forecast section states the "
+    "condition you are judging. Every id in sources must be copied exactly from "
+    "allowed_source_ids."
 )
 
 D1_VIEW_INSTRUCTIONS = (
@@ -219,8 +222,95 @@ def _bounded_schema(schema: Mapping[str, Any], **limits: int) -> dict[str, Any]:
     return body
 
 
+def _read_explanation_contract(
+    pack: Mapping[str, Any],
+) -> tuple[dict[str, dict[str, str]], list[dict[str, str]]]:
+    """Return code-owned read/prediction links and named omissions.
+
+    A prediction belongs to its journal entry, rather than merely being another
+    prediction in the pack.  That makes a model incapable of linking one
+    entry's measured result to another entry's call.  Multiple predictions for
+    one read are ambiguous evidence, so a v2 request is refused whole instead
+    of guessing which click was meant.
+    """
+    import day_review_pack
+
+    reads = _by_source_id(pack.get("reads"), what="reads")
+    said = _by_source_id(pack.get("trader_said"), what="trader_said")
+    predictions: dict[str, list[Mapping[str, Any]]] = {}
+    for item in said.values():
+        if str(item.get("kind") or "") != day_review_pack.KIND_PREDICTION:
+            continue
+        entry_id = str(item.get("entry_id") or "")
+        source_id = str(item.get("source_id") or "")
+        if not entry_id or not source_id:
+            raise NarrationRejected("a prediction offered to v2 has no entry or source id")
+        predictions.setdefault(entry_id, []).append(item)
+
+    pairs: dict[str, dict[str, str]] = {}
+    not_offered: list[dict[str, str]] = []
+    for read_id, read in reads.items():
+        entry_id = str(read.get("entry_id") or "")
+        if not read_id or not entry_id:
+            raise NarrationRejected("a read offered to v2 has no entry or source id")
+        matches = predictions.get(entry_id, [])
+        if len(matches) > 1:
+            raise NarrationRejected(
+                f"read {read_id!r} has {len(matches)} prediction sources on its entry"
+            )
+        if not matches:
+            not_offered.append({"read_source_id": read_id, "reason": "no_prediction"})
+            continue
+        if len(pairs) >= MAX_GRADED_CLAIMS:
+            not_offered.append({"read_source_id": read_id, "reason": "render_cap"})
+            continue
+        prediction = matches[0]
+        pairs[read_id] = {
+            "read_source_id": read_id,
+            "prediction_source_id": str(prediction["source_id"]),
+            "verdict": str(read.get("verdict") or ""),
+        }
+    return pairs, not_offered
+
+
+def _read_explanation_pairs(pack: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    return _read_explanation_contract(pack)[0]
+
+
 def _narration_schema_for(pack: Mapping[str, Any]) -> dict[str, Any]:
-    """The day story's schema for THIS pack: one claim per read, ids it holds."""
+    """The v2 day-story schema, closed around this pack's offered read ids."""
+    import day_review_pack
+
+    sources = len(day_review_pack.allowed_source_ids(pack))
+    pairs = _read_explanation_pairs(pack)
+    reads = len([row for row in pack.get("reads") or () if isinstance(row, Mapping)])
+    body = _bounded_schema(
+        NARRATION_JSON_SCHEMA,
+        were_you_right=min(reads, MAX_GRADED_CLAIMS),
+        sources=min(sources, MAX_SOURCES),
+    )
+    properties = body["properties"]
+    # The v2 request must have one transport only.  Legacy replies take their
+    # own strict schema after they arrive; this provider schema never offers a
+    # model the old verdict/source fields it must no longer choose.
+    properties.pop("were_you_right", None)
+    required = body["required"]
+    required.remove("were_you_right")
+    required.append("read_explanations")
+    properties["read_explanations"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(pairs),
+        "properties": {
+            read_id: {"type": "string", "maxLength": 240}
+            for read_id in pairs
+        },
+    }
+    return body
+
+
+def _legacy_narration_schema_for(pack: Mapping[str, Any]) -> dict[str, Any]:
+    """The frozen v1 provider-fixture path, with its original strict limits."""
     import day_review_pack
 
     reads = len([row for row in pack.get("reads") or () if isinstance(row, Mapping)])
@@ -428,6 +518,10 @@ def _check_day_narration(narration: Mapping[str, Any], pack: Mapping[str, Any]) 
                 "the narration graded an observation as a call; only a prediction "
                 "is a call"
             )
+        if str(item.get("entry_id") or "") != str(row.get("entry_id") or ""):
+            raise NarrationRejected(
+                "a graded claim linked a read to a prediction from another entry"
+            )
 
     chased = narration.get("chased_against_news")
     if not isinstance(chased, Mapping):
@@ -443,6 +537,39 @@ def _check_day_narration(narration: Mapping[str, Any], pack: Mapping[str, Any]) 
         raise NarrationRejected(
             f"chased_against_news cited an id the pack does not carry: {evidence_id!r}"
         )
+
+
+def _materialize_v2_narration(
+    narration: Mapping[str, Any], pack: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Turn v2 explanations into the persisted v1 claims using canonical links."""
+    pairs, _not_offered = _read_explanation_contract(pack)
+    explanations = narration.get("read_explanations")
+    if not isinstance(explanations, Mapping):
+        raise NarrationRejected("read_explanations was not an object")
+    keys = [str(key) for key in explanations]
+    expected = list(pairs)
+    if set(keys) != set(expected) or len(keys) != len(expected):
+        raise NarrationRejected("read_explanations must contain exactly the offered read ids")
+    claims: list[dict[str, str]] = []
+    for read_id, canonical in pairs.items():
+        explanation = explanations.get(read_id)
+        if not isinstance(explanation, str) or len(explanation) > 240:
+            raise NarrationRejected(
+                f"the explanation for {read_id!r} must be a string of at most 240 characters"
+            )
+        claims.append(
+            {
+                "claim": explanation,
+                "source_id": canonical["prediction_source_id"],
+                "verdict": canonical["verdict"],
+                "evidence_id": read_id,
+            }
+        )
+    body = dict(narration)
+    body.pop("read_explanations", None)
+    body["were_you_right"] = claims
+    return body
 
 
 def _check_d1_narration(narration: Mapping[str, Any], allowed: set[str]) -> None:
@@ -486,11 +613,17 @@ def _day_evidence(pack: Mapping[str, Any], root: Path) -> dict[str, Any]:
 
     session = str(pack.get("session_date") or "")
     allowed = list(day_review_pack.allowed_source_ids(pack))
+    pairs, not_offered = _read_explanation_contract(pack)
     return {
         "package_id": f"day-review:{str(pack.get('inputs_hash') or '')[:16]}",
         "evidence_hash": str(pack.get("inputs_hash") or ""),
         "instructions": DAY_INSTRUCTIONS,
         "allowed_source_ids": allowed,
+        # The model sees only a closed, code-owned mapping.  An omission is
+        # named and counted so an observation/extracted read never quietly
+        # becomes a clicked prediction.
+        "read_explanations": pairs,
+        "read_explanations_not_offered": not_offered,
         "session_date": session,
         "pack": {name: pack.get(name) for name in day_review_pack.SECTIONS},
         # Read-only, and deliberately outside `allowed_source_ids`: last night's
@@ -843,8 +976,10 @@ def _run_day_story(
             "reason": refusal,
             "outputs": [],
         }
-    schema = _narration_schema_for(pack)
     try:
+        # A malformed/ambiguous pack is evidence failure too.  Keep the last
+        # story and report it through the same no-raise nightly seam.
+        schema = _narration_schema_for(pack)
         result = _call(
             caller,
             evidence=_day_evidence(pack, root),
@@ -852,8 +987,23 @@ def _run_day_story(
             prompt_version=PROMPT_VERSION,
             schema_name="tradingbot_day_review_narration",
         )
-        narration = result.get("summary") if isinstance(result, Mapping) else None
-        narration = _validate(narration, schema, name="day story")
+        reply = result.get("summary") if isinstance(result, Mapping) else None
+        if not isinstance(reply, Mapping):
+            raise NarrationRejected("the day story was not an object")
+        has_v2 = "read_explanations" in reply
+        has_legacy = "were_you_right" in reply
+        if has_v2 and has_legacy:
+            raise NarrationRejected("the reply mixed v1 claims with v2 explanations")
+        if has_v2:
+            narration = _materialize_v2_narration(
+                _validate(reply, schema, name="day story"), pack
+            )
+        else:
+            # Existing saved/provider fixtures are still a hard v1 contract.
+            # They are checked just as strictly as before and never repaired.
+            narration = _validate(
+                reply, _legacy_narration_schema_for(pack), name="legacy day story"
+            )
         _check_day_narration(narration, pack)
         payload = {
             "schema": SCHEMA,
