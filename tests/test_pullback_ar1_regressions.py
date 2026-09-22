@@ -7,19 +7,29 @@ from datetime import timedelta
 
 from test_pct1_pullback_alert import (
     M15_LONG_CLOSES,
+    M15_LATE_FLAG_CLOSES,
+    M15_LATE_FLAG_CROSS_INDEX,
+    M15_LATE_FLAG_RECLAIM_INDEX,
     M15_RECLAIM_INDEX,
     M30_HOLD_CLOSES,
     M30_HOLD_CROSS_INDEX,
     M30_HOLD_RECLAIM_INDEX,
     M30_SMA,
     TRIGGER_H1,
+    TRIGGER_RECLAIM,
     TRIGGER_THEN_LRSI,
     bar_dt,
     bar_end,
     make_bars,
     one_fire,
 )
-from test_pct1_pullback_desk import WATCH_KIND, _events, _panel
+from test_pct1_pullback_desk import (
+    WATCH_KIND,
+    _events,
+    _install_stub_caches,
+    _panel,
+    settle_pullback,
+)
 from test_ws_10c_h1_retester import (
     GOLDEN_CONFIRM_DT,
     golden_long_h1_bars,
@@ -128,6 +138,30 @@ def test_persisted_aware_stamp_compares_against_naive_market_time_by_instant():
     assert not AlertCenterPanel._pullback_mark_covers(
         "2026-08-27T14:59:00+00:00", "2026-08-27T08:00:00"
     )
+
+
+def test_real_worker_evidence_keeps_a_prior_lrsi_cross_separate_from_event_bar(
+    monkeypatch, tmp_path
+):
+    """A reclaim event and its allowed prior cross retain both timestamps."""
+    m15 = make_bars(M15_LATE_FLAG_CLOSES[: M15_LATE_FLAG_RECLAIM_INDEX + 1], 15)
+    _install_stub_caches(monkeypatch, bars={("NVDA", 15): m15})
+    panel = _panel(monkeypatch, tmp_path)
+    panel.arm_chart_watch_for("NVDA", "LONG", WATCH_KIND)
+    panel._chart_watches = [
+        dataclasses.replace(
+            panel._chart_watches[0],
+            armed_at=bar_dt(0, 15),
+            triggers=(TRIGGER_RECLAIM,),
+        )
+    ]
+
+    panel._poll_pullback_watches(now=bar_end(M15_LATE_FLAG_RECLAIM_INDEX, 15))
+    settle_pullback(panel)
+
+    detail = _events(tmp_path, "watch_fired")[0]["detail"]
+    assert detail["bar_dt"] == bar_dt(M15_LATE_FLAG_RECLAIM_INDEX, 15).isoformat()
+    assert detail["cross_bar_dt"] == bar_dt(M15_LATE_FLAG_CROSS_INDEX, 15).isoformat()
 
 
 def test_actual_h1_poll_preserves_the_trigger_and_timeframe_in_both_outputs(

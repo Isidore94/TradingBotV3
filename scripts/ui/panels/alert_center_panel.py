@@ -6710,7 +6710,10 @@ class AlertCenterPanel(QFrame):
                                 "lrsi": fire.lrsi,
                                 "atr": fire.atr,
                                 "cross_timeframe": fire.cross_timeframe,
-                                "cross_bar_dt": stamp,
+                                "cross_bar_dt": (
+                                    fire.cross_bar_dt.isoformat()
+                                    if fire.cross_bar_dt is not None else ""
+                                ),
                                 "cross_lrsi": fire.cross_lrsi,
                                 "sma_bar_dt": (
                                     fire.sma_bar_dt.isoformat()
