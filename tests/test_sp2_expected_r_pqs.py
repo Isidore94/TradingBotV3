@@ -273,6 +273,65 @@ def test_v2_payoff_needs_thirty_measured_losing_episodes_for_full_weight():
     assert full["payoff_evidence"] == pytest.approx(60.0)
 
 
+def test_v2_keeps_a_measured_loser_below_the_unproven_baseline():
+    """The reliability floor does not erase the older measured-loser penalty."""
+    loser = compute_proven_quality_score(
+        static_points=260.0,
+        win_rate=10 / 30,
+        profit_factor=0.6,
+        closed_samples=30,
+        n_wins=10,
+        n_losses=20,
+        n_flats=0,
+        measured_entry_sessions=5,
+        gross_win=12.0,
+        gross_loss=20.0,
+    )
+    assert loser["proven"] is True
+    assert loser["profit_factor"] == pytest.approx(0.6)
+    assert loser["evidence"] < 40.0
+
+
+def test_v2_rejects_invalid_counted_population_and_compact_unknowns():
+    """A malformed count or unlabelled compact row cannot become PQS evidence."""
+    invalid_count = compute_proven_quality_score(
+        static_points=260.0,
+        closed_samples=30,
+        n_wins=math.nan,
+        n_losses=30,
+        n_flats=0,
+        measured_entry_sessions=5,
+        gross_win=30.0,
+        gross_loss=30.0,
+    )
+    assert invalid_count["proven"] is False
+    assert "invalid counted population" in invalid_count["reason"]
+
+    compact = {
+        "compact": {
+            "symbol": "OLD",
+            "side": "LONG",
+            "scan_date": "2026-09-15",
+            "priority_bucket": "favorite_setup",
+            "setup_family": "post_earnings_52w_break",
+            "_scoring_outcome_summary": {
+                "tradeable_scenario_count": 1,
+                "closed_tradeable_scenario_count": 1,
+                "avg_total_r": 1.0,
+                "avg_closed_r": 1.0,
+                "representative_total_r": 1.0,
+                "representative_closed_r": 1.0,
+                "any_target_hit": True,
+                "any_stopped": False,
+            },
+        }
+    }
+    row = _family_row(compact)
+    assert row["closed_setups"] == 1  # legacy family accounting is unchanged
+    assert row["pqs_n_closed"] == 0
+    assert row["pqs_n_entry_sessions"] == 0
+
+
 def test_v2_adds_pqs_basis_without_moving_the_pinned_legacy_family_columns():
     """SP2 may append provenance, never rewrite the existing family values."""
     golden_path = Path(__file__).parent / "fixtures" / "st4_family_rows_golden.csv"

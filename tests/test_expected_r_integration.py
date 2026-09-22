@@ -40,11 +40,17 @@ def _family_row_for(
     tracked=None,
     win_rate=None,
     profit_factor=None,
+    pqs_n_wins=None,
+    pqs_n_losses=None,
+    pqs_n_flats=0,
+    pqs_n_entry_sessions=None,
+    pqs_gross_win=None,
+    pqs_gross_loss=None,
 ):
     # Build the recent-family aggregate using the SAME canonical context the
     # real pipeline derives, so the lookup key matches what the ranking uses.
     ctx = master_avwap._tracker_setup_context(row)
-    return {
+    result = {
         "side": ctx["side"],
         "priority_bucket": ctx["priority_bucket"],
         "setup_family": ctx["setup_family"],
@@ -55,6 +61,22 @@ def _family_row_for(
         "win_rate_closed": win_rate,
         "profit_factor": profit_factor,
     }
+    if pqs_n_wins is not None and pqs_n_losses is not None:
+        result.update(
+            {
+                "pqs_policy": "pqs_v2",
+                "pqs_basis": "finite_representative_closed_r",
+                "pqs_source": "test_counted_population",
+                "pqs_n_wins": pqs_n_wins,
+                "pqs_n_losses": pqs_n_losses,
+                "pqs_n_flats": pqs_n_flats,
+                "pqs_n_closed": pqs_n_wins + pqs_n_losses + pqs_n_flats,
+                "pqs_n_entry_sessions": pqs_n_entry_sessions,
+                "pqs_gross_win": pqs_gross_win,
+                "pqs_gross_loss": pqs_gross_loss,
+            }
+        )
+    return result
 
 
 class ApplyExpectedRRankingTests(unittest.TestCase):
@@ -145,8 +167,10 @@ class ApplyExpectedRRankingTests(unittest.TestCase):
         winner = _row("GEN", "LONG", "near_favorite_zone", "avwap_breakout", 140)
         unknown = _row("NEWB", "LONG", "watch", "brand_new_family", 260)
         family_rows = [
-            _family_row_for(loser, closed=12, avg_closed_r=-0.6, avg_total_r=-0.5, win_rate=0.33, profit_factor=0.6),
-            _family_row_for(winner, closed=20, avg_closed_r=1.1, avg_total_r=1.0, win_rate=0.60, profit_factor=2.0),
+            _family_row_for(loser, closed=12, avg_closed_r=-0.6, avg_total_r=-0.5, win_rate=0.33, profit_factor=0.6,
+                            pqs_n_wins=10, pqs_n_losses=20, pqs_n_entry_sessions=5, pqs_gross_win=18.0, pqs_gross_loss=30.0),
+            _family_row_for(winner, closed=20, avg_closed_r=1.1, avg_total_r=1.0, win_rate=0.60, profit_factor=2.0,
+                            pqs_n_wins=18, pqs_n_losses=12, pqs_n_entry_sessions=5, pqs_gross_win=24.0, pqs_gross_loss=12.0),
         ]
 
         rows = [loser, winner, unknown]
@@ -166,8 +190,10 @@ class ApplyExpectedRRankingTests(unittest.TestCase):
         hot = _row("AMD", "LONG", "near_favorite_zone", "mid_earnings_first_dev_retest", 110)
         cold = _row("NVDA", "LONG", "favorite_setup", "post_earnings_52w_break", 150)
         family_rows = [
-            _family_row_for(hot, closed=10, avg_closed_r=1.9, avg_total_r=1.7, tracked=12, win_rate=0.7, profit_factor=2.6),
-            _family_row_for(cold, closed=10, avg_closed_r=-0.3, avg_total_r=-0.2, tracked=12, win_rate=0.4, profit_factor=0.8),
+            _family_row_for(hot, closed=10, avg_closed_r=1.9, avg_total_r=1.7, tracked=12, win_rate=0.7, profit_factor=2.6,
+                            pqs_n_wins=21, pqs_n_losses=9, pqs_n_entry_sessions=5, pqs_gross_win=26.0, pqs_gross_loss=10.0),
+            _family_row_for(cold, closed=10, avg_closed_r=-0.3, avg_total_r=-0.2, tracked=12, win_rate=0.4, profit_factor=0.8,
+                            pqs_n_wins=12, pqs_n_losses=18, pqs_n_entry_sessions=5, pqs_gross_win=14.4, pqs_gross_loss=18.0),
         ]
         ai_state = {"symbols": {"AMD": {}, "NVDA": {}}}
         rows = [hot, cold]
