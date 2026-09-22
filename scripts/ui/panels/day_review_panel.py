@@ -1336,6 +1336,26 @@ class DayReviewPanel(QFrame):
         self._fill_session_picker(select=str(session_date))
         self.reload()
 
+    def show_latest_completed_session(self) -> bool:
+        """Select the newest closed exchange session and read it once.
+
+        This is the explicit route from A.I. Summary.  It asks the same
+        calendar owner as the picker and refuses to replace the trader's
+        historical selection when the calendar cannot answer.
+        """
+        import market_calendar
+
+        try:
+            session = market_calendar.last_completed_session(self._clock()).isoformat()
+        except Exception:  # noqa: BLE001 - calendar uncertainty must not guess a session
+            self.status.setText(
+                "The latest completed session is uncertain. Day Review stayed where it was."
+            )
+            self.statusChanged.emit(self.status.text())
+            return False
+        self.show_session(session)
+        return True
+
     # -- the automatic read ------------------------------------------------
     def start(self) -> None:
         """Begin the once-a-minute due check.
@@ -1597,7 +1617,7 @@ class DayReviewPanel(QFrame):
         # TJ-4, AFTER the facts: the verified story replaces the "no story yet"
         # line when there is one, and leaves the facts exactly as they were when
         # there is not.
-        self._render_day_story(payload.get("day_story"))
+        self._render_day_story(payload.get("day_story"), session, payload.get("report_card"))
         self._render_d1_view(payload.get("d1_view"))
         self._render_congruence(tuple(payload.get("congruence") or ()))
         self._render_theses(payload.get("theses") or [])
@@ -1687,7 +1707,23 @@ class DayReviewPanel(QFrame):
             lines.append(str(note))
         self.story_facts.setText("\n".join(lines))
 
-    def _render_day_story(self, story: Any) -> None:
+    @staticmethod
+    def _story_attempt_state(card: Any) -> str:
+        """Read the already-loaded `how_fresh` row; never open the ledger here."""
+        lines = card.get("lines") if isinstance(card, Mapping) else getattr(card, "lines", ())
+        for line in lines or ():
+            if not isinstance(line, Mapping) or line.get("key") != "how_fresh":
+                continue
+            failed = set(line.get("slots_failed") or ())
+            degraded = set(line.get("slots_degraded") or ())
+            if "day_review_narration" in failed or "day_review_narration" in degraded:
+                return "failed"
+            return str(line.get("night_status") or "unknown")
+        # A partial/older payload has no report-card row at all. Preserve the
+        # normal pre-night message for it; only a loaded row may say unknown.
+        return ""
+
+    def _render_day_story(self, story: Any, session: str, card: Any) -> None:
         """The night's verified narration. Formatting only (TJ-4 item 4).
 
         Every verdict printed here was MEASURED by TJ-10's grader and copied by
@@ -1696,7 +1732,20 @@ class DayReviewPanel(QFrame):
         """
         self.story_body.setText("")
         self.story_body.setVisible(False)
+        attempt_state = self._story_attempt_state(card)
         if not isinstance(story, Mapping):
+            if attempt_state == "failed":
+                self.story_note.setText(
+                    "The AI story failed its checks. Your measured results are still shown."
+                )
+            elif attempt_state == "no_rows":
+                self.story_note.setText("The AI story has not run yet. Your measured results are still shown.")
+            elif attempt_state == "unknown":
+                self.story_note.setText(
+                    "The AI story status is unknown. Your measured results are still shown."
+                )
+            return
+        if str(story.get("session_date") or "") != str(session):
             return
         narration = story.get("narration")
         if not isinstance(narration, Mapping):
@@ -1704,6 +1753,10 @@ class DayReviewPanel(QFrame):
         headline = str(narration.get("headline") or "").strip()
         if headline:
             self.story_note.setText(headline)
+        if attempt_state == "failed":
+            self.story_note.setToolTip("A new attempt failed its checks. These are the prior verified words.")
+        else:
+            self.story_note.setToolTip("")
         lines: list[str] = []
         for key in ("what_happened", "what_you_thought"):
             text = str(narration.get(key) or "").strip()
