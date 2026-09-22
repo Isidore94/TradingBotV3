@@ -2482,17 +2482,28 @@ class DayReviewPanel(QFrame):
     def _render_calls(self, rows) -> None:
         calls = [row for row in rows if isinstance(row, Mapping)]
         self._call_entry_ids = [str(row.get("entry_id") or "") for row in calls]
-        self.calls_table.setRowCount(len(calls))
-        for index, row in enumerate(calls):
-            values = (
-                str(row.get("stamp") or ""),
-                str(row.get("horizon") or ""),
-                str(row.get("direction") or ""),
-                str(row.get("confidence") or ""),
-                self._verdict_text(str(row.get("verdict") or "unmeasured")),
-            )
-            for column, value in enumerate(values):
-                self.calls_table.setItem(index, column, QTableWidgetItem(value))
+        header = self.calls_table.horizontalHeader()
+        modes = [header.sectionResizeMode(column) for column in range(self.calls_table.columnCount())]
+        for column, mode in enumerate(modes):
+            if mode == QHeaderView.ResizeMode.ResizeToContents:
+                header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        self.calls_table.setUpdatesEnabled(False)
+        try:
+            self.calls_table.setRowCount(len(calls))
+            for index, row in enumerate(calls):
+                values = (
+                    str(row.get("stamp") or ""),
+                    str(row.get("horizon") or ""),
+                    str(row.get("direction") or ""),
+                    str(row.get("confidence") or ""),
+                    self._verdict_text(str(row.get("verdict") or "unmeasured")),
+                )
+                for column, value in enumerate(values):
+                    self.calls_table.setItem(index, column, QTableWidgetItem(value))
+        finally:
+            self.calls_table.setUpdatesEnabled(True)
+            for column, mode in enumerate(modes):
+                header.setSectionResizeMode(column, mode)
 
     def _open_call_row(self, row: int, _column: int) -> None:
         refs = getattr(self, "_call_entry_ids", ())

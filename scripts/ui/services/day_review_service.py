@@ -1407,23 +1407,17 @@ class DayReviewService:
                 # four stores and may read an appended tail): an index whose
                 # stores were REWRITTEN describes files that are no longer there,
                 # while an APPEND outside this index's scope leaves it valid.
-                verdict, stamp = day_review_index.stamp_verdict(stored, sources=sources)
+                verdict, _stamp = day_review_index.stamp_verdict(stored, sources=sources)
                 if verdict != "rebuild" and not day_review_index.is_stale(
                     stored, now=now
                 ):
                     index = stored
-                    if verdict == "moved":
-                        # Grew outside the scope: record the new stamp beside the
-                        # body so the next open compares sizes instead of reading
-                        # the same tail again. Hundreds of bytes, not 22 MB.
-                        day_review_index.refresh_stamp(stored, stamp=stamp)
+                    # A page open is read-only. The deterministic night/post-close
+                    # writer may refresh a moved stamp; this read uses the still
+                    # valid body without writing a cache file.
         except Exception:  # noqa: BLE001
             _log.debug("The stored Day Review index was unreadable.", exc_info=True)
             index = None
-        if index is None:
-            index = self.build_index_for(
-                session, lookback_sessions=lookback_sessions, now=now
-            )
         return daily_recap_reader.read_session(
             session,
             lookback_sessions=lookback_sessions,

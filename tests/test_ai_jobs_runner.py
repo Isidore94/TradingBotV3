@@ -325,7 +325,7 @@ EXPECTED_SLOT_ORDER = (
     # TJ-10 (2026-09-20): close the market reads whose horizon has matured.
     # Deterministic, no model. Beside the cohort graders in kind - a decision
     # measured after the fact - and INSIDE stage 1 for the same reason
-    # `miss_contrast` is: `_STAGE_ONE_LAST_SLOT` is `measured_report` and a slot
+    # `miss_contrast` is: `_STAGE_ONE_LAST_SLOT` is `day_review_facts` and a slot
     # appended after that name leaves the Sunday slate. Nothing below it reads
     # the read ledger and it reads nothing above it.
     "read_grades_mature",
@@ -346,6 +346,8 @@ EXPECTED_SLOT_ORDER = (
     # reads what the slots above it wrote and feeds nothing above it, so it
     # CLOSES the deterministic stage.
     "measured_report",
+    # TJ-17: current and recent saved facts close stage 1 before any story.
+    "day_review_facts",
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.
     "ai_summary",
@@ -353,7 +355,7 @@ EXPECTED_SLOT_ORDER = (
     # Appended INSIDE stage 2 and deliberately AHEAD of `ticker_briefs`: gate
     # #158 reads the ledger for a day story finished before 23:30 Pacific, and
     # the briefs reserve 120 minutes in front of it. It cannot go further
-    # forward either - `ai_summary` sits directly after `measured_report` and
+    # forward either - `ai_summary` sits directly after `day_review_facts` and
     # two other pins say so.
     "day_review_narration",
     # TJ-16 item 4 (2026-09-20): grounded codes for the trader's own words.

@@ -842,7 +842,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # and this is what comes back for it. Beside the cohort graders because
         # it is the same kind of work (a decision, measured after the fact) and
         # ahead of the three closers for the same reason TJ-15 sits there:
-        # `_STAGE_ONE_LAST_SLOT` is `measured_report` and `_deterministic_stage`
+        # `_STAGE_ONE_LAST_SLOT` is `day_review_facts` and `_deterministic_stage`
         # walks up to and INCLUDING it, so a slot appended after that name
         # silently leaves the Sunday slate however deterministic it is. Nothing
         # below reads the ledger and the ledger reads nothing above it, so only
@@ -886,7 +886,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # not a preference.
         #
         # The position above the closing pair is load-bearing for the same
-        # reason it is for TJ-15: `_STAGE_ONE_LAST_SLOT` is `measured_report`
+        # reason it is for TJ-15: `_STAGE_ONE_LAST_SLOT` is `day_review_facts`
         # and `_deterministic_stage` walks the slate up to and INCLUDING it, so
         # a slot appended after that name silently leaves the SUNDAY slate
         # however deterministic it is.
@@ -926,13 +926,12 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=3,
         ),
         # Packet WS-RP (2026-09-13), APPENDED after `market_story_rollups` and
-        # it now CLOSES the deterministic stage. It reads the day's own
+        # it now precedes the Day Review facts stage tail. It reads the day's own
         # evidence stores - the journal money, the intraday outcomes, the
         # session-horizon file and the warehouse - and publishes ONE measured
         # report plus its markdown sibling. Everything it reads is written by a
-        # slot above it, so it belongs last inside the stage; it calls no model
-        # and nothing below it reads its output, so it stays ahead of
-        # `ai_summary` rather than joining the narration stage.
+        # slot above it; it calls no model and stays ahead of
+        # `day_review_facts` rather than joining the narration stage.
         #
         # Deterministic, seconds of work, and a failure never fails the night -
         # hence `journal_import`'s attempt budget rather than the briefs'.
@@ -1008,7 +1007,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # Gate #158 reads the ledger for a day story finished before 23:30
         # Pacific and `ticker_briefs` reserves 120 minutes in front of it, so
         # the story goes first. It cannot move further forward: two existing
-        # pins say `ai_summary` sits directly after `measured_report`
+        # pins say `ai_summary` sits directly after `day_review_facts`
         # (`test_ws_10d_market_story.py`, `test_ws_rp_shared_report.py`), and
         # decision 0018's stage boundaries do not move for a new slot. It reads
         # only the deterministic day pack, and a failure preserves the last
@@ -1228,7 +1227,7 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
-#: ENDS at `measured_report`, which closes that stage today; a later packet
+#: ENDS at `day_review_facts`, which closes that stage today; a later packet
 #: appending inside stage 1 lands inside this set automatically because the set
 #: is derived from the slate, not written out twice.
 _STAGE_ONE_LAST_SLOT = "day_review_facts"
