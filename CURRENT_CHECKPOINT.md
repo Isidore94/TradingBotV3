@@ -20,7 +20,7 @@ This block is the current brief. Dated entries retain verification detail; old s
 | Active item | **TJ-17A…D — complete the daily and weekly learning loop**. All four packets are built on an isolated branch; combined verification and live gates remain. |
 | Working branch | **`codex/tj17-recap-complete`**, isolated at `.claude/worktrees/tj17-lead`, based on `main` `fb95854e`; desk checkout remains `main`. |
 | Live code | September 21's TJ-9E and per-trade Mentor Save are on `main`; `fb95854e` is documentation over `b4c1c4f7`/`4fe737b3`/`182f3e08`. No TJ-17 code is live. |
-| Dependencies | AI-R1 verified story/tag transport and AI-R2 navigation were integrated. The narrow AI-R3 deterministic facts stage was integrated without its separate outcome/theta changes. |
+| Dependencies | AI-R1 story/tag transport and AI-R2 navigation were integrated. The narrow AI-R3 deterministic facts stage was integrated without its separate outcome/theta changes. |
 | Next action | Finish combined tests, smoke, selftest, and offscreen page timing when the concurrent pytest runs free memory. Repair failures, then seek independent C/D review and keep live gates. Main update/restart is a later trader action. |
 | Verification | TJ-17 targeted A/B/C/D tests passed (35 together); 524 related recap tests passed before two obsolete assertions were updated. Changed Python passes ruff. Combined full suite, smoke, selftest and UI timing are pending while another full suite occupies memory. Prior main baseline: 10,263 passed, 14 skipped, 72 subtests and one known timing flake. |
 | Open gates | Existing live gates remain; TJ-17 horizon/window/late-answer/follow-through checks are owed. Independent C/D review and per-trade Save review are owed. TJ-8 cleanup waits. |
