@@ -307,7 +307,9 @@ def test_replay_separates_base_v1_history_from_reconstructed_v2_facts():
     assert replay["legacy"]["points_version"] == "points_v1"
     assert replay["legacy"]["total"] == fixture["v1_expected"]["total"]
     assert replay["reconstructed"]["points_version"] == "points_v2"
-    assert replay["reconstructed"]["sr"] == 6.0
+    # Only the blocking level is reconstructed.  Partial knowledge starts at
+    # the v2 zero baseline and retains that measured obstacle's deduction.
+    assert replay["reconstructed"]["sr"] == -4.0
     assert replay["reconstructed"]["reconstructed_family_facts"] is True
     assert replay["reconstructed"]["reconstructed_row_facts"] is True
 
