@@ -34,7 +34,7 @@ import logging
 from typing import Any, Callable, Mapping, Sequence
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 import evidence_stats
 from ai_jobs import improvement_ideas
@@ -78,6 +78,7 @@ class _IdeaRow(QWidget):
 
     keepRequested = Signal(str)
     dismissRequested = Signal(str)
+    actionRequested = Signal(str, str)
 
     def __init__(self, idea_id: str, parent=None) -> None:
         super().__init__(parent)
@@ -93,14 +94,45 @@ class _IdeaRow(QWidget):
 
         self.keep_button = QPushButton("Keep")
         self.dismiss_button = QPushButton("Dismiss")
+        self.scope_combo = QComboBox()
+        self.scope_combo.addItem("All market types", "all")
+        from indicators.d1_environment import LABELS
+
+        for label in LABELS:
+            self.scope_combo.addItem(str(label).replace("_", " "), str(label))
+        self.scope_combo.setToolTip("Choose the D1 market type before using this idea this week.")
+        self.use_button = QPushButton("Use this week")
+        self.followed_button = QPushButton("Followed today")
+        self.not_followed_button = QPushButton("Did not follow")
+        self.unknown_button = QPushButton("Not sure")
+        self.finish_button = QPushButton("Finish this change")
         self.keep_button.clicked.connect(lambda: self.keepRequested.emit(self.idea_id))
         self.dismiss_button.clicked.connect(lambda: self.dismissRequested.emit(self.idea_id))
+        self.use_button.clicked.connect(
+            lambda: self.actionRequested.emit(self.idea_id, f"choose:{self.scope_combo.currentData()}")
+        )
+        self.followed_button.clicked.connect(lambda: self.actionRequested.emit(self.idea_id, "follow:yes"))
+        self.not_followed_button.clicked.connect(lambda: self.actionRequested.emit(self.idea_id, "follow:no"))
+        self.unknown_button.clicked.connect(lambda: self.actionRequested.emit(self.idea_id, "follow:unknown"))
+        self.finish_button.clicked.connect(lambda: self.actionRequested.emit(self.idea_id, "finish"))
+        self.action_buttons = (
+            self.keep_button, self.dismiss_button, self.use_button,
+            self.followed_button, self.not_followed_button, self.unknown_button,
+            self.finish_button,
+        )
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.addWidget(self.keep_button)
         buttons.addWidget(self.dismiss_button)
+        buttons.addWidget(self.scope_combo)
+        buttons.addWidget(self.use_button)
         buttons.addStretch(1)
+        follow_buttons = QHBoxLayout()
+        follow_buttons.setContentsMargins(0, 0, 0, 0)
+        for button in self.action_buttons[3:]:
+            follow_buttons.addWidget(button)
+        follow_buttons.addStretch(1)
 
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 4)
@@ -108,6 +140,7 @@ class _IdeaRow(QWidget):
         body.addWidget(self.text_label)
         body.addWidget(self.detail_label)
         body.addLayout(buttons)
+        body.addLayout(follow_buttons)
 
     # -- rendering ---------------------------------------------------------
     def show_row(self, row: Mapping[str, Any]) -> None:
@@ -119,6 +152,14 @@ class _IdeaRow(QWidget):
         detail = self._detail(row)
         if self.detail_label.text() != detail:
             self.detail_label.setText(detail)
+        kept_process = self.status == improvement_ideas.STATUS_KEPT and self.kind == "process"
+        active = bool(row.get("current_choice"))
+        self.keep_button.setVisible(not active)
+        self.dismiss_button.setVisible(not active)
+        self.scope_combo.setVisible(kept_process and not active)
+        self.use_button.setVisible(kept_process and not active)
+        for button in (self.followed_button, self.not_followed_button, self.unknown_button, self.finish_button):
+            button.setVisible(active)
 
     @property
     def status(self) -> str:
@@ -155,6 +196,19 @@ class _IdeaRow(QWidget):
                 f"before {_reading(before)} · after {_reading(after)}"
                 + (f" · {_text(row.get('verdict'))}" if _text(row.get("verdict")) else "")
             )
+        current = row.get("current_choice") if isinstance(row.get("current_choice"), Mapping) else {}
+        if current:
+            counts = (current.get("follow_through") or {}).get("counts") or {}
+            parts.append(
+                f"this week {current.get('week') or ''}, starts {current.get('observation_start') or '?'}"
+                f" · D1 type {(current.get('scope') or {}).get('environment') or 'all'}"
+                f" · followed {int(counts.get('yes') or 0)}, no {int(counts.get('no') or 0)}, "
+                f"unknown {int(counts.get('unknown') or 0)}"
+            )
+            parts.append(f"frozen {_reading(current.get('before') or {})} · after {_reading(current.get('after') or {})}")
+        note = _text(row.get("comparison_note"))
+        if note:
+            parts.append(note)
         return " · ".join(parts)
 
 
@@ -251,6 +305,7 @@ class IdeasCard(QWidget):
                 widget = _IdeaRow(key, self)
                 widget.keepRequested.connect(self._on_keep)
                 widget.dismissRequested.connect(self._on_dismiss)
+                widget.actionRequested.connect(self._start)
                 self._by_id[key] = widget
                 self._rows_layout.addWidget(widget)
             widget.show_row(row)
@@ -320,7 +375,7 @@ class IdeasCard(QWidget):
         self.status_label.setText(f"Saving {status}...")
         worker = _WriteWorker(lambda: self._writer(str(idea_id), str(status)), self)
         worker.finished_with.connect(
-            lambda _result, key=str(idea_id), state=str(status): self._answered(key, state, "")
+            lambda result, key=str(idea_id), state=str(status): self._answered(key, state, "", result)
         )
         worker.failed.connect(
             lambda message, key=str(idea_id), state=str(status): self._answered(
@@ -330,7 +385,7 @@ class IdeasCard(QWidget):
         self._worker = worker
         worker.start()
 
-    def _answered(self, idea_id: str, status: str, problem: str) -> None:
+    def _answered(self, idea_id: str, status: str, problem: str, result: Any = None) -> None:
         """EVERY ending answers, including a raise.
 
         A card left grey by a write that failed silently is a card the trader
@@ -341,20 +396,21 @@ class IdeasCard(QWidget):
         if problem:
             self.status_label.setText(f"That {status} was not saved: {problem}")
             return
-        self.status_label.setText("")
+        display = dict(result) if isinstance(result, Mapping) else {}
+        self.status_label.setText(_text(display.get("message")))
         widget = self._by_id.get(str(idea_id))
         if widget is not None:
-            # The store is the truth and the next read confirms it; this is only
-            # so the count under the card moves on the click that moved it.
-            row = dict(getattr(widget, "row", {}))
-            row["status"] = status
+            row = dict(display.get("row") or getattr(widget, "row", {}))
+            if status in {improvement_ideas.STATUS_KEPT, improvement_ideas.STATUS_DISMISSED}:
+                row["status"] = status
             widget.show_row(row)
         self._refresh_summary()
 
     def _set_enabled(self, enabled: bool) -> None:
         for row in self.rows:
-            row.keep_button.setEnabled(bool(enabled))
-            row.dismiss_button.setEnabled(bool(enabled))
+            for button in row.action_buttons:
+                button.setEnabled(bool(enabled))
+            row.scope_combo.setEnabled(bool(enabled))
 
     def _default_writer(self, idea_id: str, status: str) -> Any:
         """The state file's OWN writers, and there is no other door.
@@ -362,9 +418,41 @@ class IdeasCard(QWidget):
         Resolved on the module at call time, so the card and the store cannot
         drift about what keeping an idea means.
         """
+        if status == improvement_ideas.STATUS_DISMISSED:
+            improvement_ideas.dismiss_idea(idea_id)
+            return {"message": "Idea dismissed."}
         if status == improvement_ideas.STATUS_KEPT:
-            return improvement_ideas.keep_idea(idea_id, end_session=self._end_session)
-        return improvement_ideas.dismiss_idea(idea_id)
+            improvement_ideas.keep_idea(idea_id, end_session=self._end_session)
+            message = "Idea kept. Choose it to track one change."
+        else:
+            from datetime import datetime
+
+            import market_calendar
+
+            today = market_calendar.last_completed_session(datetime.now().astimezone()).isoformat()
+            end = min(self._end_session, today) if self._end_session else today
+            if status.startswith("choose:"):
+                improvement_ideas.choose_weekly_change(
+                    idea_id, end_session=end, environment=status.split(":", 1)[1]
+                )
+                message = "Weekly change chosen. Follow-through starts next exchange session."
+            elif status.startswith("follow:"):
+                answer = status.split(":", 1)[1]
+                if answer not in {"yes", "no", "unknown"}:
+                    raise ValueError("unknown follow-through answer")
+                improvement_ideas.record_follow_through(
+                    idea_id, today, {"yes": True, "no": False, "unknown": None}[answer]
+                )
+                message = f"Saved {answer} for {today}."
+            elif status == "finish":
+                improvement_ideas.finish_weekly_change(idea_id)
+                message = "Weekly change finished. Its record is kept."
+            else:
+                raise ValueError(f"unknown idea action {status!r}")
+        # All store reads stay on this worker, including the fresh display row.
+        checked = improvement_ideas.checked_ideas(end_session=end if status != improvement_ideas.STATUS_KEPT else self._end_session)
+        row = next((item for item in checked if _text(item.get("idea_id")) == idea_id), {})
+        return {"row": row, "message": message}
 
     # -- sizing and shutdown -----------------------------------------------
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt's own name

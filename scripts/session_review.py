@@ -183,7 +183,7 @@ def _trade_groups(trades: list[Any], start: str, end: str, labels: Mapping[str, 
 def read_learning_window(
     *, end_session: Any, sessions: int = 5, root: Any = None,
     trades: Iterable[Any] | None = None, environment_labels: Mapping[str, str] | None = None,
-    now: datetime | None = None,
+    now: datetime | None = None, start_session: Any = "",
 ) -> dict[str, Any]:
     """One worker-only projection over 5, 10, or 20 completed NYSE sessions."""
     if sessions not in WINDOW_CHOICES:
@@ -191,6 +191,11 @@ def read_learning_window(
     payload = _empty(requested=sessions)
     try:
         chosen = _window_sessions(end_session, sessions, now)
+        if start_session:
+            first = _as_date(start_session)
+            chosen = [day for day in chosen if _as_date(day) >= first]
+        if not chosen:
+            return payload
         payload["window"] = {"requested": sessions, "sessions": chosen, "start": chosen[0], "end": chosen[-1]}
     except Exception as exc:  # calendar failures must be visible, not a blank page
         payload["error"] = f"window unavailable: {exc}"

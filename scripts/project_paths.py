@@ -418,6 +418,10 @@ DAY_REVIEW_READS_DIR = DAY_REVIEW_DIR / "reads"
 # queue or `review_policy.json` (plan.md sec 5).
 AI_IDEAS_FILE = PERSISTENT_DATA_DIR / "ai_ideas.jsonl"
 AI_IDEAS_STATE_FILE = PERSISTENT_DATA_DIR / "ai_ideas_state.json"
+# TJ-17D: explicit, trader-entered follow-through on a selected weekly process
+# change.  Append-only evidence beside the ideas state; it cannot affect any
+# detector, score, alert, queue, Focus list or policy.
+IDEA_FOLLOW_THROUGH_FILE = PERSISTENT_DATA_DIR / "idea_follow_through.jsonl"
 # Append-only JSONL of the trader's hand-vetted swing picks - "today's best
 # swing targets", typed at the end of a session into the strip under the M5
 # alert list. One row per action: an add carries (session_date, symbol, side,

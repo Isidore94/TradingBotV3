@@ -105,16 +105,18 @@ def test_named_weekly_measurables_preserve_counts_units_direction_and_scope(monk
     monkeypatch.setattr(improvement_ideas, "_resolve", lambda _reader: object())
     item = improvement_ideas.measurable_named("read_accuracy_rest_of_day")
     monkeypatch.setattr(
-        improvement_ideas, "MEASURABLES", (replace(item, read=_reading),), raising=False
+        improvement_ideas, "MEASURABLES",
+        (replace(item, read=lambda _reader, **kwargs: _reading(kwargs.pop("name"), **kwargs)),),
+        raising=False
     )
     reading = improvement_ideas.measure(
         "read_accuracy_rest_of_day",
         end_session=SESSION,
         sessions=5,
-        start_session=NEXT_SESSION,
+        start_session="2026-09-14",
         scope={"environment": ENVIRONMENT},
     )
-    assert reading["value"] == 0.70
+    assert reading["value"] == 0.70, reading.get("reason")
     assert (reading["hits"], reading["n"]) == (35, 50)
     assert reading["unit"] == "fraction"
     assert reading["better"] == "higher"
