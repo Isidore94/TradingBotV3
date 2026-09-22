@@ -379,6 +379,10 @@ class IntradayHistoryCache:
         self._batch_window = max(0.0, float(batch_window_seconds))
         self._lock = threading.Lock()
         self._bars: dict[str, list[dict[str, Any]]] = {}
+        # Incremented only when a worker installs a new readable snapshot.
+        # Callers can cheaply see a late worker delivery without copying bars
+        # on every GUI poll.
+        self._data_tokens: dict[str, int] = {}
         #: symbol -> the completed session-aligned BUCKET the last ATTEMPT was
         #: made for, so a failure is not retried sixty times before the next
         #: bar prints and the evening poll asks for nothing at all.
@@ -395,6 +399,18 @@ class IntradayHistoryCache:
         key = str(symbol or "").strip().upper()
         with self._lock:
             return list(self._bars.get(key) or ())
+
+    def data_token(self, symbol: str) -> int:
+        """A cheap per-symbol snapshot generation for poll-side scheduling."""
+        key = str(symbol or "").strip().upper()
+        with self._lock:
+            return self._data_tokens.get(key, 0)
+
+    def snapshot_for(self, symbol: str) -> tuple[list[dict[str, Any]], int]:
+        """Bars and their generation under one lock for worker evaluation."""
+        key = str(symbol or "").strip().upper()
+        with self._lock:
+            return list(self._bars.get(key) or ()), self._data_tokens.get(key, 0)
 
     def unavailable(self, symbol: str) -> bool:
         """True when the last attempt for this symbol failed and none succeeded.
@@ -581,6 +597,7 @@ class IntradayHistoryCache:
                 bars = fetched.get(key)
                 if bars:
                     self._bars[key] = bars
+                    self._data_tokens[key] = self._data_tokens.get(key, 0) + 1
                     self._failed.discard(key)
                 else:
                     # Whatever was fetched before STAYS - it is still the best
