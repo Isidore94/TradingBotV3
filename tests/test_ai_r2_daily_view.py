@@ -310,6 +310,33 @@ def test_latest_completed_session_queues_behind_an_old_read_without_backfilling_
         qapp.processEvents()
 
 
+def test_returning_to_the_active_day_clears_an_obsolete_queued_latest_read(qapp, monkeypatch):
+    """A -> B -> A while A reads finishes A only; B is no longer requested."""
+    from ui.panels.day_review_panel import DayReviewPanel
+
+    service = _BlockingDayService()
+    panel = DayReviewPanel(service=service, clock=lambda: MONDAY_MORNING)
+    monkeypatch.setattr(panel, "_backfill_bars_for", lambda _session: None)
+    try:
+        panel.show_session(OLD_SESSION)
+        assert service.started.wait(1.0)
+        assert panel.show_latest_completed_session() is True
+        assert panel.session_date() == "2026-09-18"
+
+        panel.show_session(OLD_SESSION)
+        assert panel.session_date() == OLD_SESSION
+        service.release.set()
+
+        assert _drain_until(qapp, lambda: panel._worker is None)
+        assert service.reads == [OLD_SESSION]
+        assert panel._payload.get("session_date") == OLD_SESSION
+    finally:
+        service.release.set()
+        panel.shutdown()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
 def test_missing_story_says_failed_checks_but_keeps_the_measured_report_card(day_panel):
     """An absent day narration with a failed or degraded narration slot is not "not yet"."""
     day_panel.render(
