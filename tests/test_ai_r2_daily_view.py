@@ -159,6 +159,27 @@ def test_ai_summary_daily_button_routes_to_the_one_latest_completed_day_review_w
         qapp.processEvents()
 
 
+def test_latest_daily_route_defers_the_remembered_session_read_until_after_selection():
+    """The title switch sees the guard before the panel starts its one latest-day read."""
+    from ui import app
+
+    events: list[object] = []
+    host = SimpleNamespace()
+
+    def select(title):
+        events.append((title, host._opening_latest_day_review))
+        return True
+
+    host._select_page_by_title = select
+    host.day_review_panel = SimpleNamespace(
+        show_latest_completed_session=lambda: events.append("latest") or True
+    )
+
+    assert app.MainWindow.show_latest_completed_day_review(host) is True
+    assert events == [(app.DAY_REVIEW_PAGE_TITLE, True), "latest"]
+    assert host._opening_latest_day_review is False
+
+
 @pytest.mark.parametrize(
     ("clock", "expected"),
     (

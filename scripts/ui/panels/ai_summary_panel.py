@@ -46,6 +46,9 @@ class AiSummaryPanel(QFrame):
     """Explicit, export-only provider workspace for evidence-grounded review."""
 
     statusChanged = Signal(str)
+    #: Opens the one on-device daily read.  The panel does not read a story,
+    #: build evidence, or start a provider request for this route.
+    dailyReviewRequested = Signal()
     _runFinished = Signal(object)
     #: The gate strip's read lands here, off the worker thread.
     _gatesLoaded = Signal(object)
@@ -218,6 +221,18 @@ class AiSummaryPanel(QFrame):
         safety.setObjectName("MutedLabel")
         safety.setWordWrap(True)
 
+        daily_review_note = QLabel(
+            "Daily results, story, and ideas are in Day Review. They are made on this device overnight. "
+            "These tools are for an extra manual review."
+        )
+        daily_review_note.setObjectName("MutedLabel")
+        daily_review_note.setWordWrap(True)
+        self.daily_review_button = QPushButton("Open Day Review")
+        self.daily_review_button.setToolTip(
+            "Open the latest completed exchange session. Day Review shows the overnight results, "
+            "story, and ideas without starting a model or manual review."
+        )
+
         provider_row = QHBoxLayout()
         provider_row.setContentsMargins(0, 0, 0, 0)
         provider_row.setSpacing(8)
@@ -267,6 +282,8 @@ class AiSummaryPanel(QFrame):
 
         layout.addWidget(header)
         layout.addWidget(safety)
+        layout.addWidget(daily_review_note)
+        layout.addWidget(self.daily_review_button)
         layout.addLayout(gate_row)
         layout.addLayout(provider_row)
         layout.addLayout(key_row)
@@ -284,6 +301,7 @@ class AiSummaryPanel(QFrame):
         self.delete_key_button.clicked.connect(self._delete_key)
         self.preview_button.clicked.connect(self.build_preview)
         self.generate_button.clicked.connect(self.generate_summary)
+        self.daily_review_button.clicked.connect(self.dailyReviewRequested.emit)
         self.open_export_button.clicked.connect(self._open_last_export)
         self._runFinished.connect(self._on_run_finished)
 
