@@ -124,6 +124,38 @@ def test_named_weekly_measurables_preserve_counts_units_direction_and_scope(monk
     assert reading["source"]["read_ids"] == ["read-1", "read-2"]
 
 
+def test_weekly_named_readers_use_one_owner_group_and_keep_waiting_counts():
+    from ai_jobs import improvement_ideas
+
+    window = {
+        "window": {"sessions": ["2026-09-17", "2026-09-18"]},
+        "reads": {"horizons": {"next_5_sessions": {"accuracy": {"n": 0, "right": 0, "pending": 2}}}},
+        "by_environment": [{
+            "horizon": "next_5_sessions", "key": ENVIRONMENT,
+            "accuracy": {"n": 0, "right": 0, "pending": 2, "unmeasured": 1},
+            "read_ids": ["pending-a", "pending-b"],
+        }],
+        "trade_groups": [
+            {"horizon": "day", "environment": "all", "scope": "all_contexts", "stats": {"wins": 3, "closed": 5}, "trade_ids": ["a", "b", "c", "d", "e"]},
+            {"horizon": "day", "environment": ENVIRONMENT, "scope": "entry_environment", "stats": {"wins": 1, "closed": 2}, "trade_ids": ["a", "b"]},
+        ],
+    }
+    reader = lambda **_kwargs: window
+    waiting = improvement_ideas._window_read_accuracy(
+        reader, name="read_accuracy_next_5_sessions", end_session=SESSION,
+        sessions=5, scope={"environment": ENVIRONMENT},
+    )
+    assert waiting["measured"] is False
+    assert waiting["pending"] == 2
+    assert waiting["source"]["read_ids"] == ["pending-a", "pending-b"]
+    trade = improvement_ideas._window_trade_win_rate(
+        reader, name="trade_win_rate_day", end_session=SESSION,
+        sessions=5, scope={"environment": ENVIRONMENT},
+    )
+    assert (trade["hits"], trade["n"], trade["value"]) == (1, 2, 0.5)
+    assert trade["source"]["trade_ids"] == ["a", "b"]
+
+
 def test_weekly_choice_refuses_second_active_change_and_keeps_original_baseline_bytes(monkeypatch, tmp_path):
     """One exchange week permits one active choice; the same click is harmless.
 

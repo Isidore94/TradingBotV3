@@ -418,6 +418,7 @@ class IdeasCard(QWidget):
         Resolved on the module at call time, so the card and the store cannot
         drift about what keeping an idea means.
         """
+        end = self._end_session
         if status == improvement_ideas.STATUS_DISMISSED:
             improvement_ideas.dismiss_idea(idea_id)
             return {"message": "Idea dismissed."}
@@ -430,7 +431,7 @@ class IdeasCard(QWidget):
             import market_calendar
 
             today = market_calendar.last_completed_session(datetime.now().astimezone()).isoformat()
-            end = min(self._end_session, today) if self._end_session else today
+            end = today
             if status.startswith("choose:"):
                 improvement_ideas.choose_weekly_change(
                     idea_id, end_session=end, environment=status.split(":", 1)[1]
@@ -450,7 +451,7 @@ class IdeasCard(QWidget):
             else:
                 raise ValueError(f"unknown idea action {status!r}")
         # All store reads stay on this worker, including the fresh display row.
-        checked = improvement_ideas.checked_ideas(end_session=end if status != improvement_ideas.STATUS_KEPT else self._end_session)
+        checked = improvement_ideas.checked_ideas(end_session=end)
         row = next((item for item in checked if _text(item.get("idea_id")) == idea_id), {})
         return {"row": row, "message": message}
 

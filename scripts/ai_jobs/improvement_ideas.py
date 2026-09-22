@@ -626,9 +626,18 @@ def _window_read_accuracy(
         hits, total = int(chosen.get("right") or 0), int(chosen.get("n") or 0)
     except (TypeError, ValueError):
         hits = total = 0
-    if total <= 0:
-        return _unmeasured(name, sessions, f"no measured {horizon} reads")
     dates = list((window.get("window") or {}).get("sessions") or ())
+    if total <= 0:
+        return {
+            **_unmeasured(name, sessions, f"no measured {horizon} reads"),
+            "scope": dict(scope),
+            "pending": int(chosen.get("pending") or 0),
+            "unmeasured": int(chosen.get("unmeasured") or 0),
+            "dates": dates,
+            "start_session": dates[0] if dates else start_session,
+            "end_session": dates[-1] if dates else end_session,
+            "source": {"read_ids": list(source_ids), "owner": "prediction_ledger.build_readout"},
+        }
     return {
         "measurable": name, "value": hits / total, "hits": hits, "n": total,
         "measured": True, "unit": "fraction", "better": "higher", "scope": dict(scope),
