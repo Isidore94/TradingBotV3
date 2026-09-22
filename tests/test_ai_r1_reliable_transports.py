@@ -444,6 +444,60 @@ def test_observation_v2_fragments_cover_all_punctuation_without_overlimit_quotes
         assert all(end - start <= observation_tags.MAX_FRAGMENT_LENGTH for start, end in spans)
 
 
+def test_observation_v2_persists_honest_partial_coverage_for_one_long_note(tmp_path):
+    """A cap is visible after a successful real publish, not just in the request."""
+    from ai_jobs import observation_tags
+
+    entry = tag_fx.click_entry(
+        session=tag_fx.LAST_SESSION, hour=9, direction="up", confidence="high",
+        observation=" ".join(f"Sentence {index}." for index in range(61)), because="",
+    )
+    vocabulary = observation_tags.load_vocabulary()
+
+    def request(**kwargs):
+        evidence = kwargs["evidence"]
+        omitted = evidence["fragments_omitted"]
+        assert len(evidence["fragments"]) == observation_tags.MAX_FRAGMENTS
+        assert omitted["count"] == 1 and omitted["limit"] == observation_tags.MAX_FRAGMENTS
+        assert omitted["notes_total"] == omitted["notes_represented"] == 1
+        assert omitted["notes_partially_offered"] == 1
+        return {
+            "model": "local-test-medium",
+            "summary": {"tags": [{
+                "fragment_id": evidence["fragments"][0]["fragment_id"],
+                "code": vocabulary["codes"][0],
+            }]},
+        }
+
+    outcome = observation_tags.run_observation_tags(
+        session_date=tag_fx.LAST_SESSION, now=tag_fx.morning_after(tag_fx.LAST_SESSION),
+        root=tmp_path / "tags", entries=[entry], request=request,
+    )
+    assert outcome["status"] == "ok", outcome
+    saved = observation_tags.read_latest(tag_fx.LAST_SESSION, root=tmp_path / "tags")
+    assert saved is not None
+    assert saved["notes_offered"] == saved["notes_total"] == 1
+    assert saved["fragments_offered"] == observation_tags.MAX_FRAGMENTS
+    assert saved["fragments_total"] == observation_tags.MAX_FRAGMENTS + 1
+    assert saved["fragments_omitted"] == saved["notes_partially_offered"] == 1
+    assert saved["notes_represented"] == 1
+    assert saved["fragment_limit"] == observation_tags.MAX_FRAGMENTS
+    assert outcome["extra"]["fragments_omitted"] == 1
+    assert "1 omitted at the named limit" in outcome["reason"]
+
+    # The original review case: a whole note beyond the request is not counted
+    # as represented, while the long-note run above proves partial coverage too.
+    many_notes = [
+        {"note_id": f"nt-{index}", "entry_id": f"entry-{index}",
+         "field": "observation", "text": f"Sentence {index}."}
+        for index in range(observation_tags.MAX_FRAGMENTS + 1)
+    ]
+    many = observation_tags.build_evidence(many_notes, vocabulary=vocabulary)
+    assert many["fragments_omitted"]["notes_total"] == observation_tags.MAX_FRAGMENTS + 1
+    assert many["fragments_omitted"]["notes_represented"] == observation_tags.MAX_FRAGMENTS
+    assert many["fragments_omitted"]["notes_partially_offered"] == 0
+
+
 def test_observation_v2_evidence_has_no_result_fields():
     """The fragment transport carries words and codes, never an outcome."""
     from ai_jobs import observation_tags
