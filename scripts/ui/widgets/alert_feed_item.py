@@ -104,6 +104,9 @@ class AlertFeedItem(QWidget):
         # has to remember the three things that decide its Focus dress.
         self._focus_category = str(focus_category or "")
         self._alert = alert
+        # A folded row keeps its original frame and badges, but its reason
+        # line speaks for the latest alert in the fold.
+        self._reason_alert = alert
         self._presentation = classify_alert(alert, in_focus=is_focus)
         self._alert_tone = self._presentation.frame_tone
         self.setProperty("alertTone", self._alert_tone)
@@ -259,13 +262,14 @@ class AlertFeedItem(QWidget):
         self._focus_category = category
         is_focus = bool(category)
         presentation = classify_alert(self._alert, in_focus=is_focus)
+        reason_presentation = classify_alert(self._reason_alert, in_focus=is_focus)
         if not self._is_watch_hit:
             self.setProperty("alertKind", "focus" if is_focus else None)
             self._alert_tone = presentation.frame_tone
             self.setProperty("alertTone", self._alert_tone)
             _repolish(self)
-        if self.trigger_label.property("alertReasonTone") != presentation.reason_tone:
-            self.trigger_label.setProperty("alertReasonTone", presentation.reason_tone)
+        if self.trigger_label.property("alertReasonTone") != reason_presentation.reason_tone:
+            self.trigger_label.setProperty("alertReasonTone", reason_presentation.reason_tone)
             _repolish(self.trigger_label)
         self._presentation = presentation
         if is_focus:
@@ -295,7 +299,13 @@ class AlertFeedItem(QWidget):
             _repolish(self.favorite_button)
         return True
 
-    def set_repeat_count(self, count: int, *, latest_trigger: str = "") -> None:
+    def set_repeat_count(
+        self,
+        count: int,
+        *,
+        latest_trigger: str = "",
+        latest_alert: BounceAlert | None = None,
+    ) -> None:
         """Fold a repeat into this row (R4 section 6.3).
 
         Display only: the alert itself is already in the feed's backing list,
@@ -320,6 +330,12 @@ class AlertFeedItem(QWidget):
             "History and the evidence log."
         )
         self.repeat_badge.setVisible(True)
+        if latest_alert is not None:
+            self._reason_alert = latest_alert
+            presentation = classify_alert(latest_alert, in_focus=bool(self._focus_category))
+            if self.trigger_label.property("alertReasonTone") != presentation.reason_tone:
+                self.trigger_label.setProperty("alertReasonTone", presentation.reason_tone)
+                _repolish(self.trigger_label)
         latest_trigger = str(latest_trigger or "").strip()
         if latest_trigger:
             self.trigger_label.setText(latest_trigger)

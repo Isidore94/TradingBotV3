@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -82,6 +83,23 @@ def _d1_level(kind: str):
         trigger=f"D1 level {kind}",
         payload={"chart_watch_kind": kind},
     )
+
+
+def _folded_row(qapp, monkeypatch, tmp_path):
+    """Build the actual panel/wrapper fold seam around a D1-blue row."""
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    panel = AlertCenterPanel(
+        ignored_symbols_path=tmp_path / "ignored.json",
+        parked_symbols_path=tmp_path / "parked.json",
+    )
+    base = _alert(tag="green", trigger="D1 setup")
+    item = panel._build_feed_row(base)
+    panel._feed_row_registry()[(base.symbol, base.side)] = item
+    panel.feed_layout.insertWidget(0, item)
+    panel.show()
+    qapp.processEvents()
+    return panel, item
 
 
 @pytest.mark.parametrize("theme_name", ("dark", "light"))
@@ -273,3 +291,40 @@ def test_feed_pullback_reason_text_keeps_source_colours_over_focus(
     finally:
         item.close()
         item.deleteLater()
+
+
+@pytest.mark.parametrize(
+    ("latest", "color_name"),
+    (
+        (
+            _alert(
+                tag="red",
+                trigger="PRICE ALERT: NVDA crossed 100",
+                payload={"price_alert": True},
+            ),
+            "short",
+        ),
+        (_pullback("M15"), "chart_yellow"),
+    ),
+)
+def test_folded_repeat_repaints_the_latest_reason_colour(
+    qapp, monkeypatch, tmp_path, latest, color_name
+):
+    """The exact panel fold seam updates its label, not its frame or badges."""
+    from ui import theme
+
+    _apply_theme(qapp, "dark")
+    panel, item = _folded_row(qapp, monkeypatch, tmp_path)
+    try:
+        feed_item = item.feed_item
+        assert _foreground(feed_item.trigger_label) == theme.color("chart_blue", "dark").lower()
+        frame_before = feed_item.property("alertTone")
+        assert panel._fold_into_existing_row(latest, SimpleNamespace(repeat_count=2)) is True
+        qapp.processEvents()
+        assert feed_item.repeat_badge.text() == "×2"
+        assert feed_item.trigger_label.text() == latest.trigger
+        assert _foreground(feed_item.trigger_label) == theme.color(color_name, "dark").lower()
+        assert feed_item.property("alertTone") == frame_before
+    finally:
+        panel.close()
+        panel.deleteLater()
