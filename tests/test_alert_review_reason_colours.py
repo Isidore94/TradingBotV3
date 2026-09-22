@@ -76,6 +76,14 @@ def _pullback(source: str):
     )
 
 
+def _d1_level(kind: str):
+    return _alert(
+        tag="chart_watch",
+        trigger=f"D1 level {kind}",
+        payload={"chart_watch_kind": kind},
+    )
+
+
 @pytest.mark.parametrize("theme_name", ("dark", "light"))
 def test_chart_reason_text_repaints_for_each_live_reason_then_resets_muted(
     qapp, monkeypatch, tmp_path, theme_name
@@ -134,7 +142,7 @@ def test_chart_reason_text_repaints_for_each_live_reason_then_resets_muted(
 
 
 @pytest.mark.parametrize("theme_name", ("dark", "light"))
-@pytest.mark.parametrize("tag", ("manual_chart", "auto_pick", "focus_review"))
+@pytest.mark.parametrize("tag", ("manual_chart", "auto_pick", "focus_review", "focus_faded"))
 def test_chart_reason_text_mutes_non_alert_walkthrough_forms(
     qapp, monkeypatch, tmp_path, theme_name, tag
 ):
@@ -157,6 +165,41 @@ def test_chart_reason_text_mutes_non_alert_walkthrough_forms(
     finally:
         pane.close()
         pane.deleteLater()
+
+
+@pytest.mark.parametrize("theme_name", ("dark", "light"))
+@pytest.mark.parametrize("kind", ("d1_level_above", "d1_level_below"))
+@pytest.mark.parametrize("in_focus", (False, True))
+def test_d1_level_watch_reason_stays_red_over_focus_membership(
+    qapp, monkeypatch, tmp_path, theme_name, kind, in_focus
+):
+    """A personally armed D1 level watch stays red on both alert surfaces."""
+    from ui import theme
+    from ui.widgets.alert_chart_review import AlertChartReview
+    from ui.widgets.alert_feed_item import AlertFeedItem
+    from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+    _apply_theme(qapp, theme_name)
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_a, **_k: None)
+    alert = _d1_level(kind)
+    pane = AlertChartReview(
+        annotations_path=tmp_path / "trader_annotations.jsonl",
+        mentor_context_service=None,
+    )
+    item = AlertFeedItem(alert, focus_category="swing" if in_focus else "")
+    pane.show()
+    item.show()
+    try:
+        pane.set_alert(alert, in_focus=in_focus)
+        qapp.processEvents()
+        expected = theme.color("short", theme_name).lower()
+        assert _foreground(pane.alert_text) == expected
+        assert _foreground(item.trigger_label) == expected
+    finally:
+        pane.close()
+        pane.deleteLater()
+        item.close()
+        item.deleteLater()
 
 
 @pytest.mark.parametrize("theme_name", ("dark", "light"))

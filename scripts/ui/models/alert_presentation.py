@@ -8,6 +8,7 @@ from chart_watch import D1_LEVEL_KINDS, PULLBACK_KIND
 from ui.models.bounce import (
     AUTO_PICK_TAG,
     FOCUS_D1_EVENT_TAG,
+    FOCUS_FADED_TAG,
     FOCUS_REVIEW_TAG,
     MANUAL_CHART_TAG,
     BounceAlert,
@@ -15,7 +16,12 @@ from ui.models.bounce import (
 )
 
 
-_MUTED_TAGS = frozenset({MANUAL_CHART_TAG, AUTO_PICK_TAG, FOCUS_REVIEW_TAG})
+_MUTED_TAGS = frozenset({
+    MANUAL_CHART_TAG,
+    AUTO_PICK_TAG,
+    FOCUS_REVIEW_TAG,
+    FOCUS_FADED_TAG,
+})
 _LIVE_FOCUS_TAGS = frozenset({FOCUS_D1_EVENT_TAG, "d1_focus_pin"})
 
 
@@ -78,6 +84,10 @@ def _reason_tone(alert: BounceAlert, *, in_focus: bool, source_timeframe: str) -
     if tag in _MUTED_TAGS:
         return "muted"
     if _is_price_alert(alert):
+        return "price"
+    payload = alert.payload if isinstance(alert.payload, dict) else {}
+    watch_kind = str(payload.get("chart_watch_kind") or "")
+    if is_chart_watch_alert(alert) and watch_kind in D1_LEVEL_KINDS:
         return "price"
     # Source-bar colours carry more information than Focus membership.
     if source_timeframe:
