@@ -394,6 +394,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "rejection_cohort_grading",
         "note_vocabulary_audit",
         "preference_trade_outcomes",
+        # AI-R3: close saved scanner outcomes before evidence readers.
+        "outcome_sweep",
         "evidence_report",
         "daily_digest",
         "theta_pick_grading",
@@ -407,6 +409,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "prediction_contrast",
         "market_story_rollups",
         "measured_report",
+        # AI-R3: prepare the Day Review pack before model narration.
+        "day_review_facts",
         # LEAD AMENDMENT 2026-09-20 (TJ-4 integration): the day story, inside
         # stage 2 and ahead of the briefs.
         "day_review_narration",

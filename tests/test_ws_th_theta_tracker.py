@@ -346,12 +346,12 @@ def test_a_malformed_row_in_the_list_never_raises_into_the_scan(tmp_path):
     assert [row["symbol"] for row in rows] == ["BBB"]
 
 
-def test_the_scan_records_the_picks_right_after_it_writes_the_theta_report():
-    """The hook is in the RUNNER, after `write_theta_put_report` (ruling (c)).
+def test_the_scan_records_the_picks_after_deferred_quote_enrichment():
+    """The hook is in the RUNNER, after the quote attempt.
 
     A wiring pin, read off the parsed module rather than its text: the recorder
-    lives in the scan's own output pass, so a theta report written without a
-    store row is a defect this catches. `legacy.py` is untouched.
+    lives in the deferred worker, so a quoted pick is not frozen with a null
+    premium before the option data arrives.
     """
     source = (ROOT / "scripts" / "master_avwap_lib" / "runner.py").read_text(
         encoding="utf-8"
@@ -360,7 +360,7 @@ def test_the_scan_records_the_picks_right_after_it_writes_the_theta_report():
     impl = next(
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_run_master_impl"
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_deferred_theta_enrichment"
     )
     calls: list[tuple[int, str]] = []
     for node in ast.walk(impl):
@@ -372,7 +372,7 @@ def test_the_scan_records_the_picks_right_after_it_writes_the_theta_report():
     calls.sort()
     names = [name for _lineno, name in calls]
     assert "record_theta_picks" in names, "the scan never records its theta picks"
-    assert names.index("record_theta_picks") > names.index("write_theta_put_report")
+    assert names.index("record_theta_picks") > names.index("enrich_theta_rows_with_ib_option_premiums")
 
 
 # ---------------------------------------------------------------------------

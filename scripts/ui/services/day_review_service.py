@@ -956,19 +956,29 @@ class DayReviewService:
             return []
 
     def build_session_bars_for(self, session_date: str, **_kwargs) -> Any:
-        """Fetch and persist a closed session's M5 tape after its index exists."""
+        """Fetch and persist a closed session's M5 tape after its index exists.
+
+        ``reuse_existing`` is for the night refresh only: an exact, non-empty
+        stored tape is evidence already verified for this session and is never
+        replaced by a second fetch.  The page's default/manual backfill path
+        continues to fetch and write as it always did.
+        """
         import daily_recap_reader
         import day_review_bars
 
         session = str(session_date or "")[:10]
         if not session or not day_review_bars.session_is_closed(session):
             return None
+        if bool(_kwargs.get("reuse_existing")):
+            existing = day_review_bars.read_session_bars(session)
+            if existing:
+                return existing
         names = day_review_bars.decided_symbols(session, daily_recap_reader.RecapSources())
         bars = day_review_bars.fetch_session_bars(names, session)
         return day_review_bars.write_session_bars(session, bars)
 
     # -- the read grader ---------------------------------------------------
-    def build_reads_for(self, session_date: str, **kwargs) -> list[dict[str, Any]]:
+    def build_reads_for(self, session_date: str, **kwargs) -> list[dict[str, Any]] | None:
         """Grade the session's reads and APPEND them to the ledger. One seam.
 
         The named seam the post-close tick calls (`_IndexBuildWorker`, on the
@@ -986,12 +996,16 @@ class DayReviewService:
         if not session:
             return []
         now = kwargs.get("now") or datetime.now()
+        strict = bool(kwargs.get("strict"))
         entries: list[dict[str, Any]] = []
         try:
             entries = list(self.journal.entries_about(session))
         except Exception:  # noqa: BLE001 - an unreadable ledger grades nothing
             _log.debug("The journal could not be read for grading.", exc_info=True)
-            return []
+            # A page correctly paints an empty list when this derived reader is
+            # unavailable. The night cannot call that absence "fresh facts",
+            # so its narrow strict seam gets an explicit failure sentinel.
+            return None if strict else []
         decisions, claims = self._decisions_and_claims(session)
         trades: list[dict[str, Any]] = []
         try:

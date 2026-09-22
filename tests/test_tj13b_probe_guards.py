@@ -633,6 +633,8 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # reads in the morning), then TJ-16's word tagger, then the briefs with
     # their 120-minute reserve (a weeknight has no `ai_summary`).
     assert slate[slate.index("miss_contrast") + 1] == "prediction_contrast"
+    assert slate[slate.index("evidence_report") - 1] == "outcome_sweep"
+    assert slate[slate.index("measured_report") + 1] == "day_review_facts"
     # LEAD AMENDMENT 2026-09-21 (TJ-9E): a FOURTH stage-2 slot, the exit-note
     # reader, registered after `week_review_narration` - which a weeknight does
     # not carry - so on this slate it sits directly before the briefs and the
@@ -641,6 +643,8 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     assert slate[slate.index("ticker_briefs") - 2] == "observation_tags"
     assert slate[slate.index("ticker_briefs") - 1] == "exit_note_fields"
     set_aside = (
+        "outcome_sweep",
+        "day_review_facts",
         "read_grades_mature",
         "prediction_contrast",
         "day_review_narration",

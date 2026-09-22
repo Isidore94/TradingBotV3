@@ -253,7 +253,7 @@ def test_every_night_runs_the_contrast_because_the_deterministic_stage_always_ru
 
     Sunday is the one that bites: `slots_for("sunday")` runs stage 1 plus the
     weekend's backlog, and stage 1 is computed by walking the slate up to and
-    including `runner._STAGE_ONE_LAST_SLOT` - `measured_report` today. A slot
+    including `runner._STAGE_ONE_LAST_SLOT` - `day_review_facts` today. A slot
     appended AFTER that name is not in stage 1 by that function's reckoning and
     silently leaves the Sunday slate, however deterministic it is.
 

@@ -309,6 +309,7 @@ EXPECTED_SLOT_ORDER = (
     "rejection_cohort_grading",
     "note_vocabulary_audit",
     "preference_trade_outcomes",
+    "outcome_sweep",
     "evidence_report",
     "daily_digest",
     # WS-TH (2026-09-12): appended at the END of the deterministic stage. It
@@ -316,7 +317,7 @@ EXPECTED_SLOT_ORDER = (
     # so it sits after the digest and stays ahead of `ai_summary`.
     "theta_pick_grading",
     # TJ-15 (2026-09-19): what the misses had in common. Deterministic, no
-    # model. It is INSIDE stage 1 and deliberately ahead of `measured_report`:
+    # model. It is INSIDE stage 1 and deliberately ahead of `day_review_facts`:
     # `_STAGE_ONE_LAST_SLOT` is that name and `_deterministic_stage` walks up to
     # and including it, so a slot appended after it would leave the Sunday
     # slate. Nothing here reads the measured report and nothing there reads this
@@ -325,7 +326,7 @@ EXPECTED_SLOT_ORDER = (
     # TJ-10 (2026-09-20): close the market reads whose horizon has matured.
     # Deterministic, no model. Beside the cohort graders in kind - a decision
     # measured after the fact - and INSIDE stage 1 for the same reason
-    # `miss_contrast` is: `_STAGE_ONE_LAST_SLOT` is `measured_report` and a slot
+    # `miss_contrast` is: `_STAGE_ONE_LAST_SLOT` is `day_review_facts` and a slot
     # appended after that name leaves the Sunday slate. Nothing below it reads
     # the read ledger and it reads nothing above it.
     "read_grades_mature",
@@ -334,7 +335,7 @@ EXPECTED_SLOT_ORDER = (
     # against their wrong ones, through the same `evidence_contrast.contrast`.
     # Deterministic, no model. DIRECTLY after `miss_contrast` (the same question
     # asked of the other half of the record) and after `read_grades_mature`,
-    # which closes the reads it counts - and still ahead of `measured_report`
+    # which closes the reads it counts - and still ahead of `day_review_facts`
     # for the Sunday-slate reason above it.
     "prediction_contrast",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
@@ -346,6 +347,7 @@ EXPECTED_SLOT_ORDER = (
     # reads what the slots above it wrote and feeds nothing above it, so it
     # CLOSES the deterministic stage.
     "measured_report",
+    "day_review_facts",
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.
     "ai_summary",
@@ -353,12 +355,12 @@ EXPECTED_SLOT_ORDER = (
     # Appended INSIDE stage 2 and deliberately AHEAD of `ticker_briefs`: gate
     # #158 reads the ledger for a day story finished before 23:30 Pacific, and
     # the briefs reserve 120 minutes in front of it. It cannot go further
-    # forward either - `ai_summary` sits directly after `measured_report` and
+    # forward either - `ai_summary` sits directly after `day_review_facts` and
     # two other pins say so.
     "day_review_narration",
     # TJ-16 item 4 (2026-09-20): grounded codes for the trader's own words.
     # A local MEDIUM model slot, so it is in stage 2 - after `ai_summary`
-    # because WS-10D pins `measured_report` directly before that name, and
+    # because AI-R3 pins `day_review_facts` directly before that name, and
     # before `ticker_briefs`, whose two hours of reserve it must not queue
     # behind for seconds of work.
     "observation_tags",

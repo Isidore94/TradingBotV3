@@ -350,6 +350,23 @@ def test_ai_jobs_stay_out_of_detector_scoring_and_alert_modules():
     )
     for path in (SCRIPTS_DIR / "ai_jobs").glob("*.py"):
         imports = _imported_modules(path)
+        if path.name == "outcome_sweep.py":
+            # AI-R3's one file-scoped exception is the canonical outcome-only
+            # factory. Its real-path tests prove no scanner, broker, detector,
+            # score or alert startup; no other AI job gets this import.
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            factory = next(
+                node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "_default_factory"
+            )
+            legacy_imports = [
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module == "bounce_bot_lib.legacy"
+            ]
+            assert len(legacy_imports) == 1
+            assert legacy_imports[0] in ast.walk(factory)
+            assert [alias.name for alias in legacy_imports[0].names] == ["BounceBot"]
+            imports.remove("bounce_bot_lib.legacy")
         assert not any(
             name.startswith(prefix)
             for name in imports
