@@ -297,12 +297,16 @@ def _fragment_id(note_id: str, start: int, end: int) -> str:
 
 
 def _fragment_spans(text: str) -> list[tuple[int, int]]:
-    """Cover one note with sentence-like chunks no longer than the quote limit."""
+    """Cover every character with sentence-like chunks under the quote limit."""
     spans: list[tuple[int, int]] = []
-    for match in re.finditer(r"[^.!?]+[.!?]*", text):
+    # A terminator ends a sentence only before whitespace or EOF.  That keeps
+    # ``!!!hello.`` together instead of silently dropping its punctuation.
+    for match in re.finditer(r".+?(?:[.!?]+(?=\s|$)|$)", text, flags=re.DOTALL):
         start, end = match.span()
         while end - start > MAX_FRAGMENT_LENGTH:
-            split = text.rfind(" ", start + 1, start + MAX_FRAGMENT_LENGTH + 1)
+            # The range stops BEFORE the over-limit position: including a
+            # whitespace at offset 400 then retaining it made a 401-char quote.
+            split = text.rfind(" ", start + 1, start + MAX_FRAGMENT_LENGTH)
             if split <= start:
                 split = start + MAX_FRAGMENT_LENGTH
             else:
