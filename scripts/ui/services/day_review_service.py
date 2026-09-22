@@ -956,13 +956,23 @@ class DayReviewService:
             return []
 
     def build_session_bars_for(self, session_date: str, **_kwargs) -> Any:
-        """Fetch and persist a closed session's M5 tape after its index exists."""
+        """Fetch and persist a closed session's M5 tape after its index exists.
+
+        ``reuse_existing`` is for the night refresh only: an exact, non-empty
+        stored tape is evidence already verified for this session and is never
+        replaced by a second fetch.  The page's default/manual backfill path
+        continues to fetch and write as it always did.
+        """
         import daily_recap_reader
         import day_review_bars
 
         session = str(session_date or "")[:10]
         if not session or not day_review_bars.session_is_closed(session):
             return None
+        if bool(_kwargs.get("reuse_existing")):
+            existing = day_review_bars.read_session_bars(session)
+            if existing:
+                return existing
         names = day_review_bars.decided_symbols(session, daily_recap_reader.RecapSources())
         bars = day_review_bars.fetch_session_bars(names, session)
         return day_review_bars.write_session_bars(session, bars)

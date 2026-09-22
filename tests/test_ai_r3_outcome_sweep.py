@@ -74,7 +74,8 @@ def test_outcome_sweep_job_skips_when_disabled_or_the_canonical_sweep_is_too_ear
     calls: list[datetime] = []
 
     class Bot:
-        def sweep_pending_bounce_outcomes(self, *, now):
+        def sweep_pending_bounce_outcomes(self, *, now, wait_for_scan_window):
+            assert wait_for_scan_window is False
             calls.append(now)
             return {"deferred": "scan_window_open", "finalized": 0}
 
@@ -96,15 +97,20 @@ def test_outcome_sweep_job_skips_when_disabled_or_the_canonical_sweep_is_too_ear
         bot_factory=Bot,
         autorun_enabled=True,
     )
+    after_close = run_outcome_sweep(
+        session_date="2026-09-18",
+        now=datetime(2026, 9, 18, 14, 0),
+        bot_factory=Bot,
+        autorun_enabled=True,
+    )
 
     assert disabled["status"] == "skipped", disabled
     assert "disabled" in str(disabled["reason"]).lower()
     assert early["status"] == "skipped", early
     assert "close" in str(early["reason"]).lower() or "early" in str(early["reason"]).lower()
     assert early_close["status"] == "skipped", early_close
-    assert calls == [datetime(2026, 9, 18, 13, 5), datetime(2026, 11, 27, 10, 20)], (
-        "the job did not pass its clock to the canonical regular/early-close gate"
-    )
+    assert after_close["status"] == "skipped", after_close
+    assert calls == [datetime(2026, 9, 18, 14, 0)]
 
 
 def test_outcome_sweep_job_marks_a_commit_failure_as_failed_not_ok():
@@ -112,7 +118,8 @@ def test_outcome_sweep_job_marks_a_commit_failure_as_failed_not_ok():
     from ai_jobs.outcome_sweep import run_outcome_sweep
 
     class Bot:
-        def sweep_pending_bounce_outcomes(self, *, now):
+        def sweep_pending_bounce_outcomes(self, *, now, wait_for_scan_window):
+            assert wait_for_scan_window is False
             return {
                 "finalized": 0,
                 "commit_failed": 1,

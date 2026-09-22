@@ -582,7 +582,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
 
     1. **the deterministic stage** - ``journal_import``, ``journal_auto_tag``,
        the cohort grades, ``note_vocabulary_audit``,
-       ``preference_trade_outcomes``, ``evidence_report``, ``daily_digest``.
+       ``preference_trade_outcomes``, ``outcome_sweep``, ``evidence_report``,
+       ``daily_digest`` and ``day_review_facts``.
        Their RELATIVE order is unchanged; it is the appended-only order this
        docstring used to describe and the comments below still argue for each
        position;
@@ -605,6 +606,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         briefs,
         cohorts,
         day_review_narration,
+        day_review_facts,
         digest,
         enrichment,
         evidence_report,
@@ -616,6 +618,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         miss_contrast,
         note_vocabulary_audit,
         observation_tags,
+        outcome_sweep,
         policy_draft,
         prediction_contrast,
         read_grades_mature,
@@ -758,6 +761,13 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # SEQUENCING only: until the window is met every report states in words
         # that it is scaffolding rather than a finding.
         JobSlot(
+            name="outcome_sweep",
+            run=outcome_sweep.run_outcome_sweep,
+            reserve_minutes=5.0,
+            description="Finalize pending M5 outcomes before reports read them (deterministic, no model)",
+            max_attempts=3,
+        ),
+        JobSlot(
             name="evidence_report",
             run=evidence_report.run_evidence_report,
             reserve_minutes=5.0,
@@ -823,7 +833,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # integration, 2026-09-19, when the full suite showed those two pins red).
         #
         # That position is load-bearing. `_STAGE_ONE_LAST_SLOT` is
-        # `measured_report` and `_deterministic_stage` walks the slate up to
+        # `day_review_facts` and `_deterministic_stage` walks the slate up to
         # and INCLUDING it, so a slot appended after that name is not in stage 1
         # by that function's reckoning and silently leaves the SUNDAY slate,
         # however deterministic it is. Nothing here reads `measured_report`'s
@@ -841,7 +851,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # and this is what comes back for it. Beside the cohort graders because
         # it is the same kind of work (a decision, measured after the fact) and
         # ahead of the three closers for the same reason TJ-15 sits there:
-        # `_STAGE_ONE_LAST_SLOT` is `measured_report` and `_deterministic_stage`
+        # `_STAGE_ONE_LAST_SLOT` is `day_review_facts` and `_deterministic_stage`
         # walks up to and INCLUDING it, so a slot appended after that name
         # silently leaves the Sunday slate however deterministic it is. Nothing
         # below reads the ledger and the ledger reads nothing above it, so only
@@ -885,7 +895,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # not a preference.
         #
         # The position above the closing pair is load-bearing for the same
-        # reason it is for TJ-15: `_STAGE_ONE_LAST_SLOT` is `measured_report`
+        # reason it is for TJ-15: `_STAGE_ONE_LAST_SLOT` is `day_review_facts`
         # and `_deterministic_stage` walks the slate up to and INCLUDING it, so
         # a slot appended after that name silently leaves the SUNDAY slate
         # however deterministic it is.
@@ -943,6 +953,13 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "One measured report for the session - the five WISHLIST 10K "
                 "answers with their populations (deterministic, no model)"
             ),
+            max_attempts=3,
+        ),
+        JobSlot(
+            name="day_review_facts",
+            run=day_review_facts.run_day_review_facts,
+            reserve_minutes=5.0,
+            description="Refresh closed-session Day Review facts before narration (deterministic, no model)",
             max_attempts=3,
         ),
         # ------------------------------------------------------------------
@@ -1220,10 +1237,10 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
-#: ENDS at `measured_report`, which closes that stage today; a later packet
+#: ENDS at `day_review_facts`, which closes that stage today; a later packet
 #: appending inside stage 1 lands inside this set automatically because the set
 #: is derived from the slate, not written out twice.
-_STAGE_ONE_LAST_SLOT = "measured_report"
+_STAGE_ONE_LAST_SLOT = "day_review_facts"
 
 
 def _night_evening_date(moment: datetime):
