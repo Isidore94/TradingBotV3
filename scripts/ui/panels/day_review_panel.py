@@ -2544,11 +2544,13 @@ class DayReviewPanel(QFrame):
         raw = detail.get("entry_raw") or {}
         lines.append(f"Entry words (recalled {raw.get('recorded_at') or 'date unknown'}): {raw.get('text') or 'none recorded'}")
         for field, answer in (detail.get("entry_answers") or {}).items():
-            value = answer.get("text") or answer.get("state") or (
-                f"{answer['value']} {answer.get('unit') or ''}" if answer.get("value") is not None
-                else "not answered"
+            value = answer.get("text") or (
+                f"{answer['value']} {answer.get('unit') or ''}"
+                if answer.get("value") is not None else ""
             )
-            lines.append(f"{field}: {value} · recorded {answer.get('recorded_at') or 'date unknown'}")
+            state = str(answer.get("state") or "").replace("_", " ")
+            spoken = " · ".join(part for part in (str(value).strip(), state) if part) or "not answered"
+            lines.append(f"{field}: {spoken} · recorded {answer.get('recorded_at') or 'date unknown'}")
         exit_raw = detail.get("exit_raw") or {}
         lines.append(
             f"Exit words ({exit_raw.get('recorded_at') or 'date unknown'}): "

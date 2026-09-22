@@ -137,7 +137,10 @@ def test_real_trade_row_shows_late_words_and_opens_exact_journal_trade():
         payload["trade_reviews"] = [{
             "trade_id": "exact-7", "symbol": "ABC", "net_pnl": 42, "currency": "USD",
             "entry_raw": {"text": "I chased the open", "recorded_at": "2026-09-22T09:00:00-04:00"},
-            "entry_answers": {"thesis": {"text": "breakout", "recorded_at": "2026-09-22T09:01:00-04:00"}},
+            "entry_answers": {
+                "thesis": {"text": "breakout", "recorded_at": "2026-09-22T09:01:00-04:00"},
+                "target": {"text": "", "state": "no_fixed_target", "recorded_at": "2026-09-22T09:02:00-04:00"},
+            },
             "exit_raw": {"text": "Sold into the close", "recorded_at": "2026-09-22T10:00:00-04:00"},
             "exit_fields": {"status": "confirmed", "fields": {"why": "target"}},
         }]
@@ -152,6 +155,7 @@ def test_real_trade_row_shows_late_words_and_opens_exact_journal_trade():
         panel.calls_table.cellDoubleClicked.emit(0, 0)
         assert panel.entries.currentRow() == 0
         assert "I chased the open" in panel.trade_detail.toPlainText()
+        assert "target: no fixed target" in panel.trade_detail.toPlainText()
         assert "Sold into the close" in panel.trade_detail.toPlainText()
         assert "Confirmed exit" in panel.trade_detail.toPlainText()
         panel.trades_table.cellDoubleClicked.emit(0, 0)
