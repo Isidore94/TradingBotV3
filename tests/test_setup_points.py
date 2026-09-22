@@ -39,6 +39,24 @@ def _app():
     yield QApplication.instance() or QApplication([])
 
 
+def _measured_sr(**overrides):
+    """A v2 row whose clear-path facts were actually measured by the scan."""
+    raw = {
+        "sr_inputs_measured": True,
+        "hv_level_blocking_count": 0,
+        "hv_level_nearby_count": 0,
+        "cloud_level_nearby_count": 0,
+        "trendline_note": False,
+        "previous_close": 100.0,
+        "atr20": 2.0,
+        "ema21": 90.0,
+        "sma_breakout_sma_level": 90.0,
+        "hv_level_nearest_distance_atr": 1.5,
+    }
+    raw.update(overrides)
+    return raw
+
+
 def test_setup_part_uses_the_lower_bound_and_expected_r():
     points, notes = setup_part({"win_rate_lb": 0.52, "win_rate": 1.0, "n": 3}, 0.33)
     assert points == pytest.approx(0.52 * 40 + 0.33 * 10)
@@ -59,7 +77,8 @@ def test_setup_part_names_an_ungraded_family_and_clamps_expected_r():
 
 
 def test_sr_part_knocks_levels_ahead_down_and_floors():
-    clean, notes = sr_part({}, "LONG")
+    # v1 history is still readable with its original clean-path contract.
+    clean, notes = sr_part({}, "LONG", version="points_v1")
     assert clean == SR_CLEAN_PATH and notes == []
     crowded, notes = sr_part(
         {
@@ -74,6 +93,7 @@ def test_sr_part_knocks_levels_ahead_down_and_floors():
             "sma_breakout_sma_level": 110.0,  # 5 ATR away: not counted
         },
         "LONG",
+        version="points_v1",
     )
     assert crowded == SR_FLOOR
     assert any("5 HV level(s) blocking" in note for note in notes)
@@ -83,8 +103,8 @@ def test_sr_part_knocks_levels_ahead_down_and_floors():
 
 def test_sr_part_reads_ahead_in_the_trades_direction():
     raw = {"previous_close": 100.0, "atr20": 2.0, "ema21": 101.0}
-    long_points, _ = sr_part(raw, "LONG")
-    short_points, _ = sr_part(raw, "SHORT")
+    long_points, _ = sr_part(raw, "LONG", version="points_v1")
+    short_points, _ = sr_part(raw, "SHORT", version="points_v1")
     assert long_points == SR_CLEAN_PATH - 3.0
     assert short_points == SR_CLEAN_PATH  # the EMA is BEHIND a short
 
@@ -115,10 +135,10 @@ def test_bounce_part_today_then_named_then_nothing():
 def test_score_row_sums_the_four_parts_and_tooltip_names_them():
     points = score_row(
         {
+            **_measured_sr(hv_level_blocking_count=1),
             "has_bounce_event_today": True,
             "expected_r": 0.5,
             "daily_relative_strength_score": 3.0,
-            "hv_level_blocking_count": 1,
         },
         side="LONG",
         family_record={"win_rate_lb": 0.5},
@@ -171,13 +191,13 @@ def test_the_switch_reorders_the_setups_table_and_shows_exactly_the_same_rows():
 
     rows = [
         SetupRow(symbol="NVDA", side="LONG", score=90.0, bucket="favorite_setup",
-                 raw={"setup_family": "alpha"}),
+                 raw={"setup_family": "alpha", **_measured_sr()}),
         SetupRow(symbol="TSLA", side="SHORT", score=80.0, bucket="favorite_setup",
-                 raw={"setup_family": "beta", "has_bounce_event_today": True}),
+                 raw={"setup_family": "beta", "has_bounce_event_today": True, **_measured_sr()}),
         SetupRow(symbol="AMD", side="LONG", score=70.0, bucket="near_favorite_zone",
-                 raw={"setup_family": "alpha", "hv_level_blocking_count": 3}),
+                 raw={"setup_family": "alpha", **_measured_sr(hv_level_blocking_count=3)}),
         SetupRow(symbol="XYZ", side="LONG", score=99.0, bucket="study",
-                 raw={"setup_family": "alpha", "has_bounce_event_today": True}),
+                 raw={"setup_family": "alpha", "has_bounce_event_today": True, **_measured_sr()}),
     ]
 
     def _run(switch_on: bool):
@@ -219,9 +239,9 @@ def test_the_switch_lifts_a_higher_point_row_over_a_higher_score_row():
 
     rows = [
         SetupRow(symbol="LOW", side="LONG", score=95.0, bucket="favorite_setup",
-                 raw={"setup_family": "alpha", "hv_level_blocking_count": 5}),
+                 raw={"setup_family": "alpha", **_measured_sr(hv_level_blocking_count=5)}),
         SetupRow(symbol="HIGH", side="LONG", score=50.0, bucket="near_favorite_zone",
-                 raw={"setup_family": "alpha", "has_bounce_event_today": True}),
+                 raw={"setup_family": "alpha", "has_bounce_event_today": True, **_measured_sr()}),
     ]
     _set_switch(True)
     panel = MasterAvwapPanel(None)

@@ -377,6 +377,10 @@ PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
 # Shadow only; `setup_points_evidence` is the one writer of both.
 SETUP_POINTS_LOG_FILE = PERSISTENT_DATA_DIR / "setup_points_log.jsonl"
 SETUP_POINTS_WEIGHTS_FILE = PERSISTENT_DATA_DIR / "setup_points_weights.json"
+# Bounded rich scan projection used only to attach measured Points inputs to
+# the terse priority report after a restart.  It is written after a successful
+# scan; a missing or mismatched projection leaves Points S/R unmeasured.
+SETUP_POINTS_SCAN_PROJECTION_FILE = PERSISTENT_DATA_DIR / "setup_points_scan_projection.json"
 # Legacy single-writer JSONL plus the partitioned store used by current
 # builds.  New review decisions go to one file per stable machine-local
 # installation so two PCs sharing the folder never append to the same file;

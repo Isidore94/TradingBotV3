@@ -8744,3 +8744,39 @@ actually show.
 Live gate **#147** is owed and needs gate #146/#152's back-fill first: the live home has no
 `day_review/bars/*.parquet` yet, so with no file the SPY chart draws from the Qt hand-off,
 the caption says the marks were not drawn, and no name chart can open.
+
+## SP — setup-score repair (2026-09-22, trader authorized)
+
+The trader approved the full assessment and asked for its fixes before reconsidering
+weights. SP1 changes the default displayed Points to `points_v2`. A report-only row
+cannot claim a clear S/R path: the scan worker writes a bounded rich-facts sidecar
+sealed to the priority report's byte digest, and the report parser carries that
+digest forward. Only completed, matching symbol/side/scan facts enrich a row.
+Claimed-only rows use the same side-keyed cache. A later report invalidates the
+old projection before it can lend stale facts. Missing S/R starts at zero and
+keeps any measured obstacle deductions; overlapping HV descriptions count once.
+`points_v1` is an explicit replay, and old log rows remain append-only.
+
+The Points log stores a snapshot identity, version, observed time, run stamp,
+input facts and family record. A later same-day revision is appended; the grade
+uses only the earliest eligible pre-close v2 observation for each entry session,
+symbol and side. Its outcome is `POLICY_SESSION_V2` after five actual exchange
+sessions, including holidays and early closes. Tied total or part values stay
+in whole groups. A learned multiplier is proposed only with at least 30 graded
+rows and five distinct entry sessions in each part half, and the trader's
+switch remains OFF. A v1 proposal cannot become a v2 multiplier.
+
+SP2 versions the prior family score as `pqs_v1`. Default `pqs_v2` counts finite
+closed representative episodes once, computes the win count and Wilson bound
+from that one population, and requires at least 30 such episodes across five
+entry sessions for positive evidence above the unproven baseline. No-loss
+samples have no PF99 reward; a positive payoff bonus needs measured losses and
+scales to the same 30-loss floor. Detection and the Expected-R calibration
+have no SP path. The copied 2026-09-22 replay had only four eligible entry
+sessions for the old Points comparison, so no fitted weights or personal-fit
+promotion follow from it. A narrower reconstruction matched 608 pre-close
+old logs to mature five-session outcomes across only three entry sessions;
+all 608 had incomplete S/R provenance in the archived feature history, so a
+corrected-score return ranking cannot be claimed from those rows. The trade
+journal repair passed on a private copy;
+gate #162 keeps live application trader-only with the desk down.

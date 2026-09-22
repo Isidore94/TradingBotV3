@@ -1,0 +1,72 @@
+{
+  "schema": "sp2_pqs_base_characterization_v1",
+  "feature_version": "pqs_v1",
+  "raw_input_keys": [
+    "cases"
+  ],
+  "raw_input_sha256": "07521aefb340b4c67a5b8a83829d74c0afef6a3a6342ef6b6225a45db50c256b",
+  "acquired_at": "2026-09-22T07:27:53-07:00",
+  "as_of": "2026-09-21T12:08:53-07:00",
+  "universe_version": "synthetic_pqs_examples_at_fb95854e",
+  "provider_assumptions": "Synthetic finite closed episode examples pinned to base fb95854e; no live market provider or journal was read.",
+  "expected_keys": [
+    "cases"
+  ],
+  "numeric_tolerance": 1e-09,
+  "intentional_difference": "The v2 default adds counted episode/session floors and loss-scaled payoff; cases retain original v1 outputs for replay.",
+  "source_commit": "fb95854e",
+  "policy": "pqs_v1",
+  "purpose": "Hand-pinned legacy PQS inputs and outputs before the SP2 score repair.",
+  "cases": {
+    "n0": {
+      "static_points": 260.0,
+      "win_rate": null,
+      "profit_factor": null,
+      "closed_samples": 0,
+      "freshness": 1.0,
+      "score": 80.0,
+      "evidence": 40.0
+    },
+    "n1_all_win": {
+      "static_points": 260.0,
+      "win_rate": 1.0,
+      "profit_factor": 99.0,
+      "closed_samples": 1,
+      "freshness": 1.0,
+      "score": 137.9,
+      "evidence": 97.9
+    },
+    "n6_all_win": {
+      "static_points": 260.0,
+      "win_rate": 1.0,
+      "profit_factor": 99.0,
+      "closed_samples": 6,
+      "freshness": 1.0,
+      "score": 178.6,
+      "evidence": 138.6
+    },
+    "mature_gains_losses": {
+      "n_wins": 24,
+      "n_losses": 6,
+      "n_flats": 0,
+      "measured_entry_sessions": 5,
+      "gross_win": 60.0,
+      "gross_loss": 6.0,
+      "profit_factor": 10.0,
+      "payoff_evidence": 12.0
+    },
+    "weighted_vs_counted": {
+      "weighted_win_rate": 0.2,
+      "n_wins": 2,
+      "n_losses": 2,
+      "n_flats": 0,
+      "counted_win_rate": 0.5
+    },
+    "same_day_concentration": {
+      "n_wins": 100,
+      "n_losses": 0,
+      "n_flats": 0,
+      "measured_entry_sessions": 1
+    }
+  }
+}
