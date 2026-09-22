@@ -161,7 +161,7 @@ def test_a_night_of_ideas_never_edits_wishlist_or_the_plan(tmp_path, monkeypatch
 
     watched = {
         name: hashlib.sha256((ROOT_DIR / name).read_bytes()).hexdigest()
-        for name in ("WISHLIST.md", "plan.md")
+        for name in ("WISHLIST.md", "TODO.md")
         if (ROOT_DIR / name).exists()
     }
     assert watched, "neither file is in this checkout"

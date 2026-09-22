@@ -194,5 +194,5 @@ def test_the_hidden_pages_are_still_built_and_still_indexed(qapp):
 
 
 def test_the_record_says_hidden_is_not_removed():
-    internals = (ROOT / "docs" / "DESK_INTERNALS.md").read_text(encoding="utf-8")
-    assert "hidden is not removed" in internals.lower()
+    rules = (ROOT / "docs" / "RULES.md").read_text(encoding="utf-8")
+    assert "hidden is not removed" in rules.lower()

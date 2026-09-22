@@ -36,6 +36,7 @@ in the same commit.
 - Repetition folding and movers-only are presentation only. They never withhold, delete or write policy. UNKNOWN always shows.
 - M5 alerts are a list beside the chart. Clicking away IS a pass (`clicked_away_from_m5_alert`). Never "fix" that.
 - "Holding highs" is measured in ATR (1.0), expires 15 minutes after the last extreme, and uncertainty never deletes.
+- Hidden is not removed: the Alerts, D1 Focus and Armed tabs and the Universe page are hidden, but still built and indexed, and every rail hotkey still fires.
 - Every ticker click charts into the centre pane through `chart_symbol`. A board chart holds no place in the waiting list.
 - A chart opened from the setups table cycles through that table. A day veto HIDES the row (presentation only).
 
