@@ -1,6 +1,6 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-09-22**. Checkpoint build entries for September 18–19 and changelog Recent changes for September 19–20 moved to the archives below; open gates and implemented inventory remain in the active control files.
+Last reconciled: **2026-09-22**. The AI, SP, AR and TJ-17 contracts were combined on main; checkpoint build entries for September 18–19 and changelog Recent changes for September 19–20 moved to the archives below; open gates and implemented inventory remain in the active control files.
 
 One line per file. Status and decisions live in the root control set, never here; if a
 row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.

@@ -36,7 +36,13 @@ archives named under `Revision history`, the newest being
 [`docs/archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`](docs/archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md).
 They are evidence and must not be loaded as context.
 
-- **Overnight daily AI repair (2026-09-22, scratch integration).** Day Review is
+- **TJ-17 recap learning (2026-09-22, main).** Day and Week Review keep read horizons separate and show 5/10/20 completed-session comparisons. The day page separates market calls, selection outcomes and real trade entry/exit review; recent saved facts refresh after later answers. One weekly chosen process change and its follow-through have a saved owner, with pending and unknown states visible. Live gates #186-189 remain owed.
+
+- **AR alert review (2026-09-22, main).** Pullback crosses retain their event time and avoid stale re-fires; reason text has distinct colours, ordinary scan ideas sit behind Show all, and an extended-from-base veto arms the M30/H1 pullback watch. Live gates #182-185 remain owed.
+
+- **SP1/SP2 setup score repair (2026-09-22, main).** Points uses same-scan chart facts and five-session outcome grading; PQS bonus calculation stays safe on small samples. Historical gaps remain unmeasured and prospective live validation is owed.
+
+- **Overnight daily AI repair (2026-09-22, main).** Day Review is
   reachable from A.I. Summary for the last completed session and tells the trader
   when a story failed while retaining measured facts. The day story and blind
   observation tagger use code-owned links and exact note fragments, retaining
@@ -3690,6 +3696,13 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-22 — Combined repair integration
+
+AI-R1/R2/R3, SP1/SP2, AR-1/2A/2B/3 and TJ-17A…D were combined from their reviewed branches on an isolated integration checkout and moved to main on the trader's request. The four source branches remain in history. This integration reconciles their shared Day Review facts and page paths, plus the alert, scoring and night contracts. Independent TJ-17C/D review found a future follow-through write and a missing numbered live gate; both are repaired before the main update. The integrated suite and live gates are recorded in the checkpoint.
+
+AI-R3 independent review also reproduced an unreadable outcome CSV clearing a `finalizing` intent. Fix `1d9d909d` makes the CSV read tri-state, preserves the intent and fails the single-row and batch finalizers closed; the new test failed before the fix and the reviewer reproduced all three paths after it. One active intent exists in a read-only live copy; no live store was changed.
+
 
 ### 2026-09-22 - Overnight daily AI repair (`codex/overnight-ai-repair`, scratch)
 
