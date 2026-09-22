@@ -3368,7 +3368,7 @@ class BounceBot(EWrapper, EClient):
             self._finalizing_outcome_marks = marks
         return marks
 
-    def _final_event_ids_in_csv(self, event_ids=None) -> set:
+    def _final_event_ids_in_csv(self, event_ids=None) -> set | None:
         """Ids that already have a `final` row on disk. One pass, ~1.8 s.
 
         This is the reconciliation that makes finalization exactly-once across a
@@ -3391,12 +3391,11 @@ class BounceBot(EWrapper, EClient):
                     if wanted is None or event_id in wanted:
                         found.add(event_id)
         except Exception:
-            # Unreadable: return nothing rather than a partial answer. A caller
-            # that thinks an id has no final row when it has writes a duplicate,
-            # so the transaction treats an empty answer as "unknown" and its
-            # write-ahead mark keeps the id resolvable next time.
+            # An unreadable CSV is not proof that no final row exists.  Callers
+            # must fail closed rather than treating this as an empty result and
+            # either appending a duplicate or clearing a crash-recovery mark.
             logging.exception("Could not read the outcome CSV to reconcile finalizations.")
-            return set()
+            return None
         return found
 
     def resolve_unfinished_finalizations(self) -> dict:
@@ -3419,6 +3418,16 @@ class BounceBot(EWrapper, EClient):
             return counts
         with self._outcome_transaction():
             present = self._final_event_ids_in_csv(marks)
+            if present is None:
+                # The finalizing marks are the durable record of the ambiguity.
+                # Leave both memory and the checkpoint alone for the next retry;
+                # clearing them would turn an unreadable CSV into "row absent".
+                counts["unresolved"] = len(marks)
+                logging.error(
+                    "Could not resolve %d interrupted finalization(s): outcome CSV is unreadable.",
+                    len(marks),
+                )
+                return counts
             for event_id in marks:
                 if event_id in present:
                     self._remember_finalized_outcome(
@@ -3510,6 +3519,14 @@ class BounceBot(EWrapper, EClient):
                 return "commit_failed"
 
             present = already_final if already_final is not None else self._final_event_ids_in_csv([event_id])
+            if present is None:
+                # The intent commit above is durable.  Keep it for recovery
+                # rather than appending against an unreadable duplicate fence.
+                logging.error(
+                    "Could not finalize %s: outcome CSV is unreadable; leaving the intent pending.",
+                    event_id,
+                )
+                return "commit_failed"
             outcome = "finalized"
             if str(event_id) in present:
                 # An interrupted attempt already appended it. Appending again is
@@ -4815,6 +4832,23 @@ class BounceBot(EWrapper, EClient):
         # else, and appending a second row for it is the duplicate this exists
         # to prevent.
         already_final = self._final_event_ids_in_csv(list(self.pending_bounce_outcomes))
+        if already_final is None:
+            # Do not pass an unknown fence to each finalizer.  That would make
+            # every row look absent and risk duplicates; the next sweep retries
+            # once the CSV becomes readable.
+            counts["failed"] = 1
+            counts["already_final_in_csv"] = 0
+            counts["pending_after"] = len(self.pending_bounce_outcomes)
+            counts["by_reason"] = by_reason
+            counts["by_terminal_kind"] = {
+                kind: 0
+                for kind in outcome_semantics.TERMINAL_KINDS
+                if kind != outcome_semantics.TERMINAL_OPEN
+            }
+            counts["expire_after_sessions"] = expiry
+            counts["swept_at"] = moment.isoformat(timespec="seconds")
+            self._write_outcome_coverage(counts)
+            return counts
         counts["already_final_in_csv"] = len(already_final)
         for event_id in list(self.pending_bounce_outcomes):
             # The whole decision runs under the lock, and the first thing it
