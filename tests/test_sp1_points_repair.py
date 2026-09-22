@@ -129,7 +129,7 @@ def test_sr_explicit_clear_path_earns_the_clean_bonus_but_false_text_is_not_a_tr
         "hv_level_blocking_count": 0,
         "hv_level_nearby_count": 0,
         "cloud_level_nearby_count": 0,
-        "trendline_in_play": "False",
+        "trendline_note": "False",
         "previous_close": 100.0,
         "atr20": 2.0,
         "hv_level_nearest_distance_atr": 1.5,
