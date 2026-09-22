@@ -234,7 +234,9 @@ def _claim_sort_key(claim: Mapping[str, Any]) -> str:
 
 def merge_claims(
     rows: Iterable[SetupRow], claims: Iterable[Mapping[str, Any]],
-    *, analysis_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
+    *,
+    analysis_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
+    analysis_by_identity: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
 ) -> list[SetupRow]:
     """The scan's rows with the trader's active claims folded in. Pure.
 
@@ -277,9 +279,14 @@ def merge_claims(
 
     for claim in sorted(unmatched, key=_claim_sort_key, reverse=True):
         symbol = str(claim.get("symbol") or "").strip().upper()
+        side = str(claim.get("side") or "").strip().upper()
+        identified = (analysis_by_identity or {}).get((symbol, side))
+        legacy = (analysis_by_symbol or {}).get(symbol)
+        if identified is None and isinstance(legacy, Mapping) and str(legacy.get("side") or "").upper() == side:
+            identified = legacy
         row = row_from_claim(
             claim,
-            current_analysis=(analysis_by_symbol or {}).get(symbol),
+            current_analysis=identified,
         )
         if row is not None:
             merged.append(row)

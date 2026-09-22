@@ -380,6 +380,21 @@ class _AiStateCompressionWorker(QThread):
         self.done.emit(changed)
 
 
+class _PointsProjectionWorker(QThread):
+    """Validate the bounded rich Points sidecar off the Qt thread."""
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - signal seam
+        try:
+            from ui.services.data_feed import warm_points_projection
+
+            changed = bool(warm_points_projection())
+        except Exception:  # noqa: BLE001 - absent evidence stays unmeasured
+            changed = False
+        self.done.emit(changed)
+
+
 class _PointsEvidenceWorker(QThread):
     """Log today's ranked rows, grade the log against the tracker's outcomes,
     write the weight proposal (trader, 2026-09-08). Never raises into Qt.
@@ -399,7 +414,7 @@ class _PointsEvidenceWorker(QThread):
         try:
             import setup_points_evidence
             from project_paths import (
-                MASTER_AVWAP_TIER_OUTCOMES_FILE,
+                MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE,
                 SETUP_POINTS_LOG_FILE,
                 SETUP_POINTS_WEIGHTS_FILE,
             )
@@ -408,7 +423,7 @@ class _PointsEvidenceWorker(QThread):
                 self._payload,
                 log_path=SETUP_POINTS_LOG_FILE,
                 weights_path=SETUP_POINTS_WEIGHTS_FILE,
-                outcomes_path=MASTER_AVWAP_TIER_OUTCOMES_FILE,
+                outcomes_path=MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE,
             )
             sentence = result.sentence()
         except Exception:  # noqa: BLE001 - evidence never costs the table
@@ -865,25 +880,66 @@ class MasterAvwapPanel(QWidget):
         for row in rows:
             if str(row.bucket or "").strip().lower() not in setup_points.RANKED_BUCKETS:
                 continue
-            scan_date = str(row.last_trade_date or data_date or "").strip()
+            raw = row.raw or {}
+            # A completed D1 bar can be yesterday while today's scan has just
+            # observed it.  The observation belongs to the scan session, not
+            # the bar's date.
+            scan_date = str(raw.get("scan_date") or raw.get("run_date") or data_date or row.last_trade_date or "").strip()[:10]
             if not scan_date or not row.symbol or not row.side:
                 continue
-            payload.append(
-                self.model.points_for(row).log_row(
+            logged = self.model.points_for(row).log_row(
                     scan_date=scan_date,
                     symbol=row.symbol,
                     side=row.side,
                     family=str((row.raw or {}).get("setup_family") or ""),
                     bucket=row.bucket,
-                )
             )
+            logged.update({
+                "snapshot_id": self._points_snapshot_id(row, logged, self.model.family_record_for(row)),
+                "scan_stamp": str(raw.get("scan_stamp") or raw.get("run_id") or ""),
+                "scan_timestamp": str(raw.get("run_timestamp") or ""),
+                "observed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "bar_date": str(row.last_trade_date or ""),
+                "scoring_inputs": dict(raw),
+                "family_record": self.model.family_record_for(row),
+                # Descriptive replay aid only.  It is neither ranked nor
+                # graded with v2 and cannot alter a displayed total.
+                "points_v1_shadow_total": setup_points.score_row(
+                    raw, side=row.side, family_record=self.model.family_record_for(row),
+                    d1_vs_sector=row.d1_vs_sector, d1_vs_industry=row.d1_vs_industry,
+                    weights=logged.get("multipliers"), version="points_v1",
+                ).total,
+            })
+            payload.append(logged)
         return payload
 
+    @staticmethod
+    def _points_snapshot_id(row: SetupRow, logged: dict, family_record: dict | None = None) -> str:
+        """Stable identity covers every fact that can change a shown score."""
+        import hashlib
+        import json
+
+        payload = {
+            "symbol": row.symbol, "side": row.side, "bucket": row.bucket,
+            "raw": row.raw or {}, "family": logged.get("family"),
+            "family_record": family_record or {},
+            "d1_vs_sector": row.d1_vs_sector, "d1_vs_industry": row.d1_vs_industry,
+            "parts": {key: logged.get(key) for key in ("setup", "sr", "rs", "bounce")},
+            "multipliers": logged.get("multipliers"), "version": logged.get("points_version"),
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:24]
+
     def _start_points_evidence(self, rows: list[SetupRow], data_date: str) -> None:
+        self._start_points_evidence_payload(self.points_evidence_payload(rows, data_date))
+
+    def _start_points_evidence_payload(self, payload: list[dict]) -> None:
         worker = getattr(self, "_points_evidence_worker", None)
         if worker is not None and worker.isRunning():
+            # A family/read refresh may revise the same day's parts while a
+            # prior log pass is running. Keep the newest snapshot; it will be
+            # appended after this worker returns instead of disappearing.
+            self._pending_points_evidence_payload = list(payload)
             return
-        payload = self.points_evidence_payload(rows, data_date)
         worker = _PointsEvidenceWorker(payload, self)
         worker.done.connect(self._on_points_grade_ready)
         self._points_evidence_worker = worker
@@ -892,6 +948,10 @@ class MasterAvwapPanel(QWidget):
     def _on_points_grade_ready(self, sentence: object) -> None:  # pragma: no cover - signal seam
         self._points_grade_sentence = str(sentence or "")
         self._apply_points_weights()
+        pending = getattr(self, "_pending_points_evidence_payload", None)
+        self._pending_points_evidence_payload = None
+        if pending:
+            self._start_points_evidence_payload(pending)
 
     def _on_points_toggled(self, checked: bool) -> None:
         try:
@@ -1521,6 +1581,10 @@ class MasterAvwapPanel(QWidget):
 
             if setup_points.rank_enabled():
                 self.set_rows(list(source))
+            # Family evidence changes the setup part.  Capture the revised
+            # snapshot even when rank display is off; append_log de-dupes an
+            # identical one and the worker stays off the Qt thread.
+            self._start_points_evidence(self.model.rows(), getattr(self, "_data_date", "") or "")
 
     def set_family_record_coverage(self, line: str) -> None:
         """The one line saying WHAT the Family favorable % column is - ST1 item 3.
@@ -1626,10 +1690,26 @@ class MasterAvwapPanel(QWidget):
             return
         self.refresh_from_reports(emit_empty=False)
 
+    def _start_points_projection_read(self) -> None:
+        worker = getattr(self, "_points_projection_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _PointsProjectionWorker(self)
+        worker.done.connect(self._on_points_projection_ready)
+        worker.finished.connect(worker.deleteLater)
+        self._points_projection_worker = worker
+        worker.start()
+
+    def _on_points_projection_ready(self, changed: object) -> None:  # pragma: no cover - signal seam
+        self._points_projection_worker = None
+        if bool(changed):
+            self.refresh_from_reports(emit_empty=False)
+
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
         self._start_family_record_read()
         self._start_scan_freshness_read()
         self._start_ai_state_compression_read()
+        self._start_points_projection_read()
         meta = load_latest_setup_rows_with_meta()
         rows = meta["rows"]
         _apply_swing_quality_shadow_badges(rows)
@@ -1646,6 +1726,7 @@ class MasterAvwapPanel(QWidget):
 
     def _apply_data_as_of(self, meta: dict) -> None:
         data_date = meta.get("data_date")
+        self._data_date = str(data_date or "")
         source = meta.get("source") or ""
         is_stale = bool(meta.get("is_stale"))
         if not data_date:
@@ -1804,10 +1885,10 @@ class MasterAvwapPanel(QWidget):
             return list(rows)
         try:
             from ui.services.claimed_setup_rows import merge_claims
-            from ui.services.ai_state_levels import cached_symbol_claim_analysis
+            from ui.services.data_feed import cached_claim_points_analysis
 
             return merge_claims(
-                rows, claims, analysis_by_symbol=cached_symbol_claim_analysis()
+                rows, claims, analysis_by_identity=cached_claim_points_analysis(rows)
             )
         except Exception:  # noqa: BLE001 - a claim never costs the scan's rows
             return list(rows)

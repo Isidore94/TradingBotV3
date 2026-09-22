@@ -420,8 +420,8 @@ def test_the_claimed_rows_score_is_blank_and_its_points_say_what_was_not_measure
 ):
     """"Show missing measurements honestly and keep the pick visible."
 
-    A claimed name the scan never measured scores +10 - clean path and nothing
-    else - and the tooltip names every part that was not measured. A formula
+    A claimed name the scan never measured scores +0 and the tooltip names
+    every part that was not measured. A formula
     that filled the holes with zeros and printed a confident total would fail
     this.
     """
@@ -444,7 +444,7 @@ def test_the_claimed_rows_score_is_blank_and_its_points_say_what_was_not_measure
         assert str(score_cell).strip() in ("", "-"), (
             f"a like must not invent a score; the cell read {score_cell!r}"
         )
-        assert points_cell == "+10", points_cell
+        assert points_cell == "+0", points_cell
         assert "family ungraded" in tooltip
         assert "unmeasured" in tooltip
         assert bucket_cell == "My liked trade"
@@ -469,8 +469,8 @@ def test_a_claimed_only_row_uses_the_latest_full_scan_inputs_for_points():
         "setup_family": "alpha",
     }
 
-    row = merge_claims([], [claim], analysis_by_symbol={"ZZZZ": analysis})[0]
-    points = setup_points.score_row(row.raw, side=row.side)
+    row = merge_claims([], [claim], analysis_by_identity={("ZZZZ", "LONG"): analysis})[0]
+    points = setup_points.score_row(row.raw, side=row.side, version="points_v1")
 
     assert row.raw["known_at_claim"] == {}
     assert row.raw["current_analysis"] == analysis

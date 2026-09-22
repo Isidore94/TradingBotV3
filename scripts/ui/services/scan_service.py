@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -74,6 +75,9 @@ class ScanWorker(QObject):
                 rows = load_latest_setup_rows()
             else:
                 enrich_setup_rows_for_display(rows, supplemental_rows=rows)
+            # The rich Points projection is serialized on this scan worker.
+            # `_handle_finished` runs on Qt and must only forward its result.
+            ScanService._write_points_scan_projection(run_result)
             stamp = datetime.now().strftime("%H:%M:%S")
             self.finished.emit(run_result, rows, stamp)
         except Exception as exc:
@@ -315,6 +319,73 @@ class ScanService(QObject):
         payload.setdefault("worker_pid", self._active_worker_pid)
         self.finished.emit(payload, rows, stamp)
         self.start_warehouse_build(str(payload.get("run_id") or ""))
+
+    @staticmethod
+    def _write_points_scan_projection(payload: dict) -> None:
+        """Persist bounded rich scan facts for the terse priority-report reader.
+
+        This is after the scan completed.  It is a display/evidence cache only:
+        failure loses enrichment, never scan output or the trader's table.
+        """
+        try:
+            import json
+
+            from project_paths import MASTER_AVWAP_PRIORITY_SETUPS_FILE, SETUP_POINTS_SCAN_PROJECTION_FILE
+
+            run_id = str(payload.get("run_id") or "")
+            run_date = str(payload.get("run_date") or payload.get("generated_at") or "")[:10]
+            fields = (
+                "symbol", "side", "scan_date", "scan_row_state", "bar_state", "bar_status", "view_mode", "is_preview", "sr_inputs_measured",
+                "hv_level_blocking_count", "hv_level_nearby_count", "cloud_level_nearby_count",
+                "trendline_in_play", "trendline_note", "priority_trendline_note", "previous_close", "last_close", "atr20", "ema21",
+                "sma_breakout_sma_level", "sma_breakout_sma_label", "hv_level_nearest_distance_atr",
+                "daily_relative_strength_score", "rs_vs_industry", "has_bounce_event_today",
+                "top_pattern_daily_sma50_bounce", "favorite_signals", "setup_tags", "setup_family", "expected_r", "priority_bucket",
+                "compression_score", "compression_flag", "recent_band_extension_days", "run_timestamp",
+            )
+            rows = []
+            for source_key in ("stable_priority_rows", "tracked_rows"):
+                for source in payload.get(source_key) or []:
+                    if not isinstance(source, dict):
+                        continue
+                    raw = {key: source.get(key) for key in fields if key in source}
+                    raw["bar_date"] = str(source.get("last_trade_date") or source.get("scan_date") or "")[:10]
+                    raw["scan_date"] = run_date
+                    raw.setdefault("previous_close", raw.get("last_close"))
+                    raw.setdefault("trendline_note", raw.get("priority_trendline_note"))
+                    if "sr_inputs_measured" not in raw:
+                        try:
+                            import math
+
+                            counts = all(
+                                raw.get(key) is not None and float(raw[key]).is_integer() and float(raw[key]) >= 0
+                                for key in ("hv_level_blocking_count", "hv_level_nearby_count", "cloud_level_nearby_count")
+                            )
+                            price = all(math.isfinite(float(raw[key])) for key in ("previous_close", "atr20", "ema21"))
+                            raw["sr_inputs_measured"] = bool(
+                                counts and price and float(raw["atr20"]) > 0
+                                and any(key in source for key in ("priority_trendline_note", "trendline_note", "trendline_in_play"))
+                            )
+                        except (TypeError, ValueError, KeyError, OverflowError):
+                            raw["sr_inputs_measured"] = False
+                    raw.setdefault("run_id", run_id)
+                    raw.setdefault("scan_stamp", run_id)
+                    raw.setdefault("run_date", run_date)
+                    raw.setdefault("run_timestamp", str(payload.get("run_timestamp") or ""))
+                    rows.append(raw)
+            destination = SETUP_POINTS_SCAN_PROJECTION_FILE
+            try:
+                import hashlib
+
+                report_digest = hashlib.sha256(MASTER_AVWAP_PRIORITY_SETUPS_FILE.read_bytes()).hexdigest()
+            except OSError:
+                report_digest = ""
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_suffix(destination.suffix + ".tmp")
+            temporary.write_text(json.dumps({"run_id": run_id, "run_date": run_date, "report_digest": report_digest, "rows": rows}, sort_keys=True), encoding="utf-8")
+            temporary.replace(destination)
+        except Exception:  # noqa: BLE001 - evidence cache never costs a scan
+            logging.exception("Could not write Points rich-scan projection")
 
     def start_warehouse_build(self, run_id: str = "") -> bool:
         """Seal the spool and run the EOD build after a scan, IN A CHILD.
