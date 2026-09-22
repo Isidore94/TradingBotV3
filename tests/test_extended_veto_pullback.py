@@ -443,3 +443,31 @@ def test_extended_veto_keeps_a_same_side_m15_only_watch_without_claiming_m30_h1(
     finally:
         panel.close()
         panel.deleteLater()
+
+
+def test_extended_veto_does_not_claim_legacy_h1_only_watch_covers_m30(
+    tmp_path, monkeypatch
+):
+    from chart_watch import (
+        PULLBACK_KIND,
+        TRIGGER_H1_EMA15_BOUNCE,
+        load_chart_watches,
+        save_chart_watches,
+    )
+
+    panel = _panel(tmp_path, monkeypatch)
+    try:
+        _queue_scans_for_veto(panel, "AAPL")
+        assert panel.arm_chart_watch_for("AAPL", "LONG", PULLBACK_KIND)
+        legacy = replace(panel._chart_watches[0], triggers=(TRIGGER_H1_EMA15_BOUNCE,))
+        panel._chart_watches = [legacy]
+        save_chart_watches([legacy], tmp_path / "chart_watches.json")
+        _choose_extended_reason(panel.chart_review.capture_rail)
+        QApplication.processEvents()
+
+        assert panel._chart_watches == [legacy]
+        assert load_chart_watches(tmp_path / "chart_watches.json") == [legacy]
+        assert "not armed" in panel.chart_review.capture_rail.status_label.text().casefold()
+    finally:
+        panel.close()
+        panel.deleteLater()

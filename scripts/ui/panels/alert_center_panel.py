@@ -7599,7 +7599,22 @@ class AlertCenterPanel(QFrame):
         if active_existing is not None:
             existing_side = str(getattr(active_existing, "side", "") or "").upper()
             if existing_side == side:
-                return  # idempotent saved veto; preserve the existing arm byte-for-byte
+                scope = {
+                    str(timeframe).upper()
+                    for timeframe in (getattr(active_existing, "timeframes", ()) or ())
+                }
+                triggers = set(getattr(active_existing, "triggers", ()) or ())
+                if (
+                    (not scope or {"M30", "H1"}.issubset(scope))
+                    and set(PULLBACK_TRIGGERS).issubset(triggers)
+                ):
+                    return  # this arm already covers the requested follow-up
+                self.chart_review.capture_rail.set_capture_status(
+                    f"VETO {symbol} - too_extended_from_base; pullback not armed "
+                    "(existing pullback does not cover the M30/H1 follow-up)",
+                    ok=False,
+                )
+                return
             self.chart_review.capture_rail.set_capture_status(
                 f"VETO {symbol} - too_extended_from_base; pullback not armed "
                 f"({existing_side or 'WATCH'} pullback already armed)",
