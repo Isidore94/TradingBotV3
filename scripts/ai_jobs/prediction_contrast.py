@@ -62,6 +62,7 @@ import evidence_contrast
 import evidence_stats
 import market_read_grades as grades
 import prediction_ledger
+import trade_mentor_context
 import walkaway_day
 
 _log = logging.getLogger(__name__)
@@ -103,6 +104,80 @@ def _is_unmeasured(value: Any) -> bool:
     return not text or text == grades.UNMEASURED
 
 
+def _measured_derived(
+    internals: Mapping[str, Any], name: str
+) -> Mapping[str, Any] | None:
+    """One canonical measured v2 derived line, or no feature at all.
+
+    This is deliberately an allowlist reader.  The context is an archival
+    document, so notes, sources, stamps, free-form keys and future lines must
+    not silently become outcome features merely because they were stored.
+    """
+    if str(internals.get("schema") or "") != trade_mentor_context.SCHEMA:
+        return None
+    if name not in trade_mentor_context.DERIVED_LINES:
+        return None
+    derived = internals.get("derived")
+    line = derived.get(name) if isinstance(derived, Mapping) else None
+    if not isinstance(line, Mapping) or str(line.get("status") or "") != "measured":
+        return None
+    return line
+
+
+def _recorded_number(value: Any) -> float | None:
+    """A finite stored number, preserving zero and never re-measuring it."""
+    if isinstance(value, bool):
+        return None
+    return evidence_contrast.measurement(value)
+
+
+def _internals_features(context: Mapping[str, Any]) -> dict[str, Any]:
+    """The bounded canonical-v2 market-internals projection for one grade row."""
+    internals = context.get("internals")
+    if not isinstance(internals, Mapping):
+        return {}
+    out: dict[str, Any] = {}
+    for name in ("breadth", "rates", "oil", "offense_vs_defense"):
+        line = _measured_derived(internals, name)
+        value = _recorded_number(line.get("value")) if line else None
+        if value is not None:
+            out[f"internals.{name}.value"] = value
+
+    fear = _measured_derived(internals, "fear")
+    if fear:
+        for field in ("vxx_direction", "spy_direction"):
+            value = str(fear.get(field) or "")
+            if value in {"up", "down", "flat"}:
+                out[f"internals.fear.{field}:{value}"] = 1.0
+        divergence = fear.get("divergence")
+        if isinstance(divergence, bool):
+            out[f"internals.fear.divergence:{divergence}"] = 1.0
+
+    above = _measured_derived(internals, "sectors_above_vwap")
+    if above:
+        for field in ("count", "denominator"):
+            value = _recorded_number(above.get(field))
+            if value is not None:
+                out[f"internals.sectors_above_vwap.{field}"] = value
+
+    for name in ("sector_leaders", "sector_laggards"):
+        line = _measured_derived(internals, name)
+        if not line:
+            continue
+        for window in ("day", "m30"):
+            members = line.get(window)
+            if not isinstance(members, (list, tuple)):
+                continue
+            chosen = {str(member) for member in members}
+            if not chosen <= set(trade_mentor_context.SECTORS):
+                continue
+            for sector in trade_mentor_context.SECTORS:
+                out[f"internals.{name}.{window}:{sector}"] = (
+                    1.0 if sector in chosen else 0.0
+                )
+    return out
+
+
 def _scalar_context(row: Mapping[str, Any]) -> dict[str, Any]:
     """One grade row's context, scalars only, in the shape a contrast eats."""
     context = row.get("context")
@@ -116,6 +191,7 @@ def _scalar_context(row: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(value, (Mapping, list, tuple, set)):
             continue
         out[name] = value
+    out.update(_internals_features(context))
     return out
 
 
