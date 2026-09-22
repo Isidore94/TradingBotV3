@@ -7,14 +7,12 @@ outcomes, and supports controlled research. It never places orders.
 
 ## Documentation
 
-The documentation has five entry points:
-
-- [`CHANGELOG.md`](CHANGELOG.md) — what is implemented and the revision history;
-- [`plan.md`](plan.md) — what remains, in order, with validation/promotion gates;
-- [`CURRENT_CHECKPOINT.md`](CURRENT_CHECKPOINT.md) — active work, current branch, and exact verification checkpoint;
-- [`WISHLIST.md`](WISHLIST.md) — candidate integrations that are not authorized work;
-- [`docs/README.md`](docs/README.md) — every runbook, specification, decision record,
-  and historical document classified by role.
+- [`AGENTS.md`](AGENTS.md): how to work on the repo (CLAUDE.md imports it).
+- [`STATUS.md`](STATUS.md): what's live now and what's next.
+- [`TODO.md`](TODO.md): the next work, in order.
+- [`CHANGELOG.md`](CHANGELOG.md): one line per merged change.
+- [`WISHLIST.md`](WISHLIST.md): ideas only, not authorized work.
+- [`docs/README.md`](docs/README.md): rules, live gates, decisions and runbooks.
 
 ## Current operating model
 
@@ -126,7 +124,7 @@ Before every commit:
 .venv\Scripts\python.exe scripts\smoke_check.py
 ```
 
-Check pytest's own exit code. The exact current baseline is in `CURRENT_CHECKPOINT.md`.
+Check pytest's own exit code. The exact current baseline is in `STATUS.md`.
 
 The frozen application supports a no-window, no-network engine check:
 
@@ -150,5 +148,5 @@ spec.
 - `market_prep/` — pre-session services;
 - `scripts/research_warehouse/` — disabled-by-default research lake;
 - `tests/` — deterministic, Qt, broker, network, slow, and packaging coverage;
-- `docs/` — indexed runbooks, design references, decisions, and historical records;
+- `docs/` — rules, live gates, decisions and runbooks (history is in the local `notes/`);
 - `packaging/` — PyInstaller spec and frozen-build guidance.

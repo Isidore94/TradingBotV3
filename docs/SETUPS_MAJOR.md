@@ -125,7 +125,7 @@ Anything marked ⚠ is a point I'm least sure of — please check those first.
   and which support broke first. The Setup Tracker's **Theta** tab shows support-combo cells
   with the hold rate first, its `n` and the one Wilson lower bound, sorted by the bound, plus
   a tercile grade line for the score. Shadow only; the RS cut reads `not_measured` because
-  the score has no RS term to cut on. Long form: `docs/DESK_INTERNALS.md` "TH - the theta
+  the score has no RS term to cut on. Long form: `notes/docs/DESK_INTERNALS.md` "TH - the theta
   picks are graded, never changed".
 
 ## Intraday major setups (BounceBot, M5)

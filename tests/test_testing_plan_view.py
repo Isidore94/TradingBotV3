@@ -56,10 +56,10 @@ def test_the_plan_exists_and_covers_the_owed_proofs():
         assert topic in text, f"the plan never mentions {topic!r}"
 
 
-def test_the_plan_says_it_must_be_updated_with_the_checkpoint():
+def test_the_plan_says_it_must_be_updated_with_the_gates_list():
     """Without this line the two drift apart silently."""
     text = PLAN_PATH.read_text(encoding="utf-8")
-    assert "CURRENT_CHECKPOINT.md" in text
+    assert "docs/GATES.md" in text
     assert "same pass" in text
 
 

@@ -1,293 +1,122 @@
-# TradingBotV3 — AI context index
+# TradingBotV3 — AI guide
 
-TradingBotV3 is a Windows desktop decision-support system for one trader's day and
-swing trading. It does everything except execute orders: pre-session market prep,
-candidate discovery (D1 anchored-VWAP swing scans + intraday 5-min bounce detection),
-live monitoring with alerts, unattended Auto/Away scanning with a phone report, a
-journal, and a controlled research/promotion program for new setups. Order execution
-is permanently out of scope (plan.md sec 1).
+A Windows PySide6 desk for one trader's day and swing trading: market prep, D1
+anchored-VWAP swing scans, intraday M5 bounce alerts, Auto/Away scanning with a phone
+report, a trade journal, and a night-time local-AI review. **It never places orders.**
 
-## Agent routing - read before doing work
+## Read this, then stop reading
 
-- **The agent team.** Read [`docs/AGENT_TEAM.md`](docs/AGENT_TEAM.md) before delegating: `.claude/agents/` serves Claude; `.codex/agents/` serves Codex. Tester proves failures, builder fixes, reviewer reproduces; the lead checks handoffs against the diff and alone integrates, with code workers isolated from the desk checkout.
-- **Codex delegation (trader, 2026-09-09).** The trader selects the session model (2026-09-15); never pin the lead model in project config. The selected lead owns planning, orchestration and final acceptance; explicitly delegate bounded recon and simple work to Luna, and implementation, tests and independent review to Terra wherever useful work can run alongside the lead. Use explicit model selection and narrow context, escalate Luna to Terra before asking Astra for a focused decision, and never silently spend on Astra helpers; `.codex/config.toml` and the runbook own defaults and runtime fallback details. These Codex rules do not change Claude's model choices.
+1. `STATUS.md` — what is live, in flight, next, and owed (~3 KB).
+2. `TODO.md` — only if you are choosing work.
+3. `docs/RULES.md` — only the section for the area you are changing. Each rule exists
+   because of a real incident.
+4. The code. **The code is the fact**; if a doc disagrees, fix the doc.
 
-## How to talk to the trader (trader rule 2026-08-26)
-
-**Write every message to the trader as if they are five years old.** Very short.
-Very simple words. One idea per sentence. Say what you did, what is broken, and
-what they need to do - nothing else. No long lists, no tables, no section
-headers, no code words unless the trader has to type them. If a message is
-longer than about ten short lines, cut it. Detail belongs in the docs and the
-commit message, not in the chat. This rule is for chat output only; docs, code
-comments and commit messages keep their normal depth.
-
-## Workspace memory (WISHLIST 11, trader 2026-09-12)
-
-Long form and the authority reconciliation: `docs/DESK_INTERNALS.md` "Workspace memory
-is recall, never authority".
-
-- **`MEMORY.md` at the root is a ROUTING INDEX only** (name -> detail file -> trigger keywords, never a fact); the detail lives under `memory/`. At idle boot read the standing instructions and `MEMORY.md`; once a task exists the narrow reads below apply unchanged.
-- **Before answering about prior work, decisions, dates, people or preferences, search memory first:** route through `MEMORY.md`, read the narrowest detail file, at most five sources, cite file, tag and date. A live-status question is answered from the checkpoint and the code, never from memory.
-- **Memory is recall, never authority.** `CURRENT_CHECKPOINT.md` is the brief, `plan.md` the build order, `CHANGELOG.md` the inventory, `docs/decisions/` the contracts and the code the fact; a detail file outranks its index. No recalled line authorizes a detector change, overrides a decision, promotes a WISHLIST item or bypasses the ask-first rule.
-- **Every non-blank line in `people/`, `projects/` and `decisions/` carries `[stated]` / `[observed]` / `[inferred]` / `[suggested]`, a date and a source**; only the trader's own words support `[stated]`; never keys, account numbers, live counts or machine status. An inferred lesson becomes a rule only after three weighted independent signals across two sessions; a trader correction applies at once.
-- **Supersede in place** (strike the old line with its date, the replacement beside it); update `MEMORY.md` in the same commit; consolidate before 15,000 characters per file. Recon, reviewer and tester never write memory - they hand the lead a sourced line; the lead integrates. Claude's auto-memory is private scratch.
-
-## Mandatory documentation workflow for every AI
-
-**Read narrow, not everything.** The bounded read below is the instruction — widen it
-only when the narrow read leaves a real question open. An agent that cannot read its
-brief skims it and then appends to it, which is what grew these files to 1 MB once.
-
-Before proposing, planning, or changing anything:
-
-1. `CURRENT_CHECKPOINT.md` — read the **"Active state at a glance"** block at the top:
-   branch, active roadmap items, last verified baseline, open gates, next action. That
-   block is the brief. Read a dated entry below it only for the item you are touching;
-   if a dated entry contradicts the block, the dated entry wins.
-2. `plan.md` — Sections 5 (invariants), 6 (live validation) and 7 (promotion), then the
-   phase table at the head of Section 12. Read the body of your phase only.
-3. `CHANGELOG.md` — **search** `Current implemented inventory` for the feature you are
-   about to touch, so you do not rebuild landed work. Never read it end to end.
-4. `docs/README.md` — one line per file; open only the spec, runbook and decision
-   records for the selected item.
-5. Inspect the source, tests, Git status/history and runtime artifacts needed to verify
-   that the documentation still matches reality. **When the docs and the code disagree,
-   the code is the fact and the doc is the defect** — fix the doc, and say so.
-
-`docs/archive/` is history (checkpoint, changelog and roadmap archives, retired designs,
-built prompts, frozen August reviews). Open one file there for one specific question;
-**never load it as context** and never read an entry there as an open gate.
-
-`WISHLIST.md` contains ideas, not authorized work. Never implement directly from it. An
-item enters the build sequence only when the trader explicitly moves it into `plan.md`.
-
-Before editing, state the exact roadmap/checkpoint item, what already exists, what
-remains, governing documents, expected files, tests, and whether the ask-first rule
-applies. Do not skip to a later phase because it is easier or more interesting.
-
-After every repository change, reconcile the documentation before handoff:
-
-- update `CURRENT_CHECKPOINT.md` with the active item, working state and verification
-  result (or say why the baseline is unchanged), and **refresh the glance block** — a
-  stale block is worse than none;
-- update `CHANGELOG.md` when behavior, contracts, architecture, operations or an
-  implementation status changed;
-- remove, narrow or advance the corresponding `plan.md` work while retaining any
-  live-validation or promotion gate still owed;
-- update the governing spec or decision record when its contract or rationale changed;
-- update `WISHLIST.md` only for trader-directed idea changes; an AI may recommend a
-  promotion but must not silently make one;
-- update `docs/README.md` whenever a Markdown file is added, moved, removed or
-  reclassified;
-- keep `CLAUDE.md` and `AGENTS.md` identical (edit CLAUDE.md, then re-copy it over
-  `AGENTS.md` — symlinks don't survive Windows checkouts);
-- **keep the active files small.** Size rules: `CLAUDE.md` under ~45 KB (a rule here is
-  one to three sentences and names its seam; its story, numbers and quotes go in
-  `docs/DESK_INTERNALS.md`); the glance block
-  under ~6 KB with one line per gate; `CURRENT_CHECKPOINT.md`'s dated entries hold the
-  last **three build days** and older ones move to `docs/archive/`; `CHANGELOG.md`'s
-  Recent changes holds two; a BUILT phase in `plan.md` is a stub pointing at the
-  roadmap archive. Archiving is maintenance, not a new document.
-
-Do not create another roadmap, progress ledger, handoff, or status file. The root
-control set is `CLAUDE.md`/`AGENTS.md`, `CHANGELOG.md`, `plan.md`,
-`CURRENT_CHECKPOINT.md`, `WISHLIST.md`, and `docs/README.md`; `MEMORY.md` + `memory/` sit
-beside it as recall, never status (see Workspace memory). Prompts, reports and
-assessments go in chat or an artifact, never a committed `.md` (trader rule 2026-09-04).
-
-## Core loop / data flow
-
-Each rule below is binding as written. The incident, measurements and trader
-conversation behind every one are in [`docs/DESK_INTERNALS.md`](docs/DESK_INTERNALS.md)
-— **read the matching entry there before changing the behaviour a rule governs**, and
-change both places when a rule changes.
-
-**Shape**
-- Entry: `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). One desk role, no flag; Desk Link/satellite, the mini-PC scanner, the Tk UI, `TickerMover.py` and `PyQt5` are all REMOVED, not dormant.
-- Market data: IBKR TWS/Gateway `127.0.0.1:7496` (`ibapi`) primary, `yfinance` fallback, bar source tracked per scan (`docs/BROKER_ADAPTERS.md`). The D1 scan's daily bars are PINNED to Yahoo by `local_settings.json` `daily_bars_source: "yahoo"` — a manifest full of Yahoo successes is the pin working, not IB failing; IB serves intraday bars and the champion's M5 loop.
-- Engines: `scripts/master_avwap.py` (+`master_avwap_lib/`) D1 AVWAP swing scanner; `scripts/bounce_bot.py` (+`bounce_bot_lib/`) intraday M5 bounce detector; `market_prep/` pre-session services.
-- Inputs: plain-text watchlists (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`) in the shared home folder. **`longs.txt` / `shorts.txt` are the DAY-TRADE (M5) lists and are WIPED after each session's close** (decision 0020): the stateless `scripts/daytrade_watchlist_reset.py` empties a list last written at or before the last completed session's close on the first Auto Pilot tick after it — every mode, before the weekend short-circuit and before the open scan — while a name typed after the close survives to the next close. Every name leaves alike with one WS-5D `remove` row (`session_reset`) and the swing lists are never touched. Long form: DESK_INTERNALS "DTR".
-- Storage: `C:\TradingBotData` is a plain LOCAL folder — no cloud drive (decision 0015). Per-machine caches under `%LOCALAPPDATA%\TradingBotV3` (`scripts/project_paths.py`); address home-folder stores by their `project_paths` named constants. The DAS `\\MINI-PC\Trading Bot Data` is the durable tier: **write local first, move to the DAS after.**
-- Shadow engines (`market_state.py`, `greatness_monitor`) emit JSONL promotion evidence only. Review-learning loop: Alert Center decisions → `alert_review_events.jsonl` → `review_learning.py` → AI-curated `review_policy.json` → chart annotations (`docs/REVIEW_LEARNING_LOOP.md`).
-
-**Research warehouse** (contract `docs/ULTIMATE_SETUP_DATABASE_PLAN.md`, decisions `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`, identities `docs/RESEARCH_WAREHOUSE_ERD.md`)
-- Shadow-only additive evidence with **zero detector/score/alert influence**, at `research_store_dir`, never inside `C:\TradingBotData` (unset = disabled).
-- The post-scan build runs in an owned CHILD PROCESS at below-normal priority (F1, BD-95), never a thread; reads are session-scoped and MONTH-keyed through `ResearchStore.read_rows`, never by filtering a materialised list.
-- **Never widen `_run_outcomes` to a date filter** — its walk runs FORWARD across sessions (BD-66/69/74).
-- The seal de-duplicates at the dataset grain and counts what it drops; repair is `research_warehouse.cli dedupe --apply` (dry run by default); derived rows from a duplicated month are wrong in VALUE and need a rebuild (BD-96/97).
-- A SNAPSHOT over 64 MB is stored whole but never `json.loads`-ed; the UNCHANGED watermark is a chunked hash (BD-73).
-- H2/H4 exist for the HTF LRSI study (BD-78), end each session with a STUB excluded from the LRSI input, and the grid is the 16 diagnostic recipes in `outcomes.HTF_LRSI_RECIPES`, never a Cartesian search (BD-79). Live `CROSS_LEVELS` stays `(20, 50)`.
-- `anchor_instance` comes from `earnings_avwap_anchors.csv`, fed by the SCAN through `runner.bridge_earnings_anchor_caches_to_csv` -> `append_anchor_candidates` (append-only, de-duplicated on ticker + anchor_date, new rows at the END, failure logged never raised). Nothing live reads the CSV; never trim it.
-- A reconstructed anchor is LABELLED and never promotion evidence (BD-99/100): `AnchorChoice` `observed` / `reconstructed`, carried by `feature_snapshot_daily.anchor_knowledge` and `outcome_path.path_kind`; repair order build -> `rebuild-daily-features` -> `recompute-outcomes` -> `band-coverage`.
-- **The daily snapshot carries BOTH AVWAP band families and they never share a column** (M4, BD-102): `avwape_*` is the frozen champion, `avwap_variant_*` the challenger computed from the SAME bars independently of it (a NULL band is "not measured"); `swing_house_variant_v1`'s `outcome_definition_id` fences it out of every `house_default_v1` reader. Shadow only. Long form: DESK_INTERNALS "M4".
-- The setup registry (`scripts/setup_registry.py`, `setup_registry_v1.json`) is frozen DATA regenerated by `build_setup_registry.py --write`; an unknown name RAISES; nothing in production imports it before `plan.md P4.1`. `trial_ledger.register` writes one append-only row per grid BEFORE any outcome is read.
-- The like-link payload field is `match_basis` and `LikeLink.from_payload` is its only reader, strict in both directions; the dataset is `bronze_like_occurrence_link`.
-- **The `setup_research` narration is a BOUNDED view and its selection is a SIZE rule, never a ranking by result** (N3, BD-101): `_bounded_narration_view` fills by `stats.n` descending then name; **no R statistic may enter that key** (gate #43); `narrated K of N` is stated everywhere it is read. Long form: DESK_INTERNALS "N3".
-
-**Alert Center, review queue and capture**
-- The charts own the review pane; at most ONE slim verb row sits between them and the tab strip. **The arm bar stays UNDER the chart** (host decision via `AlertChartReview(dock_arm_bar=…)`); never propose moving it without asking. Rail shortcuts are rebound at panel scope — a `QShortcut` in a hidden tab never fires and two bindings for one sequence fire neither.
-- **A VETO retires the chart, a CLAIMED like ADVANCES it, a QUICK like and a NOTE move nothing**: `vetoRetireRequested` -> `_retire_after_veto` (ONE row), `likeRecorded` -> `_after_like`, `likeAdvanceRequested` -> `_advance_after_like` -> `_advance_review_queue` (parks and drops nothing); both likes write `like_advance` because `review_learning.TAKE_ACTIONS` keys on it. **A CLAIMED like on a D1 chart PLACES before it advances** (D1C): the pick is saved to `claimed_picks.jsonl` first, `claimPlaced` -> `_place_claimed_d1` -> `_retire_claimed_review` (no `remove_today`, no park, no Focus drop; a failed save keeps the chart and says so), an active claim keeps that (symbol, side) D1 scan alert out of the REVIEW QUEUE ONLY — M5 alerts, chart-watches and every evidence writer untouched — and the horizon comes from `claimed_picks.claim_horizon`, never the rail's timeframe. Long form: DESK_INTERNALS "T1", "D1C".
-- **An extended-from-base veto requests a Pullback watch** (AR, trader 2026-09-22): only the successfully saved matching `too_extended_from_base` row asks the host to arm M30/H1, then its normal or day-trade veto route retires; a failed arm says so and an existing manual watch is kept. Every other reason and ordinary claim/Focus membership keep manual-only arming; long form: DESK_INTERNALS "AR".
-- **A day-trade PASS is a note, not a veto, and never retires the chart.** Its codes are a SEPARATE vocabulary family (`ui/annotations/vocabularies/pass_reasons_v*.json`); cached M5 bars are referenced through a sidecar written BEFORE the row (`ui/annotations/pass_bars.py`); a capture click never fetches; a pass does not mark the symbol "Reviewed today".
-- **A LIKE has two modes and only one names a setup** (P9): **Alt+L** is the QUICK like (`like_mode: "quick"`, never prompts), **Alt+K** the CLAIMED like; an absent `like_mode` reads `claimed`; a like carries zero privileges and contributes a LINK to the auto-tagger, never a tag. `sidecar_completion` writes a NEW file (`m5_bars_completed_ref`) and **its read is AWARE** (N1): `pass_bars.desk_zone()` is ATTACHED to a naive `dt`, never stripped. Long form: DESK_INTERNALS "P9 / N1".
-- **Every verdict has a forward record and no two verdicts are combined** (P5): veto, like, pass, rejection (`focus__m5_not_today` / `focus__swing_dislike`, the double underscore load-bearing); pass cohorts overlap and only `pass_all` counts passes; `unfavorite` is never graded; an unreachable pass grade is BLANK with `intraday_unmeasured_reason`, never zero.
-- Veto vocabulary is versioned and codes are never reused; cohort identity on write is `(vocab_version, reason_code)`, rows are never rewritten, pooling happens only in `_rebuild_pooled_performance`. **Never assert a literal `vocab_version` in a test.**
-- **PROVEN is the top alert class; BANGER no longer exists.** The `banger` review-event column stays a constant `False`; `REGIME_BANGER_*` in `legacy.py` is a regime-pause threshold, untouched.
-- **The LRSI M5 alerts are RETIRED and their evidence is not.** `LRSI_M5_ALERTS_RETIRED` gates only the EMIT seam in `_emit_lrsi_cross_alert`; detection, the outcome row and the PROVEN stamp still run. **Never flip `M5_SIGNAL_TYPE_DEFAULTS` for these two** — that would stop the evidence.
-- Feed repetition control is display only and withholds nothing: one live row per symbol+side+day, repeats fold with an ×N badge, privileged output bypasses the fold, the backing list is written BEFORE any repetition decision. **No suppression field exists in this chain.**
-- Movers-only chart review is a default-on PRESENTATION filter: hides and counts, never deletes, mutes or writes `review_policy.json`; both legs are asked at SHOW time; UNKNOWN always SHOWS, tagged `unmeasured`.
-- Intraday alerts are a list beside the chart (`ui/widgets/m5_alert_bar.py`, LEFT column), not a queue in front of it: clicking from one row to the next is a SKIP, never a re-queue, and **a click away IS a pass** — never "fix" it, never rename `clicked_away_from_m5_alert`. Routing is `_is_m5_review_alert` inside `_enqueue_review_alert`, after the AWAY branch.
-- "Holding highs" is measured in ATR (1.0 ATR, never a percentage), expires 15 minutes after the later of the alert and the last new extreme, and is deleted from the review queue only; uncertainty never deletes. With-trend rows auto-join M5 Focus (`scripts/regime_pause_focus.py`, DESK only).
-
-**Focus, gating and modes**
-- **M5 Focus adoption gate** — one definition in `scripts/focus_adoption_gate.py`: beyond yesterday's extreme AND right side of session VWAP on the last **completed** M5 bar, UNKNOWN always failing; session VWAP from `chart_snapshot.session_vwap_series`. Stored verdicts expire at 45 min or 2 completed bars.
-- **A Focus pick's automatic D1 alerts are PULLBACKS only** (`_poll_focus_d1_interest` evaluates `D1_PULLBACK_KINDS`); the extension set fires only when the trader ARMED it, through `_poll_d1_event_watches`. The gate is at flag GENERATION, so nothing is suppressed downstream.
-- **An armed alert expires in TRADING days** (5 for a 5d extreme watch, 10 otherwise) counted by `market_calendar.trading_days_between`, policy once in `scripts/armed_alert_expiry.py`; uncertainty never deletes, every expiry appends a row, a price alert is DISARMED never deleted, and expiry runs at the head of the poll that owns each store.
-- **A quiet Focus pick FADES after 10 trading days**, reversibly (`focus_pick_clocks.json`), through the store's own removal path so a watchlist line is never touched; faded is not deleted (`focus_faded.json` + append-only row), a faded swing favorite appends a RETRACTION, no `pick_feedback` verdict is written; `FocusPickStore` is the single writer, checked on the day roll and a half-hourly timer. Long form: DESK_INTERNALS "A Focus pick that never speaks fades".
-- Focus provenance: `focus_auto_picks.json` marks machine-adopted entries; **absence of a marker means the trader owns it**, and only marked entries are reachable by "Not today" or desync repair.
-- Today's swing picks (`ui/widgets/swing_favorites_bar.py`) get two writes - swing Focus FIRST and must not fail, then the append-only `swing_favorites.jsonl` row whose failure is swallowed; never an auto-adoption marker; like-origin `vetted`; a removal appends a RETRACTION. The strip sits UNDER the setups in the RIGHT (D1) column (`d1_column`, D1C-L); the left column is M5 only.
-- Auto-mode matrix (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`): discovery is identical in every mode; DESK adopts staged picks immediately, AWAY stages and never adopts (its return surface is the EOD recap), EVENING runs the early slot and briefing then stops, OFF does nothing automatic.
-- Quiet hours: every **automatic** starter is gated on `autopilot_core.auto_scanning_due`, fail-open. **Manual buttons are never gated.**
-- Phone push: **AWAY is the only Auto mode that pushes routine output**, with two exceptions — Research/Focus price alerts (every mode) and EVENING's SPY ±1% wake alarm. Gate any new ntfy sender on `auto_mode == AWAY` or say why it belongs with those two.
-- **The Trade Mentor prompts only a PRESENT trader** (WS-TM): whole-hour reads from 07:00 Pacific in DESK / EVENING / OFF, never in AWAY, never a push, the Settings checkbox shipping OFF; an answer is one dated Market Journal row, a missed hour is recorded as skipped, and this is the one narrow fixed-time exception to quiet hours. Long form: DESK_INTERNALS "TM".
-- **The 09:00 slot is the FORCED trade check** (TJ-9, `trade_mentor_schedule.TRADES_HOUR`): the previous session's trades are all listed, a trade's Save stays grey until each of ITS material fields holds a value or an answer state - **forced is PER TRADE and an answered trade is stored at once and never asked again** (trader 2026-09-21; words typed beside a blank dropdown and the trade's one raw note both count, and `_mentor_answered` finds an answer about a trade by its `trade_id`, never only by the day it was given on) - a check still owed RIDES on any later delivered slot, a section with ANSWER WIDGETS is never rebuilt while a one-line state always is, and a not-ready journal earns ONE Questrade retry (`JournalImportService`). **A `provisional` tag is not an answer and a rejection tag is never offered or confirmed as a setup** (`journal_analytics.is_rejection_tag`, refused again at `confirm_setup`): the guess writes nothing until the trader confirms, and a confirmed tag carries `label_provenance` from the pure `scripts/trade_origin.py` (the FIRST FILL's session, never `trade_date`).
-- **A description is not a prediction** (TJ-14A): `mentor.observation` is the words (a clicks-only row's `text` stays `""`, never synthesised), `mentor.prediction` the FORCED click (`mentor_prediction_v1`: direction, horizon, confidence unless `no_view`) and `market_journal.prediction_of` its ONE reader; **a row's `timeframe` and its prediction's `horizon` ALWAYS agree** (`HORIZON_FOR_TIMEFRAME`, enforced at the WRITER - `build_entry` raises, `is_publishable` refuses), so `Read unchanged` reaffirms PER TIMEFRAME and never falls back. `trade_mentor_context_v2` (a `derived` block naming its inputs, `unmeasured` when one is missing) comes from ONE builder serving the card, `MentorInternalsStrip` and the pure `internals_at`; the 10:00 reply is saved RAW before an off-Qt local-AI draft fills ONLY missing fields, spans and units validated, existing values winning, Save/Correct the trader's act.
-- **A Mentor question kind ships only with a NAMED CONSUMER, and a kind with no reader is DORMANT** (TJ-14B, `scripts/mentor_questions.py`, pure): every kind names the reader of its answer and the key it reads (checked by an AST walk, never a text search, never a call), a dormant kind is never asked and never given a shim reader, and a card carries at most THREE questions beyond the forced trade section and the prediction rows, the rest counted and carried. **ONE card starts AT MOST ONE import**: the three-day morning catch-up goes first when owed, outside the cap; otherwise `mentor_questions.pre_card_pull` - the ONE owner of the desk's day-time Questrade attempts and the only per-day cap - runs on one of the day's three RESERVED cards, never in AWAY, never refreshing a token, never waited for. Long form: DESK_INTERNALS "TJ-14B".
-- **An ENTRY keeps its four fields and an EXIT is ONE box the NIGHT reads** (TJ-9E): a trade with a closing fill in the reviewed session is asked once per (trade, exit session) - a scale-out inside one session is one ask - and the words are an append-only `EXIT_NOTE_RAW` row written BEFORE anything reads them, a failed write LOUD, provenance ruled by the EXIT's session. The nightly `exit_note_fields` slot drafts `why` (the closed `exit_reasons` vocabulary), `felt` (TJ-7's OWN list through its loader) and `watching` (exact quotes), each grounded in a span that must reproduce its quote, from a request holding the note's words, the symbol, the side and the two code lists and NOTHING else; the reading is `provisional` until the trader's own Confirm / Correct, keyed by `check.exit_key`, drawn in ONE home, offered only by the REGISTRY's budget for `EXIT_DRAFT_OFFER_SESSIONS` and never against rewritten words (`Rewrite` is the one door to a second note). **The Save gate is PER TRADE** (trader 2026-09-21): the exit box is one more field of its trade, an answered trade is stored at once, leaves the card and is never asked again. Long form: DESK_INTERNALS "TJ-9E".
-- The adoption gate compares timestamps at one seam (`_gate_moment`): attach market-local to the naive side, never strip the aware side.
-
-**Performance and correctness on the Qt thread**
-- **Nothing expensive belongs on the Qt thread, and "expensive" includes a stylesheet.** Lists diff, never rebuild; widget variants live in `theme.qss` keyed on object names and dynamic properties; materialization goes through `ChartDataService.cached_bar_dicts`. The theme sizes fonts in px, so `QFont.pointSizeF()` is `-1`.
-- **A burst of one signal is ONE reaction, coalesced at the LISTENER** (`ui.timer_utils.SignalCoalescer`, 200 ms leading-edge). The DESK adoption drain adopts at most `AUTO_ADOPT_BATCH_LIMIT` (10) staged picks per cycle: pacing only, nothing withheld, no pick dropped, a deferred pick never marked seen.
-- **All cyclic GC runs on the GUI thread** (`gc.disable()` is process-wide). Activity may DELAY a sweep but never CANCEL one; every wait carries a deadline in ticks. The startup heap is swept once and then `gc.freeze()`d in `main()` after the window shows — collect BEFORE freezing.
-- A candle's four prices carry an invariant (`low <= open, close <= high`); a bar that breaks it is drawn dashed, hollow and clamped, kept out of the scale, and logged — never silently dropped.
-- `ScanCycleClock` measures and formats and decides nothing; a test fails if it ever calls `sleep`, `wait`, `start` or `Thread`.
-- The exchange calendar is memoized; the stall watchdog's cap is per HOUR; every thread's CPU time is measured once a minute (`ui/thread_cpu_gauge.py`, always on), so a thread holding the lock leaves the GUI stack innocent. A recon that rates a timer from its docstring has not measured it.
-- The research M5 tee de-duplicates BEFORE any per-bar work (`capture_m5_tee`: identity pass, then work for survivors) against a per-symbol high-water mark persisted in `tee_high_water.json`, never reset by a clock (BD-96).
-- **The M5 scanner lives in ONE below-normal child process** (SN1): `BounceService` owns it, every GUI callback crosses the bounded queue, commands use the proxy, a dead child restarts on the health tick, and shutdown retires it; the detector, timing and bars are unchanged. SN2-SN6 remain in force, and the duplicate fourth `_record_environment_focus_history` call is a scoring input and stays until asked. Long form: DESK_INTERNALS "SN".
-- The daily pick scorecard streams both CSVs on its own worker (`autopilot-scorecard`) and writes `picks_scored_at` only on success; `read_scorecard_inputs` keeps today's rows only; three failures give up for the day (`picks_scoring_failed_at`) (Q5).
-
-**Evidence, journal and statistics**
-- A human-focus pick is identified by its CATEGORY too: `human_focus_tracking._pick_key` is `(trade_date, symbol, side, category slot)`; every join over these files uses `pick_source_family`; a walkaway replays ONE position per (date, symbol, side).
-- A like, a veto AND a pass merge into their cohorts on the same click through one helper (`capture_rail._merge_cohort_safely`); failure degrades to a status suffix; the nightly slot stays.
-- A pre-versioning veto pools with the version that INTRODUCED its code, inside `_rebuild_pooled_performance`; rows are never rewritten.
-- The review scoreboard grades every explicit decision; an action joins `TAKE_ACTIONS`/`REJECT_ACTIONS` on what its WRITER does, never its name (`veto_day_trade` is a REJECT); machine events, `*_fired`, `*_expired` and `disarm_*` stay out; `r_gap` is report-only and absent from the policy draft, `review_guidance` and the AI evidence package.
-- **Evidence stores are never allowed to cost the thing they record** - a failed append loses the event, never the pick, tracker save or trade. **The one exception is a journal WRITE, which fails loudly.**
-- **An unreadable M5 outcome CSV is UNKNOWN, never an empty final set** (AI-R3): the canonical finalizer keeps every `finalizing` write-ahead mark, the individual finalization returns `commit_failed`, and the batch sweep fails before writing another final. Long form: DESK_INTERNALS "AI-R3 outcome recovery".
-- Ground rule 10's statistics contract lives once in `scripts/evidence_stats.py`; `outcome_semantics.claim_kind` decides what may be averaged as a trade.
-- A sweep-finalized trade counts under the policy that MEASURED it (`setup_scoreboard.exit_policy_r`: `eod_hold` / `stop_exit` / `last_measured` never blended); **`unresolved` means UNMEASURED** (M2), a measured sweep is `swept_measured`, every reader goes through `outcome_semantics.terminal_kind`, and the champion's eod-hold cells take `eod_complete` only. Long form: DESK_INTERNALS "M2".
-- The Market Journal is what the trader thought; the Journal is what they traded - two stores, never merged, both through `shared_journal_service()`; `written_after_the_session` is COMPUTED, never backdated; a capture joins by `entry_id`.
-- **One page reads the day and no machine row is on it** (TJ-1): `Day Review` reads ONE payload on ONE worker and builds ONE chart on first need; a mode flip is an Auto Pilot log line, `is_machine_entry` is the ONE filter (`entries_about`, `build_daily_story`, `_stories_from_journal`), and a per-session index under `DAY_REVIEW_DIR` replaces the old stream. **It reads in TWO COLUMNS** (TJ-1L, `DayReviewColumns`, 55/45, saved per machine): story/theses/chart left, the trader's words right, and every table here stretches its last section instead of the shared ceiling. Long form: DESK_INTERNALS "Day Review - one page, no machine rows, a per-session index".
-- **The night narrates the day, never grades it, and sweeps what the trader queued** (TJ-4): the pure hash-stable `day_review_pack` is the only thing `day_review_narration` sees (every `source_id` minted unique, an observation and a prediction always separate, a machine row never), and an output whose verdict does not EQUAL the read row it names, grades a read twice or an observation at all, cites an unknown id or runs past a bound is rejected WHOLE with the last verified file byte-identical. **The bounds come FROM THE PACK** - one claim per read, sources <= its ids - and the slot re-checks them itself; `MAX_GRADED_CLAIMS`/`MAX_SOURCES`/`MAX_OPEN_THESES` are render ceilings only and a short story says `graded K of N reads`. A daytime **Redo story** BUILDS that session's pack first and then writes a `redo_requested` marker (one redo in flight; `validated_session` fails closed, on the page's both branches and in `--session`), and the NIGHT sweeps up to `REDO_SWEEP_LIMIT` (3) markers oldest first, spending that budget only on sessions it NARRATES and re-asking the launch window before every call after its first. Long form: DESK_INTERNALS "TJ-4".
-- **The report card heads Day Review, computes no statistic of its own, and SAYS what it could not see** (TJ-12): six `LINE_KEYS` lines, each `{key, text, n, measured, target}` with every number read from its owner (`walkaway_day`, `prediction_ledger.your_reads`, `congruence_lines`, `trade_origin`), the best family by the ONE Wilson LOWER bound and never under `MIN_REPORTABLE_N`, a DAY line carrying no `rate_lb` while only `week()` pools counts for one, built on the Day Review worker inside the ONE payload with the page only formatting it. An unread origin lane (`ORIGIN_LANES` outside `DESK_ORIGIN_LANES_READ`), a night past the ledger tail and an owner that raised are each SAID - never read as fine, never a bare `unplanned`, never a zero - and a status vocabulary is IMPORTED from `ai_jobs/ledger.py` and never re-spelled (`failed` and `degraded` apart, `skipped` deciding nothing, the LAST deciding row winning). It also wakes the two Mentor kinds it reads. Long form: DESK_INTERNALS "TJ-12".
-- **Recap learning follows the facts, by session** (TJ-17): rest-of-day and five-session reads never share a rate; Week Review's 5/10/20 completed-session comparisons use the ledger and Results owners and link to exact source days/trades. Day Review separates calls, passes and trades; original entry/exit words and later answers stay labelled by their own time. A story is current only when its hash matches both the saved pack and current inputs; the night refreshes the current pack and at most nineteen older existing packs, preserving unchanged bytes and naming failures. One kept idea may become one scoped weekly choice; follow-through is an explicit append-only yes/no/unknown event, and missing answers are unknown. Long form: DESK_INTERNALS "TJ-17".
-- **Week Review is five DAY cards and it computes nothing** (TJ-5): ONE payload on ONE worker (`weekend_prep_service.read_week_review`), pooling ONLY through `day_report_card.week_from_cards`, which names no best family from five day-winners and says why, and `how_fresh` asked PER SESSION because the pack deliberately omits it. A day nobody packed is NAMED with `no reads graded` and never a zero, and a day the desk could not READ is named too (`unreadable_sessions`) instead of counting as quiet. The Saturday-only `week_review_narration` slot sits in stage 2 between `observation_tags` and `ticker_briefs`, narrates only the week's own packs with session-qualified ids, re-checks every bound the input gave it, and below three narrated days writes a scaffold saying `narrated K of 5` and loads no model. Long form: DESK_INTERNALS "TJ-5".
-- **An idea is a SUGGESTION and advice is CHECKED** (TJ-6): the stage-3 `improvement_ideas` slot appends at most three grounded ideas a night behind `setup_research`, nothing it writes is read by a detector, score, alert, watchlist, Focus, the review queue or `review_policy.json`, and only the trader's click keeps one. A slot that asked the model is DONE for the night - nothing to cite means no call at all (`skipped` before any load), asked-once ends `ok` with a marker beside the store. A kept idea's later reading is called higher or lower ONLY when the two Wilson intervals do not overlap. Long form: DESK_INTERNALS "TJ-6".
-- **A mood is a field the desk REPORTS** (TJ-7): `market_journal` carries ONE additive key `mood` (a 1-5 score, at most two `state_tags` from a versioned closed vocabulary whose own loader owns the cap, a `process` block), absent on every old row and never a default, refused LOUDLY at `build_entry` and again at `is_publishable` rather than truncated; the strip is optional on both surfaces, nothing is pre-selected and every click can be taken back. Nothing that touches a detector, score, alert, watchlist, Focus, the review queue or `review_policy.json` may read one, the tagger never sees one, and no outcome selects or pre-fills one. Long form: DESK_INTERNALS "TJ-7".
-- **A real miss is a RULE and a D1 call gets a D1 ruler** (TJ-11): `REAL_MISS_V1` (`scripts/real_miss.py`) is 1.0 ATR in the decision's favour BEFORE 0.5 ATR against, completed bars only, the adverse extreme first in a bar, point-in-time ATR(14), anything missing `unmeasured` never `no_run`, reported never acted on, ONE function shared with TJ-15. `walkaway_day` measures a D1 decision on DAILY bars from its session's close over 1/3/5 exchange sessions (`pending <date>`, never zero) and an M5 one on the session tape; the skill line partitions the SAME scan into liked/claimed, rejected and untouched with `n`, `measured`, `pending` and the ONE Wilson interval, saying when intervals overlap, no R statistic selecting what it shows; **a pooled rate counts a name only when its horizon has CLOSED**, an early run showing on its ROW never in a fraction, an option or a hold past five sessions `not judged here`. Long form: DESK_INTERNALS "Day Review - walk-away v2".
-- **The decision's session is an ADDITIVE field** (TJ-11F): **`session_date` is UNCHANGED** - the join every existing reader uses - while **a decision belongs to the session it JUDGED** (a Friday-evening veto is FRIDAY's); `market_calendar.decision_session` (the stamp's New York date if a session day, else the PRIOR one) rides a NEW row with `decision_session_rule: "judged_session_v2"`, recomputed by every reader and never rewritten.
-- **A read is a MEASURED row, and a clicked call is never pooled with a stance we inferred** (TJ-10, `scripts/market_read_grades.py`): a CLICK (`market_journal.prediction_of`) is the read when there is one, an extraction is always LABELLED (`we read your note as …`), pooling raises `PoolingError`, `no_view` is never graded. An open horizon is `pending <date>` and a missing bar `unmeasured:<reason>` that NEVER supersedes a pending row (`verdict_rank`, measured is final, every row stamped `flat_band_rule: "atr_0.25_v1"`); a gradable CLICK is never stored without its point-in-time context (`ContextMissingError` - held back, reason in `grader_gap`). Congruence is PRINTED, keyed on TIMEFRAME (`m5_picks_side_mix` for the rest-of-day read), never pushed, never acted on. Long form: DESK_INTERNALS "TJ-10".
-- Auto-tagging has four lanes that never compete and are ordered by LANE, never confidence: `trader_capture` (what the trader already SAID inside the trade's own window, outranking the rest), `trader_note` (a setup NAMED in the Market Journal in that window - whole-token vocabulary, `match_basis = note:<id>` and the quoted span, opposite-side notes never match, a date-only fill is `unmeasured`), `journal_analytics.AutoTagger`'s scanner lane (which setup), and `journal_trade_shape` (the trade's own timestamps and legs). No tag is ever derived from the outcome and unmeasurable emits NO tag. The rejection prefixes, `context_row_id`, the note lane's window and the match-confidence rule: DESK_INTERNALS "The four auto-tagging lanes".
-- The trader owns `trade_annotations`; the ONE machine writer is `scripts/journal_bulk_tag.py`, writing only `tag_status='provisional'` for a CLOSED trade with no confirmed tag (refusal to overwrite: `JournalStore.apply_provisional_tags`), never a shape tag, never `tag_corrections`; below threshold only a `needs_review` marker. "My setups" counts confirmed tags only.
-- **`preference_trade_outcomes` matches inside 10 SESSIONS** and **`trade_level_summary` sums P&L once per `trade_id`**; **`journal_exposure` reads bias from the legs** (a LONG option is never a bullish setup); **`personal_evidence_summary` partitions by STATUS with `uncertain` a CROSS-CUTTING label that pools no money**, naming no best setup below `MIN_REPORTABLE_N`. Long form: DESK_INTERNALS "The personal-evidence reader rules".
-- The Questrade refresh chain has ONE owner (`refresh_access_token` under `local_writer_lock`, the token re-read INSIDE the lock, the four rotated values in ONE atomic save, a failed refresh saving nothing). Repair is a TRADER action.
-- **A broker file is authoritative for money and blind to time.** `journal_statement_import` and `journal_ib_transactions` write executions at MIDNIGHT market-local and `journal_trade_shape.is_date_only` refuses to name their session; identity is `fill_signature` plus an ordinal; **commission carries a SIGN the importer owns - nothing downstream may `abs()` it**. It also **outranks the live sync on MONEY and never on time** (`journal_file_authority`, per `(account, day)` on computed signed cash, tolerance per fill): the sync KEEPS a day they agree on, the file TAKES a day they do not through append-only `VOID_EXECUTION` rows, an unmentioned day is untouched, and "Check a statement..." IS a DRY RUN of that comparison. Long form: DESK_INTERNALS "A broker file is authoritative for money".
-- **A Questrade fill says what it is and a sold put is a SALE** (TJ-9Q): the classifier and `normalize_side` (`STO`->SELL, `BTC`/`COV`->BUY) are pure, the SYMBOL never moves, the IMPORT seams read `QUESTRADE_INSTRUMENT_FROM_SYMBOL` (ships OFF) at call time so no journal is half in each convention, and stored rows move ONLY through `scripts/journal_reclassify.py` - the trader's own act. Long form: DESK_INTERNALS "TJ-9Q".
-- **The tax number is the BROKER's**: `journal_tax_report` sums `raw_executions.net_amount`, recomputes nothing, refuses rather than estimates (open, `SYNTHETIC_OPEN`, amount-less and unbooked-FX positions EXCLUDED and named), and shows the recomputed figure beside it, never blended.
-- The setup tracker is mirrored into a SQLite record store after every JSON save (`scripts/tracker_store.py`, shadow, never failing the save); the JSON is still the truth and no reader loads from SQLite until gate #57, then ONE AT A TIME (decision 0017).
-- **The tracker replay has a versioned execution convention and level knowledge** (ST3/ST7, `master_avwap_lib/execution_convention.py`): the default is `gap_aware_v2` / `prior_session_v2`; `literal_level_v1` / `same_session_v1` remain by name, every record stamped. Long form: DESK_INTERNALS "ST3".
-- **Which observation of a thesis gets graded is a NAMED policy** (ST4/ST7): `selection_policy` on every family row, `first_actionable_v2` the default (decision 0019), `closed_first_v1` by name; a COMPACTED record is `undatable_exit` and **a compact projection's `_scoring_outcome_summary` IS the record**. Long form: DESK_INTERNALS "ST4 / ST7".
-- **The AVWAP band challenger is measured through the CATCH-UP path too** (M1): `build_anchor_band_variant_meta` in `legacy.py` serves BOTH the live scan and the tracker catch-up; never add a third builder; the Band variant tab prints coverage from the EXPORT's own counts, never the tracker. Long form: DESK_INTERNALS "M1".
-- **The control, study and experimental-exit populations are SURFACED, LABELLED, and never mixed with picks** (M5): three Setup Tracker tabs over three CSVs from the tracker's own guarded save pass, win rate first with `n` and the ONE Wilson bound, `experimental` a COLUMN, champion aggregates pinned byte-identical. Long form: DESK_INTERNALS "M5".
-- The overnight runner's `veto_cohort_grading` slot is deterministic and calls no model. **Stage order is decision 0018's**: deterministic slots, digest, narration, then model-gated slots (`EXPECTED_SLOT_ORDER` in `tests/test_ai_jobs_runner.py`); a later phase appends inside its stage. Nothing here may reach a detector, score, alert, watchlist, Focus, the review queue or `review_policy.json`.
-- **Local inference is night-only, seven days a week, and the NIGHT picks the slate** (TJ-13A): `window.in_offhours_window` applies the ET window every day and `--force` buys the attempt caps and the already-done check, never the clock for a `JobSlot.uses_model` slot; `runner.night_kind()` names a night on the exchange calendar from the evening it started and `runner.slots_for()` builds its slate - weeknight without `ai_summary`, Saturday with `ai_summary`, `week_review_narration` and `weekly_synthesis`, Sunday the deterministic stage plus what the weekend still owes - while `EXPECTED_SLOT_ORDER` stays the order WITHIN a night. `JobSlot.model_free_kwargs` gives a forced daytime run a slot's deterministic half only, never last night's narrated digest. Long form: DESK_INTERNALS "Night kinds".
-- **A model nobody measured has no reserve** (TJ-13B): `--probe-model <tier>` is a COMMAND, not a slot - a model LOAD, so night-only whatever `--force` says, holding the `ai_jobs_runner` lock BY DEFAULT, on a deleted COPY of one week's packs; with none `week_review_plan` answers `may_run_large: False` and the week story runs on the MEDIUM model (`local_large` is `ai_jobs/provider.py`'s name). Long form: DESK_INTERNALS "TJ-13B".
-- The digest gate has TWO halves (Q4): `clean_digest_sessions` counts CONSECUTIVE clean exchange sessions, and `digest_audit_approval.json` is written **only** by `python -m ai_jobs.digest approve-audit`, never by a nightly job; `gate_met = window_met and audit_recorded` and `journal_enrichment` refuses until both hold. Long form: DESK_INTERNALS "Q4".
-- `entry_index.json` is the deterministic handoff written beside the packs at the end of `run_daily_digest` (temp-and-rename, a failure never fails the digest): four sections never merged, `changes_vs_prior_window` by FLOOR STATUS only, trials UNRANKED, every `pack_path` the file the numbers were READ from.
-- **A miss contrast has TWO floors and judges D1 only** (TJ-15): `scripts/evidence_contrast.py` is the ONE method (`MIN_REPORTABLE_N` on a group's RATE, `MIN_CONTRAST_SIDE_N` on a FEATURE, a thinner one named in `thin_features`, `compression_calibration.auc` ranked by `abs(auc-0.5)` then NAME); the deterministic `miss_contrast` slot sits INSIDE stage 1 above `measured_report`, counts non-D1 decisions in `excluded_by_timeframe` and joins the LAST scan at or before the stamp, that session or the ONE before. Long form: DESK_INTERNALS "TJ-15".
-- **A prediction is scored against a baseline, and the words are tagged blind** (TJ-16): the read ledger prints every accuracy cell beside `always_up` / `same_as_the_last_hour` / `with_the_d1_environment` measured on the SAME stamps and never pools a click with an extraction or the two horizons, and the stage 2 `observation_tags` payload is BUILT from two texts and a picklist so the tagger never sees an outcome. **A schema is a grammar hint, never a guard** - the shared validator forbids `maxItems` and every grounded slot's verifier re-checks its own bounds. Long form: DESK_INTERNALS "TJ-16".
-
-**Charts and boards**
-- D1 charts carry a volume underlay and an earnings ribbon INSIDE the price view; neither votes on the price range; the next report is projected and labelled `est`. `chart_levels.py`'s `levels` are built on the ChartDataService worker, never the paint path.
-- Focus and Research share one `PriceAlertService` (`read_only` has no production caller).
-- The group RS/RW tape owns its clock (`group_rrs.py` + `group_tape_service.py`): ONE batched `yfinance` download per 5-minute tick, no retry inside the tick, zero IB traffic; a window without `length + 2` completed same-date M5 bars is `None` and draws nothing.
-- **M5 Strength Board:** batched yfinance over `universe_all.txt` and the four watchlists, zero IB traffic, relative volume SESSION-RELATIVE and outside the seven fenced formula functions; parity rows auto-join M5 Focus through `_auto_adopt_strength_board` (DESK only, the ONE adoption gate, never removing) and every Focus add is injected into `longs.txt` / `shorts.txt` (`FocusPickStore._inject_into_shared`). Long form: DESK_INTERNALS "The M5 Strength Board's auto-adoption".
-- **A chart opened FROM the setups table cycles through that table, and a veto for the day HIDES the row** (SC): `_chart_row_on_desk` hands `chart_symbol` a `next_pick` callback that `_advance_review_queue` consumes INSTEAD of the waiting list after a veto, a claim or the Next verb. The hide is a PRESENTATION filter on `pick_feedback.HIDDEN_REJECT_KINDS` (veto / dislike / not_today / remove_today - never a day-trade pass or an M5 click-away), counted on `Show vetoed`, never a deletion. Long form: DESK_INTERNALS "SC".
-- **A note marker sits on a bar only when it happened DURING that bar** (TJ-3, `day_review_markers.py`): compared by `astimezone`, a stamp past the tape's end is `after_tape` - counted and SAID in the caption, never clamped onto the last candle; `candle_chart.py`'s `NoteMarkers` family is ADDITIVE. Long form: DESK_INTERNALS "TJ-3".
-- **Every ticker click on the Trading Desk charts into the centre Visual Alert Review pane** through `chart_symbol`, never `_enqueue_review_alert`; a board chart holds NO place in the waiting list (`_is_manual_chart_look` on `MANUAL_CHART_TAG`) and `show_board_symbol` is the popup door for a board on ANOTHER page. Long form: DESK_INTERNALS "Every ticker click lands on the centre chart".
-- **The Desk's Strength window is ONE flat scrolling page** (`strength_page.py`): no tabs, no sections, one scrollbar, every board sized to its content (`FIT_ROWS_CAP`), one `StrengthBoardService`. Long form: DESK_INTERNALS "The Strength window is one flat page".
-- **One completed-bar rule** (`completed_bars.py`): `bar_start + bar_minutes <= now`, inclusive, converted with `astimezone` and never `replace(tzinfo=None)`. BounceBot's copies migrate opportunistically, never as a silent change to a shipped detector.
-- Pure indicator modules (`scripts/indicators/`): completed bars in, immutable tuples out, `None` for the unmeasurable.
-- Auto/Away phone output: `autopilot_today.txt` is the one verified digest, safety/freshness header first.
-
-**Headline statistics and the priority switch (V3, decision 0016)**
-- **The priority switch reorders and never withholds, and it is BUILT** (ST6): `local_settings` key `prioritise_working_lately`, default OFF, read AT SORT TIME never at write time, stably re-ordering the M5 list, the WAITING review list and the setups table by the snapshot's verdict order with ties keeping arrival order; the tier gate, movers-only and the repetition fold are untouched.
-- **ONE Working-lately snapshot, four surfaces, and nothing called proven** (ST6): `working_lately.build_snapshot` is PURE (`snapshot_id` a sha1 over cells + policy lines + `as_of`), `ui/services/working_lately_service.py` owns the build and `snapshot_latest.json`; dependence is answered by REFUSING (`CONCENTRATION_LIMIT` 0.5, `pool_cells` RAISES across kinds, `observational leader among K cells`). Long form: DESK_INTERNALS "ST6".
-- **Win rate leads every trader-facing SWING surface** (with `n` and `swing_headline`'s Wilson lower bound, sorted by the bound); **MFE-after-a-held-level leads every DAY-TRADE surface**. ONE WILSON (z 1.96; `expected_r.py`'s 1.28 is fenced), integer counts at each table's grain (ST2), ONE leader through `working_lately.select_leader`, and the tier outcomes `win` is a FAVORABLE-DIRECTION flag, not a stop-rule win (ST1, `swing_evidence.read_eligible_rows` the ONE reader). Long form: DESK_INTERNALS "Headline statistics - the ST1/ST2 clauses".
-- **The day-trade headline is `held_run_score`**: P(held in the first 30 min) x trimmed-mean MFE_R of the held ones, ONE formula on every surface; **held is MEASURED held** (Q1: `hold_rate` = held / MEASURED, the unmeasured shown never assumed); My Decisions rows use `ALL_DIRECTIONS`, a pooled cell never an average of two. Long form: DESK_INTERNALS "Q1".
-- **The AWAY digest ranks swing picks by the tracker's record**: Wilson lower bound on the family's realized win rate at `evidence_stats.SWING_HORIZON_SESSIONS` (5) inside `lately_window()`, expected R as tiebreak, ungraded families last, the near cap applied after ranking; the bucket is printed, never ranked on. Points order only when the trader's Points switch is ON (WS-PT4).
-- **Research is not a trader surface - except its Results page** (decision 0016 answer 7; `scripts/research_results.py`): the readable full readout over ONE ST6 snapshot, four populations never pooled, computing no new statistic; its window control APPLIES to My trades (`in_window`, on `closed_at`) and is DISABLED on Bot, whose cells carry their own `window_sessions` (DESK_INTERNALS "G5"). Nothing the trader must see may live only in the other eight tabs.
-- **"Lately" is ONE number in trading sessions**: `evidence_stats.LATELY_SESSIONS` (20) walked on the exchange calendar; `review_learning.DEFAULT_WINDOW_SESSIONS` IS it; Weekend Prep's week is `WEEK_SESSIONS` (5); every surface says **sessions**.
-
-## Hard invariants (plan.md sec 5 — never violate)
-- Decision-support only: never add order execution.
-- Legacy SPY pause detection and D1 wick alerts are the champions; shadow engines must never influence live decisions until plan.md sec 7 promotion gates pass.
-- No detector/scoring behavior change without golden-result fixtures first (plan.md Sections 5 and 7).
-- Never swap `calc_anchored_vwap_bands`' σ formula — every consumer is calibrated to the running-deviation variant.
-- Completed bars only for state transitions; a forming bar is preview. Missing data is uncertainty, never confirmation.
-- User-entered watchlist names are never auto-removed by a machine judgement about one name (CandidateRegistry enforces this; keep it true in any new writer). The one exception is the day-trade lists' after-close reset (decision 0020), which empties `longs.txt` / `shorts.txt` whole at a session boundary and never picks a name.
-- One component owns each timer/thread/job/mutable shared export; a failed publish never destroys the last verified report.
-- Point-in-time research uses only information available at the simulated decision time; timestamps carry explicit timezones.
-- `review_policy.json` ranks and annotates only — it deliberately has no suppression field; do not add one.
-
-## Tech stack + key deps
-- Python ≥3.12 (desk `.venv` measured 3.12.13, a uv-managed CPython; the repo venv has no `pip` — install with `uv pip install -r … -c constraints.txt --python .venv\Scripts\python.exe`), Windows-first with macOS support (`docs/MACOS_SETUP.md`; same code, no fork), repo-local `.venv`.
-- `PySide6`/`qtawesome`/`pyqtgraph` — the Trading Desk UI, the only UI (`PyQt5` is excluded by the spec as a guard).
-- `ibapi` — IBKR market data; `yfinance` — fallback bars; `pandas`/`pyarrow` — bar frames and arrow-backed columns.
-- `feedparser` — news RSS for market prep; `openai` — provider-neutral one-way advisory summaries (`scripts/ai_summary.py`, `market_prep/services/ai_service.py`).
-- `pytest` (markers: `network`, `broker`, `slow`, `qt`), `ruff` (narrow defect-class select), `pyinstaller` — packaging, via `packaging/tradingbotv3.spec`.
-- Layered installs: `requirements-core.txt` (headless) ⊂ `-gui` ⊂ `-dev`, pinned by `constraints.txt`.
+`notes/` (gitignored, local only) holds the full history: old checkpoint, plan,
+changelog, specs, and the long story behind every rule. Open one file there only to
+answer one specific question. `WISHLIST.md` is the trader's notepad — ideas, never
+authorized work.
 
 ## Commands
-- Test (before every commit): `.venv\Scripts\python.exe -m pytest tests/ -q` — must be fully green; current baseline lives in `CURRENT_CHECKPOINT.md`. Check pytest's own exit code, not a piped tail's. macOS/Linux: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ -q`.
-- Lint (before every commit): `.venv\Scripts\python.exe -m ruff check .` — must be `All checks passed`. Narrow select by design (`E9`, `F63`, `F7`, `F82`, `F401`). **Fix the code, not the config**; a `# noqa` needs the reason beside it.
-- Smoke (offline, deterministic): `.venv\Scripts\python.exe scripts/smoke_check.py` — 7/7.
-- Run: `.venv\Scripts\python.exe launch_gui.py` (Windows; also `trading_desk.cmd` — **this is the production launch**, see Frozen exe rebuild policy) or `.venv/bin/python launch_gui.py` (macOS/Linux; `./setup_macos.command` once first).
-- **One desk per machine** (`scripts/single_instance.py`): a second launch prints "another TradingBotV3 desk is already running" and exits 0; `--selftest` and `--run-scan` are outside the guard; `--allow-second-instance` overrides it; it fails OPEN without an exclusion primitive.
-- Audits: `scripts/operations_audit.py` (runtime), `scripts/review_capture_audit.py` (capture readiness) — both also render in System Health.
-- No deploy pipeline: the user runs the app from this repo on `main`. Never leave the working tree broken.
 
-## Frozen exe rebuild policy
+- Test: `.venv\Scripts\python.exe -m pytest tests/ -q` (~10k tests). While building, run
+  your area only (`pytest tests/test_<area>*.py -q`); run the full suite before a merge.
+  Check pytest's exit code, not a piped tail. macOS/Linux Qt: `QT_QPA_PLATFORM=offscreen`.
+- Lint: `.venv\Scripts\python.exe -m ruff check .` must pass. Fix the code, not the config.
+- Smoke: `.venv\Scripts\python.exe scripts/smoke_check.py` (7/7). Selftest: `launch_gui.py --selftest`.
+- Run: `trading_desk.cmd` (= `launch_gui.py`). **The desk runs from SOURCE on `main`**, so a
+  pushed commit goes live at the next restart. One desk per machine.
+- Install: the venv has no pip — `uv pip install -r requirements-dev.txt -c constraints.txt --python .venv\Scripts\python.exe`.
+- The nightly AI lock (22:00–06:00 ET) makes ~40 `run_slots` tests fail; run the full
+  suite outside that window.
 
-Long form, with the Smart App Control history, in `docs/DESK_INTERNALS.md` ("Frozen exe rebuild policy, long form").
+## Code map
 
-Build: `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` → `dist/TradingBotV3/TradingBotV3.exe` (onedir, ~420 MB, ~4 min). `dist/` and `build/` are gitignored; rebuilding is verification only.
+| Want to change | Open |
+|---|---|
+| App shell, pages | `scripts/ui/app.py`, `scripts/ui/panels/` |
+| Alert review / charts | `ui/panels/alert_center_panel.py`, `ui/widgets/` |
+| D1 swing scan (detector, ask-first) | `scripts/master_avwap.py`, `master_avwap_lib/` (`runner.py`, `legacy.py`) |
+| M5 bounce detector (ask-first) | `scripts/bounce_bot.py`, `bounce_bot_lib/`, `m5_signal_engines.py` |
+| Auto modes, scheduling | `autopilot_core.py`, `ui/services/autopilot_service.py` |
+| Focus lists, adoption gate | `focus_adoption_gate.py`, `FocusPickStore` in `ui/services/` |
+| Journal (trades) | `journal_store.py`, `journal_*.py`, `ui/panels/journal/` |
+| Day/Week Review, Mentor | `ui/panels/day_review_panel.py`, `ui/widgets/trade_mentor_card.py`, `day_report_card.py` |
+| Night AI jobs | `scripts/ai_jobs/` (`runner.py` owns slot order) |
+| Setup Tracker / scoring | `master_avwap_lib/`, `setup_scoreboard.py`, `working_lately.py` |
+| Research warehouse (shadow only) | `scripts/research_warehouse/` |
+| Paths to live stores | `scripts/project_paths.py` (always use its constants) |
+| Pre-market prep | `market_prep/` |
+| Indicators (pure) | `scripts/indicators/` |
 
-**The desk runs from SOURCE** (`trading_desk.cmd` → `launch_gui.py`) by trader decision (2026-08-26), so **a pushed commit is live at the trader's next restart** and the exe is a verification artifact. If the trader ever returns to the frozen exe, a fix is not delivered until the exe is rebuilt. Smart App Control verdicts are per file hash; **read the registry value, never recall it** (`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState`).
+## Hard invariants — never break
 
-- **Do NOT rebuild per commit.** Rebuild before each merge to `main` and when a trigger below is hit; ask before spending the trader's time on the click-through. **A build that completes is not a build that runs** - always run `dist\TradingBotV3\TradingBotV3.exe --selftest` and expect `selftest OK: N/N checks passed (frozen)`, N compared against the unfrozen count.
-- Guards: `tests/test_packaging_spec_drift.py` (packages and non-`.py` assets; deliberate omissions in `PACKAGES_NOT_IN_THE_BUNDLE`) and `launch_gui.py --selftest` (`scripts/selftest.py`, imports every lazily-loaded engine). The two lists stay disjoint.
-- **Triggers:** (1) a new third-party dependency; (2) a non-`.py` runtime asset outside the first-party trees plus `config/`; (3) a new top-level package under `scripts/` imported lazily; (4) a dynamic import by string name in an uncollected package (`selftest.LAZY_ENGINE_MODULES` only if a frozen run can reach it); (5) anything touching `__file__` / `ROOT_DIR` / `sys.path` - `ROOT_DIR` is `sys._MEIPASS` when frozen.
-- Read `packaging/README.md` "Things that will bite you" before touching the spec. "It launched" is not proof; the selftest exercises the engines.
+- Decision support only: never add order execution.
+- No detector/scoring/alert behaviour change without golden-result fixtures first. The
+  legacy SPY pause and D1 wick alerts are the champions; shadow engines never influence
+  live output.
+- Never change `calc_anchored_vwap_bands`' σ formula.
+- Completed bars only for state changes. Missing data is "unknown", never "confirmed".
+- Never auto-remove a watchlist name the trader typed (the one exception: the
+  after-close wipe of `longs.txt`/`shorts.txt`, decision 0020).
+- `review_policy.json` ranks and annotates only — never add a suppression field.
+- A failed evidence write loses the event, never the pick/trade. A **journal** write fails loudly.
+- Nothing expensive on the Qt thread — including stylesheets.
+- Point-in-time research uses only what was known then; timestamps carry timezones.
+- One owner per timer/thread/job/shared export; a failed publish never destroys the last good report.
 
-## Working agreement for agents
-- **Edit surgically.** Use `Edit` for a small or medium change; rewrite a file only when it is short or most of it is changing.
-- Follow the mandatory documentation workflow above: `plan.md` owns build order, `CURRENT_CHECKPOINT.md` the active item.
-- `main` is the trunk; branch per milestone/packet, merge back after a live-session validation day passes (plan.md sec 6). Commit small and green; push after each commit.
-- First live session on any new build: run plan.md sec 6 checklist; do NOT tune thresholds from one session.
-- **A scratch script never resolves a live store by accident** (2026-09-05 one overwrote the setup tracker; 2026-09-20 the desk's `machine_cache\daily_bars\SPY.csv`, because `TRADINGBOTV3_DATA_DIR` does not move `CACHE_DIR`). Any script that imports anything under `scripts/` outside pytest sets BOTH `TRADINGBOTV3_DATA_DIR` AND `LOCALAPPDATA` to scratch directories BEFORE the import, and aborts if ANY `project_paths` root resolves under `C:\TradingBotData`, the DAS or the real `%LOCALAPPDATA%\TradingBotV3`; test harnesses under `tests/` are never imported outside pytest, whose `conftest.py` is what points them at a test directory; a scratch export patches `MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE` itself, not an alias of it.
-- **File-scoped ask-first rule:** any edit to a file housing detector/scoring/alert code is asked about BEFORE it is made — even for capture-side or evidence-only changes in that file. Ambiguity is the trigger to ask, not a license to judge.
-- If a scheduled task ever runs unmerged branch code on the desk again, disarm it before switching branches there.
+## Ask first (before any edit, even a comment)
 
-## Where to read more
-- `CHANGELOG.md` — **`Current implemented inventory` is the contract: search it before building.**
-- `docs/DESK_INTERNALS.md` — the long form behind every `Core loop` rule.
-- `plan.md` — sec 5 invariants, sec 6 live validation, sec 7 promotion, sec 12 work queue.
-- `CURRENT_CHECKPOINT.md` — the `Active state at a glance` block, then the dated entries.
-- `WISHLIST.md` — ideas, never an implementation queue.
-- `MEMORY.md` — the routing index into `memory/`; recall, never authority.
-- `docs/README.md` — one line per file.
-- `docs/decisions/` — accepted constraints, read before changing a library, storage or architecture choice. **`0016-trader-vision-and-priorities.md` is the tie-breaker for every prioritisation call**; its clauses are the Headline-statistics rules above.
-- `docs/BRANCH_HISTORY.md` — what each branch held and where it landed; the containment proof before deleting one.
-- Runtime facts: the main desk is an always-on Ryzen 7 8845HS mini-PC (32 GB, Radeon 780M iGPU, local-LLM host); the old i5/3080 Ti desktop is never a writer; the DAS at `\\MINI-PC\Trading Bot Data` holds `research_lake/`, `ai_store/` and the cold-pushed subtrees; a full scan is 17-21 min over 1,097 symbols; post-session artifacts under `%LOCALAPPDATA%\TradingBotV3\diagnostics\`.
+`scripts/master_avwap_lib/legacy.py`, `scripts/bounce_bot_lib/*`,
+`scripts/m5_signal_engines.py`, and any other file holding detector, scoring or alert
+code. When unsure whether a file counts, ask.
+
+## Safety
+
+- The trader's desk runs from `C:\Users\Aaron\TradingBotV3` and other AI sessions share
+  that checkout: check the branch before staging or pushing, never stash, build in a worktree.
+- Live stores are read-only unless the task names a write: `C:\TradingBotData`,
+  `%LOCALAPPDATA%\TradingBotV3`, `\\MINI-PC\Trading Bot Data`. Copy before experimenting.
+- **Scratch scripts** (anything outside pytest importing `scripts/`): set BOTH
+  `TRADINGBOTV3_DATA_DIR` and `LOCALAPPDATA` to scratch folders before the import, and
+  abort if any `project_paths` root points at a live store. (This has overwritten live
+  files twice.)
+- A live-store repair goes through a tested CLI, never an ad-hoc script.
+- Never restart the desk or merge to `main` without the trader's word.
+
+## After a change
+
+1. Commit message says what and why — the commit log is the real history. Branch per
+   task, commit small and green, push after each commit.
+2. One line in `CHANGELOG.md`.
+3. Update `STATUS.md` only if what's live / in flight / next / owed changed. Keep it under 3 KB.
+4. Changed a rule? Update its line in `docs/RULES.md`. A new live check the trader must
+   do goes in `docs/GATES.md` as one line.
+
+Never add a new status, plan, report or handoff `.md` — reports go in chat or an artifact.
+
+## Frozen exe
+
+The desk runs from source; the exe is verification only. Rebuild before a merge to
+`main` only when a packaging trigger is hit: new dependency, new non-`.py` asset, new
+lazily-imported `scripts/` package, a dynamic import by string, or anything touching
+`__file__` / `ROOT_DIR` / `sys.path`. Build: `.venv\Scripts\pyinstaller.exe
+.\packaging\tradingbotv3.spec --noconfirm`, then `dist\TradingBotV3\TradingBotV3.exe
+--selftest` must match the source selftest count. Read `packaging/README.md` first.
+
+## Agents — default to none
+
+The lead does small and medium changes itself. Use a helper only for a big job, parallel
+work, or a real second opinion, and give it a narrow brief with file paths.
+
+- **Claude:** lead Opus 5.5. `recon` = Sonnet (read-only lookups). `builder` = Opus in a
+  worktree (fail-first test, then the fix). `reviewer` = Opus, one round, blockers only;
+  skip it for docs/UI-only changes. `tester` = Opus, only for detector/scoring work.
+- **Codex:** `gpt-6-luna` (cheap) for recon, tests, small builds and doc edits;
+  `gpt-6-sol` for hard builds and reviews. `.codex/config.toml` holds the defaults; the
+  trader picks the lead model.
+
+## Talking to the trader
+
+Chat as if to a five-year-old: very short, simple words, one idea per sentence. Say what
+you did, what is broken, and what they need to do. Detail goes in commits, not chat.

@@ -2,7 +2,7 @@
 
 Document role: **active operator runbook.** Last reconciled: **2026-08-27**.
 
-> **This file restates the owed live proofs from `CURRENT_CHECKPOINT.md` for a
+> **This file restates the owed live proofs from `docs/GATES.md` for a
 > human reader.** It is not a second source of truth. Whenever those proofs
 > change — one passes, one is added, one is reworded — this file must be updated
 > **in the same pass**, or the desk will be reading yesterday's instructions.

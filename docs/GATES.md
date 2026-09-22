@@ -1,0 +1,150 @@
+# Live gates owed
+
+One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
+When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
+
+- #189 TJ-17 follow-through clock [trader + lead]
+- #188 TJ-17 late facts [lead]
+- #187 TJ-17 learning windows [trader + lead]
+- #186 TJ-17 recap [trader]
+- #185 AR extended veto follow-up [trader + lead]
+- #184 AR quieter review view [trader]
+- #183 AR reason colours [trader]
+- #182 AR pullback event timing [lead + trader]
+- #181 An answered trade is stored at once and never asked again [trader]
+- #180 The note and the count are read where the trader reads the day [trader]
+- #179 A trade that exited twice is asked twice [trader]
+- #178 The night never sees how it turned out [lead]
+- #177 The reading arrives on a morning the trade is not on [trader + lead]
+- #176 A closed trade is asked why, and the words are on disk at Save [trader]
+- #175 Never a mood paired with a result [trader + lead]
+- #151 A mood shows, and an untouched strip changes nothing [trader]
+- #174 One ask a night [lead]
+- #173 A night never writes the trader's half [lead]
+- #172 A kept idea is checked, and an overlap is not a change [trader]
+- #171 One week story, on Friday's session [lead + trader]
+- #170 The week strip pools counts, not rates [trader]
+- #169 The origin wake is asked once, with its caveat [trader]
+- #168 How fresh names ONLY a slot whose LAST row was not ok [trader]
+- #167 The tags say how much was written after the fact [lead]
+- #166 The tags reach the contrast [lead]
+- #165 The tagger quotes what it read and never sees an outcome [lead]
+- #164 The right-vs-wrong contrast, off real clicks [trader + lead]
+- #163 The Mentor's pulls survive the day [trader]
+- #162 A sold put is a sale [trader]
+- #161 What leads to a good call (TJ-16, PLANNED) [trader]
+- #160 What the misses had in common (TJ-15, PLANNED) [trader]
+- #159 The Mentor asks only for what is missing (TJ-14, PLANNED) [trader]
+- #158 The night serves the trader first [lead + trader]
+- #157 The report card [trader]
+- #156 Walk-away v2 [trader]
+- #155 Read grader and congruence (TJ-10, PLANNED) [trader]
+- #154 Forced 09:00 trade labels [trader]
+- #149 Week Review on a Saturday [trader]
+- #150 The AI's ideas, and the trader's click [trader]
+- #148 The morning-after story [trader + lead]
+- #145 One Day Review page (TJ-1) [trader]
+- #152 TJ-2A session bars [trader]
+- #153 TJ-2B instant walk-away [trader]
+- #144 Overnight AI repair [lead/trader]
+- #143 Next-test local-model proposal (Phase 0.32 Packet 3) [lead/trader]
+- #142 Next-test deterministic progress (Phase 0.32 Packet 3) [lead/trader]
+- #141 Fair entry comparison (Phase 0.32 Packet 2) [lead/trader]
+- #140 Forward entry quality (Phase 0.32 Packet 1) [lead/trader]
+- #139 Trade Mentor raw-first AI help and large popup [trader]
+- #138 Grounded market-story narration [trader]
+- #137 An evening note stays with its subject session [trader]
+- #136 Trendline break + retest [trader]
+- #135 Review identity is split honestly [trader]
+- #134 The M5 scanner is a child [trader]
+- #133 One report, two views (WS-RP) [trader]
+- #132 Daily Recap is compact and closes itself (DR-REPAIR) [trader]
+- #131 The setups table cycles and a veto hides the row (SC) [trader]
+- #130 The trendline break is one frozen D1 event (PCT-2) [trader]
+- #129 Three claim names (PCT-1) [trader]
+- #128 A pullback fire reaches the phone every time (PCT-1) [trader]
+- #127 The auto-arm is cheap and honest (PCT-1) [trader]
+- #126 The Pullback alert arms and measures (PCT-1) [trader]
+- #125 The compression calibration report (PCT-3, trader 2026-09-15, plan branch) [trader]
+- #124 The compression measure reaches the desk (PCT-3, trader 2026-09-15, plan branch) [trader]
+- #123 The day-trade lists are wiped after the close (Phase 0.28, trader 2026-09-15, claude/desk-combined-2026-09-14) [trader]
+- #121 The claims are graded where the likes already were (D1C-B, trader 2026-09-14, lead/d1c-integration) [trader]
+- #120 A claimed D1 like is a pick, and the chart is done (D1C-A, trader 2026-09-14, lead/d1c-integration) [trader]
+- #119 M5 left, D1 right (D1C-L, trader 2026-09-14, lead/d1c-integration) [trader]
+- #118 Two contexts per row, three verdicts per thesis (WS-10I, WISHLIST 10I, sweep branch) [Trader]
+- #117 One Watchlist, and the two pages are gone (WS-WL, WISHLIST 10G, sweep branch) [Trader]
+- #116 The H1 retester is armed from the chart and fires once (WS-10C, WISHLIST 10C step 1, sweep branch) [Trader]
+- #115 Daily Recap reads the day from the stores (WS-DR, WISHLIST 10F + 5F, sweep branch) [Trader]
+- #114 The Market Journal tells the story and challenges the thesis (WS-10D, WISHLIST 10D, sweep branch) [Trader]
+- #113 New bars only (WS-SN2, WISHLIST item 4, sweep branch) [Next live day on the]
+- #112 The said-vs-did report has both halves (WS-5B, WISHLIST 5B, sweep branch) [Next nightly prefere]
+- #111 The Journal tags a trade from the setup the trader wrote about it (WS-10E, WISHLIST 10E, sweep branch) [First nightly run on]
+- #110 Trade Mentor pop-up and hidden context (WS-TM, amended by trader 2026-09-14) [Trader]
+- #109 Three clocks on the scan (WS-10A, WISHLIST 10A, sweep branch) [Next scan on the swe]
+- #108 Wrong side is shown, never hidden (WS-WS, WISHLIST item 9, sweep branch) [Trader]
+- #107 Chart history and the viewport [WS-CH, WISHLIST 10H, sweep branch; rewritten 2026-09-13 after Astra's… (Trader]
+- #106 The theta picks are recorded and graded (WS-TH, WISHLIST item 6, sweep branch) [Next scan + next ove]
+- #105 The Trades splitter opens at 3:2 with no blank band (WS-J1, WISHLIST item 1 leftover, sweep branch) [Trader]
+- #104 One RRS pass per cycle (WS-SN3, WISHLIST item 4, sweep branch) [Next live day on the]
+- #103 The alert feed diffs itself (WS-SN4, WISHLIST item 4, sweep branch) [Next live day on the]
+- #102 One D1 environment label per session (WS-ENV, WISHLIST item 7, sweep branch) [First scan on the sw]
+- #101 The board says whether it is being scanned (WS-10B, WISHLIST 10B, sweep branch) [Next DESK session on]
+- #100 The overnight advice is never blank on success, and a night names its completion [WS-AI1, WISHLIST 10K… (First nightly AI run]
+- #99 The star and the X are the day's decisions (WS-SX, WISHLIST item 8, sweep branch) [Trader]
+- #98 A forming bar never reaches the daily-bar cache (WS-FC1, WISHLIST item 2, sweep branch) [Next scan on the swe]
+- #97 The exit comparison answers it per setup (WS-EF1, WISHLIST item 3, trader 2026-09-08, sweep branch) [Next persisted track]
+- #96 The weekend verdict card names a cohort (WS-5A, WISHLIST 5A, sweep branch) [Next Weekend Prep re]
+- #95 The AWAY digest's swing order follows the Points switch (WS-PT4, WISHLIST item 4 block 4, sweep branch) [Next AWAY session on]
+- #94 Watchlist intent is a dated event (WS-5D, WISHLIST 5D, sweep branch) [Trader]
+- #93 Workspace memory recalls and never authorizes (WISHLIST 11, trader 2026-09-12) [First Claude and Cod]
+- #92 The scanner breathes and scans the trader's picks first (SN5/SN6, trader 2026-09-08) [Next live day]
+- #91 The point system grades itself (trader, 2026-09-08) [Trader]
+- #90 The setups table ranks by points and hides nothing (trader, 2026-09-08) [Trader]
+- #89 The Strength window is one flat page (trader, 2026-09-07)
+- #88 The desk opens without paying for eight pages nobody asked for (G7)
+- #87 Research opens on Results, the four selections show four different populations, and "not enough evidence"…
+- #86 The Setup Tracker's explanation never outlives its context (G4b)
+- #85 Four tables read whole at the trader's own width (G2b)
+- #83 One reading, four surfaces, and a switch that only reorders (ST6)
+- #82 Weekend Prep opens at 2160, Focus Review shows one table, and the pane never lags the read (G1)
+- #81 The bench's numbers hold on the trader's real screen (G0)
+- #80 An explanation never outlives its context (G4)
+- #79 Personal evidence counts once and refuses to name a best setup (ST5)
+- #78 SUPERSEDED by #84 on 2026-09-07 for its policy clauses; its scoring-path clause LIVES ON as #84 (5).
+- #77 Its artifact clause STANDS; its no-stamp clause is SUPERSEDED by #84 on 2026-09-07.
+- #76 Real counts on the desk, and one honest leader (ST2)
+- #75 Each outcome carries its own clock (ST1)
+- #74 The control and study populations are shown, and the April framework is read (M5)
+- #73 Both band families measured, side by side (M4)
+- #72 The tracker keeps up and says how old it is (M3)
+- #71 unresolved means UNMEASURED (M2)
+- #70 The band challenger measures (M1)
+- #67 The narration comes back, bounded (N3)
+- #66 The nightly synthesis completes (N2)
+- #65 The sidecar completion finishes a row (N1)
+- #64 Q5 scorecard off the Qt thread: one session past the close with no autopilot_service.py stall over 1,000…
+- #63 audit half MET 2026-09-06
+- #62 Q3 grounding on a real night: ai_morning_brief.txt opens Analyzed A of N. Membership-only B. Failed C.…
+- #61 MET 01:26 PT 2026-09-05
+- #60 Q1 measured held: the Daytrade Tracker's Measured column populated, the status line naming the window and…
+- #58 T1 + T2 capture and board rules, one DESK session: a veto double-click retires with no box and ONE row; a…
+- #57 Tracker mirror parity (decision 0017): five consecutive live saves with python scripts/tracker_store.py…
+- #55 Tee quiet (S1) and gauge names threads (S3): thread_cpu.jsonl shows warehouse-m5-tee under 5% of a core…
+- #54 One chart on the desk: in workspace mode every board, setups-row, RS Window, Industry Board and Watchlists…
+- #53 Desk clickable through a build (F1): a below-normal child python.exe does the build, the owned-child count…
+- #52 Surfaces say what they measure (R4 Part B): the Family Win % cell, the Record line, the Tier column and…
+- #51 Corrected numbers on the desk (R4 Part A): RVOL populated across a half day, Held columns filled on the…
+- #50 Headline statistics agree (V3): win rate first on every swing surface, Held x Ran first on every day-trade…
+- #49 Weekend Prep in one click (V2 item 2): Refresh builds every step, the verdict card shows five to eight…
+- #48 Hidden surfaces (V2): Alerts, D1 Focus, Armed and Universe hidden and every rail hotkey still firing
+- #47 One box, one Enter (V2): a Market Journal entry written from the desk tab, filed against the right session
+- #46 Tagger runs itself (V2): one nightly run tags new trades and the Journal nav button shows the count next…
+- #45 One window, two sections (V1): RS/RW opens ABOVE Strength and neither widens the column
+- #44 TC2000 parity (V1): the Strength section matches the trader's own TC2000 list for the top ten names on the…
+- #43 REFUSAL (P10 C): no after-like cell is read for a verdict before the declared 20-session window closes
+- #42 After-like grid collects (P10 C): bronze_like_occurrence_link rows and after-like outcome rows inside the…
+- #41 One like, one dislike from every screen (P10 A): a star, a rail like and a "Not today" each leave EXACTLY…
+- #40 Narration fits (R3): one overnight setup_research run publishes exactly ONE pack for the date with a…
+- #39 Quick like (P9): one swing and one M5 quick like reach trader_annotations.jsonl with like_mode quick,…
+- #38 Merged tree on the desk (R1, R2): stall watchdog ON and quiet on every new surface; the Setup Tracker's…
+- #37 First parameter grid (P8): one overnight run publishes rows for every declared cell inside the reserve,…

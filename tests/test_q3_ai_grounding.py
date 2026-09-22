@@ -684,37 +684,6 @@ def test_the_likes_audit_names_the_grain_of_its_distribution():
     assert "count_payload_bases" in text
 
 
-# ---------------------------------------------------------------------------
-# the documentation quotes the strings the code actually emits
-
-
-def test_no_active_document_quotes_a_detail_string_the_code_no_longer_emits():
-    """A gate the trader reads by grepping the log is worth nothing if it quotes
-    a string the log cannot contain."""
-    import ai_summary
-
-    stale = "position claim without a journal source"
-    for name in (
-        "CURRENT_CHECKPOINT.md",
-        "CHANGELOG.md",
-        "CLAUDE.md",
-        "AGENTS.md",
-        "docs/LOCAL_AI_AUTOMATION_PLAN.md",
-    ):
-        text = (ROOT_DIR / name).read_text(encoding="utf-8", errors="replace")
-        assert stale not in text, name
-
-    checkpoint = (ROOT_DIR / "CURRENT_CHECKPOINT.md").read_text(
-        encoding="utf-8", errors="replace"
-    )
-    assert "position claim without a position source" in checkpoint
-    # And the glance block states the rule the code enforces, not the one that
-    # was overturned in the fix round.
-    glance = checkpoint.split("## Active state at a glance", 1)[1].split("\n\n\n", 1)[0]
-    assert "POSITION_SOURCE_IDS" in glance
-    assert sorted(ai_summary.POSITION_SOURCE_IDS)[0] in glance
-
-
 def test_the_audit_scripts_count_through_the_production_reader():
     """Neither script may reach for a field name of its own again."""
     for name in ("lake_assessment.py", "lake_likes_and_details.py"):

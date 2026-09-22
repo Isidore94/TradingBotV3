@@ -47,3 +47,6 @@ desk_report.xml
 # Left behind by a sandboxed test run; its subfolder is owned by another account
 # and cannot be deleted without an admin prompt.
 .test_tmp/
+
+# Local-only notes: full history, old plans, the long rule stories (never pushed).
+notes/
