@@ -34,6 +34,7 @@ ENVIRONMENT = "trending_up"
 MEASURABLE = "read_accuracy_rest_of_day"
 SECOND_MEASURABLE = "trade_win_rate_day"
 NOW = datetime(2026, 9, 19, 18, 0, tzinfo=timezone.utc)
+FOLLOW_THROUGH_NOW = datetime(2026, 9, 23, 22, 0, tzinfo=timezone.utc)
 
 
 def _reading(name, *, start_session=None, end_session="", scope=None, **_kwargs):
@@ -214,10 +215,10 @@ def test_follow_through_is_append_only_correctable_and_absent_sessions_are_unkno
     monkeypatch.setattr(project_paths, "IDEA_FOLLOW_THROUGH_FILE", follow_path, raising=False)
     improvement_ideas.choose_weekly_change(first["idea_id"], end_session=SESSION, now=NOW)
 
-    improvement_ideas.record_follow_through(first["idea_id"], "2026-09-21", True, now=NOW)
-    improvement_ideas.record_follow_through(first["idea_id"], "2026-09-22", False, now=NOW)
+    improvement_ideas.record_follow_through(first["idea_id"], "2026-09-21", True, now=FOLLOW_THROUGH_NOW)
+    improvement_ideas.record_follow_through(first["idea_id"], "2026-09-22", False, now=FOLLOW_THROUGH_NOW)
     initial = follow_path.read_bytes()
-    improvement_ideas.record_follow_through(first["idea_id"], "2026-09-22", True, note="fixed", now=NOW)
+    improvement_ideas.record_follow_through(first["idea_id"], "2026-09-22", True, note="fixed", now=FOLLOW_THROUGH_NOW)
     assert follow_path.read_bytes().startswith(initial)
 
     row = next(item for item in improvement_ideas.checked_ideas(end_session="2026-09-23") if item["idea_id"] == first["idea_id"])
@@ -227,6 +228,24 @@ def test_follow_through_is_append_only_correctable_and_absent_sessions_are_unkno
     assert follow["by_session"]["2026-09-23"] == "unknown"
     assert follow["counts"] == {"yes": 2, "no": 0, "unknown": 1}
     assert len(follow_path.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_follow_through_refuses_a_future_or_unclosed_target_session(monkeypatch, tmp_path):
+    """A weekly answer records only sessions whose market close has passed."""
+    import project_paths
+    from ai_jobs import improvement_ideas
+
+    _paths, first, _second = _install_kept_process_ideas(monkeypatch, tmp_path)
+    follow_path = tmp_path / "follow_through.jsonl"
+    monkeypatch.setattr(project_paths, "IDEA_FOLLOW_THROUGH_FILE", follow_path, raising=False)
+    improvement_ideas.choose_weekly_change(first["idea_id"], end_session=SESSION, now=NOW)
+
+    before_close = datetime(2026, 9, 22, 19, 0, tzinfo=timezone.utc)
+    with pytest.raises(improvement_ideas.WeeklyChoiceError, match="has not closed"):
+        improvement_ideas.record_follow_through(first["idea_id"], "2026-09-22", True, now=before_close)
+    with pytest.raises(improvement_ideas.WeeklyChoiceError, match="has not closed"):
+        improvement_ideas.record_follow_through(first["idea_id"], "2026-09-23", True, now=before_close)
+    assert not follow_path.exists()
 
 
 def test_checked_choice_compares_only_after_start_in_the_same_horizon_and_environment(monkeypatch, tmp_path):

@@ -1651,6 +1651,11 @@ def record_follow_through(
     if followed is not True and followed is not False and followed is not None:
         raise ValueError("follow-through must be yes, no, or unknown")
     target = _session_or_raise(session, what="follow-through session").isoformat()
+    import market_calendar
+
+    completed_at_click = market_calendar.last_completed_session(now or datetime.now(timezone.utc))
+    if date.fromisoformat(target) > completed_at_click:
+        raise WeeklyChoiceError("follow-through session has not closed")
     key = _text(idea_id)
     record = read_state().get(key) or {}
     choice = record.get("weekly_choice") if isinstance(record, Mapping) else None
@@ -1671,8 +1676,6 @@ def record_follow_through(
     if latest and _text(latest.get("followed")) == state and _text(latest.get("note")) == words:
         return dict(latest)
     stamp = _moment(now)
-    import market_calendar
-
     recorded_day = (now or datetime.now(timezone.utc)).astimezone(market_calendar.MARKET_TZ).date().isoformat()
     event = {
         "schema": FOLLOW_THROUGH_SCHEMA, "idea_id": key,
