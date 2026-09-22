@@ -1698,6 +1698,8 @@ TJ-16's merge: the `ai_summary` → `ticker_briefs` pair keeps its ORDER and onl
 
 ## TJ-16 - a skill number, and words tagged blind (2026-09-20, packet TJ-16)
 
+**September 22 corrective transport (AI-R1, reviewed in scratch).** The first relevant night rejected the observation tagger twice because the model counted quote characters incorrectly. In prompt v2, code splits the note into deterministic exact fragments with stable IDs tied to `note_id` and `[start,end)`; repeated words at different offsets have different IDs. Fragments cover the text contiguously, including punctuation, with a maximum of 400 characters each. At most 60 are offered in note order, with omitted coverage counted explicitly. The model returns only `fragment_id` and a closed-vocabulary code; code recovers the exact quote and offsets and passes them through the unchanged strict `verify_reply`. Mixed transports, unknown IDs/codes, forbidden fields, repeated rows and over-cap answers reject whole. Different codes on one fragment remain valid. Stored v1 rows/readers are unchanged; legacy bad spans remain rejected. This tagger still sees only the trader's words and vocabulary, never results, bars or hindsight metadata. Gate #165 needs an actual verified night.
+
 The long form behind the CLAUDE.md rule *"The ledger reads beside three baselines on the
 same stamps, and the tagger never sees an outcome."* plan.md 12.4 TJ-16, decision 0021.
 Branch `claude/tj16-prediction-contrast` (tip `d0d61f95`), merged `c4a760e5` into
@@ -4542,10 +4544,8 @@ their rows through `evaluate_theta_put_candidate` / `evaluate_theta_pcs_candidat
 ### The rules this produced
 
 - **One row per `(symbol, scan_date, play_type)` in `theta_picks.jsonl`** (shared home,
-  `project_paths.THETA_PICKS_FILE`), written from the RUNNER right after
-  `write_theta_put_report` - the scan's own output pass, never `legacy.py`'s tracker save.
-  A key already present is not rewritten, so a rerun or a deferred option pass cannot double
-  the n. **A failed append loses the row, never the scan**, and one malformed entry in the
+  `project_paths.THETA_PICKS_FILE`), written from the RUNNER after the deferred option-quote attempt, never `legacy.py`'s tracker save. A failed quote attempt records the observed candidate with an unmeasured premium.
+  A key already present is not rewritten, so a rerun cannot double the n. **A failed append loses the row, never the scan**, and one malformed entry in the
   list does not cost the good ones.
 - **Every appearance is an observation; the cohort grain is the FIRST appearance.** A repeat
   day is its own row and keeps `first_seen_scan_date`. In the readout, `n` counts first
@@ -7787,6 +7787,10 @@ This is the second incident of its kind after 2026-09-05's live-tracker overwrit
 long form of that one is in `docs/AGENT_TEAM.md` "Rules that exist because something broke".
 
 ## TJ-4 - the day pack and the night's voice (2026-09-20, packet TJ-4)
+
+**September 22 corrective contract (AI-R1/R2/R3, implemented in scratch).** The September 21 night rejected all three day-story attempts for repeating a read. The model now receives `read_explanations`, keyed by the pack's minted read IDs, and returns bounded words only. Code joins each read to exactly one `trader_said` prediction on the SAME `entry_id`, copies its measured verdict, and materializes the existing stored v1 `were_you_right` rows. Unmatched historical/extracted reads are named as not offered; ambiguity refuses the request. The v2 request contains no legacy result-entry shape; an old v1 reply remains strictly checked, including cross-entry source links. Unknown/missing keys, mixed transports, false verdicts and repeated reads still reject the whole answer. The prompt version changes; the persisted schema and independent D1 view do not.
+
+The nightly `day_review_facts` slot builds the completed session's canonical index, available tape, grades and pack after `measured_report` and before narration, even if the page was never opened; its missing tape remains unmeasured. The daily product remains ONE Day Review. A.I. Summary's top button selects the last completed exchange session through the existing calendar and page worker; it does not run an AI review. The page uses its already-loaded `how_fresh` report-card row to distinguish rejected narration, an unreadable night and a night not run. Measured results and ideas remain visible. A retained same-session story is explicitly marked when a newer attempt failed; a story from another session is never shown. Real-model proof remains gate #148, separate from staged replay tests.
 
 The long form behind the CLAUDE.md rule *"The night narrates the day, never grades it, and
 sweeps what the trader queued."* Branch `claude/tj4-day-story` (tip `6c1e2506`), merged

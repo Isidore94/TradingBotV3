@@ -127,7 +127,7 @@ def test_the_week_story_sits_in_stage_two_between_the_tags_and_the_briefs():
 
     Ahead of `ticker_briefs` because the briefs reserve 120 minutes and the 27B
     needs the front of the night; after `observation_tags` because
-    `measured_report`/`ai_summary` must stay adjacent and two other files pin
+    `day_review_facts`/`ai_summary` must stay adjacent and two other files pin
     that pair.
     """
     from ai_jobs import runner

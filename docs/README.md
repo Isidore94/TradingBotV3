@@ -1,13 +1,6 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-09-20** (archive pass: `CURRENT_CHECKPOINT.md`'s 2026-09-03 to
-2026-09-17 entries moved to `archive/CHECKPOINT_ARCHIVE_2026-09-03_2026-09-17.md` and
-`CHANGELOG.md`'s 2026-09-06 to 2026-09-18 Recent changes to
-`archive/CHANGELOG_ARCHIVE_2026-09-06_2026-09-18.md`; before that 2026-09-17,
-`plan.md` rewritten for the trader journal program, decision
-0021 added, the old roadmap archived at `archive/PLAN_ARCHIVE_2026-09-17.md`; before that
-2026-09-16, Phase 0.32 plain-language trader test guide added; before that 2026-09-12, WISHLIST 11 added `MEMORY.md` and `memory/`; `CHANGELOG.md`'s 2026-09-03 to
-2026-09-05 entries moved to `archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`).
+Last reconciled: **2026-09-22**. Checkpoint build entries for September 18–19 and changelog Recent changes for September 19–20 moved to the archives below; open gates and implemented inventory remain in the active control files.
 
 One line per file. Status and decisions live in the root control set, never here; if a
 row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
@@ -81,6 +74,9 @@ changing a library, storage or architecture choice; **0016** is the trader's vis
 priorities and breaks every prioritisation tie. Numbering is chronological.
 
 ## Archive — evidence, never context
+
+- [`archive/CHECKPOINT_ARCHIVE_2026-09-18_2026-09-19.md`](archive/CHECKPOINT_ARCHIVE_2026-09-18_2026-09-19.md) — checkpoint build history for September 18–19; no active gates moved.
+- [`archive/CHANGELOG_ARCHIVE_2026-09-19_2026-09-20.md`](archive/CHANGELOG_ARCHIVE_2026-09-19_2026-09-20.md) — September 19–20 Recent changes; implemented inventory stays active.
 
 [`archive/`](archive/) holds everything that is history: the checkpoint archives (the
 newest,

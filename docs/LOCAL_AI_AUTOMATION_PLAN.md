@@ -2321,3 +2321,12 @@ from the proposal source without recomputation. Setup Tracker may route that exa
 object into Daily Recap > Review; the route does no tracker ranking, Qt I/O, store read or model call. Live proof must measure configured-model
 latency, reported token counts and peak memory when available; hardware specifications are not a
 performance claim.
+
+
+## 13. September 22 corrective work: a useful daily review
+
+Status: **implemented in the scratch integration** on `codex/overnight-ai-repair`; live proof remains owed. This is corrective Phase 0.33 work, authorized by the trader on September 22, not a new research program. Day Review owns the local overnight daily story, measured report card and checked ideas (decision 0021). A.I. Summary retains its extra manual-review tools and gains a direct route to that completed-session page. The broader scheduled `ai_summary` remains Saturday-only; no additional weeknight model call is introduced.
+
+The September 21 failures were rejected publication, not absent scheduling: a repeated read in the day story and an inaccurate character span in observation tags. The new transports leave identities, grades and character counting to code. The local model supplies bounded explanations and fragment-to-code selections; the existing strict publication checks and stored v1 artifacts remain. Missing data stays unmeasured, and a failure never removes measured results or the last verified story. The page reads night status from the report card it already loaded.
+
+Deterministic repairs reuse existing owners: close+35 outcome sweep before evidence/digest readers and a canonical day-facts refresh after `measured_report`. The latter reuses valid exact-session tape and builds the index, reads and pack even if the trader never opened the page. The trader authorized the two exact protected seams by saying “continue” after the file-scoped request; both changes are in the scratch branch. New option evidence must be recorded after observed quotes arrive; absent historical quotes cannot be reconstructed. Slot order is governed by decision 0018. Verification uses staged stores and injected replies; an actual local-model night and the trader's page read remain separate gates. The downstairs DAS was reachable and receiving the AI artifacts and cold pushes during the audit, so no storage configuration change is part of this repair.

@@ -392,3 +392,15 @@ and `tests/test_tj9e_night_slot.py`. The files amended at this merge were
 name, its LEAD AMENDMENT comment kept truthful),
 `tests/test_tj13b_local_large_provider.py`, `tests/test_tj13b_probe_guards.py`
 and `tests/test_tj5_week_slot_and_slate.py`.
+
+**EXTENDED 2026-09-22 (overnight AI repair):** `outcome_sweep` joins stage 1
+before `evidence_report` and `daily_digest`. It runs only after the target
+exchange session's close plus 35 minutes, and also waits out the current
+session's scanner window. It uses the canonical pending-outcome finalizer with
+the existing autorun setting, and never loads a model. `day_review_facts`
+joins the end of stage 1 after `measured_report`. It builds the closed
+session's existing Day Review index, bars, read grades and pack before the
+stage-2 story reads them, even when the trader has not opened the page.
+Both slots use existing owners, preserve failed/unknown measurements, and
+cannot move into a model stage. The ten existing order pins and the new
+AI-R3 runner tests cover their positions.
