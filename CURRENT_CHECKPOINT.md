@@ -17,17 +17,21 @@ This block is the current brief. Dated entries retain verification detail; old s
 
 | | |
 |---|---|
-| Active item | **TJ-17A…D — complete the daily and weekly learning loop**, authorized by the trader 2026-09-22 after the recap assessment; tests first. |
+| Active item | **TJ-17A…D — complete the daily and weekly learning loop**. All four packets are built on an isolated branch; combined verification and live gates remain. |
 | Working branch | **`codex/tj17-recap-complete`**, isolated at `.claude/worktrees/tj17-lead`, based on `main` `fb95854e`; desk checkout remains `main`. |
 | Live code | September 21's TJ-9E and per-trade Mentor Save are on `main`; `fb95854e` is documentation over `b4c1c4f7`/`4fe737b3`/`182f3e08`. No TJ-17 code is live. |
-| Dependencies | Reuse the concurrent overnight repair's verified AI-R1 transport, AI-R2 navigation/fallback and AI-R3 deterministic facts work; do not duplicate it or claim unreviewed work complete. |
-| Next action | Prove TJ-17A failures, then build/review; prepare B/C/D in isolated worktrees, reconcile contracts and run the combined gates. Main update/restart waits for the trader after the build is reviewable. |
-| Verification | Baseline unchanged: September 21 combined code had **10,263 passed, 14 skipped, 72 subtests, one known scan-freshness timing failure**; ruff clean, smoke 7/7, source selftest 97/97. No new full suite yet. |
-| Open gates | Existing live gates remain; the per-trade Save independent review remains owed. TJ-17 adds horizon/window/late-answer/follow-through checks in plan.md. TJ-8 cleanup waits. |
+| Dependencies | AI-R1 verified story/tag transport and AI-R2 navigation were integrated. The narrow AI-R3 deterministic facts stage was integrated without its separate outcome/theta changes. |
+| Next action | Finish combined tests, smoke, selftest, and offscreen page timing when the concurrent pytest runs free memory. Repair failures, then seek independent C/D review and keep live gates. Main update/restart is a later trader action. |
+| Verification | TJ-17 targeted A/B/C/D tests passed (35 together); 524 related recap tests passed before two obsolete assertions were updated. Changed Python passes ruff. Combined full suite, smoke, selftest and UI timing are pending while another full suite occupies memory. Prior main baseline: 10,263 passed, 14 skipped, 72 subtests and one known timing flake. |
+| Open gates | Existing live gates remain; TJ-17 horizon/window/late-answer/follow-through checks are owed. Independent C/D review and per-trade Save review are owed. TJ-8 cleanup waits. |
 | Other follow-ups | TJ-14C, TJ-12F, TJ-6M and the registry/mood/exit-note follow-ups remain as listed in plan.md unless a verified TJ-17 change explicitly closes one. |
 | Desk | Last checkpoint reports up since **2026-09-21 12:06 Pacific**, started on the trader's instruction. This build has not changed or restarted it. |
 | Trader inputs | Confirm trade labels and exit answers as the Mentor asks; keep entering prediction clicks. The assessment found five clicked reads on September 21, superseding the old zero-click note. Options repair and the Saturday large-model probe remain separately owed. |
 | Build rules | One pytest process at a time; night lock must be free for full suite. Code workers isolated; both data and machine cache redirected in scratch reproductions. |
+
+### 2026-09-22 — TJ-17 built in isolation; combined checks pending
+
+TJ-17A preserves separate read horizons and closes the pending-count error; A's independent reviewer reproduced the original failures and found one Week strip blocker, fixed in B. TJ-17B adds completed-session learning windows and source drilldown. TJ-17C adds three explicit decision sections, exact trade answer detail, hash-based story freshness, and a bounded prior-pack refresh inside the existing night facts stage. TJ-17D adds one scoped weekly chosen change and append-only, correctable daily follow-through. AI-R1 story/tag transport, AI-R2 navigation and the narrow AI-R3 facts stage were brought into this branch; the independent overnight task's outcome/theta changes were not. Changed-source ruff and targeted tests passed before the R1 integration; rerun is owed. The related recap selection passed 524 tests before two obsolete expectations were revised; rerun and full checks remain. Terra helpers reached the account usage limit, so an independent C/D review remains owed. No desk code or live data was changed.
 
 ### 2026-09-22 — TJ-17 authorized; tests-first recap implementation started
 

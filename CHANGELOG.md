@@ -36,6 +36,8 @@ archives named under `Revision history`, the newest being
 [`docs/archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`](docs/archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md).
 They are evidence and must not be loaded as context.
 
+- **TJ-17 recap learning loop (2026-09-22, integration branch `codex/tj17-recap-complete`; not live).** Day and week read summaries keep rest-of-day and five-session calls separate, including pending counts and baselines. Weekend Prep shows 5/10/20 completed-session read and actual-trade comparisons with their dated source rows. Day Review separates market calls, picks and passes, and entries and exits; it shows the trader's original and later journal words with the selected trade. A verified story is shown only when its hash matches current facts. The existing deterministic night-facts stage refreshes current and up to 19 older saved packs after late answers or matured calls, keeping unchanged bytes. One kept process idea can become the week's chosen change, with scoped before/after counts and append-only yes/no/unknown follow-through. Initial targeted tests passed; rerun after the final refinements and combined/live gates remain in `plan.md`.
+
 - **Manual-only Pullback alerts (2026-09-17, working tree).** Claims and Focus names no longer
   pre-arm Pullback alerts; any old automatic row is removed. The chart button is the only arm path,
   and it skips the unnecessary M5-cache read that could stall the desk.
@@ -3681,9 +3683,9 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 
 ## Recent changes (the last two build days)
 
-### 2026-09-22 — Recap learning follow-up authorized (TJ-17)
+### 2026-09-22 — Recap learning follow-up built on an isolated branch (TJ-17)
 
-The trader approved the recap assessment recommendations. Plan.md now schedules TJ-17A…D: separate/correct read summaries and recorded-internals comparison, 5/10/20-session learning tables, explicit entry/exit review with refreshed facts, and one chosen weekly change with measured follow-through. Implementation is pending tests and review; runtime behavior and baseline are unchanged. The checkpoint glance now matches the already-merged September 21 code on main.
+The trader approved the recap assessment recommendations. TJ-17A…D now exist on `codex/tj17-recap-complete` with separate horizon summaries, 5/10/20-session learning tables, an explicit day decision/trade review, hash-based story freshness and recent-pack night refresh, and one chosen weekly change with measured follow-through. The target tests passed; combined verification and an independent C/D review remain. No TJ-17 code has reached the desk checkout, so the live runtime is unchanged.
 
 ### 2026-09-21 - TJ-9E: the Mentor tells an exit from an entry, and a reading is the trader's only by their click (branch `claude/tj9e-exit-notes`, tip `1876bb08`, merged into `lead/p033-integration2` `7230b30d`)
 
