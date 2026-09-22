@@ -29,9 +29,27 @@ def _app():
 
 def _logged(scan_date, symbol, side, total, **parts):
     row = {"scan_date": scan_date, "symbol": symbol, "side": side, "total": total,
-           "setup": 0.0, "sr": 0.0, "rs": 0.0, "bounce": 0.0, "bucket": "favorite_setup"}
+           "setup": 0.0, "sr": 0.0, "rs": 0.0, "bounce": 0.0, "bucket": "favorite_setup",
+           "points_version": "points_v1"}
     row.update(parts)
     return row
+
+
+def _measured_sr(**overrides):
+    raw = {
+        "sr_inputs_measured": True,
+        "hv_level_blocking_count": 0,
+        "hv_level_nearby_count": 0,
+        "cloud_level_nearby_count": 0,
+        "trendline_note": False,
+        "previous_close": 100.0,
+        "atr20": 2.0,
+        "ema21": 90.0,
+        "sma_breakout_sma_level": 90.0,
+        "hv_level_nearest_distance_atr": 1.5,
+    }
+    raw.update(overrides)
+    return raw
 
 
 def test_append_log_dedupes_on_scan_date_symbol_side_and_never_raises(tmp_path):
@@ -44,14 +62,14 @@ def test_append_log_dedupes_on_scan_date_symbol_side_and_never_raises(tmp_path):
     logged = evidence.read_log(path)
     assert [(r["scan_date"], r["symbol"], r["total"]) for r in logged] == [
         ("2026-09-08", "NVDA", 30.0), ("2026-09-09", "NVDA", 32.0)]
-    assert all(r["weights_version"] == evidence.WEIGHTS_VERSION and r["logged_at"] for r in logged)
+    assert all(r["points_version"] == "points_v1" and r["logged_at"] for r in logged)
     # An unwritable path loses the rows, never raises.
     assert evidence.append_log(tmp_path / "log.jsonl" / "child", rows) == 0
 
 
 def test_score_row_log_row_records_raw_parts_and_the_weights_in_force():
     points = setup_points.score_row(
-        {"has_bounce_event_today": True, "expected_r": 0.5},
+        {"has_bounce_event_today": True, "expected_r": 0.5, **_measured_sr()},
         side="LONG",
         family_record={"win_rate_lb": 0.5},
         weights={"bounce": 0.5, "setup": 1.5},
@@ -64,7 +82,7 @@ def test_score_row_log_row_records_raw_parts_and_the_weights_in_force():
     assert (row["setup"], row["bounce"], row["total"]) == (25.0, 15.0, 55.0)
     assert row["multipliers"] == {"setup": 1.5, "sr": 1.0, "rs": 1.0, "bounce": 0.5}
     # No weights: the parts are the raw parts and the tooltip says nothing about learning.
-    plain = setup_points.score_row({"has_bounce_event_today": True}, side="LONG")
+    plain = setup_points.score_row({"has_bounce_event_today": True}, side="LONG", version="points_v1")
     assert plain.weights == {"setup": 1.0, "sr": 1.0, "rs": 1.0, "bounce": 1.0}
     assert "learned" not in plain.tooltip()
 
@@ -128,7 +146,14 @@ def test_active_weights_apply_only_when_the_trader_switch_is_on(tmp_path, monkey
 
     weights_file = tmp_path / "weights.json"
     monkeypatch.setattr(project_paths, "SETUP_POINTS_WEIGHTS_FILE", weights_file)
-    assert evidence.write_proposal(weights_file, {"multipliers": {"bounce": 1.3}})
+    assert evidence.write_proposal(
+        weights_file,
+        {
+            "weights_version": "points_v2",
+            "outcome_policy": "favorable_direction_session_v2",
+            "multipliers": {"bounce": 1.3},
+        },
+    )
     project_paths.invalidate_local_settings_cache()
     assert setup_points.learned_weights_enabled() is False
     assert setup_points.active_weights() == {}
@@ -178,9 +203,9 @@ def test_panel_builds_the_evidence_payload_from_ranked_rows_only():
         assert panel._uses_default_feedback_paths is False  # a test panel never writes evidence
         rows = [
             SetupRow(symbol="NVDA", side="LONG", bucket="favorite_setup", last_trade_date="2026-09-08",
-                     raw={"setup_family": "alpha", "has_bounce_event_today": True}),
-            SetupRow(symbol="AMD", side="LONG", bucket="near_favorite_zone", raw={"setup_family": "alpha"}),
-            SetupRow(symbol="XYZ", side="LONG", bucket="study", raw={"setup_family": "alpha"}),
+                     raw={"setup_family": "alpha", "has_bounce_event_today": True, **_measured_sr()}),
+            SetupRow(symbol="AMD", side="LONG", bucket="near_favorite_zone", raw={"setup_family": "alpha", **_measured_sr()}),
+            SetupRow(symbol="XYZ", side="LONG", bucket="study", raw={"setup_family": "alpha", **_measured_sr()}),
             SetupRow(symbol="", side="LONG", bucket="favorite_setup", raw={}),
         ]
         payload = panel.points_evidence_payload(rows, "2026-09-05")
