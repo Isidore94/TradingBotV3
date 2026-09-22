@@ -34,6 +34,7 @@ order - so the table shows exactly the same rows either way.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -51,6 +52,14 @@ RANKED_BUCKETS = frozenset(
 SETTING_KEY = "rank_setups_by_points"
 #: The trader's switch that lets the PROPOSED multipliers apply (default OFF).
 LEARNED_SETTING_KEY = "setup_points_learned_weights"
+
+# ``points_v1`` was the original presentation calculation.  It remains an
+# explicit replay choice so an append-only old log keeps its meaning.  New desk
+# observations use v2: an absent S/R reading is uncertainty, never a clean
+# path.
+POINTS_V1 = "points_v1"
+POINTS_V2 = "points_v2"
+DEFAULT_POINTS_VERSION = POINTS_V2
 
 SETUP_BOUND_WEIGHT = 40.0
 SETUP_EXPECTED_R_WEIGHT = 10.0
@@ -81,6 +90,7 @@ class SetupPoints:
     raw_parts: dict[str, float] = field(default_factory=dict)
     #: The multipliers in force when this was computed (all 1.0 unless learned).
     weights: dict[str, float] = field(default_factory=dict)
+    points_version: str = DEFAULT_POINTS_VERSION
 
     def text(self) -> str:
         return f"{self.total:+.0f}"
@@ -96,6 +106,7 @@ class SetupPoints:
             "total": float(self.total),
             **{part: float(self.raw_parts.get(part, 0.0)) for part in ("setup", "sr", "rs", "bounce")},
             "multipliers": dict(self.weights),
+            "points_version": self.points_version,
         }
 
     def tooltip(self) -> str:
@@ -123,7 +134,7 @@ def _float(value: Any) -> float | None:
         out = float(value)
     except (TypeError, ValueError):
         return None
-    return out if out == out else None
+    return out if math.isfinite(out) else None
 
 
 def _int(value: Any) -> int:
@@ -131,6 +142,30 @@ def _int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _count(value: Any) -> int | None:
+    """A count is measured only when it is a finite, non-negative integer."""
+    number = _float(value)
+    if number is None or number < 0 or int(number) != number:
+        return None
+    return int(number)
+
+
+def _truth(value: Any) -> bool | None:
+    """Read scanner booleans semantically (``bool('False')`` is a lie)."""
+    if isinstance(value, bool):
+        return value
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "yes", "1", "on"}:
+        return True
+    if text in {"false", "no", "0", "off", "none", "null", ""}:
+        return False
+    return None
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -162,8 +197,17 @@ def _ahead(level: float | None, close: float | None, atr: float | None, side: st
     return 0.0 < distance <= SR_MA_ATR_REACH * atr
 
 
-def sr_part(raw: Mapping[str, Any], side: str) -> tuple[float, list[str]]:
-    """Input 2: nearby S/R knocks it down, from the scan's own level counts."""
+def _trendline_in_play(raw: Mapping[str, Any]) -> bool | None:
+    for key in ("trendline_in_play", "trendline_note"):
+        value = _truth(raw.get(key))
+        if value is not None:
+            return value
+    text = str(raw.get("trendline_note") or "").strip()
+    return True if text else None
+
+
+def _sr_part_v1(raw: Mapping[str, Any], side: str) -> tuple[float, list[str]]:
+    """The original clean-path calculation, retained only for log replay."""
     notes: list[str] = []
     points = SR_CLEAN_PATH
     blocking = _int(raw.get("hv_level_blocking_count"))
@@ -194,6 +238,70 @@ def sr_part(raw: Mapping[str, Any], side: str) -> tuple[float, list[str]]:
     return round(max(SR_FLOOR, points), 2), notes
 
 
+def sr_part(raw: Mapping[str, Any], side: str, *, version: str = DEFAULT_POINTS_VERSION) -> tuple[float, list[str]]:
+    """Input 2: measured S/R earns the clear-path bonus; unknown starts at zero.
+
+    A partial row may still name a real obstacle.  It starts at zero and keeps
+    that deduction.  HV count / nearest-distance fields often describe the
+    same level, so v2 takes their strongest one deduction rather than adding a
+    level twice.
+    """
+    if version == POINTS_V1:
+        return _sr_part_v1(raw, side)
+
+    notes: list[str] = []
+    counts = {key: _count(raw.get(key)) for key in (
+        "hv_level_blocking_count", "hv_level_nearby_count", "cloud_level_nearby_count"
+    )}
+    close = _float(raw.get("previous_close"))
+    atr = _float(raw.get("atr20"))
+    nearest = _float(raw.get("hv_level_nearest_distance_atr"))
+    measured = _truth(raw.get("sr_inputs_measured"))
+    malformed = any(raw.get(key) not in (None, "") and value is None for key, value in counts.items())
+    malformed = malformed or (raw.get("previous_close") not in (None, "") and close is None)
+    malformed = malformed or (raw.get("atr20") not in (None, "") and atr is None)
+    complete = (
+        bool(measured) and not malformed
+        and all(value is not None for value in counts.values())
+        and close is not None and atr is not None and atr > 0
+        and (nearest is not None or (counts["hv_level_blocking_count"] == 0 and counts["hv_level_nearby_count"] == 0))
+    )
+    partial = not complete
+    points = SR_CLEAN_PATH if complete else 0.0
+    if partial:
+        notes.append("S/R partial: clear path not measured")
+    if malformed:
+        notes.append("S/R unmeasured: unreadable required input")
+
+    blocking = counts["hv_level_blocking_count"]
+    nearby = counts["hv_level_nearby_count"]
+    hv_deductions: list[tuple[float, str]] = []
+    if blocking:
+        hv_deductions.append((SR_BLOCKING_LEVEL * blocking, f"{blocking} HV level(s) blocking"))
+    if nearby:
+        hv_deductions.append((SR_NEARBY_LEVEL * nearby, f"{nearby} HV level(s) nearby"))
+    if nearest is not None and abs(nearest) < SR_TIGHT_ATR:
+        hv_deductions.append((SR_TIGHT_LEVEL, f"nearest level {abs(nearest):.2f} ATR away"))
+    if hv_deductions:
+        deduction, note = max(hv_deductions, key=lambda item: item[0])
+        points -= deduction
+        notes.append(note)
+    cloud = counts["cloud_level_nearby_count"]
+    if cloud:
+        points -= SR_CLOUD_LEVEL * cloud
+        notes.append(f"{cloud} cloud level(s) nearby")
+    if _trendline_in_play(raw) is True:
+        points -= SR_TRENDLINE
+        notes.append("a trendline is in play")
+    for key, label in (("ema21", "EMA21"), ("sma_breakout_sma_level", str(raw.get("sma_breakout_sma_label") or "SMA"))):
+        if _ahead(_float(raw.get(key)), close, atr, side):
+            points -= SR_MOVING_AVERAGE
+            notes.append(f"{label} inside {SR_MA_ATR_REACH:.0f} ATR ahead")
+    if partial and not notes[:-1] and not hv_deductions and not cloud and _trendline_in_play(raw) is None and close is None:
+        return 0.0, ["S/R unmeasured: required scan facts absent"]
+    return round(max(SR_FLOOR, points), 2), notes
+
+
 def rs_part(raw: Mapping[str, Any], side: str, *, d1_vs_sector: Any = None, d1_vs_industry: Any = None) -> tuple[float, list[str]]:
     """Input 3: RS/RW vs SPY, sector and industry in the trade's direction."""
     notes: list[str] = []
@@ -218,13 +326,15 @@ def _names_a_bounce(raw: Mapping[str, Any]) -> bool:
         return True
     if "bounce" in str(raw.get("setup_family") or "").lower():
         return True
-    return bool(raw.get("top_pattern_daily_sma50_bounce"))
+    return _truth(raw.get("top_pattern_daily_sma50_bounce")) is True
 
 
-def bounce_part(raw: Mapping[str, Any]) -> tuple[float, list[str]]:
+def bounce_part(raw: Mapping[str, Any], *, version: str = DEFAULT_POINTS_VERSION) -> tuple[float, list[str]]:
     """Input 4: a recent bounce."""
-    if raw.get("has_bounce_event_today"):
+    if (bool(raw.get("has_bounce_event_today")) if version == POINTS_V1 else _truth(raw.get("has_bounce_event_today")) is True):
         return BOUNCE_TODAY, ["bounce event today"]
+    if version == POINTS_V1 and bool(raw.get("top_pattern_daily_sma50_bounce")):
+        return BOUNCE_NAMED, ["a bounce by name, no event today"]
     if _names_a_bounce(raw):
         return BOUNCE_NAMED, ["a bounce by name, no event today"]
     return 0.0, ["no recent bounce"]
@@ -238,6 +348,7 @@ def score_row(
     d1_vs_sector: Any = None,
     d1_vs_industry: Any = None,
     weights: Mapping[str, float] | None = None,
+    version: str = DEFAULT_POINTS_VERSION,
 ) -> SetupPoints:
     """The four parts and their sum for one setup row. Pure.
 
@@ -248,9 +359,10 @@ def score_row(
     raw = raw or {}
     side = str(side or raw.get("side") or "").strip().upper()
     setup, notes = setup_part(family_record, raw.get("expected_r"))
-    sr, sr_notes = sr_part(raw, side)
+    version = POINTS_V1 if version == POINTS_V1 else POINTS_V2
+    sr, sr_notes = sr_part(raw, side, version=version)
     rs, rs_notes = rs_part(raw, side, d1_vs_sector=d1_vs_sector, d1_vs_industry=d1_vs_industry)
-    bounce, bounce_notes = bounce_part(raw)
+    bounce, bounce_notes = bounce_part(raw, version=version)
     raw_parts = {"setup": setup, "sr": sr, "rs": rs, "bounce": bounce}
     used = {part: 1.0 for part in raw_parts}
     for part, value in dict(weights or {}).items():
@@ -270,6 +382,7 @@ def score_row(
         notes=tuple(notes + sr_notes + rs_notes + bounce_notes),
         raw_parts=raw_parts,
         weights=used,
+        points_version=version,
     )
 
 

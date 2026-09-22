@@ -96,9 +96,10 @@ def _population(n_per_third: int, top_rate: float, bottom_rate: float):
         rate = {0: top_rate, 1: (top_rate + bottom_rate) / 2, 2: bottom_rate}[third]
         win = (index % n_per_third) < round(rate * n_per_third)
         symbol = f"S{index:03d}"
-        log.append(_logged("2026-09-08", symbol, "LONG", total, bounce=15.0 if third == 0 else 0.0,
+        session = ("2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14")[index % 5]
+        log.append(_logged(session, symbol, "LONG", total, bounce=15.0 if third == 0 else 0.0,
                            sr=float(index % 7)))
-        outcomes.append({"scan_date": "2026-09-08", "symbol": symbol, "side": "LONG", "win": str(win)})
+        outcomes.append({"scan_date": session, "symbol": symbol, "side": "LONG", "win": str(win)})
     return log, outcomes
 
 
@@ -137,7 +138,10 @@ def test_propose_weights_moves_only_a_part_over_the_floor_and_clamps():
     assert proposal["n_joined"] == 120 and proposal["weights_version"] == evidence.WEIGHTS_VERSION
     small = evidence.propose_weights(evidence.grade(*_population(5, 0.9, 0.1), horizon_sessions=5))
     assert set(small["multipliers"].values()) == {1.0}
-    assert evidence.proposal_multipliers({"multipliers": {"sr": 9.0, "rs": 0.1, "junk": 2}}) == {
+    assert evidence.proposal_multipliers({
+        "weights_version": "points_v2", "outcome_policy": "favorable_direction_session_v2",
+        "multipliers": {"sr": 9.0, "rs": 0.1, "junk": 2},
+    }) == {
         "setup": 1.0, "sr": evidence.WEIGHT_CEILING, "rs": evidence.WEIGHT_FLOOR, "bounce": 1.0}
 
 
@@ -162,29 +166,34 @@ def test_active_weights_apply_only_when_the_trader_switch_is_on(tmp_path, monkey
     try:
         assert setup_points.active_weights() == {"setup": 1.0, "sr": 1.0, "rs": 1.0, "bounce": 1.3}
         weights_file.unlink()
-        assert setup_points.active_weights() == {"setup": 1.0, "sr": 1.0, "rs": 1.0, "bounce": 1.0}
+        assert setup_points.active_weights() == {}
     finally:
         project_paths.save_local_setting(setup_points.LEARNED_SETTING_KEY, False)
         project_paths.invalidate_local_settings_cache()
 
 
 def test_log_and_grade_writes_the_log_and_the_proposal_and_reads_the_one_outcome_reader(tmp_path):
-    outcomes = tmp_path / "tier_outcomes.csv"
+    outcomes = tmp_path / "session_outcomes.csv"
     log_rows, outcome_rows = _population(40, 0.7, 0.4)
     import csv
 
+    targets = {"2026-09-08": "2026-09-15", "2026-09-09": "2026-09-16", "2026-09-10": "2026-09-17", "2026-09-11": "2026-09-18", "2026-09-14": "2026-09-21"}
+    for index, row in enumerate(log_rows):
+        row.update({"points_version": "points_v2", "snapshot_id": f"snapshot-{index}",
+                    "observed_at": row["scan_date"] + "T16:00:00+00:00",
+                    "logged_at": row["scan_date"] + "T16:01:00+00:00"})
     with open(outcomes, "w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=[
-            "observation_id", "scan_date", "horizon_sessions", "symbol", "side", "win", "stale_horizon",
-            "outcome_kind", "future_scan_date"])
+            "observation_id", "scan_date", "target_session", "horizon_sessions", "symbol", "side",
+            "favorable", "measured", "maturity", "outcome_kind"])
         writer.writeheader()
         for index, row in enumerate(outcome_rows):
             for horizon in (1, 5):
                 writer.writerow({"observation_id": f"o{index}h{horizon}", "scan_date": row["scan_date"],
                                  "horizon_sessions": horizon, "symbol": row["symbol"], "side": row["side"],
-                                 "win": row["win"] if horizon == 5 else "False", "stale_horizon": "False",
-                                 "outcome_kind": "favorable_direction_scanrow_v1",
-                                 "future_scan_date": "2026-09-15"})
+                                 "favorable": row["win"] if horizon == 5 else "False", "measured": "True",
+                                 "maturity": "mature", "outcome_kind": "favorable_direction_session_v2",
+                                 "target_session": targets[row["scan_date"]]})
     result = evidence.log_and_grade(
         log_rows, log_path=tmp_path / "log.jsonl", weights_path=tmp_path / "w.json", outcomes_path=outcomes)
     assert result.n_joined == 120 and result.lift == pytest.approx(0.30)
@@ -208,9 +217,9 @@ def test_panel_builds_the_evidence_payload_from_ranked_rows_only():
             SetupRow(symbol="XYZ", side="LONG", bucket="study", raw={"setup_family": "alpha", **_measured_sr()}),
             SetupRow(symbol="", side="LONG", bucket="favorite_setup", raw={}),
         ]
-        payload = panel.points_evidence_payload(rows, "2026-09-05")
+        payload = panel.points_evidence_payload(rows, "2026-09-08")
         assert [(p["symbol"], p["scan_date"], p["bucket"]) for p in payload] == [
-            ("NVDA", "2026-09-08", "favorite_setup"), ("AMD", "2026-09-05", "near_favorite_zone")]
+            ("NVDA", "2026-09-08", "favorite_setup"), ("AMD", "2026-09-08", "near_favorite_zone")]
         assert payload[0]["bounce"] == 15.0 and payload[0]["family"] == "alpha"
         assert "Learned weights OFF" in panel.points_toggle.toolTip()
         assert panel.points_grade_label.text() == ""

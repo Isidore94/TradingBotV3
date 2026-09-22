@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -10,6 +11,7 @@ from typing import Any, Iterable
 from project_paths import (
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_PRIORITY_SETUPS_FILE,
+    SETUP_POINTS_SCAN_PROJECTION_FILE,
 )
 from master_avwap_lib.setup_tagging import derive_setup_tag_payload
 from ui.models.setup import SetupRow
@@ -204,10 +206,15 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
     if not path.exists():
         return []
     try:
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        report_bytes = path.read_bytes()
+        lines = report_bytes.decode("utf-8", errors="ignore").splitlines()
     except OSError:
         return []
 
+    provenance = _priority_report_provenance(lines)
+    import hashlib
+
+    provenance["report_digest"] = hashlib.sha256(report_bytes).hexdigest()
     zone_by_symbol: dict[str, str] = {}
     for line in lines:
         zone_match = ZONE_LINE_RE.match(line)
@@ -234,6 +241,7 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
                 "setup_family": family,
                 "current_band_zone": zone_by_symbol.get(symbol, ""),
                 "expected_r": data.get("expected_r"),
+                **provenance,
                 **{k: v for k, v in data.items() if v},
             },
             source="priority_report",
@@ -248,6 +256,18 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
 
 
 _PRIORITY_GENERATED_RE = re.compile(r"Generated at\s+(\d{4}-\d{2}-\d{2})")
+_PRIORITY_STAMP_RE = re.compile(r"\b(?:scan_stamp|run_id|scan_id)=(?P<stamp>[^\s]+)", re.I)
+_POINTS_PROJECTION_CACHE: dict[str, Any] = {"rows": (), "run_date": "", "run_id": "", "valid": False}
+
+
+def _priority_report_provenance(lines: Iterable[str]) -> dict[str, str]:
+    """A report without a scan identity cannot borrow rich S/R facts."""
+    for line in list(lines)[:10]:
+        date_match = _PRIORITY_GENERATED_RE.search(line)
+        stamp_match = _PRIORITY_STAMP_RE.search(line)
+        if date_match and stamp_match:
+            return {"scan_date": date_match.group(1), "scan_stamp": stamp_match.group("stamp")}
+    return {}
 
 # Mirror the scanner's daily-bar recency tolerance (a 2-weekday gap is still
 # "recent"). Anything beyond that is flagged as stale in the UI.
@@ -333,6 +353,7 @@ def load_latest_setup_rows_with_meta() -> dict[str, Any]:
 
     priority_rows = load_setup_rows_from_priority_report()
     if priority_rows:
+        enrich_report_rows_with_cached_scan(priority_rows, cached_points_projection(priority_rows))
         enrich_setup_rows_for_display(priority_rows, supplemental_rows=focus_rows)
         return {
             "rows": priority_rows,
@@ -353,6 +374,131 @@ def load_latest_setup_rows_with_meta() -> dict[str, Any]:
 
 def load_latest_setup_rows() -> list[SetupRow]:
     return load_latest_setup_rows_with_meta()["rows"]
+
+
+def warm_points_projection(*, path: Path = MASTER_AVWAP_PRIORITY_SETUPS_FILE) -> bool:
+    """Read and validate the bounded sidecar on a worker, never during paint."""
+    global _POINTS_PROJECTION_CACHE
+    payload = _read_json(SETUP_POINTS_SCAN_PROJECTION_FILE)
+    if not isinstance(payload, dict) or not _projection_matches_report(payload, path):
+        _POINTS_PROJECTION_CACHE = {"rows": (), "run_date": "", "run_id": "", "valid": False}
+        return False
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    parsed = rows_from_run_result({"tracked_rows": rows}) if isinstance(rows, list) else []
+    next_cache = {
+        "rows": tuple(parsed), "run_date": str(payload.get("run_date") or "")[:10],
+        "run_id": str(payload.get("run_id") or ""),
+        "report_digest": str(payload.get("report_digest") or ""), "valid": bool(parsed),
+    }
+    changed = next_cache != _POINTS_PROJECTION_CACHE
+    _POINTS_PROJECTION_CACHE = next_cache
+    return changed
+
+
+def cached_points_projection(report_rows: Iterable[SetupRow]) -> list[SetupRow]:
+    """Use the worker-warmed projection, or leave Points unmeasured."""
+    payload = _POINTS_PROJECTION_CACHE
+    if not payload.get("valid"):
+        return []
+    report_rows = list(report_rows)
+    if not report_rows or not payload.get("report_digest") or any(
+        str((row.raw or {}).get("report_digest") or "") != payload["report_digest"]
+        for row in report_rows
+    ):
+        return []
+    # The textual report has no run id today.  The digest is the provenance:
+    # only a sidecar that sealed these exact report bytes may supply it.
+    run_date = str(payload.get("run_date") or "")[:10]
+    run_id = str(payload.get("run_id") or "")
+    if not run_date or not run_id:
+        return []
+    for report in report_rows:
+        if isinstance(report.raw, dict):
+            report.raw.setdefault("scan_date", run_date)
+            report.raw.setdefault("scan_stamp", run_id)
+    return list(payload.get("rows") or ())
+
+
+def cached_claim_points_analysis(report_rows: Iterable[SetupRow]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Completed facts for a claimed-only row, keyed by the scan's side."""
+    payload = _POINTS_PROJECTION_CACHE
+    if not payload.get("valid") or not payload.get("run_id") or not payload.get("run_date"):
+        return {}
+    reports = list(report_rows)
+    if not reports or not payload.get("report_digest") or any(
+        str((row.raw or {}).get("report_digest") or "") != payload["report_digest"]
+        for row in reports
+    ):
+        return {}
+    result: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in payload.get("rows") or ():
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        if not _is_completed_scan_row(raw):
+            continue
+        key = (str(row.symbol or "").upper(), str(row.side or "").upper())
+        if all(key):
+            result[key] = dict(raw)
+    return result
+
+
+def _projection_matches_report(payload: dict[str, Any], path: Path) -> bool:
+    """A published report is rich only when its sidecar sealed this exact byte set."""
+    expected = str(payload.get("report_digest") or "")
+    if not expected:
+        return False
+    try:
+        import hashlib
+
+        return hashlib.sha256(path.read_bytes()).hexdigest() == expected
+    except OSError:
+        return False
+
+
+def enrich_report_rows_with_cached_scan(
+    report_rows: list[SetupRow], rich_rows: Iterable[SetupRow],
+) -> list[SetupRow]:
+    """Overlay only a completed rich row with the exact report scan identity.
+
+    The report retains its membership, bucket and preview selection.  The
+    sidecar only fills scanner-measured fields.  A date-only, opposite-side or
+    forming match is deliberately left unmeasured.
+    """
+    indexed: dict[tuple[str, str, str, str], SetupRow] = {}
+    for candidate in rich_rows:
+        raw = candidate.raw if isinstance(candidate.raw, dict) else {}
+        if not _is_completed_scan_row(raw):
+            continue
+        key = (
+            str(candidate.symbol or "").upper(), str(candidate.side or "").upper(),
+            str(raw.get("scan_date") or raw.get("run_date") or "")[:10],
+            str(raw.get("scan_stamp") or raw.get("run_id") or ""),
+        )
+        if all(key):
+            indexed[key] = candidate
+    for index, report in enumerate(report_rows):
+        raw = report.raw if isinstance(report.raw, dict) else {}
+        key = (
+            str(report.symbol or "").upper(), str(report.side or "").upper(),
+            str(raw.get("scan_date") or raw.get("run_date") or "")[:10],
+            str(raw.get("scan_stamp") or raw.get("run_id") or ""),
+        )
+        candidate = indexed.get(key) if all(key) else None
+        if candidate is None:
+            continue
+        merged = dict(raw)
+        merged.update(candidate.raw or {})
+        for display_key in ("priority_bucket", "bucket", "setup_family", "expected_r", "score", "report_line"):
+            if display_key in raw:
+                merged[display_key] = raw[display_key]
+        report_rows[index] = dataclasses.replace(report, raw=merged)
+    return report_rows
+
+
+def _is_completed_scan_row(raw: dict[str, Any]) -> bool:
+    """Normalize the scanner's published stable/completed vocabulary."""
+    state = str(raw.get("scan_row_state") or raw.get("view_mode") or raw.get("bar_status") or "").strip().lower()
+    preview = str(raw.get("view_mode") or "").strip().lower() == "preview" or raw.get("is_preview") is True
+    return state in {"completed", "stable"} and not preview
 
 
 def enrich_setup_rows_for_display(

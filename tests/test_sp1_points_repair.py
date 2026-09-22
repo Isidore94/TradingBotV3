@@ -271,9 +271,9 @@ def test_v2_grade_counts_exact_five_exchange_sessions_across_a_holiday_and_leave
     from swing_evidence import OUTCOME_KIND_SESSION_V2
 
     mature = _logged("2026-11-20", "NVDA", "LONG", 8.0)
-    mature.update({"points_version": "points_v2", "snapshot_id": "mature", "observed_at": "2026-11-20T20:00:00+00:00"})
+    mature.update({"points_version": "points_v2", "snapshot_id": "mature", "observed_at": "2026-11-20T20:00:00+00:00", "logged_at": "2026-11-20T20:01:00+00:00"})
     immature = _logged("2026-11-20", "AMD", "LONG", 4.0)
-    immature.update({"points_version": "points_v2", "snapshot_id": "immature", "observed_at": "2026-11-20T20:00:00+00:00"})
+    immature.update({"points_version": "points_v2", "snapshot_id": "immature", "observed_at": "2026-11-20T20:00:00+00:00", "logged_at": "2026-11-20T20:01:00+00:00"})
     outcomes = tmp_path / "session_outcomes.csv"
     outcomes.write_text(
         "observation_id,scan_date,target_session,horizon_sessions,symbol,side,favorable,measured,maturity,outcome_kind\n"
