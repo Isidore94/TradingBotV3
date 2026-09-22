@@ -1837,13 +1837,14 @@ class DayReviewPanel(QFrame):
         """
         self.story_body.setText("")
         self.story_body.setVisible(False)
-        if isinstance(freshness, Mapping) and freshness.get("state") in {"stale", "unread"}:
+        attempt_state = self._story_attempt_state(card)
+        if isinstance(freshness, Mapping) and freshness.get("state") in {"stale", "unread", "missing"}:
             self.story_note.setText(
-                f"Saved story is {freshness['state']}: {freshness.get('reason') or 'facts changed'}. "
+                f"Saved story is {freshness['state']}: {freshness.get('reason') or 'facts unavailable'}. "
                 "Current measured results are below."
+                + (" The latest AI story attempt failed its checks." if attempt_state == "failed" else "")
             )
             return
-        attempt_state = self._story_attempt_state(card)
         if not isinstance(story, Mapping):
             if attempt_state == "failed":
                 self.story_note.setText(

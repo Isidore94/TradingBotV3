@@ -186,7 +186,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "reads": (),
         "congruence": (),
         "day_story": None,
-        "story_freshness": {"state": "missing", "reason": "no saved facts yet"},
+        "story_freshness": {},
         "d1_view": None,
         "report_card": {},
         "ideas": [],

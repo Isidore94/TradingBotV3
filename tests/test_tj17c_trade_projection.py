@@ -185,9 +185,11 @@ def test_stale_story_never_shows_old_words_on_current_day():
         payload = empty_payload("2026-09-21")
         payload["day_story"] = {"session_date": "2026-09-21", "narration": {"headline": "Old certainty"}}
         payload["story_freshness"] = {"state": "stale", "reason": "late trade answer"}
+        payload["report_card"] = {"lines": [{"key": "how_fresh", "night_status": "failed", "slots_failed": ["day_review_narration"]}]}
         panel.render(payload)
         assert "Old certainty" not in panel.story_note.text()
         assert "late trade answer" in panel.story_note.text()
+        assert "failed its checks" in panel.story_note.text()
         assert panel.story_body.text() == ""
     finally:
         panel.shutdown()
