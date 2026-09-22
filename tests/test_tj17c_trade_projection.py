@@ -44,6 +44,19 @@ def test_empty_trade_projection_does_not_open_store(monkeypatch):
     assert journal_feed.trade_reviews_on("2026-09-21", [], {}) == []
 
 
+def test_unread_answer_source_does_not_look_like_no_answer(monkeypatch):
+    import pytest
+    from ui.services import journal_feed
+
+    class BrokenStore:
+        def list_opportunity_events(self, **_kwargs):
+            raise OSError("answer table unreadable")
+
+    monkeypatch.setattr(journal_feed, "_store", lambda: BrokenStore())
+    with pytest.raises(OSError, match="answer table unreadable"):
+        journal_feed.trade_reviews_on("2026-09-21", [{"trade_id": "t1"}], {})
+
+
 def test_real_trade_row_shows_late_words_and_opens_exact_journal_trade():
     from PySide6.QtWidgets import QApplication
     from ui.panels.day_review_panel import DayReviewPanel
@@ -94,3 +107,24 @@ def test_week_day_link_opens_exact_session_without_old_reload():
     app.MainWindow._open_day_review_session(host, "2026-09-18")
     assert events == [(app.DAY_REVIEW_PAGE_TITLE, True), "2026-09-18"]
     assert host._opening_latest_day_review is False
+
+
+def test_stale_story_never_shows_old_words_on_current_day():
+    from PySide6.QtWidgets import QApplication
+    from ui.panels.day_review_panel import DayReviewPanel
+    from ui.services.day_review_service import empty_payload
+
+    app = QApplication.instance() or QApplication([])
+    panel = DayReviewPanel(service=object())
+    try:
+        payload = empty_payload("2026-09-21")
+        payload["day_story"] = {"session_date": "2026-09-21", "narration": {"headline": "Old certainty"}}
+        payload["story_freshness"] = {"state": "stale", "reason": "late trade answer"}
+        panel.render(payload)
+        assert "Old certainty" not in panel.story_note.text()
+        assert "late trade answer" in panel.story_note.text()
+        assert panel.story_body.text() == ""
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+        app.processEvents()

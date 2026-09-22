@@ -751,7 +751,8 @@ class WeekReviewPage(_StepPage):
             )
         elif sessions:
             self.learning_note.setText(
-                f"Learning: {len(sessions)} completed sessions, {window.get('start')} to {window.get('end')}."
+                f"Learning: {len(sessions)} completed sessions, {window.get('start')} to {window.get('end')}. "
+                "Read rates use your clicked calls."
             )
         else:
             self.learning_note.setText(str(learning.get("error") or "Learning window has no completed sessions yet."))

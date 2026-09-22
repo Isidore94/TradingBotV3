@@ -724,7 +724,7 @@ class DayReviewService:
         if payload.get("pack_sources_unread"):
             return {"state": "unread", "reason": ", ".join(payload["pack_sources_unread"])}
         try:
-            current = self._compose_pack(session, payload, now=now)
+            current = self._compose_pack(session, payload, now=now, strict=True)
         except Exception as exc:  # noqa: BLE001
             return {"state": "unread", "reason": f"current facts: {exc}"}
         saved = day_review_pack.read_pack(session)
@@ -742,7 +742,8 @@ class DayReviewService:
         return {"state": "current", "reason": "story matches current facts"}
 
     def _compose_pack(
-        self, session: str, data: Mapping[str, Any], *, now: datetime | None = None
+        self, session: str, data: Mapping[str, Any], *, now: datetime | None = None,
+        strict: bool = False,
     ) -> dict[str, Any]:
         """The one pure pack composition used by page freshness and night write."""
         import day_report_card
@@ -757,14 +758,20 @@ class DayReviewService:
             for row in data.get("trades") or () if isinstance(row, Mapping)
         ]
         entries = list(data.get("entries") or ())
+        environment = self._regime_shifts(session, strict=True) if strict else self._regime_shifts(session)
+        d1_label = self._d1_label_for(session, strict=True) if strict else self._d1_label_for(session)
+        internals = (
+            self._internals_marks(session, entries, strict=True)
+            if strict else self._internals_marks(session, entries)
+        )
         return day_review_pack.build_pack(
             session,
             entries=entries,
             forecast=data.get("forecast") or {},
             story=data.get("story"),
-            environment=self._regime_shifts(session),
-            d1_label=self._d1_label_for(session),
-            internals=self._internals_marks(session, entries),
+            environment=environment,
+            d1_label=d1_label,
+            internals=internals,
             walkaway=data.get("walkaway"),
             reads=data.get("reads") or (),
             congruence=data.get("congruence") or (),
@@ -938,7 +945,7 @@ class DayReviewService:
         if strict and data.get("pack_sources_unread"):
             return None
         try:
-            pack = self._compose_pack(session, data, now=now)
+            pack = self._compose_pack(session, data, now=now, strict=strict)
             saved = day_review_pack.read_pack(session, root=root)
             if isinstance(saved, Mapping) and saved.get("inputs_hash") == pack.get("inputs_hash"):
                 return dict(saved)
@@ -949,7 +956,7 @@ class DayReviewService:
         return pack
 
     @staticmethod
-    def _regime_shifts(session: str) -> list[dict[str, Any]]:
+    def _regime_shifts(session: str, *, strict: bool = False) -> list[dict[str, Any]]:
         """The session's own regime-shift rows, oldest first. Read-only."""
         try:
             from evidence_ledger import EvidenceLedger
@@ -962,26 +969,30 @@ class DayReviewService:
                 ).read().rows
                 if str(row.get("session_date") or "")[:10] == session
             ]
-        except Exception:  # noqa: BLE001 - a missing stream is a quieter pack
+        except Exception:  # noqa: BLE001 - strict refresh keeps the prior pack
+            if strict:
+                raise
             _log.debug("The regime-shift stream was unreadable.", exc_info=True)
             return []
         rows.sort(key=lambda row: str(row.get("event_at") or ""))
         return rows
 
     @staticmethod
-    def _d1_label_for(session: str) -> str:
+    def _d1_label_for(session: str, *, strict: bool = False) -> str:
         """The desk's own D1 label for the session, or "" (nobody labelled it)."""
         try:
             import d1_environment_store
 
             label = d1_environment_store.label_for_session(session, BENCHMARK_SYMBOL)
         except Exception:  # noqa: BLE001
+            if strict:
+                raise
             _log.debug("The desk's D1 label was unreadable.", exc_info=True)
             return ""
         return "" if str(label or "") in ("", "unknown") else str(label)
 
     @staticmethod
-    def _internals_marks(session: str, entries) -> list[dict[str, Any]]:
+    def _internals_marks(session: str, entries, *, strict: bool = False) -> list[dict[str, Any]]:
         """The open, each Mentor hour and the close - TJ-14A's v2 context each.
 
         Built through `trade_mentor_context`'s ONE builder from the durable
@@ -1026,6 +1037,8 @@ class DayReviewService:
                 })
             return marks
         except Exception:  # noqa: BLE001 - an unreadable tape costs the internals
+            if strict:
+                raise
             _log.debug("The day pack's internals could not be built.", exc_info=True)
             return []
 

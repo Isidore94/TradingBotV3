@@ -19,9 +19,9 @@ def _service(monkeypatch):
     from ui.services.day_review_service import DayReviewService
 
     service = DayReviewService()
-    monkeypatch.setattr(service, "_regime_shifts", lambda _session: [])
-    monkeypatch.setattr(service, "_d1_label_for", lambda _session: "")
-    monkeypatch.setattr(service, "_internals_marks", lambda *_args: [])
+    monkeypatch.setattr(service, "_regime_shifts", lambda _session, **_kwargs: [])
+    monkeypatch.setattr(service, "_d1_label_for", lambda _session, **_kwargs: "")
+    monkeypatch.setattr(service, "_internals_marks", lambda *_args, **_kwargs: [])
     return service
 
 
@@ -49,6 +49,9 @@ def test_late_trade_words_make_old_story_stale_and_unchanged_pack_keeps_bytes(mo
     late = _payload("I chased the open")
     late["day_story"] = {"inputs_hash": before["inputs_hash"]}
     assert service._story_freshness(OLD, late, NOW)["state"] == "stale"
+    assert service._story_freshness(
+        OLD, {**late, "pack_sources_unread": ("journal",)}, NOW
+    )["state"] == "unread"
     after = service.build_pack_for(OLD, payload=late, now=NOW, strict=True)
     assert after["inputs_hash"] != before["inputs_hash"]
     assert path.read_bytes() != original
@@ -94,3 +97,21 @@ def test_matured_five_session_read_refreshes_the_original_day_pack(monkeypatch, 
     assert result["refreshed"] == [OLD]
     assert saved["inputs_hash"] != old_pack["inputs_hash"]
     assert saved["reads"][0]["verdict"] == "right"
+
+
+def test_unread_environment_source_never_replaces_verified_pack(monkeypatch, tmp_path):
+    import day_review_pack
+
+    service = _service(monkeypatch)
+    service.build_pack_for(OLD, payload=_payload(), now=NOW, strict=True, root=tmp_path)
+    path = day_review_pack.pack_path(OLD, root=tmp_path)
+    prior = path.read_bytes()
+
+    def broken(_session, *, strict=False):
+        if strict:
+            raise OSError("environment source unavailable")
+        return []
+
+    monkeypatch.setattr(service, "_regime_shifts", broken)
+    assert service.build_pack_for(OLD, payload=_payload(), now=NOW, strict=True, root=tmp_path) is None
+    assert path.read_bytes() == prior
