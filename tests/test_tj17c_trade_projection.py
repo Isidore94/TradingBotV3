@@ -57,6 +57,71 @@ def test_unread_answer_source_does_not_look_like_no_answer(monkeypatch):
         journal_feed.trade_reviews_on("2026-09-21", [{"trade_id": "t1"}], {})
 
 
+def test_interim_scale_out_stays_on_its_own_day(monkeypatch):
+    from ui.services import journal_feed
+
+    trade = {
+        "trade_id": "scale-1", "opened_at": "2026-09-14T09:30:00-04:00",
+        "closed_at": "2026-09-21T15:00:00-04:00", "trade_date": "2026-09-21",
+        "net_pnl": 100.0, "realized_pnl": 100.0,
+    }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, *_args):
+            return self
+
+        def fetchall(self):
+            return [{"trade_id": "scale-1", "timestamp": "2026-09-18T14:00:00-04:00"}]
+
+    class Store:
+        def list_trades(self, *, trade_date=None):
+            return [] if trade_date else [trade]
+
+        def connection(self):
+            return Connection()
+
+    monkeypatch.setattr(journal_feed, "_store", lambda: Store())
+    selected = journal_feed.trades_on("2026-09-18")
+    assert [row["trade_id"] for row in selected] == ["scale-1"]
+    assert selected[0]["net_pnl"] is None and selected[0]["realized_pnl"] is None
+
+
+def test_real_journal_store_keeps_interim_and_final_exit_money_distinct(monkeypatch, tmp_path):
+    from journal_store import JournalStore
+    from ui.services import journal_feed
+
+    store = JournalStore(tmp_path / "journal.sqlite3")
+    with store.connection() as conn:
+        conn.execute(
+            """INSERT INTO trades(
+                trade_id, broker, account_number, account_label, symbol, security_type,
+                currency, direction, status, opened_at, closed_at, trade_date,
+                quantity_opened, quantity_closed, average_entry_price, average_exit_price,
+                gross_pnl, commission, fees, net_pnl, pnl_usd, updated_at
+            ) VALUES('scale-1','IBKR','U1','MAIN','ABC','STOCK','USD','LONG','CLOSED',
+                '2026-09-14T09:30:00-04:00','2026-09-21T15:00:00-04:00','2026-09-21',
+                100,100,10,11,103,2,1,100,100,'2026-09-22T12:00:00-04:00')"""
+        )
+        conn.execute(
+            """INSERT INTO trade_legs(
+                trade_id, execution_uid, side, role, quantity, price, timestamp, commission, fees
+            ) VALUES('scale-1','leg-1','SELL','CLOSE',50,11,
+                '2026-09-18T14:00:00-04:00',1,0)"""
+        )
+    monkeypatch.setattr(journal_feed, "_store", lambda: store)
+    interim = journal_feed.trades_on("2026-09-18")
+    final = journal_feed.trades_on("2026-09-21")
+    assert len(interim) == len(final) == 1
+    assert interim[0]["net_pnl"] is None
+    assert final[0]["net_pnl"] == 100
+
+
 def test_real_trade_row_shows_late_words_and_opens_exact_journal_trade():
     from PySide6.QtWidgets import QApplication
     from ui.panels.day_review_panel import DayReviewPanel

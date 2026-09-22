@@ -269,7 +269,7 @@ STORY_MIN_HEIGHT_PX = 120
 #: The trade line's columns. Read-only: the Journal page is still where a trade
 #: is tagged and corrected (decision 0021 consequences).
 TRADE_COLUMNS: tuple[str, ...] = (
-    "Time", "Symbol", "Direction", "Qty", "Net P&L", "Status",
+    "Time", "Symbol", "Direction", "Qty", "Whole trade net", "Status",
 )
 
 #: What a cell reads when nobody measured it. Never a 0.00.
@@ -2536,8 +2536,10 @@ class DayReviewPanel(QFrame):
         )
         money = detail.get("net_pnl")
         lines.append(
-            f"Net: {self._number(money, signed=True)} {detail.get('currency') or 'currency unknown'}"
+            f"Whole-trade net: {self._number(money, signed=True)} {detail.get('currency') or 'currency unknown'}"
         )
+        if detail.get("review_pnl_note"):
+            lines.append(str(detail["review_pnl_note"]))
         raw = detail.get("entry_raw") or {}
         lines.append(f"Entry words (recalled {raw.get('recorded_at') or 'date unknown'}): {raw.get('text') or 'none recorded'}")
         for field, answer in (detail.get("entry_answers") or {}).items():

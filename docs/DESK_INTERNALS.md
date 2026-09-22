@@ -8752,8 +8752,11 @@ never a grade of a trade that was not placed. The trade table and its selected-r
 detail use the ONE Journal store on the worker: the exact raw next-morning entry
 words, latest material answers and answer states, the selected (trade, exit session)
 raw exit words and trader-confirmed fields, timestamps, currency, instrument and
-recorded net P&L. Missing and unread are different; a provisional machine draft
-is never the trader's confirmed answer. The Journal remains the editor.
+recorded whole-trade net P&L. A read-only CLOSE-leg bridge includes an interim
+scale-out on its own session even after a later final close; its session P&L is
+unmeasured rather than borrowing the whole trade's final net. Missing and unread
+are different; a provisional machine draft is never the trader's confirmed
+answer. The Journal remains the editor.
 
 The 5/10/20 completed-session learning view reads `prediction_ledger` and Results
 through `session_review`, not a new grader. Rest-of-day and next-five calls never

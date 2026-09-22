@@ -298,12 +298,57 @@ def selection_spans_tax_groups(selected: Iterable[tuple[str, str]]) -> bool:
 def trades_on(trade_date: Any) -> list[dict[str, Any]]:
     """Every trade the store files under one date. Worker-thread call.
 
-    TJ-1 item 3: the Day Review page's "What you traded" section REFERS to these
-    rows and the Journal page stays the place to tag and correct them, so this is
-    a read through the SAME shared store the Journal page uses - not a second
-    connection, and not a second definition of what a trade is.
+    TJ-1 item 3: the Day Review page refers to the SAME shared Journal rows.
+    TJ-17 adds an interim scale-out session by reading that store's CLOSE legs;
+    ``closed_at`` alone names only the final exit. The Journal remains the place
+    to tag and correct every row.
     """
-    return _store().list_trades(trade_date=trade_date)
+    store = _store()
+    day = str(trade_date or "")[:10]
+    rows = list(store.list_trades(trade_date=trade_date))
+    # `trades.closed_at` is the FINAL close. A trade that scaled out on this
+    # session and finished later would otherwise disappear from this day's
+    # recap once its final row was assembled. One closing-leg query finds that
+    # earlier session; the Journal owner still supplies every trade row.
+    if not day or not hasattr(store, "connection"):
+        return rows
+    import trade_origin
+    from datetime import date, timedelta
+
+    try:
+        selected = date.fromisoformat(day)
+    except ValueError:
+        return rows
+    earliest = (selected - timedelta(days=1)).isoformat()
+    latest = (selected + timedelta(days=1)).isoformat()
+
+    with store.connection() as connection:
+        closes = connection.execute(
+            "SELECT trade_id, timestamp FROM trade_legs "
+            "WHERE role = 'CLOSE' AND substr(timestamp, 1, 10) BETWEEN ? AND ?",
+            (earliest, latest),
+        ).fetchall()
+    ids = {
+        str(leg["trade_id"])
+        for leg in closes
+        if (moment := trade_origin._moment(leg["timestamp"])) is not None
+        and moment.astimezone(trade_origin.MARKET_TZ).date().isoformat() == day
+    }
+    existing = {str(row.get("trade_id") or "") for row in rows}
+    missing = ids - existing
+    if missing:
+        for row in store.list_trades():
+            if str(row.get("trade_id") or "") not in missing:
+                continue
+            # This is an exit event in the reviewed session, not the trade's
+            # final money. The assembled trade's net belongs to its whole
+            # lifespan and cannot be called this session's exit result.
+            rows.append({
+                **dict(row), "net_pnl": None, "realized_pnl": None,
+                "pnl_usd": None,
+                "review_pnl_note": "interim exit; session P&L not measured",
+            })
+    return rows
 
 
 def exit_notes_on(session: Any) -> dict[str, dict[str, Any]]:
@@ -392,6 +437,7 @@ def trade_reviews_on(
             "entry_session": str(trade.get("opened_at") or trade.get("trade_date") or "")[:10],
             "exit_session": reviewed,
             "net_pnl": trade.get("net_pnl"),
+            "review_pnl_note": str(trade.get("review_pnl_note") or ""),
             "currency": str(trade.get("currency") or ""),
             "entry_raw": {
                 "text": str(raw_payload.get("raw_text") or ""),
