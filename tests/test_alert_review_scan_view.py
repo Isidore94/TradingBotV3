@@ -79,6 +79,22 @@ def _watch_hit(symbol: str):
     )
 
 
+def _unknown_d1_family(symbol: str):
+    """A future D1 family must fail open into the personal review view."""
+    from ui.models.bounce import BounceAlert
+
+    return BounceAlert(
+        time_text="09:38:00",
+        symbol=symbol,
+        side="LONG",
+        trigger="future D1 condition",
+        timeframe="D1",
+        tag="future_d1_family",
+        raw_text=f"FUTURE_D1_FAMILY: {symbol} (long) condition",
+        is_d1=True,
+    )
+
+
 def _panel(tmp_path, monkeypatch):
     import pick_feedback
     from ui.panels.alert_center_panel import AlertCenterPanel
@@ -128,9 +144,11 @@ def test_ordinary_d1_scan_ideas_stay_held_until_show_all_without_disturbing_the_
         scan = _scan("NVDA")
         focus = _focus_event("MSFT")
         watch = _watch_hit("AAPL")
+        unknown = _unknown_d1_family("TSLA")
         panel.add_alert(scan)
         panel.add_alert(focus)
         panel.add_alert(watch)
+        panel.add_alert(unknown)
 
         # It is still a real D1 alert in its backing feed, but the ordinary
         # scan family is not a chart candidate in the default My-alerts view.
@@ -138,7 +156,7 @@ def test_ordinary_d1_scan_ideas_stay_held_until_show_all_without_disturbing_the_
         assert panel._current_review_alert is not None
         assert panel._current_review_alert.tag == "manual_chart"
         assert panel._current_review_alert.symbol == "NVDA"
-        assert {alert.symbol for alert in panel._review_queue} == {"MSFT", "AAPL"}
+        assert {alert.symbol for alert in panel._review_queue} == {"MSFT", "AAPL", "TSLA"}
 
         switch = _show_all_scan_button(panel)
         assert "1" in switch.text(), switch.text()
@@ -151,7 +169,7 @@ def test_ordinary_d1_scan_ideas_stay_held_until_show_all_without_disturbing_the_
         switch.click()
         QApplication.processEvents()
 
-        assert {alert.symbol for alert in panel._review_queue} == {"NVDA", "MSFT", "AAPL"}
+        assert {alert.symbol for alert in panel._review_queue} == {"NVDA", "MSFT", "AAPL", "TSLA"}
         assert panel._current_review_alert.symbol == "NVDA"
         assert panel._current_review_alert.tag == "manual_chart"
         assert rail.note_input.text() == "keep this draft while changing the view"
@@ -159,7 +177,7 @@ def test_ordinary_d1_scan_ideas_stay_held_until_show_all_without_disturbing_the_
 
         switch.click()
         QApplication.processEvents()
-        assert {alert.symbol for alert in panel._review_queue} == {"MSFT", "AAPL"}
+        assert {alert.symbol for alert in panel._review_queue} == {"MSFT", "AAPL", "TSLA"}
         assert panel._current_review_alert.symbol == "NVDA"
         assert rail.note_input.text() == "keep this draft while changing the view"
     finally:
