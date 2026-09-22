@@ -269,7 +269,7 @@ STORY_MIN_HEIGHT_PX = 120
 #: The trade line's columns. Read-only: the Journal page is still where a trade
 #: is tagged and corrected (decision 0021 consequences).
 TRADE_COLUMNS: tuple[str, ...] = (
-    "Time", "Symbol", "Direction", "Qty", "Net P&L", "Status",
+    "Time", "Symbol", "Direction", "Qty", "Whole trade net", "Status",
 )
 
 #: What a cell reads when nobody measured it. Never a 0.00.
@@ -525,6 +525,7 @@ class DayReviewPanel(QFrame):
     statusChanged = Signal(str)
     #: (symbol, side). The host charts it through `show_board_symbol`.
     chartRequested = Signal(str, str)
+    openTradeRequested = Signal(str)
 
     def __init__(
         self,
@@ -963,6 +964,12 @@ class DayReviewPanel(QFrame):
         self.trades_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.trades_table.setMinimumHeight(theme.px(80))
         _fill_the_width(self.trades_table)
+        self.trades_table.itemSelectionChanged.connect(self._show_selected_trade)
+        self.trades_table.cellDoubleClicked.connect(self._open_selected_trade)
+        self.trade_detail = QPlainTextEdit()
+        self.trade_detail.setReadOnly(True)
+        self.trade_detail.setMaximumHeight(theme.px(175))
+        self.trade_detail.setPlaceholderText("Select a trade to see your entry and exit notes.")
         self.trades_note = QLabel(
             "Read-only. The Journal page is where a trade is tagged and corrected."
         )
@@ -1115,8 +1122,20 @@ class DayReviewPanel(QFrame):
         self.forecast_section = QWidget()
         self.forecast_section.setLayout(forecast)
 
+        self.calls_table = QTableWidget(0, 5)
+        self.calls_table.setHorizontalHeaderLabels(
+            ["When", "Horizon", "Direction", "Confidence", "Result"]
+        )
+        self.calls_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.calls_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.calls_table.setMinimumHeight(theme.px(110))
+        self.calls_table.setMaximumHeight(theme.px(190))
+        _fill_the_width(self.calls_table)
+        self.calls_table.cellDoubleClicked.connect(self._open_call_row)
         self.said_section = self._section(
-            "What you said",
+            "Market calls and notes",
+            QLabel("Market calls · double-click to see your exact words"),
+            self.calls_table,
             self.said_split,
             self.mood_line,
             QLabel("New entry"),
@@ -1187,6 +1206,15 @@ class DayReviewPanel(QFrame):
         body = QVBoxLayout(row)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(6)
+        picks_heading = QLabel("Picks and passes")
+        picks_heading.setObjectName("SectionTitle")
+        body.addWidget(picks_heading)
+        picks_note = QLabel(
+            "A pass that did not run is shown too. A later run does not by itself mean the pass was poor."
+        )
+        picks_note.setObjectName("SectionSubtitle")
+        picks_note.setWordWrap(True)
+        body.addWidget(picks_note)
         body.addWidget(self.walkaway_skill)
         body.addWidget(beside)
         return row
@@ -1194,7 +1222,7 @@ class DayReviewPanel(QFrame):
     def _bottom_row(self) -> QWidget:
         """What you traded, beside the desk's ideas. Two halves, full width."""
         self.traded_section = self._section(
-            "What you traded", self.trades_note, self.trades_table
+            "Entries and exits", self.trades_note, self.trades_table, self.trade_detail
         )
         self.ideas_section = self._section(
             "Ideas from the desk's AI", self.ideas_note, self.ideas_card
@@ -1675,7 +1703,10 @@ class DayReviewPanel(QFrame):
         # TJ-4, AFTER the facts: the verified story replaces the "no story yet"
         # line when there is one, and leaves the facts exactly as they were when
         # there is not.
-        self._render_day_story(payload.get("day_story"), session, payload.get("report_card"))
+        self._render_day_story(
+            payload.get("day_story"), session, payload.get("report_card"),
+            payload.get("story_freshness"),
+        )
         self._render_d1_view(payload.get("d1_view"))
         self._render_congruence(tuple(payload.get("congruence") or ()))
         self._render_theses(payload.get("theses") or [])
@@ -1685,6 +1716,16 @@ class DayReviewPanel(QFrame):
         self._render_entries(list(payload.get("entries") or []))
         self._render_forecast(dict(payload.get("forecast") or {}))
         self._render_trades(list(payload.get("trades") or []))
+        self._trade_reviews = {
+            str(row.get("trade_id") or ""): dict(row)
+            for row in payload.get("trade_reviews") or () if isinstance(row, Mapping)
+        }
+        self._render_calls(tuple(payload.get("reads") or ()))
+        if self.trades_table.rowCount():
+            self.trades_table.selectRow(0)
+            self._show_selected_trade()
+        else:
+            self.trade_detail.setPlainText("No trade opened or closed in this session.")
         self._render_chart(list(payload.get("spy_m5_bars") or []))
         # The markers were RESOLVED on the worker; this pushes them and computes
         # nothing (TJ-3). After `set_data`, because new bars drop the payload.
@@ -1785,7 +1826,9 @@ class DayReviewPanel(QFrame):
         # normal pre-night message for it; only a loaded row may say unknown.
         return ""
 
-    def _render_day_story(self, story: Any, session: str, card: Any) -> None:
+    def _render_day_story(
+        self, story: Any, session: str, card: Any, freshness: Any = None
+    ) -> None:
         """The night's verified narration. Formatting only (TJ-4 item 4).
 
         Every verdict printed here was MEASURED by TJ-10's grader and copied by
@@ -1795,6 +1838,13 @@ class DayReviewPanel(QFrame):
         self.story_body.setText("")
         self.story_body.setVisible(False)
         attempt_state = self._story_attempt_state(card)
+        if isinstance(freshness, Mapping) and freshness.get("state") in {"stale", "unread", "missing"}:
+            self.story_note.setText(
+                f"Saved story is {freshness['state']}: {freshness.get('reason') or 'facts unavailable'}. "
+                "Current measured results are below."
+                + (" The latest AI story attempt failed its checks." if attempt_state == "failed" else "")
+            )
+            return
         if not isinstance(story, Mapping):
             if attempt_state == "failed":
                 self.story_note.setText(
@@ -2413,6 +2463,7 @@ class DayReviewPanel(QFrame):
         self._render_forecast(dict(self._payload.get("forecast") or {}))
 
     def _render_trades(self, rows) -> None:
+        self._trade_ids = [str(row.get("trade_id") or "") for row in rows]
         self.trades_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             quantity = row.get("quantity")
@@ -2428,6 +2479,92 @@ class DayReviewPanel(QFrame):
             )
             for column, text in enumerate(values):
                 self.trades_table.setItem(index, column, QTableWidgetItem(str(text)))
+
+    def _render_calls(self, rows) -> None:
+        calls = [row for row in rows if isinstance(row, Mapping)]
+        self._call_entry_ids = [str(row.get("entry_id") or "") for row in calls]
+        header = self.calls_table.horizontalHeader()
+        modes = [header.sectionResizeMode(column) for column in range(self.calls_table.columnCount())]
+        for column, mode in enumerate(modes):
+            if mode == QHeaderView.ResizeMode.ResizeToContents:
+                header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        self.calls_table.setUpdatesEnabled(False)
+        try:
+            self.calls_table.setRowCount(len(calls))
+            for index, row in enumerate(calls):
+                values = (
+                    str(row.get("stamp") or ""),
+                    str(row.get("horizon") or ""),
+                    str(row.get("direction") or ""),
+                    str(row.get("confidence") or ""),
+                    self._verdict_text(str(row.get("verdict") or "unmeasured")),
+                )
+                for column, value in enumerate(values):
+                    self.calls_table.setItem(index, column, QTableWidgetItem(value))
+        finally:
+            self.calls_table.setUpdatesEnabled(True)
+            for column, mode in enumerate(modes):
+                header.setSectionResizeMode(column, mode)
+
+    def _open_call_row(self, row: int, _column: int) -> None:
+        refs = getattr(self, "_call_entry_ids", ())
+        if 0 <= row < len(refs):
+            self._select_entry_by_ref(refs[row])
+
+    def _selected_trade_id(self) -> str:
+        index = self.trades_table.currentRow()
+        ids = getattr(self, "_trade_ids", ())
+        return ids[index] if 0 <= index < len(ids) else ""
+
+    def _open_selected_trade(self, *_args) -> None:
+        trade_id = self._selected_trade_id()
+        if trade_id:
+            self.openTradeRequested.emit(trade_id)
+
+    def _show_selected_trade(self) -> None:
+        trade_id = self._selected_trade_id()
+        detail = getattr(self, "_trade_reviews", {}).get(trade_id)
+        if detail is None:
+            self.trade_detail.setPlainText("Trade answers were not read.")
+            return
+        if detail.get("status") == "unread":
+            self.trade_detail.setPlainText("Trade answers could not be read.")
+            return
+        lines = [f"{detail.get('symbol') or ''} · {detail.get('instrument') or 'instrument unknown'}"]
+        lines.append(
+            f"Opened {detail.get('opened_at') or 'time unknown'} · "
+            f"Closed {detail.get('closed_at') or 'still open or time unknown'}"
+        )
+        money = detail.get("net_pnl")
+        lines.append(
+            f"Whole-trade net: {self._number(money, signed=True)} {detail.get('currency') or 'currency unknown'}"
+        )
+        if detail.get("review_pnl_note"):
+            lines.append(str(detail["review_pnl_note"]))
+        raw = detail.get("entry_raw") or {}
+        lines.append(f"Entry words (recalled {raw.get('recorded_at') or 'date unknown'}): {raw.get('text') or 'none recorded'}")
+        for field, answer in (detail.get("entry_answers") or {}).items():
+            value = answer.get("text") or (
+                f"{answer['value']} {answer.get('unit') or ''}"
+                if answer.get("value") is not None else ""
+            )
+            state = str(answer.get("state") or "").replace("_", " ")
+            spoken = " · ".join(part for part in (str(value).strip(), state) if part) or "not answered"
+            lines.append(f"{field}: {spoken} · recorded {answer.get('recorded_at') or 'date unknown'}")
+        exit_raw = detail.get("exit_raw") or {}
+        lines.append(
+            f"Exit words ({exit_raw.get('recorded_at') or 'date unknown'}): "
+            f"{exit_raw.get('text') or exit_raw.get('answer_state') or 'none recorded'}"
+        )
+        confirmed = detail.get("exit_fields") or {}
+        fields = confirmed.get("fields") if confirmed.get("status") == "confirmed" else None
+        if isinstance(fields, Mapping):
+            lines.append("Confirmed exit: " + ", ".join(f"{key}: {value}" for key, value in fields.items()))
+        else:
+            lines.append("Exit reading: not confirmed")
+        if detail.get("label_provenance"):
+            lines.append(f"Label source: {detail['label_provenance']}")
+        self.trade_detail.setPlainText("\n".join(lines))
 
     @staticmethod
     def _number(value: Any, *, decimals: int = 2, signed: bool = False) -> str:

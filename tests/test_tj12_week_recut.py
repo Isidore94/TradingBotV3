@@ -86,18 +86,19 @@ def test_the_week_pools_the_counts_it_can_sum(week, tmp_path):
 
 
 def test_the_week_recomputes_the_wilson_from_the_pooled_counts(week):
-    """The ONE Wilson (z 1.96), over 4 of 10 - never the mean of two rates.
+    """The ONE Wilson (z 1.96), within a named horizon only.
 
-    The WEEK line carries `rate`, `rate_lb` and `meets_floor`; the DAY line does
-    NOT, because a Wilson on one session would be a statistic the card invented
-    (packet item 2). Here the pooling is what the packet asked for.
+    The top-level line is coverage only.  This fixture's ten reads are all
+    rest-of-day calls, so its named cell carries the pooled rate and bound.
     """
     from swing_headline import wilson_lower_bound
 
     line = _line(week, "your_reads")
+    cell = line["horizons"]["rest_of_day"]
 
-    assert line["rate"] == pytest.approx(0.4), "0.458 is the averaged rate"
-    assert line["rate_lb"] == pytest.approx(
+    assert "rate" not in line
+    assert cell["rate"] == pytest.approx(0.4), "0.458 is the averaged rate"
+    assert cell["rate_lb"] == pytest.approx(
         wilson_lower_bound(fx.WEEK_READS_RIGHT, fx.WEEK_READS_N)
     )
 
@@ -111,13 +112,14 @@ def test_the_day_line_carries_no_wilson_of_its_own(tmp_path):
 
 
 def test_a_window_under_the_floor_is_named_and_ranks_nothing(week):
-    """Ten graded reads is under `MIN_REPORTABLE_N`; the week says so."""
+    """Ten same-horizon graded reads is under the floor; the cell says so."""
     import evidence_stats
 
     assert fx.WEEK_READS_N < evidence_stats.MIN_REPORTABLE_N
     line = _line(week, "your_reads")
-    assert line["meets_floor"] is False
-    assert "too few" in line["text"].lower(), line["text"]
+    cell = line["horizons"]["rest_of_day"]
+    assert cell["meets_floor"] is False
+    assert "rest of day" in line["text"].lower(), line["text"]
 
 
 def test_the_week_names_no_family_under_the_floor(week):

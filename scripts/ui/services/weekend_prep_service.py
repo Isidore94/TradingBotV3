@@ -495,6 +495,7 @@ WEEK_PAYLOAD_KEYS: tuple[str, ...] = (
     "tendencies",
     "misses",
     "callouts",
+    "learning",
     #: Reserved for TJ-6's kept ideas. The key exists so the page has one shape
     #: before that packet lands; nothing writes it here.
     "ideas",
@@ -524,6 +525,11 @@ def empty_week_payload(week_id: str = "") -> dict[str, Any]:
         "tendencies": [],
         "misses": {},
         "callouts": [],
+        "learning": {
+            "schema": "session_learning_window_v1", "window": {"requested": 5, "sessions": [], "start": "", "end": ""},
+            "reads": {"horizons": {}}, "by_hour": [], "by_environment": [],
+            "trade_groups": [], "trade_rows": [], "coverage": {}, "error": "",
+        },
         "ideas": [],
     }
 
@@ -716,7 +722,8 @@ def _week_callouts() -> list[str]:
 
 
 def read_week_review(
-    *, friday: str = "", root=None, ledger_path=None, now: datetime | None = None
+    *, friday: str = "", root=None, ledger_path=None, now: datetime | None = None,
+    window_sessions: int = 5,
 ) -> dict[str, Any]:
     """ONE payload for the Week Review page. Every store this page opens.
 
@@ -741,12 +748,29 @@ def read_week_review(
         has_facts = bool(day.get("has_facts"))
         story = day.get("story") or {}
         chased = str((story.get("chased_against_news") or {}).get("verdict") or "")
+        read_horizons: dict[str, Any] = {}
+        if has_facts:
+            # Read the same saved card the week narration already used. The
+            # day card needs its named horizons; its legacy tally pools them.
+            try:
+                import day_review_pack
+
+                saved = day_review_pack.read_pack(session, root=root) or {}
+                lines = (saved.get("report_card") or {}).get("lines") or ()
+                read_line = next(
+                    (line for line in lines if isinstance(line, dict) and line.get("key") == "your_reads"),
+                    {},
+                )
+                read_horizons = dict(read_line.get("horizons") or {})
+            except Exception:  # one old/unreadable card remains explicitly unseparated
+                pass
         cards.append(
             {
                 "session": session,
                 "has_facts": has_facts,
                 "headline": str(story.get("headline") or ""),
                 "tally": dict(day.get("tally") or {}) if has_facts else {},
+                "read_horizons": read_horizons,
                 "chased": chased or ("unknown" if has_facts else "unmeasured"),
                 "said_vs_did": _said_vs_did(day) if has_facts else "",
                 "spy_bars": _spy_points(session, root) if has_facts else [],
@@ -768,6 +792,14 @@ def read_week_review(
             "callouts": _week_callouts(),
         }
     )
+    try:
+        from session_review import read_learning_window
+
+        payload["learning"] = read_learning_window(
+            end_session=anchor, sessions=window_sessions, root=root, now=now
+        )
+    except Exception as exc:  # the Week Review keeps its verified calendar-week content
+        payload["learning"]["error"] = f"learning window unavailable: {exc}"
     # TJ-6, in its OWN guard and read exactly ONCE: the ideas the trader kept,
     # each with the baseline frozen at the keep beside the same measurable now.
     # A store that will not open costs the ideas card and leaves the five day

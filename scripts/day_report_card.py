@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 import evidence_stats
+import market_read_grades as grades
+import prediction_ledger
 import real_miss
 import trade_origin
 import walkaway_day
@@ -341,13 +343,8 @@ def missed_line(walkaway: Any) -> dict[str, Any]:
 # 3. Your reads
 # ---------------------------------------------------------------------------
 def your_reads_line(tally: Mapping[str, Any] | None) -> dict[str, Any]:
-    """`prediction_ledger.your_reads`' own integers, printed as it wrote them.
-
-    The owner names the baseline with the most ``right``. More right answers on
-    a bigger base is NOT a win, so this line quotes both integers with their own
-    ``n`` and never calls anything a victory - the trader was 3 of 4 on the day
-    the best baseline was 2 of 2.
-    """
+    """`prediction_ledger.your_reads`' inventory and horizon cells, unchanged."""
+    horizons = tally.get("horizons") if isinstance(tally, Mapping) else None
     if not isinstance(tally, Mapping) or tally.get("empty"):
         return _line(
             "your_reads",
@@ -355,16 +352,25 @@ def your_reads_line(tally: Mapping[str, Any] | None) -> dict[str, Any]:
             0,
             0,
             right=0,
+            wrong=0,
+            flat=0,
+            pending=0,
+            unmeasured=0,
+            horizons=horizons if isinstance(horizons, Mapping) else {},
         )
     n = int(tally.get("n") or 0)
-    pending = int(tally.get("pending") or 0)
     text = _text(tally.get("text"))
     return _line(
         "your_reads",
         f"Your reads: {text}" if not text.lower().startswith("your reads") else text,
         n,
-        max(0, n - pending),
+        n,
         right=int(tally.get("right") or 0),
+        wrong=int(tally.get("wrong") or 0),
+        flat=int(tally.get("flat") or 0),
+        pending=int(tally.get("pending") or 0),
+        unmeasured=int(tally.get("unmeasured") or 0),
+        horizons=horizons if isinstance(horizons, Mapping) else {},
     )
 
 
@@ -1103,6 +1109,104 @@ def _rate_keys(hits: int, total: int) -> dict[str, Any]:
     }
 
 
+def _read_horizons(line: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The new per-horizon read shape, or ``None`` for a stored old card."""
+    horizons = line.get("horizons")
+    return horizons if isinstance(horizons, Mapping) else None
+
+
+def _horizon_accuracy(cell: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """Accept a Day cell or a pooled cell without deriving a new outcome."""
+    if not isinstance(cell, Mapping):
+        return {}
+    accuracy = cell.get("accuracy")
+    return accuracy if isinstance(accuracy, Mapping) else cell
+
+
+def _pooled_horizon_cell(lines: Sequence[Mapping[str, Any]], name: str) -> dict[str, Any]:
+    """Pool one named horizon only; scalar coverage never reaches this path."""
+    cells = [
+        _horizon_accuracy((_read_horizons(line) or {}).get(name))
+        for line in lines
+        if isinstance((_read_horizons(line) or {}).get(name), Mapping)
+    ]
+
+    def total(field: str) -> int:
+        return sum(int(cell.get(field) or 0) for cell in cells)
+
+    accuracy = {
+        "right": total("right"),
+        "wrong": total("wrong"),
+        "flat": total("flat"),
+        "pending": total("pending"),
+        "unmeasured": total("unmeasured"),
+        "n": total("n"),
+    }
+    accuracy.update(_rate_keys(accuracy["right"], accuracy["n"]))
+    baselines: dict[str, dict[str, Any]] = {}
+    for rule in grades.BASELINES:
+        baseline_cells = [
+            (dict(((_read_horizons(line) or {}).get(name) or {}).get("baselines") or {}).get(rule) or {})
+            for line in lines
+            if isinstance((_read_horizons(line) or {}).get(name), Mapping)
+        ]
+        baseline = {
+            "right": sum(int(cell.get("right") or 0) for cell in baseline_cells),
+            "wrong": sum(int(cell.get("wrong") or 0) for cell in baseline_cells),
+            "flat": sum(int(cell.get("flat") or 0) for cell in baseline_cells),
+            "pending": sum(int(cell.get("pending") or 0) for cell in baseline_cells),
+            "unmeasured": sum(int(cell.get("unmeasured") or 0) for cell in baseline_cells),
+            "n": sum(int(cell.get("n") or 0) for cell in baseline_cells),
+            "baseline": rule,
+            "label": prediction_ledger.BASELINE_LABELS.get(rule, rule),
+        }
+        baseline.update(_rate_keys(baseline["right"], baseline["n"]))
+        baselines[rule] = baseline
+    return {
+        "horizon": name,
+        "label": prediction_ledger.HORIZON_LABELS.get(name, name),
+        **accuracy,
+        "accuracy": dict(accuracy),
+        "baselines": baselines,
+    }
+
+
+def _pooled_read_horizons(lines: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Every known horizon stays a separate evidence population."""
+    return {
+        name: _pooled_horizon_cell(lines, name)
+        for name in prediction_ledger.HORIZONS
+    }
+
+
+def _unseparated_read_sessions(cards: Sequence[Any]) -> tuple[str, ...]:
+    """Name old scalar cards instead of inventing a horizon for their counts."""
+    sessions: list[str] = []
+    for card in cards:
+        session = _card_session(card)
+        for line in _card_lines(card):
+            if (
+                line.get("key") == "your_reads"
+                and line.get("measured_ok") is not False
+                and _read_horizons(line) is None
+                and session
+                and session not in sessions
+            ):
+                sessions.append(session)
+    return tuple(sessions)
+
+
+def _horizon_coverage_text(horizons: Mapping[str, Mapping[str, Any]]) -> str:
+    """A count-only summary. Rates, where useful, live in each named cell."""
+    return " · ".join(
+        f"{cell['label']}: {cell['n']} finished, {cell['right']} right, "
+        f"{cell['wrong']} wrong, {cell['flat']} flat, {cell['pending']} waiting, "
+        f"{cell['unmeasured']} unmeasured"
+        for cell in (horizons.get(name) or {} for name in prediction_ledger.HORIZONS)
+        if cell
+    )
+
+
 def _floor_clause(total: int) -> str:
     if total >= evidence_stats.MIN_REPORTABLE_N:
         return ""
@@ -1287,13 +1391,42 @@ def _pool_cards(
     n = _sum("your_reads", "n")
     measured = _sum("your_reads", "measured")
     right = _sum("your_reads", "right")
-    if n:
+    wrong = _sum("your_reads", "wrong")
+    flat = _sum("your_reads", "flat")
+    pending = _sum("your_reads", "pending")
+    unmeasured = _sum("your_reads", "unmeasured")
+    read_lines = _pooled(cards, "your_reads")
+    horizons = _pooled_read_horizons(read_lines)
+    unseparated = _unseparated_read_sessions(cards)
+    if n or pending or unmeasured:
         text = (
-            f"Your reads {label}: {right} right of {n}" + _floor_clause(n) + "."
+            f"Your reads {label}: coverage {n} finished, {right} right, "
+            f"{wrong} wrong, {flat} flat, {pending} waiting, {unmeasured} unmeasured. "
+            + _horizon_coverage_text(horizons)
         )
     else:
-        text = f"Your reads {label}: no graded reads yet."
-    lines.append(_line("your_reads", text, n, measured, right=right, **_rate_keys(right, n)))
+        text = f"Your reads {label}: no graded reads yet. " + _horizon_coverage_text(horizons)
+    if unseparated:
+        text += (
+            f" {len(unseparated)} historical session(s) have unseparated read horizons: "
+            + ", ".join(unseparated)
+            + "."
+        )
+    lines.append(
+        _line(
+            "your_reads",
+            text,
+            n,
+            measured,
+            right=right,
+            wrong=wrong,
+            flat=flat,
+            pending=pending,
+            unmeasured=unmeasured,
+            horizons=horizons,
+            unseparated_sessions=unseparated,
+        )
+    )
 
     # -- Congruence --------------------------------------------------------
     n = _sum("congruence", "n")

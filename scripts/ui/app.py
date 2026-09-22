@@ -170,6 +170,8 @@ class MainWindow(QMainWindow):
         # tab, on that trade. Weekend Prep never writes `planned_risk`; it
         # refers, and the trader types the plan where `save_risk_fields` lives.
         self.weekend_prep_panel.openTradeRequested.connect(self._open_journal_trade)
+        self.weekend_prep_panel.openSessionRequested.connect(self._open_day_review_session)
+        self.day_review_panel.openTradeRequested.connect(self._open_journal_trade)
         # WS-WL item 4: the Journal LINKS to the one Watchlist's Positions view.
         self.journal_panel.positionsOnWatchlistRequested.connect(
             self.show_watchlist_positions
@@ -761,6 +763,15 @@ class MainWindow(QMainWindow):
             if not self._select_page_by_title(DAY_REVIEW_PAGE_TITLE):
                 return False
             return bool(self.day_review_panel.show_latest_completed_session())
+        finally:
+            self._opening_latest_day_review = False
+
+    def _open_day_review_session(self, session: str) -> None:
+        """Open the exact Week Review day through the existing one-page reader."""
+        self._opening_latest_day_review = True
+        try:
+            if self._select_page_by_title(DAY_REVIEW_PAGE_TITLE):
+                self.day_review_panel.show_session(str(session or "")[:10])
         finally:
             self._opening_latest_day_review = False
 

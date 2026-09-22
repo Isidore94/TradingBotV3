@@ -647,6 +647,7 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         "day_review_facts",
         "read_grades_mature",
         "prediction_contrast",
+        "day_review_facts",
         "day_review_narration",
         "observation_tags",
         "exit_note_fields",

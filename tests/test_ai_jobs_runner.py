@@ -347,6 +347,7 @@ EXPECTED_SLOT_ORDER = (
     # reads what the slots above it wrote and feeds nothing above it, so it
     # CLOSES the deterministic stage.
     "measured_report",
+    # TJ-17: current and recent saved facts close stage 1 before any story.
     "day_review_facts",
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.

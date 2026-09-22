@@ -125,6 +125,8 @@ PACK_LOOKBACK_SESSIONS = 5
 
 STATUS_KEPT = "kept"
 STATUS_DISMISSED = "dismissed"
+MAX_FOLLOW_THROUGH_NOTE_CHARS = 280
+FOLLOW_THROUGH_SCHEMA = "idea_follow_through_v1"
 
 #: Why one idea was dropped. Codes rather than sentences, because they are
 #: COUNTED per reason into the slot's ledger row - a post-mortem that says "two
@@ -173,6 +175,14 @@ VERDICT_SAME = "the same as at the keep"
 #: Both sides over the floor, and their Wilson intervals OVERLAP. Two numbers
 #: that differ by less than their own uncertainty have not moved.
 VERDICT_NO_CHANGE = "no clear change"
+
+
+class WeeklyChoiceError(ValueError):
+    """A weekly-change click that cannot become a truthful record."""
+
+
+class WeeklyChoiceConflict(WeeklyChoiceError):
+    """A second active change was requested for the same exchange week."""
 
 #: What separates a session from the id it qualifies, exactly as TJ-5's week
 #: story does it: each day pack mints its ids with its OWN minter, so
@@ -368,6 +378,81 @@ def _state_path() -> Path:
     return Path(project_paths.AI_IDEAS_STATE_FILE)
 
 
+def _follow_through_path() -> Path:
+    """Resolved at the click, so tests and desks never retain an old root."""
+    return Path(project_paths.IDEA_FOLLOW_THROUGH_FILE)
+
+
+def _scope(scope: Mapping[str, Any] | None = None) -> dict[str, str]:
+    """Only the canonical D1 environment can scope a weekly reading."""
+    body = dict(scope or {})
+    unexpected = set(body) - {"environment"}
+    if unexpected:
+        raise ValueError(f"unknown measurable scope field(s): {sorted(unexpected)!r}")
+    environment = _text(body.get("environment")) or "all"
+    from d1_environment_store import LABELS
+
+    if environment not in {"all", *LABELS}:
+        raise ValueError(f"unknown D1 environment {environment!r}")
+    return {"environment": environment}
+
+
+def _session_or_raise(value: Any, *, what: str) -> date:
+    raw = _text(value)
+    if len(raw) != 10:
+        raise ValueError(f"{what} must be an exact exchange session date")
+    try:
+        day = date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError(f"{what} must be an exchange session") from exc
+    import market_calendar
+
+    if not market_calendar.is_session(day):
+        raise ValueError(f"{what} must be an exchange session")
+    return day
+
+
+def _choice_week(observation_start: date) -> str:
+    """The week in which following this change can first be observed."""
+    year, week, _weekday = observation_start.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _current_tracking_week() -> str:
+    import market_calendar
+
+    completed = market_calendar.last_completed_session(datetime.now(timezone.utc))
+    return _choice_week(market_calendar.next_session(completed))
+
+
+def _sessions_between(start: Any, end: Any, *, maximum: int = 20) -> tuple[str, ...]:
+    try:
+        first = _session_or_raise(start, what="start session")
+        last = _session_or_raise(end, what="end session")
+    except ValueError:
+        return ()
+    if last < first:
+        return ()
+    import market_calendar
+
+    out: list[str] = []
+    cursor = last
+    while cursor >= first and len(out) < maximum:
+        if market_calendar.is_session(cursor):
+            out.append(cursor.isoformat())
+        cursor = cursor.fromordinal(cursor.toordinal() - 1)
+    return tuple(reversed(out))
+
+
+def _with_dates(reading: Mapping[str, Any], *, fallback_start: Any = "") -> dict[str, Any]:
+    body = dict(reading or {})
+    dates = [_text(item)[:10] for item in body.get("dates") or () if _text(item)[:10]]
+    if not dates:
+        dates = list(_sessions_between(fallback_start or body.get("start_session"), body.get("end_session")))
+    body["dates"] = dates
+    return body
+
+
 def _asked_path() -> Path:
     """``ai_ideas_asked.json``, beside the store. Resolved at CALL time too."""
     path = _ideas_path()
@@ -406,7 +491,10 @@ def _unmeasured(name: str, sessions: int, reason: str, **extra: Any) -> dict[str
     }
 
 
-def _report_card_rate(reader, *, name: str, end_session: str, sessions: int) -> dict[str, Any]:
+def _report_card_rate(
+    reader, *, name: str, end_session: str, sessions: int, scope: Mapping[str, str] | None = None,
+    start_session: str = ""
+) -> dict[str, Any]:
     """The pooled `did_well` line over the window, from the packs' OWN lines.
 
     It builds nothing: a pack carries the BUILT card with all of its integers,
@@ -468,7 +556,10 @@ def _report_card_rate(reader, *, name: str, end_session: str, sessions: int) -> 
     }
 
 
-def _veto_real_miss_rate(reader, *, name: str, end_session: str, sessions: int) -> dict[str, Any]:
+def _veto_real_miss_rate(
+    reader, *, name: str, end_session: str, sessions: int, scope: Mapping[str, str] | None = None,
+    start_session: str = ""
+) -> dict[str, Any]:
     """The pooled real-miss rate of the VETO groups in the LAST WRITTEN pack.
 
     It reads the pack the night already wrote (`miss_contrast.read_latest`) and
@@ -513,6 +604,77 @@ def _veto_real_miss_rate(reader, *, name: str, end_session: str, sessions: int) 
     )
 
 
+def _window_read_accuracy(
+    reader, *, name: str, end_session: str, sessions: int, scope: Mapping[str, str], start_session: str = ""
+) -> dict[str, Any]:
+    """Read B's canonical prediction ledger; this module never regrades a call."""
+    window = reader(end_session=end_session, sessions=sessions, start_session=start_session)
+    horizon = "rest_of_day" if name.endswith("rest_of_day") else "next_5_sessions"
+    block = (window.get("reads") or {}).get("horizons", {}).get(horizon, {}) if isinstance(window, Mapping) else {}
+    accuracy = block.get("accuracy") if isinstance(block, Mapping) else {}
+    # Each environment row has its own owner-produced accuracy on the same stamps.
+    candidates = window.get("by_environment") or () if isinstance(window, Mapping) else ()
+    chosen: Mapping[str, Any] = accuracy if isinstance(accuracy, Mapping) else {}
+    source_ids = (((window.get("coverage") or {}).get("horizons") or {}).get(horizon) or {}).get("read_ids") or ()
+    if scope["environment"] != "all":
+        group = next((row for row in candidates if isinstance(row, Mapping)
+                      and _text(row.get("horizon")) == horizon
+                      and _text(row.get("key")) == scope["environment"]), {})
+        chosen = group.get("accuracy", {}) if isinstance(group, Mapping) else {}
+        source_ids = group.get("read_ids") or () if isinstance(group, Mapping) else ()
+    try:
+        hits, total = int(chosen.get("right") or 0), int(chosen.get("n") or 0)
+    except (TypeError, ValueError):
+        hits = total = 0
+    dates = list((window.get("window") or {}).get("sessions") or ())
+    if total <= 0:
+        return {
+            **_unmeasured(name, sessions, f"no measured {horizon} reads"),
+            "scope": dict(scope),
+            "pending": int(chosen.get("pending") or 0),
+            "unmeasured": int(chosen.get("unmeasured") or 0),
+            "dates": dates,
+            "start_session": dates[0] if dates else start_session,
+            "end_session": dates[-1] if dates else end_session,
+            "source": {"read_ids": list(source_ids), "owner": "prediction_ledger.build_readout"},
+        }
+    return {
+        "measurable": name, "value": hits / total, "hits": hits, "n": total,
+        "measured": True, "unit": "fraction", "better": "higher", "scope": dict(scope),
+        "start_session": dates[0] if dates else start_session,
+        "end_session": dates[-1] if dates else end_session,
+        "dates": dates, "pending": int(chosen.get("pending") or 0),
+        "unmeasured": int(chosen.get("unmeasured") or 0),
+        "source": {"read_ids": list(source_ids), "owner": "prediction_ledger.build_readout"},
+    }
+
+
+def _window_trade_win_rate(
+    reader, *, name: str, end_session: str, sessions: int, scope: Mapping[str, str], start_session: str = ""
+) -> dict[str, Any]:
+    """Pool only B/Results' supplied closed-trade counts and source IDs."""
+    window = reader(end_session=end_session, sessions=sessions, start_session=start_session)
+    horizon = "day" if name.endswith("_day") else "swing"
+    groups = window.get("trade_groups") or () if isinstance(window, Mapping) else ()
+    selected = next((group for group in groups if isinstance(group, Mapping)
+                     and _text(group.get("horizon")) == horizon
+                     and _text(group.get("environment")) == ("all" if scope["environment"] == "all" else scope["environment"])
+                     and _text(group.get("scope")) == ("all_contexts" if scope["environment"] == "all" else "entry_environment")), {})
+    stats = selected.get("stats") if isinstance(selected.get("stats"), Mapping) else {}
+    wins, total = int(stats.get("wins") or 0), int(stats.get("closed") or 0)
+    if total <= 0:
+        return _unmeasured(name, sessions, f"no closed {horizon} trade was measured")
+    dates = list((window.get("window") or {}).get("sessions") or ())
+    return {
+        "measurable": name, "value": wins / total, "hits": wins, "n": total,
+        "measured": True, "unit": "fraction", "better": "higher", "scope": dict(scope),
+        "start_session": dates[0] if dates else start_session,
+        "end_session": dates[-1] if dates else end_session,
+        "dates": dates,
+        "source": {"trade_ids": list(selected.get("trade_ids") or ()), "owner": "research_results.build_results_view"},
+    }
+
+
 def reader_name(reader: Any) -> str:
     return _text(getattr(reader, "__name__", "")) or "the reader"
 
@@ -553,6 +715,10 @@ MEASURABLES: tuple[Measurable, ...] = (
         ),
         read=_veto_real_miss_rate,
     ),
+    Measurable("read_accuracy_rest_of_day", "session_review.read_learning_window", "Clicked read accuracy through the rest of that session.", _window_read_accuracy),
+    Measurable("read_accuracy_next_5_sessions", "session_review.read_learning_window", "Clicked read accuracy over the next five sessions.", _window_read_accuracy),
+    Measurable("trade_win_rate_day", "session_review.read_learning_window", "Closed day-trade win fraction from Results.", _window_trade_win_rate),
+    Measurable("trade_win_rate_swing", "session_review.read_learning_window", "Closed swing-trade win fraction from Results.", _window_trade_win_rate),
 )
 
 
@@ -602,6 +768,8 @@ def measure(
     *,
     end_session: Any = "",
     sessions: int = evidence_stats.LATELY_SESSIONS,
+    scope: Mapping[str, Any] | None = None,
+    start_session: Any = "",
 ) -> dict[str, Any]:
     """ONE reading of ONE measurable, with its own `n` and its window.
 
@@ -611,18 +779,25 @@ def measure(
     """
     item = measurable_named(name)
     session = _text(end_session)[:10] or date.today().isoformat()
+    frozen_scope = _scope(scope)
     try:
         reader = _resolve(item.reader)
     except Exception as exc:  # noqa: BLE001 - an unreadable reader is uncertainty
         _log.debug("A measurable's reader could not be resolved.", exc_info=True)
         return _unmeasured(item.name, sessions, f"{item.reader} could not be read: {exc}")
     try:
-        reading = item.read(reader, name=item.name, end_session=session, sessions=int(sessions))
+        reading = item.read(
+            reader, name=item.name, end_session=session, sessions=int(sessions),
+            scope=frozen_scope, start_session=_text(start_session)[:10],
+        )
     except Exception as exc:  # noqa: BLE001 - an unreadable store is uncertainty
         _log.debug("A measurable could not be read.", exc_info=True)
         return _unmeasured(item.name, sessions, f"{item.reader} could not be read: {exc}")
     reading.setdefault("label", item.label)
     reading.setdefault("end_session", session)
+    reading.setdefault("scope", frozen_scope)
+    reading.setdefault("unit", "fraction")
+    reading.setdefault("better", "higher")
     return reading
 
 
@@ -1138,6 +1313,13 @@ def ideas_for_session(session: Any) -> tuple[dict[str, Any], ...]:
             continue
         item = dict(row)
         item["status"] = status
+        choice = record.get("weekly_choice")
+        if (status == STATUS_KEPT and isinstance(choice, Mapping)
+                and not _text(choice.get("finished_at"))
+                and _text(choice.get("week")) == _current_tracking_week()):
+            item["current_choice"] = _current_choice_block(
+                _text(row.get("idea_id")), choice, end_session=wanted
+            )
         out.append(item)
     return tuple(out)
 
@@ -1183,13 +1365,45 @@ def checked_ideas(*, end_session: Any = "") -> tuple[dict[str, Any], ...]:
                 item["verdict"] = VERDICT_UNMEASURED
             out.append(item)
             continue
-        after = measure(
-            _text(baseline.get("measurable")) or _text(row.get("measurable")),
-            end_session=session or _text(row.get("session_date")),
-        )
-        item["before"] = with_interval(baseline)
-        item["after"] = with_interval(after)
-        item["verdict"] = _verdict(item["before"], item["after"])
+        choice = record.get("weekly_choice")
+        if session:
+            try:
+                wanted_week = _choice_week(date.fromisoformat(session))
+            except ValueError:
+                wanted_week = ""
+            historical = [
+                candidate for candidate in [*(record.get("choice_history") or ()), choice]
+                if isinstance(candidate, Mapping) and _text(candidate.get("week")) == wanted_week
+            ]
+            choice = historical[-1] if historical else None
+        if isinstance(choice, Mapping):
+            choice_block = _current_choice_block(
+                key, choice, end_session=session or _text(row.get("session_date"))
+            )
+            active = not _text(choice.get("finished_at")) and _text(choice.get("week")) == _current_tracking_week()
+            item["current_choice" if active else "past_choice"] = choice_block
+            if active:
+                item["before"] = choice_block["before"]
+                item["after"] = choice_block["after"]
+                item["verdict"] = choice_block["comparison"]
+                item["comparison_note"] = "Same scope and horizon; disjoint session dates. Observational."
+            else:
+                item["before"] = choice_block["before"]
+                item["after"] = choice_block["after"]
+                item["verdict"] = choice_block["comparison"]
+                item["comparison_note"] = "Past weekly change. Its records are kept."
+        else:
+            after = measure(
+                _text(baseline.get("measurable")) or _text(row.get("measurable")),
+                end_session=session or _text(row.get("session_date")),
+            )
+            item["before"] = with_interval(baseline)
+            item["after"] = with_interval(after)
+            item["verdict"] = _verdict(item["before"], item["after"])
+            item["comparison_note"] = (
+                "Older kept baseline; rolling windows may overlap. Scope: all environments. "
+                "The comparison is observational."
+            )
         out.append(item)
     return tuple(out)
 
@@ -1331,6 +1545,173 @@ def dismiss_idea(idea_id: Any, *, now: datetime | None = None):
     state[key] = record
     _write_state(state)
     return dict(record)
+
+
+def choose_weekly_change(
+    idea_id: Any, *, end_session: Any = "", environment: Any = "all", now: datetime | None = None
+) -> dict[str, Any]:
+    """Freeze one kept process idea for this exchange week, once."""
+    row = _idea_or_raise(idea_id)
+    key = _text(row.get("idea_id"))
+    if _text(row.get("kind")) == "program":
+        raise WeeklyChoiceError("a program idea cannot be the weekly change")
+    state = read_state()
+    record = state.get(key) or {}
+    if _text(record.get("status")) != STATUS_KEPT:
+        raise WeeklyChoiceError("keep this process idea before choosing it")
+    measurable = _text(row.get("measurable"))
+    if not measurable:
+        raise WeeklyChoiceError("this process idea has no registered measurable")
+    import market_calendar
+
+    judged = _session_or_raise(end_session or row.get("session_date"), what="choice session")
+    completed_at_click = market_calendar.last_completed_session(now or datetime.now(timezone.utc))
+    if judged > completed_at_click:
+        raise WeeklyChoiceError("the choice session has not closed")
+    # A click today cannot mark a trade made last week as following the idea.
+    judged = max(judged, completed_at_click)
+    observation_start = market_calendar.next_session(judged)
+    week = _choice_week(observation_start)
+    existing = record.get("weekly_choice")
+    if isinstance(existing, Mapping) and _text(existing.get("week")) == week:
+        if not _text(existing.get("finished_at")):
+            return _choice_response(record)
+        raise WeeklyChoiceConflict(f"{week} already had a finished change")
+    for other_id, other in state.items():
+        other_choice = other.get("weekly_choice") if isinstance(other, Mapping) else None
+        if (
+            other_id != key and isinstance(other_choice, Mapping)
+            and _text(other_choice.get("week")) == week
+        ):
+            raise WeeklyChoiceConflict(f"one weekly change is already active for {week}")
+    frozen_scope = _scope({"environment": environment})
+    stamp = _moment(now)
+    baseline = measure(measurable, end_session=judged.isoformat(), scope=frozen_scope)
+    record = dict(record)
+    if isinstance(existing, Mapping) and _text(existing.get("week")) != week:
+        record["choice_history"] = [*(record.get("choice_history") or ()), dict(existing)]
+    record["weekly_choice"] = {
+        "week": week,
+        "judged_session": judged.isoformat(),
+        "observation_start": observation_start.isoformat(),
+        "scope": frozen_scope,
+        "measurable": measurable,
+        "choice_baseline": {**dict(baseline), "at": stamp},
+        "chosen_at": stamp,
+    }
+    state[key] = record
+    _write_state(state)
+    return _choice_response(record)
+
+
+def _choice_response(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Public click result with the choice's frozen facts ready for the card."""
+    choice = dict(record.get("weekly_choice") or {})
+    return {**dict(record), **choice}
+
+
+def finish_weekly_change(idea_id: Any, *, now: datetime | None = None) -> dict[str, Any]:
+    """End the active choice but retain its frozen baseline and every event."""
+    key = _text(idea_id)
+    state = read_state()
+    record = state.get(key) or {}
+    choice = record.get("weekly_choice") if isinstance(record, Mapping) else None
+    if not isinstance(choice, Mapping):
+        raise WeeklyChoiceError("this idea has no weekly choice")
+    if _text(choice.get("finished_at")):
+        return dict(record)
+    record = dict(record)
+    record["weekly_choice"] = {**dict(choice), "finished_at": _moment(now)}
+    state[key] = record
+    _write_state(state)
+    return dict(record)
+
+
+def _follow_events(choice_id: str) -> list[dict[str, Any]]:
+    path = _follow_through_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, Mapping) and _text(event.get("idea_id")) == choice_id:
+            out.append(dict(event))
+    return out
+
+
+def record_follow_through(
+    idea_id: Any, session: Any, followed: bool | None, *, note: Any = "", now: datetime | None = None
+) -> dict[str, Any]:
+    """Append an explicit trader answer; absence stays unknown forever."""
+    if followed is not True and followed is not False and followed is not None:
+        raise ValueError("follow-through must be yes, no, or unknown")
+    target = _session_or_raise(session, what="follow-through session").isoformat()
+    key = _text(idea_id)
+    record = read_state().get(key) or {}
+    choice = record.get("weekly_choice") if isinstance(record, Mapping) else None
+    if not isinstance(choice, Mapping) or _text(choice.get("finished_at")):
+        raise WeeklyChoiceError("follow-through needs an active weekly choice")
+    if target < _text(choice.get("observation_start")):
+        raise ValueError("follow-through is before this choice starts")
+    if _choice_week(date.fromisoformat(target)) != _text(choice.get("week")):
+        raise ValueError("follow-through is outside this choice's exchange week")
+    words = _text(note)
+    if len(words) > MAX_FOLLOW_THROUGH_NOTE_CHARS:
+        raise ValueError(f"follow-through note exceeds {MAX_FOLLOW_THROUGH_NOTE_CHARS} characters")
+    existing = _follow_events(key)
+    state = "yes" if followed is True else "no" if followed is False else "unknown"
+    latest = next((row for row in reversed(existing)
+                   if _text(row.get("session")) == target
+                   and _text(row.get("choice_week")) == _text(choice.get("week"))), None)
+    if latest and _text(latest.get("followed")) == state and _text(latest.get("note")) == words:
+        return dict(latest)
+    stamp = _moment(now)
+    import market_calendar
+
+    recorded_day = (now or datetime.now(timezone.utc)).astimezone(market_calendar.MARKET_TZ).date().isoformat()
+    event = {
+        "schema": FOLLOW_THROUGH_SCHEMA, "idea_id": key,
+        "choice_week": _text(choice.get("week")), "session": target, "followed": state,
+        "note": words, "recorded_at": stamp, "source": "trader", "recorded_later": recorded_day > target,
+    }
+    path = _follow_through_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True) + "\n")
+    return event
+
+
+def _current_choice_block(idea_id: str, choice: Mapping[str, Any], *, end_session: str) -> dict[str, Any]:
+    """The choice-only comparison: same frozen horizon/scope, no overlap."""
+    baseline = _with_dates(choice.get("choice_baseline") if isinstance(choice.get("choice_baseline"), Mapping) else {})
+    start = _text(choice.get("observation_start"))
+    dates = _sessions_between(start, end_session)
+    after: dict[str, Any]
+    if not dates:
+        after = {"measured": False, "n": 0, "dates": [], "reason": "waiting for a completed session"}
+        comparison = "waiting"
+    else:
+        after = _with_dates(measure(_text(choice.get("measurable")), end_session=end_session, sessions=20, scope=choice.get("scope"), start_session=start), fallback_start=start)
+        after["dates"] = [day for day in after.get("dates") or () if day >= start]
+        comparison = _verdict(baseline, after)
+        comparison = {VERDICT_HIGHER: "higher", VERDICT_LOWER: "lower", VERDICT_NO_CHANGE: "no clear change"}.get(comparison, comparison)
+    latest: dict[str, dict[str, Any]] = {}
+    for event in _follow_events(idea_id):
+        if _text(event.get("choice_week")) == _text(choice.get("week")) and _text(event.get("session")) in dates:
+            latest[_text(event.get("session"))] = event
+    by_session = {day: _text(latest.get(day, {}).get("followed")) or "unknown" for day in dates}
+    counts = {state: sum(value == state for value in by_session.values()) for state in ("yes", "no", "unknown")}
+    return {
+        "week": _text(choice.get("week")), "observation_start": start, "scope": dict(choice.get("scope") or {}),
+        "before": with_interval(baseline), "after": with_interval(after), "comparison": comparison,
+        "follow_through": {"by_session": by_session, "counts": counts},
+        "source_ids": {"before": dict(baseline.get("source") or {}), "after": dict(after.get("source") or {})},
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,45 @@ from typing import Any
 from ai_jobs import ledger
 
 
+def refresh_recent_packs(
+    *, end_session: str, now: datetime | None = None,
+    root: Path | None = None, service: Any, sessions: int = 20,
+) -> dict[str, Any]:
+    """Refresh only already saved, earlier exchange-session packs.
+
+    The current target is built by the caller. Matured calls and late answers
+    change the canonical pack hash. An unchanged pack keeps its exact bytes.
+    """
+    import day_review_pack
+    import market_calendar
+    from datetime import date
+
+    end = date.fromisoformat(end_session)
+    if not market_calendar.is_session(end):
+        raise ValueError(f"{end_session} is not an exchange session")
+    counts: dict[str, Any] = {
+        "refreshed": [], "unchanged": [], "failed": [], "omitted": [],
+    }
+    cursor = end
+    for _ in range(max(0, min(int(sessions), 20)) - 1):
+        cursor = market_calendar.previous_session(cursor)
+        day = cursor.isoformat()
+        path = day_review_pack.pack_path(day, root=root)
+        if not path.is_file():
+            counts["omitted"].append(day)
+            continue
+        try:
+            before = path.read_bytes()
+            built = service.build_pack_for(day, now=now, strict=True, root=root)
+            if not isinstance(built, dict) or not built.get("inputs_hash"):
+                raise RuntimeError("a source was unreadable or no verified pack was built")
+            after = path.read_bytes()
+            counts["unchanged" if after == before else "refreshed"].append(day)
+        except Exception as exc:  # prior atomic pack is retained
+            counts["failed"].append({"session": day, "reason": str(exc)})
+    return counts
+
+
 def _closed_target(session: str, now: datetime | None) -> tuple[bool, str]:
     """Refuse a non-session, current or future pack before any service write."""
     from datetime import date
@@ -78,7 +117,7 @@ def run_day_review_facts(
         reads = service.build_reads_for(session, now=now, strict=True)
         if reads is None:
             raise RuntimeError("the Day Review reads could not be built")
-        pack = service.build_pack_for(session, now=now)
+        pack = service.build_pack_for(session, now=now, strict=True, root=root)
     except Exception as exc:  # The prior atomic pack remains the last good one.
         return {
             "status": ledger.STATUS_FAILED,
@@ -109,11 +148,24 @@ def run_day_review_facts(
             outputs.append(str(path))
     except Exception:
         pass
+    try:
+        recent = refresh_recent_packs(
+            end_session=session, now=now, root=root, service=service,
+        )
+    except Exception as exc:
+        recent = {"refreshed": [], "unchanged": [], "omitted": [],
+                  "failed": [{"session": "recent window", "reason": str(exc)}]}
+    failed = recent["failed"]
     return {
-        "status": ledger.STATUS_OK,
-        "reason": "Day Review facts refreshed from the canonical service",
+        "status": ledger.STATUS_DEGRADED if failed else ledger.STATUS_OK,
+        "reason": (
+            f"Current facts refreshed; {len(recent['refreshed'])} older changed, "
+            f"{len(recent['unchanged'])} unchanged, {len(failed)} failed, "
+            f"{len(recent['omitted'])} absent"
+        ),
         "session_date": session,
         "pack": pack,
+        "recent": recent,
         # `build_reads_for` returns rows newly appended on this pass, not every
         # read the pack holds; say that narrow count honestly.
         "new_grades": len(reads or ()),

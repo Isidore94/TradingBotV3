@@ -640,7 +640,7 @@ def test_the_scope_can_be_selected_on_demand():
         "prediction_contrast",
         "market_story_rollups",
         "measured_report",
-        # AI-R3 closes the day pack before the story may read it.
+        # AI-R3 keeps the factual day pack current before stage-2 stories.
         "day_review_facts",
         # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
         # TJ-4 (2026-09-20) appends the day story inside the stage, ahead of the
@@ -649,8 +649,8 @@ def test_the_scope_can_be_selected_on_demand():
         "ai_summary",
         "day_review_narration",
         # TJ-16 item 4 (2026-09-20): the grounded word tagger, appended inside
-        # stage 2 after `ai_summary` (the `day_review_facts` / `ai_summary` pair
-        # stays adjacent) and before the two-hour briefs.
+        # stage 2 after `ai_summary` (the `day_review_facts` / `ai_summary`
+        # boundary stays adjacent) and before the two-hour briefs.
         "observation_tags",
         # TJ-5 (2026-09-20): the week story, appended inside stage 2 directly
         # after the word tagger and before the two-hour briefs. Saturday only

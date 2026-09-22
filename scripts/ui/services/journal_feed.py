@@ -298,12 +298,57 @@ def selection_spans_tax_groups(selected: Iterable[tuple[str, str]]) -> bool:
 def trades_on(trade_date: Any) -> list[dict[str, Any]]:
     """Every trade the store files under one date. Worker-thread call.
 
-    TJ-1 item 3: the Day Review page's "What you traded" section REFERS to these
-    rows and the Journal page stays the place to tag and correct them, so this is
-    a read through the SAME shared store the Journal page uses - not a second
-    connection, and not a second definition of what a trade is.
+    TJ-1 item 3: the Day Review page refers to the SAME shared Journal rows.
+    TJ-17 adds an interim scale-out session by reading that store's CLOSE legs;
+    ``closed_at`` alone names only the final exit. The Journal remains the place
+    to tag and correct every row.
     """
-    return _store().list_trades(trade_date=trade_date)
+    store = _store()
+    day = str(trade_date or "")[:10]
+    rows = list(store.list_trades(trade_date=trade_date))
+    # `trades.closed_at` is the FINAL close. A trade that scaled out on this
+    # session and finished later would otherwise disappear from this day's
+    # recap once its final row was assembled. One closing-leg query finds that
+    # earlier session; the Journal owner still supplies every trade row.
+    if not day or not hasattr(store, "connection"):
+        return rows
+    import trade_origin
+    from datetime import date, timedelta
+
+    try:
+        selected = date.fromisoformat(day)
+    except ValueError:
+        return rows
+    earliest = (selected - timedelta(days=1)).isoformat()
+    latest = (selected + timedelta(days=1)).isoformat()
+
+    with store.connection() as connection:
+        closes = connection.execute(
+            "SELECT trade_id, timestamp FROM trade_legs "
+            "WHERE role = 'CLOSE' AND substr(timestamp, 1, 10) BETWEEN ? AND ?",
+            (earliest, latest),
+        ).fetchall()
+    ids = {
+        str(leg["trade_id"])
+        for leg in closes
+        if (moment := trade_origin._moment(leg["timestamp"])) is not None
+        and moment.astimezone(trade_origin.MARKET_TZ).date().isoformat() == day
+    }
+    existing = {str(row.get("trade_id") or "") for row in rows}
+    missing = ids - existing
+    if missing:
+        for row in store.list_trades():
+            if str(row.get("trade_id") or "") not in missing:
+                continue
+            # This is an exit event in the reviewed session, not the trade's
+            # final money. The assembled trade's net belongs to its whole
+            # lifespan and cannot be called this session's exit result.
+            rows.append({
+                **dict(row), "net_pnl": None, "realized_pnl": None,
+                "pnl_usd": None,
+                "review_pnl_note": "interim exit; session P&L not measured",
+            })
+    return rows
 
 
 def exit_notes_on(session: Any) -> dict[str, dict[str, Any]]:
@@ -334,6 +379,83 @@ def exit_notes_on(session: Any) -> dict[str, dict[str, Any]]:
         return dict(check.exit_notes_for_session(_store(), str(session or "")[:10]))
     except Exception:
         return {}
+
+
+def trade_reviews_on(
+    session: str,
+    trades: list[dict[str, Any]],
+    exit_notes: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Read the trader's entry recollection and this session's exit per trade.
+
+    This runs only after ``trades_on`` opened the shared Journal store. An
+    unanswered field stays absent; a failed event read raises so the caller can
+    say *unread*, rather than claiming the trader gave no answer.
+    """
+    if not trades:
+        return []
+    import trade_mentor_trade_check as check
+
+    store = _store()
+    reviewed = str(session or "")[:10]
+    result: list[dict[str, Any]] = []
+    for trade in trades:
+        trade_id = str(trade.get("trade_id") or "")
+        raw_rows = store.list_opportunity_events(
+            trade_id=trade_id, event_type=check.EVENT_RECALLED_RAW, limit=10000
+        ) if trade_id else []
+        answer_rows = store.list_opportunity_events(
+            trade_id=trade_id, event_type=check.EVENT_RECALLED, limit=10000
+        ) if trade_id else []
+        raw = raw_rows[-1] if raw_rows else {}
+        raw_payload = raw.get("payload") or {}
+        answers: dict[str, dict[str, Any]] = {}
+        for event in answer_rows:
+            body = event.get("payload") or {}
+            field = str(body.get("field") or "")
+            if field not in check.MATERIAL_FIELDS:
+                continue
+            answers[field] = {
+                "state": str(body.get("state") or ""),
+                "text": str(body.get("text") or ""),
+                "value": body.get("value"),
+                "unit": str(body.get("unit") or ""),
+                "recorded_at": str(event.get("occurred_at") or ""),
+                "recalled_after_session": bool(body.get("recalled_after_session")),
+            }
+        note = (exit_notes or {}).get(trade_id) or {}
+        # The note owner keys by (trade, exit session). Never borrow a note
+        # from an earlier scale-out if a caller hands us a broader mapping.
+        if str(note.get("exit_session") or reviewed)[:10] != reviewed:
+            note = {}
+        result.append({
+            "trade_id": trade_id,
+            "symbol": str(trade.get("symbol") or ""),
+            "instrument": str(trade.get("instrument_type") or trade.get("asset_type") or trade.get("sec_type") or ""),
+            "opened_at": str(trade.get("opened_at") or ""),
+            "closed_at": str(trade.get("last_closing_leg_at") or trade.get("closed_at") or ""),
+            "entry_session": str(trade.get("opened_at") or trade.get("trade_date") or "")[:10],
+            "exit_session": reviewed,
+            "net_pnl": trade.get("net_pnl"),
+            "review_pnl_note": str(trade.get("review_pnl_note") or ""),
+            "currency": str(trade.get("currency") or ""),
+            "entry_raw": {
+                "text": str(raw_payload.get("raw_text") or ""),
+                "recorded_at": str(raw.get("occurred_at") or ""),
+                "recalled_after_session": bool(raw_payload.get("recalled_after_session")),
+            },
+            "entry_answers": answers,
+            "exit_raw": {
+                "text": str(note.get("raw_text") or ""),
+                "answer_state": str(note.get("answer_state") or ""),
+                "recorded_at": str(note.get("occurred_at") or note.get("recorded_at") or ""),
+                "written_after_the_session": bool(note.get("written_after_the_session")),
+            },
+            "exit_fields": dict(note.get("exit_fields") or {}),
+            "label_provenance": str(note.get("label_provenance") or trade.get("label_provenance") or ""),
+            "status": "read",
+        })
+    return result
 
 
 def load_trades(

@@ -365,6 +365,8 @@ class _WeekDayCard(QFrame):
     confirmation).
     """
 
+    clicked = Signal(str)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("WeekDayCard")
@@ -395,6 +397,11 @@ class _WeekDayCard(QFrame):
         ):
             box.addWidget(widget)
         self.show_row({})
+
+    def mouseReleaseEvent(self, event) -> None:
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.LeftButton and self.session:
+            self.clicked.emit(self.session)
 
     def show_row(self, row) -> None:
         """Render one payload card. Diffs text; never rebuilds a widget."""
@@ -428,10 +435,22 @@ class _WeekDayCard(QFrame):
         self.headline.setText(
             headline or f"{label}: packed; the night has not written a story yet."
         )
-        tally = body.get("tally") or {}
-        if tally:
+        horizons = body.get("read_horizons") or {}
+        if horizons:
+            parts = []
+            for name in ("rest_of_day", "next_5_sessions"):
+                cell = horizons.get(name) or {}
+                accuracy = cell.get("accuracy") or cell
+                parts.append(
+                    f"{cell.get('label') or name.replace('_', ' ')}: "
+                    f"{int(accuracy.get('right') or 0)} right of {int(accuracy.get('n') or 0)} "
+                    f"finished, {int(accuracy.get('pending') or 0)} waiting"
+                )
+            self.tally.setText(" · ".join(parts))
+        elif body.get("tally"):
+            tally = body["tally"]
             self.tally.setText(
-                f"Right {int(tally.get('right') or 0)}"
+                f"Older reads, horizons unseparated: Right {int(tally.get('right') or 0)}"
                 f" · Wrong {int(tally.get('wrong') or 0)}"
                 f" · Unresolved {int(tally.get('unresolved') or 0)}"
                 f" (n {int(tally.get('n') or 0)})"
@@ -457,6 +476,34 @@ def week_strip_cell(line) -> str:
     """
     if not line:
         return "not read"
+    horizons = line.get("horizons") if isinstance(line, dict) else None
+    if str(line.get("key") or "") == "your_reads" and isinstance(horizons, dict):
+        parts = []
+        for name in ("rest_of_day", "next_5_sessions"):
+            cell = horizons.get(name)
+            if not isinstance(cell, dict):
+                continue
+            accuracy = cell.get("accuracy")
+            accuracy = accuracy if isinstance(accuracy, dict) else cell
+            label = str(cell.get("label") or name.replace("_", " "))
+            finished = int(accuracy.get("n") or 0)
+            waiting = int(accuracy.get("pending") or 0)
+            text = f"{label}: n {finished} · right {int(accuracy.get('right') or 0)} · waiting {waiting}"
+            if not finished:
+                text += " · no finished calls"
+            elif not cell.get("meets_floor", accuracy.get("meets_floor", False)):
+                text += " · too few to call"
+            elif accuracy.get("rate") is not None:
+                text += f" · {float(accuracy['rate']) * 100:.0f}%"
+            parts.append(text)
+        if parts:
+            legacy = tuple(line.get("unseparated_sessions") or ())
+            if legacy:
+                parts.append(f"{len(legacy)} older session(s) unseparated")
+            unreadable = tuple(line.get("unreadable_sessions") or ())
+            if unreadable:
+                parts.append(f"{len(unreadable)} day(s) could not be read")
+            return " · ".join(parts)
     head = f"n {int(line.get('n') or 0)} · measured {int(line.get('measured') or 0)}"
     rate = line.get("rate")
     if rate is None:
@@ -478,6 +525,9 @@ def week_strip_cell(line) -> str:
 
 
 class WeekReviewPage(_StepPage):
+    openSessionRequested = Signal(str)
+    openTradeRequested = Signal(str)
+
     """Step 1: the week the trader opens Weekend Prep to read (TJ-5 change 1).
 
     *"5 of these days collated into one tab ... to see if I was right, to see if
@@ -512,11 +562,54 @@ class WeekReviewPage(_StepPage):
         self.facts_note = QLabel("")
         self.facts_note.setObjectName("SectionSubtitle")
         self.facts_note.setWordWrap(True)
+        self.window_selector = QComboBox()
+        self.window_selector.addItems(("5 sessions", "10 sessions", "20 sessions"))
+        self.window_selector.setToolTip("Choose completed exchange sessions for Learning only.")
+        self.window_selector.currentIndexChanged.connect(self._window_changed)
+        self.learning_note = QLabel("")
+        self.learning_note.setObjectName("SectionSubtitle")
+        self.learning_note.setWordWrap(True)
+        self.learning_reads = _ten_row_table(QTableWidget(0, 11))
+        self.learning_reads.setHorizontalHeaderLabels(
+            ("Horizon", "Finished", "Right", "Wrong", "Flat", "Waiting", "Unknown", "Accuracy", "Days", "3 baselines", "Confidence")
+        )
+        self.learning_hours = _ten_row_table(QTableWidget(0, 11))
+        self.learning_hours.setHorizontalHeaderLabels(
+            ("Hour (New York)", "Horizon", "Finished", "Right", "Wrong", "Flat", "Waiting", "Unknown", "Accuracy", "Days", "3 baselines")
+        )
+        self.learning_environments = _ten_row_table(QTableWidget(0, 11))
+        self.learning_environments.setHorizontalHeaderLabels(
+            ("D1 environment", "Horizon", "Finished", "Right", "Wrong", "Flat", "Waiting", "Unknown", "Accuracy", "Days", "3 baselines")
+        )
+        self.learning_trades = _ten_row_table(QTableWidget(0, 9))
+        self.learning_trades.setHorizontalHeaderLabels(
+            ("Entry D1 environment", "Holding", "Closed", "Wins", "Losses", "Flat", "Win %", "Net after fees", "Risk measured")
+        )
+        for table in (self.learning_reads, self.learning_hours, self.learning_environments, self.learning_trades):
+            table.setEditTriggers(QTableWidget.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectRows)
+            table.setMaximumHeight(TABLE_TEN_ROWS_PX)
+        self.learning_drilldown = QWidget()
+        self._learning_drilldown_layout = QHBoxLayout(self.learning_drilldown)
+        self._learning_drilldown_layout.setContentsMargins(0, 0, 0, 0)
+        self._learning_drilldown_layout.addWidget(
+            QLabel("Choose a learning row to open its supporting day or trade.")
+        )
+        self.learning_hours.cellClicked.connect(
+            lambda row, _column: self._open_group_row("hour", row)
+        )
+        self.learning_environments.cellClicked.connect(
+            lambda row, _column: self._open_group_row("environment", row)
+        )
+        self.learning_trades.cellClicked.connect(self._open_trade_group)
+        self.learning_reads.cellClicked.connect(self._open_read_horizon)
 
         self._line_keys = tuple(day_report_card.LINE_KEYS)
         #: Exactly `evidence_stats.WEEK_SESSIONS` cards, built once. A card is a
         #: DAY; a week with three packs still has five of them.
         self.day_cards = tuple(_WeekDayCard(self) for _ in range(int(WEEK_SESSIONS)))
+        for card in self.day_cards:
+            card.clicked.connect(self.openSessionRequested)
         cards_row = QHBoxLayout()
         cards_row.setSpacing(6)
         for card in self.day_cards:
@@ -533,6 +626,9 @@ class WeekReviewPage(_StepPage):
         self._worker: _ReadWorker | None = None
         #: ONE read at a time, cleared by EVERY ending - including a raise.
         self._reading = False
+        self._requested_sessions = 5
+        self._generation = 0
+        self._learning = {}
 
         # V2 item 2a: the per-page Refresh button is GONE FROM THE LAYOUT.
         # One Refresh at the top of the tab drives every page now. The
@@ -540,6 +636,13 @@ class WeekReviewPage(_StepPage):
         # it as its own single-flight guard - what changed is that the
         # trader no longer has to find five of them.
         self._layout.addWidget(self.refresh_note)
+        self._layout.addWidget(self.window_selector)
+        self._layout.addWidget(self.learning_note)
+        self._layout.addWidget(self.learning_reads)
+        self._layout.addWidget(self.learning_hours)
+        self._layout.addWidget(self.learning_environments)
+        self._layout.addWidget(self.learning_trades)
+        self._layout.addWidget(self.learning_drilldown)
         self._layout.addWidget(self.facts_note)
         self._layout.addLayout(cards_row)
         self._layout.addWidget(self.week_story, 1)
@@ -553,6 +656,12 @@ class WeekReviewPage(_StepPage):
         self._layout.addWidget(self.summary, 1)
         self._finish_layout()
         self._render(prep_service.empty_week_payload())
+
+    def _window_changed(self, index: int) -> None:
+        self._requested_sessions = (5, 10, 20)[max(0, min(index, 2))]
+        self._generation += 1
+        if not self._reading:
+            self.reload()
 
     def reload(self) -> None:
         """Start the ONE week read on this page's worker. Single-flight.
@@ -570,17 +679,22 @@ class WeekReviewPage(_StepPage):
         self.refresh_button.setEnabled(False)
         self.refresh_note.setText("Refreshing the week...")
         friday = self.service.weekend
+        generation = self._generation
+        count = self._requested_sessions
         worker = _ReadWorker(
-            lambda: prep_service.read_week_review(friday=friday), self
+            lambda: prep_service.read_week_review(friday=friday, window_sessions=count), self
         )
-        worker.finished_with.connect(self._on_week_ready)
-        worker.failed.connect(self._on_week_failed)
+        worker.finished_with.connect(lambda payload: self._on_week_ready(payload, generation))
+        worker.failed.connect(lambda message: self._on_week_failed(message, generation))
         self._worker = worker
         worker.start()
 
-    def _on_week_ready(self, payload: object) -> None:
+    def _on_week_ready(self, payload: object, generation: int) -> None:
         self._reading = False
         self.refresh_button.setEnabled(True)
+        if generation != self._generation:
+            self.reload()
+            return
         self.refresh_note.setText("")
         try:
             self._render(payload if isinstance(payload, dict) else {})
@@ -588,9 +702,12 @@ class WeekReviewPage(_StepPage):
             logging.debug("The Week Review page could not be drawn.", exc_info=True)
             self.refresh_note.setText(f"Week review could not be drawn: {exc}")
 
-    def _on_week_failed(self, message: str) -> None:
+    def _on_week_failed(self, message: str, generation: int) -> None:
         self._reading = False
         self.refresh_button.setEnabled(True)
+        if generation != self._generation:
+            self.reload()
+            return
         stated = f"Week review unavailable: {message}"
         self.refresh_note.setText(stated)
         # Last-good survives. Only an empty page shows the failure as its body,
@@ -622,7 +739,178 @@ class WeekReviewPage(_StepPage):
         self._render_strip(body.get("strip") or {})
         self.ideas_card.set_session(self.service.weekend)
         self.ideas_card.show_ideas(list(body.get("ideas") or ()))
-        self.summary.setPlainText("\n".join(self._summary_lines(body, rows)))
+        learning = dict(body.get("learning") or {})
+        window = dict(learning.get("window") or {})
+        sessions = list(window.get("sessions") or ())
+        if learning.get("error") and self._learning:
+            old_window = self._learning.get("window") or {}
+            self.learning_note.setText(
+                f"Learning refresh failed: {learning['error']}. "
+                f"Still showing {old_window.get('requested') or '?'} sessions "
+                f"through {old_window.get('end') or 'unknown'}."
+            )
+        elif sessions:
+            self.learning_note.setText(
+                f"Learning: {len(sessions)} completed sessions, {window.get('start')} to {window.get('end')}. "
+                "Read rates use your clicked calls."
+            )
+        else:
+            self.learning_note.setText(str(learning.get("error") or "Learning window has no completed sessions yet."))
+        lines = self._summary_lines(body, rows)
+        if sessions:
+            lines += ["", "LEARNING WINDOW", f"{window.get('start')} to {window.get('end')}"]
+        if learning.get("error"):
+            lines.append(f"Learning refresh error: {learning['error']}")
+        self.summary.setPlainText("\n".join(lines))
+        if not learning.get("error") or not self._learning:
+            self._render_learning_tables(learning)
+
+    @staticmethod
+    def _set_table(table: QTableWidget, rows: list[tuple[str, ...]]) -> None:
+        table.setRowCount(len(rows))
+        for row_index, values in enumerate(rows):
+            for column, value in enumerate(values):
+                item = table.item(row_index, column)
+                if item is None:
+                    table.setItem(row_index, column, QTableWidgetItem(value))
+                elif item.text() != value:
+                    item.setText(value)
+        apply_width_rule_to_table_widget(table, text_columns=(0,), elide_columns=(0,))
+
+    @staticmethod
+    def _learning_rate(cell: dict) -> str:
+        if not int(cell.get("n") or 0):
+            return "waiting" if int(cell.get("pending") or 0) else "unmeasured"
+        if not cell.get("meets_floor"):
+            return "too few to call"
+        rate = cell.get("rate")
+        return f"{float(rate) * 100:.0f}%" if rate is not None else "unmeasured"
+
+    def _render_learning_tables(self, learning: dict) -> None:
+        self._learning = dict(learning or {})
+        horizons = dict((learning.get("reads") or {}).get("horizons") or {})
+        read_rows: list[tuple[str, ...]] = []
+        for name in ("rest_of_day", "next_5_sessions"):
+            cell = dict(horizons.get(name) or {})
+            accuracy = dict(cell.get("accuracy") or {})
+            calibration = dict(cell.get("calibration") or {})
+            baselines = dict(cell.get("baselines") or {})
+            baseline_text = ", ".join(
+                f"{key}: {int(dict(value or {}).get('right') or 0)}/{int(dict(value or {}).get('n') or 0)}"
+                for key, value in baselines.items()
+            ) or "unmeasured"
+            confidence = "; ".join(
+                f"{str(item.get('confidence') or '')}: {int(item.get('right') or 0)}/"
+                f"{int(item.get('n') or 0)} ({self._learning_rate(item)})"
+                for item in calibration.get("cells") or ()
+            ) or "unmeasured"
+            coverage = ((learning.get("coverage") or {}).get("horizons") or {}).get(name) or {}
+            read_rows.append((
+                str(cell.get("label") or name), str(accuracy.get("n") or 0),
+                str(accuracy.get("right") or 0),
+                str(accuracy.get("wrong") or 0), str(accuracy.get("flat") or 0),
+                str(accuracy.get("pending") or 0),
+                str(accuracy.get("unmeasured") or 0), self._learning_rate(accuracy),
+                str(len(coverage.get("sessions") or ())), baseline_text, confidence,
+            ))
+        self._set_table(self.learning_reads, read_rows)
+
+        def group_rows(values, key_name: str) -> list[tuple[str, ...]]:
+            output = []
+            for row in values or ():
+                accuracy = dict(row.get("accuracy") or {})
+                baseline_text = ", ".join(
+                    f"{key}: {int(dict(value or {}).get('right') or 0)}/{int(dict(value or {}).get('n') or 0)}"
+                    for key, value in dict(row.get("baselines") or {}).items()
+                ) or "unmeasured"
+                output.append((
+                    str(row.get(key_name) or "unknown"), str(row.get("horizon") or ""),
+                    str(accuracy.get("n") or 0), str(accuracy.get("right") or 0),
+                    str(accuracy.get("wrong") or 0), str(accuracy.get("flat") or 0),
+                    str(accuracy.get("pending") or 0), str(accuracy.get("unmeasured") or 0),
+                    self._learning_rate(accuracy), str(row.get("session_count") or 0), baseline_text,
+                ))
+            return output
+
+        self._set_table(self.learning_hours, group_rows(learning.get("by_hour"), "key"))
+        self._set_table(self.learning_environments, group_rows(learning.get("by_environment"), "key"))
+        trade_rows: list[tuple[str, ...]] = []
+        for row in learning.get("trade_groups") or ():
+            stats = dict(row.get("stats") or {})
+            net = stats.get("net_pnl")
+            money = "unmeasured" if net is None else f"{net} {stats.get('currency') or ''}".strip()
+            environment = str(row.get("environment") or "unknown")
+            if str(row.get("scope") or "") == "all_contexts":
+                environment = "all entry contexts"
+            trade_rows.append((
+                environment, str(row.get("horizon") or ""),
+                str(stats.get("closed") or 0), str(stats.get("wins") or 0),
+                str(stats.get("losses") or 0), str(stats.get("flats") or 0),
+                (
+                    "too few to call" if not row.get("meets_floor")
+                    else f"{float(row['win_rate']) * 100:.0f}%" if row.get("win_rate") is not None
+                    else "unmeasured"
+                ),
+                money,
+                str(stats.get("n_with_r") or 0),
+            ))
+        self._set_table(self.learning_trades, trade_rows)
+
+    def _clear_drilldown(self) -> None:
+        while self._learning_drilldown_layout.count():
+            item = self._learning_drilldown_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _show_drilldown(self, sessions, trade_ids=(), read_ids=()) -> None:
+        """Local buttons come from the payload and never query a whole store."""
+        self._clear_drilldown()
+        days = [str(value) for value in sessions or () if str(value)]
+        trades = [str(value) for value in trade_ids or () if str(value)]
+        reads = [str(value) for value in read_ids or () if str(value)]
+        if not days and not trades and not reads:
+            self._learning_drilldown_layout.addWidget(QLabel("No supporting row was recorded."))
+            return
+        if reads:
+            label = QLabel("Read IDs: " + ", ".join(reads))
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._learning_drilldown_layout.addWidget(label)
+        for label, values, signal in (
+            ("Days", days, self.openSessionRequested), ("Trades", trades, self.openTradeRequested)
+        ):
+            if values:
+                self._learning_drilldown_layout.addWidget(QLabel(f"{label}:"))
+                for value in values:
+                    button = QToolButton()
+                    button.setText(value)
+                    button.clicked.connect(lambda _checked=False, item=value, emit=signal: emit.emit(item))
+                    self._learning_drilldown_layout.addWidget(button)
+        self._learning_drilldown_layout.addStretch(1)
+
+    def _open_group_row(self, kind: str, row: int) -> None:
+        rows = self._learning.get("by_hour" if kind == "hour" else "by_environment") or ()
+        if 0 <= row < len(rows):
+            chosen = dict(rows[row] or {})
+            self._show_drilldown(chosen.get("sessions"), read_ids=chosen.get("read_ids"))
+
+    def _open_read_horizon(self, row: int, _column: int) -> None:
+        names = ("rest_of_day", "next_5_sessions")
+        if 0 <= row < len(names):
+            cell = (((self._learning.get("coverage") or {}).get("horizons") or {}).get(names[row]) or {})
+            self._show_drilldown(cell.get("sessions"), read_ids=cell.get("read_ids"))
+
+    def _open_trade_group(self, row: int, _column: int) -> None:
+        rows = self._learning.get("trade_groups") or ()
+        if 0 <= row < len(rows):
+            chosen = dict(rows[row] or {})
+            ids = set(chosen.get("trade_ids") or ())
+            sessions = sorted({
+                str(trade.get("closed_session") or "") for trade in self._learning.get("trade_rows") or ()
+                if trade.get("trade_id") in ids and trade.get("closed_session")
+            })
+            self._show_drilldown(sessions, chosen.get("trade_ids"))
 
     def _story_text(self, body) -> str:
         story = dict(body.get("week_story") or {})
@@ -2685,6 +2973,7 @@ class WeekendPrepPanel(QFrame):
     #: Trades tab, where `save_risk_fields` already lives behind the trader's own
     #: hand. This tab has no writer for that column and never will.
     openTradeRequested = Signal(str)
+    openSessionRequested = Signal(str)
 
     def __init__(self, parent=None, *, service: WeekendPrepService | None = None, focus_service=None) -> None:
         super().__init__(parent)
@@ -2716,6 +3005,7 @@ class WeekendPrepPanel(QFrame):
             page.statusChanged.connect(self.statusChanged)
             self.pages.addWidget(page)
         self.tag_week.openTradeRequested.connect(self.openTradeRequested)
+        self.week_review.openSessionRequested.connect(self.openSessionRequested)
 
         self.header = QLabel("")
         self.header.setObjectName("WeekendHeader")

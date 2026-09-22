@@ -935,13 +935,12 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=3,
         ),
         # Packet WS-RP (2026-09-13), APPENDED after `market_story_rollups` and
-        # it now CLOSES the deterministic stage. It reads the day's own
+        # it now precedes the Day Review facts stage tail. It reads the day's own
         # evidence stores - the journal money, the intraday outcomes, the
         # session-horizon file and the warehouse - and publishes ONE measured
         # report plus its markdown sibling. Everything it reads is written by a
-        # slot above it, so it belongs last inside the stage; it calls no model
-        # and nothing below it reads its output, so it stays ahead of
-        # `ai_summary` rather than joining the narration stage.
+        # slot above it; it calls no model and stays ahead of
+        # `day_review_facts` rather than joining the narration stage.
         #
         # Deterministic, seconds of work, and a failure never fails the night -
         # hence `journal_import`'s attempt budget rather than the briefs'.
@@ -959,7 +958,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             name="day_review_facts",
             run=day_review_facts.run_day_review_facts,
             reserve_minutes=5.0,
-            description="Refresh closed-session Day Review facts before narration (deterministic, no model)",
+            description="Refresh current and recent Day Review facts (no model)",
             max_attempts=3,
         ),
         # ------------------------------------------------------------------
@@ -1017,8 +1016,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # Gate #158 reads the ledger for a day story finished before 23:30
         # Pacific and `ticker_briefs` reserves 120 minutes in front of it, so
         # the story goes first. It cannot move further forward: two existing
-        # pins say the Day Review facts sit between `measured_report` and
-        # `ai_summary` (`test_ws_10d_market_story.py`, `test_ws_rp_shared_report.py`), and
+        # pins say `ai_summary` sits directly after `day_review_facts`
+        # (`test_ws_10d_market_story.py`, `test_ws_rp_shared_report.py`), and
         # decision 0018's stage boundaries do not move for a new slot. It reads
         # only the deterministic day pack, and a failure preserves the last
         # verified story.
@@ -1036,8 +1035,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # TJ-16 item 4 (2026-09-20), APPENDED INSIDE stage 2, AFTER `ai_summary`
         # and BEFORE `ticker_briefs`.
         #
-        # After `ai_summary` because the Day Review facts close stage 1 before
-        # it; before `ticker_briefs`
+        # After `ai_summary` while the deterministic `day_review_facts` tail
+        # now separates `measured_report` from stage 2; before `ticker_briefs`
         # because the briefs hold two hours of reserve and this is seconds of
         # work per note, so queueing behind them would cost the tags a whole
         # night for nothing.

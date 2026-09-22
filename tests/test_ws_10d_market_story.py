@@ -938,12 +938,12 @@ def test_a_second_run_over_unchanged_inputs_rebuilds_nothing_and_a_changed_day_r
     assert pack["inputs_hash"], "a cache key that is empty caches nothing"
 
 
-def test_the_measured_report_slot_closes_the_deterministic_stage():
+def test_the_measured_report_precedes_the_day_facts_stage_tail():
     """Decision 0018: a later phase APPENDS inside its stage and never reorders.
 
     `market_story_rollups` remains after `daily_digest` and `theta_pick_grading`; WS-RP
-    appends `measured_report` immediately after it. AI-R3's `day_review_facts`
-    then closes stage 1 directly ahead of `ai_summary`.
+    appends `measured_report` immediately after it; Day Review facts then close
+    the deterministic stage before `ai_summary`.
     Both are deterministic and retain `journal_import`'s attempt budget rather than the
     briefs'.
     """

@@ -14,9 +14,7 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ## Active state at a glance
 
-**Read this block first.** It answers "where are we?"; the dated entries below are the
-record behind it and the newest wins if they disagree. Refresh it on every handoff: one
-sentence per cell, one line per gate, the clause behind it in the entry named beside it.
+This block is the current brief. Dated entries retain verification detail; old statements about an unmerged September 21 integration are superseded here by the verified `main` history.
 
 | | |
 |---|---|

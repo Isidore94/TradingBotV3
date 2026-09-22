@@ -8816,3 +8816,55 @@ The session offered scope/view choices; without an answer, the lead selected bot
 M30+H1 and scan ideas behind Show all. Those are implementation defaults, not a
 claim that the trader explicitly selected an option. Build/review/live status is
 only in the checkpoint; no live store was changed during this assessment.
+
+## TJ-17 — a recap that can teach across sessions (2026-09-22)
+
+The trader approved the recap assessment's four changes. The page's market calls are
+the original clicked or extracted `market_read_grades` rows, with exact horizon,
+direction, confidence, stamp, verdict and a door to the original entry. The five
+WalkawayDay populations remain the selection/pass evidence and keep `what_you_did`,
+`real_miss` (run / no-run / unmeasured) and the decision row's identity; they are
+never a grade of a trade that was not placed. The trade table and its selected-row
+detail use the ONE Journal store on the worker: the exact raw next-morning entry
+words, latest material answers and answer states, the selected (trade, exit session)
+raw exit words and trader-confirmed fields, timestamps, currency, instrument and
+recorded whole-trade net P&L. A read-only CLOSE-leg bridge includes an interim
+scale-out on its own session even after a later final close; its session P&L is
+unmeasured rather than borrowing the whole trade's final net. Missing and unread
+are different; a provisional machine draft is never the trader's confirmed
+answer. The Journal remains the editor.
+
+The 5/10/20 completed-session learning view reads `prediction_ledger` and Results
+through `session_review`, not a new grader. Rest-of-day and next-five calls never
+share a rate. Baselines, confidence, hour (exchange time), D1 environment, pending
+calls, distinct sessions, day/swing trades and unknown context travel with their
+source IDs and dates. `weekend_prep_service` builds one worker payload; the panel
+only formats it. A day or trade drilldown opens that exact existing page/row.
+
+The pack's content hash, excluding its build clock, is the freshness authority.
+`DayReviewService._compose_pack` is shared by the page's worker read and the
+night's writer. The entry/exit projection rides inside the trade rows hashed for
+the pack, so a next-morning answer changes the hash; a matured prediction changes
+the hashed read. A story is visible only when its stamp equals the saved pack and
+that pack equals current canonical facts. Stale, missing and unread are said while
+current deterministic facts stay visible. Opening the page writes no pack or
+model output and calls no model. Its worker refreshes the existing derived
+session index when stale, then reuses it; removing that cache write made every
+open restream the 527 MB intraday outcomes file (22.6 seconds on a staged copy
+before the second open). A cache write failure still costs no journal evidence.
+The `day_review_facts` stage builds the current closed session,
+then visits only existing packs among the prior nineteen completed sessions.
+An unchanged pack stays byte-identical; a failed source retains its old verified
+file and is named in the slot result. Old sessions never trigger a model call.
+
+An idea's Keep remains separate from choosing one process change for an exchange
+week. `weekly_choice` freezes a scoped before reading without overwriting the
+original Keep baseline; the after window begins at the next exchange session,
+never overlaps it, and uses the same named metric, horizon and environment.
+Follow-through is append-only by (idea, choice week, session), with the latest
+correction winning and an absent answer counted as unknown. One choice per
+week is enforced even if that choice is finished; earlier weeks remain
+available when a later week is chosen. A comparison is observational and
+thin or missing samples never claim improvement. The UI writes through the
+existing IdeasCard worker. This branch is not live until the checks and gates
+in `plan.md` are complete.
