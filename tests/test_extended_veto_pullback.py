@@ -418,3 +418,28 @@ def test_extended_veto_preserves_an_opposite_side_manual_pullback(tmp_path, monk
     finally:
         panel.close()
         panel.deleteLater()
+
+
+def test_extended_veto_keeps_a_same_side_m15_only_watch_without_claiming_m30_h1(
+    tmp_path, monkeypatch
+):
+    """A saved narrow manual watch is not the requested M30/H1 follow-up."""
+    from chart_watch import PULLBACK_KIND, load_chart_watches
+
+    panel = _panel(tmp_path, monkeypatch)
+    try:
+        _queue_scans_for_veto(panel, "AAPL")
+        assert panel.arm_chart_watch_for(
+            "AAPL", "LONG", PULLBACK_KIND,
+            source_text="chart", timeframes=("M15",),
+        )
+        manual = panel._chart_watches[0]
+        _choose_extended_reason(panel.chart_review.capture_rail)
+        QApplication.processEvents()
+
+        assert panel._chart_watches == [manual]
+        assert load_chart_watches(tmp_path / "chart_watches.json") == [manual]
+        assert "not armed" in panel.chart_review.capture_rail.status_label.text().casefold()
+    finally:
+        panel.close()
+        panel.deleteLater()
