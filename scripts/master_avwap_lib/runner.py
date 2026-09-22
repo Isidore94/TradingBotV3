@@ -727,6 +727,14 @@ def _run_deferred_theta_enrichment(
     except Exception:
         logging.exception("Deferred theta option premium enrichment failed for run %s.", run_id)
     finally:
+        # A pick is observed after the quote attempt. Recording it before this
+        # worker ran froze null strikes/credits forever under the append-only
+        # dedup key. The scan's original date remains its identity, and a stale
+        # report guard or a quote outage cannot erase the observed candidate.
+        try:
+            record_theta_picks(sold_put_rows_all, pcs_rows_all, reference_date, datetime.now())
+        except Exception:
+            logging.exception("Could not record theta picks for deferred run %s.", run_id)
         if theta_ib is not None and theta_ib_owned:
             disconnect_daily_data_client(theta_ib)
 
@@ -2725,10 +2733,6 @@ def _run_master_impl(
         reviewed_symbols=reviewed_symbols,
     )
     write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
-    # WS-TH item 1: the same rows the report just printed, recorded once per
-    # (symbol, scan date, play type). Shadow evidence - it reads the rows and
-    # changes none of them - and it never raises into the scan.
-    record_theta_picks(theta_put_rows, theta_pcs_rows, today_run, datetime.now())
     favorite_watchlist_reference = datetime.now()
     favorite_watchlist_result = write_favorite_zone_watchlist_outputs(
         focus_path=MASTER_AVWAP_FOCUS_FILE,
