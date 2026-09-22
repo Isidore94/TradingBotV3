@@ -267,3 +267,205 @@ def test_observation_tags_v2_refuses_unknown_fragment_without_changing_verified_
 
     assert bad["status"] == "degraded_no_narrative", bad
     assert {path.name: path.read_bytes() for path in sorted(root.glob("*.json"))} == before
+
+
+def test_day_story_v2_names_reads_without_a_prediction_and_accepts_zero_pairs(tmp_path):
+    """An extracted/observation-only read is counted, never made into a click."""
+    import day_review_pack
+    from ai_jobs import day_review_narration as narration
+
+    entry = day_fx.observing_and_predicting_entry()
+    reads, _ = day_fx.graded_reads([entry])
+    pack = day_fx.build(
+        entries=[entry], reads=reads, congruence=day_fx.congruence(reads),
+        story=day_fx.daily_story([entry]),
+    )
+    pack["trader_said"] = [
+        row for row in pack["trader_said"] if row["kind"] != "prediction"
+    ]
+    root = tmp_path / "day_review"
+    day_review_pack.write_pack(pack, root=root)
+
+    def request(**kwargs):
+        evidence = kwargs["evidence"]
+        assert evidence["read_explanations"] == {}
+        assert evidence["read_explanations_not_offered"] == [{
+            "read_source_id": pack["reads"][0]["source_id"], "reason": "no_prediction"
+        }]
+        return {
+            "model": "local-test-medium",
+            "summary": {
+                "headline": "No clicked call was available.",
+                "what_happened": "The session was measured.",
+                "what_you_thought": "The trader left an observation.",
+                "read_explanations": {},
+                "chased_against_news": {"verdict": "unknown", "evidence_id": ""},
+                "process": "Do not turn an observation into a prediction.",
+                "sources": list(evidence["allowed_source_ids"]),
+            },
+        }
+
+    outcome = narration.run_day_review_narration(
+        session_date=day_fx.SESSION, now=day_fx.OVERNIGHT, root=root,
+        request=request, only_this_session=True,
+    )
+    assert outcome["status"] == "ok", outcome
+    assert narration.read_narration(day_fx.SESSION, root=root)["narration"]["were_you_right"] == []
+
+
+def test_day_story_v2_rejects_every_closed_mapping_breach_byte_identically(tmp_path):
+    """Missing, unknown and too-long explanations are all whole-answer failures."""
+    import day_review_pack
+    from ai_jobs import day_review_narration as narration
+
+    for name, broken in (
+        ("missing", lambda offered: {}),
+        ("unknown", lambda offered: {"not-a-read": "Wrong key"}),
+        ("oversize", lambda offered: {next(iter(offered)): "x" * 241}),
+    ):
+        root = tmp_path / name
+        pack = day_fx.build()
+        day_review_pack.write_pack(pack, root=root)
+        prior = narration.narration_path(day_fx.SESSION, root=root)
+        prior.parent.mkdir(parents=True, exist_ok=True)
+        prior.write_bytes(b'{"verified":"keep"}\n')
+        before = prior.read_bytes()
+
+        def request(**kwargs):
+            evidence = kwargs["evidence"]
+            return {
+                "model": "local-test-medium",
+                "summary": {
+                    "headline": "The closed mapping matters.",
+                    "what_happened": "One session.",
+                    "what_you_thought": "One call.",
+                    "read_explanations": broken(evidence["read_explanations"]),
+                    "chased_against_news": {"verdict": "unknown", "evidence_id": ""},
+                    "process": "Reject the whole reply.",
+                    "sources": list(evidence["allowed_source_ids"]),
+                },
+            }
+
+        outcome = narration.run_day_review_narration(
+            session_date=day_fx.SESSION, now=day_fx.OVERNIGHT, root=root,
+            request=request, only_this_session=True,
+        )
+        assert outcome["status"] == "degraded_no_narrative", (name, outcome)
+        assert prior.read_bytes() == before
+
+
+def test_observation_v2_keeps_legacy_strict_and_names_fragment_cap(tmp_path):
+    """The old offset contract remains strict while v2 reports every omission."""
+    from ai_jobs import observation_tags
+
+    vocabulary = observation_tags.load_vocabulary()
+    note = {"note_id": "nt-test", "entry_id": "entry", "field": "observation",
+            "text": " ".join(f"Sentence {index}." for index in range(61))}
+    fragments, omitted = observation_tags.fragments_for([note])
+    assert len(fragments) == observation_tags.MAX_FRAGMENTS
+    assert omitted["count"] == 1 and omitted["limit"] == observation_tags.MAX_FRAGMENTS
+    assert omitted["fragment_ids"] and omitted["more"] == 0
+
+    root = tmp_path / "tags"
+    entry = tag_fx.click_entry(
+        session=tag_fx.LAST_SESSION, hour=9, direction="up", confidence="high",
+        observation="gap and go so far.", because="",
+    )
+
+    def legacy_bad_span(**_kwargs):
+        return {"model": "local-test-medium", "summary": {"tags": [{
+            "note_id": observation_tags.notes_for([entry])[0]["note_id"],
+            "code": vocabulary["codes"][0], "span": [0, 3], "quote": "bad",
+        }]}}
+
+    outcome = observation_tags.run_observation_tags(
+        session_date=tag_fx.LAST_SESSION, now=tag_fx.morning_after(tag_fx.LAST_SESSION),
+        root=root, entries=[entry], request=legacy_bad_span,
+    )
+    assert outcome["status"] == "degraded_no_narrative", outcome
+    assert list(root.glob("*.json")) == []
+
+
+def test_observation_v2_allows_two_codes_but_rejects_duplicate_or_mixed_transport(tmp_path):
+    """Distinct codes share a fragment; duplicate and offset-mixed rows do not."""
+    from ai_jobs import observation_tags
+
+    entry = tag_fx.click_entry(
+        session=tag_fx.LAST_SESSION, hour=9, direction="up", confidence="high",
+        observation="gap and go so far.", because="",
+    )
+    vocabulary = observation_tags.load_vocabulary()
+
+    def reply_for(kind):
+        def request(**kwargs):
+            fragment = kwargs["evidence"]["fragments"][0]
+            row = {"fragment_id": fragment["fragment_id"], "code": vocabulary["codes"][0]}
+            if kind == "valid":
+                rows = [row, {**row, "code": vocabulary["codes"][1]}]
+            elif kind == "duplicate":
+                rows = [row, dict(row)]
+            else:
+                rows = [{**row, "note_id": fragment["note_id"]}]
+            return {"model": "local-test-medium", "summary": {"tags": rows}}
+        return request
+
+    good_root = tmp_path / "good"
+    good = observation_tags.run_observation_tags(
+        session_date=tag_fx.LAST_SESSION, now=tag_fx.morning_after(tag_fx.LAST_SESSION),
+        root=good_root, entries=[entry], request=reply_for("valid"),
+    )
+    assert good["status"] == "ok", good
+    assert len(observation_tags.read_latest(tag_fx.LAST_SESSION, root=good_root)["tags"]) == 2
+
+    for kind in ("duplicate", "mixed"):
+        root = tmp_path / kind
+        prior = root / "verified.json"
+        root.mkdir()
+        prior.write_bytes(b'{"verified":"keep"}\n')
+        before = prior.read_bytes()
+        bad = observation_tags.run_observation_tags(
+            session_date=tag_fx.LAST_SESSION, now=tag_fx.morning_after(tag_fx.LAST_SESSION),
+            root=root, entries=[entry], request=reply_for(kind),
+        )
+        assert bad["status"] == "degraded_no_narrative", (kind, bad)
+        assert prior.read_bytes() == before
+
+
+def test_day_story_v2_rejects_ambiguous_input_and_names_render_cap(monkeypatch, tmp_path):
+    """Ambiguous pairs refuse before a call; the cap reports the other read."""
+    import day_review_pack
+    from ai_jobs import day_review_narration as narration
+
+    first = day_fx.observing_and_predicting_entry(direction="up")
+    second = day_fx.observing_and_predicting_entry(
+        direction="down", stamp=day_fx.fx.STAMP + timedelta(hours=1)
+    )
+    entries = [first, second]
+    reads, _ = day_fx.graded_reads(entries)
+    pack = day_fx.build(
+        entries=entries, reads=reads, congruence=day_fx.congruence(reads),
+        story=day_fx.daily_story(entries),
+    )
+    monkeypatch.setattr(narration, "MAX_GRADED_CLAIMS", 1)
+    evidence = narration._day_evidence(pack, tmp_path / "cap")
+    assert list(evidence["read_explanations"]) == [pack["reads"][0]["source_id"]]
+    assert evidence["read_explanations_not_offered"] == [{
+        "read_source_id": pack["reads"][1]["source_id"], "reason": "render_cap"
+    }]
+
+    prediction = next(row for row in pack["trader_said"] if row["kind"] == "prediction")
+    pack["trader_said"].append({**prediction, "source_id": prediction["source_id"] + "-two"})
+    root = tmp_path / "ambiguous"
+    day_review_pack.write_pack(pack, root=root)
+    prior = narration.narration_path(day_fx.SESSION, root=root)
+    prior.parent.mkdir(parents=True, exist_ok=True)
+    prior.write_bytes(b'{"verified":"keep"}\n')
+    before = prior.read_bytes()
+    calls: list[dict] = []
+    outcome = narration.run_day_review_narration(
+        session_date=day_fx.SESSION, now=day_fx.OVERNIGHT, root=root,
+        request=lambda **kwargs: calls.append(kwargs), only_this_session=True,
+    )
+    assert outcome["status"] == "degraded_no_narrative", outcome
+    assert calls == []
+    assert prior.read_bytes() == before
