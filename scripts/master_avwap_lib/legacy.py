@@ -851,6 +851,22 @@ TRACKER_RECENT_COUNT_COLUMNS = (
     "n_excluded",
     "excluded_reasons",
     "fully_excluded_groups",
+    # SP2 provenance is additive.  These are deliberately distinct from the
+    # older weighted family fields above: PQS reads only this finite,
+    # representative-CLOSED population.
+    "pqs_policy",
+    "pqs_basis",
+    "pqs_source",
+    "pqs_n_wins",
+    "pqs_n_losses",
+    "pqs_n_flats",
+    "pqs_n_closed",
+    "pqs_n_entry_sessions",
+    "pqs_n_symbols",
+    "pqs_gross_win",
+    "pqs_gross_loss",
+    "pqs_counted_win_rate",
+    "pqs_profit_factor",
 )
 
 TRACKER_SETUP_TYPE_COUNT_COLUMNS = (
@@ -8592,6 +8608,57 @@ def build_recent_tracker_setup_family_rows(
         # entry is old cannot have a newer measured close than its own scan.
         item["latest_measured_session"] = latest_measured_session
 
+        # SP2's population is intentionally separate from the older family
+        # statistics.  The latter keep their recency-weighted values for their
+        # existing readers; PQS needs one finite representative CLOSED R per
+        # already-selected episode, with unweighted gains/losses and entry
+        # sessions from exactly that same population.
+        pqs_wins = pqs_losses = pqs_flats = 0
+        pqs_gross_win = pqs_gross_loss = 0.0
+        pqs_sessions: set[str] = set()
+        pqs_symbols: set[str] = set()
+        for closed_row in closed_rows:
+            # The legacy bridge may grade a compact row when the old summary
+            # lacks a representative-status key.  It remains in old-family
+            # columns for compatibility, but cannot be PQS evidence: unknown
+            # compact is not a finite observed representative CLOSE.
+            if str(closed_row.get("representative_status") or "").strip().lower() != "closed":
+                continue
+            pqs_r = _coerce_float(closed_row.get("representative_closed_r"))
+            if pqs_r is None or not math.isfinite(pqs_r):
+                continue
+            entry_session = str(closed_row.get("scan_date") or "").strip()
+            if not entry_session:
+                continue
+            pqs_sessions.add(entry_session)
+            pqs_symbols.add(str(closed_row.get("symbol") or "").strip().upper())
+            if pqs_r > 0:
+                pqs_wins += 1
+                pqs_gross_win += pqs_r
+            elif pqs_r < 0:
+                pqs_losses += 1
+                pqs_gross_loss += -pqs_r
+            else:
+                pqs_flats += 1
+        pqs_closed = pqs_wins + pqs_losses + pqs_flats
+        item["pqs_policy"] = "pqs_v2"
+        item["pqs_basis"] = "finite_representative_closed_r"
+        item["pqs_source"] = "selected_tracker_episodes"
+        item["pqs_n_wins"] = int(pqs_wins)
+        item["pqs_n_losses"] = int(pqs_losses)
+        item["pqs_n_flats"] = int(pqs_flats)
+        item["pqs_n_closed"] = int(pqs_closed)
+        item["pqs_n_entry_sessions"] = len(pqs_sessions)
+        item["pqs_n_symbols"] = len(pqs_symbols - {""})
+        item["pqs_gross_win"] = float(pqs_gross_win)
+        item["pqs_gross_loss"] = float(pqs_gross_loss)
+        item["pqs_counted_win_rate"] = (
+            pqs_wins / pqs_closed if pqs_closed else None
+        )
+        item["pqs_profit_factor"] = (
+            pqs_gross_win / pqs_gross_loss if pqs_gross_loss > 0.0 else None
+        )
+
         # ---- ST4: which policy chose these episodes, and what it left out ---
         #
         # Two grains, and the token names say which: a bare `reason=N` counts
@@ -9360,6 +9427,10 @@ def _expected_r_realized_lookup(recent_family_rows: list[dict] | None) -> dict[t
     profit factor) from the recency-weighted family rows the tracker already
     computed this scan."""
 
+    def _finite_or_none(value):
+        parsed = _coerce_float(value)
+        return parsed if parsed is not None and math.isfinite(parsed) else None
+
     lookup: dict[tuple, dict] = {}
     for item in recent_family_rows or []:
         if not isinstance(item, dict):
@@ -9389,6 +9460,22 @@ def _expected_r_realized_lookup(recent_family_rows: list[dict] | None) -> dict[t
             "win_rate": _coerce_float(item.get("win_rate_closed")),
             "profit_factor": _coerce_float(item.get("profit_factor")),
             "closed_setups": closed,
+            # SP2 keeps its count/payoff population separate from Expected-R's
+            # legacy weighted inputs.  The family builder is the one source of
+            # these fields; no caller reconstructs a count from a rate.
+            "pqs_policy": str(item.get("pqs_policy") or "pqs_v2"),
+            "pqs_basis": str(item.get("pqs_basis") or ""),
+            "pqs_source": str(item.get("pqs_source") or ""),
+            "pqs_n_wins": max(0, int(item.get("pqs_n_wins", 0) or 0)),
+            "pqs_n_losses": max(0, int(item.get("pqs_n_losses", 0) or 0)),
+            "pqs_n_flats": max(0, int(item.get("pqs_n_flats", 0) or 0)),
+            "pqs_n_closed": max(0, int(item.get("pqs_n_closed", 0) or 0)),
+            "pqs_n_entry_sessions": max(0, int(item.get("pqs_n_entry_sessions", 0) or 0)),
+            "pqs_n_symbols": max(0, int(item.get("pqs_n_symbols", 0) or 0)),
+            "pqs_gross_win": _finite_or_none(item.get("pqs_gross_win")),
+            "pqs_gross_loss": _finite_or_none(item.get("pqs_gross_loss")),
+            "pqs_counted_win_rate": _finite_or_none(item.get("pqs_counted_win_rate")),
+            "pqs_profit_factor": _finite_or_none(item.get("pqs_profit_factor")),
         }
     return lookup
 
@@ -9543,13 +9630,25 @@ def apply_expected_r_ranking(
         static_score = _coerce_float(row.get("static_score", row.get("score")))
         win_rate = realized_stats.get("win_rate")
         profit_factor = realized_stats.get("profit_factor")
-        evidence_samples = int(realized_stats.get("closed_setups", 0) or 0)
+        pqs_wins = int(realized_stats.get("pqs_n_wins", 0) or 0)
+        pqs_losses = int(realized_stats.get("pqs_n_losses", 0) or 0)
+        pqs_flats = int(realized_stats.get("pqs_n_flats", 0) or 0)
+        pqs_sessions = int(realized_stats.get("pqs_n_entry_sessions", 0) or 0)
+        pqs_basis = str(realized_stats.get("pqs_basis") or "")
+        pqs_source = str(realized_stats.get("pqs_source") or "")
         pqs = compute_proven_quality_score(
             static_points=static_score or 0.0,
             win_rate=win_rate,
             profit_factor=profit_factor,
-            closed_samples=evidence_samples,
+            closed_samples=int(realized_stats.get("pqs_n_closed", 0) or 0),
             freshness=float(result["freshness_factor"]),
+            n_wins=pqs_wins,
+            n_losses=pqs_losses,
+            n_flats=pqs_flats,
+            measured_entry_sessions=pqs_sessions,
+            gross_win=realized_stats.get("pqs_gross_win"),
+            gross_loss=realized_stats.get("pqs_gross_loss"),
+            policy="pqs_v2",
         )
         row["static_score"] = static_score
         row["score"] = float(pqs["score"])
@@ -9557,17 +9656,41 @@ def apply_expected_r_ranking(
         row["tracker_win_rate"] = None if win_rate is None else round(float(win_rate), 3)
         row["tracker_profit_factor"] = None if profit_factor is None else round(float(profit_factor), 2)
         row["tracker_confident_win_rate"] = pqs["confident_win_rate"]
+        pqs_fields = {
+            "pqs_policy": pqs["policy"],
+            "pqs_basis": pqs_basis,
+            "pqs_source": pqs_source,
+            "pqs_n_wins": pqs["n_wins"],
+            "pqs_n_losses": pqs["n_losses"],
+            "pqs_n_flats": pqs["n_flats"],
+            "pqs_n_closed": pqs["closed_samples"],
+            "pqs_n_entry_sessions": pqs["measured_entry_sessions"],
+            "pqs_n_symbols": int(realized_stats.get("pqs_n_symbols", 0) or 0),
+            "pqs_gross_win": pqs["gross_win"],
+            "pqs_gross_loss": pqs["gross_loss"],
+            "pqs_counted_win_rate": pqs["counted_win_rate"],
+            "pqs_profit_factor": pqs["profit_factor"],
+            "pqs_payoff_evidence": pqs["payoff_evidence"],
+            "pqs_reason": pqs["reason"],
+        }
+        row.update(pqs_fields)
         if pqs["proven"]:
-            wr_text = f"{float(win_rate) * 100:.0f}%" if win_rate is not None else "n/a"
-            pf_text = f"{min(float(profit_factor), 9.9):.1f}" if profit_factor is not None else "n/a"
+            wr_text = f"{float(pqs['counted_win_rate']) * 100:.0f}%" if pqs["counted_win_rate"] is not None else "n/a"
+            pf_text = f"{float(pqs['profit_factor']):.1f}" if pqs["profit_factor"] is not None else "unmeasured"
             row["proven_quality_note"] = (
                 f"score {pqs['score']:.0f} = evidence {pqs['evidence']:.0f} "
-                f"(WR {wr_text}, PF {pf_text}, n={evidence_samples}) + structure {pqs['structure']:.0f}"
+                f"(WR {wr_text}, PF {pf_text}, n={pqs['closed_samples']}, sessions={pqs['measured_entry_sessions']}) "
+                f"+ structure {pqs['structure']:.0f}; {pqs['reason']}"
             )
         else:
+            no_history = (
+                "; no closed tracker history"
+                if int(pqs["closed_samples"] or 0) == 0
+                else ""
+            )
             row["proven_quality_note"] = (
                 f"score {pqs['score']:.0f} = unproven floor {pqs['evidence']:.0f} "
-                f"+ structure {pqs['structure']:.0f} (no closed tracker history)"
+                f"+ structure {pqs['structure']:.0f} ({pqs['reason']}{no_history})"
             )
 
         symbol_entry = symbol_map.get(symbol)
@@ -9578,6 +9701,7 @@ def apply_expected_r_ranking(
             symbol_entry["expected_r_freshness"] = row["expected_r_freshness"]
             symbol_entry["expected_r_signal_date"] = signal_date
             symbol_entry["expected_r_signal_age_days"] = int(signal_age_days)
+            symbol_entry.update(pqs_fields)
 
         feature_row = feature_rows_by_symbol.get(symbol)
         if isinstance(feature_row, dict):
@@ -9587,6 +9711,7 @@ def apply_expected_r_ranking(
             feature_row["expected_r_freshness"] = row["expected_r_freshness"]
             feature_row["expected_r_signal_date"] = signal_date
             feature_row["expected_r_signal_age_days"] = int(signal_age_days)
+            feature_row.update(pqs_fields)
 
 
 def _short_near_favorite_gate_reason(row: dict) -> str:

@@ -27,6 +27,12 @@ import copy
 import math
 from statistics import median
 
+from evidence_stats import MIN_REPORTABLE_N
+from swing_headline import (
+    WILSON_Z as CANONICAL_WILSON_Z,
+    wilson_lower_bound as canonical_wilson_lower_bound,
+)
+
 # ``shrinkage_k`` controls how many closed samples it takes before realized
 # performance carries half the weight (weight = n / (n + k)).  Smaller k =
 # tracker leads harder.  Anchors map static quality points -> a prior expected
@@ -81,6 +87,8 @@ DEFAULT_PQS_CONFIG: dict = {
     "unproven_evidence": 40.0,  # no closed history -> neutral evidence floor
     "losing_pf_scale_min_samples": 5,
     "wilson_z": 1.28,  # ~90% one-sided confidence
+    "min_closed_samples": MIN_REPORTABLE_N,
+    "min_entry_sessions": 5,
 }
 
 
@@ -106,39 +114,156 @@ def compute_proven_quality_score(
     profit_factor=None,
     closed_samples=0,
     freshness: float = 1.0,
+    n_wins=None,
+    n_losses=None,
+    n_flats=None,
+    measured_entry_sessions=None,
+    gross_win=None,
+    gross_loss=None,
+    policy: str = "pqs_v2",
     config: dict | None = None,
 ) -> dict:
-    """Evidence-led points: WR (Wilson-adjusted) + PF + freshness, with the
-    static signal stack demoted to a capped tiebreaker."""
+    """Return the versioned evidence-led score for one setup family.
+
+    ``pqs_v1`` is the exact pre-SP2 replay policy.  Default ``pqs_v2`` only
+    uses a coherent finite representative-CLOSED population and never treats a
+    zero-loss denominator as a payoff factor.
+    """
     cfg = dict(DEFAULT_PQS_CONFIG)
     if config:
         cfg.update(config)
 
+    policy_name = str(policy or "pqs_v2").strip().lower()
+    if policy_name not in {"pqs_v1", "pqs_v2"}:
+        raise ValueError(f"Unknown proven-quality score policy: {policy!r}")
+
+    def _finite(value):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if math.isfinite(parsed) else None
+
     structure = min(
-        max(float(static_points or 0.0), 0.0) / float(cfg["structure_divisor"]),
+        max(_finite(static_points) or 0.0, 0.0) / float(cfg["structure_divisor"]),
         float(cfg["structure_cap"]),
     )
-    samples = int(closed_samples or 0)
-    confident_wr = wilson_lower_bound(win_rate, samples, cfg["wilson_z"])
-    if confident_wr is None:
-        evidence = float(cfg["unproven_evidence"])
-        proven = False
-    else:
-        proven = True
-        evidence = confident_wr * float(cfg["wr_weight"])
-        if profit_factor is not None:
-            pf = max(float(profit_factor), 0.0)
-            evidence += min(pf, float(cfg["pf_cap"])) / float(cfg["pf_cap"]) * float(cfg["pf_weight"])
-            if pf < 1.0 and samples >= int(cfg["losing_pf_scale_min_samples"]):
-                evidence *= pf  # measured loser: sink below the unknowns
+    if policy_name == "pqs_v1":
+        # Kept byte-for-byte in policy terms for replay of old rows/goldens.
+        samples = int(closed_samples or 0)
+        confident_wr = wilson_lower_bound(win_rate, samples, cfg["wilson_z"])
+        if confident_wr is None:
+            evidence = float(cfg["unproven_evidence"])
+            proven = False
+        else:
+            proven = True
+            evidence = confident_wr * float(cfg["wr_weight"])
+            if profit_factor is not None:
+                pf = max(float(profit_factor), 0.0)
+                evidence += min(pf, float(cfg["pf_cap"])) / float(cfg["pf_cap"]) * float(cfg["pf_weight"])
+                if pf < 1.0 and samples >= int(cfg["losing_pf_scale_min_samples"]):
+                    evidence *= pf
+        fresh = _finite(freshness)
+        fresh = 1.0 if fresh is None else min(max(fresh, 0.0), 1.0)
+        evidence *= fresh
+        return {
+            "policy": "pqs_v1",
+            "score": round(evidence + structure, 1),
+            "evidence": round(evidence, 1),
+            "structure": round(structure, 1),
+            "confident_win_rate": None if confident_wr is None else round(confident_wr, 3),
+            "proven": proven,
+        }
 
-    evidence *= min(max(float(freshness or 1.0), 0.0), 1.0)
-    score = evidence + structure
+    def _valid_count(value):
+        parsed = _finite(value)
+        return parsed is not None and parsed >= 0 and parsed.is_integer()
+
+    counts_supplied = all(value is not None for value in (n_wins, n_losses, n_flats))
+    counts_valid = counts_supplied and all(
+        _valid_count(value) for value in (n_wins, n_losses, n_flats)
+    )
+    wins = int(_finite(n_wins)) if counts_valid else 0
+    losses = int(_finite(n_losses)) if counts_valid else 0
+    flats = int(_finite(n_flats)) if counts_valid else 0
+    counted_samples = wins + losses + flats if counts_valid else 0
+    sessions_valid = _valid_count(measured_entry_sessions)
+    sessions = int(_finite(measured_entry_sessions)) if sessions_valid else 0
+    if sessions > counted_samples:
+        sessions_valid = False
+        sessions = 0
+    counted_win_rate = wins / counted_samples if counted_samples else None
+
+    # A supplied NaN/infinity makes this population unmeasured.  We retain the
+    # counts for diagnosis, but never use malformed input to award evidence.
+    numeric_values = (win_rate, profit_factor, gross_win, gross_loss, freshness)
+    numeric_valid = all(value is None or _finite(value) is not None for value in numeric_values)
+    gross_win_value, gross_loss_value = _finite(gross_win), _finite(gross_loss)
+    if not numeric_valid or gross_win_value is None or gross_loss_value is None:
+        pf = None
+    elif gross_loss_value > 0.0:
+        pf = max(gross_win_value, 0.0) / gross_loss_value
+    else:
+        pf = None
+
+    floor_samples = int(cfg["min_closed_samples"])
+    floor_sessions = int(cfg["min_entry_sessions"])
+    coverage_reasons = []
+    if not counts_supplied:
+        coverage_reasons.append("counted population unavailable")
+    elif not counts_valid or not sessions_valid:
+        coverage_reasons.append("invalid counted population")
+    if counted_samples < floor_samples:
+        coverage_reasons.append(f"n={counted_samples} below {floor_samples}")
+    if sessions < floor_sessions:
+        coverage_reasons.append(f"sessions={sessions} below {floor_sessions}")
+    if not numeric_valid:
+        coverage_reasons.append("invalid numeric input")
+    proven = not coverage_reasons
+    confident_wr = (
+        canonical_wilson_lower_bound(wins, counted_samples, z=CANONICAL_WILSON_Z)
+        if proven
+        else None
+    )
+    payoff_evidence = 0.0
+    if proven and pf is not None:
+        payoff_evidence = (
+            min(pf, float(cfg["pf_cap"])) / float(cfg["pf_cap"])
+            * float(cfg["pf_weight"])
+            * min(1.0, losses / float(floor_samples))
+        )
+    if proven and confident_wr is not None:
+        evidence = confident_wr * float(cfg["wr_weight"]) + payoff_evidence
+        if pf is not None and pf < 1.0 and losses >= int(cfg["losing_pf_scale_min_samples"]):
+            evidence *= pf
+        reason = "measured: counted representative CLOSED R cleared episode/session floors"
+    else:
+        evidence = float(cfg["unproven_evidence"])
+        if pf is not None and pf < 1.0 and losses >= int(cfg["losing_pf_scale_min_samples"]):
+            evidence *= pf
+        reason = "unproven: " + "; ".join(coverage_reasons or ["no measured coverage"])
+
+    fresh = _finite(freshness)
+    fresh = 0.0 if fresh is None else min(max(fresh, 0.0), 1.0)
+    evidence *= fresh
     return {
-        "score": round(score, 1),
+        "policy": "pqs_v2",
+        "score": round(evidence + structure, 1),
         "evidence": round(evidence, 1),
         "structure": round(structure, 1),
         "confident_win_rate": None if confident_wr is None else round(confident_wr, 3),
+        "counted_win_rate": None if counted_win_rate is None else round(counted_win_rate, 3),
+        "closed_samples": int(counted_samples),
+        "n_wins": int(wins),
+        "n_losses": int(losses),
+        "n_flats": int(flats),
+        "measured_entry_sessions": int(sessions),
+        "gross_win": gross_win_value if numeric_valid else None,
+        "gross_loss": gross_loss_value if numeric_valid else None,
+        "profit_factor": None if pf is None else round(pf, 4),
+        "payoff_evidence": round(payoff_evidence, 3),
+        "freshness": fresh,
+        "reason": reason,
         "proven": proven,
     }
 
