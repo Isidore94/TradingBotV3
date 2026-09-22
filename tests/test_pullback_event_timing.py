@@ -20,7 +20,6 @@ if str(SCRIPTS_DIR) not in sys.path:
 from test_pct1_pullback_alert import (  # noqa: E402
     M15_LONG_CLOSES,
     M15_RECLAIM_INDEX,
-    M30_HOLD_CROSS_INDEX,
     M30_LONG_CLOSES,
     M30_RECLAIM_INDEX,
     M30_SMA,
