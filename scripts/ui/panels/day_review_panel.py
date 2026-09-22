@@ -88,7 +88,7 @@ EXCERPT_LIMIT = 90
 #: What the "What happened" section says when the night has not written a story
 #: for this session. Said plainly rather than leaving an empty box that reads as
 #: a read that failed. The deterministic facts stay under it either way.
-NO_STORY_YET = "No story yet - it is written overnight (TJ-4)."
+NO_STORY_YET = "No story yet. It is written overnight."
 
 #: What a DAYTIME Redo says. Local inference is night-only, seven days a week
 #: (trader, 2026-09-19; decision 0021 answer 19), so the button writes a
@@ -543,6 +543,13 @@ class DayReviewPanel(QFrame):
             service = DayReviewService()
         self.service = service
         self._worker: _DayReadWorker | None = None
+        #: A date chosen while the one reader is still busy.  The reader is
+        #: never terminated: its stale payload is ignored, then this request
+        #: starts after it has finished.
+        self._pending_day_read: tuple[str, bool] | None = None
+        #: The A.I. Summary link reads the completed day's existing facts.  It
+        #: must not turn a missing tape into a recovery write.
+        self._next_read_skips_backfill = False
         self._index_worker: _IndexBuildWorker | None = None
         self._bars_worker: _IndexBuildWorker | None = None
         self._bars_backfill_queue: list[str] = []
@@ -732,6 +739,10 @@ class DayReviewPanel(QFrame):
         self.story_note = QLabel(NO_STORY_YET)
         self.story_note.setObjectName("SectionSubtitle")
         self.story_note.setWordWrap(True)
+        self.story_warning = QLabel("")
+        self.story_warning.setObjectName("SectionSubtitle")
+        self.story_warning.setWordWrap(True)
+        self.story_warning.setVisible(False)
         # TJ-4: the night's story, under its own headline. The page FORMATS it -
         # every verdict on it was measured by TJ-10's grader and copied by the
         # night; nothing here grades anything.
@@ -1037,6 +1048,7 @@ class DayReviewPanel(QFrame):
         self.story_section = self._section(
             "What happened",
             self.story_note,
+            self.story_warning,
             self.story_body,
             self.story_facts,
             self.congruence_note,
@@ -1353,6 +1365,7 @@ class DayReviewPanel(QFrame):
             )
             self.statusChanged.emit(self.status.text())
             return False
+        self._next_read_skips_backfill = True
         self.show_session(session)
         return True
 
@@ -1565,19 +1578,59 @@ class DayReviewPanel(QFrame):
 
     def reload(self) -> None:
         """Ask the worker for the selected session. Never blocks the page."""
-        if self._worker is not None and self._worker.isRunning():
-            return
         self._refresh_session_picker()
         self._sync_after_the_fact()
-        self.status.setText(LOADING_NOTE)
         session = self.session_date()
-        self._backfill_bars_for(session)
+        backfill_bars = not self._next_read_skips_backfill
+        self._next_read_skips_backfill = False
+        self._request_day_read(session, backfill_bars=backfill_bars)
+
+    def _request_day_read(self, session: str, *, backfill_bars: bool) -> None:
+        """Run one existing reader, or queue its replacement after it finishes."""
+        if self._worker is not None and self._worker.isRunning():
+            if str(getattr(self._worker, "_session", "")) != str(session):
+                self._pending_day_read = (str(session), bool(backfill_bars))
+            return
+        self.status.setText(LOADING_NOTE)
+        if backfill_bars:
+            self._backfill_bars_for(session)
         self._worker = _DayReadWorker(
             self.service, session, self, spy_m5_bars=self._spy_bars_for(session)
         )
-        self._worker.loaded.connect(self.render)
-        self._worker.failed.connect(self._render_failure)
-        self._worker.start()
+        worker = self._worker
+        worker.loaded.connect(
+            lambda payload, expected=str(session), allow_backfill=backfill_bars:
+            self._render_loaded_day(expected, payload, allow_backfill=allow_backfill)
+        )
+        worker.failed.connect(
+            lambda reason, expected=str(session): self._render_failed_day(expected, reason)
+        )
+        worker.finished.connect(lambda done=worker: self._on_day_read_finished(done))
+        worker.start()
+
+    def _render_loaded_day(
+        self, expected: str, payload: Mapping[str, Any], *, allow_backfill: bool
+    ) -> None:
+        """Ignore a completed stale read after the picker moved to another day."""
+        if self.session_date() != expected:
+            return
+        if str((payload or {}).get("session_date") or "") != expected:
+            return
+        self.render(payload, allow_backfill=allow_backfill)
+
+    def _render_failed_day(self, expected: str, reason: str) -> None:
+        if self.session_date() == expected:
+            self._render_failure(reason)
+
+    def _on_day_read_finished(self, worker: _DayReadWorker) -> None:
+        if worker is not self._worker:
+            return
+        self._worker = None
+        pending = self._pending_day_read
+        self._pending_day_read = None
+        if pending is not None:
+            session, backfill_bars = pending
+            self._request_day_read(session, backfill_bars=backfill_bars)
 
     def _render_failure(self, reason: str) -> None:
         self.status.setText(f"the session could not be read: {reason}")
@@ -1588,7 +1641,7 @@ class DayReviewPanel(QFrame):
             self.reload()
 
     # -- rendering ---------------------------------------------------------
-    def render(self, payload: Mapping[str, Any]) -> None:
+    def render(self, payload: Mapping[str, Any], *, allow_backfill: bool = True) -> None:
         """Draw one payload. Formatting only - it computes nothing.
 
         Tolerates a payload with nothing in it: a first paint before any read and
@@ -1638,8 +1691,9 @@ class DayReviewPanel(QFrame):
         self._refresh_name_chart()
         self._render_ideas(session, list(payload.get("ideas") or []))
         self._render_mood(payload.get("mood"))
-        for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
-            self._backfill_bars_for(str(exit_session))
+        if allow_backfill:
+            for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
+                self._backfill_bars_for(str(exit_session))
         error = str(payload.get("error") or "")
         self.status.setText(error or f"Day Review: {session}")
         self.statusChanged.emit(self.status.text())
@@ -1684,6 +1738,9 @@ class DayReviewPanel(QFrame):
         claiming a reading nobody wrote.
         """
         self.story_note.setText(NO_STORY_YET)
+        self.story_note.setToolTip("")
+        self.story_warning.setText("")
+        self.story_warning.setVisible(False)
         if story is None:
             self.story_facts.setText("")
             return
@@ -1755,6 +1812,10 @@ class DayReviewPanel(QFrame):
             self.story_note.setText(headline)
         if attempt_state == "failed":
             self.story_note.setToolTip("A new attempt failed its checks. These are the prior verified words.")
+            self.story_warning.setText(
+                "A new attempt failed its checks. These are the last verified words."
+            )
+            self.story_warning.setVisible(True)
         else:
             self.story_note.setToolTip("")
         lines: list[str] = []

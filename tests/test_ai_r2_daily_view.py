@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,6 +45,36 @@ class _ReadOnlyDayService:
     def read_day(self, session_date, **_kwargs):
         self.reads.append(str(session_date))
         return {"session_date": str(session_date)}
+
+
+class _BlockingDayService:
+    """A worker-path stand-in: it blocks one old read until the test releases it."""
+
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def read_day(self, session_date, **_kwargs):
+        session = str(session_date)
+        self.reads.append(session)
+        self.started.set()
+        if len(self.reads) == 1:
+            assert self.release.wait(2.0), "test did not release the historical read"
+        return {
+            **_payload(session=session),
+            "walkaway_backfill_sessions": ("2026-09-15",),
+        }
+
+
+def _drain_until(qapp, predicate) -> bool:
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 @pytest.fixture(scope="module")
@@ -225,6 +257,59 @@ def test_latest_completed_session_fails_closed_when_the_calendar_is_uncertain(da
     assert "uncertain" in day_panel.status.text().lower()
 
 
+def test_latest_completed_session_reads_without_starting_a_missing_tape_backfill(qapp, monkeypatch):
+    """The daily link reads existing facts only; a missing tape cannot start recovery work."""
+    from ui.panels.day_review_panel import DayReviewPanel
+
+    service = _ReadOnlyDayService()
+    panel = DayReviewPanel(service=service, clock=lambda: MONDAY_MORNING)
+    monkeypatch.setattr(
+        panel,
+        "_backfill_bars_for",
+        lambda _session: pytest.fail("latest completed navigation started a tape backfill"),
+    )
+    try:
+        assert panel.show_latest_completed_session() is True
+        assert _drain_until(qapp, lambda: service.reads == ["2026-09-18"])
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
+def test_latest_completed_session_queues_behind_an_old_read_without_backfilling_or_rendering_it(
+    qapp, monkeypatch
+):
+    """The explicit route is read-only and cannot render old facts under a new date."""
+    from ui.panels.day_review_panel import DayReviewPanel
+
+    service = _BlockingDayService()
+    panel = DayReviewPanel(service=service, clock=lambda: MONDAY_MORNING)
+    backfills: list[str] = []
+    monkeypatch.setattr(panel, "_backfill_bars_for", lambda session: backfills.append(str(session)))
+    try:
+        panel.show_session(OLD_SESSION)
+        assert service.started.wait(1.0)
+        assert service.reads == [OLD_SESSION]
+        assert backfills == [OLD_SESSION]
+
+        assert panel.show_latest_completed_session() is True
+        assert panel.session_date() == "2026-09-18"
+        assert service.reads == [OLD_SESSION]
+        assert backfills == [OLD_SESSION]
+
+        service.release.set()
+        assert _drain_until(qapp, lambda: service.reads == [OLD_SESSION, "2026-09-18"])
+        assert _drain_until(qapp, lambda: panel._payload.get("session_date") == "2026-09-18")
+        assert panel.session_date() == "2026-09-18"
+        assert backfills == [OLD_SESSION]
+    finally:
+        service.release.set()
+        panel.shutdown()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
 def test_missing_story_says_failed_checks_but_keeps_the_measured_report_card(day_panel):
     """An absent day narration with a failed or degraded narration slot is not "not yet"."""
     day_panel.render(
@@ -252,7 +337,25 @@ def test_prior_verified_exact_session_story_stays_visible_when_a_new_attempt_fai
     assert day_panel.story_note.text() == "Friday had a measured story."
     assert "prior verified words" in day_panel.story_body.text().lower()
     assert "new attempt failed" in day_panel.story_note.toolTip().lower()
+    assert "new attempt failed" in day_panel.story_warning.text().lower()
     assert "Measured facts stay here." in day_panel._report_card_lines["did_well"].text()
+
+
+def test_story_failure_warning_is_reset_for_another_sessions_missing_story(day_panel):
+    """A prior day's failed-attempt warning must not stick to another day's empty state."""
+    from ui.panels.day_review_panel import NO_STORY_YET
+
+    day_panel.render(
+        _payload(day_story=_prior_verified_story(), report_card=_card(failed=("day_review_narration",)))
+    )
+    assert day_panel.story_warning.text()
+
+    day_panel.render(_payload(session="2026-09-17", report_card=_card(night_status="no_rows")))
+
+    assert day_panel.story_warning.text() == ""
+    assert day_panel.story_note.toolTip() == ""
+    assert "not run yet" in day_panel.story_note.text().lower()
+    assert "TJ-4" not in NO_STORY_YET
 
 
 @pytest.mark.parametrize(
