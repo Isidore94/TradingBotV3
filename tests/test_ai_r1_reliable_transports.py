@@ -487,15 +487,35 @@ def test_observation_v2_persists_honest_partial_coverage_for_one_long_note(tmp_p
 
     # The original review case: a whole note beyond the request is not counted
     # as represented, while the long-note run above proves partial coverage too.
-    many_notes = [
-        {"note_id": f"nt-{index}", "entry_id": f"entry-{index}",
-         "field": "observation", "text": f"Sentence {index}."}
-        for index in range(observation_tags.MAX_FRAGMENTS + 1)
-    ]
-    many = observation_tags.build_evidence(many_notes, vocabulary=vocabulary)
-    assert many["fragments_omitted"]["notes_total"] == observation_tags.MAX_FRAGMENTS + 1
-    assert many["fragments_omitted"]["notes_represented"] == observation_tags.MAX_FRAGMENTS
-    assert many["fragments_omitted"]["notes_partially_offered"] == 0
+    many_entries = []
+    for index in range(observation_tags.MAX_FRAGMENTS + 1):
+        many_entry = tag_fx.click_entry(
+            session=tag_fx.LAST_SESSION, hour=9, direction="up", confidence="high",
+            observation=f"Sentence {index}.", because="",
+        )
+        many_entry["entry_id"] = f"entry-{index}"
+        many_entries.append(many_entry)
+
+    def many_request(**kwargs):
+        evidence = kwargs["evidence"]
+        assert len(evidence["fragments"]) == observation_tags.MAX_FRAGMENTS
+        return {
+            "model": "local-test-medium",
+            "summary": {"tags": [{
+                "fragment_id": evidence["fragments"][0]["fragment_id"],
+                "code": vocabulary["codes"][0],
+            }]},
+        }
+
+    many_outcome = observation_tags.run_observation_tags(
+        session_date=tag_fx.LAST_SESSION, now=tag_fx.morning_after(tag_fx.LAST_SESSION),
+        root=tmp_path / "many-tags", entries=many_entries, request=many_request,
+    )
+    assert many_outcome["status"] == "ok", many_outcome
+    many_saved = observation_tags.read_latest(tag_fx.LAST_SESSION, root=tmp_path / "many-tags")
+    assert many_saved["notes_total"] == observation_tags.MAX_FRAGMENTS + 1
+    assert many_saved["notes_offered"] == many_saved["notes_represented"] == observation_tags.MAX_FRAGMENTS
+    assert many_saved["notes_partially_offered"] == 0
 
 
 def test_observation_v2_evidence_has_no_result_fields():

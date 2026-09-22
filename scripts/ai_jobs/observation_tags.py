@@ -417,8 +417,10 @@ def _coverage_header(
         "fragments_total": len(offered) + omitted_count,
         "fragments_omitted": omitted_count,
         "fragment_limit": limit,
-        # `notes_offered` is an older header field.  Keep it stable and add
-        # explicit names for the number that actually reached this request.
+        # `notes_offered` has always described the request, so it must be the
+        # distinct notes represented by offered fragments, never every note
+        # that was available before the cap.  On uncapped runs this is unchanged.
+        "notes_offered": represented,
         "notes_total": len(notes),
         "notes_represented": represented,
         "notes_partially_offered": partial,
@@ -876,7 +878,6 @@ def run_observation_tags(
         "prompt_version": PROMPT_VERSION,
         "generated_at": moment.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "inputs_hash": evidence["evidence_hash"],
-        "notes_offered": len(notes),
         **coverage,
         # Advisory 1, as a COUNT in the header: how many of the entries that got
         # a tag were written after the session closed. Present and zero, never
