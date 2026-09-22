@@ -417,12 +417,15 @@ class DayReviewService:
                 # never against the decision day's tape. Reads are durable and
                 # stay on this worker; missing past tapes are backfilled by the
                 # page's existing worker door on the next open.
+                exit_bars_by_day: dict[str, Any] = {}
                 for trade in all_trades:
                     if str(trade.get("status") or "").lower() != "closed":
                         continue
                     exit_day = str(trade.get("last_closing_leg_at") or trade.get("closed_at") or "")[:10]
                     if exit_day and exit_day != session:
-                        exit_bars = day_review_bars.read_session_bars(exit_day)
+                        if exit_day not in exit_bars_by_day:
+                            exit_bars_by_day[exit_day] = day_review_bars.read_session_bars(exit_day)
+                        exit_bars = exit_bars_by_day[exit_day]
                         if exit_bars is not None:
                             stored[exit_day] = exit_bars
             except Exception:  # noqa: BLE001
@@ -1420,17 +1423,24 @@ class DayReviewService:
                 # four stores and may read an appended tail): an index whose
                 # stores were REWRITTEN describes files that are no longer there,
                 # while an APPEND outside this index's scope leaves it valid.
-                verdict, _stamp = day_review_index.stamp_verdict(stored, sources=sources)
+                verdict, stamp = day_review_index.stamp_verdict(stored, sources=sources)
                 if verdict != "rebuild" and not day_review_index.is_stale(
                     stored, now=now
                 ):
                     index = stored
-                    # A page open is read-only. The deterministic night/post-close
-                    # writer may refresh a moved stamp; this read uses the still
-                    # valid body without writing a cache file.
+                    if verdict == "moved":
+                        # The indexed rows are unchanged. Record the small
+                        # source stamp so the next open skips the same tail.
+                        day_review_index.refresh_stamp(stored, stamp=stamp)
         except Exception:  # noqa: BLE001
             _log.debug("The stored Day Review index was unreadable.", exc_info=True)
             index = None
+        if index is None:
+            # Rebuild the derived session cache on this same worker. Otherwise
+            # every open of a stale session streams the large source files.
+            index = self.build_index_for(
+                session, lookback_sessions=lookback_sessions, now=now
+            )
         return daily_recap_reader.read_session(
             session,
             lookback_sessions=lookback_sessions,

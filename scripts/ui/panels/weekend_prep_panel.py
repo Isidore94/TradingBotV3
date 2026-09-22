@@ -569,19 +569,19 @@ class WeekReviewPage(_StepPage):
         self.learning_note = QLabel("")
         self.learning_note.setObjectName("SectionSubtitle")
         self.learning_note.setWordWrap(True)
-        self.learning_reads = QTableWidget(0, 11)
+        self.learning_reads = _ten_row_table(QTableWidget(0, 11))
         self.learning_reads.setHorizontalHeaderLabels(
             ("Horizon", "Finished", "Right", "Wrong", "Flat", "Waiting", "Unknown", "Accuracy", "Days", "3 baselines", "Confidence")
         )
-        self.learning_hours = QTableWidget(0, 11)
+        self.learning_hours = _ten_row_table(QTableWidget(0, 11))
         self.learning_hours.setHorizontalHeaderLabels(
             ("Hour (New York)", "Horizon", "Finished", "Right", "Wrong", "Flat", "Waiting", "Unknown", "Accuracy", "Days", "3 baselines")
         )
-        self.learning_environments = QTableWidget(0, 11)
+        self.learning_environments = _ten_row_table(QTableWidget(0, 11))
         self.learning_environments.setHorizontalHeaderLabels(
             ("D1 environment", "Horizon", "Finished", "Right", "Wrong", "Flat", "Waiting", "Unknown", "Accuracy", "Days", "3 baselines")
         )
-        self.learning_trades = QTableWidget(0, 9)
+        self.learning_trades = _ten_row_table(QTableWidget(0, 9))
         self.learning_trades.setHorizontalHeaderLabels(
             ("Entry D1 environment", "Holding", "Closed", "Wins", "Losses", "Flat", "Win %", "Net after fees", "Risk measured")
         )

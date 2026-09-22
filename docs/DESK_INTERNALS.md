@@ -8771,8 +8771,11 @@ night's writer. The entry/exit projection rides inside the trade rows hashed for
 the pack, so a next-morning answer changes the hash; a matured prediction changes
 the hashed read. A story is visible only when its stamp equals the saved pack and
 that pack equals current canonical facts. Stale, missing and unread are said while
-current deterministic facts stay visible. Opening the page writes no pack, index
-or other derived file and calls no model; a missing index streams on the worker.
+current deterministic facts stay visible. Opening the page writes no pack or
+model output and calls no model. Its worker refreshes the existing derived
+session index when stale, then reuses it; removing that cache write made every
+open restream the 527 MB intraday outcomes file (22.6 seconds on a staged copy
+before the second open). A cache write failure still costs no journal evidence.
 The `day_review_facts` stage builds the current closed session,
 then visits only existing packs among the prior nineteen completed sessions.
 An unchanged pack stays byte-identical; a failed source retains its old verified

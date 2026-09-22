@@ -390,7 +390,7 @@ def _scope(scope: Mapping[str, Any] | None = None) -> dict[str, str]:
     if unexpected:
         raise ValueError(f"unknown measurable scope field(s): {sorted(unexpected)!r}")
     environment = _text(body.get("environment")) or "all"
-    from indicators.d1_environment import LABELS
+    from d1_environment_store import LABELS
 
     if environment not in {"all", *LABELS}:
         raise ValueError(f"unknown D1 environment {environment!r}")

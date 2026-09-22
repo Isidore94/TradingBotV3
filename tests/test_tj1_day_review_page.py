@@ -573,7 +573,7 @@ def test_the_service_reads_a_stored_index_instead_of_streaming(monkeypatch, tmp_
     assert seen[0].get("index") is sentinel
 
 
-def test_the_service_streams_without_writing_an_index_for_a_session_that_has_none(monkeypatch, tmp_path):
+def test_the_service_builds_and_writes_an_index_for_a_session_that_has_none(monkeypatch, tmp_path):
     import project_paths
 
     monkeypatch.setattr(project_paths, "RUNTIME_DATA_DIR", tmp_path, raising=False)
@@ -585,7 +585,7 @@ def test_the_service_streams_without_writing_an_index_for_a_session_that_has_non
     written: list[object] = []
     monkeypatch.setattr(day_review_index, "write_index", lambda index, **_k: written.append(index))
     DayReviewService().read_day(SESSION, now=NOW)
-    assert written == [], "opening a page must not write a derived index"
+    assert written, "an opened session leaves an index behind for next time"
 
 
 def test_a_store_that_cannot_be_read_never_costs_the_page_its_payload(monkeypatch, tmp_path):

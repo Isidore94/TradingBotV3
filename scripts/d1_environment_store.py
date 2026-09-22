@@ -59,6 +59,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import project_paths
 from completed_bars import is_completed_bar
 from indicators.d1_environment import (
+    LABELS as LABELS,
     RULE_VERSION,
     D1Environment,
     classify_environment,

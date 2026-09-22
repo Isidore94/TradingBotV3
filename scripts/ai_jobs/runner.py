@@ -1026,8 +1026,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # TJ-16 item 4 (2026-09-20), APPENDED INSIDE stage 2, AFTER `ai_summary`
         # and BEFORE `ticker_briefs`.
         #
-        # After `ai_summary` because WS-10D pins `measured_report` DIRECTLY
-        # before it and that pair must stay adjacent; before `ticker_briefs`
+        # After `ai_summary` while the deterministic `day_review_facts` tail
+        # now separates `measured_report` from stage 2; before `ticker_briefs`
         # because the briefs hold two hours of reserve and this is seconds of
         # work per note, so queueing behind them would cost the tags a whole
         # night for nothing.
