@@ -113,6 +113,12 @@ class Fire:
     lrsi_from_below_50: bool
     atr: float | None
     message: str
+    # The source event and the SMA leg are different for the M30/M15
+    # companion path.  Keep both so a persisted alert is replayable.
+    cross_timeframe: str | None = None
+    cross_bar_dt: datetime | None = None
+    cross_lrsi: float | None = None
+    sma_bar_dt: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -346,11 +352,25 @@ def evaluate(
 
     fired: list[Fire] = []
 
-    def _fire(trigger: str, index: int, *, cross_index: int | None, message: str) -> None:
+    def _fire(
+        trigger: str,
+        index: int,
+        *,
+        cross_index: int | None,
+        message: str,
+        cross_timeframe: str | None = None,
+        cross_bar_dt: datetime | None = None,
+        cross_lrsi: float | None = None,
+        cross_from_below: bool | None = None,
+        sma_index: int | None = None,
+        event_bar_dt: datetime | None = None,
+        event_minutes: int | None = None,
+    ) -> None:
         if trigger in already or any(hit.trigger == trigger for hit in fired):
             return
         row = completed[index]
-        if not _post_arm(row["dt"], bar_minutes, armed_at):
+        event_dt = event_bar_dt or row["dt"]
+        if not _post_arm(event_dt, event_minutes or bar_minutes, armed_at):
             return
         sma_at = smas[index]
         if sma_at is None:
@@ -360,17 +380,30 @@ def evaluate(
             if cross_index is not None
             else False
         )
+        if cross_from_below is not None:
+            from_below = cross_from_below
         fired.append(
             Fire(
                 trigger=trigger,
                 timeframe=label,
-                bar_dt=row["dt"],
+                bar_dt=event_dt,
                 sma=float(sma_at),
                 close=float(row["close"]),
                 lrsi=values[index] if index < len(values) else None,
                 lrsi_from_below_50=bool(from_below),
                 atr=atr,
                 message=message,
+                cross_timeframe=cross_timeframe or label,
+                cross_bar_dt=(
+                    cross_bar_dt
+                    or (completed[cross_index]["dt"] if cross_index is not None else row["dt"])
+                ),
+                cross_lrsi=(
+                    cross_lrsi
+                    if cross_lrsi is not None
+                    else (values[cross_index] if cross_index is not None else None)
+                ),
+                sma_bar_dt=completed[sma_index if sma_index is not None else index]["dt"],
             )
         )
 
@@ -405,19 +438,20 @@ def evaluate(
 
         # --- reclaim_then_lrsi (the M30 leg) ----------------------------
         if int(bar_minutes) == RECLAIM_THEN_LRSI_MINUTES:
-            later = sorted(index for index in crosses if index > reclaim_index)
-            if later:
-                cross_index = later[0]
-                _fire(
-                    TRIGGER_RECLAIM_THEN_LRSI,
-                    cross_index,
-                    cross_index=cross_index,
-                    message=(
-                        f"{label} {int(sma_length)}-SMA held, then an "
-                        f"{label} LRSI {LRSI_CROSS_LEVEL:.0f} cross"
-                    ),
-                )
-            elif companion_bars is not None and companion_minutes:
+            # The earliest completed post-arm event wins.  A native M30 cross
+            # must not hide an earlier M15 companion cross (or vice versa).
+            candidates: list[
+                tuple[datetime, datetime, str, int | None, float | None, bool]
+            ] = []
+            for cross_index in sorted(index for index in crosses if index > reclaim_index):
+                stamp = completed[cross_index]["dt"]
+                if _post_arm(stamp, bar_minutes, armed_at):
+                    candidates.append((
+                        stamp + timedelta(minutes=bar_minutes), stamp, label,
+                        cross_index, values[cross_index],
+                        _crossed_from_below_fifty(values, cross_index),
+                    ))
+            if companion_bars is not None and companion_minutes:
                 companion = _companion_cross(
                     companion_bars,
                     companion_minutes,
@@ -425,33 +459,36 @@ def evaluate(
                     now=moment,
                     after=completed[reclaim_index]["dt"]
                     + timedelta(minutes=int(bar_minutes)),
+                    armed_at=armed_at,
                 )
                 if companion is not None:
-                    companion_dt, companion_label, companion_from_below = companion
-                    row = completed[-1]
-                    sma_at = smas[-1]
-                    if sma_at is not None and _post_arm(
-                        row["dt"], bar_minutes, armed_at
-                    ):
-                        if TRIGGER_RECLAIM_THEN_LRSI not in already:
-                            fired.append(
-                                Fire(
-                                    trigger=TRIGGER_RECLAIM_THEN_LRSI,
-                                    timeframe=label,
-                                    bar_dt=row["dt"],
-                                    sma=float(sma_at),
-                                    close=float(row["close"]),
-                                    lrsi=values[-1],
-                                    lrsi_from_below_50=bool(companion_from_below),
-                                    atr=atr,
-                                    message=(
-                                        f"{label} {int(sma_length)}-SMA held, then a "
-                                        f"{companion_label} LRSI "
-                                        f"{LRSI_CROSS_LEVEL:.0f} cross at "
-                                        f"{companion_dt.strftime('%m/%d %H:%M')}"
-                                    ),
-                                )
-                            )
+                    companion_dt, companion_label, companion_from_below, companion_lrsi = companion
+                    candidates.append((
+                        companion_dt + timedelta(minutes=companion_minutes),
+                        companion_dt, companion_label, None, companion_lrsi,
+                        companion_from_below,
+                    ))
+            if candidates:
+                _cross_end, cross_dt, cross_label, native_index, cross_value, from_below = min(
+                    candidates, key=lambda item: (item[0], item[1], item[2])
+                )
+                sma_index = native_index if native_index is not None else len(completed) - 1
+                _fire(
+                    TRIGGER_RECLAIM_THEN_LRSI,
+                    native_index if native_index is not None else sma_index,
+                    cross_index=native_index,
+                    cross_timeframe=cross_label,
+                    cross_bar_dt=cross_dt,
+                    cross_lrsi=cross_value,
+                    cross_from_below=from_below,
+                    sma_index=sma_index,
+                    event_bar_dt=cross_dt,
+                    event_minutes=(bar_minutes if native_index is not None else companion_minutes),
+                    message=(
+                        f"{label} {int(sma_length)}-SMA held, then an {cross_label} "
+                        f"LRSI {LRSI_CROSS_LEVEL:.0f} cross"
+                    ),
+                )
 
         # --- sma_retest --------------------------------------------------
         retest_index = _first_retest(
@@ -556,7 +593,8 @@ def _companion_cross(
     side: str,
     now: datetime,
     after: datetime,
-) -> tuple[datetime, str, bool] | None:
+    armed_at: datetime | None,
+) -> tuple[datetime, str, bool, float | None] | None:
     """The first LRSI 80 cross on the OTHER series after the reclaim bar.
 
     The trader asked for the M30 hold to be answerable by an M15 reversal;
@@ -571,10 +609,14 @@ def _companion_cross(
     values = list(result.values)
     for index in result.cross_up_indices(LRSI_CROSS_LEVEL):
         stamp = completed[index]["dt"]
-        if stamp + timedelta(minutes=int(companion_minutes)) > after:
+        if (
+            stamp + timedelta(minutes=int(companion_minutes)) > after
+            and _post_arm(stamp, companion_minutes, armed_at)
+        ):
             return (
                 stamp,
                 timeframe_label(companion_minutes),
                 _crossed_from_below_fifty(values, index),
+                values[index],
             )
     return None

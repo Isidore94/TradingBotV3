@@ -4961,7 +4961,9 @@ class AlertCenterPanel(QFrame):
                 source == H1_SOURCE_YFINANCE or len(bars) < self._h1_warmup_bars()
             )
             if primary_is_short:
-                cache.request(watch.symbol, now=now or datetime.now())
+                self._request_pullback_cache(
+                    watch, H1_INTERVAL_MINUTES, cache, now or datetime.now()
+                )
         return bars, source
 
     @staticmethod
@@ -6253,7 +6255,14 @@ class AlertCenterPanel(QFrame):
                         details={
                             "watch_id": watch.watch_id,
                             "reason": watch.reason,
+                            "trigger": TRIGGER_H1_EMA15_BOUNCE,
+                            "timeframe": "H1",
                             "rule_version": result.rule_version,
+                            "bar_dt": (
+                                result.confirm_bar_dt.isoformat()
+                                if result.confirm_bar_dt is not None else ""
+                            ),
+                            "close": result.confirm_close,
                             "touch_bar_dt": (
                                 result.touch_bar_dt.isoformat()
                                 if result.touch_bar_dt is not None
@@ -6323,7 +6332,15 @@ class AlertCenterPanel(QFrame):
             # What PCT-1 added, when the fire carries it: the trigger that
             # spoke, the series it spoke on, the rule sheet that decided and
             # the trader's "ideally it was below 50" label.
-            for key in ("trigger", "timeframe", "rule_version", "lrsi_from_below_50"):
+            for key in (
+                "trigger", "timeframe", "rule_version", "lrsi_from_below_50",
+                # Measured event provenance only.  Raw bar tapes never enter
+                # review evidence through this seam.
+                "bar_dt", "sma", "close", "lrsi", "atr",
+                "cross_timeframe", "cross_bar_dt", "cross_lrsi", "sma_bar_dt",
+                "touch_bar_dt", "confirm_bar_dt", "ema", "distance_atr",
+                "skipped_bars",
+            ):
                 if key in measured:
                     detail[key] = measured[key]
             self._record_review_event(
@@ -6365,7 +6382,58 @@ class AlertCenterPanel(QFrame):
             self._pullback_judged = marks
         return marks
 
-    def _pullback_due(self, watch, interval_minutes: int, moment: datetime):
+    def _pullback_request_marks(self) -> dict:
+        marks = getattr(self, "_pullback_requested", None)
+        if marks is None:
+            marks = {}
+            self._pullback_requested = marks
+        return marks
+
+    def _request_pullback_cache(self, watch, interval_minutes: int, cache, moment) -> None:
+        """Ask a cache once per completed bucket, including simple doubles."""
+        try:
+            end = intraday_last_bucket_end(moment, interval_minutes)
+        except Exception:
+            end = moment.replace(minute=0, second=0, microsecond=0)
+        key = (str(getattr(watch, "watch_id", "") or watch.symbol), int(interval_minutes))
+        if self._pullback_request_marks().get(key) == end:
+            return
+        self._pullback_request_marks()[key] = end
+        try:
+            cache.request(watch.symbol, now=moment)
+        except Exception:  # pragma: no cover - never costs the poll
+            logging.debug("Intraday history request failed for %s", watch.symbol, exc_info=True)
+
+    @staticmethod
+    def _pullback_cache_token(cache, symbol: str):
+        """Cheap cache generation, with a small compatibility fallback."""
+        reader = getattr(cache, "data_token", None)
+        if callable(reader):
+            try:
+                return reader(symbol)
+            except Exception:
+                pass
+        # Old test doubles have no generation reader.  They are tiny; the
+        # fallback preserves their delivery semantics without touching real
+        # cache snapshots on every desk poll.
+        try:
+            bars = cache.bars_for(symbol)
+            return (len(bars), str((bars[-1] if bars else {}).get("dt", "")))
+        except Exception:
+            return None
+
+    @classmethod
+    def _pullback_cache_snapshot(cls, cache, symbol: str):
+        reader = getattr(cache, "snapshot_for", None)
+        if callable(reader):
+            try:
+                return reader(symbol)
+            except Exception:
+                pass
+        bars = cache.bars_for(symbol) if cache is not None else []
+        return bars, cls._pullback_cache_token(cache, symbol) if cache is not None else None
+
+    def _pullback_due(self, watch, interval_minutes: int, moment: datetime, token=None):
         """(is this timeframe worth judging, the bucket end that made it so).
 
         A completed bar is the only thing that can change any of these
@@ -6380,13 +6448,18 @@ class AlertCenterPanel(QFrame):
         if end is None:
             return True, None
         key = (str(getattr(watch, "watch_id", "") or watch.symbol), int(interval_minutes))
-        return self._pullback_judged_marks().get(key) != end, end
+        previous = self._pullback_judged_marks().get(key)
+        if isinstance(previous, tuple) and len(previous) == 2:
+            previous_end, previous_token = previous
+        else:  # pre-AR-1 in-memory mark
+            previous_end, previous_token = previous, object()
+        return (previous_end != end or previous_token != token), end
 
-    def _mark_pullback_judged(self, watch, interval_minutes: int, end) -> None:
+    def _mark_pullback_judged(self, watch, interval_minutes: int, end, token=None) -> None:
         if end is None:
             return
         key = (str(getattr(watch, "watch_id", "") or watch.symbol), int(interval_minutes))
-        self._pullback_judged_marks()[key] = end
+        self._pullback_judged_marks()[key] = (end, token)
 
     def _h1_watches_due(self, armed, moment: datetime) -> list:
         """Which watches get their H1 leg read on THIS tick.
@@ -6400,14 +6473,16 @@ class AlertCenterPanel(QFrame):
         for watch in armed:
             if TRIGGER_H1_EMA15_BOUNCE not in self._pullback_triggers(watch):
                 continue
-            wanted, end = self._pullback_due(watch, H1_INTERVAL_MINUTES, moment)
+            cache = self._h1_history_cache()
+            token = self._pullback_cache_token(cache, watch.symbol) if cache is not None else None
+            wanted, end = self._pullback_due(watch, H1_INTERVAL_MINUTES, moment, token)
             if wanted:
-                due.append((watch, end))
+                due.append((watch, end, token))
         due.sort(key=lambda pair: str(getattr(pair[0], "symbol", "")))
         taken = due[: max(1, int(self.PULLBACK_H1_BATCH_LIMIT))]
-        for watch, end in taken:
-            self._mark_pullback_judged(watch, H1_INTERVAL_MINUTES, end)
-        return [watch for watch, _end in taken]
+        for watch, end, token in taken:
+            self._mark_pullback_judged(watch, H1_INTERVAL_MINUTES, end, token)
+        return [watch for watch, _end, _token in taken]
 
     @staticmethod
     def pullback_fire_key(trigger: str, timeframe: str) -> str:
@@ -6458,39 +6533,41 @@ class AlertCenterPanel(QFrame):
             if not any(name in triggers for name in self.PULLBACK_SMA_TRIGGERS):
                 continue
             identity = str(getattr(watch, "watch_id", "") or watch.symbol)
-            due = [
-                (interval_minutes, sma_length, ends.get(interval_minutes))
-                for interval_minutes, sma_length in self.PULLBACK_TIMEFRAMES
-                if ends.get(interval_minutes) is None
-                or marks.get((identity, int(interval_minutes)))
-                != ends.get(interval_minutes)
-            ]
-            if not due:
-                continue
             caches = {}
             for interval_minutes, _sma_length in self.PULLBACK_TIMEFRAMES:
                 cache = self._intraday_history_cache(interval_minutes)
                 if cache is None:
                     continue
                 caches[interval_minutes] = cache
-            for interval_minutes, _sma_length, end in due:
+            tokens = {
+                interval_minutes: self._pullback_cache_token(cache, watch.symbol)
+                for interval_minutes, cache in caches.items()
+            }
+            due = []
+            for interval_minutes, sma_length in self.PULLBACK_TIMEFRAMES:
+                # M30's hold can be released by a newly delivered M15 cross,
+                # even while the M30 snapshot has not changed.
+                token = tokens.get(interval_minutes)
+                if interval_minutes == 30:
+                    token = (token, tokens.get(15))
+                wanted, end = self._pullback_due(
+                    watch, interval_minutes, moment, token
+                )
+                if wanted:
+                    due.append((interval_minutes, sma_length, end, token))
+            if not due:
+                continue
+            for interval_minutes, _sma_length, _end, _token in due:
                 cache = caches.get(interval_minutes)
                 if cache is not None:
-                    try:
-                        cache.request(watch.symbol, now=moment)
-                    except Exception:  # pragma: no cover - never costs the poll
-                        logging.debug(
-                            "Intraday history request failed for %s",
-                            watch.symbol,
-                            exc_info=True,
-                        )
-                self._mark_pullback_judged(watch, interval_minutes, end)
+                    self._request_pullback_cache(watch, interval_minutes, cache, moment)
             jobs.append(
                 {
                     "watch": watch,
                     "identity": identity,
                     "triggers": triggers,
                     "due": due,
+                    "tokens": tokens,
                     "caches": caches,
                     "marks": dict(getattr(watch, "fired", None) or {}),
                     "states": {
@@ -6563,16 +6640,24 @@ class AlertCenterPanel(QFrame):
         sides = (
             (watch.side,) if watch.side in ("LONG", "SHORT") else ("LONG", "SHORT")
         )
-        series = {
-            interval_minutes: (
-                caches[interval_minutes].bars_for(watch.symbol)
-                if interval_minutes in caches
-                else []
-            )
+        snapshots = {
+            interval_minutes: self._pullback_cache_snapshot(
+                caches[interval_minutes], watch.symbol
+            ) if interval_minutes in caches else ([], None)
             for interval_minutes, _sma_length in self.PULLBACK_TIMEFRAMES
         }
+        series = {interval_minutes: snapshot[0] for interval_minutes, snapshot in snapshots.items()}
+        tokens = {interval_minutes: snapshot[1] for interval_minutes, snapshot in snapshots.items()}
+        actual_due = []
+        for due_row in job["due"]:
+            interval_minutes, sma_length, end = due_row[:3]
+            token = tokens.get(interval_minutes)
+            if interval_minutes == 30:
+                token = (token, tokens.get(15))
+            actual_due.append((interval_minutes, sma_length, end, token))
         fires: list[dict] = []
-        for interval_minutes, sma_length, _end in job["due"]:
+        for due_row in actual_due:
+            interval_minutes, sma_length, _end = due_row[:3]
             for side in sides:
                 state_key = (identity, interval_minutes, side)
                 # The trader's M30 leg may be answered by an M15 reversal, so
@@ -6601,7 +6686,7 @@ class AlertCenterPanel(QFrame):
                         continue
                     stamp = fire.bar_dt.isoformat()
                     mark_key = self.pullback_fire_key(fire.trigger, fire.timeframe)
-                    if marks.get(mark_key) == stamp:
+                    if self._pullback_mark_covers(marks.get(mark_key), stamp):
                         continue  # already announced, before this restart
                     marks[mark_key] = stamp
                     fires.append(
@@ -6624,6 +6709,13 @@ class AlertCenterPanel(QFrame):
                                 "close": fire.close,
                                 "lrsi": fire.lrsi,
                                 "atr": fire.atr,
+                                "cross_timeframe": fire.cross_timeframe,
+                                "cross_bar_dt": stamp,
+                                "cross_lrsi": fire.cross_lrsi,
+                                "sma_bar_dt": (
+                                    fire.sma_bar_dt.isoformat()
+                                    if fire.sma_bar_dt is not None else ""
+                                ),
                             },
                         }
                     )
@@ -6634,7 +6726,32 @@ class AlertCenterPanel(QFrame):
             "fires": fires,
             "states": states,
             "marks": marks,
+            "tokens": tokens,
+            "due": actual_due,
         }
+
+    @staticmethod
+    def _pullback_mark_covers(mark, stamp: str) -> bool:
+        """True when a persisted event is this event or a later old stamp."""
+        if not mark:
+            return False
+        try:
+            prior = datetime.fromisoformat(str(mark))
+            event = datetime.fromisoformat(str(stamp))
+            from market_session import get_market_local_timezone
+
+            market_tz, _name = get_market_local_timezone()
+            if prior.tzinfo is None:
+                prior = prior.replace(tzinfo=market_tz)
+            else:
+                prior = prior.astimezone(market_tz)
+            if event.tzinfo is None:
+                event = event.replace(tzinfo=market_tz)
+            else:
+                event = event.astimezone(market_tz)
+            return prior >= event
+        except (TypeError, ValueError):
+            return str(mark) == stamp
 
     def _on_pullback_fires(self, payload) -> None:
         """The worker's answer, back on the Qt thread. Records, pushes, draws.
@@ -6663,7 +6780,30 @@ class AlertCenterPanel(QFrame):
             watch = live.get(identity)
             if watch is None:
                 continue  # disarmed while the worker ran
+            result_tokens = dict(result.get("tokens") or {})
+            current_tokens = {
+                minutes: self._pullback_cache_token(cache, watch.symbol)
+                for minutes, cache in (
+                    (minutes, self._intraday_history_cache(minutes))
+                    for minutes, _length in self.PULLBACK_TIMEFRAMES
+                )
+            }
+            if any(
+                due_row[3] != (
+                    (current_tokens.get(minutes), current_tokens.get(15))
+                    if minutes == 30 else current_tokens.get(minutes)
+                )
+                for due_row in result.get("due") or ()
+                for minutes in (due_row[0],)
+                if len(due_row) > 3
+            ):
+                continue  # data changed after the worker snapshot; next tick owns it
             states.update(result.get("states") or {})
+            for due_row in result.get("due") or ():
+                interval_minutes, _length, end = due_row[:3]
+                token = due_row[3] if len(due_row) > 3 else result_tokens.get(interval_minutes)
+                # The captured token is the only mark valid for this answer.
+                self._mark_pullback_judged(watch, interval_minutes, end, token)
             fires = result.get("fires") or []
             if not fires:
                 continue
