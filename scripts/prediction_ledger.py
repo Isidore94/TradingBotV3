@@ -397,7 +397,7 @@ def build_readout(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 def your_reads(
     session: str, *, root: Any = None, source: str = grades.SOURCE_CLICK
 ) -> dict[str, Any]:
-    """One session's tally beside its baselines, as NUMBERS.
+    """One session's read inventory plus separate horizon cells, as NUMBERS.
 
     A FILE READ meant for a worker: it takes a root, it never raises on a folder
     that does not exist, and the counts travel as integers so the page never
@@ -405,22 +405,39 @@ def your_reads(
     """
     day = str(session or "")[:10]
     rows = read_ledger([day], root=root, source=source) if day else []
+    readout = build_readout(rows)
     cell = grades.accuracy(rows)
-    baselines = _baselines(rows)
+    present_horizons = [name for name in HORIZONS if any(
+        horizon_of(row) == name for row in rows
+    )]
+    # Compatibility for the original one-horizon caller.  A mixed population
+    # deliberately has no scalar baseline: it would be a comparison over two
+    # different time windows and therefore describe neither one.
+    baselines = (
+        readout["horizons"][present_horizons[0]]["baselines"]
+        if len(present_horizons) == 1
+        else {}
+    )
     if not rows:
         text = EMPTY_STATEMENT
     else:
-        best = max(
-            grades.BASELINES,
-            key=lambda name: (baselines[name].get("right") or 0, name),
-        )
-        naive = baselines[best]
-        pending = f", {cell['pending']} still open" if cell.get("pending") else ""
-        text = (
-            f"Your reads: {cell['right']} right of {cell['n']}{pending} - "
-            f"{BASELINE_LABELS.get(best, best)} scored "
-            f"{naive.get('right', 0)} of {naive.get('n', 0)} on the same stamps"
-        )
+        clauses: list[str] = []
+        for name in HORIZONS:
+            horizon = readout["horizons"][name]
+            accuracy = horizon["accuracy"]
+            baseline_counts = "; ".join(
+                f"{BASELINE_LABELS.get(rule, rule)} scored "
+                f"{int((horizon['baselines'].get(rule) or {}).get('right') or 0)} of "
+                f"{int((horizon['baselines'].get(rule) or {}).get('n') or 0)}"
+                for rule in grades.BASELINES
+            )
+            clauses.append(
+                f"{horizon['label']}: {accuracy['n']} finished, "
+                f"{accuracy['right']} right, {accuracy['wrong']} wrong, "
+                f"{accuracy['flat']} flat, {accuracy['pending']} waiting, "
+                f"{accuracy['unmeasured']} unmeasured; {baseline_counts}"
+            )
+        text = "Your reads: " + " · ".join(clauses)
     return {
         "text": text,
         "session": day,
@@ -429,8 +446,10 @@ def your_reads(
         "wrong": int(cell["wrong"]),
         "flat": int(cell["flat"]),
         "pending": int(cell["pending"]),
+        "unmeasured": int(cell["unmeasured"]),
         "empty": not rows,
         "baselines": baselines,
+        "horizons": readout["horizons"],
     }
 
 
