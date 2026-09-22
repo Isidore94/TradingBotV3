@@ -827,9 +827,9 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         # TJ-15 (2026-09-19), APPENDED INSIDE stage 1: after the four cohort
         # graders because it reads what a decision turned OUT to be, and
-        # deliberately BEFORE `market_story_rollups` + `measured_report` - the pair
-        # that CLOSES the stage (WS-10D and WS-RP each pin `measured_report` directly
-        # after `market_story_rollups`; the lead moved this slot above the pair at
+        # deliberately BEFORE `market_story_rollups`, `measured_report` and
+        # `day_review_facts` - the terminal stage chain (WS-10D and WS-RP pin
+        # `measured_report` directly after `market_story_rollups`; the lead moved this slot above it at
         # integration, 2026-09-19, when the full suite showed those two pins red).
         #
         # That position is load-bearing. `_STAGE_ONE_LAST_SLOT` is
@@ -884,7 +884,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         # TJ-16 (2026-09-20), APPENDED INSIDE stage 1, DIRECTLY AFTER
         # `miss_contrast` and still above the `market_story_rollups` /
-        # `measured_report` pair that CLOSES the stage.
+        # `measured_report` / `day_review_facts` terminal chain.
         #
         # Beside TJ-15 because it is the same question asked of the other half
         # of the record: that pack asks what the MISSES had in common, this one
@@ -1017,8 +1017,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # Gate #158 reads the ledger for a day story finished before 23:30
         # Pacific and `ticker_briefs` reserves 120 minutes in front of it, so
         # the story goes first. It cannot move further forward: two existing
-        # pins say `ai_summary` sits directly after `measured_report`
-        # (`test_ws_10d_market_story.py`, `test_ws_rp_shared_report.py`), and
+        # pins say the Day Review facts sit between `measured_report` and
+        # `ai_summary` (`test_ws_10d_market_story.py`, `test_ws_rp_shared_report.py`), and
         # decision 0018's stage boundaries do not move for a new slot. It reads
         # only the deterministic day pack, and a failure preserves the last
         # verified story.
@@ -1036,8 +1036,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # TJ-16 item 4 (2026-09-20), APPENDED INSIDE stage 2, AFTER `ai_summary`
         # and BEFORE `ticker_briefs`.
         #
-        # After `ai_summary` because WS-10D pins `measured_report` DIRECTLY
-        # before it and that pair must stay adjacent; before `ticker_briefs`
+        # After `ai_summary` because the Day Review facts close stage 1 before
+        # it; before `ticker_briefs`
         # because the briefs hold two hours of reserve and this is seconds of
         # work per note, so queueing behind them would cost the tags a whole
         # night for nothing.
@@ -1065,8 +1065,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         #
         # Ahead of the briefs because they reserve 120 minutes and the week
         # story is the thing the trader OPENS on a Saturday; it cannot move
-        # further forward either, because `measured_report` sits directly before
-        # `ai_summary` and two other files pin that pair.
+        # further forward either, because `day_review_facts` sits directly before
+        # `ai_summary` and two other files pin that boundary.
         #
         # It is on the SATURDAY slate only: `WEEKEND_ONLY_SLOTS` is the seam
         # that takes a slot off the weeknight slate, and a weeknight that loaded
