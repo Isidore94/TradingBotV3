@@ -102,9 +102,11 @@ class _IdeaRow(QWidget):
             self.scope_combo.addItem(str(label).replace("_", " "), str(label))
         self.scope_combo.setToolTip("Choose the D1 market type before using this idea this week.")
         self.use_button = QPushButton("Use this week")
-        self.followed_button = QPushButton("Followed today")
-        self.not_followed_button = QPushButton("Did not follow")
+        self.followed_button = QPushButton("Followed last close")
+        self.not_followed_button = QPushButton("Did not follow last close")
         self.unknown_button = QPushButton("Not sure")
+        for button in (self.followed_button, self.not_followed_button, self.unknown_button):
+            button.setToolTip("Record the last completed exchange session.")
         self.finish_button = QPushButton("Finish this change")
         self.keep_button.clicked.connect(lambda: self.keepRequested.emit(self.idea_id))
         self.dismiss_button.clicked.connect(lambda: self.dismissRequested.emit(self.idea_id))

@@ -386,7 +386,7 @@ def trade_reviews_on(
         result.append({
             "trade_id": trade_id,
             "symbol": str(trade.get("symbol") or ""),
-            "instrument": str(trade.get("instrument_type") or trade.get("asset_type") or ""),
+            "instrument": str(trade.get("instrument_type") or trade.get("asset_type") or trade.get("sec_type") or ""),
             "opened_at": str(trade.get("opened_at") or ""),
             "closed_at": str(trade.get("last_closing_leg_at") or trade.get("closed_at") or ""),
             "entry_session": str(trade.get("opened_at") or trade.get("trade_date") or "")[:10],
@@ -401,6 +401,7 @@ def trade_reviews_on(
             "entry_answers": answers,
             "exit_raw": {
                 "text": str(note.get("raw_text") or ""),
+                "answer_state": str(note.get("answer_state") or ""),
                 "recorded_at": str(note.get("occurred_at") or note.get("recorded_at") or ""),
                 "written_after_the_session": bool(note.get("written_after_the_session")),
             },

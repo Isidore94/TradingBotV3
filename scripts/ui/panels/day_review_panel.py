@@ -2519,6 +2519,10 @@ class DayReviewPanel(QFrame):
             self.trade_detail.setPlainText("Trade answers could not be read.")
             return
         lines = [f"{detail.get('symbol') or ''} · {detail.get('instrument') or 'instrument unknown'}"]
+        lines.append(
+            f"Opened {detail.get('opened_at') or 'time unknown'} · "
+            f"Closed {detail.get('closed_at') or 'still open or time unknown'}"
+        )
         money = detail.get("net_pnl")
         lines.append(
             f"Net: {self._number(money, signed=True)} {detail.get('currency') or 'currency unknown'}"
@@ -2526,10 +2530,16 @@ class DayReviewPanel(QFrame):
         raw = detail.get("entry_raw") or {}
         lines.append(f"Entry words (recalled {raw.get('recorded_at') or 'date unknown'}): {raw.get('text') or 'none recorded'}")
         for field, answer in (detail.get("entry_answers") or {}).items():
-            value = answer.get("text") or answer.get("state") or "not answered"
+            value = answer.get("text") or answer.get("state") or (
+                f"{answer['value']} {answer.get('unit') or ''}" if answer.get("value") is not None
+                else "not answered"
+            )
             lines.append(f"{field}: {value} · recorded {answer.get('recorded_at') or 'date unknown'}")
         exit_raw = detail.get("exit_raw") or {}
-        lines.append(f"Exit words ({exit_raw.get('recorded_at') or 'date unknown'}): {exit_raw.get('text') or 'none recorded'}")
+        lines.append(
+            f"Exit words ({exit_raw.get('recorded_at') or 'date unknown'}): "
+            f"{exit_raw.get('text') or exit_raw.get('answer_state') or 'none recorded'}"
+        )
         confirmed = detail.get("exit_fields") or {}
         fields = confirmed.get("fields") if confirmed.get("status") == "confirmed" else None
         if isinstance(fields, Mapping):

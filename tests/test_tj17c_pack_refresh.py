@@ -74,3 +74,23 @@ def test_recent_refresh_updates_only_existing_prior_pack_and_keeps_failure_bytes
     result = refresh_recent_packs(end_session=END, now=NOW, root=tmp_path, service=service, sessions=2)
     assert result["failed"][0]["session"] == OLD
     assert path.read_bytes() == updated
+
+
+def test_matured_five_session_read_refreshes_the_original_day_pack(monkeypatch, tmp_path):
+    import day_review_pack
+    import project_paths
+    from ai_jobs.day_review_facts import refresh_recent_packs
+
+    monkeypatch.setattr(project_paths, "DAY_REVIEW_DIR", tmp_path)
+    service = _service(monkeypatch)
+    pending = _payload()
+    pending["reads"] = [{"read_id": "r1", "horizon": "next_5_sessions", "verdict": "pending 2026-09-21"}]
+    old_pack = service.build_pack_for(OLD, payload=pending, now=NOW, strict=True)
+    mature = _payload()
+    mature["reads"] = [{"read_id": "r1", "horizon": "next_5_sessions", "verdict": "right", "supersedes": "old-grade"}]
+    monkeypatch.setattr(service, "read_day", lambda *_args, **_kwargs: mature)
+    result = refresh_recent_packs(end_session=END, now=NOW, root=tmp_path, service=service, sessions=2)
+    saved = day_review_pack.read_pack(OLD, root=tmp_path)
+    assert result["refreshed"] == [OLD]
+    assert saved["inputs_hash"] != old_pack["inputs_hash"]
+    assert saved["reads"][0]["verdict"] == "right"

@@ -190,6 +190,14 @@ def test_weekly_choice_refuses_second_active_change_and_keeps_original_baseline_
         improvement_ideas.choose_weekly_change(second["idea_id"], end_session=SESSION, now=NOW)
     assert paths["state"].read_bytes() == before_conflict
 
+    improvement_ideas.finish_weekly_change(first["idea_id"], now=NOW)
+    finished = paths["state"].read_bytes()
+    with pytest.raises(improvement_ideas.WeeklyChoiceConflict):
+        improvement_ideas.choose_weekly_change(second["idea_id"], end_session=SESSION, now=NOW)
+    with pytest.raises(improvement_ideas.WeeklyChoiceConflict):
+        improvement_ideas.choose_weekly_change(first["idea_id"], end_session=SESSION, now=NOW)
+    assert paths["state"].read_bytes() == finished
+
 
 def test_follow_through_is_append_only_correctable_and_absent_sessions_are_unknown(monkeypatch, tmp_path):
     """A late correction appends a second event and never turns absence into no.
@@ -245,6 +253,20 @@ def test_checked_choice_compares_only_after_start_in_the_same_horizon_and_enviro
     assert "caused" not in current["comparison"].lower()
 
 
+def test_a_past_week_reopens_its_own_choice_after_a_new_week_is_chosen(monkeypatch, tmp_path):
+    from ai_jobs import improvement_ideas
+
+    _paths, first, _second = _install_kept_process_ideas(monkeypatch, tmp_path)
+    improvement_ideas.choose_weekly_change(first["idea_id"], end_session=SESSION, now=NOW)
+    improvement_ideas.finish_weekly_change(first["idea_id"], now=NOW)
+    following_week = datetime(2026, 9, 26, 18, 0, tzinfo=timezone.utc)
+    improvement_ideas.choose_weekly_change(first["idea_id"], end_session="2026-09-25", now=following_week)
+    old = next(row for row in improvement_ideas.checked_ideas(end_session="2026-09-23") if row["idea_id"] == first["idea_id"])
+    recent = next(row for row in improvement_ideas.checked_ideas(end_session="2026-09-29") if row["idea_id"] == first["idea_id"])
+    assert old["past_choice"]["week"] == "2026-W39"
+    assert recent["past_choice"]["week"] == "2026-W40"
+
+
 pytestmark = pytest.mark.qt
 pytest.importorskip("PySide6", reason="the ideas card is a PySide6 widget")
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
@@ -286,7 +308,7 @@ def test_active_idea_row_has_explicit_actions_and_disables_every_new_action_whil
             }]
         )
         labels = {button.text(): button for button in card.findChildren(QPushButton)}
-        expected = {"Use this week", "Followed today", "Did not follow", "Not sure", "Finish this change"}
+        expected = {"Use this week", "Followed last close", "Did not follow last close", "Not sure", "Finish this change"}
         assert expected <= set(labels)
         assert all(labels[label].isEnabled() is False for label in expected)
     finally:

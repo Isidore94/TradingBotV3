@@ -1366,6 +1366,16 @@ def checked_ideas(*, end_session: Any = "") -> tuple[dict[str, Any], ...]:
             out.append(item)
             continue
         choice = record.get("weekly_choice")
+        if session:
+            try:
+                wanted_week = _choice_week(date.fromisoformat(session))
+            except ValueError:
+                wanted_week = ""
+            historical = [
+                candidate for candidate in [*(record.get("choice_history") or ()), choice]
+                if isinstance(candidate, Mapping) and _text(candidate.get("week")) == wanted_week
+            ]
+            choice = historical[-1] if historical else None
         if isinstance(choice, Mapping):
             choice_block = _current_choice_block(
                 key, choice, end_session=session or _text(row.get("session_date"))
@@ -1563,14 +1573,15 @@ def choose_weekly_change(
     observation_start = market_calendar.next_session(judged)
     week = _choice_week(observation_start)
     existing = record.get("weekly_choice")
-    if isinstance(existing, Mapping) and not _text(existing.get("finished_at")):
-        if _text(existing.get("week")) == week:
+    if isinstance(existing, Mapping) and _text(existing.get("week")) == week:
+        if not _text(existing.get("finished_at")):
             return _choice_response(record)
+        raise WeeklyChoiceConflict(f"{week} already had a finished change")
     for other_id, other in state.items():
         other_choice = other.get("weekly_choice") if isinstance(other, Mapping) else None
         if (
             other_id != key and isinstance(other_choice, Mapping)
-            and not _text(other_choice.get("finished_at")) and _text(other_choice.get("week")) == week
+            and _text(other_choice.get("week")) == week
         ):
             raise WeeklyChoiceConflict(f"one weekly change is already active for {week}")
     frozen_scope = _scope({"environment": environment})
