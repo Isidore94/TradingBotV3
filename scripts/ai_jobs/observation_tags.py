@@ -53,7 +53,9 @@ from typing import Any, Iterable, Mapping, Sequence
 _log = logging.getLogger(__name__)
 
 #: The prompt contract's NAME, stamped on every stored file.
-PROMPT_VERSION = "observation_tags_v1"
+# Stored rows remain v1 for every downstream reader.  v2 changes only the
+# provider transport: code owns every offset and exact quote.
+PROMPT_VERSION = "observation_tags_v2"
 #: The stored file's own schema name.
 SCHEMA = "observation_tags_v1"
 #: What the response_format contract is called on the wire.
@@ -85,12 +87,15 @@ _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{2,47}$")
 #: of objects arrives untouched. Reviewer, 2026-09-20: a 10,000-row reply was
 #: published `ok`. A bound the verifier does not re-check is not a bound.
 MAX_TAGS = 60
+MAX_FRAGMENT_LENGTH = 400
+MAX_FRAGMENTS = 60
 
 #: The only keys a reply may carry, at each of its two levels. They mirror
 #: :data:`TAGS_JSON_SCHEMA`'s `additionalProperties: false`, which for the same
 #: reason cannot be relied on.
 REPLY_KEYS = frozenset({"tags"})
 TAG_KEYS = frozenset({"note_id", "code", "span", "quote"})
+FRAGMENT_TAG_KEYS = frozenset({"fragment_id", "code"})
 
 #: THE ONLY REPLY ACCEPTED. No `maxLength` of exactly 2,000 anywhere in it -
 #: that is the grammar-compile defect behind gate #144.
@@ -105,17 +110,10 @@ TAGS_JSON_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["note_id", "code", "span", "quote"],
+                "required": ["fragment_id", "code"],
                 "properties": {
-                    "note_id": {"type": "string", "maxLength": 64},
+                    "fragment_id": {"type": "string", "maxLength": 96},
                     "code": {"type": "string", "maxLength": 64},
-                    "span": {
-                        "type": "array",
-                        "minItems": 2,
-                        "maxItems": 2,
-                        "items": {"type": "integer"},
-                    },
-                    "quote": {"type": "string", "maxLength": 400},
                 },
             },
         }
@@ -124,11 +122,10 @@ TAGS_JSON_SCHEMA: dict[str, Any] = {
 
 INSTRUCTIONS = (
     "Label what the trader's own words DO. You are given short notes the trader "
-    "wrote and a closed list of codes. For each note, return every code that "
-    "applies, and for each code the exact character span of the note that made "
-    "you choose it, plus that substring copied out as `quote`. `quote` must be "
-    "exactly note.text[start:end] - if it is not, the whole answer is thrown "
-    "away. Use only codes from the list and only note_id values from the list. "
+    "wrote as exact fragments and a closed list of codes. For each code, return "
+    "only the fragment_id that made you choose it and the code. Do not count "
+    "characters, choose an offset, or copy a quote: code owns those links. Use "
+    "only codes from the list and only fragment_id values from the list. "
     "You are NOT being asked whether the trader was right or wrong, and you are "
     "not told: no outcome, no market data and no later information is in this "
     "package. Do not guess at one. A note that carries no code is fine - return "
@@ -294,6 +291,66 @@ def notes_for(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _fragment_id(note_id: str, start: int, end: int) -> str:
+    """A stable id makes equal words at different offsets different evidence."""
+    return f"frag-{note_id}-{start}-{end}"
+
+
+def _fragment_spans(text: str) -> list[tuple[int, int]]:
+    """Cover one note with sentence-like chunks no longer than the quote limit."""
+    spans: list[tuple[int, int]] = []
+    for match in re.finditer(r"[^.!?]+[.!?]*", text):
+        start, end = match.span()
+        while end - start > MAX_FRAGMENT_LENGTH:
+            split = text.rfind(" ", start + 1, start + MAX_FRAGMENT_LENGTH + 1)
+            if split <= start:
+                split = start + MAX_FRAGMENT_LENGTH
+            else:
+                split += 1  # keep the separator in the preceding exact quote
+            spans.append((start, split))
+            start = split
+        if start < end:
+            spans.append((start, end))
+    return spans
+
+
+def fragments_for(
+    notes: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build deterministic exact fragments and name every cap omission.
+
+    The cap limits a request, never a note invisibly.  ``fragments_omitted``
+    carries a count plus the first bounded set of ids, so a later request can
+    explain what was not offered instead of silently changing the evidence.
+    """
+    all_fragments: list[dict[str, Any]] = []
+    for note in notes or ():
+        note_id = str(note.get("note_id") or "")
+        text = str(note.get("text") or "")
+        if not note_id or not text:
+            continue
+        for start, end in _fragment_spans(text):
+            all_fragments.append(
+                {
+                    "fragment_id": _fragment_id(note_id, start, end),
+                    "note_id": note_id,
+                    "entry_id": str(note.get("entry_id") or ""),
+                    "field": str(note.get("field") or ""),
+                    "start": start,
+                    "end": end,
+                    "text": text[start:end],
+                }
+            )
+    offered = all_fragments[:MAX_FRAGMENTS]
+    omitted = all_fragments[MAX_FRAGMENTS:]
+    return offered, {
+        "limit": MAX_FRAGMENTS,
+        "count": len(omitted),
+        "fragment_ids": [row["fragment_id"] for row in omitted[:MAX_FRAGMENTS]],
+        "more": max(0, len(omitted) - MAX_FRAGMENTS),
+    }
+
+
 def build_evidence(
     notes: Sequence[Mapping[str, Any]], *, vocabulary: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -304,22 +361,14 @@ def build_evidence(
     no way to reach anything else.
     """
     book = dict(vocabulary or load_vocabulary())
-    offered = [
-        {
-            "note_id": str(note.get("note_id") or ""),
-            "entry_id": str(note.get("entry_id") or ""),
-            "field": str(note.get("field") or ""),
-            "text": str(note.get("text") or ""),
-        }
-        for note in notes or ()
-    ]
+    offered, omitted = fragments_for(notes)
     book_payload = {
         "vocabulary_id": str(book.get("vocabulary_id") or VOCABULARY_FAMILY),
         "vocab_version": int(book.get("vocab_version") or 0),
         "entries": [dict(entry) for entry in book.get("entries") or ()],
     }
     canonical = json.dumps(
-        {"notes": offered, "vocabulary": book_payload},
+        {"fragments": offered, "fragments_omitted": omitted, "vocabulary": book_payload},
         sort_keys=True,
         separators=(",", ":"),
         default=str,
@@ -329,9 +378,10 @@ def build_evidence(
         "package_id": f"observation-tags:{digest[:16]}",
         "evidence_hash": digest,
         "instructions": INSTRUCTIONS,
-        "allowed_note_ids": [note["note_id"] for note in offered],
+        "allowed_fragment_ids": [row["fragment_id"] for row in offered],
         "vocabulary": book_payload,
-        "notes": offered,
+        "fragments": offered,
+        "fragments_omitted": omitted,
     }
 
 
@@ -340,6 +390,65 @@ def build_evidence(
 # ---------------------------------------------------------------------------
 class ReplyRejected(ValueError):
     """The model's answer was not believed, so nothing was published."""
+
+
+def verify_fragment_reply(
+    reply: Any,
+    notes: Sequence[Mapping[str, Any]],
+    vocabulary: Mapping[str, Any],
+    fragments: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve v2 ids in code, then use the unchanged v1 grounding checker."""
+    if not isinstance(reply, Mapping):
+        raise ReplyRejected("the model returned no tags object")
+    stray = sorted(str(key) for key in reply if str(key) not in REPLY_KEYS)
+    if stray:
+        raise ReplyRejected(
+            f"the reply carries key(s) the contract forbids: {', '.join(stray)}"
+        )
+    rows = reply.get("tags")
+    if not isinstance(rows, (list, tuple)):
+        raise ReplyRejected("`tags` is not a list")
+    if len(rows) > MAX_TAGS:
+        raise ReplyRejected(
+            f"the reply carries {len(rows)} tags, over the cap of {MAX_TAGS}"
+        )
+    by_id = {str(row.get("fragment_id") or ""): row for row in fragments or ()}
+    codes = set(vocabulary.get("codes") or ())
+    seen: set[tuple[str, str]] = set()
+    materialized: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ReplyRejected("a tag row is not an object")
+        extra = sorted(str(key) for key in row if str(key) not in FRAGMENT_TAG_KEYS)
+        if extra or set(row) != FRAGMENT_TAG_KEYS:
+            raise ReplyRejected("a v2 tag row must contain only fragment_id and code")
+        fragment_id = row.get("fragment_id")
+        code = row.get("code")
+        if not isinstance(fragment_id, str) or not isinstance(code, str):
+            raise ReplyRejected("a v2 tag's fragment_id and code must be strings")
+        fragment = by_id.get(fragment_id)
+        if fragment is None:
+            raise ReplyRejected(f"a tag names a fragment that was not offered: {fragment_id!r}")
+        if code not in codes:
+            raise ReplyRejected(
+                f"a tag uses {code!r}, which is outside the closed vocabulary"
+            )
+        identity = (fragment_id, code)
+        if identity in seen:
+            raise ReplyRejected(f"the reply repeats {code!r} on {fragment_id!r}")
+        seen.add(identity)
+        materialized.append(
+            {
+                "note_id": str(fragment["note_id"]),
+                "code": code,
+                "span": [int(fragment["start"]), int(fragment["end"])],
+                "quote": str(fragment["text"]),
+            }
+        )
+    # Do not fork its old verification rules.  This preserves the v1 stored
+    # shape, exact quote check and all future reader expectations.
+    return verify_reply({"tags": materialized}, notes, vocabulary)
 
 
 def verify_reply(
@@ -683,7 +792,27 @@ def run_observation_tags(
 
     reply = result.get("summary") if isinstance(result, Mapping) else None
     try:
-        verified = verify_reply(reply, notes, vocabulary)
+        if not isinstance(reply, Mapping):
+            raise ReplyRejected("the model returned no tags object")
+        rows = reply.get("tags")
+        has_v2 = isinstance(rows, (list, tuple)) and any(
+            isinstance(row, Mapping) and "fragment_id" in row for row in rows
+        )
+        has_legacy = isinstance(rows, (list, tuple)) and any(
+            isinstance(row, Mapping)
+            and any(key in row for key in ("note_id", "span", "quote"))
+            for row in rows
+        )
+        if has_v2 and has_legacy:
+            raise ReplyRejected("the reply mixed legacy offsets with v2 fragments")
+        if has_v2:
+            verified = verify_fragment_reply(
+                reply, notes, vocabulary, evidence["fragments"]
+            )
+        else:
+            # Compatibility is intentionally strict: an old provider fixture
+            # still owns its offsets and one bad span rejects the whole reply.
+            verified = verify_reply(reply, notes, vocabulary)
     except ReplyRejected as exc:
         return {
             "status": "degraded_no_narrative",
