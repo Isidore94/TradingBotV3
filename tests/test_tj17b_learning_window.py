@@ -94,8 +94,9 @@ def _rows_for_window_fixture() -> list[dict[str, Any]]:
     )
     rows.extend((pending, current))
 
-    # The second horizon is intentionally present in the selected five, and
-    # cannot be pooled into a rest-of-day percentage.
+    # An older five-session call has finished; the newest one is still open.
+    # Neither may be pooled into a rest-of-day percentage.
+    rows.extend(fx.five_session_clicks(LAST_TEN, count=1))
     rows.extend(fx.five_session_clicks(LAST_FIVE, count=1))
     return rows
 
@@ -194,6 +195,7 @@ def test_learning_window_keeps_horizons_and_group_baselines_on_the_same_stamps(t
     horizons = payload["reads"]["horizons"]
     assert horizons["rest_of_day"]["accuracy"]["n"] == 10
     assert horizons["next_5_sessions"]["accuracy"]["n"] == 1
+    assert horizons["next_5_sessions"]["accuracy"]["pending"] == 1
     assert all(cell.get("n") != 11 for cell in (horizons["rest_of_day"]["accuracy"], horizons["next_5_sessions"]["accuracy"]))
 
     grouped = [*payload["by_hour"], *payload["by_environment"]]
@@ -203,7 +205,7 @@ def test_learning_window_keeps_horizons_and_group_baselines_on_the_same_stamps(t
         assert row["session_count"] == len(set(row["sessions"])), row
         assert set(row["baselines"]) == set(grades.BASELINES), row
         assert set(row["read_ids"]), row
-    assert any("America/Los_Angeles" in str(row["key"]) for row in payload["by_hour"])
+    assert any("America/New_York" in str(row["key"]) for row in payload["by_hour"])
     assert any("unknown" in str(row["key"]).lower() for row in payload["by_environment"])
 
 
@@ -250,7 +252,7 @@ pytestmark = pytest.mark.qt
 pytest.importorskip("PySide6", reason="the Qt desk needs PySide6")
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QComboBox, QAbstractButton  # noqa: E402
+from PySide6.QtWidgets import QApplication, QComboBox, QAbstractButton, QLabel  # noqa: E402
 
 _app = QApplication.instance() or QApplication([])
 
@@ -322,7 +324,7 @@ def test_week_review_selector_reloads_latest_choice_and_rejects_stale_worker_pay
         assert reader.first_entered.wait(5), "the first learning reader never started"
         _select_window(page, 20)
         reader.release_first.set()
-        assert reader.second_entered.wait(5), "the newest selection was not reloaded"
+        _until(reader.second_entered.is_set)
         _until(lambda: not getattr(page, "_reading", True))
         shown = "\n".join(widget.text() for widget in page.findChildren(QAbstractButton))
         shown += "\n".join(widget.toPlainText() for widget in page.findChildren(type(page.summary)))
@@ -356,4 +358,69 @@ def test_week_day_card_click_emits_the_exact_day_review_session(tmp_path):
     finally:
         panel.shutdown()
         panel.deleteLater()
+        service.shutdown()
+
+
+def test_week_strip_keeps_a_shaped_read_line_per_horizon():
+    """A's separated read cells must not fall back to an old mixed scalar rate."""
+    from ui.panels.weekend_prep_panel import week_strip_cell
+
+    line = {
+        "key": "your_reads", "n": 4, "measured": 4, "rate": 1.0,
+        "horizons": {
+            "rest_of_day": {
+                "label": "Rest of day", "accuracy": {"n": 4, "right": 3, "rate": 0.75},
+                "meets_floor": False,
+            },
+            "next_5_sessions": {
+                "label": "Next 5 sessions", "accuracy": {"n": 1, "right": 1, "rate": 1.0},
+                "meets_floor": False,
+            },
+        },
+    }
+
+    shown = week_strip_cell(line)
+    assert "Rest of day: n 4 · right 3 · waiting 0 · too few to call" in shown
+    assert "Next 5 sessions: n 1 · right 1 · waiting 0 · too few to call" in shown
+    assert "100%" not in shown
+
+
+def test_learning_tables_show_owner_counts_and_read_drilldown(tmp_path):
+    """The actual page renders the selected owner values and links a read to its day."""
+    import session_review
+    from ui.panels.weekend_prep_panel import WeekReviewPage
+    from ui.services.weekend_prep_service import WeekendPrepService, empty_week_payload
+
+    learning = session_review.read_learning_window(
+        end_session="2026-09-21", sessions=5, root=_ledger(tmp_path), trades=[],
+        environment_labels={}, now=LAST_COMPLETED,
+    )
+    service = WeekendPrepService(state_path=tmp_path / "state.json", now=LAST_COMPLETED.replace(tzinfo=None))
+    page = WeekReviewPage(service)
+    seen: list[str] = []
+    wrong_trade: list[str] = []
+    try:
+        page.openSessionRequested.connect(seen.append)
+        page.openTradeRequested.connect(wrong_trade.append)
+        payload = empty_week_payload("2026-W39")
+        payload["learning"] = learning
+        page._render(payload)
+        assert page.learning_reads.item(0, 0).text() == "Rest of day"
+        assert page.learning_reads.item(0, 1).text() == "5"
+        assert page.learning_reads.item(0, 7).text() == "too few to call"
+        assert "Confidence" in page.learning_reads.horizontalHeaderItem(10).text()
+        assert page.learning_hours.rowCount() > 0
+        assert page.learning_environments.rowCount() > 0
+        assert page.learning_trades.rowCount() > 0
+        page.learning_hours.cellClicked.emit(0, 0)
+        _app.processEvents()
+        buttons = page.learning_drilldown.findChildren(QAbstractButton)
+        assert buttons
+        buttons[0].click()
+        assert seen == [learning["by_hour"][0]["sessions"][0]]
+        assert not wrong_trade, "a read ID must never open as a Journal trade"
+        assert any("Read IDs" in label.text() for label in page.learning_drilldown.findChildren(QLabel))
+    finally:
+        page.shutdown()
+        page.deleteLater()
         service.shutdown()
