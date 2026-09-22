@@ -347,11 +347,18 @@ def fragments_for(
             )
     offered = all_fragments[:MAX_FRAGMENTS]
     omitted = all_fragments[MAX_FRAGMENTS:]
+    offered_note_ids = {str(row["note_id"]) for row in offered}
+    omitted_note_ids = {str(row["note_id"]) for row in omitted}
     return offered, {
         "limit": MAX_FRAGMENTS,
         "count": len(omitted),
         "fragment_ids": [row["fragment_id"] for row in omitted[:MAX_FRAGMENTS]],
         "more": max(0, len(omitted) - MAX_FRAGMENTS),
+        # A note can be partly represented: a long note may offer its first
+        # fragments while later ones remain outside the bounded request.
+        "notes_total": len({str(row["note_id"]) for row in all_fragments}),
+        "notes_represented": len(offered_note_ids),
+        "notes_partially_offered": len(offered_note_ids & omitted_note_ids),
     }
 
 
@@ -386,6 +393,35 @@ def build_evidence(
         "vocabulary": book_payload,
         "fragments": offered,
         "fragments_omitted": omitted,
+    }
+
+
+def _coverage_header(
+    evidence: Mapping[str, Any], notes: Sequence[Mapping[str, Any]]
+) -> dict[str, int]:
+    """The request's actual coverage, kept beside the unchanged v1 tag rows."""
+    offered = list(evidence.get("fragments") or ())
+    omitted = evidence.get("fragments_omitted") or {}
+    omitted_count = int(omitted.get("count") or 0) if isinstance(omitted, Mapping) else 0
+    limit = int(omitted.get("limit") or MAX_FRAGMENTS) if isinstance(omitted, Mapping) else MAX_FRAGMENTS
+    represented = (
+        int(omitted.get("notes_represented") or 0)
+        if isinstance(omitted, Mapping) else 0
+    )
+    partial = (
+        int(omitted.get("notes_partially_offered") or 0)
+        if isinstance(omitted, Mapping) else 0
+    )
+    return {
+        "fragments_offered": len(offered),
+        "fragments_total": len(offered) + omitted_count,
+        "fragments_omitted": omitted_count,
+        "fragment_limit": limit,
+        # `notes_offered` is an older header field.  Keep it stable and add
+        # explicit names for the number that actually reached this request.
+        "notes_total": len(notes),
+        "notes_represented": represented,
+        "notes_partially_offered": partial,
     }
 
 
@@ -830,6 +866,7 @@ def run_observation_tags(
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.astimezone()
+    coverage = _coverage_header(evidence, notes)
     payload = {
         "schema": SCHEMA,
         "session_date": session,
@@ -840,6 +877,7 @@ def run_observation_tags(
         "generated_at": moment.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "inputs_hash": evidence["evidence_hash"],
         "notes_offered": len(notes),
+        **coverage,
         # Advisory 1, as a COUNT in the header: how many of the entries that got
         # a tag were written after the session closed. Present and zero, never
         # absent - a reader that has to tell "none" from "this build did not
@@ -862,9 +900,19 @@ def run_observation_tags(
             "reason": f"the tags file could not be published: {exc}",
             "outputs": [],
         }
+    coverage_reason = (
+        f"{coverage['fragments_offered']} of {coverage['fragments_total']} fragment(s) "
+        f"offered; {coverage['fragments_omitted']} omitted at the named limit "
+        f"{coverage['fragment_limit']}; {coverage['notes_represented']} of "
+        f"{coverage['notes_total']} note(s) represented"
+    )
+    if coverage["notes_partially_offered"]:
+        coverage_reason += (
+            f" ({coverage['notes_partially_offered']} partly offered)"
+        )
     reason = (
         f"{len(verified)} grounded tag(s) over {len(notes)} note(s) on {session}; "
-        "every span reproduced its quote"
+        f"every span reproduced its quote; {coverage_reason}"
     )
     if notes_source:
         reason = f"{reason}; {notes_source}"
@@ -873,7 +921,7 @@ def run_observation_tags(
         "model": str(payload["model"]),
         "reason": reason,
         "outputs": [str(written)],
-        "extra": {"tags": len(verified), "notes": len(notes)},
+        "extra": {"tags": len(verified), "notes": len(notes), **coverage},
     }
 
 
