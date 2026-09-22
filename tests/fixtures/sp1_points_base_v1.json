@@ -1,0 +1,18 @@
+{
+  "fixture_version": "sp1_points_base_v1",
+  "captured_from": "fb95854e",
+  "purpose": "Pre-repair Points v1 characterization. The complete report row has no S/R facts, so v1 incorrectly calls its path clean.",
+  "report_row": {
+    "symbol": "NVDA",
+    "side": "LONG",
+    "priority_bucket": "favorite_setup",
+    "scan_date": "2026-09-18",
+    "expected_r": 0.0,
+    "setup_family": "earnings_gap"
+  },
+  "v1_expected": {
+    "sr": 10.0,
+    "total": 10.0,
+    "note_absent": "S/R unmeasured"
+  }
+}
