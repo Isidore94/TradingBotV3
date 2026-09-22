@@ -96,8 +96,10 @@ side close. It is trader-only, one-shot, and never enters the automatic Focus pu
     minutes <= now). Warm-up: 160 M15 bars / 85 M30 bars (SMA + LRSI's 13); fewer is
     `not measured (N of 160 M15 bars)`. yfinance `15m`/`30m` for a `1mo` period, one cache instance
     per interval on the H1 cache's own worker pattern, zero IB traffic. Stale after 24 h.
-- **Pullback alerts are manual-only (trader 2026-09-17).** Claims and Focus picks never pre-arm
-  them. Old automatic rows are removed on the poll; pressing the chart button is the only arm path.
+- **Pullback alerts are manual-only except for AR-3's exact veto (trader 2026-09-17; amendment
+  2026-09-22).** Claims and Focus picks never pre-arm them; the chart button remains the manual arm
+  path. A successfully saved matching `too_extended_from_base` veto requests M30/H1 before normal
+  retirement; no other reason arms. Legacy claim/Focus automatic rows are removed on the poll.
 - **Three claim names** (in `setup_docs.SETUP_DOCS`, new group `"Entry timing and breaks"`, all
   three in `EXTRA_CLAIM_IDS` so the rail offers them): `pullback_sma_reclaim` "Pullback reclaim
   (M15 150 / M30 75 SMA)", `trendline_break` "Trendline break", `compression_break` "Compression
@@ -518,3 +520,52 @@ entries "PCT-1" / "PCT-3"):** AUTO-armed pullback watches push only the two recl
 (a retest is a feed row); one watch per symbol; the `lrsi_from_below_50` clause is a label, not
 a gate; `compression_break` v1 = the Phase-6 rule plus a >= 1.0 ATR-20 bar; the calibration
 population is every tracker record ACTIVE on the session.
+
+## AR — alert review correctness and load (2026-09-22)
+
+The trader's new request is the bounded AR follow-up in plan.md; implementation and
+review status live in CURRENT_CHECKPOINT.md. The SMA and oscillator thresholds do
+not change. M30 uses the close-based 75-SMA and efficiency LRSI crossing 80 (the
+later-cross leg may use M15); H1 remains a completed-bar 15-EMA touch/reclaim/slope
+rule with no LRSI condition. The pane still draws D1/M5 charts; colour does not
+pretend to add an M30/H1 chart or change capture attribution.
+
+The old companion path fenced the latest M30 bar rather than the M15 event,
+stamped the changing M30 bar as that event's identity, and let a pre-arm native
+cross exclude a later eligible companion. A read-only Sep 15–21 review-event audit
+found 108 companion fires across 53 (watch_id, cross-message) identities. MSTR's
+Sep 18 arm at 10:57 was followed by five reports of the 06:30 cross through Sep 21;
+GMAB and BLSH also named crosses before their current arms. This establishes event
+time and repeat faults, not an arithmetic error in the SMA or a trading edge.
+
+The corrected contract is the earliest eligible completed cross by its END time,
+strictly after the arm and after the reclaim: an M30 or M15 candidate cannot block
+an eligible candidate from the other series. The event keeps its own bar start;
+SMA and cross observations carry separate timeframes/times/values. An old stored
+M30 mark already covering that earlier event cannot re-announce it on upgrade.
+Newer episodes remain eligible; thresholds, the below-50 quality label, and the
+one-trigger-per-episode rule are unchanged.
+
+History request cadence and evaluation cadence are distinct. A worker delivery
+changes a cheap snapshot token; the next existing poll may judge that delivery
+inside the same completed bucket. The worker result acknowledges the snapshot it
+actually read, including M15's token when confirming M30. Requests stay bounded,
+unchanged data is quiet, one evaluation worker owns the calculation, and H1's
+batch limit still paces its fallback reads. No extra timer or Qt-thread indicator
+calculation is introduced. The existing `watch_fired` event retains allowlisted
+SMA/LRSI/ATR/cross fields or H1 EMA/touch/confirm fields. H1 explicitly carries
+`timeframe=H1` and its trigger so its source badge and cyan reason can render.
+
+**Narrow amendment to manual-only arming:** a successfully saved
+`too_extended_from_base` veto requests a persistent Pullback watch before the
+normal chart retirement. It is a trader-directed follow-up, not a claim/Focus
+sweep. Default scope is M30 and H1 (the lead's reversible choice after offering
+M30/H1 options in the session); M15 can remain a data companion but never emits a
+standalone M15 alert for this watch. Existing manual watches keep their identity,
+arm time, scope and fire marks. A same-side watch counts as the follow-up only
+when its saved scope and triggers cover both M30 and H1; an M15-only or converted
+legacy H1-only watch stays untouched and the capture says the follow-up was not
+armed. A duplicate does not restart a watch. An arm write
+failure is visible and leaves the veto saved; other reasons and failed or stale
+captures arm nothing. Existing expiry, disarm, personal-watch delivery and phone
+rules apply. Ordinary claims and Focus membership remain manual-only.

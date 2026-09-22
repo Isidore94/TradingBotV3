@@ -76,6 +76,9 @@ def _panel(monkeypatch, *, movers=None, vwaps=None, smas=None):
 
     monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *a, **k: None)
     panel = AlertCenterPanel()
+    # Trend filtering is tested after the optional Show all review view.
+    panel._show_all_d1_scan_reviews = True
+    panel._refresh_d1_scan_review_view()
     movers = movers if movers is not None else {}
     vwaps = vwaps if vwaps is not None else {}
     smas = smas if smas is not None else {}

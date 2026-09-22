@@ -777,6 +777,10 @@ class CaptureRail(QFrame):
         if not code:
             self._set_status("Pick a reason (1-9).", ok=False)
             return None
+        # A host may report what the saved veto also armed.  This is the same
+        # one-commit status precedence the claimed-like path already has; it
+        # changes no annotation field, cohort write, or annotation-first order.
+        self._capture_status_override = None
         row = self._record(
             EVENT_VETO,
             reason_code=code,
@@ -788,7 +792,13 @@ class CaptureRail(QFrame):
             return None
         self.veto_note_input.clear()
         detail = self._merge_veto_cohort_safely()
-        self._set_status(f"VETO {row['symbol']} - {code}{detail}")
+        override = self.take_capture_status_override()
+        if override is None:
+            self._set_status(f"VETO {row['symbol']} - {code}{detail}")
+        else:
+            # The host's armed/not-armed result and the capture-side cohort
+            # result describe different writes.  Keep both visible.
+            self._set_status(f"{override[0]}{detail}", ok=override[1])
         return row
 
     def veto_keeps_chart(self) -> bool:
