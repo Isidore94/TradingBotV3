@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
+import pytest
+
 
 SESSION = "2026-09-21"
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +37,7 @@ def test_day_review_facts_refreshes_a_stale_pack_through_the_canonical_four_serv
     from ai_jobs.day_review_facts import run_day_review_facts
 
     calls: list[tuple[str, str]] = []
+    bar_options: dict = {}
 
     class Service:
         def build_index_for(self, session_date, **_kwargs):
@@ -43,6 +46,7 @@ def test_day_review_facts_refreshes_a_stale_pack_through_the_canonical_four_serv
 
         def build_session_bars_for(self, session_date, **_kwargs):
             calls.append(("bars", session_date))
+            bar_options.update(_kwargs)
             return {"SPY": [{"close": 100.0}]}
 
         def build_reads_for(self, session_date, **_kwargs):
@@ -60,5 +64,77 @@ def test_day_review_facts_refreshes_a_stale_pack_through_the_canonical_four_serv
     )
 
     assert calls == [("index", SESSION), ("bars", SESSION), ("reads", SESSION), ("pack", SESSION)]
+    assert bar_options == {"reuse_existing": True}
     assert outcome["status"] == "ok", outcome
     assert outcome["pack"]["inputs_hash"] == "fresh"
+
+
+def test_day_review_facts_failure_keeps_the_prior_verified_pack_bytes(tmp_path):
+    """A partial night result must not replace the facts the page last verified."""
+    from ai_jobs.day_review_facts import run_day_review_facts
+
+    root = tmp_path / "day_review"
+    prior = root / "sessions" / SESSION / "pack.json"
+    prior.parent.mkdir(parents=True)
+    prior.write_bytes(b'{"inputs_hash":"last-verified"}\n')
+
+    class FailingService:
+        def build_index_for(self, *_args, **_kwargs):
+            return {"session": SESSION}
+
+        def build_session_bars_for(self, *_args, **_kwargs):
+            return {"SPY": [{"close": 100.0}]}
+
+        def build_reads_for(self, *_args, **_kwargs):
+            return []
+
+        def build_pack_for(self, *_args, **_kwargs):
+            return None
+
+    outcome = run_day_review_facts(
+        session_date=SESSION,
+        now=datetime(2026, 9, 22, 1, 0),
+        root=root,
+        service=FailingService(),
+    )
+
+    assert outcome["status"] == "failed", outcome
+    assert prior.read_bytes() == b'{"inputs_hash":"last-verified"}\n'
+
+
+def test_day_review_facts_reuses_a_verified_exact_session_tape_without_a_download(monkeypatch):
+    """The night refreshes facts; it must not replace a good tape with an empty retry."""
+    import day_review_bars
+    from ui.services.day_review_service import DayReviewService
+
+    stored = {
+        "SPY": [{
+            "dt": datetime(2026, 9, 21, 6, 30), "open": 100.0,
+            "high": 101.0, "low": 99.0, "close": 100.5, "volume": 10,
+        }]
+    }
+    monkeypatch.setattr(day_review_bars, "session_is_closed", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(day_review_bars, "read_session_bars", lambda session: stored if session == SESSION else None)
+    monkeypatch.setattr(day_review_bars, "decided_symbols", lambda *_args, **_kwargs: pytest.fail("reused tape chose download symbols"))
+    monkeypatch.setattr(day_review_bars, "fetch_session_bars", lambda *_args, **_kwargs: pytest.fail("reused tape downloaded"))
+    monkeypatch.setattr(day_review_bars, "write_session_bars", lambda *_args, **_kwargs: pytest.fail("reused tape rewrote"))
+
+    assert DayReviewService().build_session_bars_for(SESSION, reuse_existing=True) is stored
+
+
+def test_day_review_facts_fetches_and_writes_when_the_exact_session_tape_is_missing(monkeypatch, tmp_path):
+    """Reuse is a protection for verified bars, not a reason to invent a tape."""
+    import day_review_bars
+    from ui.services.day_review_service import DayReviewService
+
+    fresh = {"SPY": [{"dt": datetime(2026, 9, 21, 6, 30), "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 10}]}
+    writes: list[tuple[str, dict]] = []
+    monkeypatch.setattr(day_review_bars, "session_is_closed", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(day_review_bars, "read_session_bars", lambda _session: None)
+    monkeypatch.setattr(day_review_bars.daily_recap_reader, "RecapSources", lambda: object())
+    monkeypatch.setattr(day_review_bars, "decided_symbols", lambda session, _sources: {"SPY"} if session == SESSION else set())
+    monkeypatch.setattr(day_review_bars, "fetch_session_bars", lambda names, session: fresh if (names, session) == ({"SPY"}, SESSION) else pytest.fail("wrong canonical fetch"))
+    monkeypatch.setattr(day_review_bars, "write_session_bars", lambda session, bars: writes.append((session, bars)) or tmp_path / "tape.parquet")
+
+    assert DayReviewService().build_session_bars_for(SESSION, reuse_existing=True) == tmp_path / "tape.parquet"
+    assert writes == [(SESSION, fresh)]

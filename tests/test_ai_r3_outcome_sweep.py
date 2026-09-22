@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import threading
 import sys
+import csv
+import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -62,3 +65,139 @@ def test_outcome_sweep_factory_refuses_a_bad_checkpoint_without_quarantining_or_
 
     assert checkpoint.read_bytes() == before
     assert list(tmp_path.glob("*.corrupt-*.json")) == []
+
+
+def test_outcome_sweep_job_skips_when_disabled_or_the_canonical_sweep_is_too_early():
+    """The nightly owner preserves the existing autorun and close+35 gates."""
+    from ai_jobs.outcome_sweep import run_outcome_sweep
+
+    calls: list[datetime] = []
+
+    class Bot:
+        def sweep_pending_bounce_outcomes(self, *, now):
+            calls.append(now)
+            return {"deferred": "scan_window_open", "finalized": 0}
+
+    disabled = run_outcome_sweep(
+        session_date="2026-09-18",
+        now=datetime(2026, 9, 18, 14, 0),
+        bot_factory=Bot,
+        autorun_enabled=False,
+    )
+    early = run_outcome_sweep(
+        session_date="2026-09-18",
+        now=datetime(2026, 9, 18, 13, 5),
+        bot_factory=Bot,
+        autorun_enabled=True,
+    )
+    early_close = run_outcome_sweep(
+        session_date="2026-11-27",
+        now=datetime(2026, 11, 27, 10, 20),
+        bot_factory=Bot,
+        autorun_enabled=True,
+    )
+
+    assert disabled["status"] == "skipped", disabled
+    assert "disabled" in str(disabled["reason"]).lower()
+    assert early["status"] == "skipped", early
+    assert "close" in str(early["reason"]).lower() or "early" in str(early["reason"]).lower()
+    assert early_close["status"] == "skipped", early_close
+    assert calls == [datetime(2026, 9, 18, 13, 5), datetime(2026, 11, 27, 10, 20)], (
+        "the job did not pass its clock to the canonical regular/early-close gate"
+    )
+
+
+def test_outcome_sweep_job_marks_a_commit_failure_as_failed_not_ok():
+    """A CSV row without its durable checkpoint transaction is not a final."""
+    from ai_jobs.outcome_sweep import run_outcome_sweep
+
+    class Bot:
+        def sweep_pending_bounce_outcomes(self, *, now):
+            return {
+                "finalized": 0,
+                "commit_failed": 1,
+                "failed": 0,
+                "by_terminal_kind": {"swept_measured": 1, "unmeasured": 1},
+            }
+
+    outcome = run_outcome_sweep(
+        session_date="2026-09-21",
+        now=datetime(2026, 9, 21, 14, 0),
+        bot_factory=Bot,
+        autorun_enabled=True,
+    )
+
+    assert outcome["status"] == "failed", outcome
+    assert outcome["commit_failed"] == 1
+    assert outcome["by_terminal_kind"] == {"swept_measured": 1, "unmeasured": 1}
+
+
+def test_outcome_sweep_job_finalizes_measured_and_unmeasured_pending_rows_once_across_two_factories(
+    monkeypatch, tmp_path
+):
+    """The job drives two real canonical sweep instances against one temp checkpoint."""
+    from ai_jobs.outcome_sweep import run_outcome_sweep
+    from bounce_bot_lib import legacy
+
+    checkpoint = tmp_path / "state.json"
+    outcomes = tmp_path / "outcomes.csv"
+    measured = {
+        "event_id": "measured", "symbol": "MEAS", "direction": "long",
+        "trade_date": "2026-08-21", "entry_time": "2026-08-21T07:00:00",
+        "entry_price": 100.0, "stop_price": 99.0, "risk_per_share": 1.0,
+        "target_1r": 101.0, "target_2r": 102.0, "milestones_logged": [],
+        "outcome_mode": "eod_hold", "context": {},
+        "last_measured": {"bars": 3, "last_close": 100.5, "close_r": 0.5, "mfe_r": 0.8, "mae_r": -0.2},
+    }
+    unmeasured = {**measured, "event_id": "unmeasured", "symbol": "NONE"}
+    unmeasured.pop("last_measured")
+    checkpoint.write_text(
+        json.dumps({"pending": {"measured": measured, "unmeasured": unmeasured}, "finalized": {}, "finalizing": {}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOME_STATE_JSON", checkpoint)
+    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOMES_CSV", outcomes)
+    monkeypatch.setattr(legacy.BounceBot, "_write_outcome_coverage", lambda *_args: None)
+    monkeypatch.setattr(legacy.BounceBot, "_mirror_outcome_row_to_ledger", lambda *_args: None)
+
+    first = run_outcome_sweep(
+        session_date="2026-08-21", now=datetime(2026, 8, 21, 14, 30),
+        bot_factory=legacy.BounceBot.for_outcome_sweep, autorun_enabled=True,
+    )
+    second = run_outcome_sweep(
+        session_date="2026-08-21", now=datetime(2026, 8, 21, 14, 31),
+        bot_factory=legacy.BounceBot.for_outcome_sweep, autorun_enabled=True,
+    )
+
+    assert first["status"] == "ok", first
+    assert first["by_terminal_kind"] == {"swept_measured": 1, "unmeasured": 1}
+    assert second["status"] == "ok", second
+    assert second["already_finalized"] == 2
+    with outcomes.open(newline="", encoding="utf-8") as handle:
+        finals = [row for row in csv.DictReader(handle) if row.get("event_type") == "final"]
+    assert [row["event_id"] for row in finals] == ["measured", "unmeasured"]
+    assert {row["status"] for row in finals} == {"swept_measured", "unresolved"}
+
+
+def test_outcome_sweep_job_refuses_weekend_and_a_calendar_failure_before_the_factory(monkeypatch):
+    """A job must never name a non-session as covered or sweep on calendar doubt."""
+    import market_calendar
+    from ai_jobs.outcome_sweep import run_outcome_sweep
+
+    def should_not_construct():
+        pytest.fail("the outcome factory ran without a verified exchange session")
+
+    weekend = run_outcome_sweep(
+        session_date="2026-08-22", now=datetime(2026, 8, 22, 14, 30),
+        bot_factory=should_not_construct, autorun_enabled=True,
+    )
+    monkeypatch.setattr(market_calendar, "is_session", lambda _day: (_ for _ in ()).throw(RuntimeError("calendar offline")))
+    broken = run_outcome_sweep(
+        session_date="2026-08-21", now=datetime(2026, 8, 21, 14, 30),
+        bot_factory=should_not_construct, autorun_enabled=True,
+    )
+
+    assert weekend["status"] == "skipped", weekend
+    assert "session" in str(weekend["reason"]).lower()
+    assert broken["status"] == "failed", broken
+    assert "calendar" in str(broken["reason"]).lower()
