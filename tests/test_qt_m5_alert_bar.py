@@ -153,6 +153,9 @@ def panel(tmp_path, monkeypatch):
         parked_symbols_path=tmp_path / "parked.json",
         review_events_path=tmp_path / "alert_review_events.jsonl",
     )
+    # These legacy queue cases explicitly exercise the optional Show all view.
+    made._show_all_d1_scan_reviews = True
+    made._refresh_d1_scan_review_view()
     monkeypatch.setattr(made, "_alerts_may_sound", lambda: False)
     monkeypatch.setattr(made, "_review_movers_only", False, raising=False)
     monkeypatch.setattr(made, "_auto_mode_now", lambda: "DESK")

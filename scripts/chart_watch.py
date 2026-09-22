@@ -196,6 +196,11 @@ class ChartWatch:
     #: `pullback` (whose condition IS its trigger list) and on every row
     #: written before the rename - absent is empty, never an error.
     triggers: tuple[str, ...] = ()
+    #: An optional, deliberately narrow set of legs for a Pullback alert.
+    #: Empty is the legacy/manual meaning: judge every leg the button has
+    #: always armed.  The veto-created pullback uses ("M30", "H1") so its
+    #: M15 cache may still be a companion input but can never speak alone.
+    timeframes: tuple[str, ...] = ()
     #: trigger -> the bar time it last fired on, so one event speaks once and
     #: a NEW episode's event still speaks. Persisted, so a desk restart does
     #: not re-announce a move the trader was already told about.
@@ -289,6 +294,7 @@ def arm_chart_watch(
     *,
     now: datetime | None = None,
     source_text: str = "",
+    timeframes: tuple[str, ...] = (),
 ) -> ChartWatch:
     """Arm a watch against what the trader sees on the chart right now.
 
@@ -317,6 +323,7 @@ def arm_chart_watch(
         watch_id=uuid.uuid4().hex,
         reason=watch_reason(kind, resolved_side),
         triggers=PULLBACK_TRIGGERS if kind == PULLBACK_KIND else (),
+        timeframes=tuple(str(item).upper() for item in timeframes if str(item).strip()),
     )
 
 
@@ -838,7 +845,7 @@ def _atomic_write_json(payload: dict, path: Path) -> None:
 
 
 def chart_watch_to_dict(watch: ChartWatch) -> dict:
-    return {
+    payload = {
         "symbol": watch.symbol,
         "kind": watch.kind,
         "armed_at": _naive(watch.armed_at).isoformat(),
@@ -851,6 +858,12 @@ def chart_watch_to_dict(watch: ChartWatch) -> dict:
         "fired": dict(watch.fired or {}),
         "declined": bool(watch.declined),
     }
+    # Do not rewrite an ordinary/manual arm merely to say that it has its
+    # historical all-timeframe scope.  The field is only evidence for the
+    # new narrow veto arm.
+    if watch.timeframes:
+        payload["timeframes"] = list(watch.timeframes)
+    return payload
 
 
 def chart_watch_from_dict(payload: Mapping[str, Any]) -> ChartWatch | None:
@@ -884,6 +897,12 @@ def chart_watch_from_dict(payload: Mapping[str, Any]) -> ChartWatch | None:
         )
     else:
         triggers = ()
+    stored_timeframes = payload.get("timeframes")
+    timeframes = (
+        tuple(str(item).upper() for item in stored_timeframes if str(item).strip())
+        if isinstance(stored_timeframes, (list, tuple))
+        else ()
+    )
     fired_payload = payload.get("fired")
     fired = (
         {str(key): str(value) for key, value in fired_payload.items()}
@@ -907,6 +926,7 @@ def chart_watch_from_dict(payload: Mapping[str, Any]) -> ChartWatch | None:
         watch_id=str(payload.get("watch_id") or ""),
         reason=str(payload.get("reason") or ""),
         triggers=triggers,
+        timeframes=timeframes,
         fired=fired,
         declined=bool(payload.get("declined") or False),
     )

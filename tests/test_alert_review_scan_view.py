@@ -79,6 +79,22 @@ def _watch_hit(symbol: str):
     )
 
 
+def _personal_watch_chart(symbol: str):
+    from ui.models.bounce import BounceAlert
+    from ui.panels.alert_center_panel import CHART_WATCH_TAG
+
+    return BounceAlert(
+        time_text="09:37:00",
+        symbol=symbol,
+        side="LONG",
+        trigger="Your pullback fired",
+        timeframe="D1",
+        tag=CHART_WATCH_TAG,
+        raw_text=f"CHART WATCH {symbol} (LONG): Pullback fired",
+        is_d1=True,
+    )
+
+
 def _unknown_d1_family(symbol: str):
     """A future D1 family must fail open into the personal review view."""
     from ui.models.bounce import BounceAlert
@@ -180,6 +196,98 @@ def test_ordinary_d1_scan_ideas_stay_held_until_show_all_without_disturbing_the_
         assert {alert.symbol for alert in panel._review_queue} == {"MSFT", "AAPL", "TSLA"}
         assert panel._current_review_alert.symbol == "NVDA"
         assert rail.note_input.text() == "keep this draft while changing the view"
+    finally:
+        panel.close()
+        panel.deleteLater()
+
+
+def test_empty_personal_view_keeps_the_scan_switch_visible_and_protects_a_revealed_chart(
+    tmp_path, monkeypatch
+):
+    """A held scan must not make an otherwise empty review pane look broken."""
+    panel = _panel(tmp_path, monkeypatch)
+    try:
+        panel.show()
+        QApplication.processEvents()
+        scan = _scan("AAPL")
+        panel.add_alert(scan)
+
+        switch = _show_all_scan_button(panel)
+        assert switch.isVisible()
+        assert switch.text() == "Show all (1)"
+        assert panel._current_review_alert is None
+
+        switch.click()
+        QApplication.processEvents()
+        assert switch.text() == "My alerts"
+        assert panel._current_review_alert is scan
+        rail = panel.chart_review.capture_rail
+        rail.note_input.setText("draft survives the view change")
+
+        switch.click()
+        QApplication.processEvents()
+        assert panel._current_review_alert is scan
+        assert rail.note_input.text() == "draft survives the view change"
+    finally:
+        panel.close()
+        panel.deleteLater()
+
+
+def test_show_all_never_replaces_a_current_personal_watch_or_its_draft(tmp_path, monkeypatch):
+    panel = _panel(tmp_path, monkeypatch)
+    try:
+        personal = _personal_watch_chart("AAPL")
+        panel.chart_alert(personal)
+        rail = panel.chart_review.capture_rail
+        rail.note_input.setText("keep the pullback chart")
+        panel.add_alert(_scan("AAPL"))
+
+        switch = _show_all_scan_button(panel)
+        switch.click()
+        QApplication.processEvents()
+        assert panel._current_review_alert is personal
+        assert rail.note_input.text() == "keep the pullback chart"
+    finally:
+        panel.close()
+        panel.deleteLater()
+
+
+def test_vetoed_or_newly_focus_held_scans_do_not_lie_in_the_show_all_count(
+    tmp_path, monkeypatch
+):
+    from ui.widgets.capture_rail import _REASON_ROLE
+
+    panel = _panel(tmp_path, monkeypatch)
+    try:
+        scan = _scan("AAPL")
+        panel.add_alert(scan)
+        switch = _show_all_scan_button(panel)
+        assert switch.text() == "Show all (1)"
+        switch.click()
+        QApplication.processEvents()
+        for row in range(panel.chart_review.capture_rail.reason_list.count()):
+            item = panel.chart_review.capture_rail.reason_list.item(row)
+            if item.data(_REASON_ROLE) == "too_extended_from_base":
+                panel.chart_review.capture_rail.reason_list.setCurrentItem(item)
+                panel.chart_review.capture_rail.reason_list.itemActivated.emit(item)
+                break
+        else:
+            raise AssertionError("missing extended veto reason")
+        QApplication.processEvents()
+        assert panel._held_d1_scan_review_count() == 0
+        assert "AAPL" not in panel._held_d1_scan_reviews
+        switch.click()
+        assert not any(alert.symbol == "AAPL" for alert in panel._review_queue)
+
+        focus_scan = _scan("MSFT")
+        panel.add_alert(focus_scan)
+        assert panel._held_d1_scan_review_count() == 1
+        monkeypatch.setattr(panel, "_alert_is_focus", lambda alert: alert.symbol == "MSFT")
+        panel._on_focus_membership_changed()
+        assert "MSFT" not in panel._held_d1_scan_reviews
+        assert any(alert.symbol == "MSFT" for alert in panel._review_queue) or (
+            panel._current_review_alert is focus_scan
+        )
     finally:
         panel.close()
         panel.deleteLater()

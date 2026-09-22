@@ -163,6 +163,7 @@ def test_extended_veto_arms_only_m30_and_h1_pullback_and_keeps_the_normal_veto_r
         assert watch.kind == "pullback"
         assert watch.symbol == "AAPL" and watch.side == "LONG"
         assert watch.source_text == VETO_SOURCE
+        assert watch.timeframes == ("M30", "H1")
         assert watch.watch_id and not watch.fired and not watch.declined
         assert load_chart_watches(tmp_path / "chart_watches.json") == [watch]
         assert panel._current_review_alert is not None
@@ -235,6 +236,39 @@ def test_extended_veto_never_changes_a_manual_pullback_or_claims_a_failed_arm(tm
     finally:
         failed.close()
         failed.deleteLater()
+
+
+def test_extended_day_trade_veto_arms_before_its_existing_focus_placement_and_retirement(
+    tmp_path, monkeypatch
+):
+    """The day-trade button shares the saved veto exception, not its retirement timing."""
+    from ui.widgets.capture_rail import _REASON_ROLE
+
+    panel = _panel(tmp_path, monkeypatch)
+    try:
+        _queue_scans_for_veto(panel, "AAPL")
+        rail = panel.chart_review.capture_rail
+        for row in range(rail.reason_list.count()):
+            item = rail.reason_list.item(row)
+            if item.data(_REASON_ROLE) == VETO_CODE:
+                rail.reason_list.setCurrentItem(item)
+                break
+        else:
+            raise AssertionError("the loaded veto vocabulary has no extended row")
+
+        assert rail.commit_veto_day_trade() is not None
+        QApplication.processEvents()
+
+        assert len(panel._chart_watches) == 1
+        watch = panel._chart_watches[0]
+        assert watch.symbol == "AAPL" and watch.side == "LONG"
+        assert watch.source_text == VETO_SOURCE
+        assert watch.timeframes == ("M30", "H1")
+        assert panel._current_review_alert is not None
+        assert panel._current_review_alert.symbol == "NVDA"
+    finally:
+        panel.close()
+        panel.deleteLater()
 
 
 def test_extended_veto_limits_the_real_pullback_dispatch_and_keeps_the_existing_lifecycle(
@@ -365,3 +399,22 @@ def test_only_the_saved_matching_extended_veto_can_request_the_watch(tmp_path, m
     finally:
         matching.close()
         matching.deleteLater()
+
+
+def test_extended_veto_preserves_an_opposite_side_manual_pullback(tmp_path, monkeypatch):
+    from chart_watch import PULLBACK_KIND
+
+    panel = _panel(tmp_path, monkeypatch)
+    try:
+        _queue_scans_for_veto(panel, "AAPL", "SHORT")
+        assert panel.arm_chart_watch_for("AAPL", "LONG", PULLBACK_KIND, source_text="chart")
+        manual = panel._chart_watches[0]
+        _choose_extended_reason(panel.chart_review.capture_rail)
+        QApplication.processEvents()
+
+        assert panel._chart_watches == [manual]
+        assert "not armed" in panel.chart_review.capture_rail.status_label.text().casefold()
+        assert "long pullback already armed" in panel.chart_review.capture_rail.status_label.text().casefold()
+    finally:
+        panel.close()
+        panel.deleteLater()

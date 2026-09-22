@@ -554,6 +554,12 @@ class AlertCenterPanel(QFrame):
         self._alerts: list[BounceAlert] = []
         self._d1_alerts: list[BounceAlert] = []
         self._review_queue: list[BounceAlert] = []
+        # AR-2B: ordinary D1 scan ideas remain recorded but start outside the
+        # visual-review display.  One newest row per symbol is enough for the
+        # session switch; it is a presentation cache, never a verdict or a
+        # second alert store.
+        self._held_d1_scan_reviews: dict[str, BounceAlert] = {}
+        self._show_all_d1_scan_reviews = False
         # Whether the chart in front belongs to the waiting list (dequeued, or
         # a clicked D1 row) or was merely clicked off the M5 alert bar. Decides
         # what a click elsewhere does with it: re-queue, or skip for now.
@@ -834,6 +840,11 @@ class AlertCenterPanel(QFrame):
             self.focus_service.focusChanged.connect(
                 self._focus_feed_coalescer.request
             )
+            # A held ordinary scan that becomes a real Focus name is no
+            # longer an ordinary scan.  Move that current-session display row
+            # through the normal queue door immediately, rather than leaving
+            # a stale Show all count or waiting for a second scanner alert.
+            self.focus_service.focusChanged.connect(self._on_focus_membership_changed)
 
         self.min_tier_input = QComboBox()
         for label, mode in MIN_TIER_CHOICES:
@@ -918,6 +929,7 @@ class AlertCenterPanel(QFrame):
             self._remove_review_alert_for_today
         )
         self.chart_review.vetoRetireRequested.connect(self._retire_after_veto)
+        self.chart_review.savedVeto.connect(self._arm_saved_extended_veto)
         self.chart_review.likeRecorded.connect(self._after_like)
         self.chart_review.likeAdvanceRequested.connect(self._advance_after_like)
         self.chart_review.claimPlaced.connect(self._place_claimed_d1)
@@ -929,6 +941,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.anyBounceToggled.connect(self._toggle_any_bounce_watch)
         self.chart_review.externalChartRequested.connect(self._open_external_chart)
         self.chart_review.revealHiddenRequested.connect(self.reveal_hidden_reviews)
+        self.chart_review.scanReviewViewToggled.connect(self._toggle_d1_scan_review_view)
         self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
@@ -2387,6 +2400,85 @@ class AlertCenterPanel(QFrame):
             return 0
         return int(getattr(self, "_away_recap_diverted", 0) or 0)
 
+    def _is_ordinary_d1_scan_review(self, alert: BounceAlert) -> bool:
+        """Whether this is the scanner's ordinary D1 idea family.
+
+        This is deliberately the real, narrow taxonomy rather than a guess
+        from text.  Focus membership comes from the existing Focus provider;
+        a chart's destination category is not evidence of membership.
+        Unknown future D1 families fail open into the personal view.
+        """
+        return (
+            bool(getattr(alert, "is_d1", False))
+            and str(getattr(alert, "tag", "") or "").casefold().startswith("d1_flag_")
+            and not self._alert_is_focus(alert)
+        )
+
+    def _held_d1_scan_review_count(self) -> int:
+        """How many ordinary scan rows the My-alerts view is actually hiding."""
+        current = self._current_review_alert
+        claim_keys = self._active_claim_keys()
+        return sum(
+            1
+            for alert in self._held_d1_scan_reviews.values()
+            if self._held_d1_scan_review_is_eligible(alert, claim_keys=claim_keys)
+            if not (
+                current is not None
+                and current.symbol == alert.symbol
+                and self._is_ordinary_d1_scan_review(current)
+            )
+        )
+
+    def _held_d1_scan_review_is_eligible(
+        self, alert: BounceAlert, *, claim_keys: set[tuple[str, str]] | None = None
+    ) -> bool:
+        """A held row may be shown only while its normal queue path allows it."""
+        if not self._is_ordinary_d1_scan_review(alert):
+            return False
+        if alert.symbol in self._ignored_symbols or alert.symbol in self._parked_symbols:
+            return False
+        if claim_keys is None:
+            claim_keys = self._active_claim_keys()
+        return (alert.symbol, alert.side) not in claim_keys
+
+    def _refresh_d1_scan_review_view(self) -> None:
+        self.chart_review.set_scan_review_view(
+            show_all=self._show_all_d1_scan_reviews,
+            hidden_count=self._held_d1_scan_review_count(),
+        )
+
+    def _on_focus_membership_changed(self, *_args) -> None:
+        """Promote held rows that are now actual Focus members into review."""
+        promoted = []
+        for symbol, alert in list(self._held_d1_scan_reviews.items()):
+            if self._alert_is_focus(alert):
+                self._held_d1_scan_reviews.pop(symbol, None)
+                promoted.append(alert)
+        for alert in promoted:
+            self._enqueue_review_alert(alert)
+        self._refresh_d1_scan_review_view()
+
+    def _toggle_d1_scan_review_view(self) -> None:
+        """Toggle only which queued D1 scan ideas are displayed this session."""
+        self._show_all_d1_scan_reviews = not self._show_all_d1_scan_reviews
+        if self._show_all_d1_scan_reviews:
+            # The cache has the latest row for each symbol.  Enqueueing uses
+            # the existing ordering and prefetch paths; a manual chart in
+            # front remains a manual chart (the same-symbol guard below).
+            claim_keys = self._active_claim_keys()
+            for alert in self._held_d1_scan_reviews.values():
+                if self._held_d1_scan_review_is_eligible(alert, claim_keys=claim_keys):
+                    self._enqueue_review_alert(alert)
+        else:
+            self._review_queue = [
+                alert
+                for alert in self._review_queue
+                if not self._is_ordinary_d1_scan_review(alert)
+            ]
+            self.chart_review.set_queued_count(len(self._review_queue))
+            self._prefetch_review_queue()
+        self._refresh_d1_scan_review_view()
+
     def _enqueue_review_alert(self, alert: BounceAlert) -> None:
         """Queue one visual review per symbol; refresh the active symbol live.
 
@@ -2461,13 +2553,31 @@ class AlertCenterPanel(QFrame):
             self._attach_cached_take_prob(alert)
             self._attach_held_run_suffix(alert)
             self.m5AlertPosted.emit(alert)
+        # Default My alerts holds only the scanner's recognized ordinary D1
+        # taxonomy.  It happens before same-symbol refresh, so a routine scan
+        # cannot replace a manual/personal reason on the chart already being
+        # reviewed.  The alert was already written to its backing feed.
+        ordinary_d1_scan = self._is_ordinary_d1_scan_review(alert)
+        if ordinary_d1_scan:
+            self._held_d1_scan_reviews[alert.symbol] = alert
+            self._refresh_d1_scan_review_view()
+            if not self._show_all_d1_scan_reviews:
+                return
         if (
             self._current_review_alert is not None
             and self._current_review_alert.symbol == alert.symbol
         ):
-            self._current_review_alert = alert
-            self._render_current_review()
-            return
+            if ordinary_d1_scan:
+                # Reclassifying a scan is never a chart selection.  A Show-all
+                # click (or a later same-symbol scan while it is on) leaves
+                # every current chart and its capture draft intact, whether it
+                # came from a typed look, Focus, a price arm, a watch hit, or
+                # another ordinary scan.
+                pass
+            else:
+                self._current_review_alert = alert
+                self._render_current_review()
+                return
         if is_m5:
             return
         # Movers only (trader rule 2026-08-19). Applied HERE because this is
@@ -2553,6 +2663,12 @@ class AlertCenterPanel(QFrame):
         feed-row click. A D1 chart in front keeps its place at the head of
         the queue; an M5 chart in front is skipped (trader rule 2026-08-27,
         second pass - see `_select_review_alert`)."""
+        # An explicit click back onto an ignored chart is re-engagement, just
+        # like typing that ticker in the lookup box.  It restores the day
+        # state before charting; otherwise a direct chart request silently did
+        # nothing and a following capture applied to whichever chart was old.
+        if alert.symbol in self._ignored_symbols:
+            self._restore_ignored_symbol(alert.symbol)
         self._select_review_alert(alert)
 
     def _attach_cached_take_prob(self, alert: BounceAlert) -> None:
@@ -3371,6 +3487,12 @@ class AlertCenterPanel(QFrame):
         side = getattr(alert, "side", "")
         if not symbol:
             return
+        held = self._held_d1_scan_reviews.get(symbol)
+        if held is not None and held.side == side:
+            # A claim answers this exact scan thesis.  Do not leave its
+            # presentation cache behind to be reintroduced after a view flip.
+            self._held_d1_scan_reviews.pop(symbol, None)
+            self._refresh_d1_scan_review_view()
         self._review_queue = [
             queued
             for queued in self._review_queue
@@ -4853,7 +4975,13 @@ class AlertCenterPanel(QFrame):
         return bars
 
     def arm_chart_watch_for(
-        self, symbol: str, side: str, kind: str, *, source_text: str = ""
+        self,
+        symbol: str,
+        side: str,
+        kind: str,
+        *,
+        source_text: str = "",
+        timeframes: tuple[str, ...] = (),
     ) -> bool:
         """Public arming surface for any visual chart. Returns True on arm.
 
@@ -4871,7 +4999,7 @@ class AlertCenterPanel(QFrame):
         if kind in self.armed_watch_kinds(symbol):
             self.statusChanged.emit(f"{symbol}: {label} watch already armed.")
             return False
-        self._chart_watches = [
+        candidate_watches = [
             existing
             for existing in self._chart_watches
             if not (existing.symbol == symbol and existing.kind == kind)
@@ -4885,9 +5013,16 @@ class AlertCenterPanel(QFrame):
             # never pay for bars this watch does not use.
             () if kind == PULLBACK_KIND else self._m5_bars_for(symbol),
             source_text=source_text,
+            timeframes=timeframes,
         )
-        self._chart_watches.append(watch)
-        self._save_chart_watches()
+        candidate_watches.append(watch)
+        # An arm is a trader-visible promise.  Keep the in-memory collection
+        # untouched when its durable row cannot be saved, so a later poll can
+        # never fire an alert the desk only pretended to arm.
+        if not self._save_chart_watches(candidate_watches):
+            self.statusChanged.emit(f"{symbol}: NOT ARMED - the watch file could not be saved.")
+            return False
+        self._chart_watches = candidate_watches
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
         current = self._current_review_alert
@@ -5037,6 +5172,27 @@ class AlertCenterPanel(QFrame):
         """
         return tuple(getattr(watch, "triggers", ()) or PULLBACK_TRIGGERS)
 
+    @staticmethod
+    def _pullback_timeframe_scope(watch) -> frozenset[str]:
+        """The legs this arm may evaluate; empty remains the legacy all-leg arm."""
+        return frozenset(
+            str(item).strip().upper()
+            for item in (getattr(watch, "timeframes", ()) or ())
+            if str(item).strip()
+        )
+
+    def _pullback_uses_h1(self, watch) -> bool:
+        scope = self._pullback_timeframe_scope(watch)
+        return not scope or "H1" in scope
+
+    def _pullback_sma_timeframes(self, watch) -> tuple[tuple[int, int], ...]:
+        scope = self._pullback_timeframe_scope(watch)
+        return tuple(
+            (minutes, length)
+            for minutes, length in self.PULLBACK_TIMEFRAMES
+            if not scope or f"M{minutes}" in scope
+        )
+
     def _pullback_bars_for_watch(self, watch, interval_minutes: int, *, now=None):
         """This watch's M15 or M30 series, and an ASK for the next refresh.
 
@@ -5112,10 +5268,10 @@ class AlertCenterPanel(QFrame):
             return ""
         triggers = self._pullback_triggers(watch)
         parts: list[str] = []
-        if TRIGGER_H1_EMA15_BOUNCE in triggers:
+        if TRIGGER_H1_EMA15_BOUNCE in triggers and self._pullback_uses_h1(watch):
             parts.append(self._h1_watch_note(watch))
         if any(name in triggers for name in self.PULLBACK_SMA_TRIGGERS):
-            for interval_minutes, sma_length in self.PULLBACK_TIMEFRAMES:
+            for interval_minutes, sma_length in self._pullback_sma_timeframes(watch):
                 parts.append(
                     self._pullback_timeframe_note(watch, interval_minutes, sma_length)
                 )
@@ -5375,13 +5531,17 @@ class AlertCenterPanel(QFrame):
         parts = [part for part in (f"tracker {segment_type} {stats}" if stats else "", window) if part]
         return "; ".join(parts)
 
-    def _save_chart_watches(self) -> None:
+    def _save_chart_watches(self, watches=None) -> bool:
         if self._chart_watches_path is None:
-            return
+            return True
         try:
-            save_chart_watches(self._chart_watches, self._chart_watches_path)
+            save_chart_watches(
+                self._chart_watches if watches is None else watches,
+                self._chart_watches_path,
+            )
+            return True
         except OSError:
-            pass
+            return False
 
     def _save_d1_level_watches(self) -> None:
         if self._d1_level_watches_path is None:
@@ -6471,7 +6631,10 @@ class AlertCenterPanel(QFrame):
         """
         due = []
         for watch in armed:
-            if TRIGGER_H1_EMA15_BOUNCE not in self._pullback_triggers(watch):
+            if (
+                TRIGGER_H1_EMA15_BOUNCE not in self._pullback_triggers(watch)
+                or not self._pullback_uses_h1(watch)
+            ):
                 continue
             cache = self._h1_history_cache()
             token = self._pullback_cache_token(cache, watch.symbol) if cache is not None else None
@@ -6522,19 +6685,22 @@ class AlertCenterPanel(QFrame):
         """
         if getattr(self, "_pullback_eval_busy", False):
             return False
-        ends = {
-            interval_minutes: intraday_last_bucket_end(moment, interval_minutes)
-            for interval_minutes, _sma_length in self.PULLBACK_TIMEFRAMES
-        }
         marks = self._pullback_judged_marks()
         jobs: list[dict] = []
         for watch in armed:
             triggers = self._pullback_triggers(watch)
-            if not any(name in triggers for name in self.PULLBACK_SMA_TRIGGERS):
+            timeframes = self._pullback_sma_timeframes(watch)
+            if not timeframes or not any(name in triggers for name in self.PULLBACK_SMA_TRIGGERS):
                 continue
             identity = str(getattr(watch, "watch_id", "") or watch.symbol)
             caches = {}
-            for interval_minutes, _sma_length in self.PULLBACK_TIMEFRAMES:
+            # M30's frozen rule may read M15 as a companion reversal.  That
+            # makes M15 available to M30 without making it an M15 job for a
+            # narrow veto arm.
+            cache_intervals = {minutes for minutes, _length in timeframes}
+            if any(minutes == 30 for minutes, _length in timeframes):
+                cache_intervals.add(15)
+            for interval_minutes in cache_intervals:
                 cache = self._intraday_history_cache(interval_minutes)
                 if cache is None:
                     continue
@@ -6544,7 +6710,7 @@ class AlertCenterPanel(QFrame):
                 for interval_minutes, cache in caches.items()
             }
             due = []
-            for interval_minutes, sma_length in self.PULLBACK_TIMEFRAMES:
+            for interval_minutes, sma_length in timeframes:
                 # M30's hold can be released by a newly delivered M15 cross,
                 # even while the M30 snapshot has not changed.
                 token = tokens.get(interval_minutes)
@@ -6554,11 +6720,14 @@ class AlertCenterPanel(QFrame):
                     watch, interval_minutes, moment, token
                 )
                 if wanted:
-                    due.append((interval_minutes, sma_length, end, token))
+                    # The worker takes its own atomic cache snapshot and
+                    # stamps that generation onto its result.  The dispatch
+                    # packet carries only the scheduling fact, so a caller
+                    # cannot mistake a pre-worker token for evaluated data.
+                    due.append((interval_minutes, sma_length, end))
             if not due:
                 continue
-            for interval_minutes, _sma_length, _end, _token in due:
-                cache = caches.get(interval_minutes)
+            for interval_minutes, cache in caches.items():
                 if cache is not None:
                     self._request_pullback_cache(watch, interval_minutes, cache, moment)
             jobs.append(
@@ -7394,6 +7563,65 @@ class AlertCenterPanel(QFrame):
         self._retire_review_alert(alert, write_not_today_annotation=False)
         self.reviewDecisionRecorded.emit()
 
+    def _arm_saved_extended_veto(self, alert: BounceAlert, row: dict) -> None:
+        """Arm the one trader-requested pullback after its veto was saved.
+
+        The widget forwards only a saved, identity-matching row; repeat the
+        match at the store-owning host so a delayed capture can neither arm nor
+        retire the chart now in front.  This runs before ``vetoRetireRequested``
+        in the widget, so the normal retirement can advance immediately after
+        the durable arm attempt.
+        """
+        reason_code = str(row.get("reason_code") or "")
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = str(row.get("side") or "").strip().upper()
+        current = self._current_review_alert
+        if (
+            reason_code != "too_extended_from_base"
+            or current is None
+            or current is not alert
+            or symbol != str(current.symbol or "").strip().upper()
+            or side != str(current.side or "").strip().upper()
+            or side not in ("LONG", "SHORT")
+        ):
+            return
+        source = "veto: too_extended_from_base"
+        active_existing = next(
+            (
+                watch
+                for watch in self._chart_watches
+                if watch.symbol == symbol
+                and watch.kind == PULLBACK_KIND
+                and not bool(getattr(watch, "declined", False))
+            ),
+            None,
+        )
+        if active_existing is not None:
+            existing_side = str(getattr(active_existing, "side", "") or "").upper()
+            if existing_side == side:
+                return  # idempotent saved veto; preserve the existing arm byte-for-byte
+            self.chart_review.capture_rail.set_capture_status(
+                f"VETO {symbol} - too_extended_from_base; pullback not armed "
+                f"({existing_side or 'WATCH'} pullback already armed)",
+                ok=False,
+            )
+            return
+        armed = self.arm_chart_watch_for(
+            symbol,
+            side,
+            PULLBACK_KIND,
+            source_text=source,
+            timeframes=("M30", "H1"),
+        )
+        if armed:
+            return
+        # CaptureRail gives a saved-veto listener's status precedence for this
+        # one commit, after its own cohort write completes.  The saved veto
+        # still retires normally.
+        self.chart_review.capture_rail.set_capture_status(
+            f"VETO {symbol} - too_extended_from_base; pullback not armed", ok=False
+        )
+
     def _retire_review_alert(
         self, alert: BounceAlert, *, write_not_today_annotation: bool
     ) -> None:
@@ -7604,6 +7832,10 @@ class AlertCenterPanel(QFrame):
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return
+        # Ignoring is a day decision for the whole name.  The held ordinary
+        # scan cache is presentation-only and must not resurrect that decision
+        # if the trader flips Show all later in the day.
+        self._held_d1_scan_reviews.pop(symbol, None)
         self._ignored_symbols.add(symbol)
         if self._ignored_symbols_path is not None:
             try:
@@ -7631,6 +7863,7 @@ class AlertCenterPanel(QFrame):
         # position and its ×N badge - measured 4.0-4.1 s per veto on
         # 2026-09-08 when this was a 350-widget rebuild.
         self._sync_feed()
+        self._refresh_d1_scan_review_view()
         self._refresh_ignored_button()
         if self._current_review_alert is None:
             self._advance_review_queue()
@@ -7719,6 +7952,11 @@ class AlertCenterPanel(QFrame):
         self._review_movers_only = True
         self._hidden_inside_range.clear()
         self.chart_review.set_hidden_count(0)
+        # AR-2B's held scan rows are a day-local display cache.  Yesterday's
+        # candidates must never make today's Show all count look nonzero.
+        self._held_d1_scan_reviews.clear()
+        self._show_all_d1_scan_reviews = False
+        self._refresh_d1_scan_review_view()
         self._refresh_ignored_button()
         # The M5 alert bar is day-scoped like the queue it replaced.
         self.m5AlertsDayRolled.emit()
