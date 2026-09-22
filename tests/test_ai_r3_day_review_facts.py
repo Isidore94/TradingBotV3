@@ -138,3 +138,33 @@ def test_day_review_facts_fetches_and_writes_when_the_exact_session_tape_is_miss
 
     assert DayReviewService().build_session_bars_for(SESSION, reuse_existing=True) == tmp_path / "tape.parquet"
     assert writes == [(SESSION, fresh)]
+
+
+def test_day_review_facts_calls_an_empty_written_tape_unmeasured(monkeypatch, tmp_path):
+    """A parquet path is not proof that the fetch supplied evidence rows."""
+    import day_review_bars
+    from ai_jobs.day_review_facts import run_day_review_facts
+
+    empty_tape = tmp_path / "empty.parquet"
+    empty_tape.write_bytes(b"empty")
+    monkeypatch.setattr(day_review_bars, "read_session_bars", lambda _session: {})
+
+    class Service:
+        def build_index_for(self, *_args, **_kwargs):
+            return {"session": SESSION}
+
+        def build_session_bars_for(self, *_args, **_kwargs):
+            return empty_tape
+
+        def build_reads_for(self, *_args, **_kwargs):
+            return []
+
+        def build_pack_for(self, *_args, **_kwargs):
+            return {"session_date": SESSION, "inputs_hash": "fresh"}
+
+    outcome = run_day_review_facts(
+        session_date=SESSION, now=datetime(2026, 9, 22, 1, 0), service=Service()
+    )
+
+    assert outcome["status"] == "ok", outcome
+    assert outcome["tape"] == "unmeasured"

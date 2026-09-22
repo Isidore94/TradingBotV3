@@ -978,7 +978,7 @@ class DayReviewService:
         return day_review_bars.write_session_bars(session, bars)
 
     # -- the read grader ---------------------------------------------------
-    def build_reads_for(self, session_date: str, **kwargs) -> list[dict[str, Any]]:
+    def build_reads_for(self, session_date: str, **kwargs) -> list[dict[str, Any]] | None:
         """Grade the session's reads and APPEND them to the ledger. One seam.
 
         The named seam the post-close tick calls (`_IndexBuildWorker`, on the
@@ -996,12 +996,16 @@ class DayReviewService:
         if not session:
             return []
         now = kwargs.get("now") or datetime.now()
+        strict = bool(kwargs.get("strict"))
         entries: list[dict[str, Any]] = []
         try:
             entries = list(self.journal.entries_about(session))
         except Exception:  # noqa: BLE001 - an unreadable ledger grades nothing
             _log.debug("The journal could not be read for grading.", exc_info=True)
-            return []
+            # A page correctly paints an empty list when this derived reader is
+            # unavailable. The night cannot call that absence "fresh facts",
+            # so its narrow strict seam gets an explicit failure sentinel.
+            return None if strict else []
         decisions, claims = self._decisions_and_claims(session)
         trades: list[dict[str, Any]] = []
         try:

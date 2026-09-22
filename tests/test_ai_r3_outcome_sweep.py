@@ -103,6 +103,18 @@ def test_outcome_sweep_job_skips_when_disabled_or_the_canonical_sweep_is_too_ear
         bot_factory=Bot,
         autorun_enabled=True,
     )
+    monday_scan = run_outcome_sweep(
+        session_date="2026-09-18",
+        now=datetime(2026, 9, 21, 13, 5),
+        bot_factory=Bot,
+        autorun_enabled=True,
+    )
+    monday_after = run_outcome_sweep(
+        session_date="2026-09-18",
+        now=datetime(2026, 9, 21, 13, 36),
+        bot_factory=Bot,
+        autorun_enabled=True,
+    )
 
     assert disabled["status"] == "skipped", disabled
     assert "disabled" in str(disabled["reason"]).lower()
@@ -110,7 +122,55 @@ def test_outcome_sweep_job_skips_when_disabled_or_the_canonical_sweep_is_too_ear
     assert "close" in str(early["reason"]).lower() or "early" in str(early["reason"]).lower()
     assert early_close["status"] == "skipped", early_close
     assert after_close["status"] == "skipped", after_close
-    assert calls == [datetime(2026, 9, 18, 14, 0)]
+    assert monday_scan["status"] == "skipped", monday_scan
+    assert monday_after["status"] == "skipped", monday_after
+    assert len(calls) == 2
+    assert all(value.tzinfo is not None for value in calls)
+
+
+def test_outcome_sweep_allows_a_prior_session_before_the_current_session_opens():
+    """An overnight run may finish Friday before Monday's scanner starts."""
+    from ai_jobs.outcome_sweep import run_outcome_sweep
+
+    calls = []
+
+    class Bot:
+        def sweep_pending_bounce_outcomes(self, *, now, wait_for_scan_window):
+            assert wait_for_scan_window is False
+            calls.append(now)
+            return {"finalized": 0}
+
+    outcome = run_outcome_sweep(
+        session_date="2026-09-18",
+        now=datetime(2026, 9, 21, 5, 0),
+        bot_factory=Bot,
+        autorun_enabled=True,
+    )
+
+    assert outcome["status"] == "ok", outcome
+    assert len(calls) == 1 and calls[0].tzinfo is not None
+
+
+def test_outcome_sweep_fails_when_recovery_cannot_resolve_a_prior_intent():
+    """An ambiguous finalizing mark is a failed job even if the sweep is quiet."""
+    from ai_jobs.outcome_sweep import run_outcome_sweep
+
+    class Bot:
+        def resolve_unfinished_finalizations(self):
+            return {"unresolved": 1}
+
+        def sweep_pending_bounce_outcomes(self, *, now, wait_for_scan_window):
+            return {"finalized": 0, "failed": 0, "commit_failed": 0}
+
+    outcome = run_outcome_sweep(
+        session_date="2026-09-18",
+        now=datetime(2026, 9, 18, 14, 0),
+        bot_factory=Bot,
+        autorun_enabled=True,
+    )
+
+    assert outcome["status"] == "failed", outcome
+    assert "recovery_unresolved=1" in outcome["reason"]
 
 
 def test_outcome_sweep_job_marks_a_commit_failure_as_failed_not_ok():

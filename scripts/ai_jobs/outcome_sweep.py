@@ -33,7 +33,7 @@ def _autorun_enabled() -> bool:
     return raw in {"on", "1", "true", "yes"}
 
 
-def _closed_target_gate(day: date, now: datetime | None) -> tuple[bool, str]:
+def _closed_target_gate(day: date, now: datetime | None) -> tuple[bool, str, datetime]:
     """Validate the target and the scanner's own close-plus-35 boundary.
 
     This uses the same market-local clock and early-close calendar that
@@ -43,19 +43,41 @@ def _closed_target_gate(day: date, now: datetime | None) -> tuple[bool, str]:
     """
     import market_calendar
     from market_early_close import session_close
-    from market_session import normalize_market_local_datetime
+    from market_session import get_market_session_window, normalize_market_local_datetime
 
     moment = normalize_market_local_datetime(now)
+    current = get_market_session_window(reference=moment)
+    current_day = current.market_date
+    if market_calendar.is_session(current_day):
+        current_due = session_close(current_day).astimezone(moment.tzinfo) + timedelta(minutes=35)
+        # A prior completed session is valid before today's open, but it must
+        # not let the night finalizer race the scanner from today's open until
+        # its own final completed bar can settle after close.
+        if current.open_local <= moment < current_due:
+            return (
+                False,
+                "current session scan window is still active "
+                f"(canonical close+35 due {current_due.isoformat(timespec='minutes')})",
+                moment,
+            )
     if not market_calendar.is_session(day):
-        return False, f"{day.isoformat()} is not an exchange session"
+        return False, f"{day.isoformat()} is not an exchange session", moment
     completed = market_calendar.last_completed_session(moment)
     if day > completed:
-        return False, f"{day.isoformat()} is current, open, or future; last closed is {completed.isoformat()}"
+        return (
+            False,
+            f"{day.isoformat()} is current, open, or future; last closed is {completed.isoformat()}",
+            moment,
+        )
     close = session_close(day).astimezone(moment.tzinfo)
     due = close + timedelta(minutes=35)
     if moment < due:
-        return False, f"canonical close+35 gate has not opened (due {due.isoformat(timespec='minutes')})"
-    return True, ""
+        return (
+            False,
+            f"canonical close+35 gate has not opened (due {due.isoformat(timespec='minutes')})",
+            moment,
+        )
+    return True, "", moment
 
 
 def run_outcome_sweep(
@@ -74,7 +96,7 @@ def run_outcome_sweep(
     """
     try:
         day = _session_day(session_date)
-        allowed, reason = _closed_target_gate(day, now)
+        allowed, reason, moment = _closed_target_gate(day, now)
         if not allowed:
             return {"status": ledger.STATUS_SKIPPED, "reason": reason, "session_date": day.isoformat()}
     except Exception as exc:  # Calendar uncertainty must never launch a sweep.
@@ -96,7 +118,9 @@ def run_outcome_sweep(
         bot = (bot_factory or _default_factory)()
         resolver = getattr(bot, "resolve_unfinished_finalizations", None)
         recovery = dict(resolver()) if callable(resolver) else {}
-        counts = dict(bot.sweep_pending_bounce_outcomes(now=now, wait_for_scan_window=False))
+        counts = dict(bot.sweep_pending_bounce_outcomes(
+            now=moment, wait_for_scan_window=False
+        ))
     except Exception as exc:  # A failed canonical finalizer is a failed slot.
         return {
             "status": ledger.STATUS_FAILED,
@@ -113,12 +137,13 @@ def run_outcome_sweep(
         return outcome
     failed = int(counts.get("failed") or 0)
     commit_failed = int(counts.get("commit_failed") or 0)
-    if failed or commit_failed:
+    unresolved = int(recovery.get("unresolved") or 0)
+    if failed or commit_failed or unresolved:
         outcome.update({
             "status": ledger.STATUS_FAILED,
             "reason": (
                 "canonical outcome sweep did not commit every final "
-                f"(failed={failed}, commit_failed={commit_failed})"
+                f"(failed={failed}, commit_failed={commit_failed}, recovery_unresolved={unresolved})"
             ),
         })
         return outcome

@@ -26,6 +26,21 @@ def _closed_target(session: str, now: datetime | None) -> tuple[bool, str]:
     return True, ""
 
 
+def _tape_has_rows(session: str, result: Any) -> bool:
+    """Whether the canonical bar seam actually yielded evidence rows."""
+    if isinstance(result, dict):
+        return any(bool(rows) for rows in result.values())
+    if result is None:
+        return False
+    try:
+        import day_review_bars
+
+        stored = day_review_bars.read_session_bars(session)
+    except Exception:
+        return False
+    return isinstance(stored, dict) and any(bool(rows) for rows in stored.values())
+
+
 def run_day_review_facts(
     *,
     session_date: str = "",
@@ -60,7 +75,7 @@ def run_day_review_facts(
         if not isinstance(index, dict):
             raise RuntimeError("the per-session index was not built")
         bars = service.build_session_bars_for(session, reuse_existing=True)
-        reads = service.build_reads_for(session, now=now)
+        reads = service.build_reads_for(session, now=now, strict=True)
         if reads is None:
             raise RuntimeError("the Day Review reads could not be built")
         pack = service.build_pack_for(session, now=now)
@@ -99,7 +114,9 @@ def run_day_review_facts(
         "reason": "Day Review facts refreshed from the canonical service",
         "session_date": session,
         "pack": pack,
-        "reads": len(reads or ()),
-        "tape": "available" if bars is not None else "unmeasured",
+        # `build_reads_for` returns rows newly appended on this pass, not every
+        # read the pack holds; say that narrow count honestly.
+        "new_grades": len(reads or ()),
+        "tape": "available" if _tape_has_rows(session, bars) else "unmeasured",
         "outputs": outputs,
     }
