@@ -86,7 +86,7 @@ def test_chart_reason_text_repaints_for_each_live_reason_then_resets_muted(
     replacing the app stylesheet on every alert is not a valid implementation.
     """
     from ui import theme
-    from ui.models.bounce import MANUAL_CHART_TAG, BounceAlert
+    from ui.models.bounce import FOCUS_D1_EVENT_TAG, MANUAL_CHART_TAG, BounceAlert
     from ui.widgets.alert_chart_review import AlertChartReview
     from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
@@ -106,6 +106,7 @@ def test_chart_reason_text_repaints_for_each_live_reason_then_resets_muted(
     steps = (
         (price, {"in_focus": False}, "short"),
         (_alert(), {"in_focus": True}, "long"),
+        (_alert(tag=FOCUS_D1_EVENT_TAG), {"in_focus": False}, "long"),
         (_alert(), {"focus_category": "swing", "in_focus": False}, "chart_blue"),
         (_pullback("M15"), {"in_focus": True}, "chart_yellow"),
         (_pullback("M30"), {"in_focus": True}, "chart_purple"),
@@ -127,6 +128,32 @@ def test_chart_reason_text_repaints_for_each_live_reason_then_resets_muted(
         qapp.processEvents()
         assert _foreground(pane.alert_text) == theme.color("text_secondary", theme_name).lower()
         assert qapp.styleSheet() == stylesheet_before
+    finally:
+        pane.close()
+        pane.deleteLater()
+
+
+@pytest.mark.parametrize("theme_name", ("dark", "light"))
+@pytest.mark.parametrize("tag", ("manual_chart", "auto_pick", "focus_review"))
+def test_chart_reason_text_mutes_non_alert_walkthrough_forms(
+    qapp, monkeypatch, tmp_path, theme_name, tag
+):
+    """A look, proposal, or Focus walkthrough never wears a live-alert colour."""
+    from ui import theme
+    from ui.widgets.alert_chart_review import AlertChartReview
+    from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+    _apply_theme(qapp, theme_name)
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_a, **_k: None)
+    pane = AlertChartReview(
+        annotations_path=tmp_path / "trader_annotations.jsonl",
+        mentor_context_service=None,
+    )
+    pane.show()
+    try:
+        pane.set_alert(_alert(tag=tag, timeframe="M5", trigger="Just a look"), in_focus=True)
+        qapp.processEvents()
+        assert _foreground(pane.alert_text) == theme.color("text_secondary", theme_name).lower()
     finally:
         pane.close()
         pane.deleteLater()
@@ -155,6 +182,24 @@ def test_feed_reason_text_repaints_when_focus_changes_without_rebuild(qapp, them
         qapp.processEvents()
         assert _foreground(item.trigger_label) == theme.color("chart_blue", theme_name).lower()
         assert qapp.styleSheet() == stylesheet_before
+    finally:
+        item.close()
+        item.deleteLater()
+
+
+@pytest.mark.parametrize("theme_name", ("dark", "light"))
+def test_feed_explicit_live_focus_tag_is_green_without_membership(qapp, theme_name):
+    """A Focus D1 flag is green even before the row gets a membership badge."""
+    from ui import theme
+    from ui.models.bounce import FOCUS_D1_EVENT_TAG
+    from ui.widgets.alert_feed_item import AlertFeedItem
+
+    _apply_theme(qapp, theme_name)
+    item = AlertFeedItem(_alert(tag=FOCUS_D1_EVENT_TAG))
+    item.show()
+    qapp.processEvents()
+    try:
+        assert _foreground(item.trigger_label) == theme.color("long", theme_name).lower()
     finally:
         item.close()
         item.deleteLater()

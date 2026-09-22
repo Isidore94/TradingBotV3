@@ -3,8 +3,12 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QHBoxLayout, QToolButton, QVBoxLayout, QWidget
 
-from chart_watch import D1_EVENT_KINDS, D1_LEVEL_KINDS, PULLBACK_KIND, WATCH_KINDS
+from chart_watch import D1_EVENT_KINDS, D1_LEVEL_KINDS, WATCH_KINDS
 from ui.models.bounce import BounceAlert, is_chart_watch_alert
+from ui.models.alert_presentation import (
+    classify_alert,
+    pullback_source_timeframe as _shared_pullback_source_timeframe,
+)
 from ui.widgets.badge import Badge
 
 
@@ -16,25 +20,8 @@ _FOCUS_BADGE_TEXT = {
 
 
 def _pullback_source_timeframe(alert: BounceAlert) -> str:
-    """The real bar that fired a Pullback alert, while its row stays in D1.
-
-    Persistent Pullback alerts deliberately live in the D1 feed.  Their
-    ``alert.timeframe`` consequently says ``D1`` for routing, while the
-    payload carries the measured H1/M15/M30 bar.  Keep those two jobs separate
-    so the visual review does not hide the source timeframe.
-    """
-    payload = alert.payload if isinstance(alert.payload, dict) else {}
-    if str(payload.get("chart_watch_kind") or "") != PULLBACK_KIND:
-        return ""
-    value = str(payload.get("timeframe") or "").strip().upper().replace(" ", "")
-    return {
-        "15M": "M15",
-        "M15": "M15",
-        "30M": "M30",
-        "M30": "M30",
-        "1H": "H1",
-        "H1": "H1",
-    }.get(value, "")
+    """Compatibility wrapper for the shared alert presentation classifier."""
+    return _shared_pullback_source_timeframe(alert)
 
 
 def _alert_tone(alert: BounceAlert, focus_category: str = "") -> str:
@@ -43,19 +30,7 @@ def _alert_tone(alert: BounceAlert, focus_category: str = "") -> str:
     This is display-only.  It does not decide alert routing, sound, queueing,
     Focus membership, or a chart's capture timeframe.
     """
-    source_timeframe = _pullback_source_timeframe(alert)
-    if source_timeframe:
-        return f"pullback-{source_timeframe.lower()}"
-    payload = alert.payload if isinstance(alert.payload, dict) else {}
-    watch_kind = str(payload.get("chart_watch_kind") or "")
-    if is_chart_watch_alert(alert) and watch_kind in D1_LEVEL_KINDS:
-        return "personal-d1"
-    is_d1 = bool(alert.is_d1) or str(alert.timeframe or "").strip().upper() == "D1"
-    if is_d1 and focus_category:
-        return "focus-d1"
-    if is_d1:
-        return "d1"
-    return ""
+    return classify_alert(alert, in_focus=bool(focus_category)).frame_tone
 
 
 def _repolish(widget) -> None:
@@ -129,7 +104,8 @@ class AlertFeedItem(QWidget):
         # has to remember the three things that decide its Focus dress.
         self._focus_category = str(focus_category or "")
         self._alert = alert
-        self._alert_tone = _alert_tone(alert, self._focus_category)
+        self._presentation = classify_alert(alert, in_focus=is_focus)
+        self._alert_tone = self._presentation.frame_tone
         self.setProperty("alertTone", self._alert_tone)
         self._favorite_hint = str(favorite_hint or "")
         self._is_watch_hit = bool(is_watch_hit)
@@ -186,7 +162,7 @@ class AlertFeedItem(QWidget):
         top.addWidget(self._side_badge)
         if alert.timeframe:
             top.addWidget(Badge(alert.timeframe, "info"))
-        source_timeframe = _pullback_source_timeframe(alert)
+        source_timeframe = self._presentation.source_timeframe
         if source_timeframe:
             top.addWidget(Badge(f"{source_timeframe} PULLBACK", "info"))
         top.addStretch(1)
@@ -219,11 +195,13 @@ class AlertFeedItem(QWidget):
             top.addWidget(dislike)
 
         trigger = QLabel(alert.trigger or alert.raw_text)
+        trigger.setObjectName("AlertTrigger")
         trigger.setWordWrap(True)
         trigger.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         if is_watch_hit:
             # The requested red-font flag for a fired chart watch.
             trigger.setObjectName("AlertTriggerWatch")
+        trigger.setProperty("alertReasonTone", self._presentation.reason_tone)
         self.trigger_label = trigger
 
         layout = QVBoxLayout(self)
@@ -280,11 +258,16 @@ class AlertFeedItem(QWidget):
             return False
         self._focus_category = category
         is_focus = bool(category)
+        presentation = classify_alert(self._alert, in_focus=is_focus)
         if not self._is_watch_hit:
             self.setProperty("alertKind", "focus" if is_focus else None)
-            self._alert_tone = _alert_tone(self._alert, category)
+            self._alert_tone = presentation.frame_tone
             self.setProperty("alertTone", self._alert_tone)
             _repolish(self)
+        if self.trigger_label.property("alertReasonTone") != presentation.reason_tone:
+            self.trigger_label.setProperty("alertReasonTone", presentation.reason_tone)
+            _repolish(self.trigger_label)
+        self._presentation = presentation
         if is_focus:
             text = _FOCUS_BADGE_TEXT.get(category, "★ FOCUS")
             if self._focus_badge is None:

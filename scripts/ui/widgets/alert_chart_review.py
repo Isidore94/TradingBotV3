@@ -23,6 +23,7 @@ from ui.models.bounce import (
     capture_timeframe,
     is_auto_pick_alert,
 )
+from ui.models.alert_presentation import classify_alert
 from ui import theme
 from ui.annotations.store import (
     EVENT_LIKE_CLAIM,
@@ -901,13 +902,13 @@ class AlertChartReview(QWidget):
         timeframe = f" · {alert.timeframe}" if alert.timeframe else ""
         self.title.setText(f"{alert.symbol}{side}{timeframe}")
         self.alert_text.setText(alert.trigger or alert.raw_text)
-        # Red setup text = a live alert put this chart up. A typed manual
-        # chart and a staged auto pick stay muted, so a glance separates
-        # "something fired" from "I was just looking / deciding".
+        # Keep the established live/muted marker for existing callers, then
+        # classify the exact reason without changing routing or membership.
         is_auto_pick = is_auto_pick_alert(alert)
         self._set_setup_text_live(
             alert.tag not in (MANUAL_CHART_TAG, FOCUS_REVIEW_TAG) and not is_auto_pick
         )
+        self._set_alert_reason_tone(classify_alert(alert, in_focus=in_focus).reason_tone)
         if focus_category == "swing":
             self.focus_button.setText("Add to Swing Focus")
             # Swing pick: the cross-promote is the M5 day-trade list.
@@ -1054,11 +1055,23 @@ class AlertChartReview(QWidget):
         style.unpolish(self.alert_text)
         style.polish(self.alert_text)
 
+    def _set_alert_reason_tone(self, tone: str) -> None:
+        """Repolish only the reason label when its live meaning changes."""
+        tone = str(tone or "muted")
+        if self.alert_text.property("alertReasonTone") == tone:
+            return
+        self.alert_text.setProperty("alertReasonTone", tone)
+        style = self.alert_text.style()
+        style.unpolish(self.alert_text)
+        style.polish(self.alert_text)
+        self.alert_text.update()
+
     def clear(self) -> None:
         self.alert = None
         self.title.setText("Visual Alert Review")
         self.alert_text.setText("Waiting for the next ticker alert.")
         self._set_setup_text_live(False)
+        self._set_alert_reason_tone("muted")
         self.guidance_label.setText("")
         self.guidance_label.setVisible(False)
         self._show_chart(False)
