@@ -90,10 +90,13 @@ def test_an_m15_cross_answers_the_m30_hold_and_the_note_names_the_companion():
 
     assert result is not None
     fire = one_fire(result, TRIGGER_THEN_LRSI)
-    # The SMA is the M30's, so the FIRE is the M30's; the companion is
-    # evidence for it, never a second timeframe's alert.
+    # The SMA is the M30's, so the FIRE is the M30's; its event time is the
+    # later M15 cross, while the M30 bar remains named as SMA evidence.
     assert fire.timeframe == "M30"
-    assert fire.bar_dt == bar_dt(M30_COMPANION_LAST_INDEX, 30)
+    assert fire.bar_dt == bar_dt(M15_RECLAIM_INDEX, 15)
+    assert fire.cross_timeframe == "M15"
+    assert fire.cross_bar_dt == fire.bar_dt
+    assert fire.sma_bar_dt == bar_dt(M30_COMPANION_LAST_INDEX, 30)
     assert fire.sma == pytest.approx(
         simple_mean(m30_closes, M30_COMPANION_LAST_INDEX, M30_SMA), abs=1e-9
     )
