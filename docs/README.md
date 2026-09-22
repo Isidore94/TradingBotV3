@@ -1,13 +1,9 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-09-20** (archive pass: `CURRENT_CHECKPOINT.md`'s 2026-09-03 to
-2026-09-17 entries moved to `archive/CHECKPOINT_ARCHIVE_2026-09-03_2026-09-17.md` and
-`CHANGELOG.md`'s 2026-09-06 to 2026-09-18 Recent changes to
-`archive/CHANGELOG_ARCHIVE_2026-09-06_2026-09-18.md`; before that 2026-09-17,
-`plan.md` rewritten for the trader journal program, decision
-0021 added, the old roadmap archived at `archive/PLAN_ARCHIVE_2026-09-17.md`; before that
-2026-09-16, Phase 0.32 plain-language trader test guide added; before that 2026-09-12, WISHLIST 11 added `MEMORY.md` and `memory/`; `CHANGELOG.md`'s 2026-09-03 to
-2026-09-05 entries moved to `archive/CHANGELOG_ARCHIVE_2026-09-03_2026-09-05.md`).
+Last reconciled: **2026-09-22**. The AR alert follow-up amends the existing Pullback,
+Chart Review Workspace and Desk Internals contracts. The Sep 18–19 checkpoint
+entries and Sep 19–20 changelog entries moved verbatim to the archives indexed below;
+all open gates remain in the checkpoint. Earlier archive moves retain their own dates.
 
 One line per file. Status and decisions live in the root control set, never here; if a
 row and `CHANGELOG.md`/`plan.md` disagree, the root pair wins.
@@ -82,11 +78,14 @@ priorities and breaks every prioritisation tie. Numbering is chronological.
 
 ## Archive — evidence, never context
 
-[`archive/`](archive/) holds everything that is history: the checkpoint archives (the
-newest,
+Newest maintenance moves (2026-09-22):
+[`archive/CHECKPOINT_ARCHIVE_2026-09-18_2026-09-19.md`](archive/CHECKPOINT_ARCHIVE_2026-09-18_2026-09-19.md) holds the Sep 18–19 checkpoint entries;
+[`archive/CHANGELOG_ARCHIVE_2026-09-19_2026-09-20.md`](archive/CHANGELOG_ARCHIVE_2026-09-19_2026-09-20.md) holds the Sep 19–20 changelog entries. Both were moved verbatim; open gates remain at the root.
+
+[`archive/`](archive/) holds everything that is history: the checkpoint archives (including
 [`archive/CHECKPOINT_ARCHIVE_2026-09-03_2026-09-17.md`](archive/CHECKPOINT_ARCHIVE_2026-09-03_2026-09-17.md),
-holds the 78 dated entries from 2026-09-17 back to 2026-09-03), the
-five changelog archives (the newest is
+which holds the 78 dated entries from 2026-09-17 back to 2026-09-03), the
+older changelog archives (including
 [`archive/CHANGELOG_ARCHIVE_2026-09-06_2026-09-18.md`](archive/CHANGELOG_ARCHIVE_2026-09-06_2026-09-18.md),
 holding the 35 entries from 2026-09-18 back to 2026-09-06; beside it
 [`archive/CHANGELOG_ARCHIVE_2026-09-06.md`](archive/CHANGELOG_ARCHIVE_2026-09-06.md)

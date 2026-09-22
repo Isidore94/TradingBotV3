@@ -162,8 +162,54 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 | Phase | Packets | Status |
 |---|---|---|
+| AR Alert review follow-up | AR-1, AR-2A, AR-2B, AR-3 | Implementation verified in isolated review branch 2026-09-22; trader's main update/restart decision and live gates #182–185 remain owed. Existing journal gates remain owed. |
 | 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); **TJ-3 MERGED 2026-09-19 (evening)** (`claude/tj3-note-markers` → `lead/p033-integration2` `72647104`; Day Review note markers, a mark on a bar only when it happened during it, the Alert Center's chart proven unchanged; gate #147 owed, after #146/#152's bars back-fill); **TJ-15 MERGED 2026-09-19 (night)** (`claude/tj15-miss-contrast` → `lead/p033-integration2` `fb3f55e9`, slot position fixed `1f260ffa`; the pure `evidence_contrast` with two floors, the deterministic `miss_contrast` slot inside stage 1 above the pair that closes it, D1 decisions only; gate #160 owed) and **TJ-14A MERGED 2026-09-19 (night)** (`claude/tj14a-mentor-card` → `lead/p033-integration2` `e8c04f88`; TJ-14 items 1 and 6 - the Mentor card's What I see / What I expect split with a forced prediction click, a row's timeframe and its horizon always agreeing at the WRITER, `trade_mentor_context_v2` and the internals strip; gate #159's first clause owed); **TJ-14B MERGED 2026-09-20** (`claude/tj14b-mentor-questions` → `lead/p033-integration2` `161e905c`; TJ-14 items 2-5 - the Mentor question registry in which every kind names the reader of its answer and four kinds ship DORMANT until that reader exists, the budget of three with the remainder counted and carried, one card one import with three reserved pulls a day, and same-session fills; gates #159 and #163 owed); **TJ-10 MERGED 2026-09-20** (`claude/tj10-read-grader` → `lead/p033-integration2` `57b44ca9`, integration fix `3e52d94f`; the read grader, the prediction ledger, four congruence lines and the deterministic `read_grades_mature` slot - no model anywhere; gate #155 owed, and it needs the TJ-2A session tape to exist first); **TJ-16 MERGED 2026-09-20** (`claude/tj16-prediction-contrast` → `lead/p033-integration2` `c4a760e5`; the prediction ledger beside three naive baselines on the SAME stamps, the deterministic `prediction_contrast` slot directly after `miss_contrast`, and the Stage 2 `observation_tags` tagger that never sees an outcome and whose verifier re-checks the reply's own bounds; readers only, no page; gates #164-#167 owed); **TJ-4 MERGED 2026-09-20** (`claude/tj4-day-story` → `lead/p033-integration2` `d929e34f`; the pure hash-stable day pack, the overnight day story that narrates only measured rows and rejects a disagreeing output WHOLE, the rolling D1 view, and a night that sweeps the redos a daytime click queued; gate #148 owed); **TJ-5 MERGED 2026-09-20** (`claude/tj5-week-review` → `lead/p033-integration2` `1b9d77e0`; Week Review first in Weekend Prep - five day cards on one payload that computes nothing, the week pooled once in `day_report_card.week_from_cards` with no best family taken from day-winners, an unpacked and an unreadable day each NAMED rather than counted as quiet, and the Saturday-only `week_review_narration` slot narrating only the week's own packs; gates #149, #170 and #171 owed); **TJ-6 MERGED 2026-09-20** (`claude/tj6-ideas` → `lead/p033-integration2` `a7809d7c`, ninth slot-order pin `be435cd7`, fix `41d3f759`; the desk's AI has a voice - up to three grounded ideas a night, nothing to cite meaning no model call, a night that asked being DONE, and a KEEP the trader's own click that freezes a baseline and is checked by two non-overlapping Wilson intervals or not called a change at all; gates #150 and #172-#174 owed); **TJ-7 MERGED 2026-09-20** (`claude/tj7-mood-fields` → `lead/p033-integration2` `b63db7af`, guard amendment `ae7c06c7`, follow-up merge `0a0a0be4`; the LAST building packet - a mood is a field the desk REPORTS and nothing acts on it: ONE additive journal key refused loudly at the writer, one optional strip on both surfaces, a citable pack section, one key in each closed evidence list, a point-in-time context field and ONE Day Review line; gates #151 and #175 owed) — **every building packet of Phase 0.33 is now merged on `lead/p033-integration2`**; TJ-8 PLANNED (waits on the live gates); **TJ-11 MERGED 2026-09-19** (`claude/tj11-walkaway-v2` → `lead/p033-integration` `a89ec7d5`; walk-away v2, `REAL_MISS_V1`, the skill line, an additive `decision_session`; direction reversed the same evening by **TJ-11F MERGED 2026-09-19** (`claude/tj11f-decision-session` → `lead/p033-integration2` `f00ec302`; an after-close decision belongs to the session it JUDGED); gate #156 owed, reworded) and **TJ-13A MERGED 2026-09-19** (`claude/tj13a-night-slates` → `lead/p033-integration` `9eaae1dd`; nights only seven days, night slates, four overnight repairs; gate #158 owed); **TJ-9 … TJ-13 otherwise PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |
 | 0.5–0.32 | — | BUILT; archived; live gates in `CURRENT_CHECKPOINT.md` |
+
+### Alert review follow-up — AR (trader, 2026-09-22)
+
+**Implementation verified in the isolated branch; activation and live gates remain.** The trader
+asked to assess and correct M30/H1 pullback alerts, colour the reason text on Visual
+Alert Review, reduce unused review charts, and have `too_extended_from_base` vetoes
+arm an M30 or H1 pullback. This is a bounded follow-up to Phase 0.29, not a change to
+the journal program or a WISHLIST promotion. Existing live gates remain owed.
+
+- **AR-1, correctness:** characterize existing SMA/LRSI/EMA outputs first; reproduce
+  the asynchronous M15/M30/H1 cache timing gap and companion-cross arm fence,
+  stable identity, old persisted-mark compatibility and earliest eligible cross.
+  Save measured provenance in the existing event row. No threshold, H1 formula
+  or champion change; an H1 incomplete-bucket defensive gap has no live-path
+  false-fire proof and is not part of this repair.
+  M30 currently uses SMA75 and an efficiency-LRSI80 reversal (M15 may confirm its
+  later-cross leg); H1 currently uses EMA15 and no LRSI. Same-timeframe chart
+  parity is not currently available: the review pane has D1 and M5 charts.
+- **AR-2A, reason colours:** one display classifier for feed and chart reason text;
+  personal price red, live Focus green, D1 scan blue, Pullback M15 amber / M30
+  purple / H1 cyan, explicit manual looks muted. A Focus destination is not Focus
+  membership. Tests must inspect foreground colours in both themes and transitions.
+- **AR-2B, review load:** a reversible presentation choice for scan ideas, with an
+  honest hidden count and reveal; keep personal armed and Focus events visible,
+  preserve evidence and the backing feeds. The five-session event audit has 584
+  logged alert chart shows, of which 290 are D1 scan flags; it does not establish
+  an alert non-use rate. The trader's view preference was asked in the session.
+- **AR-3, extended veto:** only a successfully saved exact-code veto may arm the
+  requested M30/H1 watch, then use its existing normal or day-trade retirement
+  route. No other veto acquires a side
+  effect. This is the trader's narrow new exception to manual-only Pullback arms;
+  ordinary claims and Focus membership still do not auto-arm. Persist the selected
+  timeframes, preserve an existing manual watch, and test later fire after veto,
+  expiry, disarm, write failure and duplicate capture. The M30/H1 choice was asked.
+
+Governing contracts: this plan sections 5–7, decision 0009, the Pullback spec,
+Chart Review Workspace spec, DESK_INTERNALS PCT-1, and AGENT_TEAM. Expected seams:
+`indicators/pullback_sma_reclaim.py`, `indicators/h1_ema_bounce.py`,
+`intraday_history.py`, `chart_watch.py`, `ui/panels/alert_center_panel.py`,
+`ui/widgets/alert_chart_review.py`, `ui/widgets/alert_feed_item.py`, shared display
+classification, `ui/theme.qss`, focused regression tests and these existing docs.
+The current request is the ask-first authorization for these exact repairs and
+requested UI/arm behaviours. No other detector, score or alert rule is authorized.
+Tester → builder → independent reproduction review; lead integrates in a scratch
+worktree. Live activation/restart remains the trader's separate action.
 
 ### Phase 0.33 — The trader journal (trader, 2026-09-17)
 

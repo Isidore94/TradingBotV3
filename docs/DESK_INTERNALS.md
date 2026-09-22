@@ -8740,3 +8740,39 @@ actually show.
 Live gate **#147** is owed and needs gate #146/#152's back-fill first: the live home has no
 `day_review/bars/*.parquet` yet, so with no file the SPY chart draws from the Qt hand-off,
 the caption says the marks were not drawn, and no name chart can open.
+
+## AR — alert review correctness and load (2026-09-22)
+
+Trader: “How m30 and h1 alerts are calculated and address the fact they’re often
+incorrect”; “Different reasons for coming up on visual chart review should have
+different text colour”; “Review our alert system in general and optimize it”; and
+“Extended from base veto should automatically put in an m30 or h1 pullback alert”.
+The current request authorizes the exact AR seams in plan.md, not threshold tuning.
+
+Read-only evidence and rule details are in the AR amendment to
+PULLBACK_COMPRESSION_TRENDLINE_PLAN.md. Five completed sessions (Sep 15, 16, 17,
+18, 21) held 835 `shown` rows: 290 D1 scan, 127 Focus D1, 122 chart watches,
+251 manual looks and 45 other/intraday. Removing manual looks leaves 584 alert
+chart shows. These events are not a complete alert/impression denominator and no
+non-use or success rate can be inferred from them. The chosen response to load is
+a reversible view: ordinary scan ideas wait behind Show all, their count is stated,
+and personal watches, live Focus and unknown families keep their established
+routes. A current chart and its half-written capture survive a view toggle; it
+writes no verdict and changes no detection, feed history, score or watchlist.
+
+The earlier colour work painted feed frames, while ReviewSetupText still turned
+every live reason red. One shared display classifier now owns the requested text
+families: personal price/level red, live Focus green, ordinary D1 blue, M15 Pullback
+amber, M30 purple, H1 cyan. The destination for adding a pick is not membership;
+manual and Focus walkthroughs remain muted. The H1 producer must name its actual
+source timeframe for its colour and badge to work. Theme properties repolish only
+the affected labels, never a whole stylesheet during a poll.
+
+The extended veto is a narrow exception to the recorder-only/manual-arm contract:
+the recorded exact code requests the M30/H1 watch, then uses ordinary veto
+retirement. A failed save says not armed, preserves the veto, and creates no
+phantom watch. Nothing auto-arms for another reason or for simply joining Focus.
+The session offered scope/view choices; without an answer, the lead selected both
+M30+H1 and scan ideas behind Show all. Those are implementation defaults, not a
+claim that the trader explicitly selected an option. Build/review/live status is
+only in the checkpoint; no live store was changed during this assessment.

@@ -9,9 +9,11 @@ now in `plan.md` P3.1.
 Status (reconciled 2026-08-10): **A1–A5 IMPLEMENTED + GREEN** on
 `testing-week-2026-08-10`. The capture layer/workspace, shared D1+M5 chart,
 crosshair/OHLCV and source strip, paint-line groups with stable IDs, and click-to-arm
-through the one `PriceAlertService` writer have landed. LIKE/veto/note remains
-annotation-only and grants no Focus, watchlist, or alert privilege. Live-session
-acceptance remains open in `plan.md`.
+through the one `PriceAlertService` writer have landed. LIKE/note remains annotation-only;
+vetoes remain annotation-only except a successfully saved exact `too_extended_from_base`
+veto, which requests an M30/H1 Pullback watch before normal retirement (AR, 2026-09-22).
+AR adds no Focus or watchlist action; existing host routing for claimed likes is
+unchanged. Live-session acceptance remains open in `plan.md`.
 
 ---
 
@@ -699,3 +701,31 @@ is never credited with the 10:00 high, and where the pass sidecar makes the
 timing knowable the post-decision excursion is measured from the last completed
 bar at the decision instead. A row click charts through `show_board_symbol`, so a
 recap row is a board look and never a re-queue.
+
+## AR — alert review correctness and load (2026-09-22)
+
+The trader requested distinct reason TEXT colours, less unused automatic review,
+and a Pullback watch after an extended-from-base veto. This narrowly amends the
+annotation-only statement above for that exact saved veto. The rail still writes
+one verdict first and does not own any watch store: the host performs the arm,
+then the existing plain or day-trade veto route retires the chart. Day-trade
+Focus placement keeps its required order before that retirement. All other
+veto reasons, likes, notes and passes keep
+their prior contracts. Failed or mismatched captures cannot arm; failed arm
+persistence must say not armed while retaining the saved verdict. Existing manual
+watches are never reset or silently widened. M30/H1 scope persists across reload;
+the standard lifetime and disarm paths remain its only lifecycle owners.
+
+The chart reason and feed trigger use the same semantic colour classifier. A live
+price/level is red; Focus is green; ordinary D1 is blue; Pullback M15/M30/H1 is
+amber/purple/cyan. Source timeframe is separate from D1 routing and capture.
+Manual and explicit Focus walkthroughs stay muted. Both themes and transitions
+between reasons must be checked using the painted foreground, not just a property.
+
+Ordinary scan ideas may be held from automatic review in a reversible view with
+an honest count and Show all control on the existing compact row. They remain in
+the backing feed and evidence. Personal watches, actual Focus names, explicitly
+opened charts and unknown families keep their routes. Changing the view does not
+replace the current chart, lose capture text or create a take/pass/veto. The arm
+bar stays under the chart. Build and live acceptance are recorded under AR in the
+checkpoint; this section states the requested contract, not proof of live use.
