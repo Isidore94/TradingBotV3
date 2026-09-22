@@ -204,6 +204,8 @@ class MainWindow(QMainWindow):
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
         self.health_panel = HealthPanel()
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
+        self._opening_latest_day_review = False
+        self.ai_summary_panel.dailyReviewRequested.connect(self.show_latest_completed_day_review)
 
         # Chart Review (plan.md 13d). Its annotation rail is analysis-only;
         # it receives the live bot solely for the shared in-memory M5 chart.
@@ -728,7 +730,10 @@ class MainWindow(QMainWindow):
             self.workspace_button.setVisible(mode_visible)
             self.tabs_button.setVisible(mode_visible)
             interaction_trace.mark("layout")
-            if PAGE_SPECS[index].title == DAY_REVIEW_PAGE_TITLE:
+            if (
+                PAGE_SPECS[index].title == DAY_REVIEW_PAGE_TITLE
+                and not self._opening_latest_day_review
+            ):
                 self._feed_away_recap()
                 self._reload_day_review()
         finally:
@@ -743,6 +748,21 @@ class MainWindow(QMainWindow):
                 self._select_page(index)
                 return True
         return False
+
+    def show_latest_completed_day_review(self) -> bool:
+        """Open the one Day Review page on its newest completed session.
+
+        Selecting the page normally reloads its remembered date.  This route
+        briefly holds that reload so the panel chooses its calendar-owned date
+        first, then starts the existing single worker for that one session.
+        """
+        self._opening_latest_day_review = True
+        try:
+            if not self._select_page_by_title(DAY_REVIEW_PAGE_TITLE):
+                return False
+            return bool(self.day_review_panel.show_latest_completed_session())
+        finally:
+            self._opening_latest_day_review = False
 
     def show_watchlist_positions(self) -> bool:
         """The Journal's "Positions on the Watchlist" (WS-WL item 4).
