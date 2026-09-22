@@ -1,4 +1,19 @@
 {
+  "schema": "sp2_pqs_base_characterization_v1",
+  "feature_version": "pqs_v1",
+  "raw_input_keys": [
+    "cases"
+  ],
+  "raw_input_sha256": "07521aefb340b4c67a5b8a83829d74c0afef6a3a6342ef6b6225a45db50c256b",
+  "acquired_at": "2026-09-22T07:27:53-07:00",
+  "as_of": "2026-09-21T12:08:53-07:00",
+  "universe_version": "synthetic_pqs_examples_at_fb95854e",
+  "provider_assumptions": "Synthetic finite closed episode examples pinned to base fb95854e; no live market provider or journal was read.",
+  "expected_keys": [
+    "cases"
+  ],
+  "numeric_tolerance": 1e-09,
+  "intentional_difference": "The v2 default adds counted episode/session floors and loss-scaled payoff; cases retain original v1 outputs for replay.",
   "source_commit": "fb95854e",
   "policy": "pqs_v1",
   "purpose": "Hand-pinned legacy PQS inputs and outputs before the SP2 score repair.",

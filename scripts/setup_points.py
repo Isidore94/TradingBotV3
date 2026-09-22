@@ -13,12 +13,11 @@ say WHY a row sits where it sits:
    family's recent win rate x 40 (the bound, never the raw rate: a 100%-on-
    three must not outrank a 62%-on-ninety), plus the row's expected R clamped
    to +-1 x 10. A family nobody has graded scores 0 here and says so.
-2. ``sr`` (-20 to +10) - nearby support / resistance knocks it down. Starts
-   at +10 for a clean path and loses points per HV level blocking (4), per HV
-   level nearby (2), per cloud level nearby (2), for a trendline in play (4),
-   for a moving average inside 1 ATR AHEAD of price (3 each: EMA21 and the
-   SMA the breakout tracker names) and for the nearest level inside 0.5 ATR
-   (2). Floors at -20.
+2. ``sr`` (-20 to +10) - measured nearby support / resistance. V2 starts
+   unknown at zero; a proven clear path earns +10. A known HV obstacle uses
+   its strongest blocking/nearby/nearest deduction once. Cloud, trendline
+   and moving-average obstacles also deduct, even from partial data. Floors
+   at -20. V1 retains the original missing-as-clear behavior for replay.
 3. ``rs`` (-15 to +15) - RS/RW in the trade's DIRECTION: vs SPY, vs the
    sector, vs the industry, each clamped to +-5, sign-flipped for a SHORT so
    weakness is the good reading. Unmeasured legs score 0 and are named.

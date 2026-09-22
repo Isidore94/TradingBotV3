@@ -40,11 +40,21 @@ They are evidence and must not be loaded as context.
   pre-arm Pullback alerts; any old automatic row is removed. The chart button is the only arm path,
   and it skips the unnecessary M5-cache read that could stall the desk.
 
-- **Claimed-like current rating (2026-09-17, working tree).** A claimed-only
-  D1 row now overlays the latest Master AVWAP scan's existing score inputs for
-  its Points rating. Its original claim snapshot stays immutable, and an
-  unmeasured symbol remains honest rather than receiving invented data. The
-  scan, its outputs, detector, alerts, watchlists and claim store are unchanged.
+- **Claimed-like current rating (2026-09-17; SP1 corrected 2026-09-22).** A claimed-only
+  D1 row may overlay completed scan facts only from the matching symbol and side
+  when the rich sidecar seals the displayed report. Its original claim snapshot
+  stays immutable; absent or stale facts earn no clean-path Points bonus.
+
+- **Setup-score repair (SP1/SP2, 2026-09-22, isolated integration branch).**
+  Points v2 uses completed facts from the same report scan, gives unknown S/R
+  no clean-path credit, keeps same-day score revisions, and grades the earliest
+  pre-close observation against the exact five-exchange-session outcome. Ties
+  remain whole; learned weights require 30 graded observations and five entry
+  sessions per side and remain OFF by default. PQS v2 counts finite closed
+  episodes with one Wilson population, holds positive evidence at the baseline
+  below 30 episodes or five entry sessions, and no longer rewards a no-loss
+  sample with PF99. V1 calculations remain available for replay. Both were
+  reproduced red against old code and green with the repair; live gates remain.
 
 - **Pullback retest LRSI gate (2026-09-17, working tree).** M15 and M30 SMA retests now fire only
   with a same-timeframe LRSI 80 reversal on the retest bar or either of the two before it. A hold
@@ -3680,6 +3690,18 @@ ones the DEFAULT on 2026-09-06 and left the v1 names selectable as the compariso
 "old" arm.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-22 - SP1/SP2 setup score reliability repair
+
+The Master AVWAP Points and family PQS repairs described in the inventory are
+integrated on `codex/setup-score-repair-2026-09-22`. Old observations retain
+their version and are not fitted into a new weight. Copy-based journal repair
+readiness passed without a live journal write; the prospective scoring trial,
+live observation and trader-only journal gate remain open. The full test run
+passed 10,293 with two failures: fixture-contract metadata added afterward,
+and the known WS-10A timing flake that passed alone. The affected selection
+then passed 78; ruff, smoke 7/7 and source selftest 97/97 passed. The full
+suite was not rerun after the fixture edit.
 
 ### 2026-09-21 - TJ-9E: the Mentor tells an exit from an entry, and a reading is the trader's only by their click (branch `claude/tj9e-exit-notes`, tip `1876bb08`, merged into `lead/p033-integration2` `7230b30d`)
 

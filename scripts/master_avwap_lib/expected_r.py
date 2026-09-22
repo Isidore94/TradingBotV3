@@ -163,8 +163,9 @@ def compute_proven_quality_score(
                 evidence += min(pf, float(cfg["pf_cap"])) / float(cfg["pf_cap"]) * float(cfg["pf_weight"])
                 if pf < 1.0 and samples >= int(cfg["losing_pf_scale_min_samples"]):
                     evidence *= pf
-        fresh = _finite(freshness)
-        fresh = 1.0 if fresh is None else min(max(fresh, 0.0), 1.0)
+        # V1 treated an explicit zero as an absent reading. Keep that legacy
+        # quirk for replay; V2 below correctly keeps zero at zero.
+        fresh = min(max(float(freshness or 1.0), 0.0), 1.0)
         evidence *= fresh
         return {
             "policy": "pqs_v1",

@@ -39,6 +39,11 @@ GOLDENS = json.loads(
 REFERENCE_DAY = date(2026, 9, 18)
 
 
+def test_v1_replay_preserves_the_original_zero_freshness_fallback():
+    common = {"static_points": 100, "win_rate": 0.6, "profit_factor": 2.0, "closed_samples": 25, "policy": "pqs_v1"}
+    assert compute_proven_quality_score(**common, freshness=0.0) == compute_proven_quality_score(**common, freshness=1.0)
+
+
 def _tracked_setup(
     symbol: str,
     scan_date: str,

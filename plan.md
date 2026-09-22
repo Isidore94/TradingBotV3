@@ -160,6 +160,58 @@ trader thought", "TM", "Q4" and "Frozen exe" entries), `docs/LOCAL_AI_AUTOMATION
 
 ## 12. Remaining work, in execution order
 
+### Setup-score repair — trader directed, 2026-09-22 (SP)
+
+The trader approved the full 2026-09-22 assessment: **"Go ahead and make the fixes as
+per the full assessments then reconsider scoring changes."** This is the scoped
+ask-first authorization for the Points scorer/data feed/evidence worker and the PQS
+family lookup/final-score seams described here; no detector or alert recipe changes.
+Work starts from `main` `fb95854e` in isolated worktrees. It does not promote a WISHLIST
+idea or retire any Phase 0.33 live gate.
+
+1. **SP1 — BUILT AND REPRODUCED, pending live validation.** Feed Points the measured, same-scan chart facts; missing room
+   data earns no clean-path bonus. Version corrected inputs and snapshots, retain
+   append-only old logs, capture meaningful same-day revisions, and grade one eligible
+   observation per session/name/side against five real exchange sessions. Keep tied
+   values together; show sample/session coverage and withhold learned proposals when
+   either half has fewer than 30 observations or five entry sessions. No new fitted
+   multipliers and no change to other consumers' outcome policies.
+2. **SP2 — BUILT AND REPRODUCED, pending live validation.** Pin the current PQS as `pqs_v1`; correct the default's sample
+   reliability. Count finite closed representative episodes once, use a counted win
+   fraction and corresponding Wilson bound, carry measured session coverage, and remove
+   the PF99/no-loss reward. Below 30 measured episodes or five entry sessions, positive
+   evidence cannot exceed the unproven baseline. The payoff bonus scales with measured
+   losses up to the same 30-example floor. Existing detector/family columns and
+   Expected-R's separate calibration remain unchanged; v1 remains replayable.
+3. **Trade-data readiness — EXISTING REPAIR VERIFIED ON A COPY.** Keep outcome quality and personal fit separate. Use confirmed
+   trade labels and first-fill/instrument identity; a quick like supplies no setup tag,
+   a machine guess is not confirmation, and missing risk is never invented. Reuse the
+   existing TJ-9Q repair and Mentor label workflow, prove repair on a journal copy,
+   rather than learning from the wrong instrument or treating unlabelled trades as
+   negative choices. The 2026-09-22 copy apply moved 231 fills, refused none, preserved
+   all 216 trades / 189 annotations / 621 executions, stranded no annotation and left
+   no repair update pending. TJ-9Q already owns the implementation, so no duplicate
+   repair or label UI is built. Stored-journal application retains its desk-down,
+   market-closed, daytime, trader-only gate #162. Confirmed labels remain the trader's
+   act; personal-fit ranking is deferred until coverage can support an honest test.
+4. **RECONSIDERED ON COPIES; prospective gate open.** Compare old and corrected scores on copied facts,
+   naming any reconstruction and look-ahead limits. Freeze a prospective challenger
+   before observing its results; the first trial is 20 new entry sessions followed
+   by the five-session outcome wait, with success/downside/rollback limits fixed
+   beforehand. No weight optimization from the four-session assessment sample.
+
+Both packets were built test-first and reproduced on isolated review checkouts.
+SP1's new tests: 21 green on the repair, 20 red when production was restored to
+the parent. SP2's review: 10 new tests green and all 10 red with the fix restored
+to the parent. The integrated branch is `codex/setup-score-repair-2026-09-22`;
+the full suite reported 10,293 passed / 14 skipped / 72 subtests and two failures:
+one new fixture-contract omission (repaired) and the known timing-only freshness
+flake (green alone). All 78 affected and new tests passed after that repair;
+ruff, smoke 7/7 and source selftest 97/97 passed. This is not a clean full-suite
+exit, so the exact result stays visible for the next integration run.
+The desk checkout is not switched or rewritten while running. The live validation
+and five-session outcome gates remain open after the code passes.
+
 | Phase | Packets | Status |
 |---|---|---|
 | 0.33 The trader journal — Day Review, Week Review and the overnight voice | TJ-1 … TJ-8 | TJ-1 MERGED 2026-09-18 (`e00b734a`, reviewer GO after four rounds; live gate #145 owed at the next restart); TJ-1L (two-column layout, presentation only) MERGED (`86b86bcb` is an ancestor of `main` - verified 2026-09-19 with `git merge-base --is-ancestor`; this row said "unmerged" in error); TJ-2 MERGED 2026-09-18 into local `main` (`d3ae3aff`; durable session bars and four pure tables; gates #152/#153 owed); **TJ-3 MERGED 2026-09-19 (evening)** (`claude/tj3-note-markers` → `lead/p033-integration2` `72647104`; Day Review note markers, a mark on a bar only when it happened during it, the Alert Center's chart proven unchanged; gate #147 owed, after #146/#152's bars back-fill); **TJ-15 MERGED 2026-09-19 (night)** (`claude/tj15-miss-contrast` → `lead/p033-integration2` `fb3f55e9`, slot position fixed `1f260ffa`; the pure `evidence_contrast` with two floors, the deterministic `miss_contrast` slot inside stage 1 above the pair that closes it, D1 decisions only; gate #160 owed) and **TJ-14A MERGED 2026-09-19 (night)** (`claude/tj14a-mentor-card` → `lead/p033-integration2` `e8c04f88`; TJ-14 items 1 and 6 - the Mentor card's What I see / What I expect split with a forced prediction click, a row's timeframe and its horizon always agreeing at the WRITER, `trade_mentor_context_v2` and the internals strip; gate #159's first clause owed); **TJ-14B MERGED 2026-09-20** (`claude/tj14b-mentor-questions` → `lead/p033-integration2` `161e905c`; TJ-14 items 2-5 - the Mentor question registry in which every kind names the reader of its answer and four kinds ship DORMANT until that reader exists, the budget of three with the remainder counted and carried, one card one import with three reserved pulls a day, and same-session fills; gates #159 and #163 owed); **TJ-10 MERGED 2026-09-20** (`claude/tj10-read-grader` → `lead/p033-integration2` `57b44ca9`, integration fix `3e52d94f`; the read grader, the prediction ledger, four congruence lines and the deterministic `read_grades_mature` slot - no model anywhere; gate #155 owed, and it needs the TJ-2A session tape to exist first); **TJ-16 MERGED 2026-09-20** (`claude/tj16-prediction-contrast` → `lead/p033-integration2` `c4a760e5`; the prediction ledger beside three naive baselines on the SAME stamps, the deterministic `prediction_contrast` slot directly after `miss_contrast`, and the Stage 2 `observation_tags` tagger that never sees an outcome and whose verifier re-checks the reply's own bounds; readers only, no page; gates #164-#167 owed); **TJ-4 MERGED 2026-09-20** (`claude/tj4-day-story` → `lead/p033-integration2` `d929e34f`; the pure hash-stable day pack, the overnight day story that narrates only measured rows and rejects a disagreeing output WHOLE, the rolling D1 view, and a night that sweeps the redos a daytime click queued; gate #148 owed); **TJ-5 MERGED 2026-09-20** (`claude/tj5-week-review` → `lead/p033-integration2` `1b9d77e0`; Week Review first in Weekend Prep - five day cards on one payload that computes nothing, the week pooled once in `day_report_card.week_from_cards` with no best family taken from day-winners, an unpacked and an unreadable day each NAMED rather than counted as quiet, and the Saturday-only `week_review_narration` slot narrating only the week's own packs; gates #149, #170 and #171 owed); **TJ-6 MERGED 2026-09-20** (`claude/tj6-ideas` → `lead/p033-integration2` `a7809d7c`, ninth slot-order pin `be435cd7`, fix `41d3f759`; the desk's AI has a voice - up to three grounded ideas a night, nothing to cite meaning no model call, a night that asked being DONE, and a KEEP the trader's own click that freezes a baseline and is checked by two non-overlapping Wilson intervals or not called a change at all; gates #150 and #172-#174 owed); **TJ-7 MERGED 2026-09-20** (`claude/tj7-mood-fields` → `lead/p033-integration2` `b63db7af`, guard amendment `ae7c06c7`, follow-up merge `0a0a0be4`; the LAST building packet - a mood is a field the desk REPORTS and nothing acts on it: ONE additive journal key refused loudly at the writer, one optional strip on both surfaces, a citable pack section, one key in each closed evidence list, a point-in-time context field and ONE Day Review line; gates #151 and #175 owed) — **every building packet of Phase 0.33 is now merged on `lead/p033-integration2`**; TJ-8 PLANNED (waits on the live gates); **TJ-11 MERGED 2026-09-19** (`claude/tj11-walkaway-v2` → `lead/p033-integration` `a89ec7d5`; walk-away v2, `REAL_MISS_V1`, the skill line, an additive `decision_session`; direction reversed the same evening by **TJ-11F MERGED 2026-09-19** (`claude/tj11f-decision-session` → `lead/p033-integration2` `f00ec302`; an after-close decision belongs to the session it JUDGED); gate #156 owed, reworded) and **TJ-13A MERGED 2026-09-19** (`claude/tj13a-night-slates` → `lead/p033-integration` `9eaae1dd`; nights only seven days, night slates, four overnight repairs; gate #158 owed); **TJ-9 … TJ-13 otherwise PLANNED 2026-09-19** (trader-approved after the 2026-09-18 review-loop audit: forced 09:00 trade labels, read grader + congruence, walk-away v2, report card, night re-budget; order in 12.5); **second-look amendments and TJ-14 … TJ-16 PLANNED 2026-09-19** (trader: "Yes add all of this" — prediction click, skill line against a base rate, tracked ideas, instrument-aware money lines, tag provenance, miss contrast, staleness line; the Mentor asks only for what the desk is missing) |

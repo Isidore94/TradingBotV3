@@ -8,21 +8,18 @@ actually performs."*
 Three seams, all shadow, none reaching a detector, a score, an alert or a
 watchlist:
 
-1. **The log** (`SETUP_POINTS_LOG_FILE`, append-only JSONL): one row per
-   ranked-bucket setup per scan date - the RAW four parts (before any learned
-   multiplier), the total the desk showed, the multipliers it used and the
-   bucket. De-duplicated on `(scan_date, symbol, side)`; a failed append loses
-   the row, never the table.
-2. **The grade** (`grade`): the log joined to the tracker's own outcome rows
-   (`master_avwap_tier_outcomes.csv`, the ONE reader `swing_evidence.
-   read_eligible_rows`, the declared horizon) on `(scan_date, symbol, side)`.
-   Terciles by total, each with `n`, win rate and the Wilson lower bound; the
-   LIFT (top third minus bottom third) is the headline; every part gets the
-   same top-half-minus-bottom-half lift so the trader can see WHICH input is
-   earning its weight.
+1. **The log** (`SETUP_POINTS_LOG_FILE`, append-only JSONL): every distinct
+   same-day score snapshot retains its version, inputs, parts, total, shown
+   multipliers and bucket. A failed append loses the row, never the table.
+2. **The grade** (`grade`): the earliest eligible pre-close v2 snapshot per
+   entry session/name/side joins the tracker's session outcome through
+   `swing_evidence.read_eligible_rows` and `POLICY_SESSION_V2` after five
+   exchange sessions. Whole tied values stay together in the total thirds
+   and part halves. V1 logs remain readable but do not join this v2 grade.
 3. **The correction** (`propose_weights` -> `SETUP_POINTS_WEIGHTS_FILE`): one
    multiplier per part, `1 + 2 x lift` clamped to [0.5, 1.5], proposed only
-   when BOTH halves of that part hold at least `MIN_REPORTABLE_N` graded rows;
+   when BOTH halves of that part hold at least `MIN_REPORTABLE_N` graded rows
+   from five distinct entry sessions each;
    otherwise 1.0 with the reason. The desk APPLIES the proposal only when the
    trader's `setup_points_learned_weights` switch is ON (default OFF); the
    Points tooltip says which multipliers are in force either way. A weight

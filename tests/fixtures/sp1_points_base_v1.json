@@ -1,4 +1,19 @@
 {
+  "schema": "sp1_points_base_characterization_v1",
+  "feature_version": "points_v1",
+  "raw_input_keys": [
+    "report_row"
+  ],
+  "raw_input_sha256": "60f16732f06c41ae79643e058cff539aeac890c547612e9bbda7dec13fb7c836",
+  "acquired_at": "2026-09-22T07:33:21-07:00",
+  "as_of": "2026-09-21T12:08:53-07:00",
+  "universe_version": "synthetic_one_report_row_at_fb95854e",
+  "provider_assumptions": "Synthetic report-only row captured against base fb95854e; no market data provider or live store was read.",
+  "expected_keys": [
+    "v1_expected"
+  ],
+  "numeric_tolerance": 1e-09,
+  "intentional_difference": "The v2 default withholds missing S/R clean-path credit; the v1 expected block pins the old result for replay.",
   "fixture_version": "sp1_points_base_v1",
   "captured_from": "fb95854e",
   "purpose": "Pre-repair Points v1 characterization. The complete report row has no S/R facts, so v1 incorrectly calls its path clean.",
