@@ -5,6 +5,7 @@ about 40 lines and delete the oldest. The full old changelog and inventory are i
 `notes/CHANGELOG.md`, local only.
 
 - 2026-09-23 AGENTS.md test commands: offscreen Qt on Windows too, the main venv path for worktrees, and rerun suite failures on `main` before blaming a branch.
+- 2026-09-23 Mentor asks once: a trade is asked about on one card only. Any answer opens its Save; leaving the card files what was typed and marks it `MENTOR_ASKED`; local AI fills blanks from the trader's words or leaves them blank. Fixes the DRAM trade asked every hour.
 - 2026-09-23 M5 swing context: an M5 bar row on a name+side that is also a D1 swing setup shows `· D1 <grade>` (New when ungraded) and ★ when claimed; with prioritise on, those rows draw first (claimed, then grade). Display only, fed from the setups table's model reset.
 - 2026-09-22 Close-scan freshness: a daily-bar cache hit now also needs the latest completed session (not just a file touched <30 min ago), so the 13:00 PT close scan no longer publishes on yesterday's bar after the 12:45 preview. Intraday unchanged; a failed refresh still falls back to the cache.
 - 2026-09-22 "Working now" strip under Working-lately in the M5 column: today's M5 alerts by setup grade with average R since they fired (completed cached bars only, first stop touch = -1R, missing data = no data); tooltip per alert. Display only.

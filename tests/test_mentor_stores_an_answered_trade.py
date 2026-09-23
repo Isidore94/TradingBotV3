@@ -66,14 +66,9 @@ def two_trades(tmp_path):
     card._clock = lambda: pacific(SESSION, 9)
     card.set_trade_check(check.build_task(store, SESSION), store=store)
     assert set(card._answer_inputs) == {first, second}
-    # LEAD AMENDMENT 2026-09-21 (integrating TJ-9E, the trader's exit request,
-    # with this branch): both round trips CLOSED in the reviewed session, so
-    # each row also carries TJ-9E's ONE forced exit box, and "answered" means
-    # the exit too. These tests are about the ENTRY fields, so the exit is
-    # answered here with its one click and what each test pins is unchanged.
-    for trade_id in (first, second):
-        if card.exit_note_box(trade_id) is not None:
-            card.set_exit_answer_state(trade_id, check.ANSWER_NOT_REMEMBERED)
+    # ASKED ONCE (2026-09-23): an exit state is an answer in its own right and
+    # opens Save, so the fixture leaves both exits untouched; each test says
+    # what it answers.
     return store, card, first, second
 
 
@@ -103,7 +98,9 @@ def test_one_answered_trade_is_stored_while_the_other_is_still_open(two_trades):
     assert asked == [second], "and the next card does not ask about it again"
 
 
-def test_a_half_answered_trade_is_not_filed_and_keeps_its_widgets(two_trades):
+def test_a_half_answered_trade_is_filed_and_its_blanks_stay_blank(two_trades):
+    """ASKED ONCE (trader 2026-09-23): ANY answer opens a trade's Save, a blank
+    field writes no row, and the filed trade is never asked again."""
     import trade_mentor_trade_check as check
 
     store, card, first, second = two_trades
@@ -112,12 +109,13 @@ def test_a_half_answered_trade_is_not_filed_and_keeps_its_widgets(two_trades):
     combo, _text = card._answer_inputs[second][name]
     combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_APPLICABLE))
 
+    assert card._trade_save_buttons[second].isEnabled() is True
     result = card.save_trade_check()
 
-    assert result["ok"] is True and result["trades"] == [first]
-    assert check.answered_fields(store, second) == set(), "forced is still forced, per trade"
-    assert card._answer_inputs[second][name][0] is combo, "the SAME combo object"
-    assert combo.currentData() == check.ANSWER_NOT_APPLICABLE
+    assert result["ok"] is True and set(result["trades"]) == {first, second}
+    assert check.answered_fields(store, second) == {name}, "blanks are not answers"
+    assert check.unlabelled_trade_count(store, check.previous_exchange_session(SESSION)) == 1
+    assert check.build_task(store, SESSION).trades == (), "neither is asked again"
 
 
 def test_words_typed_beside_a_blank_dropdown_are_an_answer(two_trades):
@@ -137,11 +135,16 @@ def test_words_typed_beside_a_blank_dropdown_are_an_answer(two_trades):
     assert rows["stop"]["value"] is None, "typed words are never coerced to a number"
 
 
-def test_one_raw_note_answers_the_trade_and_is_stored_verbatim(two_trades):
+def test_one_raw_note_is_stored_verbatim_and_local_ai_fills_the_blanks(two_trades):
+    """The raw note is no longer a placeholder answer for every field: it is
+    stored verbatim, and the blank fields go to the local model to fill."""
     import trade_mentor_trade_check as check
-    from ui.widgets.trade_mentor_card import RAW_NOTE_ANSWER_TEXT
 
     store, card, first, _second = two_trades
+    started = []
+    card._start_ai_fill = lambda store, trade_id, words, blank, question, moment: started.append(
+        (trade_id, words, blank)
+    )
     note = "Bounce off the 1st dev. Stop under the low. No target, trailed it."
     card._raw_trade_inputs[first].setPlainText(note)
 
@@ -150,10 +153,16 @@ def test_one_raw_note_answers_the_trade_and_is_stored_verbatim(two_trades):
 
     raw = store.list_opportunity_events(trade_id=first, event_type=check.EVENT_RECALLED_RAW)
     assert [row["payload"]["raw_text"] for row in raw] == [note]
-    rows = check.recalled_fields(store, first)
-    assert {row["field"] for row in rows} == set(check.MATERIAL_FIELDS)
-    assert {row["text"] for row in rows} == {RAW_NOTE_ANSWER_TEXT}
+    assert check.recalled_fields(store, first) == [], "no placeholder answers"
+    assert started == [(first, note, tuple(card_missing(store, first)))]
     assert first not in [q.trade_id for q in check.build_task(store, SESSION).trades]
+
+
+def card_missing(store, trade_id):
+    import trade_mentor_trade_check as check
+
+    trade = store.get_trade(trade_id)
+    return check.missing_fields(trade, set())
 
 
 def test_an_untouched_card_still_files_nothing(two_trades):

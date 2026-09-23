@@ -159,6 +159,11 @@ OPPORTUNITY_EVENT_TYPES = {
     # PROVISIONAL draft in a pack file and never a row here: only the trader's
     # own click writes this type, the same way `trade_annotations` is theirs.
     "EXIT_NOTE_FIELDS",
+    # Trade Mentor, asked once (trader 2026-09-23). One row per trade when the
+    # card it was shown on is left: the trade is never offered again (its exit
+    # only for an exit session the row did not cover). A marker, not an
+    # answer - blank fields stay blank. `trade_mentor_trade_check` writes it.
+    "MENTOR_ASKED",
 }
 
 

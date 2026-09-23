@@ -223,23 +223,23 @@ def test_an_answered_check_does_not_come_back_on_a_later_slot(desk):
     assert _card(window).trade_check_session() == ""
 
 
-def test_a_half_answered_section_is_not_rebuilt_by_the_next_slot(desk):
-    """The ride is the widget staying as it is. Rebuilding it every hour would
-    throw away the combos the trader had already set."""
+def test_a_half_answered_section_is_filed_not_carried_by_the_next_slot(desk):
+    """ASKED ONCE (trader 2026-09-23: *"dont keep asking me again about them
+    all day"*). The next slot files what the trader set and never asks again."""
+    import trade_mentor_trade_check as check
+
     window, store, _fake = desk
     trade_id = add_round_trip(store, "AAPL")
 
     window._show_trade_mentor_prompt(slot_at(SESSION_TODAY, 9))
     card = _card(window)
     combo = card._answer_inputs[trade_id]["thesis"][0]
-    import trade_mentor_trade_check as check
-
     combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
 
     window._show_trade_mentor_prompt(slot_at(SESSION_TODAY, 10))
 
-    assert card._answer_inputs[trade_id]["thesis"][0] is combo
-    assert combo.currentData() == check.ANSWER_NOT_REMEMBERED
+    assert trade_id not in card._answer_inputs
+    assert check.answered_fields(store, trade_id) == {"thesis"}
 
 
 def test_the_real_service_stays_silent_in_away_and_the_desk_slot_after_it_asks(

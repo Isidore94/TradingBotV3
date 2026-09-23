@@ -267,7 +267,8 @@ def test_the_entry_half_of_a_row_is_untouched_by_the_exit_box(tmp_path):
     """STATED GUARD for *"entrys are good the way they are"*.
 
     DAYT carries both halves. Hand-counted: 4 entry combos, in `MATERIAL_FIELDS`
-    order, and answering all four does NOT open Save while the exit box is empty.
+    order. ASKED ONCE (2026-09-23): answering them opens Save on its own - the
+    exit box is optional - and the exit words are filed beside them.
     """
     import trade_mentor_trade_check as check
 
@@ -284,9 +285,7 @@ def test_the_entry_half_of_a_row_is_untouched_by_the_exit_box(tmp_path):
         combo = fields[name][0]
         combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
 
-    assert card.save_answers_button.isEnabled() is False, (
-        "the exit box is still empty and Save opened anyway"
-    )
+    assert card.save_answers_button.isEnabled() is True, "any answer opens Save"
 
     card.exit_note_box(trade_id).setPlainText(fx.EXIT_NOTE)
     assert card.save_answers_button.isEnabled() is True

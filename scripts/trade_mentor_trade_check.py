@@ -9,11 +9,13 @@ compulsory questionnaire. A trade that already carries its thesis, its setup
 claim and its stop is asked ONE question, not four - otherwise the morning task
 becomes something the trader stops doing, and a task nobody does records nothing.
 
-**Forced, at 09:00** (TJ-9, trader 2026-09-19: *"I want to be forced to label my
-trades around 0900 as per trade mentor"*). Every trade of the reviewed session
-is listed - the cap of three was five minutes of questions and the trader asked
-for all of them - and a trade's Save stays grey until each of ITS listed fields
-holds a value or one of the four explicit answer states.
+**Asked at 09:00, and asked ONCE** (TJ-9, trader 2026-09-19: *"I want to be
+forced to label my trades around 0900 as per trade mentor"*; amended
+2026-09-23: *"dont keep asking me again about them all day"*). Every trade of
+the reviewed session is listed. A trade's Save opens on ANY answer, and when
+the card is left every trade still on it is filed as it stands and marked
+`MENTOR_ASKED`: it is never offered again. Blank fields stay blank unless the
+local model can quote them from the trader's own words.
 
 **Forced is PER TRADE, and an answered trade is stored at once** (trader
 2026-09-21: *"if i answer the questions about a trade please then dont ask for
@@ -113,6 +115,19 @@ TRADE_CAP_DEFAULT = 3
 #: The append-only event type the answers are stored as.
 EVENT_RECALLED = "RECALLED"
 EVENT_RECALLED_RAW = "RECALLED_RAW"
+
+#: ASKED ONCE (trader 2026-09-23: *"dont keep asking me again about them all
+#: day. just assume anything not filled should be filled by AI based on my
+#: response and if the AI cant determine then just leave it blank"*). One row
+#: per trade when the card it was shown on is LEFT. A trade with one is never
+#: offered for its entry fields again, and its exit only for an exit session
+#: the marker did not cover. Blank fields stay blank - the completeness counts
+#: still see them - they are simply no longer ASKED.
+EVENT_MENTOR_ASKED = "MENTOR_ASKED"
+#: What a marker retired: a trade block of the trade section, or one TJ-9E
+#: waiting-reading row (retired per `(trade, exit session, note)`).
+ASKED_KIND_TRADE = "trade_check"
+ASKED_KIND_EXIT_DRAFT = "exit_draft"
 
 #: TJ-9E. The trader's own words about one EXIT, and the three fields they
 #: confirmed or corrected afterwards. Two types, because they are two different
@@ -610,12 +625,107 @@ def answered_fields(store: Any, trade_id: str) -> set[str]:
     }
 
 
-def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | None:
+def record_asked(
+    store: Any,
+    trade_id: str,
+    *,
+    session: str,
+    slot_id: str = "",
+    exit_session: str = "",
+    filed_fields: Any = (),
+    blank_fields: Any = (),
+    kind: str = ASKED_KIND_TRADE,
+    note_id: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Write the ONE marker that retires a trade's questions: it was asked.
+
+    Append-only and never raising on purpose: a journal write fails LOUDLY, so
+    the caller says so and the trade is asked again rather than lost.
+    """
+    moment = now or datetime.now().astimezone()
+    payload = {
+        "kind": str(kind or ASKED_KIND_TRADE),
+        "session": str(session or "")[:10],
+        "slot_id": str(slot_id or ""),
+        "exit_session": str(exit_session or "")[:10],
+        "filed_fields": [str(name) for name in (filed_fields or ())],
+        "blank_fields": [str(name) for name in (blank_fields or ())],
+    }
+    if note_id:
+        payload["note_id"] = str(note_id)
+    return store.record_opportunity_event(
+        opportunity_id=f"trade:{trade_id}",
+        event_type=EVENT_MENTOR_ASKED,
+        trade_id=str(trade_id),
+        occurred_at=moment,
+        reason=f"asked_once:{payload['kind']}",
+        payload=payload,
+        source="trade_mentor",
+    )
+
+
+def asked_state(store: Any, trade_id: str) -> tuple[bool, set[str]]:
+    """``(entry retired, exit sessions retired)`` for one trade.
+
+    An unreadable table answers "not asked": the cost is one more question,
+    never a lost one.
+    """
+    try:
+        rows = store.list_opportunity_events(
+            trade_id=str(trade_id), event_type=EVENT_MENTOR_ASKED, limit=10000
+        )
+    except Exception:  # noqa: BLE001 - unreadable is "not asked yet"
+        logging.debug("Asked markers unreadable.", exc_info=True)
+        return False, set()
+    retired = False
+    exits: set[str] = set()
+    for row in rows:
+        payload = row.get("payload") or {}
+        if str(payload.get("kind") or ASKED_KIND_TRADE) != ASKED_KIND_TRADE:
+            continue
+        retired = True
+        session = str(payload.get("exit_session") or "")[:10]
+        if session:
+            exits.add(session)
+    return retired, exits
+
+
+def asked_exit_drafts(store: Any) -> set[tuple[str, str, str]]:
+    """Every TJ-9E waiting reading already shown once: ``(trade, session, note)``."""
+    try:
+        rows = store.list_opportunity_events(event_type=EVENT_MENTOR_ASKED, limit=10000)
+    except Exception:  # noqa: BLE001 - unreadable is "not asked yet"
+        logging.debug("Asked markers unreadable.", exc_info=True)
+        return set()
+    out: set[tuple[str, str, str]] = set()
+    for row in rows:
+        payload = row.get("payload") or {}
+        if str(payload.get("kind") or "") != ASKED_KIND_EXIT_DRAFT:
+            continue
+        out.add(
+            (
+                str(row.get("trade_id") or ""),
+                str(payload.get("exit_session") or "")[:10],
+                str(payload.get("note_id") or ""),
+            )
+        )
+    return out
+
+
+def questions_for_session(
+    store: Any, reviewed: str, *, include_asked: bool = True
+) -> list[TradeQuestion] | None:
     """One question per trade of `reviewed` that still cannot answer a field.
 
     ``None`` - not ``[]`` - when the trade list could not be read: an empty
     questionnaire drawn from an unreadable list is a lie about the session, and
     the two have to stay distinguishable.
+
+    ``include_asked=False`` is what the CARD asks for: a trade with a
+    `MENTOR_ASKED` marker has no entry gaps left to ask, and its exit only for
+    an exit session the marker did not cover. The completeness counts keep the
+    default and still see a blank field as unlabelled.
 
     The annotation log is read ONCE for the whole session rather than once per
     trade: it is a small append-only file, but a per-trade read would turn a
@@ -649,9 +759,18 @@ def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | No
         # of 180 closed trades exit on a day other than the one they opened.
         exit_session = reviewed if reviewed in exit_sessions(store, trade_id) else ""
         answered = dict(answered_exits.get(trade_id) or {}) if exit_session else {}
+        exit_closed = bool(answered)
+        if not include_asked:
+            # Asked once is retired: the entry is never offered again, and the
+            # exit only for a session this trade's marker did not cover.
+            retired, retired_exits = asked_state(store, trade_id)
+            if retired:
+                gaps = ()
+            if exit_session and exit_session in retired_exits:
+                exit_closed = True
         # An answered exit closes its question the way an answered field does.
         # The row survives only while something on it is still OPEN.
-        if not gaps and (not exit_session or answered):
+        if not gaps and (not exit_session or exit_closed):
             continue
         guess, lane = setup_guess_for(trade, claims) if "setup" in gaps else ("", "")
         questions.append(
@@ -673,7 +792,7 @@ def questions_for_session(store: Any, reviewed: str) -> list[TradeQuestion] | No
     return questions
 
 
-def unexplained_exit_count(store: Any, session: str) -> int:
+def unexplained_exit_count(store: Any, session: str, *, askable_only: bool = False) -> int:
     """How many exits ON `session` the trader has not explained yet.
 
     The other half of :func:`unlabelled_trade_count`, and a SEPARATE number on
@@ -685,11 +804,15 @@ def unexplained_exit_count(store: Any, session: str) -> int:
     the desk asks again while EITHER is above zero.
 
     An unreadable list answers 0 rather than a guess: uncertainty is never a
-    count.
+    count. ``askable_only`` leaves out an exit already asked once (a
+    `MENTOR_ASKED` marker): it is still unexplained, and no longer ASKED.
     """
     return sum(
         1
-        for question in questions_for_session(store, str(session)[:10]) or ()
+        for question in questions_for_session(
+            store, str(session)[:10], include_asked=not askable_only
+        )
+        or ()
         if question.exit_session and not question.exit_answered
     )
 
@@ -711,7 +834,9 @@ def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> Tr
     # landed: the desk asks about what it has SEEN. Never gated on coverage -
     # today's statement does not exist yet, and waiting for it is exactly how
     # every live label came to be `recalled_after`.
-    today = tuple(questions_for_session(store, session.isoformat()) or ())
+    today = tuple(
+        questions_for_session(store, session.isoformat(), include_asked=False) or ()
+    )
     today_ids = tuple(question.trade_id for question in today)
 
     if not _journal_ready(store, reviewed):
@@ -726,7 +851,7 @@ def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> Tr
             same_session_trade_ids=today_ids,
         )
 
-    questions = questions_for_session(store, reviewed)
+    questions = questions_for_session(store, reviewed, include_asked=False)
     if questions is None:
         return TradeCheckTask(
             reviewed_session=reviewed,
@@ -757,7 +882,7 @@ def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> Tr
     )
 
 
-def unlabelled_trade_count(store: Any, session: str) -> int:
+def unlabelled_trade_count(store: Any, session: str, *, askable_only: bool = False) -> int:
     """How many trades ON `session` still cannot answer a material field.
 
     The number a later reader prints ("N trade(s) unlabelled"). It asks about
@@ -771,10 +896,17 @@ def unlabelled_trade_count(store: Any, session: str) -> int:
     forever in the Journal's completeness view. The exits have their own count
     (:func:`unexplained_exit_count`) and BOTH are owed - see that docstring for
     why they are two numbers and not one.
+
+    ``askable_only`` counts only what the card may still ASK: a trade already
+    asked once (`MENTOR_ASKED`) keeps its blank fields - it is still counted
+    by default - but never re-opens the section on a later card.
     """
     return sum(
         1
-        for question in questions_for_session(store, str(session)[:10]) or ()
+        for question in questions_for_session(
+            store, str(session)[:10], include_asked=not askable_only
+        )
+        or ()
         if question.missing
     )
 
@@ -974,8 +1106,13 @@ def save_answers(
     *,
     now: datetime | None = None,
     trade_date: str = "",
+    extra: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Store one morning's recalled answers for one trade.
+
+    ``extra`` adds payload keys to every row - the local-AI fill stamps
+    ``filled_by`` / ``model`` / ``prompt_version`` so a machine-filled answer is
+    never read as the trader's own. It can never overwrite a key set here.
 
     ANNOTATION rows only. `planned_stop` / `planned_entry` / `planned_risk` are
     never written from here: those columns mean "the plan the trader typed
@@ -1024,6 +1161,8 @@ def save_answers(
             "label_provenance_reason": provenance_reason,
             "trade_date": str(trade_date or ""),
         }
+        for key, extra_value in (extra or {}).items():
+            payload.setdefault(str(key), extra_value)
         row = store.record_opportunity_event(
             opportunity_id=f"trade:{trade_id}",
             event_type=EVENT_RECALLED,
@@ -1462,6 +1601,9 @@ def waiting_exit_drafts(
         return []
     notes = exit_notes_by_session(store, window)
     out: list[dict[str, Any]] = []
+    # ASKED ONCE (2026-09-23): a reading already shown on a card that was left
+    # is not offered again. The draft itself stays on disk, provisional.
+    shown = asked_exit_drafts(store) if any(notes.values()) else set()
     for day in window:
         # A session nobody wrote a note in cannot carry a reading, so it is not
         # worth a file read (review 2 advisory 5: the pack reads were the cost).
@@ -1484,6 +1626,8 @@ def waiting_exit_drafts(
                 continue
             if str(draft.get("note_id") or "") != str(note.get("note_id") or ""):
                 # A reading of words the trader has since rewritten.
+                continue
+            if (trade_id, day, str(draft.get("note_id") or "")) in shown:
                 continue
             out.append(
                 {

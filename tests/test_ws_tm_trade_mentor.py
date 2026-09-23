@@ -1253,16 +1253,11 @@ def test_raw_trade_reply_is_saved_before_parsing(tmp_path):
     assert row["payload"]["recalled_after_session"] is True
 
 
-def test_a_later_hour_of_the_same_session_carries_the_trade_questions_on(tmp_path):
-    """TJ-9 item 2 REPLACED this test's original rule. It used to pin that the
-    11:00 card cleared the section; the trader then asked to be FORCED, so an
-    unanswered section must not expire into silence and rides on every later
-    card of the same session instead.
-
-    The falsehood the old rule guarded against - a stale question saved against
-    the wrong morning - is still impossible, because the clear now happens on
-    the SESSION boundary, which is the boundary that actually changes which
-    trades are being asked about."""
+def test_a_later_hour_of_the_same_session_does_not_ask_the_trade_again(tmp_path):
+    """ASKED ONCE (trader 2026-09-23) REPLACED this test's TJ-9 rule, which
+    carried an unanswered section onto every later card of the session. The
+    trader was asked about the same DRAM trade every hour, so a trade shown on
+    a card that is left is marked asked and the 11:00 card does not ask it."""
     import trade_mentor_schedule as schedule
     import trade_mentor_trade_check as check
 
@@ -1280,19 +1275,11 @@ def test_a_later_hour_of_the_same_session_carries_the_trade_questions_on(tmp_pat
     eleven = [s for s in schedule.slots_for_session(NORMAL_SESSION) if s.scheduled_at.hour == 11][0]
     card.show_slot(eleven)
 
-    assert card._answer_inputs, "an unanswered section rides to the next hour"
-    assert card.trade_check_box.isVisibleTo(card)
-    assert card.save_answers_button.isVisibleTo(card)
-    # Nothing was answered, so Save is still grey and still files nothing.
-    assert card.save_answers_button.isEnabled() is False
-    assert card.save_trade_check()["ok"] is False
-
-    # The NEXT session is a different question, and it clears.
-    next_day = [
-        s for s in schedule.slots_for_session(date(2026, 9, 15)) if s.scheduled_at.hour == 7
-    ][0]
-    card.show_slot(next_day)
-    assert card._answer_inputs == {}
+    assert card._answer_inputs == {}, "the 09:00 trade was filed when that card was left"
+    assert check.asked_state(store, "T1")[0] is True
+    assert check.recalled_fields(store, "T1") == [], "nothing typed, nothing answered"
+    card.set_trade_check(check.build_task(store, NORMAL_SESSION), store=store)
+    assert card._answer_inputs == {}, "and the 11:00 task does not ask it again"
     assert not card.trade_check_box.isVisible()
     assert not card.save_answers_button.isVisible()
 

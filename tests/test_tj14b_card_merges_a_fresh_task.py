@@ -119,12 +119,14 @@ def _answer_every_field(card, trade_id: str) -> None:
 
 
 def test_the_reviewed_sessions_trades_are_added_once_the_statement_lands(desk):
-    """09:00 asks about today's AAA alone; the statement lands; 11:00 adds BBB.
+    """09:00 asks about today's AAA alone; the statement lands; 11:00 asks BBB.
 
-    Before the fix the 11:00 slot returned early - the card held answer widgets
-    - so BBB was never asked about that day and the heading went on saying
-    `journal not ready - fills current to 2026-09-10`.
+    Before the TJ-14B fix the 11:00 slot returned early, so BBB was never asked
+    about that day. ASKED ONCE (trader 2026-09-23): AAA was shown at 09:00 and
+    that card was left, so 11:00 asks about BBB ALONE.
     """
+    import trade_mentor_trade_check as check
+
     window, store, card = desk
     today = add_round_trip(store, "AAA", day=SESSION.isoformat(), entry_hour=7)
     yesterday = add_round_trip(store, "BBB", day=REVIEWED, entry_hour=7)
@@ -142,9 +144,10 @@ def test_the_reviewed_sessions_trades_are_added_once_the_statement_lands(desk):
 
     window._show_trade_mentor_prompt(slot_at(SESSION, 11))
 
-    assert list(card._answer_inputs) == [today, yesterday], (
-        "the reviewed session's trade joins the row already on the card"
+    assert list(card._answer_inputs) == [yesterday], (
+        "the reviewed session's trade is asked; the one shown at 09:00 is not"
     )
+    assert check.asked_state(store, today)[0] is True
     eleven = card.trade_check_label.text()
     assert "journal not ready" not in eleven, "the not-ready line is gone"
     assert EARLIER not in eleven, "and so is the freshness date that went stale"
@@ -154,13 +157,13 @@ def test_the_reviewed_sessions_trades_are_added_once_the_statement_lands(desk):
 
 
 # ---------------------------------------------------------------------------
-# (b) the trader's half-set widgets survive the merge
+# (b) what the trader half-set is FILED when the card is left
 # ---------------------------------------------------------------------------
 
 
-def test_a_half_answered_row_keeps_its_widgets_when_another_trade_is_added(desk):
-    """The whole reason the host used to return early. The merge has to give
-    the same protection WITHOUT freezing the words above the rows."""
+def test_a_half_answered_row_is_filed_when_the_card_is_left(desk):
+    """ASKED ONCE (2026-09-23): the next slot does not carry the row on - it
+    files what the trader set, leaves the rest blank, and never asks again."""
     import trade_mentor_trade_check as check
 
     window, store, card = desk
@@ -173,43 +176,28 @@ def test_a_half_answered_row_keeps_its_widgets_when_another_trade_is_added(desk)
     combo, text_input = card._answer_inputs[today][field]
     combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
     text_input.setText("I was watching the open")
+    assert card._trade_save_buttons[today].isEnabled() is True, "one answer opens Save"
 
     mark_covered(store, REVIEWED)
     window._show_trade_mentor_prompt(slot_at(SESSION, 11))
 
-    assert card._answer_inputs[today][field][0] is combo, "the SAME combo object"
-    assert card._answer_inputs[today][field][1] is text_input
-    assert combo.currentData() == check.ANSWER_NOT_REMEMBERED
-    assert text_input.text() == "I was watching the open"
-
-    # The gate is recomputed over ALL the rows now on the card - and it is PER
-    # TRADE (trader 2026-09-21): an answered trade is stored on its own, and
-    # the trade added beside it stays grey until IT is answered.
-    _answer_every_field(card, today)
-    # LEAD AMENDMENT 2026-09-21 (TJ-9E, the trader's own request): a round-trip
-    # trade now also carries ONE forced EXIT box - "Why did you exit? What did
-    # you feel? What were you watching?" - so Save waits on it as it waits on
-    # the entry fields. One click answers it; what this test pins is unchanged.
-    for _trade in (today, yesterday):
-        if card.exit_note_box(_trade) is not None:
-            card.set_exit_answer_state(_trade, check.ANSWER_NOT_REMEMBERED)
-    assert card._trade_save_buttons[today].isEnabled() is True
-    assert card._trade_save_buttons[yesterday].isEnabled() is False, (
-        "the added trade is still open"
-    )
-    assert card.save_answers_button.isEnabled() is True, "one answered trade can be stored"
-    _answer_every_field(card, yesterday)
-    assert card._trade_save_buttons[yesterday].isEnabled() is True
+    assert today not in card._answer_inputs
+    rows = check.recalled_fields(store, today)
+    assert [(row["field"], row["state"], row["text"]) for row in rows] == [
+        (field, check.ANSWER_NOT_REMEMBERED, "I was watching the open")
+    ]
+    assert list(card._answer_inputs) == [yesterday]
+    assert card._trade_save_buttons[yesterday].isEnabled() is False
 
 
 # ---------------------------------------------------------------------------
-# (c) a fill seen later in the day joins a READY card
+# (c) a fill seen later in the day is asked on the next card
 # ---------------------------------------------------------------------------
 
 
-def test_a_fill_seen_later_in_the_day_joins_the_rows_already_there(desk):
-    """The other direction: the statement had landed at 09:00 and the trader
-    traded afterwards. The new fill is asked about on the next card."""
+def test_a_fill_seen_later_in_the_day_is_asked_on_the_next_card(desk):
+    """The statement had landed at 09:00 and the trader traded afterwards. The
+    new fill is asked about on the next card; the 09:00 trade is not again."""
     import trade_mentor_trade_check as check
 
     window, store, card = desk
@@ -227,9 +215,8 @@ def test_a_fill_seen_later_in_the_day_joins_the_rows_already_there(desk):
 
     window._show_trade_mentor_prompt(slot_at(SESSION, 11))
 
-    assert list(card._answer_inputs) == [yesterday, today]
-    assert card._answer_inputs[yesterday][field][0] is combo
-    assert combo.currentData() == check.ANSWER_NOT_REMEMBERED
+    assert list(card._answer_inputs) == [today]
+    assert check.answered_fields(store, yesterday) == {field}
 
 
 # ---------------------------------------------------------------------------

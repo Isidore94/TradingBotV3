@@ -316,7 +316,7 @@ class TradeMentorService(QObject):
             return SKIP_IDLE
         return ""
 
-    def unlabelled_trades(self, session: str, *, store=None) -> int:
+    def unlabelled_trades(self, session: str, *, store=None, askable: bool = False) -> int:
         """How many trades ON `session` still cannot answer a material field.
 
         TJ-9 item 2. The number a later reader prints ("N trade(s) unlabelled")
@@ -326,7 +326,9 @@ class TradeMentorService(QObject):
 
         Deliberately not on the poll path - a caller asks for it when it is
         about to show it - and an unreadable journal answers 0 rather than a
-        guess.
+        guess. ``askable=True`` leaves out a trade already asked once
+        (`MENTOR_ASKED`): the ride asks that, so a blank field never re-opens a
+        retired trade.
         """
         try:
             import trade_mentor_trade_check as check
@@ -335,12 +337,12 @@ class TradeMentorService(QObject):
                 from journal_store import JournalStore
 
                 store = JournalStore()
-            return check.unlabelled_trade_count(store, str(session))
+            return check.unlabelled_trade_count(store, str(session), askable_only=askable)
         except Exception:  # noqa: BLE001 - a count never costs the desk
             logging.debug("Unlabelled trade count unreadable.", exc_info=True)
             return 0
 
-    def unexplained_exits(self, session: str, *, store=None) -> int:
+    def unexplained_exits(self, session: str, *, store=None, askable: bool = False) -> int:
         """How many exits ON `session` the trader has not explained (TJ-9E).
 
         The same shape and the same promise as :meth:`unlabelled_trades` - a
@@ -357,7 +359,7 @@ class TradeMentorService(QObject):
                 from journal_store import JournalStore
 
                 store = JournalStore()
-            return check.unexplained_exit_count(store, str(session))
+            return check.unexplained_exit_count(store, str(session), askable_only=askable)
         except Exception:  # noqa: BLE001 - a count never costs the desk
             logging.debug("Unexplained exit count unreadable.", exc_info=True)
             return 0

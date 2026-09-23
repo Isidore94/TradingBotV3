@@ -72,12 +72,12 @@ def _answer_entry_fields(card, trade_id: str) -> None:
         combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
 
 
-def test_an_open_exit_box_keeps_its_own_trade_grey_and_no_other(card_with_two_exits):
+def test_exit_words_open_their_own_trades_save_and_no_other(card_with_two_exits):
+    """ASKED ONCE (2026-09-23): any answer opens a trade's Save - the exit
+    words alone are enough - and only that trade's."""
     _store, card, first, second = card_with_two_exits
-    _answer_entry_fields(card, first)
-    _answer_entry_fields(card, second)
 
-    assert card._trade_save_buttons[first].isEnabled() is False, "its exit is still open"
+    assert card._trade_save_buttons[first].isEnabled() is False, "nothing said yet"
     assert card._trade_save_buttons[second].isEnabled() is False
 
     card.exit_note_box(first).setPlainText(WORDS)
@@ -93,12 +93,7 @@ def test_filing_one_trade_writes_its_exit_note_and_leaves_the_other_alone(card_w
 
     store, card, first, second = card_with_two_exits
     _answer_entry_fields(card, first)
-    _answer_entry_fields(card, second)
     card.exit_note_box(first).setPlainText(WORDS)
-    card.exit_note_box(second).setPlainText("half a thought about BBB")
-    # Take the second trade's entry answers back: it is half done again.
-    combo, _text = next(iter(card._answer_inputs[second].values()))
-    combo.setCurrentIndex(0)
     assert card._trade_save_buttons[second].isEnabled() is False
 
     card._trade_save_buttons[first].click()
@@ -107,13 +102,10 @@ def test_filing_one_trade_writes_its_exit_note_and_leaves_the_other_alone(card_w
     assert len(notes) == 1, notes
     assert WORDS in str(notes[0]), "the trader's own words are what was stored"
     assert check.answered_fields(store, first) == set(check.MATERIAL_FIELDS)
-
-    assert check.exit_notes(store, second) == [], "a half-open trade files nothing"
+    assert check.exit_notes(store, second) == [], "an untouched trade files nothing"
     assert first not in card._answer_inputs, "the filed trade left the card"
     assert card.exit_note_box(first) is None, "and took its exit box with it"
-    assert card.exit_note_box(second).toPlainText() == "half a thought about BBB", (
-        "the other trade keeps the words being typed into it"
-    )
+    assert card.exit_note_box(second) is not None, "the other trade is still asked"
 
 
 def test_the_exit_note_is_on_disk_before_the_entry_answers(card_with_two_exits, monkeypatch):
