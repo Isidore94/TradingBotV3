@@ -2,7 +2,7 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-22
+**Updated:** 2026-09-23
 
 - **Live on `main`:** everything through the 2026-09-22 integration (`cf9c6b2a`):
   overnight AI repair (AI-R1/R2/R3), setup-score repair (SP1/SP2), alert review
@@ -18,6 +18,9 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Working now strip** merged 2026-09-22 (`07ed01aa`): today's M5 alerts by grade with live R, at the next restart. Gate #191.
 - **Close-scan freshness fix** merged 2026-09-23: the close scan no longer reuses a cache missing today's bar. Gate #192. Follow-up owed: halted names refetch each evening scan (reviewer advisory).
 - **M5 swing context** merged 2026-09-23: M5 alert rows show the D1 swing grade and claim star. Gate #193.
+- **2026-09-23 integration** (`80d86afd`): Mentor asks once (gate #194), Pullback dip gate v2 (#195),
+  Capture tab fill + veto v4 (q/w/e), AGENTS.md test lines. Suite 10,524 passed, 2 load flakes green alone; selftest 97/97 source and frozen.
+  Mentor-ask-once merged without a reviewer round.
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
   `claude/chart-wheel-zoom-2026-09-21` (`11c3a339`). It is not on `main`. Merge it only
   while the desk is down.
