@@ -411,6 +411,15 @@ DAY_REVIEW_DIR = PERSISTENT_DATA_DIR / "day_review"
 # nothing in the running system reads it to detect, score, rank, gate or alert
 # (plan.md sec 5).
 DAY_REVIEW_READS_DIR = DAY_REVIEW_DIR / "reads"
+# Day Recap coach: one complete point-in-time record per session
+# (`records/<date>.json` + `.md`) and weekly rollups (`records/week-<YYYY-Www>.json`).
+# Never pruned. Written only by `day_session_record.py`.
+DAY_SESSION_RECORDS_DIR = DAY_REVIEW_DIR / "records"
+DAY_SESSION_RECORD_SCHEMA = "day_session_record_v1"
+# Day Recap coach: the trader's recap inputs (card answers, lesson, rule, rule
+# check, chart clues, environment verdict). Append-only JSONL; `recap_store.py`
+# is its one writer. Evidence only: nothing reads it to detect, score or alert.
+DAY_RECAP_EVENTS_FILE = PERSISTENT_DATA_DIR / "day_recap_events.jsonl"
 # The desk AI's ideas (TJ-6). `ai_ideas.jsonl` is the NIGHT's half: append-only,
 # one row per idea sighting, folded by `idea_id` on read so a repeat keeps every
 # earlier sighting on disk. `ai_ideas_state.json` is the TRADER's half: one entry
