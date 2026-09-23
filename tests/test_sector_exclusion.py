@@ -119,3 +119,73 @@ def test_hidden_line():
 
     assert hidden_line(0) == ""
     assert hidden_line(2) == "Hidden: 2 oil & gas / real estate"
+
+
+# --------------------------------------------------------------------------- setups table
+def _setup_rows():
+    from ui.models.setup import SetupRow
+
+    return [
+        SetupRow(symbol="NVDA", side="LONG", score=90.0, sector="Technology", industry="Semiconductors"),
+        SetupRow(symbol="APA", side="LONG", score=80.0, sector="Energy", industry="Oil & Gas E&P"),
+        SetupRow(symbol="ADC", side="SHORT", score=70.0, sector="Real Estate", industry="REIT - Retail"),
+        SetupRow(symbol="CCJ", side="LONG", score=60.0, sector="Energy", industry="Uranium"),
+        SetupRow(symbol="AM", side="LONG", score=50.0),  # no row text: symbol lookup
+        SetupRow(symbol="ZZZZ", side="LONG", score=40.0),  # unknown: shown
+    ]
+
+
+def test_the_setups_proxy_hides_oil_gas_and_real_estate_on_request(classified):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from ui.models.setup_table_model import SetupFilterProxyModel, SetupTableModel
+
+    model = SetupTableModel()
+    model.set_rows(_setup_rows())
+    proxy = SetupFilterProxyModel()
+    proxy.setSourceModel(model)
+
+    def visible():
+        return [model.row_at(proxy.mapToSource(proxy.index(r, 0)).row()).symbol for r in range(proxy.rowCount())]
+
+    assert visible() == ["NVDA", "APA", "ADC", "CCJ", "AM", "ZZZZ"], "the bare proxy hides nothing"
+    proxy.set_filters(hide_excluded_sectors=True)
+    assert visible() == ["NVDA", "CCJ", "ZZZZ"]
+    assert proxy.hidden_excluded_sectors() == 3
+    proxy.set_filters(min_score=0.0)  # a partial call keeps the hide flag
+    assert visible() == ["NVDA", "CCJ", "ZZZZ"]
+    proxy.set_filters(hide_excluded_sectors=False)
+    assert visible() == ["NVDA", "APA", "ADC", "CCJ", "AM", "ZZZZ"]
+    assert proxy.hidden_excluded_sectors() == 0
+    assert len(model.rows()) == 6, "hidden, never deleted"
+
+
+def test_the_setups_panel_box_is_on_by_default_and_saves_the_shared_switch(classified, tmp_path, monkeypatch):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    import chart_snapshot
+    import sector_exclusion
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+
+    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: [])
+    panel = MasterAvwapPanel(None, review_events_path=tmp_path / "events.jsonl")
+    try:
+        panel.set_rows(_setup_rows())
+        visible = [panel._row_at_proxy(r).symbol for r in range(panel.proxy.rowCount())]
+        assert visible == ["NVDA", "CCJ", "ZZZZ"]
+        assert panel.hide_sector_toggle.isChecked()
+        assert "(3)" in panel.hide_sector_toggle.text()
+        panel.hide_sector_toggle.setChecked(False)
+        assert classified[sector_exclusion.SETTING_HIDE_OIL_GAS_REAL_ESTATE] is False
+        assert panel.proxy.rowCount() == 6
+        # The other surface flips the shared switch; this one follows on refresh.
+        sector_exclusion.set_hide_enabled(True)
+        panel.sync_sector_switch()
+        assert panel.hide_sector_toggle.isChecked()
+        assert panel.proxy.rowCount() == 3
+    finally:
+        panel.close()

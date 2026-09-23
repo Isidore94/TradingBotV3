@@ -5,6 +5,7 @@ from typing import Any
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QColor
 
+from sector_exclusion import is_excluded, symbol_is_excluded
 from swing_headline import OUTCOME_KIND_FAVORABLE_DIRECTION, headline_labels
 from ui import theme
 from ui.models.setup import SetupRow
@@ -332,6 +333,9 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         # back. The scan and the tracker never see this filter.
         self.rejected_symbols: frozenset[str] = frozenset()
         self.show_rejected: bool = False
+        # Trader, 2026-09-23: hide Oil & Gas / Real Estate rows (display only).
+        # Off on a bare proxy; the panel sets it from the shared switch.
+        self.hide_excluded_sectors: bool = False
         self.setSortRole(SORT_ROLE)
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
@@ -346,6 +350,7 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         search_text: str | None = None,
         rejected_symbols=_UNSET,
         show_rejected: bool | None = None,
+        hide_excluded_sectors: bool | None = None,
     ) -> None:
         """Update only the filters named by the caller.
 
@@ -376,6 +381,8 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             )
         if show_rejected is not None:
             self.show_rejected = bool(show_rejected)
+        if hide_excluded_sectors is not None:
+            self.hide_excluded_sectors = bool(hide_excluded_sectors)
         self.endFilterChange()
 
     def hidden_rejected(self) -> int:
@@ -391,6 +398,15 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             if str(getattr(row, 'symbol', '') or '').strip().upper() in self.rejected_symbols
         )
 
+    def hidden_excluded_sectors(self) -> int:
+        """How many source rows the Oil & Gas / Real Estate filter is holding back."""
+        if not self.hide_excluded_sectors:
+            return 0
+        model = self.sourceModel()
+        if model is None:
+            return 0
+        return sum(1 for row in model.rows() if _row_is_excluded_sector(row))
+
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()
         if model is None:
@@ -405,6 +421,8 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             and self.rejected_symbols
             and str(row.symbol or '').strip().upper() in self.rejected_symbols
         ):
+            return False
+        if self.hide_excluded_sectors and _row_is_excluded_sector(row):
             return False
         if row.score is not None and row.score < self.min_score:
             return False
@@ -436,6 +454,15 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             if self.search_text not in haystack:
                 return False
         return True
+
+
+def _row_is_excluded_sector(row) -> bool:
+    """The row's own sector/industry text; blank text falls back to the symbol lookup."""
+    sector = str(getattr(row, "sector", "") or "")
+    industry = str(getattr(row, "industry", "") or "")
+    if sector.strip() or industry.strip():
+        return is_excluded(sector, industry)
+    return symbol_is_excluded(str(getattr(row, "symbol", "") or ""))
 
 
 def _bucket_color(bucket: str) -> str:
