@@ -7,12 +7,19 @@ from PySide6.QtWidgets import QLayout
 class FlowLayout(QLayout):
     """A left-to-right wrapping layout (chips flow onto the next line as needed)."""
 
-    def __init__(self, parent=None, margin: int = 0, spacing: int = 6) -> None:
+    def __init__(
+        self, parent=None, margin: int = 0, spacing: int = 6, *, fill: bool = False
+    ) -> None:
         super().__init__(parent)
         if parent is not None:
             self.setContentsMargins(margin, margin, margin, margin)
         self.setSpacing(spacing)
         self._items: list = []
+        # fill: when every item fits on ONE line, stretch them to the whole
+        # rect - spare width shared evenly, full height each - instead of
+        # leaving dead space right of and below them. Wrapped lines keep their
+        # size hints, exactly as without it.
+        self._fill = bool(fill)
 
     def addItem(self, item) -> None:  # noqa: N802 (Qt override)
         self._items.append(item)
@@ -41,6 +48,8 @@ class FlowLayout(QLayout):
         return self._items.pop(index) if 0 <= index < len(self._items) else None
 
     def expandingDirections(self):  # noqa: N802
+        if self._fill:
+            return Qt.Orientation.Horizontal | Qt.Orientation.Vertical
         return Qt.Orientation(0)
 
     def hasHeightForWidth(self) -> bool:  # noqa: N802
@@ -72,6 +81,9 @@ class FlowLayout(QLayout):
         line_height = 0
         spacing = self.spacing()
 
+        if self._fill and not test_only and self._fits_one_line(effective, spacing):
+            return self._fill_one_line(effective, spacing, rect, margins)
+
         for item in self._items:
             hint = item.sizeHint()
             next_x = x + hint.width() + spacing
@@ -86,3 +98,23 @@ class FlowLayout(QLayout):
             line_height = max(line_height, hint.height())
 
         return y + line_height - rect.y() + margins.bottom()
+
+    def _fits_one_line(self, effective, spacing: int) -> bool:
+        if not self._items:
+            return False
+        total = sum(item.sizeHint().width() for item in self._items)
+        total += spacing * (len(self._items) - 1)
+        return total <= effective.width()
+
+    def _fill_one_line(self, effective, spacing: int, rect, margins) -> int:
+        hints = [item.sizeHint() for item in self._items]
+        spare = effective.width() - sum(h.width() for h in hints)
+        spare -= spacing * (len(self._items) - 1)
+        extra, remainder = divmod(max(0, spare), len(self._items))
+        height = max(effective.height(), max(h.height() for h in hints))
+        x = effective.x()
+        for position, (item, hint) in enumerate(zip(self._items, hints)):
+            width = hint.width() + extra + (1 if position < remainder else 0)
+            item.setGeometry(QRect(x, effective.y(), width, height))
+            x += width + spacing
+        return height - rect.y() + effective.y() + margins.bottom()
