@@ -84,6 +84,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -97,7 +98,10 @@ _log = logging.getLogger(__name__)
 #: cell must not silently find nothing. Every v1 pack on disk stays a v1 pack and
 #: stays readable, and `clean_digest_sessions` counts by session, not by schema,
 #: so the Phase 2 collection window is unaffected by the bump.
-FACTS_SCHEMA = "daily_digest_facts_v2"
+#: v3 (2026-09-23) added the capped per-name `names` block (top D1 setups,
+#: settled swing outcomes, M5 alerts, journal trades). v2 packs on disk stay
+#: v2 and every reader here treats a missing `names` block as absent.
+FACTS_SCHEMA = "daily_digest_facts_v3"
 NARRATION_SCHEMA = "daily_digest_narration_v1"
 
 #: D5. Target and hard cap. 90 packs at the target is well under 1.5 MB, which
@@ -151,6 +155,10 @@ ANSWERS = {
     "retention": "Narration is disposable and regenerable; fact packs are the permanent record.",
     "cap": f"{FACT_PACK_HARD_CAP_BYTES} bytes hard cap. Over-cap fails the job and writes nothing.",
     "non_sessions": "A weekend or holiday writes an EMPTY fact pack so the gap is visible.",
+    "names": (
+        "v3: per-name rows are capped, result-selected examples that print their "
+        "full n; they are never slices or rates. null means unknown."
+    ),
 }
 
 #: One session cannot have a session-block interval - there is one block. Said
@@ -288,6 +296,9 @@ def build_fact_pack(
     unavailable: Mapping[str, str] | None = None,
     supersedes: str = "",
     now: datetime | None = None,
+    top_setups: Mapping[str, Any] | None = None,
+    swing_outcomes: Mapping[str, Any] | None = None,
+    journal_trades: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One session's deterministic fact pack. No model is called from here.
 
@@ -352,8 +363,16 @@ def build_fact_pack(
         "coverage": dict(coverage or {}),
         "unavailable": missing,
         "supersedes": str(supersedes or ""),
+        "names": build_names_block(
+            is_session=bool(is_session),
+            finals=rows,
+            top_setups=top_setups,
+            swing_outcomes=swing_outcomes,
+            journal_trades=journal_trades,
+        ),
     }
     pack["summary"] = _summary(pack)
+    _fit_names(pack)
     return pack
 
 
@@ -653,6 +672,483 @@ def _operations_block(job_rows, session_date, as_of) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# per-name rows (v3, trader 2026-09-23)
+# ---------------------------------------------------------------------------
+
+#: Row caps per list. Result-selected examples, each printed with its full n.
+TOP_SETUPS_CAP = 10
+SWING_OUTCOMES_CAP = 5
+M5_ALERTS_CAP = 3
+JOURNAL_TRADES_CAP = 10
+
+#: Bytes kept free under the hard cap when named rows are trimmed to fit.
+NAMES_FIT_MARGIN_BYTES = 256
+
+#: M5 exit policies a ranking may use: (row key, finals field).
+_M5_RANK_POLICIES = (
+    ("close_r", "close_r"),
+    ("stop_exit_r", "r_stop_exit"),
+    ("last_measured_r", "r_last_measured"),
+)
+
+NAME_STATUS_OK = "ok"
+NAME_STATUS_ABSENT = "absent"
+NAME_STATUS_UNKNOWN = "unknown"
+NAME_STATUS_NOT_A_SESSION = "not_a_session"
+
+_TIER_ORDER = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+
+#: The lists inside `names`. When a pack is over budget the longest list loses
+#: its last row first; ties go to the earlier entry here.
+_NAME_LISTS = (
+    ("journal_trades", "rows"),
+    ("d1_top_setups", "rows"),
+    ("swing_settled", "worst"),
+    ("swing_settled", "best"),
+    ("m5_alerts", "worst"),
+    ("m5_alerts", "best"),
+)
+
+
+def names_source(
+    rows: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    status: str = NAME_STATUS_OK,
+    reason: str = "",
+) -> dict[str, Any]:
+    """One reader's answer: its rows, or why there are none."""
+    return {
+        "status": str(status),
+        "reason": str(reason or ""),
+        "rows": [dict(row) for row in (rows or [])] if status == NAME_STATUS_OK else [],
+    }
+
+
+def _number_or_none(value: Any, digits: int = 4) -> float | None:
+    values = _numbers([{"v": value}], "v")
+    return round(values[0], digits) if values else None
+
+
+def _text(value: Any) -> str:
+    return str(value if value is not None else "").strip()
+
+
+def _section_head(source: Mapping[str, Any] | None, source_id: str, is_session: bool) -> dict[str, Any]:
+    if not is_session:
+        return {"status": NAME_STATUS_NOT_A_SESSION, "reason": "not a trading session",
+                "source_id": source_id, "n": 0}
+    if source is None:
+        return {"status": NAME_STATUS_UNKNOWN, "reason": "not read for this pack",
+                "source_id": source_id, "n": 0}
+    status = str(source.get("status") or NAME_STATUS_UNKNOWN)
+    head: dict[str, Any] = {"status": status, "source_id": source_id, "n": 0}
+    if status != NAME_STATUS_OK:
+        head["reason"] = str(source.get("reason") or "no reason recorded")
+    return head
+
+
+def _source_rows(source: Mapping[str, Any] | None, section: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    if section["status"] != NAME_STATUS_OK:
+        return []
+    return list((source or {}).get("rows") or [])
+
+
+def _best_worst(rows: list[dict[str, Any]], key: str, cap: int) -> tuple[list, list]:
+    """Best and worst by `key`, one row per name and side, never listed twice.
+
+    With fewer than 2 x cap names the best list takes the upper half, so a
+    short day still shows its worst.
+    """
+    ranked = sorted(
+        (row for row in rows if row.get(key) is not None),
+        key=lambda row: (-row[key], row["symbol"], row.get("side") or ""),
+    )
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in ranked:
+        ident = (row["symbol"], row.get("side") or "")
+        if ident not in seen:
+            seen.add(ident)
+            unique.append(row)
+    best_n = min(cap, (len(unique) + 1) // 2)
+    best = unique[:best_n]
+    worst = list(reversed(unique[best_n:]))[:cap]
+    return best, worst
+
+
+def _top_setups_section(source, is_session: bool) -> dict[str, Any]:
+    section = _section_head(source, "scan.tier_list", is_session)
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in _source_rows(source, section):
+        symbol = _text(row.get("symbol")).upper()
+        side = _text(row.get("side")).upper() or None
+        if not symbol or (symbol, side or "") in seen:
+            continue
+        seen.add((symbol, side or ""))
+        rows.append({
+            "symbol": symbol,
+            "side": side,
+            "tier": _text(row.get("tier")).upper() or None,
+            "score": _number_or_none(row.get("priority_score"), 1),
+            "setup": _text(row.get("setup_family")) or None,
+            "zone": _text(row.get("favorite_zone")) or _text(row.get("current_band_zone")) or None,
+        })
+    rows.sort(key=lambda row: (
+        _TIER_ORDER.get(row["tier"] or "", 9),
+        -(row["score"] if row["score"] is not None else float("-inf")),
+        row["symbol"],
+    ))
+    section["n"] = len(rows)
+    section["capped"] = max(0, len(rows) - TOP_SETUPS_CAP)
+    section["rows"] = rows[:TOP_SETUPS_CAP]
+    section["basis"] = "this session's D1 scan, by tier (S>A>B>C) then priority score"
+    return section
+
+
+def _swing_section(source, is_session: bool) -> dict[str, Any]:
+    section = _section_head(source, "scan.session_horizon_outcomes", is_session)
+    rows: list[dict[str, Any]] = []
+    for row in _source_rows(source, section):
+        symbol = _text(row.get("symbol")).upper()
+        value = _number_or_none(row.get("side_return_pct"), 2)
+        if not symbol or value is None:
+            continue
+        horizon = _number_or_none(row.get("horizon_sessions"), 0)
+        rows.append({
+            "symbol": symbol,
+            "side": _text(row.get("side")).upper() or None,
+            "setup": _text(row.get("setup_family")) or None,
+            "tier": _text(row.get("tier")).upper() or None,
+            "scan_date": _text(row.get("scan_date"))[:10] or None,
+            "h": int(horizon) if horizon is not None else None,
+            "ret_pct": value,
+        })
+    section["n"] = len(rows)
+    section["best"], section["worst"] = _best_worst(rows, "ret_pct", SWING_OUTCOMES_CAP)
+    section["basis"] = (
+        "scan rows whose h-session horizon settled this session; ret_pct is the "
+        "side return from scan-day close to this close. This source measures no R."
+    )
+    return section
+
+
+def _m5_section(finals: Sequence[Mapping[str, Any]], is_session: bool) -> dict[str, Any]:
+    section = _section_head(names_source(finals), "outcomes.intraday_finals", is_session)
+    finals = list(finals) if is_session else []
+    # Rank by ONE exit policy, the one measured on the most rows today; the
+    # policies are never mixed in one ranking.
+    rank_by = max(
+        _M5_RANK_POLICIES,
+        key=lambda item: (len(_numbers(finals, item[1])), -_M5_RANK_POLICIES.index(item)),
+    )[0]
+    source_field = dict(_M5_RANK_POLICIES)[rank_by]
+    rows: list[dict[str, Any]] = []
+    for row in finals:
+        symbol = _text(row.get("symbol")).upper()
+        if not symbol:
+            continue
+        entry = _text(row.get("entry_time"))
+        rows.append({
+            "symbol": symbol,
+            "side": _side_of(row.get("direction")),
+            "trigger": _text(row.get("bounce_type")) or None,
+            "time": entry[11:16] if len(entry) >= 16 else None,
+            rank_by: _number_or_none(row.get(source_field), 2),
+            "mfe_r": _number_or_none(row.get("mfe_r"), 2),
+        })
+    section["n"] = len(rows)
+    section["rank_by"] = rank_by
+    section["unranked"] = len([row for row in rows if row[rank_by] is None])
+    section["best"], section["worst"] = _best_worst(rows, rank_by, M5_ALERTS_CAP)
+    section["basis"] = (
+        "champion M5 alerts that settled with an entry claim, ranked by rank_by "
+        "(the exit policy measured on the most rows this session)"
+    )
+    return section
+
+
+def _journal_section(source, is_session: bool) -> dict[str, Any]:
+    section = _section_head(source, "journal.trades", is_session)
+    rows: list[dict[str, Any]] = []
+    for row in _source_rows(source, section):
+        symbol = _text(row.get("symbol")).upper()
+        if not symbol:
+            continue
+        status = _text(row.get("status")).upper() or None
+        rows.append({
+            "symbol": symbol,
+            "side": _text(row.get("direction")).upper() or None,
+            "status": status,
+            # An open trade's P&L is not settled: unknown, never zero.
+            "net_pnl": _number_or_none(row.get("net_pnl"), 2) if status == "CLOSED" else None,
+            "ccy": _text(row.get("currency")).upper() or None,
+            "r": _number_or_none(row.get("r"), 2),
+        })
+    section["n"] = len(rows)
+    section["capped"] = max(0, len(rows) - JOURNAL_TRADES_CAP)
+    section["rows"] = rows[:JOURNAL_TRADES_CAP]
+    section["basis"] = (
+        "the trader's journal trades opened or closed this session; r is null "
+        "because the journal stores no stop"
+    )
+    return section
+
+
+def build_names_block(
+    *,
+    is_session: bool,
+    finals: Sequence[Mapping[str, Any]],
+    top_setups: Mapping[str, Any] | None,
+    swing_outcomes: Mapping[str, Any] | None,
+    journal_trades: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """The per-name rows the narrator may name. Deterministic; no model."""
+    return {
+        "note": (
+            "Per-name examples, result-selected and capped; each list prints its "
+            "full n. null means unknown, never zero. status: ok (read), absent "
+            "(no file), unknown (unreadable or not this session's data)."
+        ),
+        "d1_top_setups": _top_setups_section(top_setups, is_session),
+        "swing_settled": _swing_section(swing_outcomes, is_session),
+        "m5_alerts": _m5_section(list(finals or []), is_session),
+        "journal_trades": _journal_section(journal_trades, is_session),
+    }
+
+
+def _fit_names(pack: dict[str, Any]) -> None:
+    """Trim named rows (never other facts) until the pack fits under its cap."""
+    names = pack.get("names") or {}
+    budget = FACT_PACK_HARD_CAP_BYTES - NAMES_FIT_MARGIN_BYTES
+    while fact_pack_bytes(pack) > budget:
+        size, _order, section, key = max(
+            (len((names.get(section) or {}).get(key) or []), -index, section, key)
+            for index, (section, key) in enumerate(_NAME_LISTS)
+        )
+        if size <= 0:
+            return
+        names[section][key].pop()
+        names[section]["trimmed"] = int(names[section].get("trimmed", 0)) + 1
+
+
+def _named_rows(pack: Mapping[str, Any], sections: Sequence[str] | None = None):
+    for name, section in (pack.get("names") or {}).items():
+        if not isinstance(section, Mapping) or (sections is not None and name not in sections):
+            continue
+        for key in ("rows", "best", "worst"):
+            for row in section.get(key) or []:
+                if isinstance(row, Mapping) and row.get("symbol"):
+                    yield row
+
+
+def named_symbols(pack: Mapping[str, Any], sections: Sequence[str] | None = None) -> set[str]:
+    """Every ticker printed as a row `symbol` in the pack's names block."""
+    return {str(row["symbol"]).upper() for row in _named_rows(pack, sections)}
+
+
+# ---------------------------------------------------------------------------
+# per-name readers
+# ---------------------------------------------------------------------------
+
+
+def _csv_rows(path: Path):
+    import csv
+
+    with Path(path).open("r", encoding="utf-8", newline="") as handle:
+        yield from csv.DictReader(handle)
+
+
+def read_top_setups(day: str, *, path: Path | None = None) -> dict[str, Any]:
+    """This session's D1 scan tier list. Another day's scan is unknown, not today's."""
+    if path is None:
+        from project_paths import MASTER_AVWAP_TIER_LIST_FILE
+
+        path = Path(MASTER_AVWAP_TIER_LIST_FILE)
+    path = Path(path)
+    if not path.is_file():
+        return names_source(status=NAME_STATUS_ABSENT, reason=f"{path.name} not found")
+    rows: list[dict[str, Any]] = []
+    seen_dates: set[str] = set()
+    for row in _csv_rows(path):
+        scan_date = _text(row.get("scan_date"))[:10]
+        seen_dates.add(scan_date)
+        if scan_date == day:
+            rows.append(row)
+    if not rows:
+        latest = max(seen_dates - {""}, default="nothing")
+        return names_source(
+            status=NAME_STATUS_UNKNOWN,
+            reason=f"the scan tier list holds {latest}, not {day}",
+        )
+    return names_source(rows)
+
+
+def read_swing_outcomes(day: str, *, path: Path | None = None) -> dict[str, Any]:
+    """Measured scan-row horizons that settled on this session."""
+    if path is None:
+        from project_paths import MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE
+
+        path = Path(MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE)
+    path = Path(path)
+    if not path.is_file():
+        return names_source(status=NAME_STATUS_ABSENT, reason=f"{path.name} not found")
+    rows = [
+        row for row in _csv_rows(path)
+        if _text(row.get("target_session"))[:10] == day
+        and _text(row.get("measured")).lower() in {"true", "1"}
+    ]
+    return names_source(rows)
+
+
+def read_journal_trades(day: str, *, path: Path | None = None) -> dict[str, Any]:
+    """The journal's trades for this session, opened read-only (never created)."""
+    import sqlite3
+    from urllib.parse import quote
+
+    if path is None:
+        from project_paths import JOURNAL_DB_FILE
+
+        path = Path(JOURNAL_DB_FILE)
+    path = Path(path)
+    if not path.is_file():
+        return names_source(status=NAME_STATUS_ABSENT, reason=f"{path.name} not found")
+    uri = "file:" + quote(path.resolve().as_posix(), safe="/:") + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT symbol, direction, status, net_pnl, currency, opened_at, closed_at "
+            "FROM trades WHERE substr(opened_at, 1, 10) = ? OR substr(closed_at, 1, 10) = ? "
+            "OR trade_date = ? ORDER BY opened_at, trade_id",
+            (day, day, day),
+        ).fetchall()
+    finally:
+        conn.close()
+    return names_source([dict(row) for row in rows])
+
+
+def _read_names_sources(day: str, unavailable: dict[str, str]) -> dict[str, Any]:
+    """Every per-name reader. A read that raises is recorded and reads unknown."""
+    sources: dict[str, Any] = {}
+    for key, name, reader in (
+        ("top_setups", "scan tier list", read_top_setups),
+        ("swing_outcomes", "scan horizon outcomes", read_swing_outcomes),
+        ("journal_trades", "trade journal", read_journal_trades),
+    ):
+        try:
+            sources[key] = reader(day)
+        except Exception as exc:  # noqa: BLE001 - one unreadable source costs its rows only
+            unavailable[name] = str(exc)
+            sources[key] = names_source(status=NAME_STATUS_UNKNOWN, reason=str(exc))
+    return sources
+
+
+# ---------------------------------------------------------------------------
+# narration check: only tickers the pack holds, with their numbers
+# ---------------------------------------------------------------------------
+
+
+
+#: A ticker-shaped token: 2-5 capitals (optional class suffix), not part of a word.
+_TICKER_RE = re.compile(r"(?<![A-Za-z0-9_])\$?([A-Z]{2,5}(?:\.[A-Z]{1,2})?)(?![A-Za-z0-9_])")
+_DECIMAL_RE = re.compile(r"(?<![\d.])[-+]?(\d+\.\d+)(?![\d.])")
+
+#: Capitalised words a narration may use that are not tickers.
+NON_TICKER_WORDS = frozenset({
+    "LONG", "SHORT", "EOD", "MFE", "MAE", "AVWAP", "AVWAPE", "VWAP", "ATR", "RVOL",
+    "SMA", "EMA", "PNL", "USD", "CAD", "ET", "PT", "AM", "PM", "OK", "NA", "AI",
+    "RTH", "ETF", "IPO", "EPS", "YTD", "QTD", "TBD", "UPPER", "LOWER", "NOT", "ONLY",
+    "AND", "OR", "THE", "NO", "ALL", "NONE", "BUT", "NEW", "TOP", "BEST", "WORST",
+    "HIGH", "LOW", "CLOSED", "OPEN", "UNKNOWN", "NULL", "DAY", "SWING", "TIER",
+})
+
+_BEST_CANDIDATE_SECTIONS = ("d1_top_setups", "swing_settled", "m5_alerts")
+
+
+def _narration_texts(summary: Mapping[str, Any]) -> list[str]:
+    texts = [str(summary.get("executive_summary") or "")]
+    for value in summary.values():
+        if isinstance(value, list):
+            texts.extend(
+                str(item.get("statement") or "") for item in value if isinstance(item, Mapping)
+            )
+    return texts
+
+
+def check_narration_names(summary: Mapping[str, Any], pack: Mapping[str, Any]) -> list[str]:
+    """Problems with a narration's names; empty when it may be published.
+
+    Every ticker-shaped word must be a pack symbol (or a word the pack itself
+    prints). When the pack names rows, best_candidates must name them, and a
+    decimal in a best candidate must be one of that ticker's own numbers.
+    """
+    symbols = named_symbols(pack)
+    printed = set(_TICKER_RE.findall(render_fact_pack(pack)))
+    allowed = symbols | printed | NON_TICKER_WORDS
+    problems: list[str] = []
+
+    unknown = sorted({
+        token for text in _narration_texts(summary) for token in _TICKER_RE.findall(text)
+        if token not in allowed
+    })
+    if unknown:
+        problems.append(
+            "named tickers that are not in the fact pack: " + ", ".join(unknown)
+            + ". Name only a `symbol` printed in names.*."
+        )
+
+    candidates = [
+        str(item.get("statement") or "")
+        for item in summary.get("best_candidates") or [] if isinstance(item, Mapping)
+    ]
+    if named_symbols(pack, _BEST_CANDIDATE_SECTIONS):
+        if not candidates:
+            problems.append(
+                "best_candidates is empty although names.d1_top_setups, "
+                "names.swing_settled or names.m5_alerts list tickers; name them "
+                "with their numbers"
+            )
+        for text in candidates:
+            named = [token for token in _TICKER_RE.findall(text) if token in symbols]
+            if not named:
+                problems.append(f"best_candidates statement names no pack ticker: {text!r}")
+                continue
+            values = [
+                value for symbol in named for row in _named_rows(pack)
+                if str(row["symbol"]).upper() == symbol
+                for value in row.values() if isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ]
+            for written in _DECIMAL_RE.findall(text):
+                places = len(written.split(".", 1)[1])
+                wanted = float(written)
+                if not any(abs(round(abs(value), places) - wanted) < 1e-9 for value in values):
+                    problems.append(
+                        f"best_candidates number {written} is not a number the pack "
+                        f"prints for {', '.join(named)}"
+                    )
+    return problems
+
+
+#: Told to the narrator inside its package; `check_narration_names` enforces them.
+NARRATION_RULES = (
+    "best_candidates: name the tickers listed in names.d1_top_setups, "
+    "names.swing_settled and names.m5_alerts, each with its own numbers copied "
+    "from its row (tier and score, ret_pct and h, the m5 rank_by R). If those lists are "
+    "all empty, best_candidates may be empty.",
+    "Name no ticker that is not a `symbol` in names.*. A narration that names "
+    "any other ticker, or a number that is not that ticker's own, is rejected.",
+    "Cite 'digest.facts' in evidence_refs. A statement with a percent or a "
+    "decimal R needs metric_ref {source_id: 'digest.facts', key: the row field "
+    "(ret_pct, close_r, net_pnl), horizon: e.g. 'session' or 'h sessions', "
+    "denominator: e.g. 'names.swing_settled.n'}.",
+    "names.journal_trades are trades the trader made this session; do not call "
+    "them held positions. null means unknown; never write it as zero.",
+)
+
+
 def _summary(pack: Mapping[str, Any]) -> str:
     overall = (pack.get("outcomes") or {}).get("overall") or {}
     close = overall.get("close_r") or {}
@@ -669,6 +1165,12 @@ def _summary(pack: Mapping[str, Any]) -> str:
         f"{mfe.get('value')} (result and opportunity, side by side, never blended); "
         f"{len((pack.get('outcomes') or {}).get('slices') or [])} slice(s) kept."
     ]
+    names = pack.get("names") or {}
+    if names:
+        parts.append(
+            f"Named rows: {len(named_symbols(pack))} ticker(s) across top setups, "
+            "settled swings, M5 alerts and journal trades (see names)."
+        )
     if missing:
         named = ", ".join(f"{name} ({reason})" for name, reason in sorted(missing.items()))
         parts.append(
@@ -838,6 +1340,7 @@ def narration_evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
             "trend, a confirmation, or evidence about a setup.",
             "close_r and mfe_r/mae_r are result and opportunity. Never combine them.",
         ],
+        "narration_rules": list(NARRATION_RULES),
     }
     canonical = json.dumps(package, sort_keys=True, separators=(",", ":"), default=str)
     package["evidence_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -860,13 +1363,23 @@ def _narrate(*, pack: Mapping[str, Any], now: datetime | None = None) -> dict[st
             "the fact pack stands on its own"
         )
     package = narration_evidence_package(pack)
-    result = ai_summary.request_ai_summary(
-        provider="local",
-        model=ai_summary.local_model("medium"),
-        api_key="",
-        evidence=package,
-        timeout_seconds=900,
-    )
+    # One retry, told exactly what was wrong; a second miss publishes nothing.
+    previous_error = ""
+    for _attempt in range(2):
+        result = ai_summary.request_ai_summary(
+            provider="local",
+            model=ai_summary.local_model("medium"),
+            api_key="",
+            evidence=package,
+            timeout_seconds=900,
+            previous_error=previous_error,
+        )
+        problems = check_narration_names(result.get("summary") or {}, pack)
+        if not problems:
+            break
+        previous_error = "; ".join(problems)
+    else:
+        raise RuntimeError(f"narration rejected: {previous_error}")
     return {
         "schema": NARRATION_SCHEMA,
         "session_date": pack.get("session_date"),
@@ -913,6 +1426,7 @@ def run_daily_digest(
 
     review_rows = _read_rows("alert review events", _read_review_events, unavailable)
     job_rows = _read_rows("ai job ledger", _read_job_rows, unavailable)
+    name_sources = _read_names_sources(day, unavailable) if is_session else {}
 
     try:
         target_root = Path(root) if root is not None else _default_root()
@@ -931,6 +1445,9 @@ def run_daily_digest(
         unavailable=unavailable,
         supersedes=facts_path(target_root, day).name if facts_target.name != facts_path(target_root, day).name else "",
         now=moment,
+        top_setups=name_sources.get("top_setups"),
+        swing_outcomes=name_sources.get("swing_outcomes"),
+        journal_trades=name_sources.get("journal_trades"),
     )
 
     size = fact_pack_bytes(pack)
@@ -1087,6 +1604,8 @@ def _read_champion_finals(day: str, unavailable: dict[str, str]):
             # others is a different statistic wearing one name.
             "r_stop_exit": row.get("r_stop_exit"),
             "r_last_measured": row.get("r_last_measured"),
+            # The alert's trigger, for the names block only (never a slice).
+            "bounce_type": row.get("bounce_type"),
         }
         for row in usable.to_dict("records")
     ]

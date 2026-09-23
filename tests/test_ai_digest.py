@@ -536,5 +536,6 @@ def test_the_hoist_shrinks_the_pack_without_dropping_a_figure():
 
 def test_the_schema_name_changed_with_the_shape():
     """R10 ground rule 5: a v1 reader must not silently find nothing."""
-    assert digest.FACTS_SCHEMA == "daily_digest_facts_v2"
-    assert _pack()["schema"] == "daily_digest_facts_v2"
+    # v3 (trader 2026-09-23) added the per-name `names` block.
+    assert digest.FACTS_SCHEMA == "daily_digest_facts_v3"
+    assert _pack()["schema"] == "daily_digest_facts_v3"
