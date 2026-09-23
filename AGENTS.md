@@ -47,6 +47,7 @@ ask-first applies. Only the trader may promote a WISHLIST idea into authorized w
 | M5 bounce detector (ask-first) | `scripts/bounce_bot.py`, `bounce_bot_lib/`, `m5_signal_engines.py` |
 | Auto modes, scheduling | `autopilot_core.py`, `ui/services/autopilot_service.py` |
 | Focus lists, adoption gate | `focus_adoption_gate.py`, `FocusPickStore` in `ui/services/` |
+| "Picks I like" (4 stores, not one) | `focus_picks.py` = Focus names, swing + M5 (source of truth); `human_focus_tracking.py` = their 1/3/5/10-day returns; `claimed_picks.py` = claimed D1 Master AVWAP rows; `swing_favorites.py` = hand-typed end-of-day favourites |
 | Journal (trades) | `journal_store.py`, `journal_*.py`, `ui/panels/journal/` |
 | Day/Week Review, Mentor | `ui/panels/day_review_panel.py`, `ui/widgets/trade_mentor_card.py`, `day_report_card.py` |
 | Night AI jobs | `scripts/ai_jobs/` (`runner.py` owns slot order) |
