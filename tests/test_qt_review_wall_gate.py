@@ -321,6 +321,22 @@ class TestTrendlineWall:
         assert desk.panel._wall_uncovered["NOM5"] == "no cached M5 bars"
         assert desk.panel.chart_review.mover_badge.text() == "at wall"
 
+    def test_a_sweep_owned_pullback_is_not_cover(self, desk):
+        """The claim/Focus sweep may retire its own pullback later, so it never
+        covers a hidden wall name; the chart shows tagged instead."""
+        from chart_watch import arm_chart_watch
+
+        desk.name("SWP", [(250, 30.0, 30.0)], m5=[30.6, 30.8, 31.0])
+        self._line(desk, "SWP", 31.5)
+        swept = arm_chart_watch(
+            "pullback", "SWP", "LONG", (), now=desk.today,
+            source_text=desk.panel.PULLBACK_AUTO_SOURCES["claim"],
+        )
+        desk.panel._chart_watches = [swept]
+        desk.panel.add_alert(_d1_alert("SWP"))
+        assert desk.charted() == ["SWP"]
+        assert desk.panel._wall_uncovered["SWP"] == "pullback owned by the claim/Focus sweep"
+
     def test_a_declined_wall_pullback_is_kept_declined_and_not_re_armed(self, desk):
         desk.name("TTT", [(250, 30.0, 30.0)], m5=[30.6, 30.8, 31.0])
         self._line(desk, "TTT", 31.5)

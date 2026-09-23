@@ -2176,6 +2176,9 @@ class AlertCenterPanel(QFrame):
         if existing is not None:
             if bool(getattr(existing, "declined", False)):
                 return False, "follow-up declined"
+            # The sweep can retire its own pullback later, so it never covers a hide.
+            if self._is_auto_pullback_watch(existing):
+                return False, "pullback owned by the claim/Focus sweep"
             if str(getattr(existing, "side", "") or "").upper() == side:
                 return True, ""
             return False, "other-side pullback armed"
