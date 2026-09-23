@@ -426,6 +426,11 @@ DAY_SESSION_RECORD_SCHEMA = "day_session_record_v1"
 # check, chart clues, environment verdict). Append-only JSONL; `recap_store.py`
 # is its one writer. Evidence only: nothing reads it to detect, score or alert.
 DAY_RECAP_EVENTS_FILE = PERSISTENT_DATA_DIR / "day_recap_events.jsonl"
+# Day Recap coach "Ask the AI": the trader's plain-words questions (append-only;
+# `week_coach.py` is the one writer) and the night's cited answers (append-only;
+# `ai_jobs/week_questions.py` is the one writer). Evidence only.
+WEEK_QUESTIONS_FILE = PERSISTENT_DATA_DIR / "week_questions.jsonl"
+WEEK_ANSWERS_FILE = PERSISTENT_DATA_DIR / "week_answers.jsonl"
 # The desk AI's ideas (TJ-6). `ai_ideas.jsonl` is the NIGHT's half: append-only,
 # one row per idea sighting, folded by `idea_id` on read so a repeat keeps every
 # earlier sighting on disk. `ai_ideas_state.json` is the TRADER's half: one entry

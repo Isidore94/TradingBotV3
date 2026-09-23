@@ -663,6 +663,9 @@ def test_the_scope_can_be_selected_on_demand():
         "exit_note_fields",
         "ticker_briefs",
         "market_story_narration",
+        # Day Recap coach (2026-09-23): cited answers to the trader's Week
+        # Review questions, appended at the end of stage 2.
+        "week_questions",
         # Stage 3. LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run
         # gated: the enrichment pass refuses below the digest's gate - both
         # halves of it since Q4 - and the policy draft writes only

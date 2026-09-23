@@ -625,6 +625,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         setup_research,
         theta_grading,
         week_review_narration,
+        week_questions,
     )
     from journal_runner import run_nightly_journal_import
     from market_story_rollups import run_market_story_rollups
@@ -1139,6 +1140,23 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             ),
             max_attempts=3,
             uses_model=True,
+        ),
+        # Day Recap coach "Ask the AI", appended at the end of stage 2. It reads
+        # the day/week records `day_review_facts` rebuilt, so it runs after that
+        # slot; it cannot sit directly after it because `ai_summary` is pinned
+        # there. Deterministic half (the frontier digest) runs even when forced
+        # by day; the model half answers pending questions with cited claims.
+        JobSlot(
+            name="week_questions",
+            run=week_questions.run_week_questions,
+            reserve_minutes=week_questions.RESERVE_MINUTES,
+            description=(
+                "Answer the trader's Week Review questions from the day/week "
+                "records, every claim cited; write the week's frontier digest"
+            ),
+            max_attempts=3,
+            uses_model=True,
+            model_free_kwargs={"answer": False},
         ),
         # ------------------------------------------------------------------
         # STAGE 3: the model-gated slots. Unchanged, and still last.

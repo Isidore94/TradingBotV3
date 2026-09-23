@@ -425,6 +425,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "exit_note_fields",
         "ticker_briefs",
         "market_story_narration",
+        # Day Recap coach (2026-09-23): cited answers to the trader's Week
+        # Review questions, a stage 2 model slot at the end of that stage.
+        "week_questions",
         "journal_enrichment",
         "review_policy_draft",
         # TJ-6 (2026-09-20) appended after `setup_research`, last of stage 3.
