@@ -367,6 +367,12 @@ FOCUS_D1_FLAGS_FILE = RUNTIME_DATA_DIR / "focus_d1_flags.json"
 # keeps hunting the opening side after the live label decays to neutral
 # (2026-07-17: bearish_strong open -> neutral by noon shut off RW shorts).
 AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
+# Append-only per-session history of the opening regime: the day's first
+# regime read and its directional anchor. `opening_regime_history` owns it.
+AUTO_OPENING_REGIME_HISTORY_FILE = RUNTIME_DATA_DIR / "auto_opening_regime_history.jsonl"
+# Dated, append-only copies of `working_lately/setup_grades_latest.json`, one
+# JSONL per day. `setup_grades_history` owns it.
+SETUP_GRADES_HISTORY_DIR = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_history"
 # Append-only JSONL log of the trader's pick verdicts: star likes (with origin
 # alert timeframe/surface), X dislikes (with the typed reason), unfavorites.
 # Lives in the shared home so it syncs across machines and can be handed to an
