@@ -4,6 +4,7 @@ One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-23 AGENTS.md: the full suite takes 4-7 min, so run it in the background (a foreground run was killed at 99%).
 - 2026-09-23 AGENTS.md test commands: offscreen Qt on Windows too, the main venv path for worktrees, and rerun suite failures on `main` before blaming a branch.
 - 2026-09-23 Mentor asks once: a trade is asked about on one card only. Any answer opens its Save; leaving the card files what was typed and marks it `MENTOR_ASKED`; local AI fills blanks from the trader's words or leaves them blank. Fixes the DRAM trade asked every hour.
 - 2026-09-23 Pullback dip gate (`pullback_sma_reclaim_v2`): M15/M30 Pullback triggers need price to have come to the SMA (0.2 x D1 ATR20 or a close break-and-reclaim, within 15 M30/30 M15 bars) and an LRSI flip under 20 before the 80 cross. Stops the ARM 09-23 no-pullback alert; QDEL 09-23 short still fires (real-tape goldens).
