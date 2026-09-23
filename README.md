@@ -70,7 +70,8 @@ Start TWS/Gateway first, then:
 The `trading_desk.cmd` launcher wraps the same command. **The source launch is
 production** by trader decision (2026-08-26): a pushed commit is live at the next
 restart, and the frozen exe is a verification artifact only. If the desk ever returns
-to the frozen exe, a fix is not delivered until the exe is rebuilt.
+to the frozen exe, a fix is not delivered until the exe is rebuilt. Before every
+merge to main, rebuild and selftest the frozen exe, even without a packaging trigger.
 
 Optional theme override:
 

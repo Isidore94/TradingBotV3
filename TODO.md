@@ -24,8 +24,16 @@ here.
   unread lane looks like `unplanned`.
 - **TJ-14C:** give the `quick_like_followup` Mentor kind a reader, then wake it by
   setting `dormant_until=""`. Build the reader first.
-- **Mood verifier rule:** the night must never pair a mood with a result. Gate #175
-  stands in for this until it's built.
+- **TJ-13B Sunday follow-ups:** add suggested setup tags for old untagged trades and a
+  short week-ahead note. TJ-5 must also read week_review_plan when the week slot
+  lands. The first large-model probe is still live gate #158.
+- **TJ-6M:** add mentor_answer_mix_rate to TJ-6's closed MEASURABLES, pool the
+  Mentor answer mix in day_report_card, and add it to the registry test.
+- **TJ-14B grader_gap question:** TJ-10 is merged and the field is on every grade
+  row, so this small follow-up is ready to wake the question.
+- **TJ-7 follow-ups:** build a verifier rule so the night never pairs a mood with
+  a result; gate #175 stands in until then. Re-offered Mentor subjects keep their
+  old label and combo items when the prompt or options change.
 - **TJ-9E follow-ups** (not authorized yet):
   - Day pack and stories don't read exit fields yet.
   - The `CLOSED_PARTIAL` status is misspelled in 4 places (ask-first:
@@ -43,5 +51,5 @@ here.
   - `tracker_execution_compare.py`, `tracker_selection_compare.py`, `d1_level_store_survey.py`
   - `sector_cohort_divergence.py`, `diagnostics/observability_trends.py`, `gui_output.py`
   - `build_avwap_band_variant_fixture.py`, `build_mixed_unit_avwap_fixture.py`, `build_sector_cohort_fixture.py`
-- **145 live gates are still marked owed** (`docs/GATES.md`); many are weeks old. The
+- **142 live gates are still marked owed** (`docs/GATES.md`); many are weeks old. The
   trader should mark whole batches as passed or dropped.

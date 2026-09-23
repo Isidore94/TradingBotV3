@@ -1,7 +1,7 @@
 name = "recon"
-description = "Read-only lookup: how a feature works today, with file:line evidence and live-store counts. Cheap. Use before a build so its premises are true; never for building or reviewing."
+description = "Read-only lookup: how a feature works today, with file:line evidence and live-store counts. Use before a build so its premises are true; never for building or reviewing."
 model = "gpt-6-luna"
-model_reasoning_effort = "medium"
+model_reasoning_effort = "xhigh"
 developer_instructions = '''
 You are RECON for TradingBotV3. Answer one question about how the code and the live data
 actually behave. You change nothing.

@@ -1,12 +1,11 @@
 # Changelog
 
-One line per merged change, newest first. The commit message holds the detail. Keep
+One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
-- 2026-09-22 Repo slim-down: AGENTS.md is 8 KB, CLAUDE.md imports it, and the
-  checkpoint/plan became STATUS/TODO. History moved to the gitignored `notes/`. Agents
-  are cheaper: Opus/Sonnet on Claude, gpt-6-luna/gpt-6-sol on Codex.
+- 2026-09-22 Slim-down review repairs: restored binding safety rules and complete owed gates, corrected STATUS/TODO, and set Codex defaults to Sol lead, Luna max manager and Luna xhigh workers.
+- 2026-09-22 Repo slim-down: rewrote AGENTS.md to 8 KB; CLAUDE.md imports it; moved checkpoint/plan to STATUS/TODO and history to gitignored notes/. Initial Codex routing: gpt-6-luna for small work, gpt-6-sol for hard builds/reviews.
 - 2026-09-22 Four work streams integrated on main (`cf9c6b2a`): AI-R1/R2/R3 overnight
   AI repair, SP1/SP2 setup-score repair, AR-1/2A/2B/3 alert review follow-up,
   TJ-17A–D recap learning.
