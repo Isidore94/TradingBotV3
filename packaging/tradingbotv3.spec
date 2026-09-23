@@ -167,7 +167,7 @@ hiddenimports += [
 hiddenimports += ["day_review_index", "day_review_bars", "forecast_brief", "walkaway_day"]
 # Day Recap coach: the night's facts slot imports the day record lazily, and the
 # record imports the recap store lazily. Same reason as above.
-hiddenimports += ["day_session_record", "recap_store"]
+hiddenimports += ["day_session_record", "recap_store", "recap_findability", "setup_grades_history", "opening_regime_history"]
 # The UI loads panels/services by name in places, and the engines import each
 # other lazily inside functions; collecting the first-party trees outright is
 # far cheaper than chasing ModuleNotFoundError one launch at a time.

@@ -510,6 +510,9 @@ def build_record(session_date: str, inputs: Mapping[str, Any], *, built_at: date
         "recap": _recap(inputs, recap_rows),
     }
     sections["setup_grades"] = _setup_grades(sections)
+    # The grades the desk showed at the open, from the dated grade history (None before history began).
+    sections["setup_grades"]["at_open"] = _plain(inputs.get("grades_at_open"))
+    market["opening_regime"] = _plain(inputs.get("opening_regime"))
     unread = [str(item) for item in payload.get("pack_sources_unread") or ()]
     unread.extend(str(item) for item in inputs.get("unread") or ())
     facts = {
@@ -884,6 +887,21 @@ def collect_inputs(session: str, *, service: Any = None, now: datetime | None = 
         return [row for row in load_market_environment_annotations() if _row_session(row) == session]
 
     inputs["env_annotations"] = _guard("market environment annotations", _env, [])
+
+    def _grades_at_open():
+        import setup_grades_history
+        from recap_findability import session_open
+
+        opened = session_open(session)
+        return setup_grades_history.grades_as_of(opened) if opened else None
+
+    def _opening_regime():
+        import opening_regime_history
+
+        return opening_regime_history.opening_regime_for(session)
+
+    inputs["grades_at_open"] = _guard("grade history", _grades_at_open, None)
+    inputs["opening_regime"] = _guard("opening regime history", _opening_regime, None)
     trade_ids = [
         _text(row.get("trade_id")) for row in payload.get("trades") or ()
         if isinstance(row, Mapping) and _text(row.get("trade_id"))

@@ -371,3 +371,16 @@ def test_cli_dry_run_prints_a_summary(monkeypatch, capsys):
     assert dsr.main(["--date", SESSION, "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "dry run" in out and SESSION in out and "trades 2" in out
+
+
+def test_the_record_carries_the_grades_and_regime_the_desk_had_at_the_open():
+    import day_session_record as dsr
+
+    grades = {"swing": [{"key": "LONG|near|x", "grade": "B"}], "written_at": "2026-09-22T06:00:00-07:00"}
+    regime = {"session_date": SESSION, "label": "neutral_chop", "written_at": "2026-09-22T06:31:00-07:00",
+              "source": "first_read", "directional_anchor": "bearish_strong"}
+    record = dsr.build_record(SESSION, _inputs(grades_at_open=grades, opening_regime=regime), built_at=BUILT)
+    assert record["setup_grades"]["at_open"]["swing"][0]["grade"] == "B"
+    assert record["market_context"]["opening_regime"]["directional_anchor"] == "bearish_strong"
+    bare = dsr.build_record(SESSION, _inputs(), built_at=BUILT)
+    assert bare["setup_grades"]["at_open"] is None and bare["market_context"]["opening_regime"] is None

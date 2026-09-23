@@ -379,3 +379,27 @@ def test_time_of_day_buckets_are_new_york_time():
     assert rf.moment("2026-09-22T10:00:00", rf.ZoneInfo("America/Los_Angeles")).utcoffset().total_seconds() == -7 * 3600
     assert rf.moment("nonsense") is None
     assert datetime(2026, 9, 22, tzinfo=timezone.utc)
+
+
+def test_swing_grade_at_the_pick_comes_from_the_grade_history_written_before_it():
+    now_file = {"as_of": SESSION, "swing": [{"key": "LONG|near_favorite_zone|avwape_to_1stdev", "grade": "A"}]}
+    history = [
+        (datetime(2026, 9, 22, 13, 0, tzinfo=timezone.utc),
+         {"swing": [{"key": "LONG|near_favorite_zone|avwape_to_1stdev", "grade": "C"}], "written_at": "09:00"}),
+        (datetime(2026, 9, 22, 15, 0, tzinfo=timezone.utc),
+         {"swing": [{"key": "LONG|near_favorite_zone|avwape_to_1stdev", "grade": "B"}], "written_at": "11:00"}),
+    ]
+
+    def as_of(when):
+        written = [payload for stamp, payload in history if stamp <= when]
+        return written[-1] if written else None
+
+    pick = {"symbol": "ABC", "side": "LONG", "timeframe": "D1", "pick_at": _et("10:00"), "category": rf.REAL_MISS}
+    inputs = _inputs(
+        tracker_events=[_tracker("ABC", "LONG", "avwape_to_1stdev", "near_favorite_zone", _et("08:00"))],
+        grades_now=now_file, grades_as_of=as_of,
+    )
+    traits = rf.traits_for(pick, inputs)
+    assert traits["grade"] == "C" and traits["grade_now"] == "A"  # the 11:00 snapshot came after the pick
+    early = rf.traits_for(dict(pick, pick_at=_et("08:30")), inputs)
+    assert early["grade"] == rf.UNKNOWN  # nothing written yet at 08:30

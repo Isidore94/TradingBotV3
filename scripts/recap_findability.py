@@ -387,6 +387,17 @@ def swing_grade_at(grades: Mapping[str, Any] | None, side: str, bucket: str, fam
     }
 
 
+def _grades_then(reader: Any, at: datetime | None) -> Mapping[str, Any] | None:
+    """The newest grades snapshot written at or before `at`, when a history reader is given."""
+    if not callable(reader) or at is None:
+        return None
+    try:
+        payload = reader(at)
+    except Exception:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
 def traits_for(pick: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[str, Any]:
     """Every trait of one pick as known AT its pick time. Missing is unknown."""
     tz = _tz(inputs)
@@ -427,6 +438,11 @@ def traits_for(pick: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[str, 
         traits["claim_setup"] = claimed_family  # the claim row recorded it at pick time
     if timeframe == "D1":
         g = swing_grade_at(inputs.get("grades_now"), side, traits["bucket"], traits["family"], session)
+        then = _grades_then(inputs.get("grades_as_of"), at)
+        if then and g["grade"] == UNKNOWN:
+            past = swing_grade_at({**then, "as_of": "0000-00-00"}, side, traits["bucket"], traits["family"], session)
+            if past["grade"] != UNKNOWN:
+                g = {**g, "grade": past["grade"], "basis": f"grade history written {then.get('written_at', '')}"}
         traits["grade"], traits["grade_now"] = g["grade"], g.get("grade_now", UNKNOWN)
         traits["grade_basis"] = g.get("basis") or g.get("why", "")
 
@@ -1138,10 +1154,23 @@ def read_inputs(session_date: str, *, payload: Mapping[str, Any] | None = None) 
     inputs["regime_shifts"] = guard(
         "regime shifts", lambda: _ledger("market_regime_shifts", "market_regime_shift_v1"), []
     )
-    inputs["opening_environment"] = guard(
-        "opening environment",
-        lambda: json.loads(Path(pp.AUTO_OPENING_ENV_FILE).read_text(encoding="utf-8")), {},
-    )
+    def _opening():
+        # The per-session history keeps every day's first read; the live file keeps only the latest day.
+        import opening_regime_history
+
+        row = opening_regime_history.opening_regime_for(session)
+        if row and row.get("label"):
+            return {"date": row["session_date"], "env": row["label"], "recorded_at": row["written_at"]}
+        return json.loads(Path(pp.AUTO_OPENING_ENV_FILE).read_text(encoding="utf-8"))
+
+    inputs["opening_environment"] = guard("opening environment", _opening, {})
+
+    def _grades_as_of():
+        import setup_grades_history
+
+        return lambda when: setup_grades_history.grades_as_of(when)
+
+    inputs["grades_as_of"] = guard("grades history", _grades_as_of, None)
     inputs["tracker_events"] = guard("setup tracker events", lambda: [
         r for r in _ledger("setup_tracker_events", "setup_tracker_event_v1",
                            ("initial", "reopened", "transition"),
