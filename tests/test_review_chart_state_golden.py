@@ -8,7 +8,6 @@ through the panel's own bar accessors at a fixed 11:00 clock.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from datetime import datetime, timedelta
@@ -30,8 +29,12 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from ui.models.bounce import FOCUS_D1_EVENT_TAG, BounceAlert  # noqa: E402
 
-FIXTURE = ROOT_DIR / "tests" / "fixtures" / "review_chart_state_golden_v1.json"
-CASES = json.loads(FIXTURE.read_text(encoding="utf-8"))["cases"]
+from conftest import load_fixture_contract  # noqa: E402
+
+# Loading re-verifies raw_input_sha256 over the case specs.
+FIXTURE = load_fixture_contract("review_chart_state_golden_v1")
+CASES = FIXTURE["cases"]
+EXPECTED = FIXTURE["expected"]
 
 
 def daily_bars(segments, today: datetime) -> list[dict]:
@@ -141,12 +144,13 @@ def test_review_chart_state_matches_the_golden_verdict_with_the_wall_gate_off(
     import wall_gate
 
     monkeypatch.setattr(wall_gate, "WALL_GATE_ENABLED", False)
-    assert golden_panel._review_chart_state(alert_for(case)) == case["expected"]
+    assert golden_panel._review_chart_state(alert_for(case)) == EXPECTED[case["id"]]["verdict"]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
 def test_the_wall_gate_changes_only_the_wall_cases(golden_panel, case):
     """With the gate on, every golden verdict stands except a case marked
     ``wall``, which is hidden (its follow-up watches arm in memory)."""
-    expected = "closed" if case["wall"] else case["expected"]
+    pinned = EXPECTED[case["id"]]
+    expected = "closed" if pinned["wall"] else pinned["verdict"]
     assert golden_panel._review_chart_state(alert_for(case)) == expected

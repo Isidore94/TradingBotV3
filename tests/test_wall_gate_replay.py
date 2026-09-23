@@ -155,15 +155,27 @@ def test_the_cli_refuses_a_scratch_inside_the_real_localappdata(tmp_path):
 
 
 def test_the_cli_runs_on_copies_and_writes_nothing_but_stdout(tmp_path):
-    pandas = __import__("pytest").importorskip("pandas")
     bars_dir = tmp_path / "bars"
     bars_dir.mkdir()
-    frame = pandas.DataFrame(
-        [{"datetime": bar["dt"], "open": bar["open"], "high": bar["high"],
-          "low": bar["low"], "close": bar["close"], "volume": 1}
-         for bar in _bars(WALL, DAY1)]
+    rows = [
+        {"datetime": bar["dt"].isoformat(), "open": bar["open"], "high": bar["high"],
+         "low": bar["low"], "close": bar["close"], "volume": 1}
+        for bar in _bars(WALL, DAY1)
+    ]
+    (tmp_path / "bars.json").write_text(json.dumps(rows), encoding="utf-8")
+    # The parquet is written in a child process: pandas/pyarrow in the test
+    # worker itself can collide with other tests' module reloads.
+    writer = (
+        "import json, sys, pandas as pd; "
+        "f = pd.DataFrame(json.load(open(sys.argv[1]))); "
+        "f['datetime'] = pd.to_datetime(f['datetime']); "
+        "f.to_parquet(sys.argv[2])"
     )
-    frame.to_parquet(bars_dir / "WAL.parquet")
+    subprocess.run(
+        [sys.executable, "-c", writer, str(tmp_path / "bars.json"), str(bars_dir / "WAL.parquet")],
+        check=True,
+        timeout=120,
+    )
     events = tmp_path / "events.jsonl"
     events.write_text(json.dumps(_shown(DAY1, "WAL")) + "\n", encoding="utf-8")
     scratch = tmp_path / "scratch"
