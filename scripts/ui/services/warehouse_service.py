@@ -354,10 +354,15 @@ class WarehouseTeeCapture:
         """
         if bot is None or self.disabled:
             return False
-        cache = getattr(bot, "latest_bars", None)
-        if not cache:
-            return False
-        snapshot = dict(cache)  # on this (GUI) thread, before anything iterates
+        if bool(getattr(bot, "is_process_proxy", False)):
+            # The proxy's cache is a full pickle over the child pipe: the worker
+            # reads it. The reply is already a private copy, so no resize race.
+            snapshot = bot
+        else:
+            cache = getattr(bot, "latest_bars", None)
+            if not cache:
+                return False
+            snapshot = dict(cache)  # on this (GUI) thread, before anything iterates
         moment = now or datetime.now(timezone.utc)
         with self._lock:
             self._pending = (snapshot, moment)
@@ -410,8 +415,23 @@ class WarehouseTeeCapture:
                 self._wake.clear()
                 continue
             snapshot, moment = pending
+            if not isinstance(snapshot, dict):
+                snapshot = self._read_proxy_cache(snapshot)
+                if not snapshot:
+                    continue
             self._capture_snapshot(snapshot, moment)
         self._idle.set()
+
+    def _read_proxy_cache(self, bot) -> dict:
+        """One RPC for the child's bar cache. Worker thread only; never raises."""
+        try:
+            cache = bot.latest_bars
+        except Exception as exc:  # a dead or busy child costs one capture
+            if str(exc) != self.last_error:
+                self.last_error = str(exc)
+                logging.warning("Warehouse tee could not read the scanner bar cache: %s", exc)
+            return {}
+        return dict(cache) if isinstance(cache, dict) else {}
 
     # -- the high-water mark ------------------------------------------------
     def _high_water_path(self) -> Path | None:

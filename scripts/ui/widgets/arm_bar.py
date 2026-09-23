@@ -119,6 +119,13 @@ class ArmBar(QFrame):
         # review-events learner can see e.g. "always arms off +1σ on shorts".
         self._last_fill_source = ""
         self._setting_level_programmatically = False
+        # What is armed, and what is QUEUED (clicked, not yet saved), per row.
+        self._armed_watch: set[str] = set()
+        self._armed_d1: set[str] = set()
+        self._armed_any = False
+        self._pending_watch: set[str] = set()
+        self._pending_d1: set[str] = set()
+        self._pending_any = False
 
         self.symbol_input = QLineEdit()
         self.symbol_input.setPlaceholderText("Symbol ⏎")
@@ -391,23 +398,44 @@ class ArmBar(QFrame):
 
     def set_armed_kinds(self, kinds: Iterable[str]) -> None:
         armed = set(kinds or ())
+        self._armed_watch = armed
         for kind, button in self.watch_buttons.items():
             label = WATCH_KINDS[kind]
-            button.setText(f"{label} ✓ armed" if kind in armed else label)
-            button.setChecked(kind in armed)
+            queued = kind in self._pending_watch and kind not in armed
+            button.setText(
+                f"⏳ {label}" if queued else f"{label} ✓ armed" if kind in armed else label
+            )
+            button.setChecked(kind in armed or queued)
 
     def set_armed_d1_events(self, kinds: Iterable[str]) -> None:
         """Reflect this symbol's armed D1 event watches; a second click disarms."""
         armed = set(kinds or ())
+        self._armed_d1 = armed
         for kind, button in self.d1_event_buttons.items():
             label = D1_EVENT_KINDS[kind]
-            button.setText(f"{label} ✓" if kind in armed else label)
-            button.setChecked(kind in armed)
+            queued = kind in self._pending_d1 and kind not in armed
+            button.setText(f"⏳ {label}" if queued else f"{label} ✓" if kind in armed else label)
+            button.setChecked(kind in armed or queued)
 
     def set_any_bounce_armed(self, armed: bool) -> None:
         """Reflect this symbol's any-bounce watch; a second click disarms."""
-        self.any_bounce_button.setText("Any bounce ✓" if armed else "Any bounce")
-        self.any_bounce_button.setChecked(bool(armed))
+        self._armed_any = bool(armed)
+        queued = self._pending_any and not armed
+        self.any_bounce_button.setText(
+            "⏳ Any bounce" if queued else "Any bounce ✓" if armed else "Any bounce"
+        )
+        self.any_bounce_button.setChecked(bool(armed) or queued)
+
+    def set_pending_arms(
+        self, watch_kinds: Iterable[str] = (), d1_kinds: Iterable[str] = (), any_bounce: bool = False
+    ) -> None:
+        """Show QUEUED arms (⏳, pressed) until they save; a click cancels one."""
+        self._pending_watch = set(watch_kinds or ())
+        self._pending_d1 = set(d1_kinds or ())
+        self._pending_any = bool(any_bounce)
+        self.set_armed_kinds(self._armed_watch)
+        self.set_armed_d1_events(self._armed_d1)
+        self.set_any_bounce_armed(self._armed_any)
 
     @staticmethod
     def _any_bounce_tooltip() -> str:

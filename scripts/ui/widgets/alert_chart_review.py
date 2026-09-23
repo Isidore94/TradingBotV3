@@ -1112,6 +1112,7 @@ class AlertChartReview(QWidget):
         self.queue_label.setText("")
         self._clear_selected_level()
         self._set_actions_enabled(False)
+        self.arm_bar.set_pending_arms()
         self.set_armed_kinds(())
         self.set_armed_levels(())
         self.set_armed_d1_events(())
@@ -1144,6 +1145,10 @@ class AlertChartReview(QWidget):
         self._armed_watch_count = len(set(kinds))
         self.arm_bar.set_armed_kinds(kinds)
         self._refresh_armed_summary()
+
+    def set_pending_arms(self, watch_kinds=(), d1_kinds=(), any_bounce: bool = False) -> None:
+        """Show this symbol's QUEUED arms on the dock (⏳ until they save)."""
+        self.arm_bar.set_pending_arms(watch_kinds, d1_kinds, any_bounce)
 
     def set_armed_levels(self, levels: Iterable = ()) -> None:
         """Show this symbol's armed price levels as dismissable chips."""
