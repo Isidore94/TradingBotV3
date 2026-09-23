@@ -62,6 +62,9 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
 # so every bronze row is BACKFILL and is excluded from AS_OBSERVED coverage,
 # latency, live-shadow, and promotion claims (sec 9.3).
 BRONZE_CAPTURE_MODE = "BACKFILL"
+#: Market benchmarks the D1 ingest always carries. They are never universe
+#: members, yet market context (Auto Market Bias D1/M5) reads SPY's daily bars.
+BENCHMARK_SYMBOLS = ("SPY", "QQQ", "IWM")
 QUALITY_COMPLETE = "COMPLETE"
 QUALITY_INVALID = "INVALID_DATA"
 
@@ -249,9 +252,11 @@ class IngestReport:
 class SnapshotReport:
     dataset: str
     session_date: str = ""
-    status: str = "OK"  # OK | ALREADY_CAPTURED | NO_SOURCE | DISABLED
+    status: str = "OK"  # OK | ALREADY_CAPTURED | NO_SOURCE | DISABLED | DRY_RUN
     rows: int = 0
     sources: list[str] = field(default_factory=list)
+    # Per-symbol {rows, first_session, last_session} of what was (or would be) written.
+    planned: dict = field(default_factory=dict)
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -1085,6 +1090,7 @@ def ingest_daily_bars(
     run_id: str = "",
     job_id: str = "d1_wrapped_read",
     now: datetime | None = None,
+    dry_run: bool = False,
 ) -> SnapshotReport:
     """Project the durable D1 store into ``bar_d1`` (completed sessions only).
 
@@ -1099,6 +1105,7 @@ def ingest_daily_bars(
       provider going forward.
 
     Re-runs are idempotent: a (symbol, session) already present is not rewritten.
+    ``dry_run`` builds the same rows and reports them without publishing.
     """
     report = SnapshotReport(dataset="bar_d1")
     if store is None:
@@ -1157,8 +1164,22 @@ def ingest_daily_bars(
                     "run_id": run_id,
                 }
             )
+    for row in rows:
+        entry = report.planned.setdefault(
+            row["symbol"], {"rows": 0, "first_session": None, "last_session": None}
+        )
+        entry["rows"] += 1
+        day_text = row["session_date"].isoformat()
+        if entry["first_session"] is None or day_text < entry["first_session"]:
+            entry["first_session"] = day_text
+        if entry["last_session"] is None or day_text > entry["last_session"]:
+            entry["last_session"] = day_text
     if not rows:
         report.status = "ALREADY_CAPTURED" if already else "NO_SOURCE"
+        return report
+    if dry_run:
+        report.status = "DRY_RUN"
+        report.rows = len(rows)
         return report
     result = store.publish("bar_d1", rows, job_id=job_id)
     report.rows = result.rows_published
@@ -1215,6 +1236,7 @@ def ingest_everything(
 
 
 __all__ = [
+    "BENCHMARK_SYMBOLS",
     "BRONZE_ARTIFACTS",
     "CLASS_A_ARTIFACTS",
     "BronzeArtifact",

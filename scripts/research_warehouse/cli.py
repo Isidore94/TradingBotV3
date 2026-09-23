@@ -44,7 +44,13 @@ try:  # package import
     )
     from . import after_like, like_links
     from .aggregate import build_derived_bars, build_trading_sessions, build_weekly_bars
-    from .ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots
+    from .ingest_existing import (
+        BENCHMARK_SYMBOLS,
+        ingest_daily_bars,
+        read_durable_daily_bars,
+        run_bronze_ingest,
+        run_daily_snapshots,
+    )
     from .manifest import utc_now
     from .spool import seal_spool
     from .store import LakeIntegrityError, ResearchStore
@@ -60,7 +66,13 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     import schemas  # type: ignore
     import tracker_adapter  # type: ignore
     from aggregate import build_derived_bars, build_trading_sessions, build_weekly_bars  # type: ignore
-    from ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots  # type: ignore
+    from ingest_existing import (  # type: ignore
+        BENCHMARK_SYMBOLS,
+        ingest_daily_bars,
+        read_durable_daily_bars,
+        run_bronze_ingest,
+        run_daily_snapshots,
+    )
     from manifest import utc_now  # type: ignore
     from spool import seal_spool  # type: ignore
     from store import LakeIntegrityError, ResearchStore  # type: ignore
@@ -261,6 +273,11 @@ def cohort_for(store: ResearchStore, day: date) -> list[str]:
             if value:
                 symbols.add(value)
     return sorted(symbols)
+
+
+def d1_ingest_cohort(store: ResearchStore, day: date) -> list[str]:
+    """The session's cohort plus the market benchmarks, for the bar_d1 ingest."""
+    return sorted(set(cohort_for(store, day)) | set(BENCHMARK_SYMBOLS))
 
 
 def anchor_dates_by_symbol(store: ResearchStore, day: date) -> dict:
@@ -811,7 +828,7 @@ def run_build(
             report.steps["snapshots"] = [
                 vars(item) for item in run_daily_snapshots(target, session_date=day, run_id=run_id, now=stamp)
             ]
-            cohort = cohort_for(target, day)
+            cohort = d1_ingest_cohort(target, day)
             report.steps["bar_d1"] = vars(
                 ingest_daily_bars(target, cohort, as_of=day, run_id=run_id, now=stamp)
             )
@@ -1918,6 +1935,202 @@ def run_recompute_outcomes(
     return report
 
 
+# ---------------------------------------------------------------------------
+# Benchmark D1 and market-context repairs - DRY RUN unless apply
+# ---------------------------------------------------------------------------
+def run_backfill_benchmark_d1(
+    store: ResearchStore | None,
+    *,
+    apply: bool = False,
+    bars_dir: Path | None = None,
+    now: datetime | None = None,
+    lock_path: Path | None = None,
+    run_id: str = "",
+) -> dict:
+    """Publish the benchmarks' full completed D1 history into ``bar_d1``.
+
+    Same projection as the nightly ingest (provider UNKNOWN, BACKFILL, completed
+    sessions only, already-present sessions skipped). A dry run reads only.
+    """
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    stamp = now or utc_now()
+
+    def _run(dry_run: bool) -> dict:
+        result = ingest_daily_bars(
+            store,
+            BENCHMARK_SYMBOLS,
+            as_of=stamp.date(),
+            bars_dir=bars_dir,
+            run_id=run_id,
+            job_id="benchmark_d1_backfill",
+            now=stamp,
+            dry_run=dry_run,
+        )
+        return {
+            "status": "OK",
+            "ingest_status": result.status,
+            "applied": not dry_run,
+            "as_of": stamp.date().isoformat(),
+            "rows": int(result.rows),
+            "symbols": result.planned,
+            "sources_found": list(result.sources),
+            "missing_sources": [symbol for symbol in BENCHMARK_SYMBOLS if symbol not in result.sources],
+        }
+
+    if not apply:
+        return _run(True)
+    try:
+        with single_flight(lock_path):
+            report = _run(False)
+            _record_job("COMPLETED", {"job": "backfill_benchmark_d1", "rows": report["rows"]})
+            return report
+    except SingleFlightError as exc:
+        return {"status": "REFUSED", "applied": True, "reason": str(exc)}
+
+
+def _all_latest_occurrences(store: ResearchStore) -> dict:
+    years = sorted(
+        {
+            int(str(entry.partition).split("=", 1)[1])
+            for entry in store.manifest.resolve(dataset="setup_occurrence").entries
+            if str(entry.partition).startswith("year=")
+        }
+    )
+    if not years:
+        return {}
+    return occurrences.latest_occurrences(store, years[-1], span_years=years[-1] - years[0])
+
+
+def _durable_spy_d1(bars_dir: Path | None) -> list[dict]:
+    """SPY D1 rows from the durable store, shaped like bar_d1, for a dry-run preview."""
+    frame = read_durable_daily_bars("SPY", bars_dir)
+    if frame is None:
+        return []
+    rows = []
+    for record in frame.to_dict("records"):
+        stamp = record.get("datetime")
+        day = stamp.date() if hasattr(stamp, "date") else None
+        if day is None:
+            continue
+        values = {key: record.get(key) for key in ("open", "high", "low", "close", "volume")}
+        rows.append({**values, "symbol": "SPY", "session_date": day, "capture_mode": "BACKFILL"})
+    return rows
+
+
+def run_backfill_market_context(
+    store: ResearchStore | None,
+    *,
+    apply: bool = False,
+    since: date | None = None,
+    until: date | None = None,
+    now: datetime | None = None,
+    lock_path: Path | None = None,
+    run_id: str = "",
+    preview_bars_dir: Path | None = None,
+) -> dict:
+    """Record current-definition market context for historical occurrences.
+
+    Walks every occurrence (optionally bounded by its trigger date, ET) and
+    records ``setup_market_context`` rows under ``BIAS_DEFINITION_ID`` using
+    only SPY bars completed by each entry. Rows already present for that
+    definition are skipped, so a re-run records nothing. A real run needs SPY
+    D1 in the lake; a dry run may preview with the durable D1 store instead.
+    """
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    stamp = now or utc_now()
+    spy_d1 = store.read_rows("bar_d1", symbols=["SPY"])
+    d1_source = "lake"
+    if not spy_d1:
+        if apply:
+            return {
+                "status": "NO_SPY_D1",
+                "applied": True,
+                "message": "bar_d1 holds no SPY rows; run backfill-benchmark-d1 --apply first.",
+            }
+        spy_d1 = _durable_spy_d1(preview_bars_dir) if preview_bars_dir is not None else []
+        d1_source = "durable_store_preview" if spy_d1 else "none"
+
+    def _in_window(row) -> bool:
+        trigger = row.get("trigger_at")
+        if not isinstance(trigger, datetime):
+            return False
+        trigger = trigger if trigger.tzinfo else trigger.replace(tzinfo=timezone.utc)
+        day = trigger.astimezone(xcal.EXCHANGE_TZ).date()
+        return (since is None or day >= since) and (until is None or day <= until)
+
+    selected = [row for row in _all_latest_occurrences(store).values() if _in_window(row)]
+    by_month: dict[str, list[dict]] = {}
+    for row in selected:
+        by_month.setdefault(f"{row['trigger_at']:%Y-%m}", []).append(row)
+
+    report: dict = {
+        "status": "OK",
+        "applied": bool(apply),
+        "bias_definition_id": market_bias_context.BIAS_DEFINITION_ID,
+        "spy_d1_source": d1_source,
+        "spy_d1_sessions": len(spy_d1),
+        "spy_d1_first": min((str(row.get("session_date")) for row in spy_d1), default=None),
+        "spy_d1_last": max((str(row.get("session_date")) for row in spy_d1), default=None),
+        "occurrences": len(selected),
+        "trigger_first": min((str(row["trigger_at"]) for row in selected), default=None),
+        "trigger_last": max((str(row["trigger_at"]) for row in selected), default=None),
+        "months": len(by_month),
+        "rows": 0,
+        "unknown": {},
+        "by_month": {},
+    }
+    m5_cache: dict[str, list[dict]] = {}
+
+    def _spy_m5(month: str) -> list[dict]:
+        if month not in m5_cache:
+            m5_cache[month] = store.read_rows("bar_m5", f"month={month}", symbols=["SPY"])
+        return m5_cache[month]
+
+    def _walk() -> None:
+        for month in sorted(by_month):
+            first = date.fromisoformat(f"{month}-01")
+            months = (
+                f"{first - timedelta(days=1):%Y-%m}",
+                month,
+                f"{first + timedelta(days=32):%Y-%m}",
+            )
+            # The previous month warms up H4; the next holds an after-close trigger's entry.
+            spy_m5 = [bar for part in months for bar in _spy_m5(part)]
+            result = market_bias_context.record_context(
+                store,
+                by_month[month],
+                spy_m5=spy_m5,
+                spy_d1=spy_d1,
+                now=stamp,
+                run_id=run_id,
+                dry_run=not apply,
+            )
+            report["rows"] += int(result.rows)
+            for timeframe, count in result.unknown.items():
+                report["unknown"][timeframe] = report["unknown"].get(timeframe, 0) + count
+            report["by_month"][month] = {
+                "occurrences": len(by_month[month]),
+                "rows": int(result.rows),
+                "status": result.status,
+                "unknown": dict(result.unknown),
+            }
+            for stale in [key for key in m5_cache if key < months[0]]:
+                m5_cache.pop(stale, None)
+
+    if not apply:
+        _walk()
+        return report
+    try:
+        with single_flight(lock_path):
+            _walk()
+            _record_job("COMPLETED", {"job": "backfill_market_context", "rows": report["rows"]})
+            return report
+    except SingleFlightError as exc:
+        return {"status": "REFUSED", "applied": True, "reason": str(exc)}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="research_warehouse", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1990,8 +2203,51 @@ def main(argv=None) -> int:
     recompute.add_argument("--session-date", default="")
     recompute.add_argument("--apply", action="store_true")
 
+    bench = sub.add_parser(
+        "backfill-benchmark-d1",
+        help="publish SPY/QQQ/IWM completed D1 history into bar_d1; DRY RUN unless --apply",
+    )
+    bench.add_argument("--apply", action="store_true", help="publish; without it only the plan is printed")
+    bench.add_argument("--bars-dir", default="", help="durable D1 store; default the desk's daily_bars")
+    bench.add_argument("--root", default="", help="lake root to read (dry run only); default the configured lake")
+    ctx = sub.add_parser(
+        "backfill-market-context",
+        help="record current-definition setup_market_context for past occurrences; DRY RUN unless --apply",
+    )
+    ctx.add_argument("--apply", action="store_true", help="publish; without it only counts are printed")
+    ctx.add_argument("--since", default="", help="YYYY-MM-DD trigger date (ET), inclusive")
+    ctx.add_argument("--until", default="", help="YYYY-MM-DD trigger date (ET), inclusive")
+    ctx.add_argument("--root", default="", help="lake root to read (dry run only); default the configured lake")
+    ctx.add_argument(
+        "--preview-bars-dir",
+        default="",
+        help="dry run only: preview with this durable D1 store when bar_d1 has no SPY yet",
+    )
+
     args = parser.parse_args(argv)
-    store = ResearchStore.open()
+    if args.command in {"backfill-benchmark-d1", "backfill-market-context"} and args.root:
+        if args.apply:
+            parser.error("--root is for dry runs; --apply writes only the configured lake")
+        # A plain read handle: no layout creation, no lock, no job-ledger line.
+        store = ResearchStore(Path(args.root))
+    else:
+        store = ResearchStore.open()
+    if args.command == "backfill-benchmark-d1":
+        report = run_backfill_benchmark_d1(
+            store, apply=bool(args.apply), bars_dir=Path(args.bars_dir) if args.bars_dir else None
+        )
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status") in {"OK", "DISABLED"} else 1
+    if args.command == "backfill-market-context":
+        report = run_backfill_market_context(
+            store,
+            apply=bool(args.apply),
+            since=date.fromisoformat(args.since) if args.since else None,
+            until=date.fromisoformat(args.until) if args.until else None,
+            preview_bars_dir=Path(args.preview_bars_dir) if args.preview_bars_dir else None,
+        )
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status") in {"OK", "DISABLED"} else 1
     if args.command == "status":
         print(json.dumps(run_status(store), indent=2, default=str))
         return 0

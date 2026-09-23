@@ -363,7 +363,7 @@ def test_newest_definition_wins_whatever_the_row_order():
 def test_setup_research_reads_the_newest_definition(store, monkeypatch):
     from ai_jobs import setup_research
 
-    store.publish("setup_occurrence", [_occurrence()], job_id="test")
+    store.publish("setup_occurrence", [_occurrence(), _occurrence("occ-2")], job_id="test")
     entry_at = ENTRY_SESSION.rth_open_at + timedelta(minutes=5)
     base = {
         "occurrence_id": "occ-1", "symbol": "AAA", "entry_at": entry_at, "timeframe": "D1",
@@ -375,6 +375,9 @@ def test_setup_research_reads_the_newest_definition(store, monkeypatch):
         [
             {**base, "bias_definition_id": "auto_market_bias_multiframe_v1", "env_key": "unknown"},
             {**base, "bias_definition_id": market_bias_context.BIAS_DEFINITION_ID, "env_key": "bullish_weak"},
+            # Not yet recomputed: the older definition still answers.
+            {**base, "occurrence_id": "occ-2", "timeframe": "H1",
+             "bias_definition_id": "auto_market_bias_multiframe_v1", "env_key": "bearish_weak"},
         ],
         job_id="test",
     )
@@ -384,3 +387,4 @@ def test_setup_research_reads_the_newest_definition(store, monkeypatch):
     _latest, _occurrences, contexts, _coverage = setup_research._load()
 
     assert contexts["occ-1"]["D1"] == "bullish_weak"
+    assert contexts["occ-2"]["H1"] == "bearish_weak"

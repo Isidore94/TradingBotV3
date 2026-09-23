@@ -25,7 +25,12 @@ except ImportError:  # pragma: no cover
     from outcomes import _entry_bar_after_d1_close  # type: ignore
     from schemas import SCHEMA_VERSION  # type: ignore
 
-BIAS_DEFINITION_ID = "auto_market_bias_multiframe_v1"
+#: v2 is the v1 formula with SPY D1 bars actually in the lake. Every v1 D1 row
+#: and every v1 M5 row (needs the previous SPY D1 close) read no SPY D1 and is
+#: unknown; v1 rows stay as history and readers prefer the newest definition.
+BIAS_DEFINITION_ID = "auto_market_bias_multiframe_v2"
+#: Oldest first; the last entry is the one written now.
+BIAS_DEFINITION_HISTORY = ("auto_market_bias_multiframe_v1", BIAS_DEFINITION_ID)
 TIMEFRAMES = ("M5", "M30", "H1", "H4", "D1")
 ROLLING_BARS = 20
 UNKNOWN = "unknown"
@@ -189,7 +194,49 @@ def build_context_rows(occurrences, *, spy_m5: list[dict], spy_d1: list[dict], n
     return rows
 
 
-def record_context(store, occurrences, *, spy_m5: list[dict], spy_d1: list[dict], now: datetime | None = None, run_id: str = "") -> ContextReport:
+def _definition_rank(definition_id) -> int:
+    try:
+        return BIAS_DEFINITION_HISTORY.index(str(definition_id))
+    except ValueError:
+        return -1
+
+
+def newest_context_rows(rows) -> dict[tuple[str, str], dict]:
+    """One row per (occurrence_id, timeframe): the newest bias definition wins.
+
+    Ties within a definition go to the later ``computed_at``.
+    """
+    chosen: dict[tuple[str, str], dict] = {}
+    for row in rows or []:
+        key = (str(row.get("occurrence_id") or ""), str(row.get("timeframe") or ""))
+        current = chosen.get(key)
+        if current is None:
+            chosen[key] = row
+            continue
+        rank, current_rank = _definition_rank(row.get("bias_definition_id")), _definition_rank(current.get("bias_definition_id"))
+        if rank > current_rank or (
+            rank == current_rank and _later(row.get("computed_at"), current.get("computed_at"))
+        ):
+            chosen[key] = row
+    return chosen
+
+
+def _later(candidate, current) -> bool:
+    if not isinstance(candidate, datetime):
+        return False
+    return not isinstance(current, datetime) or candidate > current
+
+
+def record_context(
+    store,
+    occurrences,
+    *,
+    spy_m5: list[dict],
+    spy_d1: list[dict],
+    now: datetime | None = None,
+    run_id: str = "",
+    dry_run: bool = False,
+) -> ContextReport:
     occurrence_list = list(occurrences or [])
     report = ContextReport(occurrences=len(occurrence_list))
     if store is None:
@@ -215,15 +262,21 @@ def record_context(store, occurrences, *, spy_m5: list[dict], spy_d1: list[dict]
     if not rows:
         report.status = "NOTHING_TO_RECORD"
         return report
+    if dry_run:
+        report.status = "DRY_RUN"
+        report.rows = len(rows)
+        return report
     report.rows = store.publish("setup_market_context", rows, job_id="setup_market_context").rows_published
     return report
 
 
 __all__ = [
+    "BIAS_DEFINITION_HISTORY",
     "BIAS_DEFINITION_ID",
     "TIMEFRAMES",
     "ContextReport",
     "build_context_rows",
     "context_at",
+    "newest_context_rows",
     "record_context",
 ]

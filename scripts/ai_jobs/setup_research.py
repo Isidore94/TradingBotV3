@@ -122,18 +122,20 @@ def _load() -> tuple[list[dict], dict[str, dict], dict[str, dict[str, str]], dic
         columns=["occurrence_id", "timeframe", "bias_definition_id", "env_key"],
         occurrence_ids=list(occurrence_map),
     )
+    # Per occurrence and timeframe the newest bias definition answers; an older
+    # one answers only until the newer one has been recorded.
     contexts: dict[str, dict[str, str]] = {}
-    for row in context_rows:
-        if str(row.get("bias_definition_id")) != market_bias_context.BIAS_DEFINITION_ID:
-            continue
-        contexts.setdefault(str(row.get("occurrence_id")), {})[str(row.get("timeframe"))] = str(
-            row.get("env_key") or "unknown"
-        )
+    definitions_used: dict[str, int] = {}
+    for (occurrence_id, timeframe), row in market_bias_context.newest_context_rows(context_rows).items():
+        contexts.setdefault(occurrence_id, {})[timeframe] = str(row.get("env_key") or "unknown")
+        definition = str(row.get("bias_definition_id") or "")
+        definitions_used[definition] = definitions_used.get(definition, 0) + 1
     coverage = {
         "outcomes": len(latest),
         "occurrences": len(occurrence_map),
         "context_rows": len(context_rows),
         "bias_definition_id": market_bias_context.BIAS_DEFINITION_ID,
+        "bias_definitions_used": definitions_used,
     }
     coverage.update(_coverage_state(store, latest, occurrence_map))
     # The grid is carried out with the rows so the pack can state WHICH recipe
