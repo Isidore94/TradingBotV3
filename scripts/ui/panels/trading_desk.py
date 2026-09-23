@@ -587,6 +587,15 @@ class TradingDeskPanel(QWidget):
     def shutdown(self) -> None:
         """Release live resources (IB connection, worker threads) on app close."""
         components = []
+        # First, while the scanner child still answers: drain queued arms.
+        alert_center = getattr(self, "alert_center", None)
+        if alert_center is not None and hasattr(alert_center, "shutdown"):
+            components.append(("queued arms", alert_center.shutdown))
+        # Then the M5 cache worker, so it is not holding the proxy's RPC lock
+        # while the bot stops. Bounded join inside.
+        from ui.services.m5_bar_cache import shutdown_shared_m5_cache
+
+        components.append(("M5 bar cache", shutdown_shared_m5_cache))
         price_alert_service = getattr(self, "price_alert_service", None)
         if price_alert_service is not None:
             components.append(("price alerts", price_alert_service.shutdown))

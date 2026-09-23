@@ -136,6 +136,19 @@ def test_the_startup_sweep_is_a_full_one(monkeypatch):
     assert 2 in collects
 
 
+def test_startup_makes_peewee_threads_close_their_own_connections(monkeypatch):
+    """2026-09-23: yfinance ticker threads left SQLite connections for the GUI
+    gc sweep, which then froze for seconds beside a busy download thread."""
+    import peewee_thread_close
+
+    calls = []
+    monkeypatch.setattr(peewee_thread_close, "install", lambda: calls.append("install") or True)
+
+    _run_main(monkeypatch, _RecordingGc())
+
+    assert calls == ["install"]
+
+
 def test_the_collector_design_is_untouched(monkeypatch):
     """The GUI-thread collector, its cadence and its bounded waits are what
     keep Qt destructors on the owning thread (2026-07-29 crash). This packet

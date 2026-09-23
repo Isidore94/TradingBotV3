@@ -50,6 +50,11 @@ from typing import Any
 
 import pytest
 
+import _run_guard
+
+# The machine's real LOCALAPPDATA, captured before the redirect below; the
+# parallel-run lock lives there (never under a live store).
+_REAL_LOCALAPPDATA = os.environ.get("LOCALAPPDATA")
 
 _TEST_SHARED_DIR = tempfile.mkdtemp(prefix="tradingbotv3-pytest-shared-")
 _TEST_DIAGNOSTICS_DIR = tempfile.mkdtemp(prefix="tradingbotv3-pytest-diagnostics-")
@@ -329,6 +334,15 @@ _GC_ENABLED_AT_SESSION_START = gc.isenabled()
 _FULL_COLLECT_EVERY = 25
 
 _gc_sweeps = 0
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """One parallel (-n > 1) run per machine; cap workers while the desk could be live."""
+    _run_guard.configure(config, real_localappdata=_REAL_LOCALAPPDATA)
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    _run_guard.unconfigure(config)
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

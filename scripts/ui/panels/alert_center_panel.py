@@ -119,6 +119,7 @@ from review_guidance import ORDERING_ANNOTATION_ONLY, AlertGuidance, ReviewGuide
 from ui import theme
 from ui.panels import desk_layout
 from ui.timer_utils import SignalCoalescer, start_staggered
+from ui.services.m5_bar_cache import is_process_proxy, shared_m5_cache
 from ui.models.bounce import (
     AUTO_PICK_TAG,
     BounceAlert,
@@ -158,6 +159,9 @@ if TYPE_CHECKING:  # pragma: no cover - annotation only, never imported at runti
 #: each entry is one already-built list, so this is comfortably inside it.
 #: Mirrors `chart_data_service._MAX_MATERIALIZED_SYMBOLS`.
 M5_BAR_DICT_CACHE_LIMIT = 240
+
+#: "Not passed": `arm_d1_event_watch` reads the trendline report itself.
+_UNREAD = object()
 
 _TIER_RE = re.compile(r"\[([SABCD])-TIER\]", re.IGNORECASE)
 
@@ -567,6 +571,12 @@ class AlertCenterPanel(QFrame):
         self.setObjectName("Panel")
         self.focus_service = focus_service
         self._bounce_service = None
+        # Queued arms (built on first use). While a queued arm commits, its
+        # review rows are deferred to the queue's worker and use the click's context.
+        self._arm_queue_obj = None
+        self._force_async_arms = False
+        self._deferred_review_events: list | None = None
+        self._arm_review_override: tuple | None = None
         self._alerts: list[BounceAlert] = []
         self._d1_alerts: list[BounceAlert] = []
         self._review_queue: list[BounceAlert] = []
@@ -938,6 +948,7 @@ class AlertCenterPanel(QFrame):
         self.armed_list.disarmLevelRequested.connect(self.disarm_d1_level_watch)
         self.armed_list.disarmEventRequested.connect(self.disarm_d1_event_watch)
         self.armed_list.symbolActivated.connect(self.chart_symbol)
+        self.armed_list.pendingCancelRequested.connect(self._cancel_or_dismiss_arm)
         self.armedWatchesChanged.connect(self._refresh_armed_list)
 
         # Built BEFORE the tab strip, because the tab strip hosts one of its
@@ -989,7 +1000,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
         self.chart_review.levelDisarmRequested.connect(self._disarm_level_from_dock)
-        self.chart_review.levelAlertRequested.connect(self._arm_price_alert_from_level)
+        self.chart_review.levelAlertRequested.connect(self._request_price_alert_from_level)
         self.chart_review.vetoDayTradeRequested.connect(self._veto_but_day_trade)
 
         self.tabs = QTabWidget()
@@ -1859,6 +1870,8 @@ class AlertCenterPanel(QFrame):
             return PREV_DAY_UNKNOWN
         try:
             moment = datetime.now()
+            if self._m5_unknown(symbol):
+                return PREV_DAY_UNKNOWN
             m5_bars = self._m5_bars_for(symbol)
             stamp = (moment.date(), self._series_stamp(m5_bars))
             remembered = self._vwap_measure_cache.get((symbol, side_key))
@@ -1897,6 +1910,8 @@ class AlertCenterPanel(QFrame):
             return PREV_DAY_UNKNOWN
         try:
             moment = datetime.now()
+            if self._m5_unknown(symbol):
+                return PREV_DAY_UNKNOWN
             d1_bars = self._d1_bars_for(symbol)
             m5_bars = self._m5_bars_for(symbol)
             stamp = (
@@ -1967,6 +1982,8 @@ class AlertCenterPanel(QFrame):
             return wall_gate.WallVerdict(state=PREV_DAY_UNKNOWN, reason="no side")
         try:
             moment = datetime.now()
+            if self._m5_unknown(symbol):
+                return wall_gate.WallVerdict(state=PREV_DAY_UNKNOWN, reason="M5 bars not fetched yet")
             d1_bars = self._d1_bars_for(symbol)
             m5_bars = self._m5_bars_for(symbol)
             lines = self._wall_trendlines_for(symbol)
@@ -2331,6 +2348,8 @@ class AlertCenterPanel(QFrame):
         """
         try:
             moment = datetime.now()
+            if self._m5_unknown(symbol):
+                return PREV_DAY_UNKNOWN
             d1_bars = self._d1_bars_for(symbol)
             m5_bars = self._m5_bars_for(symbol)
             stamp = (
@@ -3579,6 +3598,9 @@ class AlertCenterPanel(QFrame):
     def _record_review_event(self, action: str, **kwargs) -> None:
         if self._review_events_path is None:
             return
+        if self._deferred_review_events is not None:
+            self._deferred_review_events.append((action, dict(kwargs)))
+            return
         try:
             record_review_event(action, path=self._review_events_path, **kwargs)
         except Exception:
@@ -3652,13 +3674,15 @@ class AlertCenterPanel(QFrame):
                 for queued in self._review_queue[:DEFAULT_LOOKAHEAD]
                 if queued.symbol
             )
+            # A proxy symbol not fetched yet is unknown, not empty: no refetch.
+            symbols = [sym for sym in symbols if not self._m5_unknown(sym, sessions=2)]
             if not symbols:
                 return
             bot = self._current_bot()
             if bot is None:
                 return
             shared_refresh_service().refresh_if_stale(
-                symbols, lambda sym: bot.m5_chart_bars(sym, max_sessions=2), bot
+                symbols, lambda sym: self._m5_bars_for(sym, sessions=2), bot
             )
         except Exception:
             # Display refresh only - it must never break the watch tick that
@@ -3712,6 +3736,10 @@ class AlertCenterPanel(QFrame):
                 "shown", alert=alert, queue_len=len(self._review_queue), detail=detail
             )
         bot = self._current_bot()
+        pending = self.pending_arm_kinds(alert.symbol)
+        self.chart_review.set_pending_arms(
+            pending["watch"], pending["d1_event"], bool(pending["any_bounce"])
+        )
         self.chart_review.set_alert(
             alert,
             bot=bot,
@@ -4657,7 +4685,13 @@ class AlertCenterPanel(QFrame):
         if self._bounce_service is not None:
             try:
                 bot = self._bounce_service.current_bot()
-                if bot is not None:
+                if is_process_proxy(bot):
+                    # An RPC on the proxy: the cached label, blank until fetched.
+                    current = str(
+                        shared_m5_cache().peek_value(bot, "get_market_environment", call=True)
+                        or ""
+                    )
+                elif bot is not None:
                     current = str(bot.get_market_environment() or "")
             except Exception:
                 current = ""
@@ -5038,6 +5072,9 @@ class AlertCenterPanel(QFrame):
                 symbol = str(symbol or "").strip().upper()
                 if not symbol or symbol in self._ignored_symbols:
                     continue
+                if self._m5_unknown(symbol):
+                    held += 1  # bars not fetched yet: the break state stays as it was
+                    continue
                 d1_bars = self._d1_bars_for(symbol)
                 m5_bars = self._m5_bars_for(symbol)
                 # Measured every tick even when nothing is pending: the feed
@@ -5324,13 +5361,6 @@ class AlertCenterPanel(QFrame):
         from `m5_chart_bars` itself, so if this lookup ever diverged the cost
         would be a missed cache hit, not a wrong bar.
         """
-        if bool(getattr(bot, "is_process_proxy", False)):
-            # A symbol-sized RPC avoids copying the scanner's entire M5 cache
-            # across the process boundary on every chart-watch tick.
-            try:
-                return bot.m5_chart_bars(symbol, max_sessions=2) or []
-            except Exception:
-                return []
         latest = getattr(bot, "latest_bars", None)
         if not isinstance(latest, dict):
             return []
@@ -5362,7 +5392,17 @@ class AlertCenterPanel(QFrame):
         dicts with six float() coercions apiece, on the Qt thread, for ~105
         symbols. Nothing about WHICH bars come back changes: the value is
         always `m5_chart_bars`'s own output.
+
+        On the process proxy this reads `shared_m5_cache()` only - never an
+        RPC on the Qt thread - and bars not fetched yet come back as [].
+        Callers that must not treat "not fetched" as "no bars" ask
+        `_m5_unknown` first.
         """
+        bars = self._m5_cached(symbol, sessions=sessions)
+        return bars if bars is not None else []
+
+    def _m5_cached(self, symbol: str, *, sessions: int = 1) -> list | None:
+        """Memory-only M5 bars; None means a proxy bot's bars are not fetched yet."""
         bot = None
         if self._bounce_service is not None:
             try:
@@ -5371,6 +5411,16 @@ class AlertCenterPanel(QFrame):
                 bot = None
         if bot is None:
             return []
+        if is_process_proxy(bot):
+            return shared_m5_cache().peek(bot, symbol, sessions)
+        return self._m5_local_bars(bot, symbol, sessions=sessions)
+
+    def _m5_unknown(self, symbol: str, *, sessions: int = 1) -> bool:
+        """True while a proxy bot's bars for this symbol have never been fetched."""
+        return self._m5_cached(symbol, sessions=sessions) is None
+
+    def _m5_local_bars(self, bot, symbol: str, *, sessions: int = 1) -> list:
+        """An in-process bot's bars, memoized per source series (item 1a)."""
         key = (str(symbol or "").strip().upper(), max(1, int(sessions)))
         try:
             source = self._m5_source_bars(bot, symbol)
@@ -5378,10 +5428,7 @@ class AlertCenterPanel(QFrame):
             source = []
         stamp = self._m5_source_stamp(source)
         cached = self._m5_bar_dicts.get(key)
-        same_source = cached is not None and (
-            cached[0] is source
-            or bool(getattr(bot, "is_process_proxy", False))
-        )
+        same_source = cached is not None and cached[0] is source
         if cached is not None and same_source and cached[1] == stamp:
             self._m5_bar_dicts.move_to_end(key)
             return cached[2]
@@ -5403,8 +5450,12 @@ class AlertCenterPanel(QFrame):
         *,
         source_text: str = "",
         timeframes: tuple[str, ...] = (),
+        m5_bars: list | None = None,
     ) -> bool:
         """Public arming surface for any visual chart. Returns True on arm.
+
+        ``m5_bars`` is the baseline a queued arm fetched off the Qt thread;
+        None reads the desk's cached bars as before.
 
         A DECLINED row for this (symbol, kind) is DROPPED first (review
         blocker 6): the trader turned an auto-armed watch off and is now
@@ -5432,7 +5483,9 @@ class AlertCenterPanel(QFrame):
             # A Pullback watch has no M5 baseline. Reading the chart cache here
             # can take its lock while a refresh owns it, so a button press must
             # never pay for bars this watch does not use.
-            () if kind == PULLBACK_KIND else self._m5_bars_for(symbol),
+            ()
+            if kind == PULLBACK_KIND
+            else (m5_bars if m5_bars is not None else self._m5_bars_for(symbol)),
             source_text=source_text,
             timeframes=timeframes,
         )
@@ -5446,13 +5499,12 @@ class AlertCenterPanel(QFrame):
         self._chart_watches = candidate_watches
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
-        current = self._current_review_alert
         self._record_review_event(
             "arm_watch",
-            alert=current if current is not None and current.symbol == symbol else None,
+            alert=self._arm_review_alert(symbol),
             symbol=symbol,
             side=side,
-            dwell_ms=self._review_dwell_ms(symbol),
+            dwell_ms=self._arm_dwell_ms(symbol),
             detail={"kind": kind, "baseline": watch.baseline},
         )
         if kind == PULLBACK_KIND:
@@ -5813,11 +5865,172 @@ class AlertCenterPanel(QFrame):
     def _toggle_chart_watch(self, alert: BounceAlert, kind: str) -> None:
         if not alert.symbol:
             return
-        if kind in self.armed_watch_kinds(alert.symbol):
-            self.disarm_chart_watch_for(alert.symbol, kind)
-        else:
-            self.arm_chart_watch_for(
-                alert.symbol, alert.side, kind, source_text=alert.raw_text
+        self.toggle_chart_watch(alert.symbol, alert.side, kind, source_text=alert.raw_text)
+
+    def toggle_chart_watch(self, symbol: str, side: str, kind: str, *, source_text: str = "") -> None:
+        """A watch button click: cancel a queued arm, disarm, or arm (queued on a proxy)."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol or self._cancel_pending_arm(("watch", symbol, kind)):
+            return
+        if kind in self.armed_watch_kinds(symbol):
+            self.disarm_chart_watch_for(symbol, kind)
+            return
+        if not self._arms_async() or kind not in WATCH_KINDS:
+            self.arm_chart_watch_for(symbol, side, kind, source_text=source_text)
+            return
+        bot = self._current_bot()
+        prepare = None
+        if kind != PULLBACK_KIND and is_process_proxy(bot):
+
+            def prepare():
+                try:
+                    return shared_m5_cache().fetch_now(bot, symbol, 1)
+                except Exception:  # an unreadable child arms on the cached bars, as before
+                    logging.debug("Arm baseline fetch failed for %s.", symbol, exc_info=True)
+                    return None
+
+        self._queue_arm(
+            "watch",
+            symbol,
+            kind,
+            WATCH_KINDS[kind],
+            prepare,
+            lambda bars: self.arm_chart_watch_for(
+                symbol, side, kind, source_text=source_text, m5_bars=bars
+            )
+            or kind in self.armed_watch_kinds(symbol),
+        )
+
+    # -- queued arms ---------------------------------------------------------
+    def _arm_queue(self):
+        if self._arm_queue_obj is None:
+            from ui.services.arm_queue import ArmQueue
+
+            self._arm_queue_obj = ArmQueue(self)
+            self._arm_queue_obj.jobChanged.connect(self._on_arm_job_changed)
+        return self._arm_queue_obj
+
+    def _arms_async(self) -> bool:
+        """Queue arm clicks when the scanner is the process proxy (its reads can block)."""
+        return bool(self._force_async_arms) or is_process_proxy(self._current_bot())
+
+    def pending_arm_kinds(self, symbol: str) -> dict[str, set[str]]:
+        """Kinds still QUEUED for a symbol, per lane (watch / d1_event / any_bounce / level)."""
+        lanes: dict[str, set[str]] = {
+            "watch": set(), "d1_event": set(), "any_bounce": set(), "level": set(), "phone": set()
+        }
+        queue = self._arm_queue_obj
+        symbol = str(symbol or "").strip().upper()
+        if queue is None or not symbol:
+            return lanes
+        for job in queue.jobs():
+            if job.pending and job.symbol == symbol and job.key[0] in lanes:
+                lanes[job.key[0]].add(job.key[2])
+        return lanes
+
+    def _queue_arm(self, lane: str, symbol: str, kind: str, label: str, prepare, commit) -> None:
+        """Mark QUEUED now; `prepare` runs on the arm worker, `commit` back here."""
+        alert = self._current_review_alert
+        context = (
+            symbol,
+            alert if alert is not None and alert.symbol == symbol else None,
+            self._review_dwell_ms(symbol),
+        )
+        self._arm_queue().submit(
+            (lane, symbol, kind),
+            symbol,
+            label,
+            prepare,
+            lambda result: self._commit_queued_arm(context, lambda: commit(result)),
+        )
+        self.statusChanged.emit(f"{symbol}: arming {label}… (queued)")
+
+    def _commit_queued_arm(self, context: tuple, commit) -> tuple[bool, str]:
+        """Run the unchanged arm body with the click's review context; its review
+        rows are appended by the arm worker, in order."""
+        messages: list[str] = []
+
+        def grab(text: str) -> None:
+            messages.append(str(text))
+
+        self._arm_review_override = context
+        self._deferred_review_events = []
+        self.statusChanged.connect(grab)
+        try:
+            ok = bool(commit())
+        finally:
+            self.statusChanged.disconnect(grab)
+            deferred, self._deferred_review_events = self._deferred_review_events, None
+            self._arm_review_override = None
+        path = self._review_events_path
+        if deferred and path is not None:
+
+            def write() -> None:
+                for action, kwargs in deferred:
+                    try:
+                        record_review_event(action, path=path, **kwargs)
+                    except Exception:  # evidence loses the event, never the arm
+                        logging.debug("Queued review event %s failed.", action, exc_info=True)
+
+            self._arm_queue().post(write, f"review events for {context[0]}")
+        return ok, (messages[-1] if messages else "")
+
+    def _arm_review_alert(self, symbol: str):
+        """The alert a review row names: the click's own when a queued arm commits."""
+        override = self._arm_review_override
+        if override is not None and override[0] == symbol:
+            return override[1]
+        current = self._current_review_alert
+        return current if current is not None and current.symbol == symbol else None
+
+    def _arm_dwell_ms(self, symbol: str) -> int | None:
+        override = self._arm_review_override
+        if override is not None and override[0] == symbol:
+            return override[2]
+        return self._review_dwell_ms(symbol)
+
+    def _cancel_pending_arm(self, key: tuple) -> bool:
+        """A second click on a QUEUED arm cancels it before it saves."""
+        queue = self._arm_queue_obj
+        job = queue.pending(key) if queue is not None else None
+        if job is None or not queue.cancel(key):
+            return False
+        self.statusChanged.emit(f"{job.symbol}: {job.label} arm cancelled - it had not saved yet.")
+        return True
+
+    def _cancel_or_dismiss_arm(self, key) -> None:
+        if not self._cancel_pending_arm(tuple(key)) and self._arm_queue_obj is not None:
+            self._arm_queue_obj.dismiss(key)
+
+    def _on_arm_job_changed(self, job) -> None:
+        from ui.services.arm_queue import FAILED
+
+        self._refresh_review_armed_kinds()
+        self.armedWatchesChanged.emit()  # the armed list and any open snapshot chart
+        if job.state == FAILED:
+            self.statusChanged.emit(
+                f"{job.symbol}: {job.label} FAILED - {job.reason or 'not armed'}"
+            )
+
+    def _pending_arm_rows(self) -> list[tuple]:
+        queue = self._arm_queue_obj
+        if queue is None:
+            return []
+        return [
+            (job.symbol, job.label, job.state, job.reason, job.key)
+            for job in queue.jobs()
+        ]
+
+    def shutdown(self) -> None:
+        """Drain queued arms (bounded); anything not armed is logged loudly."""
+        queue = self._arm_queue_obj
+        if queue is None:
+            return
+        dropped = queue.shutdown()
+        if dropped:
+            self.statusChanged.emit(
+                "NOT ARMED at shutdown: "
+                + ", ".join(f"{job.symbol} {job.label}" for job in dropped)
             )
 
     def _poll_chart_watches(self, now: datetime | None = None) -> None:
@@ -5978,8 +6191,42 @@ class AlertCenterPanel(QFrame):
     def _arm_d1_level_from_chart(
         self, symbol: str, direction: str, level: float, candle_date: str
     ) -> None:
-        self.arm_d1_level_watch(
+        self.request_d1_level_watch(
             symbol, direction, level, candle_date=candle_date, fill_source="candle"
+        )
+
+    def request_d1_level_watch(
+        self, symbol: str, direction: str, level: float, *, candle_date: str = "", fill_source: str = ""
+    ) -> None:
+        """A level-arm click: queued on a proxy, else `arm_d1_level_watch` at once."""
+        symbol = str(symbol or "").strip().upper()
+        try:
+            level = float(level)
+        except (TypeError, ValueError):
+            return
+        if not self._arms_async() or not symbol:
+            self.arm_d1_level_watch(
+                symbol, direction, level, candle_date=candle_date, fill_source=fill_source
+            )
+            return
+
+        def armed() -> bool:
+            return any(
+                watch.symbol == symbol and watch.direction == direction
+                and abs(watch.level - level) < 1e-6
+                for watch in self._d1_level_watches
+            )
+
+        self._queue_arm(
+            "level",
+            symbol,
+            f"{direction}:{level:.4f}",
+            f"D1 level {direction} {level:.2f}",
+            None,
+            lambda _result: self.arm_d1_level_watch(
+                symbol, direction, level, candle_date=candle_date, fill_source=fill_source
+            )
+            or armed(),
         )
 
     def arm_d1_level_watch(
@@ -6019,12 +6266,11 @@ class AlertCenterPanel(QFrame):
         )
         self._save_d1_level_watches()
         self.armedWatchesChanged.emit()
-        current = self._current_review_alert
         self._record_review_event(
             "arm_level",
-            alert=current if current is not None and current.symbol == symbol else None,
+            alert=self._arm_review_alert(symbol),
             symbol=symbol,
-            dwell_ms=self._review_dwell_ms(symbol),
+            dwell_ms=self._arm_dwell_ms(symbol),
             detail={
                 "direction": direction,
                 "level": level,
@@ -6104,7 +6350,7 @@ class AlertCenterPanel(QFrame):
             fill_source = self.chart_review.arm_bar.last_fill_source()
         except Exception:
             pass
-        self.arm_d1_level_watch(symbol, direction, level, fill_source=fill_source)
+        self.request_d1_level_watch(symbol, direction, level, fill_source=fill_source)
 
     def _disarm_level_from_dock(self, symbol: str, direction: str, level: float) -> None:
         self.disarm_d1_level_watch(symbol, direction, level)
@@ -6137,6 +6383,42 @@ class AlertCenterPanel(QFrame):
                 "cross on the Focus tab instead."
             )
             return
+        self._announce_price_alert(
+            symbol, direction, level, self._write_price_alert(service, symbol, direction, level)
+        )
+
+    def _request_price_alert_from_level(self, symbol: str, direction: str, level: float) -> None:
+        """The phone-alert click: the store merge/save runs on the arm worker on a proxy."""
+        symbol = str(symbol or "").strip().upper()
+        try:
+            level = float(level)
+        except (TypeError, ValueError):
+            return
+        service = getattr(self, "price_alert_service", None)
+        if (
+            not self._arms_async()
+            or service is None
+            or not symbol
+            or direction not in ("above", "below")
+            or not level > 0
+        ):
+            self._arm_price_alert_from_level(symbol, direction, level)
+            return
+        self._queue_arm(
+            "phone",
+            symbol,
+            direction,
+            f"phone alert {direction} {level:.2f}",
+            lambda: self._write_price_alert(service, symbol, direction, level),
+            lambda outcome: self._announce_price_alert(symbol, direction, level, outcome),
+        )
+
+    @staticmethod
+    def _write_price_alert(service, symbol: str, direction: str, level: float) -> str:
+        """The Focus board's merge, key for key, then one save. Any thread.
+
+        Returns "refused", "armed" or "kept" (an unchanged level that already fired).
+        """
         entries = service.entries()
         entry = next((row for row in entries if row.get("symbol") == symbol), None)
         if entry is None:
@@ -6164,12 +6446,17 @@ class AlertCenterPanel(QFrame):
 
                 price_alerts.mark_armed_now(entry)
         if not service.save_entries(entries):
+            return "refused"
+        return "armed" if entry.get(f"armed_{direction}") else "kept"
+
+    def _announce_price_alert(self, symbol: str, direction: str, level: float, outcome: str) -> bool:
+        if outcome == "refused":
             self.statusChanged.emit(
                 f"{symbol}: phone price alert NOT saved - the price-alert "
                 "store refused the write on this machine."
             )
-            return
-        if entry.get(f"armed_{direction}"):
+            return False
+        if outcome == "armed":
             self.statusChanged.emit(
                 f"{symbol}: phone price alert armed - cross {direction} "
                 f"{level:.2f}. It fires once, pushes to your phone, then "
@@ -6181,6 +6468,7 @@ class AlertCenterPanel(QFrame):
                 "disarmed - it already fired at this level. Re-arm it on the "
                 "Focus tab."
             )
+        return True
 
     def armed_levels_for(self, symbol: str) -> list:
         symbol = str(symbol or "").strip().upper()
@@ -6355,6 +6643,7 @@ class AlertCenterPanel(QFrame):
             d1_events=self._d1_event_watches,
             has_m5_bars=lambda symbol: bool(self._m5_bars_for(symbol)),
             watch_note=self._armed_watch_note,
+            pending=self._pending_arm_rows(),
         )
         current = self._current_review_alert
         if current is not None:
@@ -6534,6 +6823,9 @@ class AlertCenterPanel(QFrame):
         triggered = []
         for watch in self._d1_level_watches:
             hit = None
+            if self._m5_unknown(watch.symbol):
+                remaining.append(watch)  # bars not fetched yet: unknown, never judged
+                continue
             m5_bars = self._m5_bars_for(watch.symbol)
             d1_bars = self._d1_bars_for(watch.symbol)
             if m5_bars or d1_bars:
@@ -6579,10 +6871,38 @@ class AlertCenterPanel(QFrame):
     def _toggle_d1_event_watch(self, alert: BounceAlert, kind: str) -> None:
         if alert is None or not alert.symbol:
             return
-        if kind in self.armed_d1_event_kinds(alert.symbol):
-            self.disarm_d1_event_watch(alert.symbol, kind)
-        else:
-            self.arm_d1_event_watch(alert.symbol, kind, side=alert.side)
+        self.toggle_d1_event_watch(alert.symbol, kind, side=alert.side)
+
+    def toggle_d1_event_watch(self, symbol: str, kind: str, side: str = "") -> None:
+        """A D1 event button click: cancel a queued arm, disarm, or arm (queued on a proxy)."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol or self._cancel_pending_arm(("d1_event", symbol, kind)):
+            return
+        if kind in self.armed_d1_event_kinds(symbol):
+            self.disarm_d1_event_watch(symbol, kind)
+            return
+        if not self._arms_async() or kind not in D1_EVENT_KINDS:
+            self.arm_d1_event_watch(symbol, kind, side=side)
+            return
+        reads_line = kind in {"trendline_break", "trendline_break_retest"}
+
+        def prepare():
+            return self._current_trendline_report_evidence(symbol, side)
+
+        self._queue_arm(
+            "d1_event",
+            symbol,
+            kind,
+            D1_EVENT_KINDS[kind],
+            prepare if reads_line else None,
+            lambda evidence: self.arm_d1_event_watch(
+                symbol,
+                kind,
+                side=side,
+                trendline_evidence=evidence if reads_line else _UNREAD,
+            )
+            or kind in self.armed_d1_event_kinds(symbol),
+        )
 
     def _current_trendline_candidate(self, symbol: str, side: str = "") -> dict | None:
         evidence = self._current_trendline_report_evidence(symbol, side)
@@ -6631,7 +6951,9 @@ class AlertCenterPanel(QFrame):
                 return frozen, knowledge_at
         return None
 
-    def arm_d1_event_watch(self, symbol: str, kind: str, side: str = "") -> bool:
+    def arm_d1_event_watch(
+        self, symbol: str, kind: str, side: str = "", *, trendline_evidence=_UNREAD
+    ) -> bool:
         symbol = str(symbol or "").strip().upper()
         if not symbol or kind not in D1_EVENT_KINDS:
             return False
@@ -6641,7 +6963,11 @@ class AlertCenterPanel(QFrame):
             return False
         moment = datetime.now()
         if kind in {"trendline_break", "trendline_break_retest"}:
-            evidence = self._current_trendline_report_evidence(symbol, side)
+            evidence = (
+                self._current_trendline_report_evidence(symbol, side)
+                if trendline_evidence is _UNREAD
+                else trendline_evidence
+            )
             candidate, knowledge_at = evidence if evidence is not None else (None, None)
             resolved_side = str(side or "").strip().upper()
             if not resolved_side and isinstance(candidate, dict):
@@ -6668,12 +6994,11 @@ class AlertCenterPanel(QFrame):
         self._save_d1_event_watches()
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
-        current = self._current_review_alert
         self._record_review_event(
             "arm_d1_event",
-            alert=current if current is not None and current.symbol == symbol else None,
+            alert=self._arm_review_alert(symbol),
             symbol=symbol,
-            dwell_ms=self._review_dwell_ms(symbol),
+            dwell_ms=self._arm_dwell_ms(symbol),
             detail={"kind": kind},
         )
         self.statusChanged.emit(
@@ -7063,8 +7388,11 @@ class AlertCenterPanel(QFrame):
             cache = self._h1_history_cache()
             token = self._pullback_cache_token(cache, watch.symbol) if cache is not None else None
             wanted, end = self._pullback_due(watch, H1_INTERVAL_MINUTES, moment, token)
-            if wanted:
-                due.append((watch, end, token))
+            if not wanted:
+                continue
+            if self._m5_unknown(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS):
+                continue  # not marked judged: it is judged once its bars land
+            due.append((watch, end, token))
         due.sort(key=lambda pair: str(getattr(pair[0], "symbol", "")))
         taken = due[: max(1, int(self.PULLBACK_H1_BATCH_LIMIT))]
         for watch, end, token in taken:
@@ -7741,6 +8069,9 @@ class AlertCenterPanel(QFrame):
         levels_caches: dict[str, dict] = {}
         for watch in self._d1_event_watches:
             hit = None
+            if self._m5_unknown(watch.symbol):
+                remaining.append(watch)  # bars not fetched yet: unknown, never judged
+                continue
             m5_bars = self._m5_bars_for(watch.symbol)
             d1_bars = self._d1_bars_for(watch.symbol)
             if d1_bars:
@@ -7821,10 +8152,24 @@ class AlertCenterPanel(QFrame):
     def _toggle_any_bounce_watch(self, alert: BounceAlert) -> None:
         if alert is None or not alert.symbol:
             return
-        if self.any_bounce_armed_for(alert.symbol):
-            self.disarm_any_bounce_watch(alert.symbol)
+        symbol = str(alert.symbol).strip().upper()
+        if self._cancel_pending_arm(("any_bounce", symbol, "")):
+            return
+        if self.any_bounce_armed_for(symbol):
+            self.disarm_any_bounce_watch(symbol)
+        elif not self._arms_async():
+            self.arm_any_bounce_watch(symbol, alert.side or "long")
         else:
-            self.arm_any_bounce_watch(alert.symbol, alert.side or "long")
+            side = alert.side or "long"
+            self._queue_arm(
+                "any_bounce",
+                symbol,
+                "",
+                "Any bounce",
+                None,
+                lambda _result: self.arm_any_bounce_watch(symbol, side)
+                or self.any_bounce_armed_for(symbol),
+            )
 
     def arm_any_bounce_watch(self, symbol: str, side: str = "long") -> bool:
         symbol = str(symbol or "").strip().upper()
@@ -7845,13 +8190,12 @@ class AlertCenterPanel(QFrame):
         self._save_any_bounce_watches()
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
-        current = self._current_review_alert
         self._record_review_event(
             "arm_any_bounce",
-            alert=current if current is not None and current.symbol == symbol else None,
+            alert=self._arm_review_alert(symbol),
             symbol=symbol,
             side=side,
-            dwell_ms=self._review_dwell_ms(symbol),
+            dwell_ms=self._arm_dwell_ms(symbol),
             detail={"kinds": list(ANY_BOUNCE_KINDS)},
         )
         self.statusChanged.emit(
@@ -7875,6 +8219,11 @@ class AlertCenterPanel(QFrame):
         self.statusChanged.emit(f"{symbol}: any-bounce alert disarmed.")
         return True
 
+    def _zone_arms_unknown(self) -> bool:
+        """True while a proxy bot's `d1_zone_arms` have never been fetched."""
+        bot = self._current_bot()
+        return is_process_proxy(bot) and shared_m5_cache().peek_value(bot, "d1_zone_arms") is None
+
     def _any_bounce_levels_for(
         self, symbol: str, moment: datetime, *, m5_bars: list | None = None
     ) -> dict:
@@ -7887,7 +8236,10 @@ class AlertCenterPanel(QFrame):
         entry = None
         try:
             bot = self._current_bot()
-            arms = getattr(bot, "d1_zone_arms", None) or {}
+            if is_process_proxy(bot):
+                arms = shared_m5_cache().peek_value(bot, "d1_zone_arms") or {}
+            else:
+                arms = getattr(bot, "d1_zone_arms", None) or {}
             candidate = arms.get(symbol)
             if isinstance(candidate, Mapping):
                 entry = candidate
@@ -7928,8 +8280,12 @@ class AlertCenterPanel(QFrame):
                 return
         remaining: list[AnyBounceWatch] = []
         triggered = []
+        zone_arms_unknown = self._zone_arms_unknown()
         for watch in self._any_bounce_watches:
             hit = None
+            if zone_arms_unknown or self._m5_unknown(watch.symbol):
+                remaining.append(watch)  # bars not fetched yet: unknown, never judged
+                continue
             try:
                 # Once per watch, not twice: the levels builder and the
                 # evaluation both need today's M5 bars.
@@ -7972,6 +8328,10 @@ class AlertCenterPanel(QFrame):
     def _refresh_review_armed_kinds(self) -> None:
         current = self._current_review_alert
         if current is not None:
+            pending = self.pending_arm_kinds(current.symbol)
+            self.chart_review.set_pending_arms(
+                pending["watch"], pending["d1_event"], bool(pending["any_bounce"])
+            )
             self.chart_review.set_armed_kinds(self.armed_watch_kinds(current.symbol))
             self.chart_review.set_armed_d1_events(
                 self.armed_d1_event_kinds(current.symbol)

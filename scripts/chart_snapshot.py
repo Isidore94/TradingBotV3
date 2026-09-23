@@ -19,6 +19,7 @@ band consumer is calibrated to. Do not "fix" it toward a distribution
 stdev; see plan.md section 5.
 """
 
+import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -35,7 +36,11 @@ D1_DEFAULT_SESSIONS = 90
 #: nothing further left to pan to and saying otherwise invites the trader to
 #: drag at a wall. Roughly four NYSE years.
 D1_HISTORY_SESSIONS = 1000
+#: Symbols whose parsed daily history stays in memory (~300-400 KB and ~1,000
+#: gc-tracked dicts each). Least recently used names are dropped past this.
+DAILY_BARS_CACHE_MAX_SYMBOLS = 512
 _daily_bars_cache: dict[str, tuple[tuple[str, int], list[dict[str, Any]]]] = {}
+_daily_bars_cache_lock = threading.Lock()
 # (mtime, {symbol: [iso dates...]}) for the earnings-dates cache file.
 _earnings_dates_cache: list = [None, {}]
 
@@ -342,11 +347,12 @@ def load_d1_bars(symbol: str) -> list[dict[str, Any]]:
     cache_key = (str(resolved_path or ""), mtime_ns)
     cached = _daily_bars_cache.get(symbol)
     if cached is not None and cached[0] == cache_key:
+        _remember_daily_bars(symbol, cached)  # refresh its recency
         return cached[1]
 
     frame = _load_daily_frame(resolved_stem) if resolved_stem else None
     if frame is None:
-        _daily_bars_cache[symbol] = (cache_key, [])
+        _remember_daily_bars(symbol, (cache_key, []))
         return []
     bars: list[dict[str, Any]] = []
     has_volume = "volume" in frame.columns
@@ -367,8 +373,17 @@ def load_d1_bars(symbol: str) -> list[dict[str, Any]]:
                 "volume": _volume_or_zero(getattr(row, "volume", 0.0)) if has_volume else 0.0,
             }
         )
-    _daily_bars_cache[symbol] = (cache_key, bars)
+    _remember_daily_bars(symbol, (cache_key, bars))
     return bars
+
+
+def _remember_daily_bars(symbol: str, entry: tuple) -> None:
+    """Store ``entry`` as the most recent symbol; drop the oldest past the cap."""
+    with _daily_bars_cache_lock:
+        _daily_bars_cache.pop(symbol, None)
+        _daily_bars_cache[symbol] = entry
+        while len(_daily_bars_cache) > DAILY_BARS_CACHE_MAX_SYMBOLS:
+            _daily_bars_cache.pop(next(iter(_daily_bars_cache)), None)
 
 
 def latest_completed_session_date(now: datetime | None = None) -> date:

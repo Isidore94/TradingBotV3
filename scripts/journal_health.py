@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -125,7 +126,9 @@ def _last_oauth_failure(db_path: Path) -> dict[str, str] | None:
     tells the trader their chain broke in 2025, which is how this function
     read on its first run.
     """
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+    # closing(): a bare `with connect()` only commits, and the unclosed
+    # connection would wait for the GUI-thread gc sweep to close it.
+    with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
         rows = conn.execute(
             "SELECT day, message, updated_at FROM import_coverage "
             "WHERE broker = 'QUESTRADE' AND status = 'FAILED' "

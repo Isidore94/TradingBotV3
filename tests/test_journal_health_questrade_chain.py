@@ -296,3 +296,24 @@ def test_an_aware_stamp_against_a_naive_caller_is_normalized_the_same_way(tmp_pa
 
     assert verdict["state"] == journal_health.STATE_OK
     assert verdict["days_since_refresh"] == pytest.approx(0.04, abs=0.01)
+
+
+def test_the_health_read_closes_its_connection(tmp_path):
+    """A bare `with sqlite3.connect()` only commits; the open connection then
+    waited for the desk's GUI-thread gc sweep to close it (2026-09-23)."""
+    import gc
+
+    db_path = _db(tmp_path)
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        gc.collect()
+        before = sum(1 for obj in gc.get_objects() if isinstance(obj, sqlite3.Connection))
+        journal_health.questrade_chain_health(
+            now=NOW, db_path=db_path, settings_reader=_settings(journal_questrade_refresh_token="t")
+        )
+        after = sum(1 for obj in gc.get_objects() if isinstance(obj, sqlite3.Connection))
+    finally:
+        if was_enabled:
+            gc.enable()
+    assert after == before

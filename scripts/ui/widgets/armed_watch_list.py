@@ -79,6 +79,7 @@ class ArmedWatchList(QFrame):
     disarmWatchRequested = Signal(str, str)  # symbol, kind
     disarmLevelRequested = Signal(str, str, float)  # symbol, direction, level
     disarmEventRequested = Signal(str, str)  # symbol, D1 event kind
+    pendingCancelRequested = Signal(object)  # queued-arm key: cancel it, or clear a failed row
     symbolActivated = Signal(str)
 
     def __init__(self, parent=None) -> None:
@@ -121,6 +122,7 @@ class ArmedWatchList(QFrame):
         d1_events=(),
         now: datetime | None = None,
         watch_note=None,
+        pending=(),
     ) -> None:
         """Render armed session watches and persistent level/event alerts together.
 
@@ -129,6 +131,10 @@ class ArmedWatchList(QFrame):
         yet - the H1 retester's warm-up shortfall, for instance. A non-empty
         note REPLACES the health cell, because "ok" next to a watch that
         cannot evaluate is the one thing this table must never say.
+
+        ``pending`` rows are arms clicked but not saved yet:
+        ``(symbol, label, state, reason, key)``; ✕ cancels a queued one or
+        clears a failed one.
         """
         moment = now or datetime.now()
         self._rows = []
@@ -194,6 +200,11 @@ class ArmedWatchList(QFrame):
                 )
             )
 
+        for symbol, label, state, reason, key in pending or ():
+            self._row_reasons.append(str(reason or ""))
+            health = f"✕ failed: {reason}" if state == "failed" else f"⏳ {state}…"
+            self._rows.append((symbol, label, "—", "", "", health, ("pending", symbol, key)))
+
         self.table.setRowCount(len(self._rows))
         for index, row in enumerate(self._rows):
             for column in range(len(COLUMNS) - 1):
@@ -221,7 +232,9 @@ class ArmedWatchList(QFrame):
             return
         handle = self._rows[row][-1]
         if column == len(COLUMNS) - 1:
-            if handle[0] == "watch":
+            if handle[0] == "pending":
+                self.pendingCancelRequested.emit(handle[2])
+            elif handle[0] == "watch":
                 self.disarmWatchRequested.emit(handle[1], handle[2])
             elif handle[0] == "event":
                 self.disarmEventRequested.emit(handle[1], handle[2])
