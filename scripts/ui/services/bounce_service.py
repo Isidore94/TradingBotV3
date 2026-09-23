@@ -758,7 +758,8 @@ class BounceService(QObject):
         champion is resizing would raise - but the spool writer's construction,
         its stale-segment adoption, its cap enforcement and its fsync all run on
         the capture object's own worker thread (review defect D21). No provider
-        request, no lake I/O, on any thread.
+        request, no lake I/O, on any thread. On the process proxy the cache is
+        an RPC, so the worker reads it and this slot only signals.
         """
         if not self._is_live():
             return
