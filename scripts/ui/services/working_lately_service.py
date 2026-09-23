@@ -42,6 +42,7 @@ from typing import Any, Mapping
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
+import setup_grades_history
 import working_lately
 from working_lately import EvidenceSnapshot, build_snapshot, leader_name
 
@@ -387,6 +388,21 @@ class WorkingLatelyService(QObject):
             os.replace(temp, target)
         except OSError:
             logging.debug("Setup grades write failed", exc_info=True)
+            return
+        # Dated point-in-time copy for the Day Recap; a failure loses this line only.
+        try:
+            setup_grades_history.append_snapshot(grades, history_dir=self._history_dir())
+        except Exception:  # noqa: BLE001 - evidence write, never fatal
+            logging.warning("Setup grades history write failed", exc_info=True)
+
+    def _history_dir(self) -> Path:
+        """The live history constant for the default store, else beside `store_dir`."""
+        from project_paths import SETUP_GRADES_HISTORY_DIR
+
+        default = Path(SETUP_GRADES_HISTORY_DIR)
+        if self._dir == default.parent:
+            return default
+        return self._dir / default.name
 
     def _on_payload_ready(self, payload: dict) -> None:
         """THE GUI SLOT. It formats nothing and reads nothing - it emits."""

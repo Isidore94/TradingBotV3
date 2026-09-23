@@ -39,6 +39,7 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import avwape_side
 import focus_adoption_gate
+import opening_regime_history
 import prev_day_gate
 import sector_exclusion
 from evidence_stats import SWING_HORIZON_SESSIONS
@@ -2027,6 +2028,8 @@ def record_opening_environment(
         path = AUTO_OPENING_ENV_FILE
     today_iso = (now or datetime.now()).date().isoformat()
     env = str(env_key or "").strip().lower()
+    history_path = _opening_regime_history_path(path)
+    _record_opening_regime_history(today_iso, env, opening_regime_history.SOURCE_FIRST_READ, history_path, now)
     with _AUTO_POPULATE_LOCK:
         try:
             payload = json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {}
@@ -2050,8 +2053,30 @@ def record_opening_environment(
                 encoding="utf-8",
             )
         except OSError:
-            pass
+            return env
+        _record_opening_regime_history(
+            today_iso, env, opening_regime_history.SOURCE_OPENING_ANCHOR, history_path, now
+        )
         return env
+
+
+def _opening_regime_history_path(opening_path: Path) -> Path:
+    """The live history beside the live opening file, else a sibling of `opening_path`."""
+    from project_paths import AUTO_OPENING_ENV_FILE, AUTO_OPENING_REGIME_HISTORY_FILE
+
+    if Path(opening_path) == Path(AUTO_OPENING_ENV_FILE):
+        return Path(AUTO_OPENING_REGIME_HISTORY_FILE)
+    return Path(opening_path).with_name(Path(AUTO_OPENING_REGIME_HISTORY_FILE).name)
+
+
+def _record_opening_regime_history(
+    session_iso: str, label: str, source: str, history_path: Path, now: datetime | None
+) -> None:
+    """Append one per-session regime row; a failure loses this row only."""
+    try:
+        opening_regime_history.record(session_iso, label, source, path=history_path, now=now)
+    except Exception:  # noqa: BLE001 - evidence write, never fatal
+        logging.getLogger(__name__).warning("Opening regime history write failed", exc_info=True)
 
 
 def load_opening_environment(
