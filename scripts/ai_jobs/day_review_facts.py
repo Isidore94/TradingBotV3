@@ -156,16 +156,32 @@ def run_day_review_facts(
         recent = {"refreshed": [], "unchanged": [], "omitted": [],
                   "failed": [{"session": "recent window", "reason": str(exc)}]}
     failed = recent["failed"]
+    # Day Recap records ride this slot. A record failure keeps that session's
+    # prior file and is reported; it never changes the facts slot's status.
+    try:
+        import day_session_record
+
+        records = day_session_record.rebuild_recent(
+            session, now=now, service=service,
+            root=(Path(root) / "records") if root is not None else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        records = {"written": [], "unchanged": [], "weeks": [],
+                   "failed": [{"session": session, "reason": str(exc)}]}
     return {
         "status": ledger.STATUS_DEGRADED if failed else ledger.STATUS_OK,
         "reason": (
             f"Current facts refreshed; {len(recent['refreshed'])} older changed, "
             f"{len(recent['unchanged'])} unchanged, {len(failed)} failed, "
-            f"{len(recent['omitted'])} absent"
+            f"{len(recent['omitted'])} absent; day records "
+            f"{len(records.get('written') or ())} written, "
+            f"{len(records.get('unchanged') or ())} unchanged, "
+            f"{len(records.get('failed') or ())} failed"
         ),
         "session_date": session,
         "pack": pack,
         "recent": recent,
+        "records": records,
         # `build_reads_for` returns rows newly appended on this pass, not every
         # read the pack holds; say that narrow count honestly.
         "new_grades": len(reads or ()),

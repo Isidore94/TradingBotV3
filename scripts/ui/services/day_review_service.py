@@ -783,6 +783,12 @@ class DayReviewService:
             now=now,
         )
 
+    def compose_pack(
+        self, session_date: str, payload: Mapping[str, Any], *, now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """The pack for `payload`, composed and NOT written (the day record's reader)."""
+        return self._compose_pack(str(session_date or "")[:10], payload, now=now)
+
     @staticmethod
     def _d1_view() -> dict[str, Any] | None:
         """The ONE rolling D1 view, or `None`. Not keyed to a session."""
