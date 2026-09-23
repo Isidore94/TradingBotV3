@@ -796,6 +796,16 @@ def recipe_stats(traits: Mapping[str, Any], obs: Sequence[Mapping[str, Any]]) ->
     }
 
 
+def _bucket_label(bucket: str) -> str:
+    """The Bucket filter's own label for a bucket key (`ui.models.setup`, an import-light dict)."""
+    try:
+        from ui.models.setup import SETUP_BUCKET_LABELS
+    except Exception:  # noqa: BLE001 - the key reads fine on its own
+        SETUP_BUCKET_LABELS = {}
+    key = bucket.strip().lower()
+    return SETUP_BUCKET_LABELS.get(key, key.replace("_", " ").title())
+
+
 def where_to_look(traits: Mapping[str, Any], surfaced_info: Mapping[str, Any]) -> list[str]:
     """The existing desk filter/sort/page that shows such names. Says so when none exists."""
     out: list[str] = []
@@ -807,16 +817,16 @@ def where_to_look(traits: Mapping[str, Any], surfaced_info: Mapping[str, Any]) -
         if side in ("LONG", "SHORT"):
             line += f", Side = {side}"
         if bucket != UNKNOWN:
-            line += f", Bucket = {bucket}"
+            line += f", Bucket = {_bucket_label(bucket)}"
         if sector != UNKNOWN:
             line += f", type '{sector}' in 'Filter symbol, tag, level'"
         out.append(line)
         if traits.get("grade_now") not in (None, UNKNOWN):
             out.append(f"Today this family grades {traits['grade_now']} on that page.")
-        out.append("No family filter exists on that page; the family shows in the grade tooltip only.")
+        out.append("No setup-family filter exists on that page.")
     elif traits.get("timeframe") == "M5":
         tier = traits.get("alert_tier", UNKNOWN)
-        line = "Trading Desk M5 alerts column: turn on 'prioritise' in the Working lately strip to sort by grade"
+        line = "Trading Desk M5 alerts column: tick 'Prioritise what is working' (Working lately strip) to sort by grade"
         out.append(line)
         if tier in ("S", "A", "B"):
             label = {"S": "S tier / PROVEN only", "A": "A tier and above", "B": "B tier and above"}[tier]

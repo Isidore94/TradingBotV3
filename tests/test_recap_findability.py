@@ -261,6 +261,14 @@ def test_surfaced_prefers_the_focus_add_that_came_before_the_pick():
     assert only_later["first_at"] == "2026-09-22T13:00:00-04:00" and only_later["before_pick"] is False
 
 
+def test_d1_where_to_look_names_the_bucket_filters_own_label():
+    lines = rf.where_to_look({"timeframe": "D1", "side": "SHORT", "bucket": "near_favorite_zone",
+                              "sector": "Energy", "grade_now": "A"}, {"surfaces": []})
+    assert lines[0] == ("Master AVWAP page (Setup Tracker scan): sort by the Grade badge (best first), "
+                        "Side = SHORT, Bucket = Near, type 'Energy' in 'Filter symbol, tag, level'")
+    assert "Today this family grades A on that page." in lines
+
+
 def test_recipe_leaves_out_unknown_traits():
     parts = rf.recipe_parts({"timeframe": "D1", "family": rf.UNKNOWN, "claim_setup": "trendline_break",
                              "side": "SHORT", "grade": rf.UNKNOWN, "env_d1": {"label": rf.UNKNOWN},
