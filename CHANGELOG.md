@@ -4,6 +4,7 @@ One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-23 Snappy arms: arm clicks show ⏳ queued at once and arm on one ordered worker (ARMED / FAILED + reason; a second click cancels; drained at shutdown). Scanner-child M5 bars, zone arms and the warehouse tee cache are read off the Qt thread; bars not fetched yet are unknown and never fire or clear a watch.
 - 2026-09-23 Hide Oil & Gas / Real Estate (default ON, one shared switch): hidden from the setups table, Alert Center feeds (no row, chart or sound; Focus and armed watches still show) and the phone report (`Hidden: N` line). Display only; unknown sector shows; everything is still recorded.
 - 2026-09-23 Wall gate: review charts within 1 ATR20 of an SMA in their path or of the D1 trendline (or on its break day) are hidden and followed up by auto-armed `sma_break`/`ema15_reject` or an M15/M30 Pullback (cap 20; anything we cannot follow shows as `at wall`). Replay CLI `scripts/wall_gate_replay.py`.
 - 2026-09-23 AGENTS.md: the full suite takes 4-7 min, so run it in the background (a foreground run was killed at 99%).
