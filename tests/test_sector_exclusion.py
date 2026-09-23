@@ -288,3 +288,164 @@ def test_a_hidden_sector_d1_alert_stays_off_the_d1_feed(alert_panel):
     assert panel.test_beeps == []
     panel.hide_sector_input.setChecked(False)
     assert [row[1].symbol for row in panel._d1_target_rows()] == ["ADC"]
+
+
+# --------------------------------------------------------------------------- phone report
+def _away_payload():
+    picks = [
+        {"symbol": sym, "side": "LONG", "bucket": "favorite_setup", "expected_r": 1.0}
+        for sym in ("APA", "NVDA", "ADC", "CCJ", "ZZZZ")
+    ]
+    return {
+        "generated_at": "2026-09-23 10:00:00",
+        "swing_picks": picks,
+        "longs": ["APA", "NVDA"],  # the trader's own list: never filtered
+        "shorts": [],
+        "auto_longs": ["AM", "NVDA"],
+        "auto_shorts": ["ADC"],
+        "staged_picks": {"long": ["APA", "CCJ"], "short": []},
+        "alerts": ["09:31:00 [S-TIER] APA: Bounce", "09:32:00 [S-TIER] NVDA: Bounce"],
+        "alert_symbols": ["APA", "NVDA"],
+        "bucket_roster": {"favorite_setup": {"LONG": ["APA", "NVDA"], "SHORT": ["ADC"]}},
+    }
+
+
+def test_the_report_filter_hides_names_and_counts_them(classified):
+    import autopilot_core as core
+
+    out = core.hide_sector_names(_away_payload(), pick_limit=2)
+    assert [p["symbol"] for p in out["swing_picks"]] == ["NVDA", "CCJ"], "filtered before the cap"
+    assert out["longs"] == ["APA", "NVDA"]
+    assert out["auto_longs"] == ["NVDA"]
+    assert out["auto_shorts"] == []
+    assert out["staged_picks"] == {"long": ["CCJ"], "short": []}
+    assert out["alerts"] == ["09:32:00 [S-TIER] NVDA: Bounce"]
+    assert out["bucket_roster"] == {"favorite_setup": {"LONG": ["NVDA"], "SHORT": []}}
+    assert out["sector_hidden_count"] == 3  # APA, ADC, AM - distinct names
+    text = core.render_away_report(out)
+    assert "Hidden: 3 oil & gas / real estate" in text
+    assert "APA (LONG)" not in text
+
+
+def test_the_report_filter_is_the_identity_when_the_switch_is_off(classified):
+    import autopilot_core as core
+    import sector_exclusion
+
+    sector_exclusion.set_hide_enabled(False)
+    payload = _away_payload()
+    out = core.hide_sector_names(payload, pick_limit=10)
+    assert [p["symbol"] for p in out["swing_picks"]] == ["APA", "NVDA", "ADC", "CCJ", "ZZZZ"]
+    assert out["auto_shorts"] == ["ADC"]
+    assert out.get("sector_hidden_count", 0) == 0
+    assert "Hidden:" not in core.render_away_report(out)
+
+
+def test_a_report_with_nothing_hidden_prints_no_hidden_line(classified):
+    import autopilot_core as core
+
+    out = core.hide_sector_names(
+        {"swing_picks": [{"symbol": "NVDA", "side": "LONG"}], "auto_longs": ["CCJ"]}
+    )
+    assert out["sector_hidden_count"] == 0
+    assert "Hidden:" not in core.render_away_report(out)
+
+
+def test_the_d1_phone_events_skip_hidden_names(classified):
+    import autopilot_core as core
+
+    events = [
+        {"symbol": "APA", "label": "zone", "time_text": "10:00"},
+        {"symbol": "NVDA", "label": "zone", "time_text": "10:01"},
+    ]
+    assert [e["symbol"] for e in core.visible_sector_events(events)] == ["NVDA"]
+
+
+def test_mismatched_alert_symbols_leave_the_alert_lines_alone(classified):
+    import autopilot_core as core
+
+    out = core.hide_sector_names({"alerts": ["a", "b"], "alert_symbols": ["APA"]})
+    assert out["alerts"] == ["a", "b"]
+
+
+def _bare_autopilot(monkeypatch):
+    from collections import deque
+    from types import SimpleNamespace
+
+    import autopilot_core as core
+    from ui.services import autopilot_service as svc_mod
+    from ui.services.autopilot_service import AUTO_PROFILE_AWAY, AutopilotService
+
+    service = AutopilotService.__new__(AutopilotService)
+    service._enabled = True
+    service._profile = AUTO_PROFILE_AWAY
+    service._state = {}
+    service._alerts_today = deque(maxlen=60)
+    service._alert_symbols_today = deque(maxlen=60)
+    service._log_lines = deque(maxlen=60)
+    service._scorecard_line = ""
+    service._outcome_coverage_line = ""
+    service._evening_briefing_lines = []
+    service._d1_events_pending = deque()
+    service._log = lambda *_a, **_k: None
+    service._read_watchlists = lambda: ([], [])
+    service.status_snapshot = lambda: {
+        "ib_status": "connected", "regime": "x", "slots_done": [], "next_slot": ""
+    }
+    today = svc_mod.datetime.now().date().isoformat()
+    rows = [SimpleNamespace(symbol=s, side="LONG", bucket="favorite_setup") for s in ("APA", "NVDA", "ADC")]
+    service._load_swing_feed = lambda: {"data_date": today, "rows": rows, "source": "test"}
+    service._read_auto_watchlist = lambda _path: []
+    service._staged_pick_summary = lambda: {"long": [], "short": []}
+    monkeypatch.setattr(
+        core, "swing_pick_projection", lambda row: {"symbol": row.symbol, "side": row.side, "bucket": row.bucket}
+    )
+    monkeypatch.setattr(core, "swing_family_read", lambda: ({}, None))
+    monkeypatch.setattr(svc_mod, "_working_lately_report_line", lambda: "")
+    return service
+
+
+def test_the_away_report_payload_is_filtered_before_publishing(classified, monkeypatch):
+    import autopilot_core as core
+
+    service = _bare_autopilot(monkeypatch)
+    service._on_alert(type("A", (), {"raw_text": "[S-TIER] APA: Bounce", "time_text": "09:31:00", "symbol": "APA"})())
+    service._on_alert(type("A", (), {"raw_text": "[S-TIER] NVDA: Bounce", "time_text": "09:32:00", "symbol": "NVDA"})())
+    published: list[dict] = []
+    monkeypatch.setattr(
+        core, "publish_away_report", lambda payload: published.append(payload) or {"ok": False, "error": "test"}
+    )
+    service._write_report_locked()
+    assert published, "the report was built"
+    payload = published[0]
+    assert [p["symbol"] for p in payload["swing_picks"]] == ["NVDA"]
+    assert payload["alerts"] == ["09:32:00 [S-TIER] NVDA: Bounce"]
+    assert payload["sector_hidden_count"] == 2
+    assert "Hidden: 2 oil & gas / real estate" in core.render_away_report(payload)
+    assert list(service._alerts_today) == [
+        "09:31:00 [S-TIER] APA: Bounce",
+        "09:32:00 [S-TIER] NVDA: Bounce",
+    ], "the service still records every alert"
+
+
+def test_the_d1_phone_push_skips_hidden_names(classified, monkeypatch):
+    import autopilot_core as core
+    from ui.services import autopilot_service as svc_mod
+
+    service = _bare_autopilot(monkeypatch)
+    service._d1_events_pending.extend(
+        [
+            {"symbol": "APA", "label": "zone", "time_text": "10:00"},
+            {"symbol": "NVDA", "label": "zone", "time_text": "10:01"},
+        ]
+    )
+    seen: list[list[str]] = []
+    monkeypatch.setattr(svc_mod.push_notify, "push_configured", lambda: True)
+    monkeypatch.setattr(svc_mod.push_notify, "send_push", lambda *a, **k: {"ok": True})
+    real_build = core.build_d1_events_push
+    monkeypatch.setattr(
+        core,
+        "build_d1_events_push",
+        lambda events: seen.append([e["symbol"] for e in events]) or real_build(events),
+    )
+    service._maybe_push_d1_events(svc_mod.datetime(2026, 9, 23, 11, 0))
+    assert seen == [["NVDA"]]
