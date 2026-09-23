@@ -5,6 +5,7 @@ about 40 lines and delete the oldest. The full old changelog and inventory are i
 `notes/CHANGELOG.md`, local only.
 
 - 2026-09-23 Test-run guard (conftest): one `-n` > 1 pytest run per machine (OS lock; a second run waits up to 30 min, naming the holder), and `-n` capped to 4 on weekdays 06:00-13:30 PT. Two parallel runs beside the live desk bluescreened the machine. `TBV3_TEST_LOCK=0` / `TBV3_TEST_WORKERS_CAP=off` bypass.
+- 2026-09-23 GUI gc freezes: yfinance ticker threads (strength board, autopilot) now close their own SQLite cache connections instead of leaving them for the GUI-thread young sweep (5 s -> 0.1 s beside a busy thread); journal-health read closes its connection; chart daily-bars cache capped at 512 symbols (LRU); `thread_cpu.jsonl` now logs memory, object count and gc sweep time each minute (`thread_cpu_gauge.py --memory`).
 - 2026-09-23 Hide Oil & Gas / Real Estate (default ON, one shared switch): hidden from the setups table, Alert Center feeds (no row, chart or sound; Focus and armed watches still show) and the phone report (`Hidden: N` line). Display only; unknown sector shows; everything is still recorded.
 - 2026-09-23 Wall gate: review charts within 1 ATR20 of an SMA in their path or of the D1 trendline (or on its break day) are hidden and followed up by auto-armed `sma_break`/`ema15_reject` or an M15/M30 Pullback (cap 20; anything we cannot follow shows as `at wall`). Replay CLI `scripts/wall_gate_replay.py`.
 - 2026-09-23 AGENTS.md: the full suite takes 4-7 min, so run it in the background (a foreground run was killed at 99%).
