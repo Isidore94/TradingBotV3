@@ -26,8 +26,11 @@ ask-first applies. Only the trader may promote a WISHLIST idea into authorized w
 - Test: `.venv\Scripts\python.exe -m pytest tests/ -q -n 8` (~10k tests, ~4 min; ALWAYS
   `-n 8` - trader rule 2026-09-22). While building, run
   your area only (`pytest tests/test_<area>*.py -q`); run the full suite before every
-  commit and merge. Check pytest's exit code, not a piped tail. macOS/Linux Qt:
-  `QT_QPA_PLATFORM=offscreen`.
+  commit and merge. Check pytest's exit code, not a piped tail. Always set
+  `QT_QPA_PLATFORM=offscreen` for pytest, Windows too (parallel Qt tests abort without it).
+  In a worktree, run `C:\Users\Aaron\TradingBotV3\.venv\Scripts\python.exe`; worktrees
+  have no `.venv`. If the full suite fails, rerun only the failing files on `main` before
+  blaming the branch.
 - Lint: `.venv\Scripts\python.exe -m ruff check .` must pass before every commit. Fix the
   code, not the config.
 - Smoke: `.venv\Scripts\python.exe scripts/smoke_check.py` (7/7). Selftest: `launch_gui.py --selftest`.
