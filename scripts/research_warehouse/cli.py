@@ -2081,23 +2081,24 @@ def run_backfill_market_context(
         "unknown": {},
         "by_month": {},
     }
-    m5_cache: dict[str, list[dict]] = {}
-
-    def _spy_m5(month: str) -> list[dict]:
-        if month not in m5_cache:
-            m5_cache[month] = store.read_rows("bar_m5", f"month={month}", symbols=["SPY"])
-        return m5_cache[month]
+    # SPY M5 is small (one symbol); read every month once. The entry is the first
+    # completed RTH bar after the trigger, as the outcome walk defines it, so it
+    # can sit in any later month.
+    all_spy_m5: list[dict] = []
+    if by_month:
+        for partition in sorted({entry.partition for entry in store.manifest.resolve(dataset="bar_m5").entries}):
+            all_spy_m5.extend(store.read_rows("bar_m5", partition, symbols=["SPY"]))
+    report["spy_m5_bars"] = len(all_spy_m5)
 
     def _walk() -> None:
         for month in sorted(by_month):
             first = date.fromisoformat(f"{month}-01")
-            months = (
-                f"{first - timedelta(days=1):%Y-%m}",
-                month,
-                f"{first + timedelta(days=32):%Y-%m}",
-            )
-            # The previous month warms up H4; the next holds an after-close trigger's entry.
-            spy_m5 = [bar for part in months for bar in _spy_m5(part)]
+            # The previous month warms up H4; earlier bars are never needed.
+            floor = datetime(first.year, first.month, 1, tzinfo=timezone.utc) - timedelta(days=31)
+            spy_m5 = [
+                bar for bar in all_spy_m5
+                if isinstance(bar.get("interval_start"), datetime) and bar["interval_start"] >= floor
+            ]
             result = market_bias_context.record_context(
                 store,
                 by_month[month],
@@ -2116,8 +2117,6 @@ def run_backfill_market_context(
                 "status": result.status,
                 "unknown": dict(result.unknown),
             }
-            for stale in [key for key in m5_cache if key < months[0]]:
-                m5_cache.pop(stale, None)
 
     if not apply:
         _walk()

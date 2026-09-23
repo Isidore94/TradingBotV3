@@ -388,3 +388,20 @@ def test_setup_research_reads_the_newest_definition(store, monkeypatch):
 
     assert contexts["occ-1"]["D1"] == "bullish_weak"
     assert contexts["occ-2"]["H1"] == "bearish_weak"
+
+
+def test_context_entry_matches_the_outcome_entry_even_months_later(store, bars_dir, tmp_path):
+    from research_warehouse import outcomes
+
+    _seed_context_lake(store)
+    early = {**_occurrence("occ-early"), "trigger_at": datetime(2026, 5, 1, 21, 0, tzinfo=UTC)}  # two months before any SPY M5
+    store.publish("setup_occurrence", [early], job_id="test")
+    cli.run_backfill_benchmark_d1(store, apply=True, bars_dir=bars_dir, now=NOW, lock_path=tmp_path / "lock")
+
+    report = cli.run_backfill_market_context(store, apply=True, now=NOW, lock_path=tmp_path / "lock")
+
+    assert report["rows"] == 10
+    spy_m5 = store.read_rows("bar_m5", symbols=["SPY"])
+    expected, _session = outcomes._entry_bar_after_d1_close(early, spy_m5)
+    rows = [row for row in store.read_rows("setup_market_context") if row["occurrence_id"] == "occ-early"]
+    assert {row["entry_at"] for row in rows} == {expected["interval_end"]}
