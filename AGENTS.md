@@ -55,6 +55,7 @@ ask-first applies. Only the trader may promote a WISHLIST idea into authorized w
 | Paths to live stores | `scripts/project_paths.py` (always use its constants) |
 | Pre-market prep | `market_prep/` |
 | Indicators (pure) | `scripts/indicators/` |
+| Live bot, cached M5 bars | `bounce_panel.service.current_bot()` -> `bot.m5_chart_bars()` (cache only, never IB; bars are naive market-local time, see `market_session.get_market_local_timezone()`) |
 
 ## Hard invariants — never break
 
