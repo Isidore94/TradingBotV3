@@ -114,6 +114,10 @@ code. When unsure whether a file counts, ask.
 
 Never add a new status, plan, report or handoff `.md` — reports go in chat or an artifact.
 
+Flag token cost. When something in the repo costs a lot of tokens (a huge file, long
+comments, a hard lookup, a failed agent run), say so in chat and add one line under
+`## Token cost` in `TODO.md`. Delete the line when it is fixed.
+
 ## Frozen exe
 
 The desk runs from source; a pushed commit is live at the trader's next restart, and the

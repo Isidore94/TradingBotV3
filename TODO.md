@@ -50,6 +50,17 @@ here.
   - `ai_summary._journal_source` lets raw exit words ride into narration next to P&L.
   - `journal_feed._store()` is a module-global cache.
 
+## Token cost
+
+Things that make AI sessions expensive. One line each; delete when fixed.
+
+- Mentor files are huge and mostly incident-history comments: `ui/widgets/trade_mentor_card.py`
+  (3.3k lines), `trade_mentor_trade_check.py` (1.9k). Trim comments to what the code does.
+- Giant files every lookup pays for: `alert_center_panel.py` (8.7k), `autopilot_core.py` (4.9k),
+  `weekend_prep_panel.py` (4.4k), `ai_summary.py` (4.3k). See the split item below.
+- 40 stale agent worktrees in `.claude/worktrees/`, some locked; a locked one blocked a builder
+  on 2026-09-23. Clean up with the trader's yes (other sessions may use them).
+
 ## Housekeeping
 
 - Split the giant files, starting with `ui/panels/alert_center_panel.py` (8k lines).
