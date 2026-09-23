@@ -268,3 +268,30 @@ def test_the_default_path_is_the_project_paths_constant():
     assert project_paths.DAY_RECAP_EVENTS_FILE.name == "day_recap_events.jsonl"
     assert project_paths.DAY_RECAP_EVENTS_FILE.parent == project_paths.PERSISTENT_DATA_DIR
     assert "DAY_RECAP_EVENTS_FILE" in inspect.getsource(recap_store._default_path)
+
+
+def test_a_clue_can_carry_a_context_snapshot_and_old_calls_still_work(store):
+    rs, path = store
+    bar_time = datetime(2026, 9, 22, 10, 5, tzinfo=ET)
+    plain = rs.record_clue(
+        session_date="2026-09-22", symbol="AMD", timeframe="M5", bar_time=bar_time,
+        price=150.0, clue_tag="gap", now=NOW, path=path,
+    )
+    assert "context" not in plain
+    snap = {
+        "bar": {"open": 149.5, "high": 150.5, "low": 149.0, "close": 150.2, "volume": 1200.0},
+        "spy_close": 512.3,
+    }
+    row = rs.record_clue(
+        session_date="2026-09-22", symbol="AMD", timeframe="M5", bar_time=bar_time,
+        price=150.0, clue_tag="volume_surge", context=snap, now=NOW, path=path,
+    )
+    assert row["context"] == snap
+    assert _lines(path)[-1]["context"] == snap
+    for bad in (["not", "a", "dict"], {"when": object()}):
+        with pytest.raises(rs.RecapError):
+            rs.record_clue(
+                session_date="2026-09-22", symbol="AMD", timeframe="M5", bar_time=bar_time,
+                price=150.0, clue_tag="gap", context=bad, now=NOW, path=path,
+            )
+    assert len(_lines(path)) == 2
