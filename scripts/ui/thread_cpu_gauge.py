@@ -23,12 +23,18 @@ Always on: one syscall per thread per minute costs nothing, and the point is
 that it is already running the day the next hot thread appears. It measures
 and reports; it never stops, renices or interrupts anything.
 
+Each record also carries the process's memory (working set and commit) and
+the cyclic collector's work over the interval (sweeps, time, objects freed),
+so a session log shows the heap's growth curve and which sweeps were slow.
+
 Read the log back with::
 
     .venv\\Scripts\\python.exe scripts/ui/thread_cpu_gauge.py
+    .venv\\Scripts\\python.exe scripts/ui/thread_cpu_gauge.py --memory
 """
 
 import ctypes
+import gc
 import json
 import logging
 import os
@@ -49,6 +55,9 @@ TOP_THREADS = 6
 #: A runaway loop must not fill the disk; one record a minute is 1,440 a day.
 MAX_RECORDS_PER_HOUR = 120
 LOG_NAME = "thread_cpu.jsonl"
+#: ``len(gc.get_objects())`` holds the interpreter lock for its whole walk. The
+#: first time it costs more than this it is switched off for the session.
+OBJECT_COUNT_BUDGET_MS = 50.0
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -119,6 +128,119 @@ def thread_cpu_seconds(native_id: int) -> float | None:
     return None
 
 
+class _PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.c_uint32),
+        ("PageFaultCount", ctypes.c_uint32),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+        ("PrivateUsage", ctypes.c_size_t),
+    ]
+
+
+def process_memory() -> dict[str, float]:
+    """This process's working set and commit in MB; {} where unsupported."""
+    mb = 1024.0 * 1024.0
+    try:
+        if sys.platform.startswith("win"):
+            counters = _PROCESS_MEMORY_COUNTERS_EX()
+            counters.cb = ctypes.sizeof(counters)
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            psapi = ctypes.windll.psapi  # type: ignore[attr-defined]
+            psapi.GetProcessMemoryInfo.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32
+            ]
+            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+            ok = psapi.GetProcessMemoryInfo(
+                kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
+            )
+            if not ok:
+                return {}
+            return {
+                "rss_mb": round(counters.WorkingSetSize / mb, 1),
+                "commit_mb": round(counters.PrivateUsage / mb, 1),
+                "peak_commit_mb": round(counters.PeakPagefileUsage / mb, 1),
+            }
+        if sys.platform.startswith("linux"):
+            pages = Path("/proc/self/statm").read_text(encoding="ascii").split()
+            page = os.sysconf("SC_PAGE_SIZE")
+            return {"rss_mb": round(int(pages[1]) * page / mb, 1)}
+    except Exception:
+        return {}
+    return {}
+
+
+class GcTimer:
+    """Times every cyclic collection via ``gc.callbacks``; drained once a tick.
+
+    The callback runs on whichever thread collects (the GUI thread on the desk)
+    and does a clock read and a few additions, nothing more.
+    """
+
+    def __init__(self, clock=time.perf_counter) -> None:
+        self._clock = clock
+        self._started: float | None = None
+        self._young_at_start = 0
+        self._window = self._empty()
+        self.last_full: dict | None = None
+
+    @staticmethod
+    def _empty() -> dict:
+        return {"young": [0, 0.0, 0.0, 0, 0], "full": [0, 0.0, 0.0, 0, 0]}
+
+    def install(self) -> None:
+        if self._callback not in gc.callbacks:
+            gc.callbacks.append(self._callback)
+
+    def uninstall(self) -> None:
+        while self._callback in gc.callbacks:
+            gc.callbacks.remove(self._callback)
+
+    def _callback(self, phase: str, info: dict) -> None:
+        if phase == "start":
+            self._started = self._clock()
+            self._young_at_start = gc.get_count()[0]
+            return
+        if self._started is None:
+            return
+        ms = (self._clock() - self._started) * 1000.0
+        self._started = None
+        full = int(info.get("generation", 0)) >= 2
+        # [sweeps, total ms, max ms, objects freed, largest young generation seen]
+        row = self._window["full" if full else "young"]
+        row[0] += 1
+        row[1] += ms
+        row[2] = max(row[2], ms)
+        row[3] += int(info.get("collected", 0) or 0)
+        row[4] = max(row[4], int(self._young_at_start))
+        if full:
+            self.last_full = {
+                "ms": round(ms, 1),
+                "freed": int(info.get("collected", 0) or 0),
+                "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+
+    def drain(self) -> dict:
+        window, self._window = self._window, self._empty()
+        out: dict[str, Any] = {}
+        for name, (count, total, worst, freed, young) in window.items():
+            out[name] = {
+                "sweeps": count,
+                "total_ms": round(total, 1),
+                "max_ms": round(worst, 1),
+                "freed": freed,
+                "max_young_objects": young,
+            }
+        out["last_full"] = self.last_full
+        return out
+
+
 def supported() -> bool:
     return sys.platform.startswith("win") or sys.platform.startswith("linux")
 
@@ -163,6 +285,8 @@ class ThreadCpuGauge:
         self._hour_key = ""
         self.last_record: dict | None = None
         self.hot_seen: list[dict] = []
+        self.gc_timer: GcTimer | None = None
+        self._count_objects = True
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
@@ -176,6 +300,8 @@ class ThreadCpuGauge:
         worker, self._worker = self._worker, None
         if worker is not None:
             worker.join(timeout=1.0)
+        if self.gc_timer is not None:
+            self.gc_timer.uninstall()
 
     @property
     def records_written(self) -> int:
@@ -218,6 +344,9 @@ class ThreadCpuGauge:
             "top": rows[:TOP_THREADS],
             "hot": [row["thread"] for row in hot],
         }
+        record["memory"] = self._memory_fields()
+        if self.gc_timer is not None:
+            record["gc"] = self.gc_timer.drain()
         self.last_record = record
         for row in hot:
             self.hot_seen.append(row)
@@ -230,6 +359,18 @@ class ThreadCpuGauge:
             )
         self._write(record)
         return record
+
+    def _memory_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = dict(process_memory())
+        fields["gc_counts"] = list(gc.get_count())
+        if self._count_objects:
+            started = time.perf_counter()
+            fields["gc_objects"] = len(gc.get_objects())
+            cost_ms = (time.perf_counter() - started) * 1000.0
+            fields["gc_objects_ms"] = round(cost_ms, 1)
+            if cost_ms > OBJECT_COUNT_BUDGET_MS:
+                self._count_objects = False  # too dear to hold the lock for
+        return fields
 
     def _write(self, record: dict[str, Any]) -> None:
         hour = datetime.now().strftime("%Y-%m-%d %H")
@@ -253,6 +394,8 @@ def install() -> ThreadCpuGauge | None:
     """Start the gauge for this process. Never raises."""
     try:
         gauge = ThreadCpuGauge(log_path=log_path())
+        gauge.gc_timer = GcTimer()
+        gauge.gc_timer.install()
         gauge.start()
         return gauge
     except Exception:
@@ -298,8 +441,41 @@ def summarize(path: Path | str | None = None, *, top: int = 10) -> list[dict]:
     return rows[:top]
 
 
+def memory_curve(path: Path | str | None = None) -> list[dict]:
+    """One row per record that carries memory: time, MB, objects, gc time."""
+    rows = []
+    for record in load_records(path):
+        memory = record.get("memory")
+        if not isinstance(memory, dict):
+            continue
+        sweeps = record.get("gc") or {}
+        rows.append(
+            {
+                "ts": str(record.get("ts") or ""),
+                "rss_mb": memory.get("rss_mb"),
+                "commit_mb": memory.get("commit_mb"),
+                "gc_objects": memory.get("gc_objects"),
+                "young_ms": (sweeps.get("young") or {}).get("total_ms"),
+                "young_max_ms": (sweeps.get("young") or {}).get("max_ms"),
+                "full_ms": (sweeps.get("full") or {}).get("total_ms"),
+                "full_max_ms": (sweeps.get("full") or {}).get("max_ms"),
+            }
+        )
+    return rows
+
+
 def _main() -> int:
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else log_path()
+    args = [arg for arg in sys.argv[1:] if arg != "--memory"]
+    target = Path(args[0]) if args else log_path()
+    if "--memory" in sys.argv[1:]:
+        print(f"{'time':25}  {'rss MB':>8}  {'commit MB':>9}  {'objects':>9}  "
+              f"{'young ms':>9}  {'max':>7}  {'full ms':>8}  {'max':>7}")
+        widths = (("rss_mb", 8), ("commit_mb", 9), ("gc_objects", 9), ("young_ms", 9),
+                  ("young_max_ms", 7), ("full_ms", 8), ("full_max_ms", 7))
+        for row in memory_curve(target):
+            cells = [f"{'-' if row[key] is None else row[key]:>{width}}" for key, width in widths]
+            print("  ".join([f"{row['ts']:25}", *cells]))
+        return 0
     rows = summarize(target)
     if not rows:
         print(f"No thread-CPU records in {target}")

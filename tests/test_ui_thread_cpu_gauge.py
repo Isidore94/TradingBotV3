@@ -78,3 +78,86 @@ def test_the_summary_reads_the_log_back(tmp_path):
     rows = summarize(log)
     assert rows[0] == {"thread": "tee", "cpu_s": 90.0, "hot_ticks": 2}
     assert rows[1]["thread"] == "MainThread" and rows[1]["hot_ticks"] == 0
+
+
+# ---------------------------------------------------------------------
+# Memory and collector fields (2026-09-23: 20-44 s of GUI sweeps per 10 min
+# with no record of heap size or sweep cost to explain them).
+# ---------------------------------------------------------------------
+def test_each_record_carries_process_memory_and_the_object_count(tmp_path):
+    from ui import thread_cpu_gauge
+
+    gauge = ThreadCpuGauge(interval_seconds=60, log_path=tmp_path / "t.jsonl")
+    record = gauge.tick({}, {}, 60.0)
+
+    memory = record["memory"]
+    assert len(memory["gc_counts"]) == 3
+    assert memory["gc_objects"] > 0 and memory["gc_objects_ms"] >= 0.0
+    if sys.platform.startswith("win"):
+        assert memory["rss_mb"] > 1.0 and memory["commit_mb"] > 1.0
+        assert memory["peak_commit_mb"] >= memory["commit_mb"]
+    assert load_records(tmp_path / "t.jsonl")[0]["memory"]["gc_objects"] == memory["gc_objects"]
+    assert thread_cpu_gauge.memory_curve(tmp_path / "t.jsonl")[0]["gc_objects"] == memory["gc_objects"]
+
+
+def test_the_object_count_switches_itself_off_when_it_costs_too_much(tmp_path, monkeypatch):
+    from ui import thread_cpu_gauge
+
+    monkeypatch.setattr(thread_cpu_gauge, "OBJECT_COUNT_BUDGET_MS", -1.0)
+    gauge = ThreadCpuGauge(interval_seconds=60, log_path=tmp_path / "t.jsonl")
+    first = gauge.tick({}, {}, 60.0)
+    second = gauge.tick({}, {}, 60.0)
+
+    assert "gc_objects" in first["memory"], "measured once, so the log says what it cost"
+    assert "gc_objects" not in second["memory"], "then never again this session"
+    assert "gc_counts" in second["memory"]
+
+
+def test_gc_timer_times_young_and_full_sweeps_and_drains_per_tick(tmp_path):
+    from ui.thread_cpu_gauge import GcTimer
+
+    now = [0.0]
+    timer = GcTimer(clock=lambda: now[0])
+
+    def sweep(generation, seconds, collected):
+        timer._callback("start", {"generation": generation})
+        now[0] += seconds
+        timer._callback("stop", {"generation": generation, "collected": collected, "uncollectable": 0})
+
+    sweep(0, 0.010, 5)
+    sweep(0, 1.500, 80)
+    sweep(2, 0.700, 1000)
+
+    gauge = ThreadCpuGauge(interval_seconds=60, log_path=tmp_path / "t.jsonl")
+    gauge.gc_timer = timer
+    record = gauge.tick({}, {}, 60.0)
+
+    young, full = record["gc"]["young"], record["gc"]["full"]
+    assert young["sweeps"] == 2 and young["total_ms"] == 1510.0 and young["max_ms"] == 1500.0
+    assert young["freed"] == 85
+    assert full["sweeps"] == 1 and full["max_ms"] == 700.0 and full["freed"] == 1000
+    assert record["gc"]["last_full"]["ms"] == 700.0
+
+    # Drained: the next minute starts from zero but remembers the last full sweep.
+    again = gauge.tick({}, {}, 60.0)
+    assert again["gc"]["young"]["sweeps"] == 0 and again["gc"]["full"]["sweeps"] == 0
+    assert again["gc"]["last_full"]["ms"] == 700.0
+
+
+def test_gc_timer_sees_a_real_collection_and_uninstalls_cleanly():
+    import gc
+
+    from ui.thread_cpu_gauge import GcTimer
+
+    timer = GcTimer()
+    timer.install()
+    timer.install()  # idempotent
+    try:
+        assert gc.callbacks.count(timer._callback) == 1
+        gc.collect(0)
+        gc.collect(2)
+    finally:
+        timer.uninstall()
+    assert timer._callback not in gc.callbacks
+    drained = timer.drain()
+    assert drained["young"]["sweeps"] >= 1 and drained["full"]["sweeps"] >= 1
