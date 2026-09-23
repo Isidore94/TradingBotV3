@@ -22,7 +22,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   Capture tab fill + veto v4 (q/w/e), AGENTS.md test lines. Suite 10,524 passed, 2 load flakes green alone; selftest 97/97 source and frozen.
   Mentor-ask-once merged without a reviewer round.
 - **Wall gate + Oil & Gas / Real Estate hide** merged 2026-09-23: D1/Focus review charts at an in-path SMA or the D1 trendline (1 ATR20) hide and auto-arm a follow-up (cap 20, else shown tagged `at wall`); Oil & Gas / Real Estate hidden by one switch. Live at the next restart. Gate #196.
-- **Perf integration** on `claude/perf-integrate-2026-09-23`, not on `main`: test-run guard (the 09-23 07:52 bluescreen came from two parallel
+- **Perf fixes** merged 2026-09-23 (`f3b2bfc8`), live at the next restart: test-run guard (the 09-23 07:52 bluescreen came from two parallel
   `-n 8` suites beside the desk), queued arms + no bot RPC on the Qt thread (gate #197), yfinance SQLite gc freeze fix + memory in `thread_cpu.jsonl`.
   Suite 10,681 passed. Owed: memory numbers in the swing-scan phase log (the scan child hit 4.7 GB).
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
