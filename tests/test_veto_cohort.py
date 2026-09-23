@@ -550,6 +550,17 @@ class CanonicalCohortTests(unittest.TestCase):
             canonical_veto_cohort("veto_v3_sma_incoming"), "veto_v3_sma_incoming"
         )
 
+    def test_the_v4_bump_restarts_nothing_and_its_new_codes_stand_alone(self) -> None:
+        """v4 (2026-09-23) only added bad_industry, too_early, not_remotely_good."""
+        from ui.annotations.veto_cohort import canonical_veto_cohort
+
+        self.assertEqual(canonical_veto_cohort("veto_v4_volume_dry"), "veto_v1_volume_dry")
+        self.assertEqual(
+            canonical_veto_cohort("veto_v4_sma_incoming"), "veto_v3_sma_incoming"
+        )
+        for code in ("bad_industry", "too_early", "not_remotely_good"):
+            self.assertEqual(canonical_veto_cohort(f"veto_v4_{code}"), f"veto_v4_{code}")
+
     def test_a_pre_versioning_row_pools_with_the_version_that_INTRODUCED_its_code(
         self,
     ) -> None:

@@ -257,12 +257,16 @@ class CaptureRail(QFrame):
         # to reach Note. FlowLayout is the same primitive the arm bar uses for
         # the same reason: wide hosts get them side by side, and the narrow
         # Capture tab still gets a single column with nothing clipped.
-        sections = FlowLayout(margin=0, spacing=theme.px(8))
+        #
+        # fill=True (trader, 2026-09-23: "make the capture tab fill out theres
+        # a lot of dead space at the bottom"): when the three sections sit on
+        # one line they take the whole tab, and the two picklists grow to use
+        # the height, so more reasons show without scrolling.
+        sections = FlowLayout(margin=0, spacing=theme.px(8), fill=True)
         for section in (self._veto_section(), self._like_section(), self._note_section()):
             section.setMinimumWidth(theme.px(280))
             sections.addWidget(section)
-        layout.addLayout(sections)
-        layout.addStretch(1)
+        layout.addLayout(sections, 1)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("CaptureStatus")
@@ -308,11 +312,10 @@ class CaptureRail(QFrame):
         # eliding them, and a veto vocabulary the trader has to guess at is
         # worse than one that takes a few more pixels of a row that now sits
         # beside two other sections instead of above them.
-        rows = max(1, min(self.reason_list.count(), 14))
-        self.reason_list.setMaximumHeight(
-            rows * theme.px(21) + theme.px(10)
-        )
-        inner.addWidget(self.reason_list)
+        #
+        # No height cap (2026-09-23): the list takes whatever height its
+        # section is given, so on the Capture tab it shows every reason.
+        inner.addWidget(self.reason_list, 1)
 
         self.veto_note_input = QLineEdit()
         self.veto_note_input.setPlaceholderText("note (optional)")
@@ -382,9 +385,7 @@ class CaptureRail(QFrame):
         # thing is the WHOLE like: `commit_like` refuses only when no setup is
         # picked.
         self.setup_list.itemActivated.connect(lambda item: self._claim_picked(item))
-        rows = max(1, min(self.setup_list.count(), 14))
-        self.setup_list.setMaximumHeight(rows * theme.px(21) + theme.px(10))
-        inner.addWidget(self.setup_list)
+        inner.addWidget(self.setup_list, 1)
 
         self.like_note_input = QLineEdit()
         # Packet T2 (trader, 2026-09-04): the why is OPTIONAL on a claimed like.
@@ -429,6 +430,9 @@ class CaptureRail(QFrame):
         self.note_button.clicked.connect(self.commit_note)
         inner.addWidget(self.note_button)
         inner.addWidget(self._pass_block())
+        # Keeps Note and the pass block at the top when the section is
+        # stretched to the tab's height.
+        inner.addStretch(1)
         return frame
 
     def _pass_block(self) -> QFrame:
