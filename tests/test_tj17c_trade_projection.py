@@ -151,7 +151,8 @@ def test_real_trade_row_shows_late_words_and_opens_exact_journal_trade():
             "verdict": "right",
         }]
         panel.render(payload)
-        assert panel.calls_table.item(0, 1).text() == "rest_of_day"
+        # Day Recap step A: the horizon id reads as words.
+        assert panel.calls_table.item(0, 1).text() == "rest of day"
         panel.calls_table.cellDoubleClicked.emit(0, 0)
         assert panel.entries.currentRow() == 0
         assert "I chased the open" in panel.trade_detail.toPlainText()

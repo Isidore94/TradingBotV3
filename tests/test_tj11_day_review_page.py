@@ -21,7 +21,10 @@ The contract these tests pin, so the builder has nothing to guess
     arms a `QTimer.singleShot`) - read at most once per symbol.
 
 ``scripts/ui/panels/day_review_panel.py``
-    ``TJ2B_WALKAWAY_COLUMNS`` gains the new moves with FULL headers;
+    ``TJ2B_WALKAWAY_COLUMNS`` gains the new moves with FULL headers; since
+    Day Recap step A (2026-09-23) the five populations are filter chips
+    (``miss_chips``) over ONE ``miss_table``, and the old per-table names below
+    read as those;
     ``walkaway_tables`` gains ``"earlier_calls"``; ``walkaway_skill`` is one
     label above the grid; ``walkaway_sentences`` is one label per population,
     above its table. Every table on the page keeps the TJ-1L width rule (last
@@ -146,55 +149,55 @@ def _payload(**overrides):
 # -- the page ----------------------------------------------------------------
 
 
-def test_the_page_shows_a_fifth_earlier_calls_table(panel):
-    assert "earlier_calls" in panel.walkaway_tables
-    assert isinstance(panel.walkaway_tables["earlier_calls"], QTableWidget)
-    assert len(panel.walkaway_tables) == 5
+def test_the_page_shows_a_fifth_earlier_calls_population(panel):
+    """Day Recap step A: five populations are five chips over ONE table."""
+    assert "earlier_calls" in panel.miss_chips
+    assert set(panel.miss_chips) == set(POPULATIONS)
+    assert isinstance(panel.miss_table_for("earlier_calls"), QTableWidget)
+    assert len(panel.findChildren(QTableWidget, "DayReviewMissTable")) == 1
 
 
-def test_the_fifth_table_is_inside_the_walkaway_grid(panel):
-    table = panel.walkaway_tables["earlier_calls"]
-    owner = panel.walkaway_grid.parentWidget()
-
-    parent = table.parentWidget()
-    while parent is not None and parent is not owner:
-        parent = parent.parentWidget()
-    assert parent is owner, "the fifth population is not in the walk-away grid"
+def test_the_fifth_chip_sits_in_the_miss_section(panel):
+    chip = panel.miss_chips["earlier_calls"]
+    assert panel.miss_section.isAncestorOf(chip)
+    assert panel.miss_section.isAncestorOf(panel.miss_table)
 
 
-def test_every_walkaway_table_carries_the_new_columns_with_full_headers(panel):
+def test_the_miss_table_carries_the_new_columns_with_full_headers(panel):
     from ui.panels.day_review_panel import TJ2B_WALKAWAY_COLUMNS
 
     for column in NEW_COLUMNS:
         assert column in TJ2B_WALKAWAY_COLUMNS, column
-    for name, table in panel.walkaway_tables.items():
-        headers = [
-            table.horizontalHeaderItem(index).text()
-            for index in range(table.columnCount())
-        ]
-        for column in NEW_COLUMNS:
-            assert column in headers, (name, column, headers)
+    table = panel.miss_table
+    headers = [
+        table.horizontalHeaderItem(index).text()
+        for index in range(table.columnCount())
+    ]
+    for column in NEW_COLUMNS:
+        assert column in headers, (column, headers)
 
 
-def test_every_walkaway_table_keeps_the_tj1l_width_rule(panel):
-    for name, table in panel.walkaway_tables.items():
-        assert table.horizontalHeader().stretchLastSection() is True, name
+def test_the_miss_table_keeps_the_tj1l_width_rule(panel):
+    assert panel.miss_table.horizontalHeader().stretchLastSection() is True
 
 
-def test_the_skill_line_sits_above_the_walkaway_grid(panel):
+def test_the_skill_line_sits_above_the_miss_table(panel):
     assert isinstance(panel.walkaway_skill, QLabel)
+    assert panel.miss_section.isAncestorOf(panel.walkaway_skill)
+    panel.resize(1600, 1000)
+    panel.show()
+    QApplication.processEvents()
+    try:
+        skill_y = panel.walkaway_skill.mapTo(panel.miss_section, panel.walkaway_skill.rect().topLeft()).y()
+        table_top = panel.miss_table.mapTo(panel.miss_section, panel.miss_table.rect().topLeft())
+        assert skill_y < table_top.y(), "the skill line is a header, above the table"
+    finally:
+        panel.hide()
 
-    owner = panel.walkaway_grid.parentWidget()
-    parent = panel.walkaway_skill.parentWidget()
-    while parent is not None and parent is not owner:
-        parent = parent.parentWidget()
-    assert parent is not owner, "the skill line is a header, not a grid cell"
 
-
-def test_every_population_gets_its_own_sentence_label(panel):
-    assert set(panel.walkaway_sentences) == set(POPULATIONS)
-    for name, label in panel.walkaway_sentences.items():
-        assert isinstance(label, QLabel), name
+def test_the_selected_population_gets_its_own_sentence_label(panel):
+    assert isinstance(panel.walkaway_sentence, QLabel)
+    assert set(panel.miss_chips) == set(POPULATIONS)
 
 
 def test_rendering_paints_the_sentence_and_the_skill_line_from_the_payload(panel):
@@ -220,7 +223,10 @@ def test_rendering_paints_the_sentence_and_the_skill_line_from_the_payload(panel
     panel.render(_payload(walkaway=day))
 
     assert "n 55" in panel.walkaway_skill.text()
-    assert panel.walkaway_sentences["rejected"].text() == "rejected sentence"
+    panel.select_miss_population("rejected")
+    assert panel.walkaway_sentence.text() == "rejected sentence"
+    panel.select_miss_population("claimed_d1")
+    assert panel.walkaway_sentence.text() == "claimed_d1 sentence"
 
 
 def test_an_unmeasured_move_paints_a_dash_and_never_a_zero(panel):
@@ -231,12 +237,11 @@ def test_an_unmeasured_move_paints_a_dash_and_never_a_zero(panel):
     object.__setattr__(day, "skill", None)
     panel.render(_payload(walkaway=day))
 
-    table = panel.walkaway_tables["rejected"]
+    table = panel.miss_table_for("rejected")
     headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
     for column in ("Against you first %", "Real miss", "At the close (ATR)"):
         text = table.item(0, headers.index(column)).text()
         assert text == UNMEASURED, (column, text)
-
 
 def test_rendering_the_walkaway_grid_starts_no_second_read(panel):
     day = _walkaway_day()

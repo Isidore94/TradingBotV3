@@ -311,12 +311,14 @@ def test_the_walkaway_is_five_tables_under_its_fixed_titles(panel):
         "Left on the table %",
         "State",
     ]
-    assert tuple(panel.walkaway_tables) == (
+    # Day Recap step A (2026-09-23): the five populations are filter chips
+    # over ONE table that keeps all sixteen columns.
+    assert tuple(panel.miss_chips) == (
         "rejected", "liked_not_traded", "traded_left_early", "claimed_d1", "earlier_calls",
     )
-    for table in panel.walkaway_tables.values():
-        assert table.columnCount() == len(expected)
-        assert [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())] == expected
+    table = panel.miss_table
+    assert table.columnCount() == len(expected)
+    assert [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())] == expected
 
 
 def test_the_trades_line_is_read_only_and_names_the_money_once(panel):

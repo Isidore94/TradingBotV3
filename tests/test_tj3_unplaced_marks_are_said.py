@@ -184,7 +184,7 @@ def test_the_name_pane_says_it_too(panel, qapp):
     )
     panel.render(payload)
 
-    table = panel.walkaway_tables["rejected"]
+    table = panel.miss_table_for("rejected")
     table.itemActivated.emit(table.item(0, 1))
     qapp.processEvents()
 

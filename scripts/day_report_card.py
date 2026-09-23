@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -1547,6 +1548,208 @@ def _unreadable_sessions(cards: Sequence[Any]) -> dict[str, tuple[str, ...]]:
     return {key: tuple(sorted(names)) for key, names in found.items()}
 
 
+# ---------------------------------------------------------------------------
+# display helpers for the Day Review page (Day Recap step A)
+# ---------------------------------------------------------------------------
+
+#: Internal names the trader should never read, and the words that replace them.
+_PLAIN_NAMES: tuple[tuple[str, str], ...] = (
+    (grades.CONGRUENCE_M5_KIND, "your M5 picks' sides"),
+    ("picks_side_mix", "your D1 picks' sides"),
+    ("desk_d1_label", "the desk's D1 label"),
+    ("fills_bias", "your fills"),
+    ("claimed_before_entry", "claimed before entry"),
+    ("same_session", "same session"),
+    ("recalled_after", "recalled after"),
+    ("liked_or_claimed", "liked or claimed"),
+)
+#: Packet names like "(TJ-12F)" or "TJ-2 brings ...", with any brackets.
+_PACKET = re.compile(r"\s*\(?\bTJ-\d+[A-Z]*\b\)?")
+_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])")
+
+
+def _all_zero(part: str) -> bool:
+    """True when a clause holds numbers and every one of them is zero."""
+    numbers = _NUMBER.findall(part)
+    return bool(numbers) and all(float(number) == 0 for number in numbers)
+
+
+def _split_top(text: str, separators: tuple[str, ...]) -> list[str]:
+    """Split on `separators` outside parentheses, keeping each separator."""
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            for sep in separators:
+                if text.startswith(sep, index):
+                    parts.append(text[start:index])
+                    parts.append(sep)
+                    index += len(sep)
+                    start = index
+                    break
+            else:
+                index += 1
+                continue
+            continue
+        index += 1
+    parts.append(text[start:])
+    return parts
+
+
+def _drop_zero_clauses(text: str) -> str:
+    """Remove comma/semicolon clauses and sentences that are only zeros."""
+    sentences = _split_top(text, (". ", " · "))
+    kept_sentences: list[str] = []
+    for index in range(0, len(sentences), 2):
+        body = sentences[index]
+        sep = sentences[index + 1] if index + 1 < len(sentences) else ""
+        pieces = _split_top(body, (", ", "; "))
+        head = ""
+        first = pieces[0]
+        # "Label: 0 x, 3 y" - the label is kept with whatever survives.
+        if ": " in first and not _all_zero(first.split(": ", 1)[0]):
+            head, pieces[0] = first.split(": ", 1)[0] + ": ", first.split(": ", 1)[1]
+        clauses = [pieces[i] for i in range(0, len(pieces), 2)]
+        joins = [pieces[i] for i in range(1, len(pieces), 2)]
+        survivors = [
+            (clause, joins[i - 1] if i else "")
+            for i, clause in enumerate(clauses)
+            if not _all_zero(clause)
+        ]
+        if not survivors:
+            continue
+        rebuilt = survivors[0][0]
+        for clause, join in survivors[1:]:
+            rebuilt += (join or ", ") + clause
+        if body.rstrip().endswith(".") and not rebuilt.rstrip().endswith("."):
+            rebuilt = rebuilt.rstrip() + "."
+        kept_sentences.append(head + rebuilt + sep)
+    out = "".join(kept_sentences).strip()
+    for sep in (" ·", "·"):
+        if out.endswith(sep):
+            out = out[: -len(sep)].rstrip()
+    return out
+
+
+def plain_words(text: Any) -> str:
+    """A report-card or congruence sentence as the trader should read it.
+
+    Display only - the stored card and the night's pack keep their words.
+    Internal ids become words, packet names go, clauses that are all zeros or
+    "0 of 0" are hidden, and "unmeasured" reads "not measured" (unknown is
+    never shown as zero).
+    """
+    out = str(text or "")
+    for name, words in _PLAIN_NAMES:
+        out = re.sub(rf"\b{re.escape(name)}\b", words, out)
+    out = _PACKET.sub("", out)
+    out = re.sub(r"\bunmeasured\b", "not measured", out)
+    # The line's own label ("Did well:") survives even when its first
+    # sentence is all zeros.
+    label, _sep, rest = out.partition(": ")
+    if rest and len(label) <= 24 and not re.search(r"\d", label):
+        out = f"{label}: {_drop_zero_clauses(rest) or 'nothing to report.'}"
+    else:
+        out = _drop_zero_clauses(out)
+    # A leading "Plus" whose first half was hidden reads oddly on its own.
+    out = re.sub(r"(^|: )Plus (\d)", r"\1\2", out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out
+
+
+def _money(value: Any) -> float | None:
+    try:
+        return None if value is None or value == "" else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _card_line(card: Any, key: str) -> Mapping[str, Any]:
+    rows = card.get("lines") if isinstance(card, Mapping) else getattr(card, "lines", ())
+    for row in rows or ():
+        if isinstance(row, Mapping) and row.get("key") == key:
+            return row
+    return {}
+
+
+def glance(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The numbers at the top of Day Review, from ONE payload. Pure.
+
+    Every value is either measured or ``None`` ("not measured"); nothing
+    unknown is shown as a zero.
+    """
+    trades = [row for row in (payload.get("trades") or ()) if isinstance(row, Mapping)]
+    nets = [(row, _money(row.get("net_pnl"))) for row in trades]
+    known = [(row, net) for row, net in nets if net is not None]
+    pnl = sum(net for _row, net in known) if known else None
+    risks = [_money(row.get("planned_risk")) for row, _net in known]
+    r_value = (
+        sum(net / risk for (_row, net), risk in zip(known, risks))
+        if known and all(risk and risk > 0 for risk in risks)
+        else None
+    )
+    wins = sum(1 for _row, net in known if net > 0)
+    losses = sum(1 for _row, net in known if net < 0)
+    best = max(known, key=lambda pair: pair[1], default=None)
+    biggest_win = (
+        {"symbol": str(best[0].get("symbol") or ""), "net_pnl": best[1],
+         "trade_id": str(best[0].get("trade_id") or "")}
+        if best and best[1] > 0 else None
+    )
+
+    process = _card_line(payload.get("report_card"), "process")
+    reads = _card_line(payload.get("report_card"), "your_reads")
+    planned = None
+    if trades and process:
+        planned = {
+            "planned": int(process.get("planned") or 0),
+            "unplanned": int(process.get("unplanned") or 0),
+            "unmeasured": int(process.get("unmeasured") or 0),
+            "lanes_unread": tuple(process.get("lanes_unread") or ()),
+        }
+    calls = None
+    if reads and int(reads.get("n") or 0):
+        calls = {name: int(reads.get(name) or 0) for name in ("right", "wrong", "flat", "pending")}
+
+    miss = None
+    walkaway = payload.get("walkaway")
+    for population in ("rejected", "liked_not_traded"):
+        for row in _rows_of(walkaway, population):
+            if _text(getattr(row, "real_miss", "")) != real_miss.RUN:
+                continue
+            moved = getattr(row, "ran_after_pct", None)
+            if moved is None:
+                continue
+            if miss is None or float(moved) > miss["ran_after_pct"]:
+                miss = {
+                    "symbol": _text(getattr(row, "symbol", "")),
+                    "ran_after_pct": float(moved),
+                    "population": population,
+                }
+    day_type = _text(payload.get("day_type"))
+    return {
+        "trades": len(trades),
+        "pnl": pnl,
+        "pnl_counted": len(known),
+        "r": r_value,
+        "wins": wins,
+        "losses": losses,
+        "planned": planned,
+        "calls": calls,
+        "day_type": day_type or None,
+        "biggest_win": biggest_win,
+        "biggest_miss": miss,
+        "pnl_by_session": tuple(payload.get("pnl_by_session") or ()),
+    }
+
+
 __all__ = [
     "DESK_ORIGIN_LANES_READ",
     "LEDGER_TAIL_BYTES",
@@ -1558,6 +1761,8 @@ __all__ = [
     "PACK_LINE_KEYS",
     "ReportCard",
     "build",
+    "glance",
+    "plain_words",
     "congruence_line",
     "did_well_line",
     "how_fresh",
