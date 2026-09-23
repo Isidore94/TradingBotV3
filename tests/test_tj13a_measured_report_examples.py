@@ -141,13 +141,17 @@ def test_the_worst_intraday_example_list_names_three_different_symbols(tmp_path)
 
 
 def test_the_swing_example_list_names_three_different_occurrences(tmp_path):
-    """A swing row is identified by its occurrence id, not by its symbol."""
+    """A swing row is keyed by its occurrence id and shown by its ticker.
+
+    Trader 2026-09-23: the id is only a short trailing reference.
+    """
     _report, tables = _tables(tmp_path)
     table = tables["swing.best_moves"]
     names = [row["name"] for row in table["rows"]]
 
     assert len(set(names)) == 3
-    assert names[0] == SWING_ID
+    assert table["rows"][0]["occurrence_id"] == SWING_ID
+    assert names[0].startswith("SWG LONG") and SWING_ID not in names[0]
     assert [row["value"] for row in table["rows"]] == [4.4529, 3.2, 2.1]
     assert table["denominator"] == 5
 

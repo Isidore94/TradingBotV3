@@ -1510,14 +1510,53 @@ def _example_tables(
            day_worst, len(day_worst), "percent", False)
 
     if swing_rows:
+        # Keyed by occurrence (one occurrence measured by several recipes is
+        # one example); shown by ticker, side, setup and date.
         swing_best = [
             (str(row.get("occurrence_id") or row.get("symbol") or ""),
              float(_number(row.get("mfe_r"))))
             for row in swing_rows if _number(row.get("mfe_r")) is not None
         ]
+        identity: dict[str, dict[str, Any]] = {}
+        for row in swing_rows:
+            key = str(row.get("occurrence_id") or row.get("symbol") or "")
+            identity.setdefault(key, _swing_identity(row))
         _table("swing.best_moves", "Biggest swing movement in R",
                swing_best, len(swing_best), "R", True)
+        for table in tables:
+            if table["table_id"] != "swing.best_moves":
+                continue
+            table["rows"] = [
+                {**identity.get(row["name"], _swing_identity({"occurrence_id": row["name"]})),
+                 "value": row["value"]}
+                for row in table["rows"]
+            ]
     return tuple(tables)
+
+
+def _swing_identity(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Display fields for one swing occurrence; blanks read as unknown."""
+    occurrence_id = str(row.get("occurrence_id") or "")
+    symbol = str(row.get("symbol") or "").strip().upper()
+    side = str(row.get("side") or "").strip().upper()
+    setup = str(row.get("canonical_setup_id") or row.get("setup_family") or "").strip()
+    entry_at = _aware(row.get("entry_at"))
+    day = (
+        entry_at.astimezone(market_calendar.MARKET_TZ).date().isoformat()
+        if entry_at is not None else str(row.get("entry_at") or "")[:10]
+    )
+    parts = [symbol or "unknown symbol", side or "unknown side", setup or "unknown setup"]
+    name = " ".join(parts) + (f", entered {day}" if day else ", entry date unknown")
+    if occurrence_id:
+        name += f" (occ {occurrence_id[:8]})"
+    return {
+        "name": name,
+        "symbol": symbol or None,
+        "side": side or None,
+        "setup": setup or None,
+        "date": day or None,
+        "occurrence_id": occurrence_id,
+    }
 
 
 def build_report(
