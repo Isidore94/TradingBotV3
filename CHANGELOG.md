@@ -4,6 +4,7 @@ One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-23 Hide Oil & Gas / Real Estate (default ON, one shared switch): hidden from the setups table, Alert Center feeds (no row, chart or sound; Focus and armed watches still show) and the phone report (`Hidden: N` line). Display only; unknown sector shows; everything is still recorded.
 - 2026-09-23 AGENTS.md: the full suite takes 4-7 min, so run it in the background (a foreground run was killed at 99%).
 - 2026-09-23 AGENTS.md test commands: offscreen Qt on Windows too, the main venv path for worktrees, and rerun suite failures on `main` before blaming a branch.
 - 2026-09-23 Mentor asks once: a trade is asked about on one card only. Any answer opens its Save; leaving the card files what was typed and marks it `MENTOR_ASKED`; local AI fills blanks from the trader's words or leaves them blank. Fixes the DRAM trade asked every hour.
