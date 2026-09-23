@@ -41,6 +41,7 @@ from project_paths import (
     get_local_setting,
     save_local_setting,
 )
+import sector_exclusion
 from review_events import record_review_event, setup_context_fields
 from pick_feedback import reviewed_symbols_today
 from market_session import get_default_hourly_scan_schedule, get_default_stop_time_label, get_market_session_window
@@ -665,6 +666,7 @@ class MasterAvwapPanel(QWidget):
         self._build_bucket_toggle()
         self._build_points_toggle()
         self._build_show_vetoed_toggle()
+        self._build_hide_sector_toggle()
         self._build_overflow_menu()
         self._column_profile = ""
         self._build_layout()
@@ -684,6 +686,8 @@ class MasterAvwapPanel(QWidget):
         # `_poll_report_changes` is called unbound by a test with a stand-in
         # self and must keep answering exactly one question.
         self.report_poll_timer.timeout.connect(self._check_decision_day_roll)
+        # The Oil & Gas / Real Estate switch is shared; follow a flip made elsewhere.
+        self.report_poll_timer.timeout.connect(self.sync_sector_switch)
         start_staggered(self.report_poll_timer, 43_000)
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.setInterval(15_000)
@@ -699,6 +703,7 @@ class MasterAvwapPanel(QWidget):
         # ...and so does a page that was hidden while the trader vetoed a name
         # from the chart, or across a day roll (WS-SX).
         self._request_decision_refresh()
+        self.sync_sector_switch()
 
     def _build_layout(self) -> None:
         """One control strip over the table.
@@ -718,6 +723,7 @@ class MasterAvwapPanel(QWidget):
         strip.addSpacing(6)
         strip.addWidget(self.points_toggle)
         strip.addWidget(self.show_vetoed_toggle)
+        strip.addWidget(self.hide_sector_toggle)
         strip.addWidget(self.search_input, 1)
         strip.addWidget(self.data_as_of_label)
         strip.addWidget(self.overflow_button)
@@ -815,6 +821,44 @@ class MasterAvwapPanel(QWidget):
     def _refresh_show_vetoed_label(self) -> None:
         hidden = self.proxy.hidden_rejected()
         self.show_vetoed_toggle.setText(f"Show vetoed ({hidden})" if hidden else "Show vetoed")
+
+    def _build_hide_sector_toggle(self) -> None:
+        """Trader, 2026-09-23: hide Oil & Gas / Real Estate rows (display only).
+
+        One switch shared with the Alert Center and the phone report.
+        """
+        self.hide_sector_toggle = QCheckBox(sector_exclusion.HIDE_LABEL)
+        self.hide_sector_toggle.setToolTip(
+            "Hides Oil & Gas and Real Estate names from this table, the alerts and the "
+            "phone report. The scan still tracks them. Names with no sector are shown."
+        )
+        stored = sector_exclusion.hide_enabled()
+        self.hide_sector_toggle.setChecked(stored)
+        self.proxy.set_filters(hide_excluded_sectors=stored)
+        self.hide_sector_toggle.toggled.connect(self._on_hide_sector_toggled)
+
+    def _on_hide_sector_toggled(self, checked: bool) -> None:
+        try:
+            sector_exclusion.set_hide_enabled(bool(checked))
+        except Exception:  # noqa: BLE001 - a preference never costs the table
+            pass
+        self.proxy.set_filters(hide_excluded_sectors=bool(checked))
+        self._refresh_hide_sector_label()
+
+    def _refresh_hide_sector_label(self) -> None:
+        hidden = self.proxy.hidden_excluded_sectors()
+        label = sector_exclusion.HIDE_LABEL
+        self.hide_sector_toggle.setText(f"{label} ({hidden})" if hidden else label)
+
+    def sync_sector_switch(self) -> None:
+        """Follow the shared switch when another surface flipped it."""
+        stored = sector_exclusion.hide_enabled()
+        if stored != self.hide_sector_toggle.isChecked():
+            self.hide_sector_toggle.blockSignals(True)
+            self.hide_sector_toggle.setChecked(stored)
+            self.hide_sector_toggle.blockSignals(False)
+            self.proxy.set_filters(hide_excluded_sectors=stored)
+        self._refresh_hide_sector_label()
 
     def _rejected_today_symbols(self) -> frozenset[str]:
         """Today's swing-side rejects, from the snapshot the ★/✕ columns read."""
@@ -1850,6 +1894,7 @@ class MasterAvwapPanel(QWidget):
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
         self._apply_filters()
+        self._refresh_hide_sector_label()
         self.stack.setCurrentWidget(self.table if rows else self.empty_state)
         if rows:
             # Rows arrive pre-ranked (conviction bucket, then tracker-led

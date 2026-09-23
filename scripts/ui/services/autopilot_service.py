@@ -210,6 +210,9 @@ class AutopilotService(QObject):
 
         self._log_lines: deque[str] = deque(maxlen=_MAX_LOG_LINES)
         self._alerts_today: deque[str] = deque(maxlen=60)
+        # Each line's symbol, kept in step with `_alerts_today`, so the phone
+        # report can apply the Oil & Gas / Real Estate view filter.
+        self._alert_symbols_today: deque[str] = deque(maxlen=60)
         self._alerts_date = datetime.now().date().isoformat()
         #: D1 level/event alerts seen since the last hourly D1 push. Cleared on
         #: a sent push, so each push carries only what is new.
@@ -622,6 +625,8 @@ class AutopilotService(QObject):
         if self._alerts_date != today:
             self._alerts_date = today
             self._alerts_today.clear()
+            if getattr(self, "_alert_symbols_today", None) is not None:
+                self._alert_symbols_today.clear()
             # Yesterday's unsent D1 events are not news; a push naming them at
             # 07:00 would read as this morning's.
             self._d1_events_pending.clear()
@@ -1957,7 +1962,9 @@ class AutopilotService(QObject):
                 }
                 for row in swing_rows
             ]
-            picks = [pick for pick in picks if pick["symbol"]][:10]
+            # The top-ten cap is applied by `hide_sector_names` below, AFTER the
+            # Oil & Gas / Real Estate view filter, so a hidden name costs no slot.
+            picks = [pick for pick in picks if pick["symbol"]]
             # ONE read of the tier outcomes for both the ranking and the line
             # that says what was ranked (ST1 item 3).
             swing_family_records, swing_family_read = core.swing_family_read()
@@ -1999,6 +2006,9 @@ class AutopilotService(QObject):
                     )
                 ),
                 "alerts": list(self._alerts_today)[-_MAX_REPORT_ALERTS:][::-1],
+                "alert_symbols": list(getattr(self, "_alert_symbols_today", ()))[
+                    -_MAX_REPORT_ALERTS:
+                ][::-1],
                 "slots_done": snapshot["slots_done"],
                 "next_slot": snapshot["next_slot"],
                 "log_lines": list(self._log_lines)[-_MAX_REPORT_LOG_LINES:][::-1],
@@ -2038,6 +2048,12 @@ class AutopilotService(QObject):
                         "tracker_line": f"Tracker: UNKNOWN - {exc}",
                     }
                 )
+            try:
+                payload = core.hide_sector_names(payload, pick_limit=10)
+            except Exception:
+                # The view filter never costs the report; fall back to the cap alone.
+                logging.exception("Away report sector filter failed; publishing unfiltered.")
+                payload["swing_picks"] = list(payload.get("swing_picks") or [])[:10]
             publish = core.publish_away_report(payload)
             self._last_report_attempt = datetime.now()
             if publish.get("ok"):
@@ -2129,6 +2145,9 @@ class AutopilotService(QObject):
             return
         stamp = getattr(alert, "time_text", "") or datetime.now().strftime("%H:%M:%S")
         self._alerts_today.append(f"{stamp} {text}")
+        symbols = getattr(self, "_alert_symbols_today", None)
+        if symbols is not None:
+            symbols.append(str(getattr(alert, "symbol", "") or "").strip().upper())
 
     @Slot(object)
     def record_d1_event(self, event) -> None:
@@ -2185,7 +2204,9 @@ class AutopilotService(QObject):
                 return
             if not push_notify.push_configured():
                 return
-            built = core.build_d1_events_push(list(self._d1_events_pending))
+            built = core.build_d1_events_push(
+                core.visible_sector_events(list(self._d1_events_pending))
+            )
             if built is None:
                 return
             title, message = built

@@ -40,6 +40,7 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import avwape_side
 import focus_adoption_gate
 import prev_day_gate
+import sector_exclusion
 from evidence_stats import SWING_HORIZON_SESSIONS
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import (
@@ -3982,6 +3983,96 @@ def build_d1_events_push(
     return f"D1 events ({total})", fit_push_message(lines)
 
 
+def _sector_hidden_predicate(is_hidden: Callable[[str], bool] | None) -> Callable[[str], bool] | None:
+    """The shared Oil & Gas / Real Estate test, or None when the switch is off."""
+    if is_hidden is not None:
+        return is_hidden
+    if not sector_exclusion.hide_enabled():
+        return None
+    return sector_exclusion.symbol_is_excluded
+
+
+def visible_sector_events(
+    events: Iterable[Mapping[str, Any]], *, is_hidden: Callable[[str], bool] | None = None
+) -> list[Mapping[str, Any]]:
+    """D1 phone events minus Oil & Gas / Real Estate names (display only)."""
+    events = list(events)
+    hidden = _sector_hidden_predicate(is_hidden)
+    if hidden is None:
+        return events
+    return [event for event in events if not hidden(str(event.get("symbol") or "").strip().upper())]
+
+
+def hide_sector_names(
+    payload: Mapping[str, Any],
+    *,
+    is_hidden: Callable[[str], bool] | None = None,
+    pick_limit: int | None = None,
+) -> dict[str, Any]:
+    """Drop Oil & Gas / Real Estate names from the phone report's bot-made lists.
+
+    Display only, under the shared switch. The trader's own longs/shorts lists
+    are left alone. Swing picks are filtered BEFORE `pick_limit`, so a hidden
+    name never costs a slot. `sector_hidden_count` = distinct names removed.
+    """
+    out = dict(payload)
+    hidden_test = _sector_hidden_predicate(is_hidden)
+    if hidden_test is None:
+        if pick_limit is not None and isinstance(out.get("swing_picks"), list):
+            out["swing_picks"] = out["swing_picks"][:pick_limit]
+        return out
+    removed: set[str] = set()
+
+    def keep(symbol: Any) -> bool:
+        key = str(symbol or "").strip().upper()
+        if key and hidden_test(key):
+            removed.add(key)
+            return False
+        return True
+
+    picks = out.get("swing_picks")
+    if isinstance(picks, (list, tuple)):
+        picks = [
+            pick for pick in picks if not isinstance(pick, Mapping) or keep(pick.get("symbol"))
+        ]
+        out["swing_picks"] = picks[:pick_limit] if pick_limit is not None else picks
+    for key in ("auto_longs", "auto_shorts"):
+        if isinstance(out.get(key), (list, tuple)):
+            out[key] = [symbol for symbol in out[key] if keep(symbol)]
+    staged = out.get("staged_picks")
+    if isinstance(staged, Mapping):
+        out["staged_picks"] = {
+            side: [symbol for symbol in (symbols or []) if keep(symbol)]
+            for side, symbols in staged.items()
+        }
+    roster = out.get("bucket_roster")
+    if isinstance(roster, Mapping):
+        out["bucket_roster"] = {
+            bucket: (
+                {side: [s for s in (names or []) if keep(s)] for side, names in sides.items()}
+                if isinstance(sides, Mapping)
+                else sides
+            )
+            for bucket, sides in roster.items()
+        }
+    alerts = out.get("alerts")
+    alert_symbols = out.get("alert_symbols")
+    if (
+        isinstance(alerts, (list, tuple))
+        and isinstance(alert_symbols, (list, tuple))
+        and len(alerts) == len(alert_symbols)
+    ):
+        pairs = [
+            (line, symbol)
+            for line, symbol in zip(alerts, alert_symbols)
+            if keep(symbol)
+        ]
+        out["alerts"] = [line for line, _symbol in pairs]
+        out["alert_symbols"] = [symbol for _line, symbol in pairs]
+    out["sector_hidden_count"] = len(removed)
+    return out
+
+
 def render_away_report(payload: Mapping[str, Any]) -> str:
     """Phone-first digest: ONE central shared file, best swing trades on top.
 
@@ -4085,6 +4176,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         swing_lines = ["No qualified current-session swing opportunity."]
     if swing_data_line:
         swing_lines = [*swing_lines, swing_data_line]
+    sector_line = sector_exclusion.hidden_line(int(payload.get("sector_hidden_count") or 0))
+    if sector_line:
+        swing_lines = [*swing_lines, sector_line]
     # WS-PT4: the same line NAMES the order it used, so a phone reader can tell
     # a Wilson-bound list from a points list without opening the desk. It is
     # written whenever picks were ranked, with or without a record line - a

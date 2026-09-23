@@ -84,6 +84,7 @@ from intraday_history import (
 )
 import focus_adoption_gate
 import regime_pause_hold
+import sector_exclusion
 from regime_pause_focus import day_bias, focus_side_for
 import sma_trend_gate
 import wall_gate
@@ -889,6 +890,16 @@ class AlertCenterPanel(QFrame):
         self.sound_input.setChecked(bool(get_local_setting("qt_alert_sound", True)))
         self.sound_input.toggled.connect(self._on_prefs_changed)
 
+        # Trader, 2026-09-23: one shared switch hides Oil & Gas / Real Estate
+        # names from the feeds (display only; the alert is still recorded).
+        self.hide_sector_input = QCheckBox(sector_exclusion.HIDE_LABEL)
+        self.hide_sector_input.setToolTip(
+            "Hides Oil & Gas and Real Estate alerts from these feeds: no row, no chart, "
+            "no sound. They are still recorded. Focus names and armed watches always show."
+        )
+        self.hide_sector_input.setChecked(sector_exclusion.hide_enabled())
+        self.hide_sector_input.toggled.connect(self._on_hide_sector_toggled)
+
         clear_button = QPushButton("Clear")
         clear_button.clicked.connect(self.clear_feed)
         self.ignored_button = QPushButton()
@@ -1255,6 +1266,7 @@ class AlertCenterPanel(QFrame):
         controls.addWidget(show_label)
         controls.addWidget(self.min_tier_input)
         controls.addWidget(self.sound_input)
+        controls.addWidget(self.hide_sector_input)
         controls.addStretch(1)
         controls.addWidget(self.ignored_button)
         controls.addWidget(clear_button)
@@ -1319,6 +1331,7 @@ class AlertCenterPanel(QFrame):
 
     def add_alert(self, alert: BounceAlert) -> None:
         self._refresh_ignored_market_date()
+        self.sync_sector_switch()
         if _is_feed_noise_alert(alert):
             return
         if (
@@ -1333,6 +1346,7 @@ class AlertCenterPanel(QFrame):
         d1_event = d1_push_event(alert)
         if d1_event is not None:
             self.d1EventRecorded.emit(d1_event)
+        sector_hidden = self._sector_hidden(alert)
         # A Focus pick's automatic D1 interest flag belongs in the D1 Focus
         # feed (the name is already the trader's) plus the chart queue.
         if alert.tag == FOCUS_D1_EVENT_TAG:
@@ -1343,6 +1357,12 @@ class AlertCenterPanel(QFrame):
         # (final bucket upgrades only). Developing trigger/watch observations
         # are research evidence and are excluded from both actionable feeds.
         if alert.is_d1 and is_ready_d1_alert(alert):
+            if sector_hidden:
+                # Recorded in the D1 list, but no row, chart or sound.
+                self._d1_alerts.insert(0, alert)
+                del self._d1_alerts[MAX_D1_FEED_ITEMS * 2 :]
+                self._emit_feed_status()
+                return
             self._enqueue_review_alert(alert)
             self._add_d1_alert(alert)
             return
@@ -1351,6 +1371,10 @@ class AlertCenterPanel(QFrame):
         # push all read from here, so folding a row can never cost a record.
         self._alerts.insert(0, alert)
         del self._alerts[MAX_FEED_ITEMS * 2 :]
+        if sector_hidden:
+            # Recorded above; no row, no chart, no sound.
+            self._emit_feed_status()
+            return
         is_focus = self._alert_has_focus_privilege(alert)
         # Trader rule 2026-08-27: a with-trend regime-pause row ("holding
         # highs" on a bullish day, "pressing lows" on a bearish day) goes
@@ -1693,6 +1717,33 @@ class AlertCenterPanel(QFrame):
                 "qt_alert_sound": bool(self.sound_input.isChecked()),
             }
         )
+        self._rebuild_feed()
+
+    def _sector_hidden(self, alert: BounceAlert, enabled: bool | None = None) -> bool:
+        """Oil & Gas / Real Estate under the shared switch. Focus names and armed watches always show."""
+        if enabled is None:
+            enabled = sector_exclusion.hide_enabled()
+        if not enabled or not alert.symbol:
+            return False
+        if is_chart_watch_alert(alert) or self._alert_is_focus(alert):
+            return False
+        return sector_exclusion.symbol_is_excluded(alert.symbol)
+
+    def _on_hide_sector_toggled(self, checked: bool) -> None:
+        try:
+            sector_exclusion.set_hide_enabled(bool(checked))
+        except Exception:  # noqa: BLE001 - a preference never costs the feed
+            logging.debug("Sector hide setting not saved.", exc_info=True)
+        self._rebuild_feed()
+
+    def sync_sector_switch(self) -> None:
+        """Follow the shared switch when another surface flipped it."""
+        stored = sector_exclusion.hide_enabled()
+        if stored == self.hide_sector_input.isChecked():
+            return
+        self.hide_sector_input.blockSignals(True)
+        self.hide_sector_input.setChecked(stored)
+        self.hide_sector_input.blockSignals(False)
         self._rebuild_feed()
 
     def _alert_is_focus(self, alert: BounceAlert) -> bool:
@@ -2498,10 +2549,12 @@ class AlertCenterPanel(QFrame):
           count it had.
         """
         mode = self._min_tier_mode()
+        hide_sectors = sector_exclusion.hide_enabled()
         qualifying = [
             alert
             for alert in self._alerts
             if alert.symbol not in self._ignored_symbols
+            and not self._sector_hidden(alert, hide_sectors)
             and alert_passes_feed_gate(
                 alert, mode, is_focus=self._alert_has_focus_privilege(alert)
             )
@@ -2532,12 +2585,14 @@ class AlertCenterPanel(QFrame):
         No fold and no tier gate here: the D1 feed shows one row per ready
         transition or pin, and two of them on one symbol are two events.
         """
+        hide_sectors = sector_exclusion.hide_enabled()
         return [
             (id(alert), alert, 1)
             for alert in [
                 alert
                 for alert in self._d1_alerts
                 if alert.symbol not in self._ignored_symbols
+                and not self._sector_hidden(alert, hide_sectors)
             ][:MAX_D1_FEED_ITEMS]
         ]
 
