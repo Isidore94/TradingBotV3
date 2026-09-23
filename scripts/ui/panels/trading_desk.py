@@ -33,6 +33,7 @@ from ui.services.watchlist_tab_service import WatchlistTabService
 from ui.timer_utils import SignalCoalescer
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
+from ui.widgets.live_results_strip import LiveResultsStrip
 from ui.widgets.working_lately_strip import WorkingLatelyStrip
 
 # v3 (2026-08-27): the M5 alert bar moved to the LEFT of the chart column, so a
@@ -202,6 +203,17 @@ class TradingDeskPanel(QWidget):
         self.working_lately_strip.prioritiseToggled.connect(
             lambda *_args: self._push_working_lately_order()
         )
+
+        # Trader, 2026-09-22 (change #3): "Working now" - how today's M5 alerts
+        # have done since they fired, in R, by setup grade. Directly UNDER the
+        # Working-lately line. Display only: fed by the same post the bar is,
+        # cleared by the M5 DAY ROLL (never the bar's own "Clear all"), and
+        # its bars are the bot's CACHED series - never an IB fetch.
+        self.live_results_strip = LiveResultsStrip()
+        self.m5_alert_bar.layout().insertWidget(1, self.live_results_strip)
+        self.live_results_strip.set_bars_provider(self._live_results_bars)
+        self.alert_center.m5AlertPosted.connect(self.live_results_strip.record)
+        self.alert_center.m5AlertsDayRolled.connect(self.live_results_strip.clear_day)
 
         # Trader, 2026-08-31: "at the end of the day I have a list of my top
         # swing targets... put it at the very bottom of the M5 alerts tab, the
@@ -514,7 +526,24 @@ class TradingDeskPanel(QWidget):
         if grades and grades is not getattr(self, "_pushed_setup_grades", None):
             self._pushed_setup_grades = grades
             self.m5_alert_bar.set_setup_grades(grades)
+            self.live_results_strip.set_setup_grades(grades)
             self.master_panel.set_setup_grades(grades)
+
+    def _live_results_bars(self, symbol: str) -> list:
+        """One symbol's CACHED M5 bars for the "Working now" strip, or [].
+
+        Called on the strip's worker thread. `m5_chart_bars` reads the bot's
+        `latest_bars` only and never fetches from IB (the scan needs the
+        request budget). The bot is looked up per call because it restarts.
+        """
+        service = getattr(self.bounce_panel, "service", None)
+        try:
+            bot = service.current_bot() if service is not None else None
+            if bot is None:
+                return []
+            return list(bot.m5_chart_bars(symbol, max_sessions=1) or [])
+        except Exception:  # noqa: BLE001 - no bars is "no data", never an error
+            return []
 
     def _refresh_swing_favorites(self) -> None:
         """Show the current session's list and re-ask the journal about it.

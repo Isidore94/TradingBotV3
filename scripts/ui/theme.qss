@@ -643,3 +643,18 @@ QLabel#WorkingLatelyLine {
 QFrame#WorkingLatelyStrip[hasSnapshot="true"] QLabel#WorkingLatelyLine {
     color: @text_primary@;
 }
+
+/* 2026-09-22 - the "Working now" strip under it. Same rule: the variant is a
+   dynamic property, never a per-tick setStyleSheet. */
+QFrame#LiveResultsStrip {
+    background: transparent;
+    border-bottom: 1px solid @border@;
+}
+
+QLabel#LiveResultsLine {
+    color: @text_secondary@;
+}
+
+QFrame#LiveResultsStrip[hasRows="true"] QLabel#LiveResultsLine {
+    color: @text_primary@;
+}
