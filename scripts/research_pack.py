@@ -49,6 +49,8 @@ Point-in-time rules
 * M5 context is the ``registered`` row's context, written when the alert fired.
 * ``--as-of`` hides every revision, outcome, alert row and trade written
   after that moment.
+* Ranks use the mean of R clipped to +/-10 (``rank_basis``); ``mean`` and
+  ``median`` stay raw. One alert with a tiny stop can otherwise read +300R.
 
 Safety
 ------
@@ -99,6 +101,8 @@ DEFAULT_JOURNAL_FLOOR = 10
 DEFAULT_D1_MAX_SESSIONS = 5
 DEFAULT_M5_WINDOW_MINUTES = 120
 TIER_MATCH_SECONDS = 600
+#: R is clipped to this band for RANKING only; a tiny stop makes one alert worth +300R.
+RANK_CLIP_R = 10.0
 
 #: Live roots written by the desk; an output folder under any of them is refused.
 HARD_PROTECTED_ROOTS = (Path(r"C:\TradingBotData"), Path(r"\\MINI-PC\Trading Bot Data"))
@@ -452,18 +456,20 @@ def _jsonl_files_status(name: str, path: Path | None, date_key: str) -> dict:
 def _ai_store_status(root: Path | None) -> dict:
     if not _exists(root):
         return _status_row("ai_store", "files", root, reachable=False, note="AI store not configured or not reachable")
-    counts, newest = [], None
+    counts, newest, total = [], None, 0
     for sub in ("digests", "facts", "briefs", "retros"):
         folder = Path(root) / sub
         if not folder.exists():
             continue
         items = [item for item in folder.rglob("*") if item.is_file()]
+        total += len(items)
         counts.append(f"{sub}={len(items)}")
         for item in items:
             stamp = _mtime(item)
             if stamp and (newest is None or stamp > newest):
                 newest = stamp
-    return _status_row("ai_store", "files", root, reachable=True, freshness=newest, note=" ".join(counts))
+    return _status_row("ai_store", "files", root, reachable=True, rows=total, files=total, freshness=newest,
+                       note=" ".join(counts))
 
 
 def collect_status(sources: Sources) -> list[dict]:
@@ -938,7 +944,7 @@ def match_journal_trades(trades: list[dict], d1_occurrences: list[dict], m5_aler
 # summary
 # ---------------------------------------------------------------------------
 def rank_cells(cells: list[dict], floor: int) -> list[dict]:
-    """Rank by mean within (source, recipe, trait); cells under ``floor`` episodes get no rank."""
+    """Rank by ``rank_value`` (else mean) within (source, recipe, trait); cells under ``floor`` episodes get no rank."""
     groups: dict[tuple, list[dict]] = {}
     for cell in cells:
         cell["floor"] = floor
@@ -947,13 +953,19 @@ def rank_cells(cells: list[dict], floor: int) -> list[dict]:
         if not cell["below_floor"]:
             groups.setdefault((cell.get("source"), cell.get("recipe_id"), cell.get("trait")), []).append(cell)
     for group in groups.values():
-        for position, cell in enumerate(sorted(group, key=lambda c: -float(c["mean"])), start=1):
+        for position, cell in enumerate(sorted(group, key=lambda c: -float(_rank_value(c))), start=1):
             cell["rank"] = position
     return cells
 
 
-def _cell(source, family, side, recipe_id, trait, value, metric, samples, episodes, extras):
+def _rank_value(cell: dict) -> float:
+    value = cell.get("rank_value")
+    return cell["mean"] if value is None else value
+
+
+def _cell(source, family, side, recipe_id, trait, value, metric, samples, episodes, extras, clip=None):
     values = [v for v in samples if v is not None]
+    clipped = [max(-clip, min(clip, v)) for v in values] if clip else values
     cell = {
         "source": source, "family": family, "side": side, "recipe_id": recipe_id, "trait": trait,
         "trait_value": value, "metric": metric, "n": len(values), "n_episodes": len(episodes - {None}),
@@ -961,6 +973,8 @@ def _cell(source, family, side, recipe_id, trait, value, metric, samples, episod
         "win_rate": (sum(1 for v in values if v > 0) / len(values)) if values else None,
         "mean": statistics.fmean(values) if values else None,
         "median": statistics.median(values) if values else None,
+        "rank_value": statistics.fmean(clipped) if clipped else None,
+        "rank_basis": f"mean clipped to +/-{clip:g}" if clip else "mean",
         "evidence_tier": EVIDENCE_TIER,
     }
     for name, numbers in extras.items():
@@ -969,7 +983,7 @@ def _cell(source, family, side, recipe_id, trait, value, metric, samples, episod
     return cell
 
 
-def _grouped_cells(source, rows, *, metric, value_of, episode_of, traits, extras, recipe_id=None):
+def _grouped_cells(source, rows, *, metric, value_of, episode_of, traits, extras, recipe_id=None, clip=None):
     buckets: dict[tuple, dict] = {}
     for row in rows:
         metric_value = value_of(row)
@@ -985,7 +999,7 @@ def _grouped_cells(source, rows, *, metric, value_of, episode_of, traits, extras
                     for name, getter in extras.items():
                         bucket["extras"][name].append(getter(row))
     return [
-        _cell(source, family, side, recipe_id, trait, value, metric, b["samples"], b["episodes"], b["extras"])
+        _cell(source, family, side, recipe_id, trait, value, metric, b["samples"], b["episodes"], b["extras"], clip)
         for (family, side, trait, value), b in sorted(buckets.items(), key=lambda item: tuple(str(x) for x in item[0]))
     ]
 
@@ -1000,8 +1014,8 @@ def summarize(d1_occurrences: list[dict], m5_alerts: list[dict], journal: list[d
             ("dist_sma50_atr", [_bucket(row.get("feat_dist_sma50_atr"))]),
             ("dist_sma200_atr", [_bucket(row.get("feat_dist_sma200_atr"))]),
             ("anchor_knowledge", [row.get("feat_anchor_knowledge") or "unknown"]),
-            ("ctx_D1", [row.get("ctx_D1") or "unknown"]),
             ("ctx_H1", [row.get("ctx_H1") or "unknown"]),
+            ("ctx_M30", [row.get("ctx_M30") or "unknown"]),
         ]
 
     def m5_traits(row):
@@ -1018,14 +1032,14 @@ def summarize(d1_occurrences: list[dict], m5_alerts: list[dict], journal: list[d
 
     recipe = next((row.get("hl_recipe_id") for row in d1_occurrences if row.get("hl_recipe_id")), None)
     d1_cells = _grouped_cells(
-        "d1_setups", d1_occurrences, metric="hl_net_r", recipe_id=recipe,
+        "d1_setups", d1_occurrences, metric="hl_net_r", recipe_id=recipe, clip=RANK_CLIP_R,
         value_of=lambda r: r.get("hl_net_r") if r.get("hl_result_state") not in (None, "NO_TRIGGER", "TRUNCATED", "OPEN") else None,
         episode_of=lambda r: r.get("episode_id"), traits=d1_traits,
         extras={"mean_r_at_s5": lambda r: r.get("hl_r_at_s5"), "mean_r_at_s10": lambda r: r.get("hl_r_at_s10"),
                 "mean_mfe_r": lambda r: r.get("hl_mfe_r"), "mean_mae_r": lambda r: r.get("hl_mae_r")},
     )
     m5_cells = _grouped_cells(
-        "m5_alerts", m5_alerts, metric="close_r_final",
+        "m5_alerts", m5_alerts, metric="close_r_final", clip=RANK_CLIP_R,
         value_of=lambda r: r.get("close_r_final"),
         episode_of=lambda r: (r.get("symbol"), r.get("trade_date"), r.get("direction")), traits=m5_traits,
         extras={"mean_r_12bar": lambda r: r.get("r_12bar"), "mean_mfe_r": lambda r: r.get("mfe_r"),

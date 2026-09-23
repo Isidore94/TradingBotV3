@@ -424,6 +424,18 @@ def test_cells_below_the_floor_are_never_ranked():
     assert [cell["below_floor"] for cell in ranked] == [False, True, False]
 
 
+def test_one_tiny_stop_outlier_cannot_take_the_top_rank():
+    steady = [{"family": "steady", "side": "LONG", "close_r_final": 0.5, "symbol": f"S{i}", "trade_date": "d",
+               "direction": "long", "bounce_types": "a"} for i in range(40)]
+    spiky = [{"family": "spiky", "side": "LONG", "close_r_final": -0.5, "symbol": f"P{i}", "trade_date": "d",
+              "direction": "long", "bounce_types": "b"} for i in range(39)]
+    spiky.append({**spiky[0], "symbol": "OUT", "close_r_final": 300.0})
+    cells = rp.summarize([], steady + spiky, [], floor=30, journal_floor=30)
+    top = {c["family"]: c for c in cells if c["source"] == "m5_alerts" and c["trait"] == "all" and c["family"] != "*"}
+    assert top["spiky"]["mean"] > top["steady"]["mean"]  # raw mean stays raw
+    assert top["steady"]["rank"] == 1 and top["spiky"]["rank"] > top["steady"]["rank"]
+
+
 def test_summary_has_counts_and_honours_the_floor(sources):
     store = ResearchStore(sources.lake_root)
     occurrences, _ = rp.build_d1_tables(store, as_of=datetime(2026, 9, 1, tzinfo=UTC))

@@ -4,6 +4,7 @@ One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-23 Research pack (`scripts/research_pack.py status|export`): read-only source inventory and a point-in-time pack of D1 setups, M5 alerts and journal trades joined to their setups, with a floored family/trait summary, for a frontier model. Refuses live-store output.
 - 2026-09-23 AGENTS.md: the full suite takes 4-7 min, so run it in the background (a foreground run was killed at 99%).
 - 2026-09-23 AGENTS.md test commands: offscreen Qt on Windows too, the main venv path for worktrees, and rerun suite failures on `main` before blaming a branch.
 - 2026-09-23 Mentor asks once: a trade is asked about on one card only. Any answer opens its Save; leaving the card files what was typed and marks it `MENTOR_ASKED`; local AI fills blanks from the trader's words or leaves them blank. Fixes the DRAM trade asked every hour.

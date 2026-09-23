@@ -59,6 +59,7 @@ the tests that pin it in the plan.
 | Night AI jobs | `scripts/ai_jobs/` (`runner.py` owns slot order) |
 | Setup Tracker / scoring | `master_avwap_lib/`, `setup_scoreboard.py`, `working_lately.py` |
 | Research warehouse (shadow only) | `scripts/research_warehouse/` |
+| Research pack for an AI (read-only) | `scripts/research_pack.py status` then `export --out <scratch>` |
 | Paths to live stores | `scripts/project_paths.py` (always use its constants) |
 | Pre-market prep | `market_prep/` |
 | Indicators (pure) | `scripts/indicators/` |
