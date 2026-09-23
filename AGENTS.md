@@ -26,7 +26,8 @@ the tests that pin it in the plan.
 ## Commands
 
 - Test: `.venv\Scripts\python.exe -m pytest tests/ -q -n 8` (~10k tests, 4-7 min; ALWAYS
-  `-n 8` - trader rule 2026-09-22). Run the full suite in the background: it can pass
+  `-n 8` (capped to 4 in market hours; one parallel run at a time machine-wide, enforced
+  in conftest) - trader rule 2026-09-22). Run the full suite in the background: it can pass
   the 10-minute tool limit and be killed at 99%. While building, run
   your area only (`pytest tests/test_<area>*.py -q`); run the full suite before every
   commit and merge. Check pytest's exit code, not a piped tail. Always set
