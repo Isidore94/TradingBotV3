@@ -467,6 +467,15 @@ def _m5_event_at(events, symbol, side, session, at, tz) -> Mapping[str, Any] | N
     return hit[1] if hit else None
 
 
+def _nearest_join(rows, at, close, stamp_key, tz):
+    """The newest add at or before the pick; else the first add after it, up to the close."""
+    hit = _latest_before(rows, at, stamp_key, tz) if at is not None else None
+    if hit is not None:
+        return hit
+    later = [(s, r) for r in rows if (s := moment(r.get(stamp_key), tz)) is not None and (close is None or s <= close)]
+    return min(later, key=lambda item: item[0]) if later else None
+
+
 def surfaced(pick: Mapping[str, Any], traits: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[str, Any]:
     """Where the desk put this name in front of the trader, first time per surface."""
     tz = _tz(inputs)
@@ -493,7 +502,7 @@ def surfaced(pick: Mapping[str, Any], traits: Mapping[str, Any], inputs: Mapping
         if _text(r.get("symbol")).upper() == symbol and _side(r.get("side")) == side
         and _text(r.get("event_type")) == "joined"
     ]
-    hit = _latest_before(focus, close, "event_at", tz)
+    hit = _nearest_join(focus, at, close, "event_at", tz)
     if hit:
         add("Focus", hit[0], _text(hit[1].get("category")))
     watch = [
@@ -501,7 +510,7 @@ def surfaced(pick: Mapping[str, Any], traits: Mapping[str, Any], inputs: Mapping
         if _text(r.get("symbol")).upper() == symbol and _text(r.get("action")) == "add"
         and (not _text(r.get("side")) or _side(r.get("side")) == side)
     ]
-    hit = _latest_before(watch, close, "ts", tz)
+    hit = _nearest_join(watch, at, close, "ts", tz)
     if hit:
         add("watchlist", hit[0], _text(hit[1].get("list")))
     found.sort(key=lambda item: item["_t"])
