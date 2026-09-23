@@ -17,13 +17,19 @@ changelog, specs, and the long story behind every rule. Open one file there only
 answer one specific question. `WISHLIST.md` is the trader's notepad — ideas, never
 authorized work.
 
+Before planning or editing, name the exact active work item (`STATUS.md`/`TODO.md` when
+applicable), what exists and remains, governing rules, expected files/tests, and whether
+ask-first applies. Only the trader may promote a WISHLIST idea into authorized work.
+
 ## Commands
 
-- Test: `.venv\Scripts\python.exe -m pytest tests/ -q -n 8` (~10k tests, ~4 min on 8 cores;
-  ALWAYS pass `-n 8` - trader rule). While building, run your area only
-  (`pytest tests/test_<area>*.py -q`); run the full suite before a merge.
-  Check pytest's exit code, not a piped tail. macOS/Linux Qt: `QT_QPA_PLATFORM=offscreen`.
-- Lint: `.venv\Scripts\python.exe -m ruff check .` must pass. Fix the code, not the config.
+- Test: `.venv\Scripts\python.exe -m pytest tests/ -q -n 8` (~10k tests, ~4 min; ALWAYS
+  `-n 8` - trader rule 2026-09-22). While building, run
+  your area only (`pytest tests/test_<area>*.py -q`); run the full suite before every
+  commit and merge. Check pytest's exit code, not a piped tail. macOS/Linux Qt:
+  `QT_QPA_PLATFORM=offscreen`.
+- Lint: `.venv\Scripts\python.exe -m ruff check .` must pass before every commit. Fix the
+  code, not the config.
 - Smoke: `.venv\Scripts\python.exe scripts/smoke_check.py` (7/7). Selftest: `launch_gui.py --selftest`.
 - Run: `trading_desk.cmd` (= `launch_gui.py`). **The desk runs from SOURCE on `main`**, so a
   pushed commit goes live at the next restart. One desk per machine.
@@ -80,10 +86,12 @@ code. When unsure whether a file counts, ask.
   `%LOCALAPPDATA%\TradingBotV3`, `\\MINI-PC\Trading Bot Data`. Copy before experimenting.
 - **Scratch scripts** (anything outside pytest importing `scripts/`): set BOTH
   `TRADINGBOTV3_DATA_DIR` and `LOCALAPPDATA` to scratch folders before the import, and
-  abort if any `project_paths` root points at a live store. (This has overwritten live
-  files twice.)
+  abort if any `project_paths` root points at a live store. A scratch leaderboard export
+  patches `MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE` itself, never an alias. (This
+  has overwritten live files twice.)
 - A live-store repair goes through a tested CLI, never an ad-hoc script.
 - Never restart the desk or merge to `main` without the trader's word.
+- If a scheduled task runs unmerged branch code on the desk, disarm it before switching branches.
 
 ## After a change
 
@@ -93,29 +101,40 @@ code. When unsure whether a file counts, ask.
 3. Update `STATUS.md` only if what's live / in flight / next / owed changed. Keep it under 3 KB.
 4. Changed a rule? Update its line in `docs/RULES.md`. A new live check the trader must
    do goes in `docs/GATES.md` as one line.
+5. Update `docs/README.md` whenever a Markdown file is added, moved, removed or reclassified.
 
 Never add a new status, plan, report or handoff `.md` — reports go in chat or an artifact.
 
 ## Frozen exe
 
-The desk runs from source; the exe is verification only. Rebuild before a merge to
-`main` only when a packaging trigger is hit: new dependency, new non-`.py` asset, new
-lazily-imported `scripts/` package, a dynamic import by string, or anything touching
-`__file__` / `ROOT_DIR` / `sys.path`. Build: `.venv\Scripts\pyinstaller.exe
-.\packaging\tradingbotv3.spec --noconfirm`, then `dist\TradingBotV3\TradingBotV3.exe
---selftest` must match the source selftest count. Read `packaging/README.md` first.
+The desk runs from source; a pushed commit is live at the trader's next restart, and the
+exe is verification only. Do not rebuild per commit. Build and run the frozen selftest
+before EVERY merge to `main` and whenever a listed packaging trigger is hit: a new
+third-party dependency; non-`.py` runtime asset outside first-party trees plus `config/`;
+new top-level `scripts/` package imported lazily; dynamic import by string in an uncollected
+package; or change touching `__file__`, `ROOT_DIR` or `sys.path`. One pre-merge build can
+satisfy both checks.
+Build: `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm`, then
+`dist\TradingBotV3\TradingBotV3.exe --selftest` must run and match the source selftest count.
+Guard packaging with `tests/test_packaging_spec_drift.py`; keep its deliberate-omission
+list disjoint from `selftest.LAZY_ENGINE_MODULES`. If the trader returns to the frozen exe,
+a fix is not delivered until rebuilt. Read Smart App Control at
+`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` ->
+`VerifiedAndReputablePolicyState`; never rely on memory. Read `packaging/README.md` first.
+Ask before spending the trader's time on any Smart App Control click-through.
+Merge to `main` only after a live-session validation day passes its checklist and with the
+trader's word. Run that checklist on the first session and do not tune thresholds from one
+session. Never restart the desk or merge to `main` without the trader's word.
 
-## Agents — default to none
-
-The lead does small and medium changes itself. Use a helper only for a big job, parallel
-work, or a real second opinion, and give it a narrow brief with file paths.
+## Agents — role defaults
 
 - **Claude:** lead Opus 5.5. `recon` = Sonnet (read-only lookups). `builder` = Opus in a
   worktree (fail-first test, then the fix). `reviewer` = Opus, one round, blockers only;
   skip it for docs/UI-only changes. `tester` = Opus, only for detector/scoring work.
-- **Codex:** `gpt-6-luna` (cheap) for recon, tests, small builds and doc edits;
-  `gpt-6-sol` for hard builds and reviews. `.codex/config.toml` holds the defaults; the
-  trader picks the lead model.
+- **Codex:** `.codex/config.toml` sets Sol for new-thread lead, Luna max for the default
+  manager, and Luna xhigh for named `recon`, `builder`, `tester` and `reviewer` workers.
+  The manager delegates every assigned change, then integrates and validates. Keep scopes
+  narrow and use a worktree. These are defaults; explicit session or lead overrides win.
 
 ## Talking to the trader
 

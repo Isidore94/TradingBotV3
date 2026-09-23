@@ -10,10 +10,11 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   per-trade Mentor Save.
 - **Desk:** it runs from source on `main`. It was down for the 09-22 update and was
   not restarted. The next start is the trader's call.
-- **Last full suite:** 10,428 passed, 14 skipped, 1 known flaky test (G7 research tab,
+- **Last full suite:** 10,429 passed, 14 skipped, 1 known flaky test (G7 research tab,
   green when run alone). Ruff clean, smoke 7/7, source and frozen selftest 97/97.
-- **Repo slim-down merged** 2026-09-22 (`6ea50405`): docs and agent settings only. History is in the local `notes/`.
-- **Setup grades** (`claude/setup-grades-2026-09-22`): built for the next session; live at the next desk restart once merged. Gate #190.
+- **Repo slim-down merged** 2026-09-22: 6682a844 changed docs and agent settings;
+  6ea50405 updated two doc-pinning tests and one rule. History is in local notes.
+- **Setup grades + 8-core tests** merged 2026-09-22: grades show on the desk at the next restart. Gate #190.
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
   `claude/chart-wheel-zoom-2026-09-21` (`11c3a339`). It is not on `main`. Merge it only
   while the desk is down.

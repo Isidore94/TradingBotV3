@@ -83,14 +83,14 @@ When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECK
 - #110 Trade Mentor pop-up and hidden context (WS-TM, amended by trader 2026-09-14) [Trader]
 - #109 Three clocks on the scan (WS-10A, WISHLIST 10A, sweep branch) [Next scan on the swe]
 - #108 Wrong side is shown, never hidden (WS-WS, WISHLIST item 9, sweep branch) [Trader]
-- #107 Chart history and the viewport [WS-CH, WISHLIST 10H, sweep branch; rewritten 2026-09-13 after Astra's… (Trader]
+- #107 Centre-chart D1 history [trader]: after restart, a real symbol's centre chart reaches the store's oldest available D1 session when panned left.
 - #106 The theta picks are recorded and graded (WS-TH, WISHLIST item 6, sweep branch) [Next scan + next ove]
 - #105 The Trades splitter opens at 3:2 with no blank band (WS-J1, WISHLIST item 1 leftover, sweep branch) [Trader]
 - #104 One RRS pass per cycle (WS-SN3, WISHLIST item 4, sweep branch) [Next live day on the]
 - #103 The alert feed diffs itself (WS-SN4, WISHLIST item 4, sweep branch) [Next live day on the]
 - #102 One D1 environment label per session (WS-ENV, WISHLIST item 7, sweep branch) [First scan on the sw]
 - #101 The board says whether it is being scanned (WS-10B, WISHLIST 10B, sweep branch) [Next DESK session on]
-- #100 The overnight advice is never blank on success, and a night names its completion [WS-AI1, WISHLIST 10K… (First nightly AI run]
+- #100 Overnight AI notes and completion [first nightly run after restart]: journal_enrichment reports enriched A, abstained B, failed 0 of N (A>0 when a trade closed), and the Journal shows a nonblank advisory note with status, confidence and written_at; the main-summary ledger and System Health agree on completion, with ok only for synthesized; preference_to_trade counts reconcile to ST5 and its three coverage counts sum to unmatched. Abstentions and a night with no closed trades are valid.
 - #99 The star and the X are the day's decisions (WS-SX, WISHLIST item 8, sweep branch) [Trader]
 - #98 A forming bar never reaches the daily-bar cache (WS-FC1, WISHLIST item 2, sweep branch) [Next scan on the swe]
 - #97 The exit comparison answers it per setup (WS-EF1, WISHLIST item 3, trader 2026-09-08, sweep branch) [Next persisted track]
@@ -103,7 +103,7 @@ When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECK
 - #90 The setups table ranks by points and hides nothing (trader, 2026-09-08) [Trader]
 - #89 The Strength window is one flat page (trader, 2026-09-07)
 - #88 The desk opens without paying for eight pages nobody asked for (G7)
-- #87 Research opens on Results, the four selections show four different populations, and "not enough evidence"…
+- #87 Research Results first read [trader]: Research opens on Results; controls default to Bot setups, Swing and Recent 20 sessions, with My trades, Day trading, All history and Custom available and dates only on Custom; all four selections yield distinct readouts. Bot/Swing labels closed R and favorable-direction % separately and shares no family with Bot/Day. Not-enough-evidence cases are sentences, never blank/zero. Snapshot window controls are disabled, My trades filters work and Custom excludes out-of-range trades; control changes clear detail and refresh restores the same row and values. Freshness matches the eight-character ID on Working-lately and Setup Tracker, sources show row counts, None is absent, bands show shown/total; when tags are unconfirmed the page says no setup is named, n with R stays zero until planned risk is recorded, and no other surface's number changes.
 - #86 The Setup Tracker's explanation never outlives its context (G4b)
 - #85 Four tables read whole at the trader's own width (G2b)
 - #83 One reading, four surfaces, and a switch that only reorders (ST6)
@@ -111,8 +111,7 @@ When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECK
 - #81 The bench's numbers hold on the trader's real screen (G0)
 - #80 An explanation never outlives its context (G4)
 - #79 Personal evidence counts once and refuses to name a best setup (ST5)
-- #78 SUPERSEDED by #84 on 2026-09-07 for its policy clauses; its scoring-path clause LIVES ON as #84 (5).
-- #77 Its artifact clause STANDS; its no-stamp clause is SUPERSEDED by #84 on 2026-09-07.
+- #77 ST3 execution-comparison artifacts [lead]: the three JSON/CSV pairs in %LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\ (both__comparison_20260906T110731.*, exec_only__comparison_20260906T110814.*, levels_only__comparison_20260906T110855.*) exist and are readable by the lead; the README headline is 472 of 794 changed (794 is the artifact denominator; 800 offered, 6 untradeable, never use --limit), raw expectancy -0.0981 -> -0.1192, 43 of 50 groups moved rank, plus both single-axis runs.
 - #76 Real counts on the desk, and one honest leader (ST2)
 - #75 Each outcome carries its own clock (ST1)
 - #74 The control and study populations are shown, and the April framework is read (M5)
@@ -123,29 +122,27 @@ When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECK
 - #67 The narration comes back, bounded (N3)
 - #66 The nightly synthesis completes (N2)
 - #65 The sidecar completion finishes a row (N1)
-- #64 Q5 scorecard off the Qt thread: one session past the close with no autopilot_service.py stall over 1,000…
-- #63 audit half MET 2026-09-06
-- #62 Q3 grounding on a real night: ai_morning_brief.txt opens Analyzed A of N. Membership-only B. Failed C.…
-- #61 MET 01:26 PT 2026-09-05
-- #60 Q1 measured held: the Daytrade Tracker's Measured column populated, the status line naming the window and…
-- #58 T1 + T2 capture and board rules, one DESK session: a veto double-click retires with no box and ONE row; a…
-- #57 Tracker mirror parity (decision 0017): five consecutive live saves with python scripts/tracker_store.py…
-- #55 Tee quiet (S1) and gauge names threads (S3): thread_cpu.jsonl shows warehouse-m5-tee under 5% of a core…
-- #54 One chart on the desk: in workspace mode every board, setups-row, RS Window, Industry Board and Watchlists…
-- #53 Desk clickable through a build (F1): a below-normal child python.exe does the build, the owned-child count…
-- #52 Surfaces say what they measure (R4 Part B): the Family Win % cell, the Record line, the Tier column and…
-- #51 Corrected numbers on the desk (R4 Part A): RVOL populated across a half day, Held columns filled on the…
-- #50 Headline statistics agree (V3): win rate first on every swing surface, Held x Ran first on every day-trade…
-- #49 Weekend Prep in one click (V2 item 2): Refresh builds every step, the verdict card shows five to eight…
+- #64 Q5 scorecard off the Qt thread: one session past the close with no `autopilot_service.py` stall over 1,000 ms, the scorecard lines in the log, one CSV row per pick group, `picks_scored_at` set and never `picks_scoring_failed_at`
+- #63 Q4 overnight stages: deterministic stage and audit are MET; remaining: the next session night has a journal_enrichment ledger row that is not refused.
+- #60 Q1 measured held: the Daytrade Tracker's Measured column populated, the status line naming the window and its missing sessions, `held_run_score.load_episodes()` reporting the four counts on the live file
+- #58 T1 + T2 capture and board rules, one DESK session: a veto double-click retires with no box and ONE row; a claim double-click with nothing typed advances with ONE row; a quick like leaves the chart up; "✕ Not today" still opens the box; board clicks leave "queue clear"; TC2000 parity names reach M5 Focus after a refresh, and a "Not today" or a Focus-list removal stays gone with `longs.txt` not regaining it
+- #57 Tracker mirror parity (decision 0017): five consecutive live saves with `python scripts/tracker_store.py verify` printing `"ok": true` and the `Setup tracker mirrored` log line; then step 2 moves the first reader
+- #55 Tee quiet (S1) and gauge names threads (S3): `thread_cpu.jsonl` shows `warehouse-m5-tee` under 5% of a core after the close, no `Hot thread:` warning for it, `tee_high_water.json` beside the spool, one session of rows per segment
+- #54 One chart on the desk: in workspace mode every board, setups-row, RS Window, Industry Board and Watchlists click lands on the centre chart with NO popup; tabs mode brings the popup back
+- #53 Desk clickable through a build (F1): a below-normal child `python.exe` does the build, the owned-child count includes it, the next scan is not refused, the desk stays clickable
+- #52 Surfaces say what they measure (R4 Part B): the Family Win % cell, the Record line, the Tier column and the "Verdict (edge score)" header, each on the desk
+- #51 Corrected numbers on the desk (R4 Part A): RVOL populated across a half day, Held columns filled on the four answerable tabs and BLANK on the four Swing tabs
+- #50 Headline statistics agree (V3): win rate first on every swing surface, Held x Ran first on every day-trade surface, sorts agree
+- #49 Weekend Prep in one click (V2 item 2): Refresh builds every step, the verdict card shows five to eight lines with an n each, "Tag this week" confirms
 - #48 Hidden surfaces (V2): Alerts, D1 Focus, Armed and Universe hidden and every rail hotkey still firing
 - #47 One box, one Enter (V2): a Market Journal entry written from the desk tab, filed against the right session
-- #46 Tagger runs itself (V2): one nightly run tags new trades and the Journal nav button shows the count next…
+- #46 Tagger runs itself (V2): one nightly run tags new trades and the Journal nav button shows the count next morning
 - #45 One window, two sections (V1): RS/RW opens ABOVE Strength and neither widens the column
-- #44 TC2000 parity (V1): the Strength section matches the trader's own TC2000 list for the top ten names on the…
+- #44 TC2000 parity (V1): the Strength section matches the trader's own TC2000 list for the top ten names on the same minute
 - #43 REFUSAL (P10 C): no after-like cell is read for a verdict before the declared 20-session window closes
-- #42 After-like grid collects (P10 C): bronze_like_occurrence_link rows and after-like outcome rows inside the…
-- #41 One like, one dislike from every screen (P10 A): a star, a rail like and a "Not today" each leave EXACTLY…
-- #40 Narration fits (R3): one overnight setup_research run publishes exactly ONE pack for the date with a…
-- #39 Quick like (P9): one swing and one M5 quick like reach trader_annotations.jsonl with like_mode quick,…
-- #38 Merged tree on the desk (R1, R2): stall watchdog ON and quiet on every new surface; the Setup Tracker's…
-- #37 First parameter grid (P8): one overnight run publishes rows for every declared cell inside the reserve,…
+- #42 After-like grid collects (P10 C): `bronze_like_occurrence_link` rows and after-like outcome rows inside the reserve, ledger row `collecting`
+- #41 One like, one dislike from every screen (P10 A): a star, a rail like and a "Not today" each leave EXACTLY ONE annotation row with the right `surface`
+- #40 Narration fits (R3): one overnight `setup_research` run publishes exactly ONE pack for the date with a `.narration.json` beside it
+- #39 Quick like (P9): one swing and one M5 quick like reach `trader_annotations.jsonl` with `like_mode` quick, nothing in Focus, and the M5 one's intraday columns are numbers next morning
+- #38 Merged tree on the desk (R1, R2): stall watchdog ON and quiet on every new surface; the Setup Tracker's picks count after the first scan
+- #37 First parameter grid (P8): one overnight run publishes rows for every declared cell inside the reserve, ledger row `collecting`, and no cell is read early

@@ -1,7 +1,26 @@
-# The trader selects the session model; do not pin it in project config.
+# Sol leads new threads. The named manager role is Luna max, and named worker roles
+# use Luna xhigh. Unassigned spawns default to Luna max; explicit overrides still win.
+
+[models.new_thread]
+model = "gpt-6-sol"
 
 [agents]
 enabled = true
 default_subagent_model = "gpt-6-luna"
-default_subagent_reasoning_effort = "medium"
+default_subagent_reasoning_effort = "max"
 max_concurrent_threads_per_session = 3
+
+[agents.manager]
+config_file = "agents/manager.toml"
+
+[agents.recon]
+config_file = "agents/recon.toml"
+
+[agents.builder]
+config_file = "agents/builder.toml"
+
+[agents.tester]
+config_file = "agents/tester.toml"
+
+[agents.reviewer]
+config_file = "agents/reviewer.toml"

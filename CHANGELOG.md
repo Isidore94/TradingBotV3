@@ -1,14 +1,13 @@
 # Changelog
 
-One line per merged change, newest first. The commit message holds the detail. Keep
+One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
 - 2026-09-22 Parallel tests: pytest-xdist, `pytest -n 8` runs the suite in ~4 min (was ~28). Three font-order-dependent tests fixed (desk icon fonts loaded up front; compact setups table drops Points and trims Bucket before it overflows).
 - 2026-09-22 Setup grades: PROVEN/A/B/C/D/New from the trackers' real results (swing: tracker win rate + low bound; day trade: +1R before -1R). Shown on the setups table and M5 bar, best first; the priority switch now defaults ON.
-- 2026-09-22 Repo slim-down: AGENTS.md is 8 KB, CLAUDE.md imports it, and the
-  checkpoint/plan became STATUS/TODO. History moved to the gitignored `notes/`. Agents
-  are cheaper: Opus/Sonnet on Claude, gpt-6-luna/gpt-6-sol on Codex.
+- 2026-09-22 Slim-down review repairs: restored binding safety rules and complete owed gates, corrected STATUS/TODO, and set Codex defaults to Sol lead, Luna max manager and Luna xhigh workers.
+- 2026-09-22 Repo slim-down: rewrote AGENTS.md to 8 KB; CLAUDE.md imports it; moved checkpoint/plan to STATUS/TODO and history to gitignored notes/. Initial Codex routing: gpt-6-luna for small work, gpt-6-sol for hard builds/reviews.
 - 2026-09-22 Four work streams integrated on main (`cf9c6b2a`): AI-R1/R2/R3 overnight
   AI repair, SP1/SP2 setup-score repair, AR-1/2A/2B/3 alert review follow-up,
   TJ-17A–D recap learning.

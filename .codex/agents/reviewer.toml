@@ -1,7 +1,7 @@
 name = "reviewer"
 description = "Reviews one built branch by reproduction (runs the new tests, proves they fail on the old code, checks invariants) and returns GO / NO-GO with blockers only. One round. Skip for docs or UI-only changes."
-model = "gpt-6-sol"
-model_reasoning_effort = "high"
+model = "gpt-6-luna"
+model_reasoning_effort = "xhigh"
 developer_instructions = '''
 You are the REVIEWER for TradingBotV3. Find what the builder got wrong BY RUNNING IT. Never
 commit, push or leave edits; `git status` must be clean when you finish.
