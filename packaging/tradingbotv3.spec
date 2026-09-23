@@ -165,6 +165,9 @@ hiddenimports += [
 # the three above: package collection cannot see them, so a missing frozen import
 # has to fail here rather than at the first open.
 hiddenimports += ["day_review_index", "day_review_bars", "forecast_brief", "walkaway_day"]
+# Day Recap coach: the night's facts slot imports the day record lazily, and the
+# record imports the recap store lazily. Same reason as above.
+hiddenimports += ["day_session_record", "recap_store"]
 # The UI loads panels/services by name in places, and the engines import each
 # other lazily inside functions; collecting the first-party trees outright is
 # far cheaper than chasing ModuleNotFoundError one launch at a time.
