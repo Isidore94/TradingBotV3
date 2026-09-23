@@ -91,10 +91,12 @@ class ArmQueue(QObject):
         return list(self._jobs.values())
 
     def cancel(self, key) -> bool:
-        job = self.pending(key)
-        if job is None:
-            return False
-        job.state = CANCELLED
+        # Same lock as the worker's check-and-set, so a cancel is never overwritten.
+        with self._lock:
+            job = self.pending(key)
+            if job is None:
+                return False
+            job.state = CANCELLED
         self._jobs.pop(job.key, None)
         self.jobChanged.emit(job)
         return True
@@ -108,6 +110,10 @@ class ArmQueue(QObject):
     @Slot(object)
     def _on_prepared(self, job: ArmJob) -> None:
         if job.state == CANCELLED or job.state in (ARMED, FAILED):
+            return
+        with self._lock:
+            cancelled = job.state == CANCELLED
+        if cancelled:
             return
         if job.error:
             ok, reason = False, job.error
@@ -152,9 +158,10 @@ class ArmQueue(QObject):
                     logging.exception("Queued write failed: %s", item[2])
                 continue
             job: ArmJob = item[1]
-            if job.state == CANCELLED:
-                continue
-            job.state = RUNNING
+            with self._lock:
+                if job.state == CANCELLED:
+                    continue
+                job.state = RUNNING
             try:
                 job.result = job.prepare() if job.prepare is not None else None
             except Exception as exc:  # noqa: BLE001

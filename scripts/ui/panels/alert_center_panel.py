@@ -7385,13 +7385,14 @@ class AlertCenterPanel(QFrame):
                 or not self._pullback_uses_h1(watch)
             ):
                 continue
-            if self._m5_unknown(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS):
-                continue  # not marked judged: it is judged once its bars land
             cache = self._h1_history_cache()
             token = self._pullback_cache_token(cache, watch.symbol) if cache is not None else None
             wanted, end = self._pullback_due(watch, H1_INTERVAL_MINUTES, moment, token)
-            if wanted:
-                due.append((watch, end, token))
+            if not wanted:
+                continue
+            if self._m5_unknown(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS):
+                continue  # not marked judged: it is judged once its bars land
+            due.append((watch, end, token))
         due.sort(key=lambda pair: str(getattr(pair[0], "symbol", "")))
         taken = due[: max(1, int(self.PULLBACK_H1_BATCH_LIMIT))]
         for watch, end, token in taken:
