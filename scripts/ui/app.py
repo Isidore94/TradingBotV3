@@ -2108,6 +2108,11 @@ def main(argv: list[str] | None = None) -> int:
     app.ui_activity_monitor = UiActivityMonitor(app)
     app.installEventFilter(app.ui_activity_monitor)
     install_gui_thread_gc(app, activity_monitor=app.ui_activity_monitor)
+    # yfinance's download threads each leave SQLite connections that only the
+    # GUI-thread collector would free; close each one on its own thread instead.
+    from peewee_thread_close import install as install_peewee_thread_close
+
+    install_peewee_thread_close()
     # Scale first: every widget built below reads theme.px() at construction.
     apply_theme(
         app,
