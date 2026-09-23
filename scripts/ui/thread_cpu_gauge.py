@@ -128,54 +128,6 @@ def thread_cpu_seconds(native_id: int) -> float | None:
     return None
 
 
-class _PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
-    _fields_ = [
-        ("cb", ctypes.c_uint32),
-        ("PageFaultCount", ctypes.c_uint32),
-        ("PeakWorkingSetSize", ctypes.c_size_t),
-        ("WorkingSetSize", ctypes.c_size_t),
-        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-        ("QuotaPagedPoolUsage", ctypes.c_size_t),
-        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-        ("PagefileUsage", ctypes.c_size_t),
-        ("PeakPagefileUsage", ctypes.c_size_t),
-        ("PrivateUsage", ctypes.c_size_t),
-    ]
-
-
-def process_memory() -> dict[str, float]:
-    """This process's working set and commit in MB; {} where unsupported."""
-    mb = 1024.0 * 1024.0
-    try:
-        if sys.platform.startswith("win"):
-            counters = _PROCESS_MEMORY_COUNTERS_EX()
-            counters.cb = ctypes.sizeof(counters)
-            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-            psapi = ctypes.windll.psapi  # type: ignore[attr-defined]
-            psapi.GetProcessMemoryInfo.argtypes = [
-                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32
-            ]
-            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-            ok = psapi.GetProcessMemoryInfo(
-                kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
-            )
-            if not ok:
-                return {}
-            return {
-                "rss_mb": round(counters.WorkingSetSize / mb, 1),
-                "commit_mb": round(counters.PrivateUsage / mb, 1),
-                "peak_commit_mb": round(counters.PeakPagefileUsage / mb, 1),
-            }
-        if sys.platform.startswith("linux"):
-            pages = Path("/proc/self/statm").read_text(encoding="ascii").split()
-            page = os.sysconf("SC_PAGE_SIZE")
-            return {"rss_mb": round(int(pages[1]) * page / mb, 1)}
-    except Exception:
-        return {}
-    return {}
-
-
 class GcTimer:
     """Times every cyclic collection via ``gc.callbacks``; drained once a tick.
 
@@ -361,6 +313,8 @@ class ThreadCpuGauge:
         return record
 
     def _memory_fields(self) -> dict[str, Any]:
+        from diagnostics.process_memory import process_memory
+
         fields: dict[str, Any] = dict(process_memory())
         fields["gc_counts"] = list(gc.get_count())
         if self._count_objects:
