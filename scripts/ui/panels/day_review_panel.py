@@ -552,6 +552,34 @@ class _IndexBuildWorker(QThread):
         self.built.emit(self._session)
 
 
+class _BarsBackfillWorker(QThread):
+    """Fetch one past session's bars file, unless it already exists.
+
+    The existence check is a parquet read, so it runs here and not on the Qt
+    thread. `present` says the file was already there.
+    """
+
+    present = Signal(str)
+
+    def __init__(self, callback, session: str, parent=None) -> None:
+        super().__init__(parent)
+        self.callback, self.value = callback, str(session)
+
+    def run(self) -> None:  # pragma: no cover - asserted through its seams
+        try:
+            import day_review_bars
+
+            if day_review_bars.read_session_bars(self.value) is not None:
+                self.present.emit(self.value)
+                return
+        except Exception:  # noqa: BLE001 - an unreadable file is fetched again
+            logging.debug("Day Review bars check failed.", exc_info=True)
+        try:
+            self.callback(self.value, lookback_sessions=LOOKBACK_SESSIONS)
+        except Exception:  # noqa: BLE001
+            logging.info("Day Review bars backfill failed.", exc_info=True)
+
+
 class _RedoPackWorker(QThread):
     """One day pack, built off the Qt thread before a Redo is queued.
 
@@ -615,6 +643,8 @@ class DayReviewPanel(QFrame):
         self._bars_worker: _IndexBuildWorker | None = None
         self._bars_backfill_queue: list[str] = []
         self._bars_backfill_queued: set[str] = set()
+        #: Sessions a worker found already on disk; never checked again.
+        self._bars_known_present: set[str] = set()
         self._building_index = ""
         #: The desk's own M5 cache accessor (`alert_center.journal_chart_bars`).
         #: Called ONLY on the Qt thread, by `reload`, and only for a session that
@@ -1568,7 +1598,9 @@ class DayReviewPanel(QFrame):
         session = str(session_date or "")[:10]
         if not session or not day_review_bars.session_is_backfillable(session, now=self._clock()):
             return
-        if day_review_bars.read_session_bars(session) is not None:
+        # Whether the file already exists is asked ON the worker: it is a
+        # parquet read, and this runs on the Qt thread.
+        if session in self._bars_known_present:
             return
         if session not in self._bars_backfill_queued:
             self._bars_backfill_queue.append(session)
@@ -1586,18 +1618,8 @@ class DayReviewPanel(QFrame):
             self._bars_backfill_queued.discard(session)
             self._start_next_bars_backfill()
             return
-
-        class _BarsWorker(QThread):
-            def __init__(self, callback, value, parent=None):
-                super().__init__(parent)
-                self.callback, self.value = callback, value
-            def run(self):  # pragma: no cover - asserted through worker seam
-                try:
-                    self.callback(self.value, lookback_sessions=LOOKBACK_SESSIONS)
-                except Exception:
-                    logging.info("Day Review bars backfill failed.", exc_info=True)
-
-        self._bars_worker = _BarsWorker(method, session, self)
+        self._bars_worker = _BarsBackfillWorker(method, session, self)
+        self._bars_worker.present.connect(lambda done: self._bars_known_present.add(str(done)))
         self._bars_worker.finished.connect(lambda: self._on_bars_backfill_finished(session))
         self.status.setText(FETCHING_BARS_NOTE.format(session=session))
         self.statusChanged.emit(self.status.text())
@@ -1605,6 +1627,9 @@ class DayReviewPanel(QFrame):
 
     def _on_bars_backfill_finished(self, session: str) -> None:
         self._bars_backfill_queued.discard(session)
+        if self.status.text() == FETCHING_BARS_NOTE.format(session=session):
+            self.status.setText(f"Day Review: {self.session_date()}")
+            self.statusChanged.emit(self.status.text())
         self._start_next_bars_backfill()
 
     def _on_index_built(self, session_date: str) -> None:
@@ -2915,19 +2940,23 @@ class DayReviewPanel(QFrame):
 
     # -- the pasted forecast -----------------------------------------------
     def _paste_daily_forecast(self) -> None:
-        """Ask for the text, the session it is about, and who wrote it."""
-        payload = self._ask_for_forecast()
-        if payload is None:
-            return
-        self._import_forecast(payload)
+        """Open the paste dialog. It is NON-modal: the desk keeps running."""
+        dialog = getattr(self, "_forecast_dialog", None)
+        try:
+            if dialog is not None and dialog.isVisible():
+                dialog.raise_()
+                dialog.activateWindow()
+                return
+        except RuntimeError:  # the last dialog was deleted on close
+            pass
+        self._forecast_dialog = self._ask_for_forecast(self._import_forecast)
 
-    def _ask_for_forecast(self) -> dict | None:
-        """The paste dialog. Returns what was typed, or `None` when cancelled.
+    def _ask_for_forecast(self, on_accept: Callable[[dict], Any]):
+        """Build and SHOW the paste dialog; `on_accept` gets what was typed.
 
         The date field DEFAULTS to the date in the brief's own first heading
         (`forecast_brief.parse`), and stops defaulting the moment the trader
-        types in it: the document knows which day it is about, and the trader
-        outranks the document.
+        types in it. The source starts EMPTY: nothing is pre-filled for them.
         """
         from PySide6.QtWidgets import (
             QDialog,
@@ -2940,10 +2969,13 @@ class DayReviewPanel(QFrame):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Paste a daily forecast")
+        dialog.setModal(False)
+        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
         text_box = QPlainTextEdit()
         text_box.setPlaceholderText("Paste the brief exactly as it was written.")
         session_box = QLineEdit(self.session_date())
-        model_box = QLineEdit("chatgpt")
+        model_box = QLineEdit()
+        model_box.setPlaceholderText("Who wrote it, e.g. chatgpt (optional)")
         created_box = QLineEdit()
         created_box.setPlaceholderText("When it was written, if you know (optional)")
         touched = {"session": False}
@@ -2964,18 +2996,25 @@ class DayReviewPanel(QFrame):
         form.addRow("Source", model_box)
         form.addRow("Written at", created_box)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        form.addRow(buttons)
 
-        if dialog.exec() != QDialog.Accepted:
-            return None
-        return {
-            "text": text_box.toPlainText(),
-            "target_session": session_box.text().strip() or self.session_date(),
-            "source_model": model_box.text().strip(),
-            "created_at_claimed": created_box.text().strip(),
-        }
+        def _accept() -> None:
+            values = {
+                "text": text_box.toPlainText(),
+                "target_session": session_box.text().strip() or self.session_date(),
+                "source_model": model_box.text().strip(),
+                "created_at_claimed": created_box.text().strip(),
+            }
+            dialog.accept()
+            on_accept(values)
+
+        buttons.accepted.connect(_accept)
+        form.addRow(buttons)
+        # Handles for tests; the dialog owns them.
+        dialog.text_box, dialog.session_box = text_box, session_box
+        dialog.model_box, dialog.buttons = model_box, buttons
+        dialog.show()
+        return dialog
 
     def _import_forecast(self, payload: Mapping[str, Any]) -> dict:
         """The write half, separate from the dialog so it can be tested."""

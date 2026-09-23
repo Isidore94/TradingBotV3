@@ -117,3 +117,73 @@ def test_a_real_failure_still_shows_beside_the_no_trade_fact(panel):
 
     panel.render(_payload(error=f"the open theses could not be read: boom · {NO_TRADES_EXIT_NOTE}"))
     assert panel.status.text() == "the open theses could not be read: boom"
+
+
+# -- 7. no Qt-thread parquet reads -------------------------------------------
+def test_no_bars_file_is_read_on_the_qt_thread(app, monkeypatch):
+    """`_backfill_bars_for` and the per-exit loop in `render` read on a worker."""
+    import threading
+
+    import day_review_bars
+    from ui.panels.day_review_panel import DayReviewPanel
+
+    reads: list[tuple[str, int]] = []
+
+    def _read(session, **_kwargs):
+        reads.append((str(session), threading.get_ident()))
+        return {"SPY": []}
+
+    class _Service(_BarsService):
+        pass
+
+    monkeypatch.setattr(day_review_bars, "read_session_bars", _read)
+    monkeypatch.setattr(day_review_bars, "session_is_backfillable", lambda *_a, **_k: True)
+    panel = DayReviewPanel(service=_Service(), clock=lambda: NOW)
+    try:
+        gui = threading.get_ident()
+        panel._backfill_bars_for("2026-09-18")
+        panel.render(_payload(walkaway_backfill_sessions=("2026-09-17",)))
+        for _ in range(200):
+            worker = panel._bars_worker
+            if worker is not None:
+                worker.wait(2000)
+            app.processEvents()
+            if len(reads) >= 2 and (panel._bars_worker is None or not panel._bars_worker.isRunning()):
+                break
+        assert {session for session, _ in reads} == {"2026-09-18", "2026-09-17"}
+        assert all(thread != gui for _session, thread in reads), reads
+        # The file was there, so nothing was fetched, and it is not asked twice.
+        assert panel.service.fetched == []
+        before = len(reads)
+        panel._backfill_bars_for("2026-09-18")
+        assert len(reads) == before
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+        app.processEvents()
+
+
+class _BarsService(_Service):
+    def __init__(self):
+        self.fetched: list[str] = []
+
+    def backfill_session_bars_for(self, session_date, **_kwargs):
+        self.fetched.append(str(session_date))
+
+
+def test_the_forecast_dialog_is_non_modal_and_prefills_no_source(panel, app, monkeypatch):
+    from PySide6.QtWidgets import QDialog, QDialogButtonBox
+
+    imported: list[dict] = []
+    monkeypatch.setattr(panel, "_import_forecast", lambda values: imported.append(values) or {})
+    monkeypatch.setattr(
+        QDialog, "exec", lambda *_a: pytest.fail("the forecast dialog blocked the desk")
+    )
+    panel._paste_daily_forecast()
+    dialog = panel._forecast_dialog
+    assert dialog.isVisible() and not dialog.isModal()
+    assert dialog.model_box.text() == ""
+    dialog.text_box.setPlainText("# Market Morning Brief")
+    dialog.buttons.button(QDialogButtonBox.Ok).click()
+    assert imported and imported[0]["text"] == "# Market Morning Brief"
+    assert imported[0]["source_model"] == ""
