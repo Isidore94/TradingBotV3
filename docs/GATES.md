@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #194 Pullback dip gate: the next M30/M15 Pullback alert had price come to the SMA and LRSI dip under 20 first; no alert on a name pinned far above/below its SMA [trader]
 - #193 M5 swing context: an M5 alert on a D1 setup name shows `· D1 <grade>` (★ if claimed); prioritise on puts them first; tooltip names the setup [trader]
 - #192 Close scan fresh: after the close scan, `master_avwap_scan_manifest_history.jsonl` shows latest_input_bar_session = today even when a 12:45 preview ran [lead]
 - #191 Working now strip: M5 column shows today's alerts by grade with R since they fired; hover R/best/worst match the chart; no desk lag [trader]
