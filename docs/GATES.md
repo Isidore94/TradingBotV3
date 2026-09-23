@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #196 Wall gate: a D1 chart right under an SMA/trendline is hidden (counted in N hidden, `wall_hidden` in the log), its SMA break/15EMA reject or M15/M30 Pullback shows on the Armed board, live wall arms stay <= 20, and an over-cap name shows tagged `at wall` [trader]
 - #195 Pullback dip gate: the next M30/M15 Pullback alert had price come to the SMA and LRSI dip under 20 first; no alert on a name pinned far above/below its SMA [trader]
 - #194 Mentor asks once: answer or skip the 09:00 card; the same trades are NOT on the 10:00 card; typed words show in the Journal [trader]
 - #193 M5 swing context: an M5 alert on a D1 setup name shows `· D1 <grade>` (★ if claimed); prioritise on puts them first; tooltip names the setup [trader]

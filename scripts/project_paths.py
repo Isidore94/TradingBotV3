@@ -550,6 +550,9 @@ D1_LEVEL_WATCHES_FILE = PERSISTENT_DATA_DIR / "d1_level_watches.json"
 # armed from the dock's D1 row, kept across sessions until they fire. Their
 # reference levels are re-derived from the daily store on every poll.
 D1_EVENT_WATCHES_FILE = PERSISTENT_DATA_DIR / "d1_event_watches.json"
+# Wall-gate ledger: which follow-up watches the desk auto-armed for a name
+# hidden at an SMA/trendline wall, and which of those the trader turned off.
+WALL_GATE_ARMS_FILE = PERSISTENT_DATA_DIR / "wall_gate_arms.json"
 # Persistent ANY-BOUNCE watches (R5 section 4): one armed request per
 # symbol and side covering a SET of levels - D1 bands, current and prior
 # AVWAP, daily and session EMAs, the H1 15 EMA. Its own store beside the

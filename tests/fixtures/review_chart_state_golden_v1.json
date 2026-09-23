@@ -1,0 +1,246 @@
+{
+ "schema": "review_chart_state_golden_v1",
+ "feature_version": "alert_center_review_chart_state@2026-09-23-pre-wall-gate",
+ "raw_input_keys": [
+  "cases"
+ ],
+ "raw_input_sha256": "d2842a81245538916ddb2aa51bb0b3e389e35ebcd292ff62fdb2296e9a2deedb",
+ "acquired_at": "2026-09-23T12:00:00-07:00",
+ "as_of": "2026-09-23T12:00:00-07:00",
+ "universe_version": "synthetic-review-chart-state-2026-09-23",
+ "provider_assumptions": "Hand-built bars: daily = [count, first close, last close] segments ending the day before the test's session, high/low = close +/- 0.5; m5 = completed session closes ten minutes apart before an 11:00 clock. Built by tests/test_review_chart_state_golden.py; no provider is called (the panel's bar accessors are stubbed).",
+ "intentional_difference": "Pinned BEFORE the wall-gate leg (2026-09-23). With the gate on, only cases whose expected.wall is true change (open -> closed); with WALL_GATE_ENABLED False every verdict is unchanged.",
+ "expected_keys": [
+  "expected"
+ ],
+ "numeric_tolerance": 0.0,
+ "cases": [
+  {
+   "id": "d1_long_uptrend_breakout",
+   "symbol": "AAA",
+   "side": "LONG",
+   "kind": "d1",
+   "daily": [
+    [
+     250,
+     18.0,
+     22.0
+    ]
+   ],
+   "m5": [
+    23.0,
+    23.2,
+    23.5
+   ]
+  },
+  {
+   "id": "d1_short_uptrend_inside_range",
+   "symbol": "BBB",
+   "side": "SHORT",
+   "kind": "d1",
+   "daily": [
+    [
+     250,
+     18.0,
+     22.0
+    ]
+   ],
+   "m5": [
+    23.0,
+    23.2,
+    23.5
+   ]
+  },
+  {
+   "id": "d1_long_downtrend_under_sma200",
+   "symbol": "CCC",
+   "side": "LONG",
+   "kind": "d1",
+   "daily": [
+    [
+     250,
+     22.0,
+     18.0
+    ]
+   ],
+   "m5": [
+    18.8,
+    18.9,
+    19.0
+   ]
+  },
+  {
+   "id": "m5_long_below_vwap",
+   "symbol": "DDD",
+   "side": "LONG",
+   "kind": "m5",
+   "daily": [
+    [
+     250,
+     18.0,
+     22.0
+    ]
+   ],
+   "m5": [
+    24.0,
+    23.6,
+    23.0
+   ]
+  },
+  {
+   "id": "m5_short_downtrend_breakdown",
+   "symbol": "EEE",
+   "side": "SHORT",
+   "kind": "m5",
+   "daily": [
+    [
+     250,
+     22.0,
+     18.0
+    ]
+   ],
+   "m5": [
+    17.3,
+    17.2,
+    17.0
+   ]
+  },
+  {
+   "id": "focus_d1_long_uptrend",
+   "symbol": "FFF",
+   "side": "LONG",
+   "kind": "focus_d1",
+   "daily": [
+    [
+     250,
+     18.0,
+     22.0
+    ]
+   ],
+   "m5": [
+    23.0,
+    23.2,
+    23.5
+   ]
+  },
+  {
+   "id": "no_data_unknown",
+   "symbol": "GGG",
+   "side": "LONG",
+   "kind": "d1",
+   "daily": [],
+   "m5": []
+  },
+  {
+   "id": "m5_long_under_sma200_wall",
+   "symbol": "HHH",
+   "side": "LONG",
+   "kind": "m5",
+   "daily": [
+    [
+     150,
+     22.0,
+     22.0
+    ],
+    [
+     100,
+     20.0,
+     20.0
+    ]
+   ],
+   "m5": [
+    20.6,
+    20.7,
+    20.8
+   ]
+  },
+  {
+   "id": "m5_short_resistance_behind",
+   "symbol": "III",
+   "side": "SHORT",
+   "kind": "m5",
+   "daily": [
+    [
+     150,
+     22.0,
+     22.0
+    ],
+    [
+     100,
+     20.0,
+     20.0
+    ]
+   ],
+   "m5": [
+    19.4,
+    19.3,
+    19.2
+   ]
+  },
+  {
+   "id": "m5_long_just_above_sma_support",
+   "symbol": "JJJ",
+   "side": "LONG",
+   "kind": "m5",
+   "daily": [
+    [
+     150,
+     18.0,
+     18.0
+    ],
+    [
+     100,
+     20.0,
+     20.0
+    ]
+   ],
+   "m5": [
+    20.6,
+    20.7,
+    20.8
+   ]
+  }
+ ],
+ "expected": {
+  "d1_long_uptrend_breakout": {
+   "verdict": "open",
+   "wall": false
+  },
+  "d1_short_uptrend_inside_range": {
+   "verdict": "closed",
+   "wall": false
+  },
+  "d1_long_downtrend_under_sma200": {
+   "verdict": "closed",
+   "wall": false
+  },
+  "m5_long_below_vwap": {
+   "verdict": "closed",
+   "wall": false
+  },
+  "m5_short_downtrend_breakdown": {
+   "verdict": "open",
+   "wall": false
+  },
+  "focus_d1_long_uptrend": {
+   "verdict": "open",
+   "wall": false
+  },
+  "no_data_unknown": {
+   "verdict": "unknown",
+   "wall": false
+  },
+  "m5_long_under_sma200_wall": {
+   "verdict": "open",
+   "wall": true
+  },
+  "m5_short_resistance_behind": {
+   "verdict": "open",
+   "wall": false
+  },
+  "m5_long_just_above_sma_support": {
+   "verdict": "open",
+   "wall": false
+  }
+ }
+}
