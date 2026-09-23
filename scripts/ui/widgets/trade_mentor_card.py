@@ -3296,3 +3296,43 @@ class TradeMentorCard(QWidget):
         except Exception:  # noqa: BLE001 - a key handler never breaks the desk
             logging.debug("Trade Mentor key handling failed.", exc_info=True)
         return super().eventFilter(watched, event)
+
+
+# -- the Day Review walk's two exit verbs -------------------------------------
+def confirm_exit_draft(store: Any, draft: Mapping[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """The walk's "Yes" on a waiting exit reading: the card's own Confirm writer.
+
+    Kept here so the trader's click is the only way a reading becomes theirs.
+    """
+    import trade_mentor_trade_check as check
+
+    body = dict(draft or {})
+    owner = str(body.get("trade_id") or check.split_exit_key(body.get("key"))[0])
+    return check.confirm_exit_fields(store, owner, body, now=now)
+
+
+def correct_exit_draft(
+    store: Any,
+    draft: Mapping[str, Any],
+    *,
+    why: str = "",
+    felt: tuple[str, ...] = (),
+    watching: tuple[str, ...] = (),
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """The walk's "Fix": the trader's own values, through the card's Correct writer."""
+    import trade_mentor_trade_check as check
+
+    body = dict(draft or {})
+    key = str(body.get("key") or "")
+    owner = str(body.get("trade_id") or check.split_exit_key(key)[0])
+    return check.correct_exit_fields(
+        store,
+        owner,
+        why=why,
+        felt=tuple(felt),
+        watching=tuple(watching),
+        now=now,
+        exit_session=str(body.get("exit_session") or check.split_exit_key(key)[1]),
+        note_id=str(body.get("note_id") or ""),
+    )

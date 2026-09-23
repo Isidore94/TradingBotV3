@@ -797,6 +797,17 @@ def load_walk_inputs(
         traits_by_trade=traits, mentor_by_trade=mentor,
         rule=rule, streak=streak, zone=zone,
     )
+    if any(card.get("exit_draft") for card in cards):
+        reasons: list[tuple[str, str]] = []
+        try:
+            import exit_reasons
+
+            reasons = [(code, exit_reasons.label_for(code) or _words(code)) for code in exit_reasons.codes()]
+        except Exception as exc:  # noqa: BLE001 - Fix then offers only the note words
+            unread.append(f"exit reasons: {exc}")
+        for card in cards:
+            if card.get("exit_draft"):
+                card["exit_draft"]["reasons"] = reasons
     return {"session": day, "cards": cards, "unread": unread}
 
 

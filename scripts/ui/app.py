@@ -172,6 +172,7 @@ class MainWindow(QMainWindow):
         self.weekend_prep_panel.openTradeRequested.connect(self._open_journal_trade)
         self.weekend_prep_panel.openSessionRequested.connect(self._open_day_review_session)
         self.day_review_panel.openTradeRequested.connect(self._open_journal_trade)
+        self.day_review_panel.walkReadyChanged.connect(self._apply_day_review_badge)
         # WS-WL item 4: the Journal LINKS to the one Watchlist's Positions view.
         self.journal_panel.positionsOnWatchlistRequested.connect(
             self.show_watchlist_positions
@@ -712,6 +713,16 @@ class MainWindow(QMainWindow):
                 self.nav_buttons[index].setText(
                     f"Journal ({count} to review)" if count > 0 else "Journal"
                 )
+            return
+
+    def _apply_day_review_badge(self, ready: bool) -> None:
+        """"Day Review •" while a closed day's walk waits. No popup, just the label."""
+        for index, spec in enumerate(PAGE_SPECS):
+            if spec.title != DAY_REVIEW_PAGE_TITLE:
+                continue
+            buttons = getattr(self, "nav_buttons", ())
+            if index < len(buttons):
+                buttons[index].setText(f"{spec.title} •" if ready else spec.title)
             return
 
     def _select_page(self, index: int) -> None:

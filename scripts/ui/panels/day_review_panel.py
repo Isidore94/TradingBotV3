@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -662,6 +663,8 @@ class DayReviewPanel(QFrame):
     #: (symbol, side). The host charts it through `show_board_symbol`.
     chartRequested = Signal(str, str)
     openTradeRequested = Signal(str)
+    #: True while a closed day's "Review my day" walk is waiting. The host badges its nav entry.
+    walkReadyChanged = Signal(bool)
 
     def __init__(
         self,
@@ -738,6 +741,14 @@ class DayReviewPanel(QFrame):
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(AUTO_POLL_INTERVAL_MS)
         self._auto_timer.timeout.connect(self._on_auto_tick)
+        #: "Review my day": the open walk, walks kept alive while a save runs, and the banner state.
+        self._walk: Any = None
+        self._retired_walks: list[Any] = []
+        self._walk_ready = False
+        self._walk_banner_dismissed: set[str] = set()
+        #: The saved-clue layers on the name and trade charts (`clue_marker.ClueFlow`).
+        self._name_clue_flow: Any = None
+        self._trade_clue_flow: Any = None
 
         self._build_header()
         self._build_glance()
@@ -798,6 +809,8 @@ class DayReviewPanel(QFrame):
     # -- day navigation ----------------------------------------------------
     def step_session(self, step: int) -> None:
         """Move one session older (-1) or newer (+1). The picker is newest first."""
+        if self.walk_is_open():
+            return
         index = self.session_picker.currentIndex() - int(step)
         if 0 <= index < self.session_picker.count():
             self.session_picker.setCurrentIndex(index)
@@ -841,6 +854,27 @@ class DayReviewPanel(QFrame):
         self.details_toggle.setFlat(True)
         self.details_toggle.setToolTip("Show the full report card sentences.")
         self.details_toggle.toggled.connect(self._toggle_details)
+        self.walk_button = QPushButton("Review my day (5 min)")
+        self.walk_button.setToolTip("A short guided walk through this day, one card at a time.")
+        self.walk_button.clicked.connect(self.open_walk)
+        self.walk_button.setEnabled(False)
+        # The closed-day nudge: a small line on the page, never a popup.
+        self.walk_banner = QFrame()
+        self.walk_banner.setObjectName("DayReviewWalkBanner")
+        banner_row = QHBoxLayout(self.walk_banner)
+        banner_row.setContentsMargins(8, 4, 8, 4)
+        self.walk_banner_label = QLabel("Your day is ready —")
+        self.walk_banner_button = QPushButton("Review (5 min)")
+        self.walk_banner_button.clicked.connect(self.open_walk)
+        self.walk_banner_close = QPushButton("×")
+        self.walk_banner_close.setFlat(True)
+        self.walk_banner_close.setToolTip("Hide this for now.")
+        self.walk_banner_close.clicked.connect(self._dismiss_walk_banner)
+        banner_row.addWidget(self.walk_banner_label)
+        banner_row.addWidget(self.walk_banner_button)
+        banner_row.addStretch(1)
+        banner_row.addWidget(self.walk_banner_close)
+        self.walk_banner.setVisible(False)
 
     def _toggle_details(self, shown: bool) -> None:
         self.report_card_section.setVisible(bool(shown))
@@ -1519,6 +1553,7 @@ class DayReviewPanel(QFrame):
         glance_row = QHBoxLayout()
         glance_row.setContentsMargins(0, 0, 0, 0)
         glance_row.addWidget(self.glance_strip, 1)
+        glance_row.addWidget(self.walk_button, 0, Qt.AlignBottom)
         glance_row.addWidget(self.details_toggle, 0, Qt.AlignBottom)
 
         page = QWidget()
@@ -1529,6 +1564,7 @@ class DayReviewPanel(QFrame):
         body.addWidget(self.subtitle)
         body.addLayout(header)
         body.addWidget(self.provisional_note)
+        body.addWidget(self.walk_banner)
         # The glance strip heads the page; the full report card sits under
         # "Details", still above the two columns that hold the story.
         body.addLayout(glance_row)
@@ -1547,9 +1583,12 @@ class DayReviewPanel(QFrame):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setWidget(page)
+        # The walk replaces the page body while it is open.
+        self.body_stack = QStackedWidget()
+        self.body_stack.addWidget(self.scroll)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
-        outer.addWidget(self.scroll)
+        outer.addWidget(self.body_stack)
 
     def refresh_reader_measure(self) -> None:
         """The reader and the forecast span the RIGHT column (TJ-1L).
@@ -2007,6 +2046,7 @@ class DayReviewPanel(QFrame):
         self._refresh_name_chart()
         self._render_ideas(session, list(payload.get("ideas") or []))
         self._render_mood(payload.get("mood"))
+        self._sync_walk_entry(session, payload)
         if allow_backfill:
             for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
                 self._backfill_bars_for(str(exit_session))
@@ -2810,6 +2850,7 @@ class DayReviewPanel(QFrame):
         self._trade_chart.set_data(bars, timeframe="m5")
         self._trade_chart.set_note_markers(tuple(chart.get("markers") or ()))
         self._trade_chart_symbol = name
+        self._draw_saved_clues(self._trade_chart, "_trade_clue_flow", name)
         caption = self._marker_caption(chart.get("placements"))
         self.trade_chart_note.setText(
             f"{name} M5 this session, with your entry and exit marked."
@@ -3012,6 +3053,7 @@ class DayReviewPanel(QFrame):
         pane.set_data(bars, timeframe="m5")
         pane.set_note_markers(tuple(chart.get("markers") or ()))
         self._name_chart_symbol = name
+        self._draw_saved_clues(pane, "_name_clue_flow", name)
         caption = self._marker_caption(chart.get("placements"))
         self.name_chart_note.setText(
             f"{name} M5 — {len(bars)} completed bar(s), and what you said about it."
@@ -3283,6 +3325,106 @@ class DayReviewPanel(QFrame):
         return result
 
     # -- teardown ----------------------------------------------------------
+    # -- "Review my day" -----------------------------------------------------
+    def walk_is_open(self) -> bool:
+        return self._walk is not None and self.body_stack.currentWidget() is self._walk
+
+    def walk(self):
+        """The open (or last) walk, or None."""
+        return self._walk
+
+    def _walk_ready_for(self, session: str, payload: Mapping[str, Any]) -> bool:
+        """A closed session, the newest one, whose walk is not finished."""
+        if not session or payload.get("provisional") or str(payload.get("session_date") or "") != session:
+            return False
+        try:
+            import market_calendar
+
+            if market_calendar.last_completed_session(self._clock()).isoformat() != session:
+                return False
+        except Exception:  # noqa: BLE001 - an unsure calendar shows no nudge
+            return False
+        from ui.widgets.recap_walk import walk_finished
+
+        return not walk_finished(session)
+
+    def _sync_walk_entry(self, session: str, payload: Mapping[str, Any]) -> None:
+        """Enable the button for a loaded day; show the banner only after the close."""
+        loaded = str(payload.get("session_date") or "") == session and bool(session)
+        self.walk_button.setEnabled(loaded)
+        ready = self._walk_ready_for(session, payload)
+        self.walk_banner.setVisible(ready and session not in self._walk_banner_dismissed)
+        if ready != self._walk_ready:
+            self._walk_ready = ready
+            self.walkReadyChanged.emit(ready)
+
+    def _dismiss_walk_banner(self) -> None:
+        self._walk_banner_dismissed.add(self.session_date())
+        self.walk_banner.setVisible(False)
+
+    def open_walk(self) -> None:
+        """Replace the page body with the walk for the loaded session."""
+        session = self.session_date()
+        if str(self._payload.get("session_date") or "") != session:
+            self.status.setText("The day is still loading - try again in a moment.")
+            return
+        walk = self._walk
+        if walk is None or walk.session != session:
+            if walk is not None:
+                self._retire_walk(walk)
+            from ui.widgets.recap_walk import RecapWalk
+
+            walk = RecapWalk(session, self._payload, self, zone=self._zone)
+            walk.exited.connect(self.close_walk)
+            walk.walkFinished.connect(self._on_walk_finished)
+            walk.statusChanged.connect(self.statusChanged.emit)
+            self._walk = walk
+            self.body_stack.addWidget(walk)
+            walk.start()
+        self.body_stack.setCurrentWidget(walk)
+        walk.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def close_walk(self) -> None:
+        """Back to the page. The walk stays built, so reopening resumes it."""
+        self.body_stack.setCurrentWidget(self.scroll)
+
+    def _retire_walk(self, walk) -> None:
+        """Drop an old session's walk once its saves have finished."""
+        self.body_stack.removeWidget(walk)
+        walk.setParent(None)
+        self._retired_walks = [w for w in self._retired_walks if w.busy()]
+        if walk.busy():
+            self._retired_walks.append(walk)
+        else:
+            walk.deleteLater()
+
+    def _on_walk_finished(self, session: str) -> None:
+        if session == self.session_date():
+            self.walk_banner.setVisible(False)
+            if self._walk_ready:
+                self._walk_ready = False
+                self.walkReadyChanged.emit(False)
+
+    # -- saved clues on the page's charts ---------------------------------------
+    def _draw_saved_clues(self, chart, attr: str, symbol: str) -> None:
+        """Draw the session's saved clues for `symbol` on `chart`, read on a worker."""
+        try:
+            from ui.widgets.clue_marker import mark_clue_flow
+        except Exception:  # noqa: BLE001 - no clue module, no clues drawn
+            return
+        try:
+            flow = getattr(self, attr)
+            if flow is None:
+                flow = mark_clue_flow(chart, self.session_date(), symbol, "M5")
+                setattr(self, attr, flow)
+            flow.session_date = self.session_date()
+            flow.symbol = str(symbol or "").upper()
+            flow.clues = []
+            flow.redraw()
+            flow.load()
+        except Exception:  # noqa: BLE001 - a clue never costs the page
+            logging.debug("Saved clues were not drawn.", exc_info=True)
+
     def shutdown(self) -> None:
         try:
             self._auto_timer.stop()
