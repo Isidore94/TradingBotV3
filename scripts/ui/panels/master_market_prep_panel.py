@@ -31,6 +31,7 @@ from ui.services.market_prep_feed import (
     section_copy_text,
     section_symbol_count,
 )
+from ui.widgets.rule_chip import RuleChip
 from ui.widgets.section_header import SectionHeader
 
 
@@ -54,6 +55,8 @@ class MasterMarketPrepPanel(QFrame):
         self.status_label.setObjectName("MutedLabel")
         #: G7.1: the first show pays for the first read, never the constructor.
         self._loaded_once = False
+        # Day Recap coach: "Today's rule: ... (streak N)", read on a worker.
+        self.rule_banner = RuleChip(self, banner=True)
         self._build_layout()
         self._configure_watcher()
 
@@ -69,6 +72,7 @@ class MasterMarketPrepPanel(QFrame):
         if self._loaded_once:
             return
         self._loaded_once = True
+        self.rule_banner.start()
         self.refresh()
 
     def _build_layout(self) -> None:
@@ -109,6 +113,7 @@ class MasterMarketPrepPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         layout.addWidget(header)
+        layout.addWidget(self.rule_banner)
         layout.addWidget(self.status_label)
         layout.addWidget(self._build_human_picks_panel())
         layout.addLayout(body, 1)

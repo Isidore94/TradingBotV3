@@ -205,6 +205,7 @@ def build_daily_report_object(
     *,
     report_date: str | None = None,
     generated_at: str | None = None,
+    todays_rule_line: str = "",
 ) -> dict:
     report_date = report_date or datetime.now().date().isoformat()
     generated_at = generated_at or datetime.now().isoformat(timespec="seconds")
@@ -241,6 +242,7 @@ def build_daily_report_object(
         "report_date": report_date,
         "export_prefix": "daily_market_prep",
         "generated_at": generated_at,
+        "todays_rule_line": str(todays_rule_line or "").strip(),
         "scheduled_landmines": build_scheduled_landmines(todays_events, today_tomorrow_earnings, watchlist_risk),
         "todays_events": todays_events,
         "next_7_events": next_7_events,
@@ -387,9 +389,12 @@ def build_daily_markdown(report: dict) -> str:
         report.get("overnight_hold_warnings") if isinstance(report.get("overnight_hold_warnings"), list) else []
     )
 
-    lines = [
-        f"# Daily Market Prep - {report_date}",
-        "",
+    lines = [f"# Daily Market Prep - {report_date}", ""]
+    # Day Recap coach: the rule the last recap set, when there is one.
+    rule_line = str(report.get("todays_rule_line") or "").strip()
+    if rule_line:
+        lines.extend([f"**{rule_line}**", ""])
+    lines += [
         "## 1. Highest Importance Focus",
         "",
     ]

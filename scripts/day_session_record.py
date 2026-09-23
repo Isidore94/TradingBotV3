@@ -442,6 +442,32 @@ def _ideas(inputs: Mapping[str, Any]) -> dict[str, Any]:
     return {"n": len(rows), "rows": rows}
 
 
+def rule_reflections(mentor_by_trade: Any) -> list[dict[str, Any]]:
+    """The Mentor's "kept or broke today's rule?" answers, one row per trade."""
+    rows: list[dict[str, Any]] = []
+    if not isinstance(mentor_by_trade, Mapping):
+        return rows
+    for trade_id, answers in mentor_by_trade.items():
+        latest: Mapping[str, Any] | None = None
+        for row in answers or ():
+            payload = row.get("payload") if isinstance(row, Mapping) else None
+            if isinstance(payload, Mapping) and payload.get("mentor_question_kind") == "rule_reflection":
+                if latest is None or _text(payload.get("answered_at")) >= _text(latest.get("answered_at")):
+                    latest = payload
+        if latest is None:
+            continue
+        rows.append({
+            "trade_id": _text(trade_id),
+            "symbol": _text(latest.get("symbol")),
+            "rule_tag": _text(latest.get("rule_tag")) or UNKNOWN,
+            "answer": _text(latest.get("rule_kept")) or UNKNOWN,
+            "answered_at": _text(latest.get("answered_at")),
+            "source": _source("trade_journal.sqlite3:opportunity_events", trade_id),
+        })
+    rows.sort(key=lambda row: (row["answered_at"], row["trade_id"]))
+    return rows
+
+
 def _recap(inputs: Mapping[str, Any], recap_rows: list[dict[str, Any]]) -> dict[str, Any]:
     rows = []
     for row in recap_rows:
@@ -455,6 +481,7 @@ def _recap(inputs: Mapping[str, Any], recap_rows: list[dict[str, Any]]) -> dict[
         "rows": rows,
         "rule_checked_today": _plain(dict(rule)) if isinstance(rule, Mapping) else None,
         "rule_streak": int(streak) if isinstance(streak, int) and not isinstance(streak, bool) else None,
+        "rule_reflections": rule_reflections(inputs.get("mentor_answers")),
     }
 
 
@@ -622,6 +649,8 @@ def render_markdown(record: Mapping[str, Any]) -> str:
             lines.append(f"- Environment verdict: {row.get('verdict')} (auto was {row.get('auto_label')})")
         elif kind == "clue":
             lines.append(f"- Clue {row.get('symbol')} {row.get('timeframe')} {row.get('bar_time')}: {row.get('clue_tag')}")
+    for row in recap.get("rule_reflections") or ():
+        lines.append(f"- Rule on {row.get('symbol') or row.get('trade_id')}: {row.get('answer')}")
     streak = recap.get("rule_streak")
     lines.append(f"- Rule streak: {streak if streak is not None else UNKNOWN}")
     lines += ["", f"Outcomes measured later, at {record.get('outcomes_measured_at')}.", ""]

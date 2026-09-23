@@ -102,6 +102,7 @@ class MarketPrepOrchestrator:
             future_roadmap=future_roadmap,
             generated_at=generated_at,
             report_date=prep_date.isoformat(),
+            todays_rule_line=_todays_rule_line(prep_date),
         )
         daily_report = self._attach_ai_brief(daily_report)
         return {
@@ -663,6 +664,17 @@ def _watchlist_tickers(payload: dict[str, Any]) -> list[str]:
             seen.add(ticker)
             tickers.append(ticker)
     return tickers
+
+
+def _todays_rule_line(prep_date) -> str:
+    """Day Recap coach: "Today's rule: ... (streak N)" for the prep date, or ""."""
+    try:
+        import recap_rule_loop
+
+        return recap_rule_loop.prep_line(recap_rule_loop.rule_for_date(prep_date))
+    except Exception:  # noqa: BLE001 - a missing rule never costs the prep
+        get_market_prep_logger().debug("Today's rule unreadable.", exc_info=True)
+        return ""
 
 
 def _parse_date_or_default(value, default):
