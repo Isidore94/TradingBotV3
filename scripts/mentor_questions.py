@@ -31,6 +31,8 @@ kind                          dormant until   why
 ``open_position_check``       **AWAKE**       TJ-12 shipped the long-hold rows
                                               (``day_report_card.long_hold_lines``),
                                               2026-09-20
+``rule_reflection``           **AWAKE**       ``day_session_record.rule_reflections``
+                                              reads it in the day record's recap
 ``grader_gap``                TJ-10           no deterministic reader emits a gap yet
 ``quick_like_followup``       TJ-14C          its answer is an ``opportunity_events``
                                               row and ``like_cohort.like_pick_rows``
@@ -678,6 +680,61 @@ def _trigger_grader_gap(state: Mapping[str, Any]) -> list[Subject]:
     return subjects
 
 
+def _trigger_rule_reflection(state: Mapping[str, Any]) -> list[Subject]:
+    """Day Recap coach: did a closed trade keep today's rule?
+
+    The host hands in `rule_reflections`, already worked out by
+    `recap_rule_loop.reflection_rows` (at most three, one per trade). Answers
+    already given today count against the three, so the day never asks a fourth.
+    """
+    try:
+        import recap_rule_loop as loop
+    except Exception:  # noqa: BLE001
+        return []
+    session = _session_date(state)
+    rows = _rows(state, "rule_reflections")
+    if session is None or not rows:
+        return []
+    ids = {_text(row.get("trade_id")) for row in rows}
+    answered = state.get("answered") if isinstance(state, Mapping) else None
+    spent = 0
+    if isinstance(answered, Mapping):
+        prefix = f"{loop.REFLECTION_KIND}:"
+        for key, record in answered.items():
+            text = _text(key)
+            if not text.startswith(prefix) or text[len(prefix):] in ids:
+                continue
+            on = _answered_on(record) if isinstance(record, Mapping) else None
+            if on == session:
+                spent += 1
+    room = max(0, loop.MAX_REFLECTIONS_PER_DAY - spent)
+    subjects: list[Subject] = []
+    seen: set[str] = set()
+    for row in rows:
+        trade_id = _text(row.get("trade_id"))
+        if not trade_id or trade_id in seen:
+            continue
+        if len(subjects) >= room:
+            break
+        seen.add(trade_id)
+        subjects.append(
+            Subject(
+                kind=loop.REFLECTION_KIND,
+                subject_id=trade_id,
+                options=_with_answer_states(*loop.REFLECTION_OPTIONS),
+                prompt=_text(row.get("prompt")),
+                detail={
+                    "trade_id": trade_id,
+                    "symbol": _text(row.get("symbol")),
+                    "rule_tag": _text(row.get("tag")),
+                    "rule_id": _text(row.get("rule_id")),
+                    "session": _text(row.get("session")),
+                },
+            )
+        )
+    return subjects
+
+
 def _trigger_ai_question(state: Mapping[str, Any]) -> list[Subject]:
     """At most ONE a day: the overnight `mentor_question` with its click options.
 
@@ -776,6 +833,20 @@ REGISTRY: tuple[QuestionKind, ...] = (
         # joined - so the question waits for the packet that joins them. The
         # live log holds 46 quick likes, so this would really have been asked.
         dormant_until="TJ-14C",
+    ),
+    # Day Recap coach (2026-09-23): a closed trade checked against the rule
+    # the last recap set. Read by `day_session_record.rule_reflections`.
+    QuestionKind(
+        kind="rule_reflection",
+        trigger=_trigger_rule_reflection,
+        options=_with_answer_states("kept", "broke", "not_relevant"),
+        writes=WRITES_OPPORTUNITY_EVENTS,
+        consumer="day_session_record.rule_reflections",
+        answer_key="rule_kept",
+        cadence=CADENCE_ONCE,
+        expiry="never - the trade already closed",
+        priority=35,
+        dormant_until="",
     ),
     QuestionKind(
         kind="day_close",

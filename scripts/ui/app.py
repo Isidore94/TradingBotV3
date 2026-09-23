@@ -488,6 +488,11 @@ class MainWindow(QMainWindow):
         self.health_status = QLabel("Health: checking...")
         status.addWidget(self.ib_status)
         status.addWidget(self.scan_status, 1)
+        # Day Recap coach: "Rule: ..." for today, hidden when there is none.
+        from ui.widgets.rule_chip import RuleChip
+
+        self.rule_chip = RuleChip(self)
+        status.addPermanentWidget(self.rule_chip)
         status.addPermanentWidget(self.setup_status)
         self.market_regime_status = QLabel("Auto regime: n/a")
         status.addPermanentWidget(self.market_regime_status)
@@ -510,9 +515,60 @@ class MainWindow(QMainWindow):
             color = "#3fb950"
         else:
             color = "#8b8fa3"
+        self._note_regime_seen(env_key)
         self.market_regime_status.setText(chip)
         self.market_regime_status.setToolTip(tooltip)
         self.market_regime_status.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+    def _note_regime_seen(self, env_key: str, now=None) -> None:
+        """Keep today's auto-regime changes in memory for the rule reflection.
+
+        What the desk saw live, stamped when it saw it; a restart starts empty,
+        and an entry before the first reading is unknown.
+        """
+        label = str(env_key or "").strip()
+        if not label:
+            return
+        moment = now or datetime.now().astimezone()
+        timeline = getattr(self, "_regime_timeline", None)
+        if timeline is None:
+            timeline = self._regime_timeline = []
+        if timeline and timeline[-1][0].date() != moment.date():
+            timeline.clear()
+        if not timeline or timeline[-1][1] != label:
+            timeline.append((moment, label))
+
+    def _mentor_rule_lane(self, store, session: str, trades) -> list:
+        """The rule-reflection lane: today's closed trades the rule can be checked on.
+
+        The rule comes from the status-bar chip's worker (no file read here); the
+        size baseline is one bounded journal query, only for `size_down_in_chop`.
+        """
+        try:
+            import recap_rule_loop as loop
+
+            chip = getattr(self, "rule_chip", None)
+            rule = chip.info() if chip is not None else None
+            if not rule or str(rule.get("tag") or "") not in loop.CHECKABLE_TAGS:
+                return []
+            median = None
+            if rule.get("tag") == "size_down_in_chop":
+                from datetime import timedelta
+
+                day = _date.fromisoformat(str(session)[:10])
+                start = day - timedelta(days=loop.SIZE_BASELINE_DAYS)
+                earlier = store.list_trades(date_from=start.isoformat(), date_to=day.isoformat())
+                median = loop.size_baseline(earlier, day)
+            return loop.reflection_rows(
+                rule,
+                trades,
+                session=session,
+                size_median=median,
+                regime_timeline=list(getattr(self, "_regime_timeline", ()) or ()),
+            )
+        except Exception:  # noqa: BLE001 - a lane never costs the card
+            logging.debug("Mentor rule lane unreadable.", exc_info=True)
+            return []
 
     def _set_technical_integrity(self, snapshot) -> None:
         self._technical_integrity_snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -1061,6 +1117,8 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_tag_badge_started", False):
             self._tag_badge_started = True
             self._start_tag_review_badge()
+            # Day Recap coach: today's rule, read on its own worker.
+            self.rule_chip.start()
         # ST6.3 trigger (a): once, after the window is actually on screen - for
         # the same reason the badge waits. The build opens three stores on a
         # worker, and a thread started during construction runs while a test is
@@ -1319,6 +1377,8 @@ class MainWindow(QMainWindow):
             # so this is the same class of cost and not a new one; it stays on
             # this thread this round by decision.
             "exit_drafts": self._mentor_exit_drafts(store, session),
+            # Day Recap coach: closed trades checked against today's rule.
+            "rule_reflections": self._mentor_rule_lane(store, session, trades),
             "answered": self._mentor_answered(
                 store,
                 (session, reviewed),
@@ -1721,6 +1781,14 @@ class MainWindow(QMainWindow):
         # V2: the badge reader, before the panels. It is one bounded read and it
         # must not outlive the window that started it.
         self._join_tag_review_badge()
+        # Day Recap coach: the rule chip and the prep page's rule line.
+        try:
+            from ui.widgets.rule_chip import RuleChip
+
+            for chip in self.findChildren(RuleChip):
+                chip.shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
         for panel in (
             self.trading_panel,
             self.journal_panel,
