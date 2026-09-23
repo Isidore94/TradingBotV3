@@ -21,6 +21,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **2026-09-23 integration** (`80d86afd`): Mentor asks once (gate #194), Pullback dip gate v2 (#195),
   Capture tab fill + veto v4 (q/w/e), AGENTS.md test lines. Suite 10,524 passed, 2 load flakes green alone; selftest 97/97 source and frozen.
   Mentor-ask-once merged without a reviewer round.
+- **Wall gate + Oil & Gas / Real Estate hide** merged 2026-09-23: D1/Focus review charts at an in-path SMA or the D1 trendline (1 ATR20) hide and auto-arm a follow-up (cap 20, else shown tagged `at wall`); Oil & Gas / Real Estate hidden by one switch. Live at the next restart. Gate #196.
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
   `claude/chart-wheel-zoom-2026-09-21` (`11c3a339`). It is not on `main`. Merge it only
   while the desk is down.
