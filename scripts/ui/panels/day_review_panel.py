@@ -357,12 +357,72 @@ def _prediction_text(entry: Mapping[str, Any]) -> str:
         return ""
 
 
-def _clock_text(created_at: Any) -> str:
-    """`HH:MM` off the row's own stamp, or a dash. Never a guessed zone."""
-    raw = str(created_at or "").strip()
-    if len(raw) >= 16 and raw[10] in {"T", " "}:
-        return raw[11:16]
-    return UNMEASURED
+def _display_zone():
+    """The desk's one display clock: `market_session`'s market-local zone."""
+    try:
+        from market_session import get_market_local_timezone
+
+        return get_market_local_timezone()[0]
+    except Exception:  # noqa: BLE001 - a zone lookup never costs the page
+        return None
+
+
+def _zone_label(zone: Any = None, *, when: datetime | None = None) -> str:
+    """A short name for the display zone, e.g. `PDT`, for the page header."""
+    zone = zone if zone is not None else _display_zone()
+    if zone is None:
+        return "desk local time"
+    try:
+        moment = (when or datetime.now()).astimezone(zone)
+        return moment.tzname() or str(zone)
+    except Exception:  # noqa: BLE001
+        return str(zone)
+
+
+def _as_moment(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    raw = str(value or "").strip()
+    if len(raw) < 16:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _clock_text(created_at: Any, session: str = "", *, zone: Any = None) -> str:
+    """`HH:MM` in the display zone, with the date only when it is not `session`.
+
+    An aware stamp is converted; a naive one is already market-local (the bar
+    rule). Unparseable is a dash, never a guess.
+    """
+    moment = _as_moment(created_at)
+    if moment is None:
+        return UNMEASURED
+    if moment.tzinfo is not None:
+        zone = zone if zone is not None else _display_zone()
+        if zone is not None:
+            moment = moment.astimezone(zone)
+    text = moment.strftime("%H:%M")
+    day = moment.date().isoformat()
+    if session and day != str(session)[:10]:
+        text = f"{moment.strftime('%b')} {moment.day} {text}"
+    return text
+
+
+def _status_problems(error: Any) -> str:
+    """The payload's real read failures, minus facts about the day itself.
+
+    A day with no trades has no exit notes to read; that is not a failure.
+    """
+    from ui.services.day_review_service import NO_TRADES_EXIT_NOTE
+
+    parts = [
+        part.strip() for part in str(error or "").split(" · ")
+        if part.strip() and part.strip() != NO_TRADES_EXIT_NOTE
+    ]
+    return " · ".join(parts)
 
 
 def _fill_the_width(table: QTableWidget) -> None:
@@ -574,6 +634,8 @@ class DayReviewPanel(QFrame):
         self._name_chart_symbol = ""
         self._name_charts: dict[str, Any] = {}
         self._clock: Callable[[], datetime] = clock or datetime.now
+        #: The one display zone, resolved once per render (item: one clock).
+        self._zone: Any = _display_zone()
         self._auto_time_reader: Callable[[], Any] = (
             auto_time_reader or daily_recap_schedule.auto_time_from_settings
         )
@@ -614,6 +676,9 @@ class DayReviewPanel(QFrame):
         )
         self.subtitle.setObjectName("SectionSubtitle")
         self.subtitle.setWordWrap(True)
+        #: Every time on the page is in this one zone; it is named once, here.
+        self.zone_note = QLabel(f"Times in {_zone_label(self._zone)}")
+        self.zone_note.setObjectName("SectionSubtitle")
 
         self.session_picker = QComboBox()
         self._fill_session_picker()
@@ -1240,6 +1305,7 @@ class DayReviewPanel(QFrame):
         header.addWidget(QLabel("Session"))
         header.addWidget(self.session_picker, 1)
         header.addWidget(self.refresh_button)
+        header.addWidget(self.zone_note)
 
         # Row 2: the two columns. The ratio is the trader's to drag and it is
         # remembered per machine, like every other desk splitter.
@@ -1682,6 +1748,8 @@ class DayReviewPanel(QFrame):
         """
         payload = dict(payload or {})
         self._payload = payload
+        self._zone = _display_zone()
+        self.zone_note.setText(f"Times in {_zone_label(self._zone)}")
         session = str(payload.get("session_date") or self.session_date())
         self.provisional_note.setText(
             "This session has NOT closed - every number on it is provisional."
@@ -1740,8 +1808,7 @@ class DayReviewPanel(QFrame):
         if allow_backfill:
             for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
                 self._backfill_bars_for(str(exit_session))
-        error = str(payload.get("error") or "")
-        self.status.setText(error or f"Day Review: {session}")
+        self.status.setText(_status_problems(payload.get("error")) or f"Day Review: {session}")
         self.statusChanged.emit(self.status.text())
 
     def _render_mood(self, section: Any) -> None:
@@ -2175,16 +2242,16 @@ class DayReviewPanel(QFrame):
             else "Nothing you passed on ran, on this session's measured rows."
         )
 
-    @staticmethod
-    def _walkaway_cells(row: Any) -> dict[str, str]:
+    def _walkaway_cells(self, row: Any) -> dict[str, str]:
         """One row, keyed by HEADER text.
 
         Keyed rather than positional: the five tables share one column list, and
         a positional tuple is how the rejected table came to print its "Ran
         after %" under "Held at close %".
         """
+        session, zone = self.session_date(), self._zone
         return {
-            "Time": row.time.strftime("%H:%M") if row.time else UNMEASURED,
+            "Time": _clock_text(row.time, session, zone=zone) if row.time else UNMEASURED,
             "Symbol": row.symbol,
             "Side": row.side,
             "What you did": row.what_you_did,
@@ -2356,7 +2423,7 @@ class DayReviewPanel(QFrame):
                     self._reads.get(str(entry.get("entry_id") or ""))
                 )
                 label = (
-                    f"{_clock_text(entry.get('created_at'))}"
+                    f"{_clock_text(entry.get('created_at'), self.session_date(), zone=self._zone)}"
                     f"  ·  {entry.get('timeframe') or ''}{marker}"
                     f"{('  ·  ' + verdict) if verdict else ''}"
                     f"  ·  {_excerpt(body)}"
@@ -2399,7 +2466,7 @@ class DayReviewPanel(QFrame):
             return
         self._show_verdict_chip(self._reads.get(str(entry.get("entry_id") or "")))
         origin = str(entry.get("origin") or "")
-        stamp = _clock_text(entry.get("created_at"))
+        stamp = _clock_text(entry.get("created_at"), self.session_date(), zone=self._zone)
         meta = f"written {stamp}  ·  {entry.get('timeframe') or ''}  ·  {origin}"
         if entry.get("written_after_the_session"):
             meta += "  ·  written after the session"
@@ -2470,7 +2537,7 @@ class DayReviewPanel(QFrame):
             if quantity is None:
                 quantity = row.get("quantity_opened")
             values = (
-                _clock_text(row.get("opened_at")),
+                _clock_text(row.get("opened_at"), self.session_date(), zone=self._zone),
                 str(row.get("symbol") or ""),
                 str(row.get("direction") or ""),
                 self._number(quantity, decimals=0),
@@ -2493,7 +2560,7 @@ class DayReviewPanel(QFrame):
             self.calls_table.setRowCount(len(calls))
             for index, row in enumerate(calls):
                 values = (
-                    str(row.get("stamp") or ""),
+                    _clock_text(row.get("stamp"), self.session_date(), zone=self._zone),
                     str(row.get("horizon") or ""),
                     str(row.get("direction") or ""),
                     str(row.get("confidence") or ""),
@@ -2530,19 +2597,34 @@ class DayReviewPanel(QFrame):
         if detail.get("status") == "unread":
             self.trade_detail.setPlainText("Trade answers could not be read.")
             return
-        lines = [f"{detail.get('symbol') or ''} · {detail.get('instrument') or 'instrument unknown'}"]
+        session, zone = self.session_date(), self._zone
+
+        def _when(value: Any) -> str:
+            text = _clock_text(value, session, zone=zone)
+            return "" if text == UNMEASURED else text
+
+        instrument = str(detail.get("instrument") or "").strip()
+        lines = [" · ".join(part for part in (str(detail.get("symbol") or ""), instrument) if part)]
+        opened, closed = _when(detail.get("opened_at")), _when(detail.get("closed_at"))
         lines.append(
-            f"Opened {detail.get('opened_at') or 'time unknown'} · "
-            f"Closed {detail.get('closed_at') or 'still open or time unknown'}"
+            f"Opened {opened or 'not recorded'} · "
+            + (f"Closed {closed}" if closed else "Still open")
         )
         money = detail.get("net_pnl")
+        currency = str(detail.get("currency") or "").strip()
         lines.append(
-            f"Whole-trade net: {self._number(money, signed=True)} {detail.get('currency') or 'currency unknown'}"
+            f"Whole-trade net: {self._number(money, signed=True)}"
+            + (f" {currency}" if currency and money is not None else "")
         )
         if detail.get("review_pnl_note"):
             lines.append(str(detail["review_pnl_note"]))
         raw = detail.get("entry_raw") or {}
-        lines.append(f"Entry words (recalled {raw.get('recorded_at') or 'date unknown'}): {raw.get('text') or 'none recorded'}")
+        recalled = _when(raw.get("recorded_at"))
+        entry_words = str(raw.get("text") or "").strip()
+        lines.append(
+            f"Entry note{f' ({recalled})' if recalled and entry_words else ''}: "
+            + (entry_words or "you did not write one")
+        )
         for field, answer in (detail.get("entry_answers") or {}).items():
             value = answer.get("text") or (
                 f"{answer['value']} {answer.get('unit') or ''}"
@@ -2550,11 +2632,16 @@ class DayReviewPanel(QFrame):
             )
             state = str(answer.get("state") or "").replace("_", " ")
             spoken = " · ".join(part for part in (str(value).strip(), state) if part) or "not answered"
-            lines.append(f"{field}: {spoken} · recorded {answer.get('recorded_at') or 'date unknown'}")
+            said_at = _when(answer.get("recorded_at"))
+            lines.append(f"{field}: {spoken}" + (f" · {said_at}" if said_at else ""))
         exit_raw = detail.get("exit_raw") or {}
+        exit_at = _when(exit_raw.get("recorded_at"))
+        exit_words = str(
+            exit_raw.get("text") or str(exit_raw.get("answer_state") or "").replace("_", " ")
+        ).strip()
         lines.append(
-            f"Exit words ({exit_raw.get('recorded_at') or 'date unknown'}): "
-            f"{exit_raw.get('text') or exit_raw.get('answer_state') or 'none recorded'}"
+            f"Exit note{f' ({exit_at})' if exit_at and exit_words else ''}: "
+            + (exit_words or "you did not write one")
         )
         confirmed = detail.get("exit_fields") or {}
         fields = confirmed.get("fields") if confirmed.get("status") == "confirmed" else None

@@ -95,6 +95,12 @@ PAYLOAD_KEYS: tuple[str, ...] = (
 #: reads its bars (Qt thread only); this constant is what it reads them for.
 BENCHMARK_SYMBOL = "SPY"
 
+#: Said in the payload's `error` on a day with no trades. It is a fact about
+#: the day, not a failed read, so the page keeps it out of its status line.
+NO_TRADES_EXIT_NOTE = (
+    "the day's exit notes were not read: this payload opened no trades"
+)
+
 #: How many prior sessions the walk-away read looks back over. The page offers
 #: no control for it (the Daily Recap's 1/2/3 picker is gone with the page); the
 #: reader's own default is the answer.
@@ -1540,9 +1546,7 @@ class DayReviewService:
         if not rows:
             # Said, never guessed: the report card's line reads `unmeasured`
             # rather than "0 of 0" for a day nobody opened the journal for.
-            problems.append(
-                "the day's exit notes were not read: this payload opened no trades"
-            )
+            problems.append(NO_TRADES_EXIT_NOTE)
             return None
         notes: dict[str, Any] = {}
         try:
