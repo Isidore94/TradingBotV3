@@ -145,6 +145,23 @@ def session_is_complete(day: date | None, now: datetime | None = None) -> bool:
     return day <= last_completed_session(now)
 
 
+def cache_holds_latest_completed_session(last_bar_day: date | None, now: datetime | None = None) -> bool:
+    """Does a cache ending on ``last_bar_day`` hold the newest completed session?
+
+    The reader's side of the writer rule above. Because the writer refuses
+    today's forming bar, a cache written by the 12:45 PT pre-close preview ends
+    on YESTERDAY; a file-age check alone let the 13:00 PT close scan publish on
+    it (2026-09-17, 2026-09-18). Before the close the newest completed session
+    is the previous one, so intraday reads are unchanged. Early closes follow
+    ``last_completed_session`` (16:00 ET), the same rule the writer uses, so a
+    reader never demands a bar the writer would refuse. An unknown last bar is
+    never fresh.
+    """
+    if last_bar_day is None:
+        return False
+    return last_bar_day >= last_completed_session(now)
+
+
 def candle_is_possible(row) -> bool:
     """``low <= open, close <= high``, the invariant the charts already draw by.
 

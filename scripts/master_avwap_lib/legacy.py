@@ -19304,7 +19304,12 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
 
     # Prefer fresh local bars. A full IBKR->Yahoo miss can cost seconds per
     # symbol, so do not refresh symbols whose cache was updated recently.
-    if cache_has_history and cache_data_is_recent and _daily_bar_cache_is_recent(normalized_symbol):
+    if (
+        cache_has_history
+        and cache_data_is_recent
+        and daily_bar_cache.cache_holds_latest_completed_session(_daily_bar_frame_last_date(cached))
+        and _daily_bar_cache_is_recent(normalized_symbol)
+    ):
         _provider_count("daily_bars", "cache_hit")
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 

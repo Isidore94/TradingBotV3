@@ -4,6 +4,7 @@ One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-22 Close-scan freshness: a daily-bar cache hit now also needs the latest completed session (not just a file touched <30 min ago), so the 13:00 PT close scan no longer publishes on yesterday's bar after the 12:45 preview. Intraday unchanged; a failed refresh still falls back to the cache.
 - 2026-09-22 "Working now" strip under Working-lately in the M5 column: today's M5 alerts by setup grade with average R since they fired (completed cached bars only, first stop touch = -1R, missing data = no data); tooltip per alert. Display only.
 - 2026-09-22 Parallel tests: pytest-xdist, `pytest -n 8` runs the suite in ~4 min (was ~28). Three font-order-dependent tests fixed (desk icon fonts loaded up front; compact setups table drops Points and trims Bucket before it overflows).
 - 2026-09-22 Setup grades: PROVEN/A/B/C/D/New from the trackers' real results (swing: tracker win rate + low bound; day trade: +1R before -1R). Shown on the setups table and M5 bar, best first; the priority switch now defaults ON.
