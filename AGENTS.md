@@ -20,6 +20,8 @@ authorized work.
 Before planning or editing, name the exact active work item (`STATUS.md`/`TODO.md` when
 applicable), what exists and remains, governing rules, expected files/tests, and whether
 ask-first applies. Only the trader may promote a WISHLIST idea into authorized work.
+When the trader's word reverses a rule, search `tests/` for the old rule first and list
+the tests that pin it in the plan.
 
 ## Commands
 
@@ -57,6 +59,7 @@ ask-first applies. Only the trader may promote a WISHLIST idea into authorized w
 | Pre-market prep | `market_prep/` |
 | Indicators (pure) | `scripts/indicators/` |
 | Live bot, cached M5 bars | `bounce_panel.service.current_bot()` -> `bot.m5_chart_bars()` (cache only, never IB; bars are naive market-local time, see `market_session.get_market_local_timezone()`) |
+| Trade Mentor live data | answers: `trade_journal.sqlite3` table `opportunity_events` (`RECALLED`, `RECALLED_RAW`, `EXIT_NOTE_RAW`, `MENTOR_ASKED`); slot state: `TRADE_MENTOR_SLOTS_FILE` (`C:\TradingBotData\trade_mentor_slots.json`) |
 
 ## Hard invariants — never break
 
@@ -133,6 +136,11 @@ session. Never restart the desk or merge to `main` without the trader's word.
 - **Claude:** lead Opus 5.5. `recon` = Sonnet (read-only lookups). `builder` = Opus in a
   worktree (fail-first test, then the fix). `reviewer` = Opus, one round, blockers only;
   skip it for docs/UI-only changes. `tester` = Opus, only for detector/scoring work.
+- Builders commit and push a WIP after each step, so a cut-off run leaves a known state.
+  Before starting one, check `git worktree list`: resume a worktree already on that
+  branch instead of starting fresh.
+- New code comments say what the code does in one or two lines; incident history goes
+  in the commit message.
 - **Codex:** `.codex/config.toml` sets Sol for new-thread lead, Luna max for the default
   manager, and Luna xhigh for named `recon`, `builder`, `tester` and `reviewer` workers.
   The manager delegates every assigned change, then integrates and validates. Keep scopes
