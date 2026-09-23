@@ -191,6 +191,12 @@ class TradingDeskPanel(QWidget):
         self.alert_center.m5AlertPosted.connect(self.m5_alert_bar.post)
         self.alert_center.m5AlertsDayRolled.connect(self.m5_alert_bar.clear_all)
         self.m5_alert_bar.alertActivated.connect(self.alert_center.chart_alert)
+        # 2026-09-23: an M5 row on a name that is also a D1 swing setup says
+        # so (`· D1 A ★`). Every change to the setups table - rows, claims,
+        # grades - ends in the model's reset, so that one signal rebuilds the
+        # map. No timer, no file read: the rows are already in memory.
+        self.master_panel.model.modelReset.connect(self._push_swing_context)
+        self._push_swing_context()
 
         # ST6.4. The Working-lately line sits at the TOP of the M5 alerts
         # column, above the list - the arm bar stays under the chart and no new
@@ -528,6 +534,20 @@ class TradingDeskPanel(QWidget):
             self.m5_alert_bar.set_setup_grades(grades)
             self.live_results_strip.set_setup_grades(grades)
             self.master_panel.set_setup_grades(grades)
+
+    def _push_swing_context(self) -> None:
+        """Hand the M5 bar which names+sides are D1 swing setups. Display only."""
+        import swing_context
+
+        model = self.master_panel.model
+        try:
+            rows = model.rows()
+            mapping = swing_context.build_swing_context(
+                rows, model.grade_cell_for, swing_context.claimed_keys_from_rows(rows)
+            )
+        except Exception:  # noqa: BLE001 - a display hint never costs the bar
+            mapping = {}
+        self.m5_alert_bar.set_swing_context(mapping)
 
     def _live_results_bars(self, symbol: str) -> list:
         """One symbol's CACHED M5 bars for the "Working now" strip, or [].

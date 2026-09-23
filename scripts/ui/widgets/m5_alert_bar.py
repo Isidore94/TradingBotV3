@@ -35,6 +35,12 @@ annotation row and does nothing else - no Focus placement, no arm, no alert, no
 change to what this bar shows or to what reaches the review queue. The paragraph
 above still holds for the alert stream itself; what is new is that the trader can
 now say something about a row, and be recorded saying it.
+
+Since 2026-09-23 a row whose symbol AND side is also a D1 swing setup carries
+``· D1 A ★`` - the swing grade, and a star when the trader claimed that pick
+(`swing_context`). The desk hands the map in; nothing here reads a file. With
+the prioritise switch on, swing-backed rows are DRAWN first; the arrival list is
+untouched and the switch off restores arrival order exactly.
 """
 
 from __future__ import annotations
@@ -114,7 +120,9 @@ def alert_grade_label(alert: Any) -> str:
     return f"[{tier}]" if tier else "[—]"
 
 
-def row_text(alert: Any, *, repeats: int = 1, grade: str | None = None) -> str:
+def row_text(
+    alert: Any, *, repeats: int = 1, grade: str | None = None, swing: str = ""
+) -> str:
     """One line: grade, time, side, ticker, what fired, and take context.
 
     The take-rate suffix is P(take | shown) for this alert's segments, measured
@@ -126,6 +134,9 @@ def row_text(alert: Any, *, repeats: int = 1, grade: str | None = None) -> str:
 
     ``repeats`` is the ×N fold badge - see `M5AlertBar.post`. It counts what
     the bar has SHOWN, and the count is display only.
+
+    ``swing`` is `swing_context.suffix` (``· D1 A ★``), or blank when the name
+    and side are not a D1 swing setup.
     """
     time_text = str(getattr(alert, "time_text", "") or "")[:5]
     side = str(getattr(alert, "side", "") or "")
@@ -135,6 +146,8 @@ def row_text(alert: Any, *, repeats: int = 1, grade: str | None = None) -> str:
         f"{label}  {time_text}  {mark} "
         f"{getattr(alert, 'symbol', '')}  {alert_type_label(alert)}"
     )
+    if swing:
+        line += f"  {swing}"
     if repeats > 1:
         line += f"  ×{repeats}"
     probability = take_probability(alert)
@@ -173,6 +186,9 @@ class M5AlertBar(QWidget):
         #: display, so a sort applied while the switch was on could not be
         #: undone when it went off.
         self._arrival: list[QListWidgetItem] = []
+        #: `{(SYMBOL, SIDE): {"grade", "family", "claimed"}}` from the desk's
+        #: setups table (`swing_context`). Display and draw order only.
+        self._swing_context: dict = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -294,6 +310,29 @@ class M5AlertBar(QWidget):
         side = str(getattr(alert, "side", "") or "")
         return setup_grades.badge(setup_grades.daytrade_grade_for_alert(grades, bounce_types, side))
 
+    def set_swing_context(self, mapping) -> None:
+        """Which rows sit on a D1 swing setup. Rewrites rows in place.
+
+        The whole map is replaced each time, so a name that left the setups
+        table loses its suffix, and an empty map leaves every row clean.
+        """
+        self._swing_context = dict(mapping or {})
+        for item in self._arrival:
+            alert = item.data(_ALERT_ROLE)
+            if alert is not None:
+                self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
+        self._render_order()
+
+    def _swing_for(self, alert: Any):
+        """This alert's swing context, or None."""
+        if not self._swing_context:
+            return None
+        import swing_context
+
+        return swing_context.context_for(
+            self._swing_context, getattr(alert, "symbol", ""), getattr(alert, "side", "")
+        )
+
     def set_working_lately_order(self, order) -> None:
         """`[(bounce_type, SIDE)]`, best first. Presentation only (ST6.5)."""
         self._working_lately_order = [
@@ -315,16 +354,21 @@ class M5AlertBar(QWidget):
         """
         import working_lately
 
+        import swing_context
+
         rows = list(self._arrival)
-        if len(rows) < 2 or not self._working_lately_order:
+        if len(rows) < 2 or not (self._working_lately_order or self._swing_context):
             return rows
         if not working_lately.prioritise_enabled():
             return rows
+        # Swing-backed rows first (claimed, then swing grade), then the
+        # Working-lately rank, then arrival order (2026-09-23).
         return [
             item
-            for _rank, _index, item in sorted(
+            for _swing, _rank, _index, item in sorted(
                 (
                     (
+                        swing_context.sort_key(self._swing_for(item.data(_ALERT_ROLE))),
                         working_lately.priority_rank(
                             self._working_lately_order,
                             working_lately.alert_priority_key(item.data(_ALERT_ROLE)),
@@ -334,7 +378,7 @@ class M5AlertBar(QWidget):
                     )
                     for index, item in enumerate(rows)
                 ),
-                key=lambda entry: (entry[0], entry[1]),
+                key=lambda entry: (entry[0], entry[1], entry[2]),
             )
         ]
 
@@ -369,7 +413,17 @@ class M5AlertBar(QWidget):
 
     def _write_item(self, item: QListWidgetItem, alert: Any, repeats: int) -> None:
         """Fill one row IN PLACE - never a rebuilt widget (fluidity rules)."""
-        item.setText(row_text(alert, repeats=repeats, grade=self._grade_for(alert)))
+        import swing_context
+
+        swing = self._swing_for(alert)
+        item.setText(
+            row_text(
+                alert,
+                repeats=repeats,
+                grade=self._grade_for(alert),
+                swing=swing_context.suffix(swing),
+            )
+        )
         item.setData(_ALERT_ROLE, alert)
         item.setData(_REPEAT_ROLE, repeats)
         raw = str(getattr(alert, "raw_text", "") or "")
@@ -386,6 +440,9 @@ class M5AlertBar(QWidget):
                 "Every one of them is in the feed, History and the evidence "
                 f"files - this row folds them, it does not drop them.\n\n{raw}"
             )
+        swing_line = swing_context.tooltip_line(swing)
+        if swing_line:
+            grade_help = f"{swing_line}\n\n{grade_help}"
         item.setToolTip(f"{grade_help}{raw}")
         side = str(getattr(alert, "side", "") or "")
         token = "long" if side == "LONG" else "short" if side == "SHORT" else "text_muted"
