@@ -1358,6 +1358,7 @@ class SymbolSnapshotDialog(QDialog):
             return
         self._symbol = symbol
         self._side = side if side in ("LONG", "SHORT") else ""
+        self._follow_host_arms(watch_host)
         self.watch_host = watch_host
         self.review_host = review_host
         side_text = f" ({side})" if side in ("LONG", "SHORT") else ""
@@ -1465,22 +1466,30 @@ class SymbolSnapshotDialog(QDialog):
             armed = set(host.armed_watch_kinds(self._symbol))
         except Exception:
             armed = set()
+        try:
+            pending = host.pending_arm_kinds(self._symbol)
+        except Exception:  # an older host has no queued arms
+            pending = {}
+        queued_watch = set(pending.get("watch") or ()) - armed
         for kind, button in self.watch_buttons.items():
             label = WATCH_KINDS[kind]
             is_armed = kind in armed
-            button.setText(f"{label} ✓ armed" if is_armed else label)
-            button.setChecked(is_armed)
+            queued = kind in queued_watch
+            button.setText(f"⏳ {label}" if queued else f"{label} ✓ armed" if is_armed else label)
+            button.setChecked(is_armed or queued)
         try:
             armed_events = set(host.armed_d1_event_kinds(self._symbol))
         except Exception:
             # An older host without the D1-event API: leave the buttons
             # visible-but-unchecked; a click will no-op through the same guard.
             armed_events = set()
+        queued_events = set(pending.get("d1_event") or ()) - armed_events
         for kind, button in self.d1_event_buttons.items():
             label = D1_EVENT_KINDS[kind]
             is_armed = kind in armed_events
-            button.setText(f"{label} ✓" if is_armed else label)
-            button.setChecked(is_armed)
+            queued = kind in queued_events
+            button.setText(f"⏳ {label}" if queued else f"{label} ✓" if is_armed else label)
+            button.setChecked(is_armed or queued)
         pinned = bool(host.is_d1_focus_active(self._symbol, self._side))
         self.d1_focus_button.setText("✓ In D1 Focus" if pinned else "Add to D1 Focus")
         self.d1_focus_button.setChecked(pinned)
@@ -1488,10 +1497,35 @@ class SymbolSnapshotDialog(QDialog):
         self.m5_focus_button.setText("✓ In M5 Focus" if in_m5 else "Add to M5 Focus")
         self.m5_focus_button.setChecked(in_m5)
 
+    def _follow_host_arms(self, host) -> None:
+        """Repaint the arm buttons when the host's queued arms change."""
+        previous = getattr(self, "_followed_arm_host", None)
+        if host is previous:
+            return
+        signal = getattr(previous, "armedWatchesChanged", None)
+        if signal is not None:
+            try:
+                signal.disconnect(self._refresh_watch_actions)
+            except (RuntimeError, TypeError):
+                pass
+        signal = getattr(host, "armedWatchesChanged", None)
+        if signal is not None:
+            signal.connect(self._refresh_watch_actions)
+        self._followed_arm_host = host
+
     def _toggle_watch(self, kind: str) -> None:
         if self.watch_host is None or not self._symbol:
             return
-        if kind in set(self.watch_host.armed_watch_kinds(self._symbol)):
+        toggle = getattr(self.watch_host, "toggle_chart_watch", None)
+        if callable(toggle):
+            # The host queues the arm off the Qt thread and shows it as ⏳.
+            toggle(
+                self._symbol,
+                self._side or "WATCH",
+                kind,
+                source_text=f"chart snapshot: {self.windowTitle()}",
+            )
+        elif kind in set(self.watch_host.armed_watch_kinds(self._symbol)):
             self.watch_host.disarm_chart_watch_for(self._symbol, kind)
         else:
             self.watch_host.arm_chart_watch_for(
@@ -1508,7 +1542,10 @@ class SymbolSnapshotDialog(QDialog):
             return
         if not hasattr(host, "arm_d1_event_watch"):
             return  # older host: the button is inert rather than a crash
-        if kind in set(host.armed_d1_event_kinds(self._symbol)):
+        toggle = getattr(host, "toggle_d1_event_watch", None)
+        if callable(toggle):
+            toggle(self._symbol, kind)
+        elif kind in set(host.armed_d1_event_kinds(self._symbol)):
             host.disarm_d1_event_watch(self._symbol, kind)
         else:
             host.arm_d1_event_watch(self._symbol, kind)
@@ -1564,9 +1601,10 @@ class SymbolSnapshotDialog(QDialog):
     def _on_d1_level_alert(self, symbol: str, direction: str, level: float, candle_date: str) -> None:
         if self.watch_host is None:
             return
-        self.watch_host.arm_d1_level_watch(
-            symbol, direction, level, candle_date=candle_date
-        )
+        arm = getattr(self.watch_host, "request_d1_level_watch", None)
+        if not callable(arm):
+            arm = self.watch_host.arm_d1_level_watch
+        arm(symbol, direction, level, candle_date=candle_date)
 
 
 def show_symbol_snapshot(
