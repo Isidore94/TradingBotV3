@@ -4,6 +4,7 @@ One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-23 Night AI fixes: journal enrichment keeps the grammar on (a grammar 400 retries the same schema without length bounds, then JSON mode; the prompt no longer invites the model to return the schema, and an echoed schema is named). Day story sends the model a trimmed pack (~40 KB, was ~100 KB that timed out at 540 s) and refuses an oversized one before loading the model.
 - 2026-09-23 AGENTS.md: the full suite takes 4-7 min, so run it in the background (a foreground run was killed at 99%).
 - 2026-09-23 AGENTS.md test commands: offscreen Qt on Windows too, the main venv path for worktrees, and rerun suite failures on `main` before blaming a branch.
 - 2026-09-23 Mentor asks once: a trade is asked about on one card only. Any answer opens its Save; leaving the card files what was typed and marks it `MENTOR_ASKED`; local AI fills blanks from the trader's words or leaves them blank. Fixes the DRAM trade asked every hour.

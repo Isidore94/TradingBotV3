@@ -608,13 +608,143 @@ def _previous_story(session: str, root: Path) -> dict[str, Any]:
     }
 
 
+#: Ceiling on the day evidence the model reads, in characters of JSON. The
+#: medium model evaluates ~118 prompt tokens/s at ~2.1 chars/token, so this
+#: keeps prompt evaluation near three minutes inside the call's timeout.
+MAX_DAY_EVIDENCE_CHARS = 60_000
+
+#: Longest pasted forecast text the model reads; its parsed fields stay whole.
+MAX_FORECAST_TEXT_CHARS = 6_000
+
+#: How many member ids one congruence row shows; the rest are counted.
+MAX_CONGRUENCE_MEMBER_IDS = 8
+
+#: The trade keys a day story can use. Account ids, FX and reconcile fields stay out.
+_TRADE_KEYS = (
+    "source_id", "trade_id", "symbol", "direction", "status", "trade_date",
+    "opened_at", "closed_at", "quantity_opened", "quantity_closed",
+    "average_entry_price", "average_exit_price", "net_pnl", "currency",
+    "planned_entry", "planned_stop", "planned_risk", "setup_tags",
+    "display_tags", "notes", "exit_note", "exit_fields",
+)
+
+
+def _trade_view(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One journal trade reduced to what a story can narrate."""
+    view = {key: row.get(key) for key in _TRADE_KEYS if key in row}
+    review = row.get("trade_review")
+    if isinstance(review, Mapping):
+        entry_raw = review.get("entry_raw")
+        exit_raw = review.get("exit_raw")
+        entry_raw = entry_raw if isinstance(entry_raw, Mapping) else {}
+        exit_raw = exit_raw if isinstance(exit_raw, Mapping) else {}
+        view["trader_words"] = {
+            "entry": str(entry_raw.get("text") or ""),
+            "exit": str(exit_raw.get("text") or ""),
+            "entry_answers": review.get("entry_answers") or {},
+            "review_pnl_note": str(review.get("review_pnl_note") or ""),
+        }
+    return view
+
+
+def _internals_view(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One internals mark as its one-line summary; the per-symbol table stays out."""
+    context = row.get("context")
+    context = context if isinstance(context, Mapping) else {}
+    common = context.get("common")
+    common = common if isinstance(common, Mapping) else {}
+    return {
+        "source_id": row.get("source_id"),
+        "kind": row.get("kind"),
+        "at": row.get("at"),
+        "availability": common.get("availability"),
+        "internals": common.get("internals"),
+        "reason": common.get("reason"),
+    }
+
+
+def _congruence_view(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One congruence line with its member-id list capped and counted."""
+    members = row.get("source_ids")
+    if not isinstance(members, (list, tuple)) or len(members) <= MAX_CONGRUENCE_MEMBER_IDS:
+        return dict(row)
+    return {
+        **row,
+        "source_ids": list(members[:MAX_CONGRUENCE_MEMBER_IDS]),
+        "source_ids_total": len(members),
+    }
+
+
+def _model_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
+    """The pack sections the model reads, trimmed to fit the medium model.
+
+    Every citable source id stays visible. Only bulk a story cannot use is
+    dropped: per-symbol internals tables, multi-session skill cells, trade
+    bookkeeping, report-card counters, long congruence member lists, and
+    forecast text past a cap.
+    """
+    import day_review_pack
+
+    view: dict[str, Any] = {name: pack.get(name) for name in day_review_pack.SECTIONS}
+    view["internals"] = [
+        _internals_view(row) for row in pack.get("internals") or () if isinstance(row, Mapping)
+    ]
+    skill = pack.get("skill")
+    if isinstance(skill, Mapping):
+        view["skill"] = {key: value for key, value in skill.items() if key != "lately"}
+    trades = pack.get("trades")
+    if isinstance(trades, Mapping):
+        view["trades"] = {
+            **{key: value for key, value in trades.items() if key != "rows"},
+            "rows": [
+                _trade_view(row) for row in trades.get("rows") or () if isinstance(row, Mapping)
+            ],
+        }
+    view["congruence"] = [
+        _congruence_view(row) for row in pack.get("congruence") or () if isinstance(row, Mapping)
+    ]
+    card = pack.get("report_card")
+    if isinstance(card, Mapping):
+        view["report_card"] = {
+            **{key: value for key, value in card.items() if key != "lines"},
+            "lines": [
+                {key: line.get(key) for key in ("source_id", "key", "text")}
+                for line in card.get("lines") or ()
+                if isinstance(line, Mapping)
+            ],
+        }
+    forecast = pack.get("forecast")
+    if isinstance(forecast, Mapping):
+        text = str(forecast.get("text") or "")
+        if len(text) > MAX_FORECAST_TEXT_CHARS:
+            view["forecast"] = {
+                **forecast,
+                "text": text[:MAX_FORECAST_TEXT_CHARS],
+                "text_truncated": f"first {MAX_FORECAST_TEXT_CHARS} of {len(text)} characters",
+            }
+    return view
+
+
+def _previous_view(previous: Mapping[str, Any]) -> dict[str, Any]:
+    """Yesterday's story as headline and summary only: continuity, not evidence."""
+    narration = previous.get("narration")
+    narration = narration if isinstance(narration, Mapping) else {}
+    if not previous:
+        return {}
+    return {
+        "session_date": previous.get("session_date"),
+        "headline": narration.get("headline"),
+        "what_happened": narration.get("what_happened"),
+    }
+
+
 def _day_evidence(pack: Mapping[str, Any], root: Path) -> dict[str, Any]:
     import day_review_pack
 
     session = str(pack.get("session_date") or "")
     allowed = list(day_review_pack.allowed_source_ids(pack))
     pairs, not_offered = _read_explanation_contract(pack)
-    return {
+    evidence = {
         "package_id": f"day-review:{str(pack.get('inputs_hash') or '')[:16]}",
         "evidence_hash": str(pack.get("inputs_hash") or ""),
         "instructions": DAY_INSTRUCTIONS,
@@ -625,11 +755,19 @@ def _day_evidence(pack: Mapping[str, Any], root: Path) -> dict[str, Any]:
         "read_explanations": pairs,
         "read_explanations_not_offered": not_offered,
         "session_date": session,
-        "pack": {name: pack.get(name) for name in day_review_pack.SECTIONS},
+        "pack": _model_pack(pack),
         # Read-only, and deliberately outside `allowed_source_ids`: last night's
         # story is context for continuity, never a fact this night may cite.
-        "previous_day": _previous_story(session, root),
+        "previous_day": _previous_view(_previous_story(session, root)),
     }
+    size = len(json.dumps(evidence, sort_keys=True, default=str))
+    if size > MAX_DAY_EVIDENCE_CHARS:
+        # Refused before the model loads: a prompt this size times out instead.
+        raise NarrationRejected(
+            f"the day evidence is {size} characters; the medium model reads at most "
+            f"{MAX_DAY_EVIDENCE_CHARS} inside the {TIMEOUT_SECONDS}s call"
+        )
+    return evidence
 
 
 def _d1_window(session: str) -> list[str]:

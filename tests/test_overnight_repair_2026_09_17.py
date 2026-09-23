@@ -135,7 +135,11 @@ print('THETA-COLD-IMPORT-OK')
 
 
 def test_local_enrichment_retries_only_grammar_400_with_json_object_and_full_contract():
-    """The grammar workaround is one JSON-object retry, not a weaker contract."""
+    """A grammar 400 first retries the same contract without repetition bounds.
+
+    Changed 2026-09-23: Ollama 0.32 cannot compile `maxLength: 2000`, and plain
+    JSON mode let gemma3:12b return the schema itself. Validation stays full.
+    """
     import ai_summary
 
     requests: list[dict] = []
@@ -152,7 +156,8 @@ def test_local_enrichment_retries_only_grammar_400_with_json_object_and_full_con
     assert result["summary"] == _enrichment_response()
     assert len(requests) == 2
     assert requests[0]["response_format"]["type"] == "json_schema"
-    assert requests[1]["response_format"] == {"type": "json_object"}
+    assert requests[1]["response_format"]["type"] == "json_schema"
+    assert "maxLength" not in json.dumps(requests[1]["response_format"])
 
 
 def test_local_enrichment_grammar_fallback_still_rejects_an_incomplete_contract():
@@ -160,7 +165,8 @@ def test_local_enrichment_grammar_fallback_still_rejects_an_incomplete_contract(
     import ai_summary
 
     requests: list[dict] = []
-    responses = [_grammar_failure(), _chat_response(json.dumps({"summary": "only this key"}))]
+    incomplete = _chat_response(json.dumps({"summary": "only this key"}))
+    responses = [_grammar_failure(), _grammar_failure(), incomplete, incomplete]
 
     def post(url, **kwargs):
         requests.append(kwargs["json"])
@@ -170,8 +176,8 @@ def test_local_enrichment_grammar_fallback_still_rejects_an_incomplete_contract(
         with pytest.raises(RuntimeError, match="missing required field"):
             _local_enrichment_request(ai_summary, post)
 
-    assert len(requests) == 2
-    assert requests[1]["response_format"] == {"type": "json_object"}
+    assert len(requests) == 4
+    assert requests[2]["response_format"] == {"type": "json_object"}
 
 
 def test_local_enrichment_validation_enforces_its_2000_character_summary_limit():
@@ -179,10 +185,8 @@ def test_local_enrichment_validation_enforces_its_2000_character_summary_limit()
     import ai_summary
 
     requests: list[dict] = []
-    responses = [
-        _grammar_failure(),
-        _chat_response(json.dumps(_enrichment_response(summary="x" * 2001))),
-    ]
+    too_long = _chat_response(json.dumps(_enrichment_response(summary="x" * 2001)))
+    responses = [_grammar_failure(), _grammar_failure(), too_long, too_long]
 
     def post(url, **kwargs):
         requests.append(kwargs["json"])
@@ -192,8 +196,8 @@ def test_local_enrichment_validation_enforces_its_2000_character_summary_limit()
         with pytest.raises(RuntimeError, match="2000"):
             _local_enrichment_request(ai_summary, post)
 
-    assert len(requests) == 2
-    assert requests[1]["response_format"] == {"type": "json_object"}
+    assert len(requests) == 4
+    assert requests[2]["response_format"] == {"type": "json_object"}
 
 
 def test_local_enrichment_does_not_retry_a_non_grammar_http_400():
