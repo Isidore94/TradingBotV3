@@ -10,9 +10,13 @@ This cache is the only thing the Qt thread reads for a proxy bot:
 * ``peek`` is memory only. ``None`` means "never fetched" - UNKNOWN, which a
   caller must treat as unknown, never as "no bars" or "confirmed".
 * One worker thread (this object's) refreshes every key asked for in the last
-  ``WANT_TTL_SECONDS`` once per 5-minute bar (after the boundary plus a short
-  grace), one RPC per (symbol, sessions), ~10 ms apart so Qt-thread RPCs are
-  not starved of the proxy's lock. Never-fetched keys go first, at once.
+  ``WANT_TTL_SECONDS``, one RPC per (symbol, sessions), ~10 ms apart so
+  Qt-thread RPCs are not starved of the proxy's lock. Never-fetched keys go
+  first, at once.
+* After each 5-minute boundary (+ grace) a key is HUNGRY until a fetch returns
+  a bar ending at or after that boundary: it is refetched every
+  ``REFRESH_SECONDS`` meanwhile, then idles until the next boundary. Hunger
+  ends at boundary + ``HUNGRY_CAP_SECONDS`` (a halted name does not poll all bar).
 * The value is always `m5_chart_bars`' own output, so a poll given the same
   bars decides exactly what it decided before.
 
@@ -25,16 +29,19 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime
 
 from PySide6.QtCore import QObject, Signal
 
-#: Whole-bot values (zone arms, regime label) are refetched at most this often,
-#: and a failed first fetch is retried after it.
+#: Retry period for a hungry key, a failed first fetch, and whole-bot values
+#: (zone arms, regime label).
 REFRESH_SECONDS = 15.0
-#: Bars are refetched once per M5 bar: a completed bar is all a poll may use.
+#: The M5 bar length; a completed bar is all a poll may use.
 BAR_SECONDS = 300
-#: How long after a bar boundary the refetch waits, so the child has the bar.
+#: How long after a bar boundary the first refetch waits.
 BOUNDARY_GRACE_SECONDS = 20.0
+#: A key stops being hungry this long after the boundary, bar or no bar.
+HUNGRY_CAP_SECONDS = 240.0
 #: Gap between two refresh RPCs; the proxy's RPC lock is not fair.
 RPC_GAP_SECONDS = 0.01
 #: A key nobody has asked for in this long stops being refreshed.
@@ -73,6 +80,7 @@ class M5BarCache(QObject):
         # (symbol, sessions) -> monotonic of a failed first fetch (retry backoff)
         self._failed: dict[tuple[str, int], float] = {}
         self._shut = False
+        self._market_tz = None
         # (symbol, sessions) -> last asked monotonic
         self._wanted: dict[tuple[str, int], float] = {}
         # Small whole-bot values (e.g. `d1_zone_arms`): name -> (value, fetched_at)
@@ -83,16 +91,44 @@ class M5BarCache(QObject):
         self._thread: threading.Thread | None = None
         self.fetches = 0
 
-    def _bucket(self) -> int:
-        """Which 5-minute bar we are in, shifted by the grace after its boundary."""
-        return int((self._clock() - BOUNDARY_GRACE_SECONDS) // BAR_SECONDS)
+    def _boundary(self, wall: float) -> float:
+        """The latest 5-minute boundary whose grace has passed, as epoch seconds."""
+        return ((wall - BOUNDARY_GRACE_SECONDS) // BAR_SECONDS) * BAR_SECONDS
 
     def _bars_due(self, entry, now: float, key) -> bool:
-        """Caller holds the lock."""
+        """Caller holds the lock. ``entry`` is (bars, mono, fetched_wall, last_bar_end)."""
         if entry is None:
             failed = self._failed.get(key)
             return failed is None or now - failed >= self.refresh_seconds
-        return self._bucket() > entry[2]
+        wall = self._clock()
+        boundary = self._boundary(wall)
+        _bars, _mono, fetched_wall, last_end = entry
+        if last_end is not None and last_end >= boundary:
+            return False  # has this bar: idle until the next boundary
+        if fetched_wall < boundary + BOUNDARY_GRACE_SECONDS:
+            return True  # not asked yet since this boundary
+        if wall > boundary + HUNGRY_CAP_SECONDS:
+            return False  # a halted / illiquid name: give up until the next bar
+        return wall - fetched_wall >= self.refresh_seconds  # hungry: retry
+
+    def _last_bar_end(self, bars) -> float | None:
+        """Epoch end of the newest bar, or None when it carries no usable time."""
+        if not bars:
+            return None
+        last = bars[-1]
+        stamp = last.get("dt") if isinstance(last, dict) else getattr(last, "dt", None)
+        if not isinstance(stamp, datetime):
+            return None
+        if stamp.tzinfo is None:
+            if self._market_tz is None:
+                try:
+                    from market_session import get_market_local_timezone
+
+                    self._market_tz = get_market_local_timezone()[0]
+                except Exception:
+                    return None
+            stamp = stamp.replace(tzinfo=self._market_tz)
+        return stamp.timestamp() + BAR_SECONDS
 
     @staticmethod
     def _key(symbol: str, sessions: int) -> tuple[str, int]:
@@ -155,13 +191,14 @@ class M5BarCache(QObject):
         return bars
 
     def _store(self, bot, key, bars: list) -> None:
+        last_end = self._last_bar_end(bars)
         with self._lock:
             if bot is not self._bot:
                 if self._bot is not None:
                     return  # an answer from a retired child
                 self._bot = bot
             previous = self._entries.get(key)
-            self._entries[key] = (bars, time.monotonic(), self._bucket())
+            self._entries[key] = (bars, time.monotonic(), self._clock(), last_end)
             self._failed.pop(key, None)
             self._wanted.setdefault(key, time.monotonic())
         self.fetches += 1
@@ -239,13 +276,13 @@ class M5BarCache(QObject):
                 try:
                     bars = list(bot.m5_chart_bars(key[0], max_sessions=key[1]) or [])
                 except Exception:
-                    # Unknown stays unknown (retried after REFRESH_SECONDS); a known
-                    # entry keeps its last answer until the next bar.
+                    # Unknown stays unknown and a known entry keeps its last
+                    # answer; both are retried after REFRESH_SECONDS.
                     logging.debug("M5 cache fetch failed for %s.", key[0], exc_info=True)
                     with self._lock:
                         entry = self._entries.get(key)
                         if entry is not None:
-                            self._entries[key] = (entry[0], entry[1], self._bucket())
+                            self._entries[key] = (entry[0], entry[1], self._clock(), entry[3])
                         else:
                             self._failed[key] = time.monotonic()
                 else:

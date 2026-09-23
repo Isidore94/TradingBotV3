@@ -3,7 +3,8 @@
 1. A cancel that lands between the worker's CANCELLED check and its RUNNING
    write must still win: a cancelled arm never commits.
 2. App close shuts the shared M5 cache down before the bot stops.
-3. The M5 cache's child load is bounded: one RPC per key per 5-minute bar,
+3. The M5 cache's child load is bounded: about one RPC per key per 5-minute
+   bar (a hungry key retries every 15 s until the child has the new bar),
    and the H1 leg asks for bars only for a watch that is due.
 """
 
@@ -13,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -107,24 +109,45 @@ def test_app_close_stops_the_m5_cache_before_the_bot():
 
 
 class _CountingProxy:
+    """A proxy whose newest bar ends at `self.bar_end` (epoch seconds)."""
+
     is_process_proxy = True
 
-    def __init__(self):
+    def __init__(self, bar_end: float):
         self.calls = 0
+        self.bar_end = bar_end
         self.d1_zone_arms = {}
 
     def m5_chart_bars(self, symbol, max_sessions=2):
         self.calls += 1
-        return [{"dt": None, "close": 1.0}]
+        start = datetime.fromtimestamp(self.bar_end - 300, tz=timezone.utc)
+        return [{"dt": start, "close": 1.0}]
+
+
+BOUNDARY = 1_000_000.0 * 300  # an epoch 5-minute boundary
+
+
+def _wait_calls(bot, at_least, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while bot.calls < at_least and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return bot.calls
+
+
+def _settle(cache, bot, symbols):
+    """Let the worker look (it wakes on a peek, else once a second)."""
+    for symbol in symbols:
+        cache.peek(bot, symbol, 1)
+    time.sleep(1.3)
 
 
 def test_a_refresh_sweep_is_one_rpc_per_key_per_five_minute_bar():
     from ui.services.m5_bar_cache import M5BarCache
 
-    clock = [1_000_000.0 * 300 + 60.0]  # a minute into a 5-minute bar
-    cache = M5BarCache(refresh_seconds=0.2)
+    clock = [BOUNDARY + 60.0]
+    cache = M5BarCache()
     cache._clock = lambda: clock[0]
-    bot = _CountingProxy()
+    bot = _CountingProxy(bar_end=BOUNDARY)  # the child already has this bar
     symbols = [f"S{index:02d}" for index in range(20)]
     try:
         for symbol in symbols:
@@ -133,22 +156,78 @@ def test_a_refresh_sweep_is_one_rpc_per_key_per_five_minute_bar():
             assert cache.wait_known(bot, symbol, 1, timeout=10.0)
         assert bot.calls == 20, "new keys fetch at once, once each"
 
-        # Polls keep asking inside the same bar: no refetch.
+        # Polls keep asking inside the same bar, well past the retry period.
         for _ in range(3):
-            for symbol in symbols:
-                cache.peek(bot, symbol, 1)
-            time.sleep(0.5)
+            clock[0] += 60.0
+            _settle(cache, bot, symbols)
         assert bot.calls == 20, f"{bot.calls - 20} extra RPCs inside one 5-minute bar"
 
-        # A new bar boundary (plus its grace) has passed: one more sweep.
-        clock[0] += 300.0
-        for symbol in symbols:
-            cache.peek(bot, symbol, 1)
-        deadline = time.monotonic() + 10.0
-        while bot.calls < 40 and time.monotonic() < deadline:
-            time.sleep(0.05)
-        time.sleep(1.5)
+        # The next boundary passes and the child has its bar: one more sweep.
+        clock[0] = BOUNDARY + 300 + 25.0
+        bot.bar_end = BOUNDARY + 300
+        _settle(cache, bot, symbols)
+        assert _wait_calls(bot, 40) == 40
+        clock[0] += 60.0
+        _settle(cache, bot, symbols)
         assert bot.calls == 40
+    finally:
+        cache.shutdown()
+
+
+def test_a_late_bar_from_the_child_is_picked_up_on_the_next_retry():
+    from ui.services.m5_bar_cache import M5BarCache
+
+    clock = [BOUNDARY - 100.0]
+    cache = M5BarCache()
+    cache._clock = lambda: clock[0]
+    bot = _CountingProxy(bar_end=BOUNDARY - 300)
+    try:
+        assert cache.wait_known(bot, "LATE", 1)
+        assert bot.calls == 1
+
+        # The boundary passes; the child is still on the old bar.
+        clock[0] = BOUNDARY + 25.0
+        _settle(cache, bot, ["LATE"])
+        assert bot.calls == 2, "the first fetch after the boundary"
+        clock[0] += 5.0
+        _settle(cache, bot, ["LATE"])
+        assert bot.calls == 2, "hungry keys wait the retry period"
+
+        # The child lands the bar; the next 15 s retry picks it up.
+        bot.bar_end = BOUNDARY
+        clock[0] += 11.0
+        _settle(cache, bot, ["LATE"])
+        assert bot.calls == 3
+        assert cache.peek(bot, "LATE", 1)[-1]["dt"].timestamp() + 300 == BOUNDARY
+
+        # Fed: idle for the rest of the bar.
+        for _ in range(3):
+            clock[0] += 20.0
+            _settle(cache, bot, ["LATE"])
+        assert bot.calls == 3
+    finally:
+        cache.shutdown()
+
+
+def test_a_halted_name_stops_retrying_at_the_cap():
+    from ui.services.m5_bar_cache import HUNGRY_CAP_SECONDS, M5BarCache
+
+    clock = [BOUNDARY - 100.0]
+    cache = M5BarCache()
+    cache._clock = lambda: clock[0]
+    bot = _CountingProxy(bar_end=BOUNDARY - 600)  # never gets a new bar
+    try:
+        assert cache.wait_known(bot, "HALT", 1)
+        clock[0] = BOUNDARY + HUNGRY_CAP_SECONDS + 1.0
+        _settle(cache, bot, ["HALT"])
+        after_cap = bot.calls
+        for _ in range(3):
+            clock[0] += 16.0
+            _settle(cache, bot, ["HALT"])
+        assert bot.calls == after_cap, "past the cap a halted name idles until the next bar"
+        clock[0] = BOUNDARY + 300 + 25.0
+        _settle(cache, bot, ["HALT"])
+        assert bot.calls == after_cap + 1
     finally:
         cache.shutdown()
 
