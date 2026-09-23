@@ -396,8 +396,7 @@ def test_rendering_twice_starts_no_read_and_keeps_one_chart(panel):
 
 def test_a_walkaway_row_click_opens_that_name_in_one_reused_chart(panel, qapp):
     panel.render(_page_payload())
-    rejected = panel.walkaway_tables["rejected"]
-    liked = panel.walkaway_tables["liked_not_traded"]
+    rejected = panel.miss_table_for("rejected")
 
     rejected.itemActivated.emit(rejected.item(0, 1))
     qapp.processEvents()
@@ -408,6 +407,7 @@ def test_a_walkaway_row_click_opens_that_name_in_one_reused_chart(panel, qapp):
     assert first.bar_count() == 30, "the name chart drew someone else's tape"
     assert first is not panel._chart, "the name took the SPY pane"
 
+    liked = panel.miss_table_for("liked_not_traded")
     liked.itemActivated.emit(liked.item(0, 1))
     qapp.processEvents()
 
@@ -418,7 +418,7 @@ def test_a_walkaway_row_click_opens_that_name_in_one_reused_chart(panel, qapp):
 
 def test_the_name_chart_carries_that_names_own_markers(panel, qapp):
     panel.render(_page_payload())
-    table = panel.walkaway_tables["liked_not_traded"]
+    table = panel.miss_table_for("liked_not_traded")
 
     table.itemActivated.emit(table.item(0, 1))
     qapp.processEvents()
@@ -428,7 +428,7 @@ def test_the_name_chart_carries_that_names_own_markers(panel, qapp):
 
 def test_the_name_chart_lives_on_this_page_and_is_shown(panel, qapp):
     panel.render(_page_payload())
-    table = panel.walkaway_tables["rejected"]
+    table = panel.miss_table_for("rejected")
 
     table.itemActivated.emit(table.item(0, 1))
     qapp.processEvents()
@@ -454,7 +454,7 @@ def test_a_row_click_starts_no_second_read_and_opens_no_store(panel, monkeypatch
     monkeypatch.setattr(day_review_markers, "benchmark_markers", _forbidden)
     before = panel.service.reads
 
-    table = panel.walkaway_tables["rejected"]
+    table = panel.miss_table_for("rejected")
     table.itemActivated.emit(table.item(0, 1))
     qapp.processEvents()
 
@@ -467,7 +467,7 @@ def test_a_row_click_still_tells_the_host_about_the_name(panel, qapp):
     seen: list[tuple[str, str]] = []
     panel.chartRequested.connect(lambda symbol, side: seen.append((symbol, side)))
 
-    table = panel.walkaway_tables["rejected"]
+    table = panel.miss_table_for("rejected")
     table.itemActivated.emit(table.item(0, 1))
     qapp.processEvents()
 
@@ -479,7 +479,7 @@ def test_a_name_with_no_chart_in_the_payload_says_so_and_draws_nothing(panel, qa
     payload["name_charts"] = {}
 
     panel.render(payload)
-    table = panel.walkaway_tables["rejected"]
+    table = panel.miss_table_for("rejected")
     table.itemActivated.emit(table.item(0, 1))
     qapp.processEvents()
 
@@ -513,7 +513,7 @@ def test_clicking_a_marker_for_something_that_is_not_a_note_changes_no_selection
 
 def test_clicking_a_marker_on_the_name_chart_selects_the_note_too(panel, qapp):
     panel.render(_page_payload())
-    table = panel.walkaway_tables["rejected"]
+    table = panel.miss_table_for("rejected")
     table.itemActivated.emit(table.item(0, 1))
     qapp.processEvents()
 

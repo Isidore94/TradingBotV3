@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -44,7 +45,6 @@ from PySide6.QtCore import QEvent, QThread, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -120,11 +120,10 @@ REDO_REFUSED_NOTE = "{session} cannot be redone: {reason}"
 #: by the CLI that receives it.
 REDO_SLOT = "day_review_narration"
 
-#: What the SPY section says when the desk has no bars for the session. TJ-2
-#: brings the stored bars for a past session; until then this is the truth.
+#: What the SPY section says when the desk has no bars for the session.
 NO_CHART_NOTE = (
-    "chart after the close - the desk holds today's SPY bars in memory, and "
-    "TJ-2 brings past sessions."
+    "No SPY chart for this session yet. The desk shows today's bars live and "
+    "saves each day's bars after the close."
 )
 
 #: What the ideas section says on a session the night had nothing to say about.
@@ -135,26 +134,13 @@ NO_IDEAS_YET = (
     "citing your own sessions, and you keep or dismiss each one here."
 )
 
-#: The ONE walk-away table TJ-1 ships. TJ-2 brings the other three.
+#: The heading of the "rejected" population.
 WALKAWAY_TITLE = "Passed, and it ran"
 
-#: Its columns - the ones the Daily Recap's `rejected_that_worked` tab already
-#: showed, under the new title.
-WALKAWAY_COLUMNS: tuple[tuple[str, str | None], ...] = (
-    ("Time", None),
-    ("Symbol", None),
-    ("Side", None),
-    ("Verdict", None),
-    ("My reason", None),
-    ("It ran %", "favorable_pct"),
-    ("Against me first %", "adverse_pct"),
-    ("After the decision %", "favorable_pct_after_decision"),
-    ("Environment", None),
-)
-#: TJ-2B's columns plus TJ-11's three extra moves, each in percent and in ATR,
-#: and the versioned real-miss verdict. Spelled in FULL: the TJ-1L width rule
-#: exists because the shared 260 px ceiling clipped "Against me first %" at both
-#: ends, and a clipped header carries no ellipsis to say so.
+#: The 16-column walk-away model: TJ-2B's columns plus TJ-11's three extra
+#: moves, each in percent and in ATR, and the versioned real-miss verdict.
+#: Spelled in FULL: the TJ-1L width rule exists because a clipped header
+#: carries no ellipsis to say so.
 TJ2B_WALKAWAY_COLUMNS = (
     "Time", "Symbol", "Side", "What you did",
     "Ran after %", "Against you first %", "At the close %",
@@ -174,6 +160,31 @@ TJ2B_WALKAWAY_TITLES: tuple[tuple[str, str], ...] = (
     ("earlier_calls", "Earlier calls, now"),
 )
 
+#: The one miss table's filter chips, in order, with their short labels.
+MISS_FILTERS: tuple[tuple[str, str], ...] = (
+    ("rejected", "Passed & ran"),
+    ("liked_not_traded", "Liked not traded"),
+    ("traded_left_early", "Left early"),
+    ("claimed_d1", "Claimed D1"),
+    ("earlier_calls", "Earlier calls"),
+)
+
+#: The columns shown until "More columns" is on.
+MISS_DEFAULT_COLUMNS: tuple[str, ...] = (
+    "Time", "Symbol", "Side", "What you did",
+    "Ran after %", "Against you first %", "At the close %", "Real miss",
+)
+#: A population whose useful columns differ from the default set.
+MISS_DEFAULT_COLUMNS_BY_FILTER: dict[str, tuple[str, ...]] = {
+    "traded_left_early": (
+        "Time", "Symbol", "Side", "What you did",
+        "Ran after %", "You made", "Left on the table %", "Real miss",
+    ),
+}
+
+#: The miss table's height; the name chart beside it matches it.
+MISS_TABLE_HEIGHT_PX = 340
+
 
 def _tj2_pct(value: object) -> str:
     return UNMEASURED if value is None else f"{float(value):+.2f}%"
@@ -182,19 +193,33 @@ def _tj2_pct(value: object) -> str:
 def _tj2_number(value: object) -> str:
     return UNMEASURED if value is None else f"{float(value):+.2f}"
 
-#: The three tables TJ-2 adds, as (title, note) - each one a small titled frame
-#: holding its place in the 2 x 2 grid. A labelled cell rather than an empty
-#: widget: a table with no rows and no explanation reads as a table that failed,
-#: and a placeholder that is one title line and one note line is not a tall box.
-WALKAWAY_PLACEHOLDERS: tuple[tuple[str, str], ...] = (
-    ("Liked but never traded", "TJ-2 measures it."),
-    ("Traded, then left early", "TJ-2 measures it."),
-    ("Claimed D1 picks", "TJ-2 measures it."),
-)
 
-#: Where each placeholder sits, in grid order. The one real table is (0, 0):
-#: most-ran first (plan.md §12.2), reading left to right then down.
-WALKAWAY_PLACEHOLDER_CELLS: tuple[tuple[int, int], ...] = ((0, 1), (1, 0), (1, 1))
+def _button_text(text: object) -> str:
+    """A button label with `&` shown, not read as a keyboard mnemonic."""
+    return str(text or "").replace("&", "&&")
+
+
+#: A night-story citation such as `[said:mj-2026-09-22-b6559bf2669f:prediction]`.
+_CITATION = re.compile(r"\s*\[(?:said|cite|src|ref):[^\]]*\]")
+
+
+def _without_citations(text: object) -> str:
+    """Story text without the machine citation ids the night writes."""
+    return _CITATION.sub("", str(text or "")).strip()
+
+
+def _plain_cell(value: object) -> str:
+    """A stored code as words: `no_run` -> `no run`, `unmeasured` -> `not measured`."""
+    text = str(value or "").replace("_", " ").strip()
+    return text.replace("unmeasured", "not measured")
+
+
+def _median_ran_after(rows) -> float | None:
+    moves = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
+    if not moves:
+        return None
+    middle = len(moves) // 2
+    return moves[middle] if len(moves) % 2 else (moves[middle - 1] + moves[middle]) / 2
 
 #: The two columns (trader, 2026-09-18: *"there's a lot of empty space
 #: horizontally that's not being efficiently used"*, and, offered three shapes,
@@ -251,12 +276,31 @@ NAME_CHART_MIN_WIDTH_PX = 320
 #: What the name pane says before a row is clicked, and when the session's bars
 #: file never got that name. Said rather than drawn on somebody else's tape.
 NAME_CHART_IDLE_NOTE = (
-    "Click a walk-away row to see that name's session, with what you said on it."
+    "Click a row to see that name's session, with what you said on it."
 )
 NAME_CHART_MISSING_NOTE = (
-    "{symbol}: the session's bars file holds no tape for this name, so there is "
-    "nothing to draw it on."
+    "{symbol}: no bars were saved for this name on this session, so there is "
+    "no chart."
 )
+
+#: What the trade chart says before a trade is picked, and on a day with none.
+TRADE_CHART_IDLE_NOTE = "Pick a trade to see its chart with your entry and exit."
+TRADE_CHART_NO_TRADES_NOTE = "No trades this session."
+
+#: The local setting that remembers the session on screen.
+SESSION_SETTING_KEY = "qt_day_review_session_v1"
+
+#: Where each glance tile's click goes (a `reveal_card_target` name).
+GLANCE_TARGETS: dict[str, str] = {
+    "pnl": "trades",
+    "trades": "trades",
+    "planned": "trades",
+    "calls": "said",
+    "day_type": "story",
+    "biggest_win": "trades",
+    "biggest_miss": "miss",
+    "sparkline": "trades",
+}
 
 #: What the SPY caption says when the session has no tape at all. A mark with no
 #: bar to sit on is SAID, never silently dropped.
@@ -374,7 +418,11 @@ def _zone_label(zone: Any = None, *, when: datetime | None = None) -> str:
         return "desk local time"
     try:
         moment = (when or datetime.now()).astimezone(zone)
-        return moment.tzname() or str(zone)
+        name = moment.tzname() or str(zone)
+        # Windows spells some zones out ("Pacific Daylight Time"); use initials.
+        if " " in name:
+            name = "".join(word[0] for word in name.split() if word[:1].isalpha()).upper()
+        return name
     except Exception:  # noqa: BLE001
         return str(zone)
 
@@ -623,9 +671,15 @@ class DayReviewPanel(QFrame):
         clock: Callable[[], datetime] | None = None,
         auto_time_reader: Callable[[], Any] | None = None,
         redo_launcher: Callable[[str], Any] | None = None,
+        remember_session: bool | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
+        #: Keep the shown session in local settings. Defaults on for the desk's
+        #: own page (no injected service) and off for a host with its own.
+        self._remember_session = (service is None) if remember_session is None else bool(
+            remember_session
+        )
         if service is None:
             from ui.services.day_review_service import DayReviewService
 
@@ -686,6 +740,7 @@ class DayReviewPanel(QFrame):
         self._auto_timer.timeout.connect(self._on_auto_tick)
 
         self._build_header()
+        self._build_glance()
         self._build_report_card()
         self._build_story()
         self._build_walkaway()
@@ -698,6 +753,8 @@ class DayReviewPanel(QFrame):
 
     # -- construction ------------------------------------------------------
     def _build_header(self) -> None:
+        from PySide6.QtGui import QKeySequence, QShortcut
+
         self.heading = QLabel("Day Review")
         self.heading.setObjectName("SectionTitle")
         self.subtitle = QLabel(
@@ -711,10 +768,25 @@ class DayReviewPanel(QFrame):
         self.zone_note.setObjectName("SectionSubtitle")
 
         self.session_picker = QComboBox()
-        self._fill_session_picker()
+        saved = self._saved_session() if self._remember_session else ""
+        self._fill_session_picker(select=saved or None)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.reload)
         self.session_picker.currentIndexChanged.connect(lambda _index: self.reload())
+        # Day navigation: older on the left, newer on the right.
+        self.prev_session_button = QPushButton("◀")
+        self.prev_session_button.setToolTip("Previous session (Alt+Left)")
+        self.prev_session_button.clicked.connect(lambda: self.step_session(-1))
+        self.next_session_button = QPushButton("▶")
+        self.next_session_button.setToolTip("Next session (Alt+Right)")
+        self.next_session_button.clicked.connect(lambda: self.step_session(1))
+        self.session_shortcuts: dict[str, QShortcut] = {}
+        for keys, step in (("Alt+Left", -1), ("Alt+Right", 1)):
+            shortcut = QShortcut(QKeySequence(keys), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(lambda s=step: self.step_session(s))
+            self.session_shortcuts[keys] = shortcut
+        self._sync_step_buttons()
 
         self.provisional_note = QLabel("")
         self.provisional_note.setObjectName("SectionSubtitle")
@@ -722,6 +794,79 @@ class DayReviewPanel(QFrame):
         self.status = QLabel("")
         self.status.setObjectName("SectionSubtitle")
         self.status.setWordWrap(True)
+
+    # -- day navigation ----------------------------------------------------
+    def step_session(self, step: int) -> None:
+        """Move one session older (-1) or newer (+1). The picker is newest first."""
+        index = self.session_picker.currentIndex() - int(step)
+        if 0 <= index < self.session_picker.count():
+            self.session_picker.setCurrentIndex(index)
+
+    def _sync_step_buttons(self) -> None:
+        index = self.session_picker.currentIndex()
+        count = self.session_picker.count()
+        self.prev_session_button.setEnabled(0 <= index < count - 1)
+        self.next_session_button.setEnabled(index > 0)
+
+    @staticmethod
+    def _saved_session() -> str:
+        try:
+            from project_paths import get_local_setting
+
+            return str(get_local_setting(SESSION_SETTING_KEY, "") or "")[:10]
+        except Exception:  # noqa: BLE001 - a setting never costs the page
+            return ""
+
+    def _remember(self, session: str) -> None:
+        """Keep the shown session in local settings, written only on a change."""
+        if not self._remember_session or not session:
+            return
+        try:
+            from project_paths import get_local_setting, save_local_setting
+
+            if get_local_setting(SESSION_SETTING_KEY, "") != session:
+                save_local_setting(SESSION_SETTING_KEY, session)
+        except Exception:  # noqa: BLE001
+            logging.debug("The Day Review session was not remembered.", exc_info=True)
+
+    # -- the glance strip --------------------------------------------------
+    def _build_glance(self) -> None:
+        """The numbers row at the top. Each tile has a tooltip and a click."""
+        from ui.widgets.day_glance_strip import DayGlanceStrip
+
+        self.glance_strip = DayGlanceStrip()
+        self.glance_strip.tileClicked.connect(self._open_glance_target)
+        self.details_toggle = QPushButton("Details ▸")
+        self.details_toggle.setCheckable(True)
+        self.details_toggle.setFlat(True)
+        self.details_toggle.setToolTip("Show the full report card sentences.")
+        self.details_toggle.toggled.connect(self._toggle_details)
+
+    def _toggle_details(self, shown: bool) -> None:
+        self.report_card_section.setVisible(bool(shown))
+        self.details_toggle.setText("Details ▾" if shown else "Details ▸")
+
+    def _open_glance_target(self, key: str) -> None:
+        """A tile click scrolls to the section its number came from."""
+        glance = dict(self._payload.get("glance") or {})
+        if key == "biggest_miss" and isinstance(glance.get("biggest_miss"), Mapping):
+            miss = glance["biggest_miss"]
+            self.select_miss_population(str(miss.get("population") or ""))
+            symbol = str(miss.get("symbol") or "")
+            for index, row in enumerate(self._walkaway_rows):
+                if str(getattr(row, "symbol", "") or "").upper() == symbol.upper():
+                    self.miss_table.setCurrentCell(index, 1)
+                    break
+            self.reveal_card_target("miss")
+            return
+        if key == "biggest_win" and isinstance(glance.get("biggest_win"), Mapping):
+            wanted = str(glance["biggest_win"].get("trade_id") or "")
+            ids = getattr(self, "_trade_ids", ())
+            if wanted in ids:
+                self.trades_table.selectRow(ids.index(wanted))
+        target = GLANCE_TARGETS.get(str(key), "")
+        if target:
+            self.reveal_card_target(target)
 
     def _build_report_card(self) -> None:
         """The six lines, built ONCE. A render only sets their text (TJ-12).
@@ -756,6 +901,8 @@ class DayReviewPanel(QFrame):
             button.clicked.connect(lambda _checked=False, name=key: self._open_card_target(name))
             body.addWidget(button)
             self._report_card_lines[key] = button
+        # The full sentences live under "Details"; the glance strip leads.
+        self.report_card_section.setVisible(False)
 
     @property
     def report_card_lines(self) -> tuple[QPushButton, ...]:
@@ -782,9 +929,14 @@ class DayReviewPanel(QFrame):
         a line that opened nothing would be a promise the card could not keep.
         """
         name = str(target or "")
-        widget = self.walkaway_tables.get(name)
+        widget = None
+        if name in self.miss_chips:
+            # A walk-away target is a population of the one miss table.
+            self.select_miss_population(name)
+            widget = self.miss_section
         if widget is None:
             widget = {
+                "miss": getattr(self, "miss_section", None),
                 "said": getattr(self, "said_section", None),
                 "congruence": self.congruence_note,
                 "trades": getattr(self, "traded_section", None),
@@ -823,9 +975,11 @@ class DayReviewPanel(QFrame):
         for line in rows or ():
             if isinstance(line, Mapping) and line.get("key"):
                 lines[str(line["key"])] = line
+        import day_report_card
+
         for key, button in self._report_card_lines.items():
             row = lines.get(key)
-            text = str((row or {}).get("text") or "").strip()
+            text = day_report_card.plain_words((row or {}).get("text"))
             if not text:
                 text = REPORT_CARD_PLACEHOLDERS.get(key, key)
             button.setText(self._wrapped_card_text(text))
@@ -879,110 +1033,102 @@ class DayReviewPanel(QFrame):
         self.theses.setMaximumHeight(theme.px(150))
 
     def _build_walkaway(self) -> None:
-        self.rejected_that_worked_table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
-        self.rejected_that_worked_table.setHorizontalHeaderLabels(
-            TJ2B_WALKAWAY_COLUMNS
+        """ONE miss table, five filter chips, and a "More columns" toggle.
+
+        The 16-column model stays (`TJ2B_WALKAWAY_COLUMNS`); only the default
+        columns show until the toggle is on. A single click (or J/K) draws the
+        row's name beside the table; a double click also asks the host.
+        """
+        from PySide6.QtWidgets import QAbstractScrollArea, QButtonGroup
+
+        self.miss_table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
+        self.miss_table.setObjectName("DayReviewMissTable")
+        self.miss_table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
+        self.miss_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.miss_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.miss_table.setSelectionMode(QTableWidget.SingleSelection)
+        # Its width follows its visible columns, so the chart beside it gets
+        # whatever is left.
+        self.miss_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        self.miss_table.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.miss_table.setFixedHeight(theme.px(MISS_TABLE_HEIGHT_PX))
+        self.miss_table.itemDoubleClicked.connect(self._activate_walkaway)
+        self.miss_table.itemActivated.connect(self._activate_walkaway)
+        self.miss_table.currentCellChanged.connect(self._on_miss_row_changed)
+        self.miss_table.installEventFilter(self)
+        _fill_the_width(self.miss_table)
+
+        self.miss_chips: dict[str, QPushButton] = {}
+        self._miss_chip_group = QButtonGroup(self)
+        self._miss_chip_group.setExclusive(True)
+        for name, label in MISS_FILTERS:
+            chip = QPushButton(f"{_button_text(label)} (0)")
+            chip.setObjectName("MissFilterChip")
+            chip.setCheckable(True)
+            chip.setProperty("population", name)
+            chip.setToolTip(dict(TJ2B_WALKAWAY_TITLES).get(name, label))
+            chip.clicked.connect(lambda _checked=False, n=name: self.select_miss_population(n))
+            self._miss_chip_group.addButton(chip)
+            self.miss_chips[name] = chip
+        self.more_columns_toggle = QPushButton("More columns")
+        self.more_columns_toggle.setCheckable(True)
+        self.more_columns_toggle.setToolTip(
+            "Show every measured column: the ATR moves, held at close, traded, "
+            "what you made, left on the table and state."
         )
-        self.rejected_that_worked_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.rejected_that_worked_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.rejected_that_worked_table.setMinimumHeight(theme.px(120))
-        self.rejected_that_worked_table.itemDoubleClicked.connect(self._activate_walkaway)
-        self.rejected_that_worked_table.itemActivated.connect(self._activate_walkaway)
-        _fill_the_width(self.rejected_that_worked_table)
+        self.more_columns_toggle.toggled.connect(lambda _on: self._apply_miss_columns())
+
         self.walkaway_note = QLabel(LOADING_NOTE)
         self.walkaway_note.setObjectName("SectionSubtitle")
         self.walkaway_note.setWordWrap(True)
-        #: The three TJ-2 populations, by grid position. Built here so the grid
-        #: is the same four cells whether or not anything has been read yet.
-        self.walkaway_cells: dict[tuple[int, int], QWidget] = {
-            cell: self._placeholder_cell(title, note)
-            for cell, (title, note) in zip(
-                WALKAWAY_PLACEHOLDER_CELLS, WALKAWAY_PLACEHOLDERS
-            )
-        }
-        self.walkaway_tables: dict[str, QTableWidget] = {}
-        self._walkaway_table_rows: dict[int, tuple[Any, ...]] = {}
-        #: One deterministic sentence per population, above its own table
-        #: (TJ-11 item 5). Built here so an empty population still has a line.
-        self.walkaway_sentences: dict[str, QLabel] = {}
-        #: Each population's heading, held by name so a render never has to
-        #: guess which child label of a frame is the title.
-        self._walkaway_headings: dict[str, QLabel] = {}
-        #: The base rate the whole grid is read against (TJ-11 item 4). ONE
-        #: label above the grid, never a cell inside it.
+        #: The selected population's one sentence (TJ-11 item 5).
+        self.walkaway_sentence = QLabel("")
+        self.walkaway_sentence.setObjectName("SectionSubtitle")
+        self.walkaway_sentence.setWordWrap(True)
+        #: The base rate the table is read against (TJ-11 item 4).
         self.walkaway_skill = QLabel("")
         self.walkaway_skill.setObjectName("SectionSubtitle")
         self.walkaway_skill.setWordWrap(True)
-        for name, _title in TJ2B_WALKAWAY_TITLES:
-            sentence = QLabel("")
-            sentence.setObjectName("SectionSubtitle")
-            sentence.setWordWrap(True)
-            self.walkaway_sentences[name] = sentence
-            if name == "rejected":
-                self.walkaway_tables[name] = self.rejected_that_worked_table
-                continue
-            table = QTableWidget(0, len(TJ2B_WALKAWAY_COLUMNS))
-            table.setHorizontalHeaderLabels(TJ2B_WALKAWAY_COLUMNS)
-            table.setEditTriggers(QTableWidget.NoEditTriggers)
-            table.setSelectionBehavior(QTableWidget.SelectRows)
-            table.itemActivated.connect(self._activate_walkaway)
-            table.itemDoubleClicked.connect(self._activate_walkaway)
-            _fill_the_width(table)
-            self.walkaway_tables[name] = table
-        for cell, name, title in (
-            ((0, 1), "liked_not_traded", "Liked but never traded"),
-            ((1, 0), "traded_left_early", "Traded, then left early"),
-            ((1, 1), "claimed_d1", "Claimed D1 picks"),
-            ((2, 0), "earlier_calls", "Earlier calls, now"),
-        ):
-            heading = QLabel(title)
-            heading.setObjectName("SectionTitle")
-            heading.setWordWrap(True)
-            self._walkaway_headings[name] = heading
-            self.walkaway_cells[cell] = self._table_cell(
-                heading, self.walkaway_tables[name], self.walkaway_sentences[name]
-            )
 
-    @staticmethod
-    def _placeholder_cell(title: str, note: str) -> QFrame:
-        """One empty population: a titled frame, one note line, nothing taller.
+        self._miss_rows: dict[str, tuple[Any, ...]] = {name: () for name, _ in MISS_FILTERS}
+        self._miss_sentences: dict[str, str] = {}
+        self._miss_population = MISS_FILTERS[0][0]
+        self.miss_chips[self._miss_population].setChecked(True)
+        self._apply_miss_columns()
 
-        `Panel` is the theme's existing bordered-card object name, so this costs
-        a property set and not a stylesheet parse.
-        """
-        frame = QFrame()
-        frame.setObjectName("Panel")
-        body = QVBoxLayout(frame)
-        body.setContentsMargins(10, 8, 10, 8)
-        body.setSpacing(2)
-        heading = QLabel(title)
-        heading.setObjectName("SectionTitle")
-        heading.setWordWrap(True)
-        body.addWidget(heading)
-        subtitle = QLabel(note)
-        subtitle.setObjectName("SectionSubtitle")
-        subtitle.setWordWrap(True)
-        body.addWidget(subtitle)
-        frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        return frame
+    def miss_population(self) -> str:
+        """Which filter chip is on."""
+        return self._miss_population
 
-    @staticmethod
-    def _table_cell(heading: QLabel, table: QTableWidget, sentence: QLabel | None = None) -> QFrame:
-        """A labelled TJ-2 population, replacing the TJ-1 placeholder.
+    def miss_counts(self) -> dict[str, int]:
+        """Rows per population, as the chips show them."""
+        return {name: len(self._miss_rows.get(name, ())) for name, _ in MISS_FILTERS}
 
-        TJ-11 puts the population's one deterministic sentence between the
-        heading and the table: the count is read before the rows are.
-        """
-        frame = QFrame()
-        frame.setObjectName("Panel")
-        body = QVBoxLayout(frame)
-        body.setContentsMargins(10, 8, 10, 8)
-        body.setSpacing(2)
-        body.addWidget(heading)
-        if sentence is not None:
-            body.addWidget(sentence)
-        body.addWidget(table)
-        return frame
+    def miss_table_for(self, name: str) -> QTableWidget:
+        """Turn on `name`'s chip and hand back the one table, now showing it."""
+        self.select_miss_population(name)
+        return self.miss_table
+
+    def select_miss_population(self, name: str) -> None:
+        """Show one population in the miss table. Formatting only."""
+        name = str(name or "")
+        if name not in self.miss_chips:
+            return
+        self._miss_population = name
+        chip = self.miss_chips[name]
+        if not chip.isChecked():
+            chip.setChecked(True)
+        self._show_miss_population()
+
+    def _apply_miss_columns(self) -> None:
+        """Hide the columns outside the default set unless "More columns" is on."""
+        more = self.more_columns_toggle.isChecked()
+        wanted = MISS_DEFAULT_COLUMNS_BY_FILTER.get(
+            self._miss_population, MISS_DEFAULT_COLUMNS
+        )
+        for index, header in enumerate(TJ2B_WALKAWAY_COLUMNS):
+            self.miss_table.setColumnHidden(index, not (more or header in wanted))
+        self.more_columns_toggle.setText("Fewer columns" if more else "More columns")
 
     def _build_said(self) -> None:
         self.entries = QListWidget()
@@ -1061,10 +1207,28 @@ class DayReviewPanel(QFrame):
         _fill_the_width(self.trades_table)
         self.trades_table.itemSelectionChanged.connect(self._show_selected_trade)
         self.trades_table.cellDoubleClicked.connect(self._open_selected_trade)
+        self.trades_table.installEventFilter(self)
         self.trade_detail = QPlainTextEdit()
         self.trade_detail.setReadOnly(True)
         self.trade_detail.setMaximumHeight(theme.px(175))
         self.trade_detail.setPlaceholderText("Select a trade to see your entry and exit notes.")
+        # The selected trade's session chart, with its entry and exit marks.
+        # Same widget class and the same worker-built `name_charts` payload as
+        # the miss table's name pane; built on first need, then re-fed.
+        self._trade_chart: Any = None
+        self._trade_chart_symbol = ""
+        self.trade_chart_note = QLabel(TRADE_CHART_IDLE_NOTE)
+        self.trade_chart_note.setObjectName("SectionSubtitle")
+        self.trade_chart_note.setWordWrap(True)
+        self._trade_chart_holder = QWidget()
+        self._trade_chart_holder.setMinimumWidth(theme.px(NAME_CHART_MIN_WIDTH_PX))
+        self._trade_chart_holder.setMaximumHeight(theme.px(MISS_TABLE_HEIGHT_PX + 60))
+        holder = QVBoxLayout(self._trade_chart_holder)
+        holder.setContentsMargins(0, 0, 0, 0)
+        holder.addWidget(self.trade_chart_note)
+        self._trade_chart_layout = QVBoxLayout()
+        self._trade_chart_layout.setContentsMargins(0, 0, 0, 0)
+        holder.addLayout(self._trade_chart_layout, 1)
         self.trades_note = QLabel(
             "Read-only. The Journal page is where a trade is tagged and corrected."
         )
@@ -1094,6 +1258,10 @@ class DayReviewPanel(QFrame):
         self.name_chart_note.setWordWrap(True)
         self._name_chart_holder = QWidget()
         self._name_chart_holder.setMinimumWidth(theme.px(NAME_CHART_MIN_WIDTH_PX))
+        self._name_chart_holder.setFixedHeight(theme.px(MISS_TABLE_HEIGHT_PX))
+        self._name_chart_holder.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         body = QVBoxLayout(self._name_chart_holder)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(4)
@@ -1227,6 +1395,7 @@ class DayReviewPanel(QFrame):
         self.calls_table.setMaximumHeight(theme.px(190))
         _fill_the_width(self.calls_table)
         self.calls_table.cellDoubleClicked.connect(self._open_call_row)
+        self.calls_table.installEventFilter(self)
         self.said_section = self._section(
             "Market calls and notes",
             QLabel("Market calls · double-click to see your exact words"),
@@ -1249,56 +1418,38 @@ class DayReviewPanel(QFrame):
         return column
 
     def _walkaway_row(self) -> QWidget:
-        """The five populations as a grid, under ONE skill line.
+        """Picks and passes: the chips, then ONE table with its name chart beside.
 
-        Equal COLUMNS, and rows that fit their content: an empty population
-        padded to the height of a table reads as a table that failed to load.
-        TJ-11's fifth population spans the full width on its own row, because
-        "Earlier calls, now" is the one table whose rows come from other days.
-
-        The skill line is the base rate the whole grid is read against, so it
-        sits ABOVE the grid rather than inside one of its cells: a miss count
-        without a base rate is the number the trader would misread.
+        The skill line is the base rate the table is read against, so it sits
+        above the chips: a miss count without a base rate is the number the
+        trader would misread. The chart takes whatever width the table leaves.
         """
-        holder = QWidget()
-        self.walkaway_grid = QGridLayout(holder)
-        self.walkaway_grid.setContentsMargins(0, 0, 0, 0)
-        self.walkaway_grid.setHorizontalSpacing(12)
-        self.walkaway_grid.setVerticalSpacing(10)
-        self.walkaway_grid.addWidget(
-            self._section(
-                WALKAWAY_TITLE,
-                self.walkaway_note,
-                self.walkaway_sentences["rejected"],
-                self.rejected_that_worked_table,
-            ),
-            0,
-            0,
-        )
-        for cell, widget in self.walkaway_cells.items():
-            if cell[0] >= 2:
-                # The fifth population spans both columns on its own row.
-                self.walkaway_grid.addWidget(widget, cell[0], 0, 1, 2, Qt.AlignTop)
-                continue
-            self.walkaway_grid.addWidget(widget, cell[0], cell[1], Qt.AlignTop)
-        self.walkaway_grid.setColumnStretch(0, 1)
-        self.walkaway_grid.setColumnStretch(1, 1)
-        self.walkaway_grid.setRowStretch(0, 0)
-        self.walkaway_grid.setRowStretch(1, 0)
-        self.walkaway_grid.setRowStretch(2, 0)
+        chips = QHBoxLayout()
+        chips.setContentsMargins(0, 0, 0, 0)
+        chips.setSpacing(6)
+        for chip in self.miss_chips.values():
+            chips.addWidget(chip)
+        chips.addStretch(1)
+        chips.addWidget(self.more_columns_toggle)
 
-        # The name pane sits BESIDE the tables (TJ-3): a row and the chart it
-        # opens are read together, and a chart under five tables would be off
-        # the bottom of the page by the time it was drawn.
+        left = QWidget()
+        left.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        left_body = QVBoxLayout(left)
+        left_body.setContentsMargins(0, 0, 0, 0)
+        left_body.setSpacing(4)
+        left_body.addWidget(self.walkaway_note)
+        left_body.addWidget(self.walkaway_sentence)
+        left_body.addWidget(self.miss_table)
+
         beside = QWidget()
         side_by_side = QHBoxLayout(beside)
         side_by_side.setContentsMargins(0, 0, 0, 0)
         side_by_side.setSpacing(12)
-        side_by_side.addWidget(holder, 3)
-        side_by_side.addWidget(self._name_chart_holder, 2)
+        side_by_side.addWidget(left, 0, Qt.AlignTop)
+        side_by_side.addWidget(self._name_chart_holder, 1, Qt.AlignBottom)
 
-        row = QWidget()
-        body = QVBoxLayout(row)
+        self.miss_section = QWidget()
+        body = QVBoxLayout(self.miss_section)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(6)
         picks_heading = QLabel("Picks and passes")
@@ -1311,14 +1462,23 @@ class DayReviewPanel(QFrame):
         picks_note.setWordWrap(True)
         body.addWidget(picks_note)
         body.addWidget(self.walkaway_skill)
+        body.addLayout(chips)
         body.addWidget(beside)
-        return row
+        return self.miss_section
 
     def _bottom_row(self) -> QWidget:
-        """What you traded, beside the desk's ideas. Two halves, full width."""
-        self.traded_section = self._section(
-            "Entries and exits", self.trades_note, self.trades_table, self.trade_detail
-        )
+        """What you traded, with the selected trade's chart, beside the ideas."""
+        trade_left = QWidget()
+        left_body = QVBoxLayout(trade_left)
+        left_body.setContentsMargins(0, 0, 0, 0)
+        left_body.addWidget(self.trades_table)
+        left_body.addWidget(self.trade_detail)
+        trade_row = QHBoxLayout()
+        trade_row.setContentsMargins(0, 0, 0, 0)
+        trade_row.setSpacing(12)
+        trade_row.addWidget(trade_left, 1)
+        trade_row.addWidget(self._trade_chart_holder, 1)
+        self.traded_section = self._section("Entries and exits", self.trades_note, trade_row)
         self.ideas_section = self._section(
             "Ideas from the desk's AI", self.ideas_note, self.ideas_card
         )
@@ -1326,14 +1486,16 @@ class DayReviewPanel(QFrame):
         row = QHBoxLayout(self.bottom_row)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
-        row.addWidget(self.traded_section, 1)
+        row.addWidget(self.traded_section, 3)
         row.addWidget(self.ideas_section, 1)
         return self.bottom_row
 
     def _build_layout(self) -> None:
         header = QHBoxLayout()
         header.addWidget(QLabel("Session"))
+        header.addWidget(self.prev_session_button)
         header.addWidget(self.session_picker, 1)
+        header.addWidget(self.next_session_button)
         header.addWidget(self.refresh_button)
         header.addWidget(self.zone_note)
 
@@ -1354,6 +1516,11 @@ class DayReviewPanel(QFrame):
         )
         desk_layout.persist_sizes(self, self.columns, COLUMN_SPLIT_KEY)
 
+        glance_row = QHBoxLayout()
+        glance_row.setContentsMargins(0, 0, 0, 0)
+        glance_row.addWidget(self.glance_strip, 1)
+        glance_row.addWidget(self.details_toggle, 0, Qt.AlignBottom)
+
         page = QWidget()
         body = QVBoxLayout(page)
         body.setContentsMargins(0, 0, 0, 0)
@@ -1362,8 +1529,9 @@ class DayReviewPanel(QFrame):
         body.addWidget(self.subtitle)
         body.addLayout(header)
         body.addWidget(self.provisional_note)
-        # TJ-12: the card HEADS the page - above the two columns that hold the
-        # story, and never inside one of them.
+        # The glance strip heads the page; the full report card sits under
+        # "Details", still above the two columns that hold the story.
+        body.addLayout(glance_row)
         body.addWidget(self.report_card_section)
         body.addWidget(self.columns, 1)
         body.addWidget(self._walkaway_row())
@@ -1700,6 +1868,8 @@ class DayReviewPanel(QFrame):
         self._refresh_session_picker()
         self._sync_after_the_fact()
         session = self.session_date()
+        self._sync_step_buttons()
+        self._remember(session)
         backfill_bars = not self._next_read_skips_backfill
         self._next_read_skips_backfill = False
         self._request_day_read(session, backfill_bars=backfill_bars)
@@ -1792,6 +1962,15 @@ class DayReviewPanel(QFrame):
         # built. `render` formats - it never calls `day_report_card.build` or
         # `how_fresh`, which are worker work inside the ONE payload.
         self._render_report_card(payload.get("report_card"))
+        # The glance strip heads the page. The worker builds it; a hand-built
+        # payload without one gets the same pure projection here (a few sums).
+        if not payload.get("glance"):
+            import day_report_card
+
+            payload["glance"] = day_report_card.glance(payload)
+        self.glance_strip.set_glance(payload["glance"])
+        # Before the tables and trades: a row or trade click draws from these.
+        self._name_charts = dict(payload.get("name_charts") or {})
         self._render_story(payload.get("story"))
         # TJ-4, AFTER the facts: the verified story replaces the "no story yet"
         # line when there is one, and leaves the facts exactly as they were when
@@ -1803,9 +1982,7 @@ class DayReviewPanel(QFrame):
         self._render_d1_view(payload.get("d1_view"))
         self._render_congruence(tuple(payload.get("congruence") or ()))
         self._render_theses(payload.get("theses") or [])
-        self._render_walkaway(tuple(payload.get("rejected_that_worked") or ()))
-        if payload.get("walkaway") is not None:
-            self._render_tj2b_walkaway(payload["walkaway"])
+        self._render_tj2b_walkaway(payload.get("walkaway"))
         self._render_entries(list(payload.get("entries") or []))
         self._render_forecast(dict(payload.get("forecast") or {}))
         self._render_trades(list(payload.get("trades") or []))
@@ -1818,7 +1995,8 @@ class DayReviewPanel(QFrame):
             self.trades_table.selectRow(0)
             self._show_selected_trade()
         else:
-            self.trade_detail.setPlainText("No trade opened or closed in this session.")
+            self.trade_detail.setPlainText("No trades this session.")
+            self._show_trade_chart("")
         self._render_chart(list(payload.get("spy_m5_bars") or []))
         # The markers were RESOLVED on the worker; this pushes them and computes
         # nothing (TJ-3). After `set_data`, because new bars drop the payload.
@@ -1826,7 +2004,6 @@ class DayReviewPanel(QFrame):
             tuple(payload.get("spy_markers") or ()),
             payload.get("spy_marker_placements"),
         )
-        self._name_charts = dict(payload.get("name_charts") or {})
         self._refresh_name_chart()
         self._render_ideas(session, list(payload.get("ideas") or []))
         self._render_mood(payload.get("mood"))
@@ -1886,7 +2063,7 @@ class DayReviewPanel(QFrame):
         for cell in tuple(getattr(story, "measured", ()) or ()):
             symbol = str(cell.get("symbol") or "")
             if str(cell.get("status") or "") != "measured":
-                lines.append(f"{symbol}: unmeasured — {cell.get('reason') or 'no completed bars'}")
+                lines.append(f"{symbol}: not measured — {cell.get('reason') or 'no completed bars'}")
                 continue
             change = cell.get("change_pct")
             span = cell.get("range_atr")
@@ -2003,7 +2180,7 @@ class DayReviewPanel(QFrame):
                 covered = held = 0
             if held and covered < held:
                 lines.append(f"graded {covered} of {held} reads")
-        body = "\n".join(lines)
+        body = "\n".join(_without_citations(line) for line in lines)
         self.story_body.setText(body)
         self.story_body.setVisible(bool(body))
 
@@ -2034,7 +2211,7 @@ class DayReviewPanel(QFrame):
             if still:
                 parts.append(f"still true: {still}")
             lines.append(" — ".join(parts))
-        text = "\n".join(lines)
+        text = "\n".join(_without_citations(line) for line in lines)
         self.d1_view_note.setText(text)
         self.d1_view_note.setVisible(bool(text))
 
@@ -2169,6 +2346,8 @@ class DayReviewPanel(QFrame):
         threshold and no colour that means "do something". A line the desk could
         not measure SAYS which side was missing rather than going quiet.
         """
+        import day_report_card
+
         rendered: list[str] = []
         for line in lines or ():
             if not isinstance(line, Mapping):
@@ -2182,7 +2361,7 @@ class DayReviewPanel(QFrame):
                 text = f"{text} — missing: {missing}"
             elif verdict:
                 text = f"{text} — {verdict}"
-            rendered.append(f"· {text}")
+            rendered.append(f"· {day_report_card.plain_words(text)}")
         self.congruence_note.setText("\n".join(rendered))
         self.congruence_note.setVisible(bool(rendered))
 
@@ -2246,47 +2425,26 @@ class DayReviewPanel(QFrame):
                 parts.append(f"horizon {horizon}")
             self.theses.addItem("  ·  ".join(parts))
 
-    def _render_walkaway(self, rows) -> None:
-        self._walkaway_rows = tuple(rows)
-        table = self.rejected_that_worked_table
-        table.setRowCount(len(self._walkaway_rows))
-        for index, row in enumerate(self._walkaway_rows):
-            for column, (header, measure) in enumerate(WALKAWAY_COLUMNS):
-                text, tip = self._walkaway_cell(row, header, measure)
-                item = QTableWidgetItem(text)
-                if tip:
-                    item.setToolTip(tip)
-                table.setItem(index, column, item)
-        # No width call here: the columns measure themselves (`_fill_the_width`,
-        # set once at construction) and the last one stretches, so a repaint
-        # costs the rows and nothing else.
-        self.walkaway_note.setText(
-            f"{len(self._walkaway_rows)} refusal(s) whose later path went the way "
-            "you turned down. Double-click a row to chart it."
-            if self._walkaway_rows
-            else "Nothing you passed on ran, on this session's measured rows."
-        )
-
     def _walkaway_cells(self, row: Any) -> dict[str, str]:
         """One row, keyed by HEADER text.
 
-        Keyed rather than positional: the five tables share one column list, and
-        a positional tuple is how the rejected table came to print its "Ran
-        after %" under "Held at close %".
+        Keyed rather than positional: the populations share one column list,
+        and a positional tuple is how a table came to print its "Ran after %"
+        under "Held at close %".
         """
         session, zone = self.session_date(), self._zone
         return {
             "Time": _clock_text(row.time, session, zone=zone) if row.time else UNMEASURED,
             "Symbol": row.symbol,
             "Side": row.side,
-            "What you did": row.what_you_did,
+            "What you did": _plain_cell(row.what_you_did),
             "Ran after %": _tj2_pct(row.ran_after_pct),
             "Against you first %": _tj2_pct(getattr(row, "against_first_pct", None)),
             "At the close %": _tj2_pct(getattr(row, "at_close_pct", None)),
             "Ran after (ATR)": _tj2_number(getattr(row, "ran_after_atr", None)),
             "Against you first (ATR)": _tj2_number(getattr(row, "against_first_atr", None)),
             "At the close (ATR)": _tj2_number(getattr(row, "at_close_atr", None)),
-            "Real miss": str(getattr(row, "real_miss", "") or "") or UNMEASURED,
+            "Real miss": _plain_cell(getattr(row, "real_miss", "")) or UNMEASURED,
             "Held at close %": _tj2_pct(row.held_at_close_pct),
             "Traded?": row.traded,
             "You made": _tj2_number(row.you_made),
@@ -2294,7 +2452,7 @@ class DayReviewPanel(QFrame):
                 str(getattr(row, "not_judged_reason", "") or "")
                 or _tj2_pct(row.left_on_table_pct)
             ),
-            "State": row.state,
+            "State": _plain_cell(row.state),
         }
 
     @staticmethod
@@ -2308,7 +2466,7 @@ class DayReviewPanel(QFrame):
         home: TJ-11's five tables and ~700 rows spent **90 seconds** inside one
         `processEvents`. The mode is suspended for the fill and restored once,
         so the measurement happens a single time and the columns still measure
-        their own headers.
+        their own headers. Signals are blocked so a fill never "clicks" a row.
         """
         header = table.horizontalHeader()
         columns = table.columnCount()
@@ -2316,49 +2474,81 @@ class DayReviewPanel(QFrame):
         for index, mode in enumerate(modes):
             if mode == QHeaderView.ResizeMode.ResizeToContents:
                 header.setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+        blocked = table.blockSignals(True)
         table.setUpdatesEnabled(False)
         try:
+            table.clearSelection()
             table.setRowCount(len(rows))
             for index, row in enumerate(rows):
                 cells = cells_for(row)
                 for column, name in enumerate(TJ2B_WALKAWAY_COLUMNS):
                     table.setItem(index, column, QTableWidgetItem(cells.get(name, "")))
+            table.setCurrentCell(-1, -1)
         finally:
             table.setUpdatesEnabled(True)
+            table.blockSignals(blocked)
             for index, mode in enumerate(modes):
                 if header.sectionResizeMode(index) != mode:
                     header.setSectionResizeMode(index, mode)
 
     def _render_tj2b_walkaway(self, day) -> None:
-        """Paint the five populations, their sentences and the skill line.
+        """Count the five populations onto their chips and show the chosen one.
 
         Formatting only: every number was measured on the worker, and a missing
-        one is a dash with its reason, never a 0.00.
+        one is a dash with its reason, never a 0.00. `day` is None when the
+        walk-away read failed: every chip then says so rather than "0".
         """
-        sentences = dict(getattr(day, "sentences", {}) or {})
-        for name, base in TJ2B_WALKAWAY_TITLES:
-            table = self.walkaway_tables[name]
-            rows = tuple(getattr(day, name, ()) or ())
-            moves = sorted(row.ran_after_pct for row in rows if row.ran_after_pct is not None)
-            middle = len(moves) // 2
-            median = (
-                (moves[middle] if len(moves) % 2 else (moves[middle - 1] + moves[middle]) / 2)
-                if moves
-                else None
+        import day_report_card
+
+        read = day is not None
+        sentences = dict(getattr(day, "sentences", {}) or {}) if read else {}
+        for name, label in MISS_FILTERS:
+            rows = tuple(getattr(day, name, ()) or ()) if read else ()
+            self._miss_rows[name] = rows
+            self._miss_sentences[name] = day_report_card.plain_words(sentences.get(name, ""))
+            chip = self.miss_chips[name]
+            chip.setText(f"{_button_text(label)} ({len(rows)})" if read else f"{_button_text(label)} (not read)")
+            chip.setToolTip(
+                f"{dict(TJ2B_WALKAWAY_TITLES).get(name, label)} - n={len(rows)}; "
+                f"median Ran after {_tj2_pct(_median_ran_after(rows))}"
+                if read else "The walk-away tables were not read for this session."
             )
-            heading = self._walkaway_headings.get(name)
-            if heading is not None:
-                heading.setText(f"{base} — n={len(rows)}; median Ran after {_tj2_pct(median)}")
-            self.walkaway_sentences[name].setText(str(sentences.get(name, "") or ""))
-            self._walkaway_table_rows[id(table)] = rows
-            if name == "rejected":
-                self._walkaway_rows = rows
-                self.walkaway_note.setText(
-                    f"n={len(rows)}; median Ran after {_tj2_pct(median)}. "
-                    "Double-click a row to chart it."
-                )
-            self._fill_walkaway_table(table, rows, self._walkaway_cells)
-        self.walkaway_skill.setText(self._skill_text(getattr(day, "skill", None)))
+        self.walkaway_skill.setText(
+            "\n".join(
+                day_report_card.plain_words(line)
+                for line in self._skill_text(getattr(day, "skill", None)).splitlines()
+            )
+            if read else ""
+        )
+        self._show_miss_population()
+        if not read:
+            self.walkaway_note.setText("The walk-away tables were not read for this session.")
+
+    def _show_miss_population(self) -> None:
+        """Fill the one table with the selected chip's rows. Formatting only."""
+        name = self._miss_population
+        rows = self._miss_rows.get(name, ())
+        self._walkaway_rows = rows
+        self._apply_miss_columns()
+        self._fill_walkaway_table(self.miss_table, rows, self._walkaway_cells)
+        title = dict(TJ2B_WALKAWAY_TITLES).get(name, name)
+        self.walkaway_sentence.setText(self._miss_sentences.get(name, ""))
+        self.walkaway_sentence.setVisible(bool(self._miss_sentences.get(name)))
+        self.walkaway_note.setText(
+            f"{title}: {len(rows)} name(s), median ran after "
+            f"{_tj2_pct(_median_ran_after(rows))}. Click a row to chart it here; "
+            "double-click to open it on the board."
+            if rows
+            else f"{title}: nothing on this session."
+        )
+
+    def _on_miss_row_changed(self, row: int, _column: int, previous: int, _pc: int) -> None:
+        """A single click, or J/K, draws that row's name beside the table."""
+        if row == previous or row < 0 or row >= len(self._walkaway_rows):
+            return
+        symbol = str(getattr(self._walkaway_rows[row], "symbol", "") or "").strip().upper()
+        if symbol:
+            self._open_name_chart(symbol)
 
     @staticmethod
     def _skill_text(skill: Any) -> str:
@@ -2384,36 +2574,6 @@ class DayReviewPanel(QFrame):
             ) else window
             lines.append(f"{count}: {sentence}")
         return "\n".join(lines)
-
-    def _walkaway_cell(self, row: Any, header: str, measure: str | None) -> tuple[str, str]:
-        """One cell's text and its tooltip. `None` is a dash WITH its reason."""
-        if measure is not None:
-            value = (getattr(row, "measures", {}) or {}).get(measure)
-            if value is None:
-                return UNMEASURED, str((getattr(row, "unavailable", {}) or {}).get(measure, ""))
-            return f"{float(value):+.2f}%", ""
-        detail = getattr(row, "detail", {}) or {}
-        moment = getattr(row, "observed_at", None)
-        if header == "Time":
-            if moment is None:
-                return UNMEASURED, "this observation carries no timestamp"
-            return moment.strftime("%H:%M"), moment.isoformat()
-        if header == "Symbol":
-            return str(getattr(row, "symbol", "")), ""
-        if header == "Side":
-            return str(getattr(row, "side", "")), ""
-        if header == "Verdict":
-            return str(detail.get("verdict") or ""), str(detail.get("channel") or "")
-        if header == "My reason":
-            codes = ", ".join(str(code) for code in (detail.get("reason_codes") or ()))
-            return str(detail.get("reason") or codes or ""), codes
-        if header == "Environment":
-            observation = str(
-                getattr(row, "observation_context", "") or getattr(row, "d1_environment", "")
-            )
-            entry = str(getattr(row, "entry_context", "") or "")
-            return (f"{observation} → {entry}" if entry else observation), ""
-        return "", ""
 
     def _render_entries(self, rows) -> None:
         """The day's words, OLDEST FIRST, machine rows never.
@@ -2492,7 +2652,7 @@ class DayReviewPanel(QFrame):
         self._show_verdict_chip(self._reads.get(str(entry.get("entry_id") or "")))
         origin = str(entry.get("origin") or "")
         stamp = _clock_text(entry.get("created_at"), self.session_date(), zone=self._zone)
-        meta = f"written {stamp}  ·  {entry.get('timeframe') or ''}  ·  {origin}"
+        meta = f"written {stamp}  ·  {entry.get('timeframe') or ''}  ·  {_plain_cell(origin)}"
         if entry.get("written_after_the_session"):
             meta += "  ·  written after the session"
         self.entry_meta.setText(meta)
@@ -2556,6 +2716,7 @@ class DayReviewPanel(QFrame):
 
     def _render_trades(self, rows) -> None:
         self._trade_ids = [str(row.get("trade_id") or "") for row in rows]
+        self._trade_symbols = [str(row.get("symbol") or "").strip().upper() for row in rows]
         self.trades_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             quantity = row.get("quantity")
@@ -2586,7 +2747,7 @@ class DayReviewPanel(QFrame):
             for index, row in enumerate(calls):
                 values = (
                     _clock_text(row.get("stamp"), self.session_date(), zone=self._zone),
-                    str(row.get("horizon") or ""),
+                    _plain_cell(row.get("horizon")),
                     str(row.get("direction") or ""),
                     str(row.get("confidence") or ""),
                     self._verdict_text(str(row.get("verdict") or "unmeasured")),
@@ -2613,8 +2774,57 @@ class DayReviewPanel(QFrame):
         if trade_id:
             self.openTradeRequested.emit(trade_id)
 
+    def _show_trade_chart(self, symbol: str) -> None:
+        """Draw the selected trade's name, from the worker's `name_charts` alone.
+
+        The chart carries that name's marks for the session - the entry and
+        exit legs among them. No read, no store, no marker build here.
+        """
+        name = str(symbol or "").strip().upper()
+        chart = dict(self._name_charts.get(name) or {}) if name else {}
+        bars = [
+            bar for bar in (chart.get("bars") or ())
+            if isinstance(bar, Mapping) and bar.get("dt") is not None
+        ]
+        if not bars:
+            self._trade_chart_symbol = ""
+            if not name:
+                self.trade_chart_note.setText(
+                    TRADE_CHART_IDLE_NOTE if self.trades_table.rowCount()
+                    else TRADE_CHART_NO_TRADES_NOTE
+                )
+            else:
+                self.trade_chart_note.setText(NAME_CHART_MISSING_NOTE.format(symbol=name))
+            if self._trade_chart is not None:
+                self._trade_chart.set_data([])
+                self._trade_chart.setVisible(False)
+            return
+        if self._trade_chart is None:
+            from ui.widgets.candle_chart import CandleChart
+
+            self._trade_chart = CandleChart()
+            self._trade_chart.setMinimumHeight(theme.px(NAME_CHART_MIN_HEIGHT_PX))
+            self._trade_chart.markerClicked.connect(self._select_entry_by_ref)
+            self._trade_chart_layout.addWidget(self._trade_chart)
+        self._trade_chart.setVisible(True)
+        self._trade_chart.set_data(bars, timeframe="m5")
+        self._trade_chart.set_note_markers(tuple(chart.get("markers") or ()))
+        self._trade_chart_symbol = name
+        caption = self._marker_caption(chart.get("placements"))
+        self.trade_chart_note.setText(
+            f"{name} M5 this session, with your entry and exit marked."
+            + (f" {caption}" if caption else "")
+        )
+
+    def trade_chart_symbol(self) -> str:
+        """Which name the trade chart is showing. "" when none."""
+        return self._trade_chart_symbol
+
     def _show_selected_trade(self) -> None:
         trade_id = self._selected_trade_id()
+        index = self.trades_table.currentRow()
+        symbols = getattr(self, "_trade_symbols", ())
+        self._show_trade_chart(symbols[index] if 0 <= index < len(symbols) else "")
         detail = getattr(self, "_trade_reviews", {}).get(trade_id)
         if detail is None:
             self.trade_detail.setPlainText("Trade answers were not read.")
@@ -2852,6 +3062,27 @@ class DayReviewPanel(QFrame):
             + (f" {dropped} carried no timestamp and are not drawn." if dropped else "")
         )
 
+    def _row_key_tables(self) -> tuple[QTableWidget, ...]:
+        return tuple(
+            table for table in (
+                getattr(self, "miss_table", None),
+                getattr(self, "trades_table", None),
+                getattr(self, "calls_table", None),
+            ) if table is not None
+        )
+
+    @staticmethod
+    def step_row(table: QTableWidget, step: int) -> None:
+        """Move `table`'s current row by `step`, staying inside the table."""
+        count = table.rowCount()
+        if not count:
+            return
+        current = table.currentRow()
+        target = 0 if current < 0 else max(0, min(count - 1, current + int(step)))
+        column = max(0, table.currentColumn())
+        table.setCurrentCell(target, column)
+        table.selectRow(target)
+
     def _activate_walkaway(self, item) -> None:
         """Open that name BESIDE the table, and tell the host about it too.
 
@@ -2864,7 +3095,7 @@ class DayReviewPanel(QFrame):
         if item is None:
             return
         index = item.row()
-        rows = self._walkaway_table_rows.get(id(item.tableWidget()), self._walkaway_rows)
+        rows = self._walkaway_rows
         if index < 0 or index >= len(rows):
             return
         row = rows[index]
@@ -2876,7 +3107,10 @@ class DayReviewPanel(QFrame):
 
     # -- writing -----------------------------------------------------------
     def eventFilter(self, watched, event):  # noqa: N802 (Qt override)
-        """Enter saves, Shift+Enter starts a new line (decision 0016 answer 11)."""
+        """Enter saves, Shift+Enter starts a new line (decision 0016 answer 11).
+
+        In the page's tables, J moves to the next row and K to the previous one.
+        """
         try:
             if (
                 watched is self.entry_text
@@ -2885,6 +3119,14 @@ class DayReviewPanel(QFrame):
                 and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             ):
                 self._save()
+                return True
+            if (
+                event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_J, Qt.Key.Key_K)
+                and not event.modifiers()
+                and watched in self._row_key_tables()
+            ):
+                self.step_row(watched, 1 if event.key() == Qt.Key.Key_J else -1)
                 return True
         except Exception:  # noqa: BLE001 - a key handler never breaks the page
             pass
@@ -3080,9 +3322,11 @@ __all__ = [
     "SAID_SPLIT_WEIGHTS",
     "SPY_MIN_HEIGHT_PX",
     "STORY_MIN_HEIGHT_PX",
+    "GLANCE_TARGETS",
+    "MISS_DEFAULT_COLUMNS",
+    "MISS_FILTERS",
+    "SESSION_SETTING_KEY",
+    "TJ2B_WALKAWAY_COLUMNS",
     "TRADE_COLUMNS",
-    "WALKAWAY_COLUMNS",
-    "WALKAWAY_PLACEHOLDERS",
-    "WALKAWAY_PLACEHOLDER_CELLS",
     "WALKAWAY_TITLE",
 ]

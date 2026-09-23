@@ -89,6 +89,13 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # line here. The page prints it and reads nothing of its own - no builder,
     # no model, no second pass over the journal on the Qt thread.
     "mood",
+    # Day Recap step A: the glance strip. `day_type` is the desk's stored D1
+    # environment label ("" when none), `pnl_by_session` the last five
+    # sessions' net from the trades already read, and `glance` the numbers,
+    # built here by `day_report_card.glance`.
+    "day_type",
+    "pnl_by_session",
+    "glance",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -168,6 +175,21 @@ def _looks_like_a_date(key: Any) -> bool:
     return True
 
 
+def _pnl_by_session(sessions, trades) -> tuple[tuple[str, float | None], ...]:
+    """`(session, net)` per session from trades already read; None = no trade."""
+    totals: dict[str, float] = {}
+    for trade in trades or ():
+        if not isinstance(trade, Mapping):
+            continue
+        day = str(trade.get("trade_date") or "")[:10]
+        try:
+            net = float(trade.get("net_pnl"))
+        except (TypeError, ValueError):
+            continue
+        totals[day] = totals.get(day, 0.0) + net
+    return tuple((str(day), totals.get(str(day))) for day in sessions)
+
+
 def empty_payload(session_date: str = "") -> dict[str, Any]:
     """A payload with every key present and nothing in it.
 
@@ -199,6 +221,9 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         # TJ-7. Empty until the trader clicks something; the `line` is what the
         # page prints, and it says "no mood recorded yet" rather than nothing.
         "mood": {},
+        "day_type": "",
+        "pnl_by_session": (),
+        "glance": {},
     }
 
 
@@ -415,6 +440,9 @@ class DayReviewService:
             # journal's full read, not the visible session-only trades table.
             from journal_store import JournalStore
             all_trades = list(JournalStore().list_trades())
+            payload["pnl_by_session"] = _pnl_by_session(
+                (*walkaway_day.earlier_sessions(session, count=4), session), all_trades
+            )
             stored = {}
             try:
                 import day_review_bars
@@ -586,6 +614,13 @@ class DayReviewService:
         except Exception as exc:  # noqa: BLE001
             problems.append(f"the desk's ideas could not be read: {exc}")
             _log.debug("Day Review ideas unreadable.", exc_info=True)
+        payload["day_type"] = self._d1_label_for(session)
+        try:
+            import day_report_card
+
+            payload["glance"] = day_report_card.glance(payload)
+        except Exception:  # noqa: BLE001 - the strip never costs the day
+            _log.debug("The Day Review glance could not be built.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
