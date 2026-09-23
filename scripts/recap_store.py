@@ -467,11 +467,16 @@ def record_clue(
     card_id: Any = "",
     trade_id: Any = "",
     pick_id: Any = "",
+    context: Mapping[str, Any] | None = None,
     supersedes: Any = "",
     now: datetime | None = None,
     path: Path | None = None,
 ) -> dict[str, Any]:
-    """A hindsight chart clue: what the trader sees now on one bar."""
+    """A hindsight chart clue: what the trader sees now on one bar.
+
+    `context` is an optional JSON-safe snapshot for the AI (the bar's OHLCV,
+    SPY's same-bar close). Left out, the row has no `context` key.
+    """
     ticker = _text(symbol, limit=20, field="symbol").upper()
     if not ticker:
         raise RecapError("a clue needs a symbol")
@@ -481,10 +486,19 @@ def record_clue(
         raise RecapError(f"price {price!r} is not a number") from exc
     if level != level or level <= 0:
         raise RecapError(f"price {price!r} is not a positive number")
+    extra: dict[str, Any] = {}
+    if context is not None:
+        if not isinstance(context, Mapping):
+            raise RecapError("context must be a mapping")
+        try:
+            extra["context"] = json.loads(json.dumps(dict(context), allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise RecapError(f"context is not plain JSON: {exc}") from exc
     return _write(
         KIND_CLUE,
         session_date,
         {
+            **extra,
             "symbol": ticker,
             "timeframe": _choice(timeframe, CLUE_TIMEFRAMES, field="timeframe", upper=True),
             "bar_time": _aware(bar_time, field="bar_time").isoformat(),
