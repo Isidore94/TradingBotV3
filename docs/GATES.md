@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #193 M5 swing context: an M5 alert on a D1 setup name shows `· D1 <grade>` (★ if claimed); prioritise on puts them first; tooltip names the setup [trader]
 - #192 Close scan fresh: after the close scan, `master_avwap_scan_manifest_history.jsonl` shows latest_input_bar_session = today even when a 12:45 preview ran [lead]
 - #191 Working now strip: M5 column shows today's alerts by grade with R since they fired; hover R/best/worst match the chart; no desk lag [trader]
 - #190 Setup grades on the desk: setups Bucket cell and M5 row badges show PROVEN/A/B/C/D/NEW, best grade on top, every row still shown [trader]
