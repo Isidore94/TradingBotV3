@@ -1229,9 +1229,11 @@ class MainWindow(QMainWindow):
         """
         try:
             reviewed = check.previous_exchange_session(slot.scheduled_at.date())
-            if self.trade_mentor_service.unlabelled_trades(reviewed) > 0:
+            # Only what may still be ASKED: a trade asked once (`MENTOR_ASKED`,
+            # 2026-09-23) keeps its blanks and never brings the section back.
+            if self.trade_mentor_service.unlabelled_trades(reviewed, askable=True) > 0:
                 return True
-            if self.trade_mentor_service.unexplained_exits(reviewed) > 0:
+            if self.trade_mentor_service.unexplained_exits(reviewed, askable=True) > 0:
                 return True
             from journal_store import JournalStore
 

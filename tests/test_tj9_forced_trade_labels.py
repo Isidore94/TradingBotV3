@@ -174,18 +174,16 @@ def test_every_trade_of_the_previous_session_is_listed_even_past_the_cap(tmp_pat
     assert task.incomplete_total == 4
 
 
-def test_save_is_disabled_until_every_listed_field_holds_a_value_or_an_answer_state(tmp_path):
-    """Forced means the button is grey. One open field keeps it grey; an
-    explicit `not_remembered` - which is a complete answer, not a blank - turns
-    it on. The four answer states are read from the module, never spelled here."""
+def test_save_opens_on_any_answer_and_closes_when_it_is_taken_back(tmp_path):
+    """ASKED ONCE (trader 2026-09-23) replaced "forced": ONE answer opens the
+    trade's Save, and going back to the blank "-" closes it again - the gate is
+    a state, not a one-way latch. The answer states are read from the module."""
     import trade_mentor_trade_check as check
     from ui.widgets.trade_mentor_card import TradeMentorCard
 
     store = new_store(tmp_path)
     mark_covered(store, REVIEWED)
     trade_id = add_round_trip(store, "AAPL")
-    # The setup is already the trader's own, so only thesis/stop/target are asked
-    # and this test stays clear of item 3's confirm button.
     store.save_trade_annotation(trade_id, setup_tags="vwap_reclaim", notes="")
 
     task = check.build_task(store, SESSION_TODAY)
@@ -199,30 +197,18 @@ def test_save_is_disabled_until_every_listed_field_holds_a_value_or_an_answer_st
     assert card.save_answers_button.isVisibleTo(card) is True
     assert card.save_answers_button.isEnabled() is False, "nothing is answered yet"
 
-    combos = {name: card._answer_inputs[trade_id][name][0] for name in asked}
-    combos["thesis"].setCurrentIndex(combos["thesis"].findData(check.ANSWER_NOT_SUPPLIED))
-    combos["stop"].setCurrentIndex(combos["stop"].findData(check.ANSWER_NOT_APPLICABLE))
-    assert card.save_answers_button.isEnabled() is False, "target is still open"
+    stop = card._answer_inputs[trade_id]["stop"][0]
+    stop.setCurrentIndex(stop.findData(check.ANSWER_NOT_APPLICABLE))
+    assert card.save_answers_button.isEnabled() is True, "one answer is enough"
 
-    combos["target"].setCurrentIndex(combos["target"].findData(check.ANSWER_NOT_REMEMBERED))
-    # LEAD AMENDMENT 2026-09-21 (TJ-9E, the trader's own request): a round-trip
-    # trade now also carries ONE forced EXIT box - "Why did you exit? What did
-    # you feel? What were you watching?" - so Save waits on it as it waits on
-    # the entry fields. One click answers it; what this test pins is unchanged.
-    assert card.save_answers_button.isEnabled() is False, "the exit box is still open"
-    card.set_exit_answer_state(trade_id, check.ANSWER_NOT_REMEMBERED)
-    assert card.save_answers_button.isEnabled() is True
-
-    # And going back to the blank "-" closes it again: the gate is a state, not
-    # a one-way latch.
-    combos["stop"].setCurrentIndex(combos["stop"].findData(""))
+    stop.setCurrentIndex(stop.findData(""))
     assert card.save_answers_button.isEnabled() is False
 
 
-def test_an_unanswered_trade_section_rides_to_the_next_slot_of_the_same_session(tmp_path):
-    """An unanswered card must not expire into silence. The 10:00 card carries
-    the same section, and the next SESSION's first card does not - a question
-    about Friday's trades asked on Wednesday is a different question."""
+def test_an_unanswered_trade_is_asked_once_and_not_on_the_next_slot(tmp_path):
+    """ASKED ONCE (trader 2026-09-23: *"I get asked about my DRAM trade every
+    hour"*). The 09:00 card shows the trade; the 10:00 card does not carry it,
+    and a fresh task for the session does not ask it again."""
     import trade_mentor_trade_check as check
     from ui.widgets.trade_mentor_card import TradeMentorCard
 
@@ -236,17 +222,11 @@ def test_an_unanswered_trade_section_rides_to_the_next_slot_of_the_same_session(
     assert card.trade_check_box.isVisibleTo(card) is True
 
     card.show_slot(slot_at(SESSION_TODAY, 10))
-    assert card.trade_check_box.isVisibleTo(card) is True, "the section rides to 10:00"
-    assert trade_id in card._answer_inputs
-    assert card.save_answers_button.isVisibleTo(card) is True
-
-    card.show_slot(slot_at(SESSION_TODAY, 11))
-    assert card.trade_check_box.isVisibleTo(card) is True, "and to 11:00"
-
-    # A new session starts clean.
-    card.show_slot(slot_at(date(2026, 9, 15), 7))
-    assert card.trade_check_box.isVisibleTo(card) is False
+    assert trade_id not in card._answer_inputs
+    card.set_trade_check(check.build_task(store, SESSION_TODAY), store=store)
     assert card._answer_inputs == {}
+    assert check.unlabelled_trade_count(store, REVIEWED) == 1, "still unlabelled"
+    assert check.unlabelled_trade_count(store, REVIEWED, askable_only=True) == 0
 
 
 def test_the_service_counts_the_unlabelled_trades_of_a_session(tmp_path):

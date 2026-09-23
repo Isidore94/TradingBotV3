@@ -145,3 +145,61 @@ def extract_draft(
         }
     )
     return draft
+
+
+def fill_blank_fields(
+    store: Any,
+    trade_id: str,
+    raw_text: str,
+    blank_fields: Sequence[str],
+    trade: Mapping[str, Any],
+    *,
+    request: Callable[..., Mapping[str, Any]] | None = None,
+    now: Any = None,
+) -> list[dict[str, Any]]:
+    """Fill a filed trade's BLANK fields from the trader's own words, and store them.
+
+    Asked once (trader 2026-09-23): *"anything not filled should be filled by
+    AI based on my response and if the AI cant determine then just leave it
+    blank"*. No confirmation and no follow-up question: every answer the model
+    returns has already passed :func:`validate_draft` (an exact source span),
+    and anything it cannot quote stays blank. Each row carries
+    ``filled_by: local_ai`` with the model and prompt version.
+
+    Runs OFF the Qt thread and touches no widget. Raises on a model or write
+    failure; the caller logs it and writes nothing else - a blank is never
+    re-asked.
+    """
+    import trade_mentor_trade_check as check
+
+    wanted = tuple(
+        name for name in (str(field) for field in (blank_fields or ())) if name in MATERIAL_FIELDS
+    )
+    if not wanted or not str(raw_text or "").strip():
+        return []
+    draft = extract_draft(raw_text, wanted, trade, request=request)
+    answers: dict[str, dict[str, Any]] = {}
+    for answer in draft.get("answers") or ():
+        name = str(answer.get("field") or "")
+        if name not in wanted or name in answers:
+            continue
+        answers[name] = {
+            "state": str(answer.get("state") or ""),
+            "text": str(answer.get("text") or answer.get("source_span") or ""),
+            "value": answer.get("value"),
+            "unit": str(answer.get("unit") or ""),
+            "source_span": str(answer.get("source_span") or ""),
+        }
+    if not answers:
+        return []
+    return check.save_answers(
+        store,
+        str(trade_id),
+        answers,
+        now=now,
+        extra={
+            "filled_by": "local_ai",
+            "model": str(draft.get("model") or ""),
+            "prompt_version": str(draft.get("prompt_version") or PROMPT_VERSION),
+        },
+    )
