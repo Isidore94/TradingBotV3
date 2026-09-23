@@ -40,12 +40,10 @@ class RuleChip(QLabel):
         self._again = False
         self._date = ""
         self._timer: QTimer | None = None
+        # Colours live in theme.qss (QLabel#RuleChip / #RuleBanner).
         self.setVisible(False)
         if banner:
             self.setWordWrap(True)
-            self.setStyleSheet("font-weight: 600; color: #e3b341; padding: 4px 2px;")
-        else:
-            self.setStyleSheet("color: #e3b341; font-weight: 600; padding: 0 6px;")
 
     # -- public -------------------------------------------------------------
     def info(self) -> dict[str, Any] | None:
