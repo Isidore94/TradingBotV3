@@ -547,9 +547,12 @@ SETUP_DOCS: dict[str, dict] = {
             "name."
         ),
         "detection": [
-            "Rule sheet pullback_sma_reclaim_v1, armed under the chart as the Pullback alert and "
-            "automatically on every claimed D1 pick and swing Focus name. Three triggers, each "
-            "named on its own fire:",
+            "Rule sheet pullback_sma_reclaim_v2, armed under the chart as the Pullback alert and "
+            "automatically on every claimed D1 pick and swing Focus name. Dip gate (2026-09-23): "
+            "no trigger fires unless price first came to the SMA (within 0.2 x the D1 ATR(20), "
+            "or closed through it and back) inside the last 15 M30 / 30 M15 bars, and the LRSI "
+            "then crossed down through 20 before its 80 up-cross. Three triggers, each named on "
+            "its own fire:",
             "sma_reclaim_lrsi",
             "A completed close back above the SMA after one below it, with an LRSI cross up "
             "through 80 on that bar or the two before it — labelled lrsi_from_below_50 when the "

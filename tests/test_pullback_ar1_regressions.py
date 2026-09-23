@@ -6,6 +6,7 @@ import dataclasses
 from datetime import timedelta
 
 from test_pct1_pullback_alert import (
+    OPEN_GATE_D1_ATR,
     M15_LONG_CLOSES,
     M15_LATE_FLAG_CLOSES,
     M15_LATE_FLAG_CROSS_INDEX,
@@ -53,6 +54,7 @@ def test_prearm_native_cross_does_not_block_a_later_eligible_m15_companion():
         now=bar_end(M30_HOLD_CROSS_INDEX + 3, 30),
         companion_bars=companion,
         companion_minutes=15,
+        d1_atr=OPEN_GATE_D1_ATR,
     )
 
     assert bar_end(M30_HOLD_RECLAIM_INDEX, 30) < armed_at
@@ -74,6 +76,10 @@ def test_later_companion_cross_after_a_prearm_one_is_still_eligible(monkeypatch)
         def cross_up_indices(self, _level):
             return self._crosses
 
+        def cross_down_indices(self, _level):
+            # v2 dip gate: one M30 bear flip on the reclaim bar, none on M15.
+            return (M30_HOLD_RECLAIM_INDEX,) if len(self.values) <= 150 else ()
+
     primary = make_bars(M30_HOLD_CLOSES[: M30_HOLD_CROSS_INDEX + 4], 30)
     companion = make_bars(M15_LONG_CLOSES[:215], 15)
     monkeypatch.setattr(
@@ -89,6 +95,7 @@ def test_later_companion_cross_after_a_prearm_one_is_still_eligible(monkeypatch)
         now=bar_end(M30_HOLD_CROSS_INDEX + 3, 30),
         companion_bars=companion,
         companion_minutes=15,
+        d1_atr=OPEN_GATE_D1_ATR,
     )
 
     fire = one_fire(result, TRIGGER_THEN_LRSI)
@@ -107,6 +114,10 @@ def test_m30_hold_selects_the_cross_that_finishes_first(monkeypatch):
         def cross_up_indices(self, _level):
             return self._crosses
 
+        def cross_down_indices(self, _level):
+            # v2 dip gate: one M30 bear flip on the reclaim bar, none on M15.
+            return (M30_HOLD_RECLAIM_INDEX,) if len(self.values) <= 150 else ()
+
     primary = make_bars(M30_HOLD_CLOSES[: M30_HOLD_CROSS_INDEX + 4], 30)
     companion = make_bars(M15_LONG_CLOSES[:215], 15)
     monkeypatch.setattr(
@@ -122,6 +133,7 @@ def test_m30_hold_selects_the_cross_that_finishes_first(monkeypatch):
         now=bar_end(M30_HOLD_CROSS_INDEX + 3, 30),
         companion_bars=companion,
         companion_minutes=10,
+        d1_atr=OPEN_GATE_D1_ATR,
     )
 
     fire = one_fire(result, TRIGGER_THEN_LRSI)
