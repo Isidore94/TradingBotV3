@@ -18,6 +18,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from test_pct1_pullback_alert import (  # noqa: E402
+    OPEN_GATE_D1_ATR,
     M15_LONG_CLOSES,
     M15_RECLAIM_INDEX,
     M30_LONG_CLOSES,
@@ -59,6 +60,7 @@ def test_a_companion_cross_uses_its_own_end_for_the_arm_fence(side):
         now=bar_end(107, 30),
         companion_bars=companion,
         companion_minutes=15,
+        d1_atr=OPEN_GATE_D1_ATR,
     )
 
     assert result is not None
@@ -91,6 +93,7 @@ def test_a_post_arm_m15_cross_keeps_its_cross_identity_beside_the_m30_sma(side):
         now=bar_end(107, 30),
         companion_bars=companion,
         companion_minutes=15,
+        d1_atr=OPEN_GATE_D1_ATR,
     )
 
     assert result is not None

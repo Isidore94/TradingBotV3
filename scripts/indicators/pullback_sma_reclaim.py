@@ -1,4 +1,4 @@
-"""The Pullback alert's rule sheet: `pullback_sma_reclaim_v1` (PCT-1).
+"""The Pullback alert's rule sheet: `pullback_sma_reclaim_v2` (PCT-1).
 
 The trader's words (2026-09-15), which this module is a transcription of:
 
@@ -9,6 +9,17 @@ The trader's words (2026-09-15), which this module is a transcription of:
     frame in the past 3 bars or so. we can also test on an M30 basis a breakup
     then waiting for an M30 or M15 LRSI reversal while staying above teh
     relevant SMA for an entry. we can also test for retests of the SMA."
+
+The dip gate (trader, 2026-09-23, after ARM fired while pinned far above its
+M30 75-SMA): "there was no pullback". Every trigger now needs, before its
+LRSI 80 up-cross and in this order, (1) a DIP - a completed bar's low (short:
+high) within ``DIP_TOLERANCE_D1_ATR`` x the daily Wilder ATR(20) of the SMA or
+through it, or a completed close below the SMA (short: above) and a later
+close back - no older than ``DIP_WINDOW_BARS`` before the cross; (2) a BEAR
+FLIP - the same LRSI crossing DOWN through 20 at or after the dip began; then
+(3) the fresh 80 up-cross (for the M15 companion too, after the M30 flip).
+Missing daily bars cannot answer the touch path; the close path still can. A
+blocked trigger says why in ``details["gate_blocked"]``.
 
 Three triggers, one episode clock, one timeframe per call:
 
@@ -61,7 +72,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Mapping, Sequence
 
-RULE_VERSION = "pullback_sma_reclaim_v1"
+RULE_VERSION = "pullback_sma_reclaim_v2"
 
 #: The three trigger names. They are written on every fire, every review row
 #: and every feed line, so they are the vocabulary - never re-spelled.
@@ -94,6 +105,21 @@ STALE_AFTER = timedelta(hours=24)
 #: `reclaim_then_lrsi` is the M30 leg the trader asked for by name.
 RECLAIM_THEN_LRSI_MINUTES = 30
 
+#: The dip gate (trader, 2026-09-23). The touch tolerance is in DAILY Wilder
+#: ATR(20) units, so it is the same absolute size on M15 and on M30.
+DIP_TOLERANCE_D1_ATR = 0.2
+D1_ATR_LENGTH = 20
+#: The bear flip: the rule's own LRSI crossing DOWN through this level.
+BEAR_FLIP_LEVEL = 20.0
+#: How far back from the cross bar the dip may be (~2 trading days).
+DIP_WINDOW_BARS = {30: 15, 15: 30}
+
+GATE_NO_DIP = "no_dip"
+GATE_DIP_STALE = "dip_stale"
+GATE_NO_BEAR_FLIP = "no_bear_flip"
+DIP_PATH_TOUCH = "touch"
+DIP_PATH_BREAK_RECLAIM = "break_reclaim"
+
 REASON_NO_EPISODE = "no_episode"
 REASON_BELOW = "below"
 REASON_RECLAIMED = "reclaimed"
@@ -119,6 +145,12 @@ class Fire:
     cross_bar_dt: datetime | None = None
     cross_lrsi: float | None = None
     sma_bar_dt: datetime | None = None
+    # The dip gate's evidence: which path the dip took, where it began, and
+    # the bear flip that followed it. Annotation only.
+    dip_path: str | None = None
+    dip_bar_dt: datetime | None = None
+    bear_flip_bar_dt: datetime | None = None
+    d1_atr: float | None = None
 
 
 @dataclass(frozen=True)
@@ -301,6 +333,142 @@ def _post_arm(bar_dt: datetime, bar_minutes: int, armed_at: datetime | None) -> 
 
 
 # ---------------------------------------------------------------------------
+# The dip gate (trader, 2026-09-23)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _Gate:
+    """One cross's verdict: ``blocked`` is None when it may fire."""
+
+    blocked: str | None
+    dip_path: str | None = None
+    dip_index: int | None = None
+    bear_flip_index: int | None = None
+    d1_atr: float | None = None
+
+
+class _DailyAtr:
+    """The daily Wilder ATR(20) from sessions strictly BEFORE a given date.
+
+    Point in time: a cross on day D is measured with the ATR the trader could
+    see that morning, so a replay answers the same way on any later poll. A
+    caller-supplied ``d1_atr`` is used as given. Nothing readable is
+    ``None`` - unknown, never a tolerance.
+    """
+
+    def __init__(
+        self,
+        daily_bars: Iterable[Mapping[str, Any]] | None,
+        d1_atr: float | None,
+    ) -> None:
+        self._fixed = None
+        if d1_atr is not None:
+            try:
+                value = float(d1_atr)
+            except (TypeError, ValueError):
+                value = None
+            self._fixed = value if value is not None and value > 0 else None
+        self._explicit = d1_atr is not None
+        self._rows: list[tuple[Any, Mapping[str, Any]]] = []
+        self._memo: dict[Any, float | None] = {}
+        if not self._explicit and daily_bars is not None:
+            from completed_bars import bar_time
+
+            for bar in daily_bars:
+                stamp = bar_time(bar)
+                if stamp is None:
+                    continue
+                self._rows.append((stamp.date(), bar))
+            self._rows.sort(key=lambda item: item[0])
+
+    def before(self, day) -> float | None:
+        if self._explicit:
+            return self._fixed
+        if not self._rows:
+            return None
+        if day not in self._memo:
+            from indicators.atr import wilder_atr
+
+            prior = [bar for stamp, bar in self._rows if stamp < day]
+            self._memo[day] = wilder_atr(prior, D1_ATR_LENGTH) if prior else None
+        return self._memo[day]
+
+
+def _dip_gate(
+    completed: Sequence[Mapping[str, Any]],
+    smas: Sequence[float | None],
+    *,
+    long_side: bool,
+    cross_index: int,
+    limit_index: int,
+    window: int,
+    tolerance: float | None,
+    bear_flips: Sequence[int],
+    flip_ok,
+) -> _Gate:
+    """Dip, then bear flip, then (the caller's) 80 cross - or why not.
+
+    A dip bar is a completed bar at or before ``cross_index`` that either
+    (a) TOUCHED the SMA - its low (short: high) within ``tolerance`` of the
+    line or through it; unknown tolerance answers no - or (b) CLOSED on the
+    wrong side of it with a later close, at or before ``limit_index``, back
+    on the right side. The dip is the latest unbroken run of such bars; it
+    began at the run's first bar, and its last bar must sit within
+    ``window`` bars of the cross. A bear flip at or after the run began, and
+    accepted by ``flip_ok``, completes the order.
+    """
+    last_beyond: int | None = None
+    for index in range(min(limit_index, len(completed) - 1), -1, -1):
+        sma = smas[index]
+        if sma is None:
+            continue
+        close = float(completed[index]["close"])
+        if (close > sma) if long_side else (close < sma):
+            last_beyond = index
+            break
+
+    def touched(index: int) -> bool:
+        sma = smas[index]
+        if sma is None or tolerance is None:
+            return False
+        row = completed[index]
+        if long_side:
+            return float(row["low"]) - sma <= tolerance
+        return sma - float(row["high"]) <= tolerance
+
+    def broke(index: int) -> bool:
+        sma = smas[index]
+        if sma is None or last_beyond is None or index >= last_beyond:
+            return False
+        close = float(completed[index]["close"])
+        return not ((close > sma) if long_side else (close < sma))
+
+    def is_dip(index: int) -> bool:
+        return touched(index) or broke(index)
+
+    last_dip = next(
+        (index for index in range(cross_index, -1, -1) if is_dip(index)), None
+    )
+    if last_dip is None:
+        return _Gate(blocked=GATE_NO_DIP, d1_atr=None)
+    if cross_index - last_dip > int(window):
+        return _Gate(blocked=GATE_DIP_STALE, dip_index=last_dip)
+    start = last_dip
+    while start - 1 >= 0 and is_dip(start - 1):
+        start -= 1
+    path = (
+        DIP_PATH_TOUCH
+        if any(touched(index) for index in range(start, last_dip + 1))
+        else DIP_PATH_BREAK_RECLAIM
+    )
+    flips = [index for index in bear_flips if index >= start and flip_ok(index)]
+    if not flips:
+        return _Gate(blocked=GATE_NO_BEAR_FLIP, dip_path=path, dip_index=start)
+    return _Gate(
+        blocked=None, dip_path=path, dip_index=start, bear_flip_index=flips[-1]
+    )
+
+
+# ---------------------------------------------------------------------------
 # The rule
 # ---------------------------------------------------------------------------
 def evaluate(
@@ -314,6 +482,8 @@ def evaluate(
     episode_state: EpisodeState | None = None,
     companion_bars: Iterable[Mapping[str, Any]] | None = None,
     companion_minutes: int | None = None,
+    daily_bars: Iterable[Mapping[str, Any]] | None = None,
+    d1_atr: float | None = None,
 ) -> PullbackResult | None:
     """The three triggers on one timeframe, or ``None`` when NOT MEASURED.
 
@@ -321,6 +491,9 @@ def evaluate(
     trader named for the M30 leg ("waiting for an M30 or M15 LRSI reversal"):
     they are read for `reclaim_then_lrsi` only, they never move the SMA, and
     a fire they produce still carries this call's timeframe.
+
+    ``daily_bars`` (or a precomputed ``d1_atr``) size the dip gate's touch
+    tolerance. Without either, only the close break-and-reclaim dip counts.
     """
     moment = _naive(now)
     completed = _completed(bars, bar_minutes, now=moment)
@@ -336,8 +509,48 @@ def evaluate(
     lrsi = _lrsi_series(closes, side)
     values = list(lrsi.values)
     crosses = set(lrsi.cross_up_indices(LRSI_CROSS_LEVEL))
+    bear_flips = tuple(lrsi.cross_down_indices(BEAR_FLIP_LEVEL))
     long_side = _is_long(side)
     label = timeframe_label(bar_minutes)
+    window = int(DIP_WINDOW_BARS.get(int(bar_minutes), DIP_WINDOW_BARS[30]))
+    daily = _DailyAtr(daily_bars, d1_atr)
+    blocked: dict[str, str] = {}
+
+    def _gate(
+        cross_index: int,
+        *,
+        limit_index: int,
+        cross_dt: datetime | None = None,
+    ) -> _Gate:
+        stamp = cross_dt or completed[cross_index]["dt"]
+        atr_d1 = daily.before(stamp.date())
+        tolerance = DIP_TOLERANCE_D1_ATR * atr_d1 if atr_d1 else None
+        if cross_dt is None:
+            def flip_ok(index: int) -> bool:
+                return index < cross_index
+        else:
+            span = timedelta(minutes=int(bar_minutes))
+
+            def flip_ok(index: int) -> bool:
+                return completed[index]["dt"] + span <= cross_dt
+        verdict = _dip_gate(
+            completed,
+            smas,
+            long_side=long_side,
+            cross_index=cross_index,
+            limit_index=limit_index,
+            window=window,
+            tolerance=tolerance,
+            bear_flips=bear_flips,
+            flip_ok=flip_ok,
+        )
+        return _Gate(
+            blocked=verdict.blocked,
+            dip_path=verdict.dip_path,
+            dip_index=verdict.dip_index,
+            bear_flip_index=verdict.bear_flip_index,
+            d1_atr=atr_d1,
+        )
 
     from indicators.atr import wilder_atr
 
@@ -358,6 +571,7 @@ def evaluate(
         *,
         cross_index: int | None,
         message: str,
+        gate: _Gate,
         cross_timeframe: str | None = None,
         cross_bar_dt: datetime | None = None,
         cross_lrsi: float | None = None,
@@ -404,8 +618,31 @@ def evaluate(
                     else (values[cross_index] if cross_index is not None else None)
                 ),
                 sma_bar_dt=completed[sma_index if sma_index is not None else index]["dt"],
+                dip_path=gate.dip_path,
+                dip_bar_dt=(
+                    completed[gate.dip_index]["dt"] if gate.dip_index is not None else None
+                ),
+                bear_flip_bar_dt=(
+                    completed[gate.bear_flip_index]["dt"]
+                    if gate.bear_flip_index is not None
+                    else None
+                ),
+                d1_atr=gate.d1_atr,
             )
         )
+
+    def _first_open(trigger: str, candidates, fire_index: int):
+        """The latest cross in ``candidates`` the gate lets through."""
+        latest_block: str | None = None
+        for cross_index in sorted(candidates, reverse=True):
+            gate = _gate(cross_index, limit_index=fire_index)
+            if gate.blocked is None:
+                return cross_index, gate
+            if latest_block is None:
+                latest_block = gate.blocked
+        if latest_block is not None and trigger not in already:
+            blocked[trigger] = latest_block
+        return None, None
 
     reclaim_index = episode.reclaim_index if episode is not None else None
     reason = REASON_NO_EPISODE if episode is None else REASON_BELOW
@@ -415,12 +652,12 @@ def evaluate(
         side_word = "reclaim" if long_side else "loss"
 
         # --- sma_reclaim_lrsi -------------------------------------------
-        window = {
+        window_bars = {
             reclaim_index - back for back in range(CROSS_WINDOW_BARS + 1)
         }
-        in_window = sorted(index for index in crosses if index in window)
-        if in_window:
-            cross_index = in_window[-1]
+        in_window = [index for index in crosses if index in window_bars]
+        cross_index, gate = _first_open(TRIGGER_RECLAIM_LRSI, in_window, reclaim_index)
+        if cross_index is not None:
             flag = (
                 " (from below 50)"
                 if _crossed_from_below_fifty(values, cross_index)
@@ -430,6 +667,7 @@ def evaluate(
                 TRIGGER_RECLAIM_LRSI,
                 reclaim_index,
                 cross_index=cross_index,
+                gate=gate,
                 message=(
                     f"{label} {int(sma_length)}-SMA {side_word} + "
                     f"LRSI {LRSI_CROSS_LEVEL:.0f} cross{flag}"
@@ -438,21 +676,29 @@ def evaluate(
 
         # --- reclaim_then_lrsi (the M30 leg) ----------------------------
         if int(bar_minutes) == RECLAIM_THEN_LRSI_MINUTES:
-            # The earliest completed post-arm event wins.  A native M30 cross
-            # must not hide an earlier M15 companion cross (or vice versa).
+            # The earliest completed post-arm event the gate lets through
+            # wins. A native M30 cross must not hide an earlier M15 companion
+            # cross (or vice versa).
             candidates: list[
-                tuple[datetime, datetime, str, int | None, float | None, bool]
+                tuple[datetime, datetime, str, int | None, float | None, bool, _Gate]
             ] = []
+            latest_block: tuple[datetime, str] | None = None
             for cross_index in sorted(index for index in crosses if index > reclaim_index):
                 stamp = completed[cross_index]["dt"]
-                if _post_arm(stamp, bar_minutes, armed_at):
-                    candidates.append((
-                        stamp + timedelta(minutes=bar_minutes), stamp, label,
-                        cross_index, values[cross_index],
-                        _crossed_from_below_fifty(values, cross_index),
-                    ))
+                if not _post_arm(stamp, bar_minutes, armed_at):
+                    continue
+                gate = _gate(cross_index, limit_index=cross_index)
+                end = stamp + timedelta(minutes=bar_minutes)
+                if gate.blocked is not None:
+                    if latest_block is None or end >= latest_block[0]:
+                        latest_block = (end, gate.blocked)
+                    continue
+                candidates.append((
+                    end, stamp, label, cross_index, values[cross_index],
+                    _crossed_from_below_fifty(values, cross_index), gate,
+                ))
             if companion_bars is not None and companion_minutes:
-                companion = _companion_cross(
+                for companion in _companion_crosses(
                     companion_bars,
                     companion_minutes,
                     side=side,
@@ -460,16 +706,30 @@ def evaluate(
                     after=completed[reclaim_index]["dt"]
                     + timedelta(minutes=int(bar_minutes)),
                     armed_at=armed_at,
-                )
-                if companion is not None:
+                ):
                     companion_dt, companion_label, companion_from_below, companion_lrsi = companion
+                    # The M30 bar the companion cross sits in (or the last
+                    # completed one before it): the dip is read on M30.
+                    host = max(
+                        (index for index, row in enumerate(completed) if row["dt"] <= companion_dt),
+                        default=None,
+                    )
+                    end = companion_dt + timedelta(minutes=companion_minutes)
+                    if host is None:
+                        continue
+                    gate = _gate(
+                        host, limit_index=len(completed) - 1, cross_dt=companion_dt
+                    )
+                    if gate.blocked is not None:
+                        if latest_block is None or end >= latest_block[0]:
+                            latest_block = (end, gate.blocked)
+                        continue
                     candidates.append((
-                        companion_dt + timedelta(minutes=companion_minutes),
-                        companion_dt, companion_label, None, companion_lrsi,
-                        companion_from_below,
+                        end, companion_dt, companion_label, None, companion_lrsi,
+                        companion_from_below, gate,
                     ))
             if candidates:
-                _cross_end, cross_dt, cross_label, native_index, cross_value, from_below = min(
+                _cross_end, cross_dt, cross_label, native_index, cross_value, from_below, gate = min(
                     candidates, key=lambda item: (item[0], item[1], item[2])
                 )
                 sma_index = native_index if native_index is not None else len(completed) - 1
@@ -477,6 +737,7 @@ def evaluate(
                     TRIGGER_RECLAIM_THEN_LRSI,
                     native_index if native_index is not None else sma_index,
                     cross_index=native_index,
+                    gate=gate,
                     cross_timeframe=cross_label,
                     cross_bar_dt=cross_dt,
                     cross_lrsi=cross_value,
@@ -489,6 +750,8 @@ def evaluate(
                         f"LRSI {LRSI_CROSS_LEVEL:.0f} cross"
                     ),
                 )
+            elif latest_block is not None and TRIGGER_RECLAIM_THEN_LRSI not in already:
+                blocked[TRIGGER_RECLAIM_THEN_LRSI] = latest_block[1]
 
         # --- sma_retest --------------------------------------------------
         retest_index = _first_retest(
@@ -500,12 +763,12 @@ def evaluate(
         )
         if retest_index is not None:
             reason = REASON_RETESTED
-            window = {
+            window_bars = {
                 retest_index - back for back in range(CROSS_WINDOW_BARS + 1)
             }
-            in_window = sorted(index for index in crosses if index in window)
-            if in_window:
-                cross_index = in_window[-1]
+            in_window = [index for index in crosses if index in window_bars]
+            cross_index, gate = _first_open(TRIGGER_SMA_RETEST, in_window, retest_index)
+            if cross_index is not None:
                 tolerance = ""
                 if atr:
                     row = completed[retest_index]
@@ -521,6 +784,7 @@ def evaluate(
                     TRIGGER_SMA_RETEST,
                     retest_index,
                     cross_index=cross_index,
+                    gate=gate,
                     message=(
                         f"{label} {int(sma_length)}-SMA retest held + "
                         f"LRSI {LRSI_CROSS_LEVEL:.0f} cross{flag}{tolerance}"
@@ -530,6 +794,10 @@ def evaluate(
     new_fired = tuple(already) + tuple(
         hit.trigger for hit in fired if hit.trigger not in already
     )
+    details: dict[str, Any] = {}
+    unfired = {name: why for name, why in blocked.items() if not any(hit.trigger == name for hit in fired)}
+    if unfired:
+        details["gate_blocked"] = unfired
     return PullbackResult(
         rule_version=RULE_VERSION,
         timeframe=label,
@@ -550,6 +818,7 @@ def evaluate(
         close=closes[-1],
         atr=atr,
         lrsi=values[-1] if values else None,
+        details=details,
     )
 
 
@@ -586,6 +855,47 @@ def _first_retest(
     return None
 
 
+
+
+def _companion_crosses(
+    companion_bars: Iterable[Mapping[str, Any]] | None,
+    companion_minutes: int,
+    *,
+    side: str,
+    now: datetime,
+    after: datetime,
+    armed_at: datetime | None,
+) -> list[tuple[datetime, str, bool, float | None]]:
+    """Every LRSI 80 cross on the OTHER series after the reclaim bar, oldest first.
+
+    The trader asked for the M30 hold to be answerable by an M15 reversal;
+    this reads that series and nothing else from it. The fire it produces
+    still belongs to the M30 evaluation, so the caller stamps the timeframe.
+    All of them, not the first: the dip gate may refuse an early one and let
+    a later one through.
+    """
+    completed = _completed(companion_bars, companion_minutes, now=now)
+    if len(completed) <= LRSI_BELOW_LOOKBACK[-1]:
+        return []
+    closes = [row["close"] for row in completed]
+    result = _lrsi_series(closes, side)
+    values = list(result.values)
+    out: list[tuple[datetime, str, bool, float | None]] = []
+    for index in result.cross_up_indices(LRSI_CROSS_LEVEL):
+        stamp = completed[index]["dt"]
+        if (
+            stamp + timedelta(minutes=int(companion_minutes)) > after
+            and _post_arm(stamp, companion_minutes, armed_at)
+        ):
+            out.append((
+                stamp,
+                timeframe_label(companion_minutes),
+                _crossed_from_below_fifty(values, index),
+                values[index],
+            ))
+    return out
+
+
 def _companion_cross(
     companion_bars: Iterable[Mapping[str, Any]] | None,
     companion_minutes: int,
@@ -595,28 +905,13 @@ def _companion_cross(
     after: datetime,
     armed_at: datetime | None,
 ) -> tuple[datetime, str, bool, float | None] | None:
-    """The first LRSI 80 cross on the OTHER series after the reclaim bar.
-
-    The trader asked for the M30 hold to be answerable by an M15 reversal;
-    this reads that series and nothing else from it. The fire it produces
-    still belongs to the M30 evaluation, so the caller stamps the timeframe.
-    """
-    completed = _completed(companion_bars, companion_minutes, now=now)
-    if len(completed) <= LRSI_BELOW_LOOKBACK[-1]:
-        return None
-    closes = [row["close"] for row in completed]
-    result = _lrsi_series(closes, side)
-    values = list(result.values)
-    for index in result.cross_up_indices(LRSI_CROSS_LEVEL):
-        stamp = completed[index]["dt"]
-        if (
-            stamp + timedelta(minutes=int(companion_minutes)) > after
-            and _post_arm(stamp, companion_minutes, armed_at)
-        ):
-            return (
-                stamp,
-                timeframe_label(companion_minutes),
-                _crossed_from_below_fifty(values, index),
-                values[index],
-            )
-    return None
+    """The first of `_companion_crosses`, or None."""
+    found = _companion_crosses(
+        companion_bars,
+        companion_minutes,
+        side=side,
+        now=now,
+        after=after,
+        armed_at=armed_at,
+    )
+    return found[0] if found else None

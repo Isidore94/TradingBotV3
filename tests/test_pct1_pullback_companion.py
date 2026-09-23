@@ -28,6 +28,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from test_pct1_pullback_alert import (  # noqa: E402
+    OPEN_GATE_D1_ATR,
     M15_LONG_CLOSES,
     M15_RECLAIM_INDEX,
     M30_HOLD_CLOSES,
@@ -71,6 +72,7 @@ def _companion_case(*, with_companion: bool):
         now=bar_end(M15_RECLAIM_INDEX, 15),
         companion_bars=m15_bars if with_companion else None,
         companion_minutes=15 if with_companion else None,
+        d1_atr=OPEN_GATE_D1_ATR,
     )
 
 

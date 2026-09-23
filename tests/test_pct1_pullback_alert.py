@@ -65,7 +65,7 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-RULE_VERSION = "pullback_sma_reclaim_v1"
+RULE_VERSION = "pullback_sma_reclaim_v2"  # v2 = the 2026-09-23 dip gate
 TRIGGER_RECLAIM = "sma_reclaim_lrsi"
 TRIGGER_THEN_LRSI = "reclaim_then_lrsi"
 TRIGGER_RETEST = "sma_retest"
@@ -263,6 +263,30 @@ def simple_mean(closes, index: int, length: int) -> float:
     return sum(closes[index + 1 - length: index + 1]) / float(length)
 
 
+#: v2 (2026-09-23) added a dip gate: a trigger needs price to have come to the
+#: SMA and the LRSI to have flipped under 20 first. These fixtures pin the v1
+#: MECHANICS (episodes, windows, fences, the retest tag), not the gate, so the
+#: wrapper hands the rule a daily ATR so large that every bar counts as a
+#: touch - the gate then asks only for the bear flip each fixture's drop
+#: already makes. The gate itself is pinned in `test_pullback_dip_gate.py`.
+OPEN_GATE_D1_ATR = 1e9
+
+
+def open_gate_daily_bars():
+    """The same wide-open gate for desk tests: a daily tape whose ATR is ~1e9."""
+    start = datetime(2026, 7, 1)
+    return [
+        {
+            "dt": start + timedelta(days=offset),
+            "open": 1.0,
+            "high": OPEN_GATE_D1_ATR,
+            "low": 0.0,
+            "close": 1.0,
+        }
+        for offset in range(30)
+    ]
+
+
 def evaluate(
     bars,
     *,
@@ -272,6 +296,7 @@ def evaluate(
     armed_at,
     now,
     episode_state=None,
+    d1_atr=OPEN_GATE_D1_ATR,
 ):
     """The rule under test, imported inside the call so this file still loads."""
     from indicators.pullback_sma_reclaim import evaluate as rule_evaluate
@@ -284,6 +309,7 @@ def evaluate(
         armed_at=armed_at,
         now=now,
         episode_state=episode_state,
+        d1_atr=d1_atr,
     )
 
 

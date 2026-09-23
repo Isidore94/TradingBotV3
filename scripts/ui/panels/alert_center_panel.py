@@ -6511,6 +6511,8 @@ class AlertCenterPanel(QFrame):
                 "cross_timeframe", "cross_bar_dt", "cross_lrsi", "sma_bar_dt",
                 "touch_bar_dt", "confirm_bar_dt", "ema", "distance_atr",
                 "skipped_bars",
+                # The v2 dip gate's evidence (2026-09-23).
+                "dip_path", "dip_bar_dt", "bear_flip_bar_dt", "d1_atr",
             ):
                 if key in measured:
                     detail[key] = measured[key]
@@ -6749,6 +6751,9 @@ class AlertCenterPanel(QFrame):
                     "due": due,
                     "tokens": tokens,
                     "caches": caches,
+                    # The dip gate's daily ATR(20) source: the chart
+                    # service's memoized D1 dicts, read-only on the worker.
+                    "d1_bars": self._pullback_d1_bars(watch.symbol),
                     "marks": dict(getattr(watch, "fired", None) or {}),
                     "states": {
                         key: value
@@ -6767,6 +6772,19 @@ class AlertCenterPanel(QFrame):
             daemon=True,
         ).start()
         return True
+
+    def _pullback_d1_bars(self, symbol: str) -> list:
+        """Daily bars for the Pullback dip gate (cache only, never IB).
+
+        The same memoized list `_d1_bars_for` hands every D1 poll; empty
+        when the chart service has not cached the name yet, and then the
+        gate's touch path is unknown and only a close break-and-reclaim
+        dip can answer.
+        """
+        try:
+            return list(self._d1_bars_for(symbol) or [])
+        except Exception:  # pragma: no cover - a missing daily tape is unknown
+            return []
 
     def _pullback_episode_states(self) -> dict:
         states = getattr(self, "_pullback_episodes", None)
@@ -6857,6 +6875,7 @@ class AlertCenterPanel(QFrame):
                         series.get(companion_minutes) if companion_minutes else None
                     ),
                     companion_minutes=companion_minutes,
+                    daily_bars=job.get("d1_bars") or None,
                 )
                 if result is None:
                     continue  # NOT MEASURED - the watch simply waits
@@ -6899,6 +6918,16 @@ class AlertCenterPanel(QFrame):
                                     fire.sma_bar_dt.isoformat()
                                     if fire.sma_bar_dt is not None else ""
                                 ),
+                                "dip_path": fire.dip_path or "",
+                                "dip_bar_dt": (
+                                    fire.dip_bar_dt.isoformat()
+                                    if fire.dip_bar_dt is not None else ""
+                                ),
+                                "bear_flip_bar_dt": (
+                                    fire.bear_flip_bar_dt.isoformat()
+                                    if fire.bear_flip_bar_dt is not None else ""
+                                ),
+                                "d1_atr": fire.d1_atr,
                             },
                         }
                     )

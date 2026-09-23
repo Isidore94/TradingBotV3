@@ -54,6 +54,7 @@ from test_pct1_pullback_alert import (  # noqa: E402
     bar_dt,
     bar_end,
     make_bars,
+    open_gate_daily_bars,
 )
 
 WATCH_KIND = "pullback"
@@ -207,6 +208,9 @@ def _panel(monkeypatch, tmp_path, *, focus_service=None):
     made._chart_watches_path = tmp_path / "chart_watches.json"
     monkeypatch.setattr(made, "_m5_bars_for", lambda symbol, **kw: [])
     monkeypatch.setattr(made, "_d1_bars_for", lambda symbol, **kw: [])
+    # v2's dip gate, opened wide: these tests pin the desk plumbing, the gate
+    # has its own file (see `open_gate_daily_bars`).
+    monkeypatch.setattr(made, "_pullback_d1_bars", lambda symbol: open_gate_daily_bars())
     monkeypatch.setattr(made, "_alerts_may_sound", lambda: False)
     return made
 

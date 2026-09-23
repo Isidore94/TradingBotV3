@@ -1,6 +1,6 @@
 """Golden replays of the two real 2026-09-23 Pullback alerts.
 
-Real tapes (see the fixture's ``_about``): QDEL SHORT was a correct alert and
+Real tapes (see the fixture's ``provider_assumptions``): QDEL SHORT was a correct alert and
 must keep firing; ARM LONG ``reclaim_then_lrsi`` fired with no pullback at
 all - ARM sat ~50 points above its M30 75-SMA - and is the case the dip gate
 exists for.
@@ -41,14 +41,6 @@ def _evaluate_m30(symbol: str):
 
     now, symbols = _load()
     entry = symbols[symbol]
-    kwargs = {}
-    try:
-        import inspect
-
-        if "daily_bars" in inspect.signature(evaluate).parameters:
-            kwargs["daily_bars"] = entry["D1"]
-    except (TypeError, ValueError):  # pragma: no cover
-        pass
     return evaluate(
         entry["M30"],
         side=entry["side"],
@@ -58,7 +50,7 @@ def _evaluate_m30(symbol: str):
         now=now,
         companion_bars=entry["M15"],
         companion_minutes=15,
-        **kwargs,
+        daily_bars=entry["D1"],
     )
 
 
@@ -75,11 +67,35 @@ def test_qdel_short_m30_loss_with_lrsi_cross_still_fires_on_the_real_tape():
     assert round(fire.sma, 4) == round(10.923817354838054, 4)
 
 
-def test_arm_long_reclaim_then_lrsi_fired_on_the_real_tape_before_the_gate():
+def test_arm_long_reclaim_then_lrsi_no_longer_fires_without_a_pullback():
+    # v1 fired reclaim_then_lrsi on the M15 06:45 cross. ARM's last touch of
+    # its M30 75-SMA is weeks behind the cross: the dip gate calls it stale.
     result = _evaluate_m30("ARM")
     assert result is not None
-    fires = {fire.trigger: fire for fire in result.fired}
-    assert set(fires) == {"reclaim_then_lrsi"}
-    fire = fires["reclaim_then_lrsi"]
-    assert fire.cross_timeframe == "M15"
-    assert fire.cross_bar_dt == datetime(2026, 9, 23, 6, 45)
+    assert result.fired == ()
+    assert result.details.get("gate_blocked") == {"reclaim_then_lrsi": "dip_stale"}
+
+
+def test_qdel_fire_carries_the_dip_it_came_from():
+    # QDEL rallied up to the SMA on 09-21 08:00 (high 0.1813 under a 0.1830
+    # tolerance = 0.2 x D1 ATR 0.9149) and its short LRSI flipped under 20 on
+    # that same bar. The margin is thin; this pins it.
+    fire = _evaluate_m30("QDEL").fired[0]
+    assert fire.dip_path == "touch"
+    assert fire.dip_bar_dt == datetime(2026, 9, 21, 8, 0)
+    assert fire.bear_flip_bar_dt == datetime(2026, 9, 21, 8, 0)
+    assert round(fire.d1_atr, 4) == 0.9149
+
+
+def test_the_fixture_contract_holds_and_matches_what_the_rule_says():
+    from conftest import load_fixture_contract
+
+    contract = load_fixture_contract("pullback_dip_gate_real_tapes_v1")
+    assert contract.raw_input_digest() == contract["raw_input_sha256"]
+    expected = contract["expected"]["v2"]
+    qdel = _evaluate_m30("QDEL").fired[0]
+    assert qdel.trigger == expected["QDEL"]["trigger"]
+    assert qdel.dip_path == expected["QDEL"]["dip_path"]
+    assert qdel.dip_bar_dt.isoformat() == expected["QDEL"]["dip_bar_dt"]
+    assert qdel.bear_flip_bar_dt.isoformat() == expected["QDEL"]["bear_flip_bar_dt"]
+    assert dict(_evaluate_m30("ARM").details) == expected["ARM"]
