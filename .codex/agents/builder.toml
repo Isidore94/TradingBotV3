@@ -25,7 +25,7 @@ Rules:
 5. If the branch has red tests from `tester`, make them pass. You may add tests; never
    weaken, skip or delete one.
 6. Before handoff: run the tests for your area, `ruff check .`, and smoke. Run the full
-   suite only if the brief asks (never 22:00-06:00 ET - the nightly lock fails ~40 tests).
+   suite (`pytest tests/ -q -n 8`) only if the brief asks (never 22:00-06:00 ET - the nightly lock fails ~40 tests).
 7. Docs: one CHANGELOG line; a new live check goes in `docs/GATES.md`; a changed rule in
    `docs/RULES.md`. Nothing else.
 

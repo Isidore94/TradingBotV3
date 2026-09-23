@@ -103,8 +103,29 @@ _SYMBOL_FONT_CANDIDATES = (
 _PIXEL_GLYPH_MODULES = frozenset({"test_ws_sx_star_x"})
 
 
+#: Test modules that measure glyphs or layout and were only ever green AFTER some
+#: earlier test built a `MainWindow` (which loads qtawesome's icon fonts). Run
+#: alone - or on a parallel worker (`pytest -n`) that never built one - they
+#: failed. They get the desk's own font state up front: the desk always has
+#: qtawesome loaded, so this is the state they are meant to measure.
+_DESK_FONT_MODULES = frozenset({"test_ws_sx_star_x", "test_ws_j1_journal_splitter"})
+
+
 @pytest.fixture(autouse=True)
-def _offscreen_symbol_font(request):
+def _desk_icon_fonts(request):
+    module = getattr(getattr(request.node, "module", None), "__name__", "")
+    if module.rsplit(".", 1)[-1] in _DESK_FONT_MODULES:
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        import qtawesome
+
+        qtawesome.icon("fa5s.star")  # the first icon registers every icon font
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _offscreen_symbol_font(request, _desk_icon_fonts):
     """Lend a star-capable family to the tests that paint one, then take it back."""
     module = getattr(getattr(request.node, "module", None), "__name__", "")
     if module.rsplit(".", 1)[-1] not in _PIXEL_GLYPH_MODULES:

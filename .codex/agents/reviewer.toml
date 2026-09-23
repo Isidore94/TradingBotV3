@@ -17,7 +17,7 @@ Where you work:
 A review:
 1. `git checkout <branch>`; read the brief and `git diff <base>..<branch>`. Each item:
    delivered / partial / missing.
-2. Run the new and changed tests. Restore the implementation to base, confirm they FAIL,
+2. Run the new and changed tests (full suite: `pytest tests/ -q -n 8`). Restore the implementation to base, confirm they FAIL,
    restore. Name any test that passes on the old code.
 3. Re-derive numbers against COPIES of live data only when the change claims numbers.
 4. Invariant scan (AGENTS.md hard invariants): policy writes, detector/score/alert

@@ -1,6 +1,8 @@
 -r requirements-gui.txt
 pytest
 pytest-timeout
+# Parallel test runs (`pytest -n 8`): the full suite in ~4 min instead of ~28.
+pytest-xdist
 # Read-only research-lake query engine (warehouse Phase 7, LD-04). Optional:
 # the read path answers every slice query through pyarrow without it.
 duckdb

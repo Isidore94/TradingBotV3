@@ -1284,6 +1284,20 @@ class MasterAvwapPanel(QWidget):
                 continue
             overflow -= header.sectionSize(column)
             self.table.setColumnHidden(column, True)
+        # Last resort, narrow panes only (~1400 px desks with real fonts): the
+        # Points total goes (its switch still works), then the Bucket/grade
+        # cell gives up its slack before anything else is lost.
+        if overflow > 0 and "points" in keys:
+            column = keys.index("points")
+            if not self.table.isColumnHidden(column):
+                overflow -= header.sectionSize(column)
+                self.table.setColumnHidden(column, True)
+        if overflow > 0 and "bucket" in keys:
+            column = keys.index("bucket")
+            current = header.sectionSize(column)
+            take = min(overflow, max(0, current - 72))
+            if take:
+                header.resizeSection(column, current - take)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().resizeEvent(event)

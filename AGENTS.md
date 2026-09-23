@@ -19,8 +19,9 @@ authorized work.
 
 ## Commands
 
-- Test: `.venv\Scripts\python.exe -m pytest tests/ -q` (~10k tests). While building, run
-  your area only (`pytest tests/test_<area>*.py -q`); run the full suite before a merge.
+- Test: `.venv\Scripts\python.exe -m pytest tests/ -q -n 8` (~10k tests, ~4 min on 8 cores;
+  ALWAYS pass `-n 8` - trader rule). While building, run your area only
+  (`pytest tests/test_<area>*.py -q`); run the full suite before a merge.
   Check pytest's exit code, not a piped tail. macOS/Linux Qt: `QT_QPA_PLATFORM=offscreen`.
 - Lint: `.venv\Scripts\python.exe -m ruff check .` must pass. Fix the code, not the config.
 - Smoke: `.venv\Scripts\python.exe scripts/smoke_check.py` (7/7). Selftest: `launch_gui.py --selftest`.

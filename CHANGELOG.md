@@ -4,6 +4,7 @@ One line per merged change, newest first. The commit message holds the detail. K
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-22 Parallel tests: pytest-xdist, `pytest -n 8` runs the suite in ~4 min (was ~28). Three font-order-dependent tests fixed (desk icon fonts loaded up front; compact setups table drops Points and trims Bucket before it overflows).
 - 2026-09-22 Setup grades: PROVEN/A/B/C/D/New from the trackers' real results (swing: tracker win rate + low bound; day trade: +1R before -1R). Shown on the setups table and M5 bar, best first; the priority switch now defaults ON.
 - 2026-09-22 Repo slim-down: AGENTS.md is 8 KB, CLAUDE.md imports it, and the
   checkpoint/plan became STATUS/TODO. History moved to the gitignored `notes/`. Agents
