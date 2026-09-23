@@ -392,6 +392,46 @@ def test_load_d1_bars_resolves_dotted_alias_and_caches_by_mtime(tmp_path, monkey
         chart_snapshot._daily_bars_cache.clear()
 
 
+def test_load_d1_bars_cache_keeps_only_the_most_recent_symbols(tmp_path, monkeypatch):
+    """2026-09-23: the cache kept ~300-400 KB of parsed history for every symbol
+    the desk ever touched, all day. It is now least-recently-used and capped."""
+    import pandas as pd
+    import setup_playbook_study
+    from master_avwap_lib import legacy as master_legacy
+
+    monkeypatch.setattr(master_legacy, "MASTER_AVWAP_DAILY_BARS_DIR", tmp_path)
+    monkeypatch.setattr(chart_snapshot, "DAILY_BARS_CACHE_MAX_SYMBOLS", 3)
+    frame = pd.DataFrame(
+        {
+            "datetime": pd.date_range("2026-01-01", periods=5, freq="B"),
+            "open": [1.0] * 5, "high": [1.0] * 5, "low": [1.0] * 5,
+            "close": [1.0] * 5, "volume": [1.0] * 5,
+        }
+    )
+    reads = []
+
+    def fake_load(stem):
+        reads.append(stem)
+        return frame
+
+    monkeypatch.setattr(setup_playbook_study, "_load_daily_frame", fake_load)
+    for name in ("AAA", "BBB", "CCC", "DDD"):
+        (tmp_path / f"{name}.parquet").write_bytes(b"x")
+    chart_snapshot._daily_bars_cache.clear()
+    try:
+        for name in ("AAA", "BBB", "CCC"):
+            assert len(chart_snapshot.load_d1_bars(name)) == 5
+        chart_snapshot.load_d1_bars("AAA")  # a hit makes AAA the most recent
+        chart_snapshot.load_d1_bars("DDD")  # over the cap: BBB, the oldest, goes
+
+        assert list(chart_snapshot._daily_bars_cache) == ["CCC", "AAA", "DDD"]
+        assert reads == ["AAA", "BBB", "CCC", "DDD"], "the AAA hit read nothing"
+        assert len(chart_snapshot.load_d1_bars("BBB")) == 5, "a dropped name simply reloads"
+        assert reads[-1] == "BBB" and len(chart_snapshot._daily_bars_cache) == 3
+    finally:
+        chart_snapshot._daily_bars_cache.clear()
+
+
 def test_build_m5_snapshot_overlays():
     bars = _m5_bars(30)
     snapshot = chart_snapshot.build_m5_snapshot("TEST", bars)
