@@ -593,6 +593,17 @@ class SymbolSnapshotWidget(QWidget):
         """
         if self._bot is None:
             return []
+        from ui.services.m5_bar_cache import is_process_proxy
+
+        if is_process_proxy(self._bot):
+            # A proxy read is an RPC: the Qt thread reads the shared cache and
+            # re-requests the chart when the worker lands this symbol's bars.
+            cached = self._proxy_m5_cache().peek(
+                self._bot, self._symbol, self._m5_sessions
+            )
+            if cached is None:
+                return self.cached_m5_bars()
+            return self._merge_older_m5(self.cached_m5_bars(), list(cached))
         try:
             fresh = list(
                 self._bot.m5_chart_bars(self._symbol, max_sessions=self._m5_sessions)
@@ -612,6 +623,20 @@ class SymbolSnapshotWidget(QWidget):
                 return drawn
             return []
         return self._merge_older_m5(self.cached_m5_bars(), fresh)
+
+    def _proxy_m5_cache(self):
+        """The shared proxy M5 cache, subscribed once per widget."""
+        from ui.services.m5_bar_cache import shared_m5_cache
+
+        cache = shared_m5_cache()
+        if getattr(self, "_m5_cache_subscribed", None) is not cache:
+            cache.barsUpdated.connect(self._on_m5_cache_updated)
+            self._m5_cache_subscribed = cache
+        return cache
+
+    def _on_m5_cache_updated(self, symbol: str) -> None:
+        if symbol and symbol == self._symbol:
+            self._request_snapshots()
 
     @staticmethod
     def _merge_older_m5(existing: list, fresh: list) -> list:

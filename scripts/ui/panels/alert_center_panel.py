@@ -119,6 +119,7 @@ from review_guidance import ORDERING_ANNOTATION_ONLY, AlertGuidance, ReviewGuide
 from ui import theme
 from ui.panels import desk_layout
 from ui.timer_utils import SignalCoalescer, start_staggered
+from ui.services.m5_bar_cache import is_process_proxy, shared_m5_cache
 from ui.models.bounce import (
     AUTO_PICK_TAG,
     BounceAlert,
@@ -1859,6 +1860,8 @@ class AlertCenterPanel(QFrame):
             return PREV_DAY_UNKNOWN
         try:
             moment = datetime.now()
+            if self._m5_unknown(symbol):
+                return PREV_DAY_UNKNOWN
             m5_bars = self._m5_bars_for(symbol)
             stamp = (moment.date(), self._series_stamp(m5_bars))
             remembered = self._vwap_measure_cache.get((symbol, side_key))
@@ -1897,6 +1900,8 @@ class AlertCenterPanel(QFrame):
             return PREV_DAY_UNKNOWN
         try:
             moment = datetime.now()
+            if self._m5_unknown(symbol):
+                return PREV_DAY_UNKNOWN
             d1_bars = self._d1_bars_for(symbol)
             m5_bars = self._m5_bars_for(symbol)
             stamp = (
@@ -1967,6 +1972,8 @@ class AlertCenterPanel(QFrame):
             return wall_gate.WallVerdict(state=PREV_DAY_UNKNOWN, reason="no side")
         try:
             moment = datetime.now()
+            if self._m5_unknown(symbol):
+                return wall_gate.WallVerdict(state=PREV_DAY_UNKNOWN, reason="M5 bars not fetched yet")
             d1_bars = self._d1_bars_for(symbol)
             m5_bars = self._m5_bars_for(symbol)
             lines = self._wall_trendlines_for(symbol)
@@ -2331,6 +2338,8 @@ class AlertCenterPanel(QFrame):
         """
         try:
             moment = datetime.now()
+            if self._m5_unknown(symbol):
+                return PREV_DAY_UNKNOWN
             d1_bars = self._d1_bars_for(symbol)
             m5_bars = self._m5_bars_for(symbol)
             stamp = (
@@ -3652,13 +3661,15 @@ class AlertCenterPanel(QFrame):
                 for queued in self._review_queue[:DEFAULT_LOOKAHEAD]
                 if queued.symbol
             )
+            # A proxy symbol not fetched yet is unknown, not empty: no refetch.
+            symbols = [sym for sym in symbols if not self._m5_unknown(sym, sessions=2)]
             if not symbols:
                 return
             bot = self._current_bot()
             if bot is None:
                 return
             shared_refresh_service().refresh_if_stale(
-                symbols, lambda sym: bot.m5_chart_bars(sym, max_sessions=2), bot
+                symbols, lambda sym: self._m5_bars_for(sym, sessions=2), bot
             )
         except Exception:
             # Display refresh only - it must never break the watch tick that
@@ -4657,7 +4668,13 @@ class AlertCenterPanel(QFrame):
         if self._bounce_service is not None:
             try:
                 bot = self._bounce_service.current_bot()
-                if bot is not None:
+                if is_process_proxy(bot):
+                    # An RPC on the proxy: the cached label, blank until fetched.
+                    current = str(
+                        shared_m5_cache().peek_value(bot, "get_market_environment", call=True)
+                        or ""
+                    )
+                elif bot is not None:
                     current = str(bot.get_market_environment() or "")
             except Exception:
                 current = ""
@@ -5038,6 +5055,9 @@ class AlertCenterPanel(QFrame):
                 symbol = str(symbol or "").strip().upper()
                 if not symbol or symbol in self._ignored_symbols:
                     continue
+                if self._m5_unknown(symbol):
+                    held += 1  # bars not fetched yet: the break state stays as it was
+                    continue
                 d1_bars = self._d1_bars_for(symbol)
                 m5_bars = self._m5_bars_for(symbol)
                 # Measured every tick even when nothing is pending: the feed
@@ -5324,13 +5344,6 @@ class AlertCenterPanel(QFrame):
         from `m5_chart_bars` itself, so if this lookup ever diverged the cost
         would be a missed cache hit, not a wrong bar.
         """
-        if bool(getattr(bot, "is_process_proxy", False)):
-            # A symbol-sized RPC avoids copying the scanner's entire M5 cache
-            # across the process boundary on every chart-watch tick.
-            try:
-                return bot.m5_chart_bars(symbol, max_sessions=2) or []
-            except Exception:
-                return []
         latest = getattr(bot, "latest_bars", None)
         if not isinstance(latest, dict):
             return []
@@ -5362,7 +5375,17 @@ class AlertCenterPanel(QFrame):
         dicts with six float() coercions apiece, on the Qt thread, for ~105
         symbols. Nothing about WHICH bars come back changes: the value is
         always `m5_chart_bars`'s own output.
+
+        On the process proxy this reads `shared_m5_cache()` only - never an
+        RPC on the Qt thread - and bars not fetched yet come back as [].
+        Callers that must not treat "not fetched" as "no bars" ask
+        `_m5_unknown` first.
         """
+        bars = self._m5_cached(symbol, sessions=sessions)
+        return bars if bars is not None else []
+
+    def _m5_cached(self, symbol: str, *, sessions: int = 1) -> list | None:
+        """Memory-only M5 bars; None means a proxy bot's bars are not fetched yet."""
         bot = None
         if self._bounce_service is not None:
             try:
@@ -5371,6 +5394,16 @@ class AlertCenterPanel(QFrame):
                 bot = None
         if bot is None:
             return []
+        if is_process_proxy(bot):
+            return shared_m5_cache().peek(bot, symbol, sessions)
+        return self._m5_local_bars(bot, symbol, sessions=sessions)
+
+    def _m5_unknown(self, symbol: str, *, sessions: int = 1) -> bool:
+        """True while a proxy bot's bars for this symbol have never been fetched."""
+        return self._m5_cached(symbol, sessions=sessions) is None
+
+    def _m5_local_bars(self, bot, symbol: str, *, sessions: int = 1) -> list:
+        """An in-process bot's bars, memoized per source series (item 1a)."""
         key = (str(symbol or "").strip().upper(), max(1, int(sessions)))
         try:
             source = self._m5_source_bars(bot, symbol)
@@ -5378,10 +5411,7 @@ class AlertCenterPanel(QFrame):
             source = []
         stamp = self._m5_source_stamp(source)
         cached = self._m5_bar_dicts.get(key)
-        same_source = cached is not None and (
-            cached[0] is source
-            or bool(getattr(bot, "is_process_proxy", False))
-        )
+        same_source = cached is not None and cached[0] is source
         if cached is not None and same_source and cached[1] == stamp:
             self._m5_bar_dicts.move_to_end(key)
             return cached[2]
@@ -6534,6 +6564,9 @@ class AlertCenterPanel(QFrame):
         triggered = []
         for watch in self._d1_level_watches:
             hit = None
+            if self._m5_unknown(watch.symbol):
+                remaining.append(watch)  # bars not fetched yet: unknown, never judged
+                continue
             m5_bars = self._m5_bars_for(watch.symbol)
             d1_bars = self._d1_bars_for(watch.symbol)
             if m5_bars or d1_bars:
@@ -7060,6 +7093,8 @@ class AlertCenterPanel(QFrame):
                 or not self._pullback_uses_h1(watch)
             ):
                 continue
+            if self._m5_unknown(watch.symbol, sessions=self.H1_WATCH_M5_SESSIONS):
+                continue  # not marked judged: it is judged once its bars land
             cache = self._h1_history_cache()
             token = self._pullback_cache_token(cache, watch.symbol) if cache is not None else None
             wanted, end = self._pullback_due(watch, H1_INTERVAL_MINUTES, moment, token)
@@ -7741,6 +7776,9 @@ class AlertCenterPanel(QFrame):
         levels_caches: dict[str, dict] = {}
         for watch in self._d1_event_watches:
             hit = None
+            if self._m5_unknown(watch.symbol):
+                remaining.append(watch)  # bars not fetched yet: unknown, never judged
+                continue
             m5_bars = self._m5_bars_for(watch.symbol)
             d1_bars = self._d1_bars_for(watch.symbol)
             if d1_bars:
@@ -7875,6 +7913,11 @@ class AlertCenterPanel(QFrame):
         self.statusChanged.emit(f"{symbol}: any-bounce alert disarmed.")
         return True
 
+    def _zone_arms_unknown(self) -> bool:
+        """True while a proxy bot's `d1_zone_arms` have never been fetched."""
+        bot = self._current_bot()
+        return is_process_proxy(bot) and shared_m5_cache().peek_value(bot, "d1_zone_arms") is None
+
     def _any_bounce_levels_for(
         self, symbol: str, moment: datetime, *, m5_bars: list | None = None
     ) -> dict:
@@ -7887,7 +7930,10 @@ class AlertCenterPanel(QFrame):
         entry = None
         try:
             bot = self._current_bot()
-            arms = getattr(bot, "d1_zone_arms", None) or {}
+            if is_process_proxy(bot):
+                arms = shared_m5_cache().peek_value(bot, "d1_zone_arms") or {}
+            else:
+                arms = getattr(bot, "d1_zone_arms", None) or {}
             candidate = arms.get(symbol)
             if isinstance(candidate, Mapping):
                 entry = candidate
@@ -7928,8 +7974,12 @@ class AlertCenterPanel(QFrame):
                 return
         remaining: list[AnyBounceWatch] = []
         triggered = []
+        zone_arms_unknown = self._zone_arms_unknown()
         for watch in self._any_bounce_watches:
             hit = None
+            if zone_arms_unknown or self._m5_unknown(watch.symbol):
+                remaining.append(watch)  # bars not fetched yet: unknown, never judged
+                continue
             try:
                 # Once per watch, not twice: the levels builder and the
                 # evaluation both need today's M5 bars.

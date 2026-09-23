@@ -1341,30 +1341,32 @@ class AutopilotService(QObject):
         bot = self._current_bot()
         if bot is None:
             return
-        try:
-            regime = str(bot.get_market_environment() or "")
-            spy_today, _prev = bot._spy_session_bars()
-        except Exception:
-            return
-        if len(spy_today) < 6:
-            return
-        last_bar = spy_today[-1]
-        side = None
-        if regime.startswith("bullish") and last_bar.close < last_bar.open:
-            side = "long"
-        elif regime.startswith("bearish") and last_bar.close > last_bar.open:
-            side = "short"
-        if side is None:
-            return
-
+        # The regime and SPY reads are RPCs on the process proxy, so the whole
+        # check runs on the worker; the Qt tick only starts it.
         self._hod_check_running = True
-        self._state["hod_last_check"] = now.strftime("%H:%M:%S")
-        self._save_state()
-        extreme = "HOD" if side == "long" else "LOD"
-        self._log(f"{regime} tape pausing - checking swing-scanner {side}s near their {extreme}...")
 
         def worker() -> None:
+            side = None
+            extreme = ""
             try:
+                try:
+                    regime = str(bot.get_market_environment() or "")
+                    spy_today, _prev = bot._spy_session_bars()
+                except Exception:
+                    return
+                if len(spy_today) < 6:
+                    return
+                last_bar = spy_today[-1]
+                if regime.startswith("bullish") and last_bar.close < last_bar.open:
+                    side = "long"
+                elif regime.startswith("bearish") and last_bar.close > last_bar.open:
+                    side = "short"
+                if side is None:
+                    return
+                self._state["hod_last_check"] = now.strftime("%H:%M:%S")
+                self._save_state()
+                extreme = "HOD" if side == "long" else "LOD"
+                self._log(f"{regime} tape pausing - checking swing-scanner {side}s near their {extreme}...")
                 symbols = self._top_swing_symbols(side)
                 if not symbols:
                     self._log(f"No swing-scanner {side} rows available for the {extreme} check.")
