@@ -15,6 +15,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Repo slim-down merged** 2026-09-22: 6682a844 changed docs and agent settings;
   6ea50405 updated two doc-pinning tests and one rule. History is in local notes.
 - **Setup grades + 8-core tests** merged 2026-09-22: grades show on the desk at the next restart. Gate #190.
+- **Working now strip** merged 2026-09-22 (`07ed01aa`): today's M5 alerts by grade with live R, at the next restart. Gate #191.
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
   `claude/chart-wheel-zoom-2026-09-21` (`11c3a339`). It is not on `main`. Merge it only
   while the desk is down.
