@@ -143,13 +143,15 @@ def load_ai_state_projection(
     except (OSError, ValueError) as exc:
         logging.warning("D1 level feed could not read ai_state: %s", exc)
         return cached["feeds"].get(key, {}) if cached else {}
-    feeds: dict[str, dict[str, Any]] = {name: {} for name in _ai_state_projections}
+    # A snapshot: another thread may register a projection mid-parse.
+    projections = list(_ai_state_projections.items())
+    feeds: dict[str, dict[str, Any]] = {name: {} for name, _project in projections}
     symbols = payload.get("symbols") if isinstance(payload, Mapping) else {}
     for symbol, entry in (symbols or {}).items():
         if not isinstance(entry, Mapping):
             continue
         name = str(symbol).strip().upper()
-        for projection_key, projection in _ai_state_projections.items():
+        for projection_key, projection in projections:
             try:
                 sliver = projection(entry)
             except Exception:
@@ -165,6 +167,26 @@ def load_ai_state_projection(
                 feeds[projection_key][name] = sliver
     _ai_state_cache[cache_key] = {"mtime": mtime, "feeds": feeds}
     return feeds.get(key, {})
+
+
+def peek_ai_state_projection(
+    key: str,
+    project: Callable[[Mapping[str, Any]], Any],
+    path: Path,
+) -> dict[str, Any] | None:
+    """The cached ``{symbol: sliver}`` for ``key``, or None. Never parses.
+
+    For the Qt thread: registers the projection so the next parse by any
+    consumer (BounceBot's worker, the chart-level loader) includes it, and
+    returns the last parsed sliver (possibly one file version old - callers
+    age-check the records themselves), or None before the first parse.
+    """
+    key = str(key)
+    _ai_state_projections.setdefault(key, project)
+    cached = _ai_state_cache.get(str(path))
+    if cached and key in cached["feeds"]:
+        return cached["feeds"][key]
+    return None
 
 
 def reset_ai_state_cache() -> None:

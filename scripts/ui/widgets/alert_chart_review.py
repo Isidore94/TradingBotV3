@@ -1197,6 +1197,8 @@ class AlertChartReview(QWidget):
             # Trader rule 3, same day: a D1 long under its SMA200 or a D1
             # short over its SMA50 is hidden too.
             "wrong_side_sma": ("wrong side of SMA", theme.color("text_muted")),
+            # 2026-09-23: within 1 ATR of an SMA in its path or a D1 trendline.
+            "at_wall": ("at wall", theme.color("text_muted")),
         }.get(str(state or "").strip().lower(), ("", ""))
         self.mover_badge.setText(text)
         self.mover_badge.setVisible(bool(text))
@@ -1210,7 +1212,8 @@ class AlertChartReview(QWidget):
         self.hidden_button.setVisible(count > 0)
         if count:
             self.hidden_button.setText(
-                f"{count} hidden (inside yesterday's range / wrong side of VWAP or SMA) - show"
+                f"{count} hidden (inside yesterday's range / wrong side of VWAP or SMA"
+                " / at a wall) - show"
             )
 
     def set_scan_review_view(self, *, show_all: bool, hidden_count: int = 0) -> None:

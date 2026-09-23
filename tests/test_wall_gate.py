@@ -225,3 +225,33 @@ class TestTrendline:
         record = {"current_line_price": 30.2, "lookback_end": (TODAY - timedelta(days=1)).isoformat()}
         verdict = wall_state("SHORT", 30.4, bars, today=TODAY, trendlines=[record])
         assert verdict.wall != "trendline"
+
+
+def test_the_panel_peeks_at_the_shared_ai_state_parse_and_never_parses(tmp_path):
+    """The Qt thread reads trendline records only from the shared parse cache."""
+    import json
+
+    import d1_level_feed
+
+    d1_level_feed.reset_ai_state_cache()
+    path = tmp_path / "ai_state.json"
+    record = {"current_line_price": 10.0, "slope_log_per_bar": 0.0, "lookback_end": "2026-09-22"}
+    path.write_text(
+        json.dumps({"symbols": {"aaa": {"priority_trendline_candidate": record}}}),
+        encoding="utf-8",
+    )
+
+    def project(entry):
+        candidate = entry.get("priority_trendline_candidate")
+        return [candidate] if candidate else None
+
+    try:
+        assert d1_level_feed.peek_ai_state_projection("test.wall", project, path) is None
+        # Another consumer's parse carries the peeked projection along.
+        d1_level_feed.load_ai_state_projection("test.other", lambda entry: {}, path)
+        feed = d1_level_feed.peek_ai_state_projection("test.wall", project, path)
+        assert feed == {"AAA": [record]}
+    finally:
+        d1_level_feed._ai_state_projections.pop("test.wall", None)
+        d1_level_feed._ai_state_projections.pop("test.other", None)
+        d1_level_feed.reset_ai_state_cache()

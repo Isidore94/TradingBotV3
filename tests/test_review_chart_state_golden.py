@@ -135,5 +135,18 @@ def golden_panel(monkeypatch):
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
-def test_review_chart_state_matches_the_golden_verdict(golden_panel, case):
+def test_review_chart_state_matches_the_golden_verdict_with_the_wall_gate_off(
+    golden_panel, case, monkeypatch
+):
+    import wall_gate
+
+    monkeypatch.setattr(wall_gate, "WALL_GATE_ENABLED", False)
     assert golden_panel._review_chart_state(alert_for(case)) == case["expected"]
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
+def test_the_wall_gate_changes_only_the_wall_cases(golden_panel, case):
+    """With the gate on, every golden verdict stands except a case marked
+    ``wall``, which is hidden (its follow-up watches arm in memory)."""
+    expected = "closed" if case["wall"] else case["expected"]
+    assert golden_panel._review_chart_state(alert_for(case)) == expected
