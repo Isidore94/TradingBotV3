@@ -4,6 +4,7 @@ One line per merged change, newest first. The commit message holds the detail. K
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-22 Setup grades: PROVEN/A/B/C/D/New from the trackers' real results (swing: tracker win rate + low bound; day trade: +1R before -1R). Shown on the setups table and M5 bar, best first; the priority switch now defaults ON.
 - 2026-09-22 Repo slim-down: AGENTS.md is 8 KB, CLAUDE.md imports it, and the
   checkpoint/plan became STATUS/TODO. History moved to the gitignored `notes/`. Agents
   are cheaper: Opus/Sonnet on Claude, gpt-6-luna/gpt-6-sol on Codex.

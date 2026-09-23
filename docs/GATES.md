@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #190 Setup grades on the desk: setups Bucket cell and M5 row badges show PROVEN/A/B/C/D/NEW, best grade on top, every row still shown [trader]
 - #189 TJ-17 follow-through clock [trader + lead]
 - #188 TJ-17 late facts [lead]
 - #187 TJ-17 learning windows [trader + lead]

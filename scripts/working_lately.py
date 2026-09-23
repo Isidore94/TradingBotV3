@@ -2029,14 +2029,15 @@ def priority_rank(order: Sequence[tuple[str, str]] | None, key: tuple[str, str])
 def prioritise_enabled() -> bool:
     """The persisted switch, read AT SORT TIME and never at write time.
 
-    Default OFF. Nothing about this flag reaches a write path: the backing
-    lists, the evidence files and the repetition/movers filters are built
-    before any sort and are byte-identical either way.
+    Default ON since 2026-09-22 (trader: "be shown those trades primarily").
+    Nothing about this flag reaches a write path: the backing lists, the
+    evidence files and the repetition/movers filters are built before any sort
+    and are byte-identical either way.
     """
     try:
         import project_paths
 
-        return bool(project_paths.get_local_setting("prioritise_working_lately", False))
+        return bool(project_paths.get_local_setting("prioritise_working_lately", True))
     except Exception:  # noqa: BLE001 - a display preference never costs a list
         return False
 

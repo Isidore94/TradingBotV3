@@ -78,6 +78,10 @@ class SetupTableModel(QAbstractTableModel):
         self._family_records: dict[str, dict] = {}
         #: The learned point multipliers in force, handed in by the panel.
         self._points_weights: dict[str, float] = {}
+        #: `{setup_grades.swing_key: graded cell}` - the tracker grade
+        #: (PROVEN/A/B/C/D/New) for a row's family. Injected; `{}` = no grades
+        #: yet, and then the Bucket cell reads exactly as it always did.
+        self._grades: dict[str, dict] = {}
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -129,6 +133,10 @@ class SetupTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ToolTipRole:
             if key == "points":
                 return self.points_for(row).tooltip()
+            if key == "bucket":
+                cell = self.grade_cell_for(row)
+                if cell is not None:
+                    return _grade_tooltip(cell)
             return _tooltip(row, key)
         return None
 
@@ -150,6 +158,23 @@ class SetupTableModel(QAbstractTableModel):
             for key, value in dict(records or {}).items()
         }
         self.endResetModel()
+
+    def set_setup_grades(self, payload) -> None:
+        """The tracker grades, built OFF this thread by the Working-lately worker."""
+        import setup_grades
+
+        self.beginResetModel()
+        self._grades = {key: dict(cell) for key, cell in setup_grades.swing_lookup(payload).items()}
+        self.endResetModel()
+
+    def grade_cell_for(self, row: SetupRow) -> dict | None:
+        """The graded family cell for this row, or None when grades are not loaded."""
+        if not self._grades:
+            return None
+        import setup_grades
+
+        key = setup_grades.swing_key(row.side, row.bucket, (row.raw or {}).get("setup_family"))
+        return self._grades.get(key) or {"grade": setup_grades.NEW}
 
     def _family_record(self, row: SetupRow) -> dict:
         family = _normalize_family((row.raw or {}).get("setup_family"))
@@ -194,7 +219,12 @@ class SetupTableModel(QAbstractTableModel):
         if key == "score":
             return "" if row.score is None else f"{row.score:.1f}"
         if key == "bucket":
-            return row.bucket_display
+            cell = self.grade_cell_for(row)
+            if cell is None:
+                return row.bucket_display
+            import setup_grades
+
+            return f"{setup_grades.badge(cell.get('grade'))} · {row.bucket_display}"
         if key == "setup_tags":
             return row.tags_text
         if key == "key_level":
@@ -223,6 +253,12 @@ class SetupTableModel(QAbstractTableModel):
         return ""
 
     def _sort_value(self, row: SetupRow, key: str) -> Any:
+        if key == "bucket" and self._grades:
+            # Best grade first when sorted ascending; the bucket name breaks ties.
+            import setup_grades
+
+            cell = self.grade_cell_for(row) or {}
+            return f"{setup_grades.sort_rank(cell.get('grade'))}{row.bucket_display}"
         if key == "score":
             return row.score if row.score is not None else -999999.0
         if key == "supports":
@@ -243,6 +279,29 @@ class SetupTableModel(QAbstractTableModel):
         if key == "points":
             return float(self.points_for(row).total)
         return self._display_value(row, key)
+
+
+def _grade_tooltip(cell: dict) -> str:
+    """What the grade was read from, in the tracker's own numbers."""
+    import setup_grades
+
+    grade = setup_grades.badge(cell.get("grade"))
+    n = int(cell.get("n") or 0)
+    rules = setup_grades.RULES_TEXT
+    if not n:
+        return f"Grade {grade}: no closed trades in the tracker's recent window.\n\n{rules}"
+    rate = cell.get("win_rate")
+    low = cell.get("low_bound")
+    avg_r = cell.get("avg_r")
+    facts = ", ".join(
+        (
+            f"{n} closed over {int(cell.get('sessions') or 0)} sessions",
+            f"win rate {rate * 100:.0f}%" if rate is not None else "win rate unmeasured",
+            f"low bound {low * 100:.0f}%" if low is not None else "low bound unmeasured",
+            f"avg R {avg_r:+.2f}" if avg_r is not None else "avg R unmeasured",
+        )
+    )
+    return f"Grade {grade} - Setup Tracker, recent window: {facts}.\n\n{rules}"
 
 
 def _normalize_family(value) -> str:

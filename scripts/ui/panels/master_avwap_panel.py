@@ -1766,9 +1766,37 @@ class MasterAvwapPanel(QWidget):
         if source:
             self.set_rows(list(source))
 
+    def set_setup_grades(self, payload) -> None:
+        """The tracker grades (trader, 2026-09-22): best-graded families first.
+
+        Shown in the Bucket cell and, with the priority switch on, the sort's
+        first key - ahead of the Working-lately order. Presentation only: no row
+        is hidden and no score changes.
+        """
+        self._setup_grades_present = bool((payload or {}).get("swing"))
+        self.model.set_setup_grades(payload or {})
+        source = getattr(self, "_working_lately_source_rows", None)
+        if source:
+            self.set_rows(list(source))
+
     def _prioritised(self, rows: list[SetupRow]) -> list[SetupRow]:
         import working_lately
 
+        if getattr(self, "_setup_grades_present", False) and len(rows) > 1:
+            if not working_lately.prioritise_enabled():
+                return list(rows)
+            import setup_grades
+
+            return [
+                row
+                for _key, _index, row in sorted(
+                    (
+                        (setup_grades.swing_sort_key(self.model.grade_cell_for(row)), index, row)
+                        for index, row in enumerate(rows)
+                    ),
+                    key=lambda item: (item[0], item[1]),
+                )
+            ]
         order = getattr(self, "_working_lately_order", None)
         if not order or len(rows) < 2 or not working_lately.prioritise_enabled():
             return list(rows)

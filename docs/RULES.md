@@ -108,5 +108,6 @@ in the same commit.
 - Swing surfaces lead with win rate, plus `n` and the Wilson lower bound (z 1.96, one Wilson everywhere).
 - Day-trade surfaces lead with `held_run_score` = P(held in the first 30 min) × trimmed-mean MFE_R. Held means MEASURED held.
 - "Lately" = `evidence_stats.LATELY_SESSIONS` (20 sessions). Every surface says "sessions", never "days".
-- The priority switch (`prioritise_working_lately`, default OFF) reorders and never withholds.
+- The priority switch (`prioritise_working_lately`, default ON since 2026-09-22) reorders and never withholds.
+- Setup grades (`setup_grades.py`, trader 2026-09-22): PROVEN/A/B/C/D/New, ONE ladder. Swing = Setup Tracker recent family rows (live namespace, counts not weighted rates). Day trade = +1R before -1R on the outcome log (a same-row tie is a loss). Built on the Working-lately worker, written to `setup_grades_latest.json`, shown in the setups Bucket cell and the M5 row badge, and used as the priority order. Presentation only: never read by a detector, score, alert decision, Focus, the queue or `review_policy.json`.
 - Research isn't a trader surface, except the Results page.

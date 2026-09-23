@@ -51,6 +51,10 @@ from working_lately import EvidenceSnapshot, build_snapshot, leader_name
 #: leader change is on screen before the trader next looks for it.
 REFRESH_INTERVAL_MS = 30 * 60 * 1000
 
+#: The setup grades (PROVEN/A/B/C/D/New) written beside the snapshot. Kept OUT
+#: of the snapshot itself so its id and size cap are untouched.
+GRADES_FILE_NAME = "setup_grades_latest.json"
+
 #: The event file's schema, named so a later shape cannot be read as this one.
 EVENT_SCHEMA = "working_lately_leader_change_v1"
 
@@ -114,18 +118,63 @@ def read_favorable_read() -> Any:
         return None
 
 
+#: The outcome window streamed ONCE per build and shared by the two readers
+#: that need it (held x ran and the setup grades). Set and cleared by
+#: `build_payload` on the worker; never held between builds - the window is
+#: hundreds of MB of dicts.
+_OUTCOME_ROWS_THIS_BUILD: list[dict] | None = None
+
+
+def _outcome_rows() -> list[dict]:
+    global _OUTCOME_ROWS_THIS_BUILD
+    if _OUTCOME_ROWS_THIS_BUILD is not None:
+        return _OUTCOME_ROWS_THIS_BUILD
+    import held_run_score
+    from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE
+
+    return held_run_score.read_outcome_rows(Path(INTRADAY_BOUNCE_OUTCOMES_FILE))
+
+
 def read_held_run_summaries() -> Any:
     """`held_run_score.dimension_summaries` over the rolling window, or None."""
     try:
         import held_run_score
 
-        episodes = held_run_score.load_episodes()
+        episodes = held_run_score.load_episodes(rows=_outcome_rows())
         if not episodes:
             return None
         return held_run_score.dimension_summaries(episodes)
     except Exception:  # noqa: BLE001 - the day-trade half is absent, not fatal
         logging.debug("Working-lately held-run read failed", exc_info=True)
         return None
+
+
+def read_setup_grades(recent_rows: Any) -> dict[str, Any] | None:
+    """`setup_grades.build_payload` over the tracker rows and the outcome window.
+
+    None when it could not be built; the surfaces then keep arrival order.
+    """
+    try:
+        import setup_grades
+
+        return setup_grades.build_payload(
+            recent_rows=recent_rows or (),
+            outcome_rows=_outcome_rows(),
+            as_of=_last_completed_session().isoformat(),
+        )
+    except Exception:  # noqa: BLE001 - grades are presentation, never fatal
+        logging.debug("Setup grades build failed", exc_info=True)
+        return None
+
+
+def read_persisted_grades(store_dir: Any = None) -> dict[str, Any]:
+    """The last published grades, `{}` when absent."""
+    path = Path(store_dir) if store_dir is not None else default_store_dir()
+    try:
+        payload = json.loads((path / GRADES_FILE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def read_persisted_snapshot(store_dir: Any = None) -> dict[str, Any]:
@@ -296,16 +345,48 @@ class WorkingLatelyService(QObject):
         self.statusChanged.emit(f"Working lately: the reading failed ({message}).")
 
     def build_payload(self) -> dict[str, Any]:
-        """THE WORKER SIDE. Reads, builds, publishes, returns the payload."""
-        snapshot = build_snapshot(
-            recent_rows=read_recent_rows(),
-            favorable_read=read_favorable_read(),
-            held_run_summaries=read_held_run_summaries(),
-            last_completed_session=_last_completed_session(),
-            previous_verdicts=self.previous_verdicts(),
-        )
+        """THE WORKER SIDE. Reads, builds, publishes, returns the payload.
+
+        The outcome window is streamed once and shared by held x ran and the
+        setup grades. The grades ride on the emitted dict under `setup_grades`
+        and in their own file; the persisted snapshot is unchanged.
+        """
+        global _OUTCOME_ROWS_THIS_BUILD
+        try:
+            try:
+                _OUTCOME_ROWS_THIS_BUILD = _outcome_rows()
+            except Exception:  # noqa: BLE001 - each reader reports its own absence
+                _OUTCOME_ROWS_THIS_BUILD = None
+            recent_rows = read_recent_rows()
+            snapshot = build_snapshot(
+                recent_rows=recent_rows,
+                favorable_read=read_favorable_read(),
+                held_run_summaries=read_held_run_summaries(),
+                last_completed_session=_last_completed_session(),
+                previous_verdicts=self.previous_verdicts(),
+            )
+            grades = read_setup_grades(recent_rows)
+        finally:
+            _OUTCOME_ROWS_THIS_BUILD = None
         self.publish(snapshot)
-        return snapshot.to_payload()
+        payload = snapshot.to_payload()
+        if grades is not None:
+            self._write_grades(grades)
+        else:
+            grades = read_persisted_grades(self._dir) or None
+        if grades:
+            payload["setup_grades"] = grades
+        return payload
+
+    def _write_grades(self, grades: Mapping[str, Any]) -> None:
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            target = self._dir / GRADES_FILE_NAME
+            temp = target.with_suffix(".json.tmp")
+            temp.write_text(json.dumps(grades, default=str), encoding="utf-8")
+            os.replace(temp, target)
+        except OSError:
+            logging.debug("Setup grades write failed", exc_info=True)
 
     def _on_payload_ready(self, payload: dict) -> None:
         """THE GUI SLOT. It formats nothing and reads nothing - it emits."""

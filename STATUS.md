@@ -13,6 +13,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Last full suite:** 10,428 passed, 14 skipped, 1 known flaky test (G7 research tab,
   green when run alone). Ruff clean, smoke 7/7, source and frozen selftest 97/97.
 - **Repo slim-down merged** 2026-09-22 (`6ea50405`): docs and agent settings only. History is in the local `notes/`.
+- **Setup grades** (`claude/setup-grades-2026-09-22`): built for the next session; live at the next desk restart once merged. Gate #190.
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
   `claude/chart-wheel-zoom-2026-09-21` (`11c3a339`). It is not on `main`. Merge it only
   while the desk is down.

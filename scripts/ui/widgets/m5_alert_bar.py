@@ -114,7 +114,7 @@ def alert_grade_label(alert: Any) -> str:
     return f"[{tier}]" if tier else "[—]"
 
 
-def row_text(alert: Any, *, repeats: int = 1) -> str:
+def row_text(alert: Any, *, repeats: int = 1, grade: str | None = None) -> str:
     """One line: grade, time, side, ticker, what fired, and take context.
 
     The take-rate suffix is P(take | shown) for this alert's segments, measured
@@ -130,8 +130,9 @@ def row_text(alert: Any, *, repeats: int = 1) -> str:
     time_text = str(getattr(alert, "time_text", "") or "")[:5]
     side = str(getattr(alert, "side", "") or "")
     mark = "▲" if side == "LONG" else "▼" if side == "SHORT" else "·"
+    label = f"[{grade}]" if grade else alert_grade_label(alert)
     line = (
-        f"{alert_grade_label(alert)}  {time_text}  {mark} "
+        f"{label}  {time_text}  {mark} "
         f"{getattr(alert, 'symbol', '')}  {alert_type_label(alert)}"
     )
     if repeats > 1:
@@ -266,6 +267,33 @@ class M5AlertBar(QWidget):
         """
         self.layout().insertWidget(0, widget)
 
+    def set_setup_grades(self, payload) -> None:
+        """The day-trade grades from the Working-lately worker. Rewrites rows in place."""
+        import setup_grades
+
+        self._grades = setup_grades.daytrade_lookup(payload)
+        for index in range(self.list.count()):
+            item = self.list.item(index)
+            alert = item.data(_ALERT_ROLE)
+            if alert is not None:
+                self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
+
+    def _grade_for(self, alert: Any) -> str | None:
+        """The tracker grade badge for this alert, or None before grades load."""
+        grades = getattr(self, "_grades", None)
+        if not grades:
+            return None
+        import setup_grades
+        import working_lately
+
+        payload = getattr(alert, "payload", None)
+        feedback = payload.get("feedback") if isinstance(payload, dict) else None
+        bounce_types = str((feedback or {}).get("bounce_types") or "")
+        if not bounce_types:
+            bounce_types = working_lately.alert_priority_key(alert)[0]
+        side = str(getattr(alert, "side", "") or "")
+        return setup_grades.badge(setup_grades.daytrade_grade_for_alert(grades, bounce_types, side))
+
     def set_working_lately_order(self, order) -> None:
         """`[(bounce_type, SIDE)]`, best first. Presentation only (ST6.5)."""
         self._working_lately_order = [
@@ -341,12 +369,16 @@ class M5AlertBar(QWidget):
 
     def _write_item(self, item: QListWidgetItem, alert: Any, repeats: int) -> None:
         """Fill one row IN PLACE - never a rebuilt widget (fluidity rules)."""
-        item.setText(row_text(alert, repeats=repeats))
+        item.setText(row_text(alert, repeats=repeats, grade=self._grade_for(alert)))
         item.setData(_ALERT_ROLE, alert)
         item.setData(_REPEAT_ROLE, repeats)
         raw = str(getattr(alert, "raw_text", "") or "")
         grade_help = (
             "Grade: PROVEN, then S through D; — means the alert is ungraded.\n\n"
+            if not getattr(self, "_grades", None)
+            else "Grade from the Daytrade Tracker: how often this alert type reached "
+            "+1R before -1R over the last 20 sessions (PROVEN, A, B, C, D; NEW = "
+            "too few to grade).\n\n"
         )
         if repeats > 1:
             raw = (

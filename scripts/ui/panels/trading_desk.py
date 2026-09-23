@@ -499,9 +499,22 @@ class TradingDeskPanel(QWidget):
         import working_lately
 
         payload = getattr(self, "_working_lately_snapshot", None) or {}
-        self.m5_alert_bar.set_working_lately_order(working_lately.daytrade_order(payload))
-        self.alert_center.set_working_lately_order(working_lately.daytrade_order(payload))
+        grades = payload.get("setup_grades") or {}
+        if grades.get("daytrade"):
+            # Trader, 2026-09-22: the M5 lists put the best-GRADED alert types
+            # first (+1R before -1R, `setup_grades`). Same seam, same shape.
+            import setup_grades
+
+            day_order = setup_grades.daytrade_order(grades)
+        else:
+            day_order = working_lately.daytrade_order(payload)
+        self.m5_alert_bar.set_working_lately_order(day_order)
+        self.alert_center.set_working_lately_order(day_order)
         self.master_panel.set_working_lately_order(working_lately.swing_order(payload))
+        if grades and grades is not getattr(self, "_pushed_setup_grades", None):
+            self._pushed_setup_grades = grades
+            self.m5_alert_bar.set_setup_grades(grades)
+            self.master_panel.set_setup_grades(grades)
 
     def _refresh_swing_favorites(self) -> None:
         """Show the current session's list and re-ask the journal about it.

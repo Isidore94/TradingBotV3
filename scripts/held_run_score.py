@@ -1069,8 +1069,12 @@ def load_episodes(
     setups_path: Path | None = None,
     sessions: int = ROLLING_SESSIONS,
     as_of: Any = None,
+    rows: list[dict] | None = None,
 ) -> list[Episode]:
     """The whole build path, in one call, so no caller re-assembles it.
+
+    `rows` lets a caller that already streamed the window (`read_outcome_rows`)
+    hand it over instead of reading the ~500 MB log a second time.
 
     R4 A9/A10: the D1 dimension was never fed and the tracker computed its own
     version of the score. One entry point means one answer.
@@ -1086,7 +1090,8 @@ def load_episodes(
 
     outcomes = Path(outcomes_path or INTRADAY_BOUNCE_OUTCOMES_FILE)
     setups = Path(setups_path or MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE)
-    rows = read_outcome_rows(outcomes, sessions=sessions, as_of=as_of)
+    if rows is None:
+        rows = read_outcome_rows(outcomes, sessions=sessions, as_of=as_of)
     return build_episodes(
         rows,
         d1_setups_by_session=d1_setups_by_session(d1_setup_rows(setups)),

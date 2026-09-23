@@ -20,6 +20,14 @@ here.
 
 ## Planned, not scheduled
 
+- **Setup grades, step 2 (trader asked 2026-09-22):** find the micro-setups inside a
+  family (stop at an SMA vs the level, time of day, market environment, D1 alignment)
+  and let the local AI suggest which traits work. Guard against luck: test few ideas,
+  hold out recent sessions.
+- **Old PROVEN stamp:** the M5 alert text still carries the learning tier `[X-TIER] PROVEN`
+  from `bounce_bot_lib/learning.py` (12 alerts all-time unlock it). Replacing it with the
+  new grade is ask-first and needs golden fixtures.
+
 - **TJ-12F:** read the Focus-add and armed-alert lanes in `trade_origin`. Today an
   unread lane looks like `unplanned`.
 - **TJ-14C:** give the `quick_like_followup` Mentor kind a reader, then wake it by
