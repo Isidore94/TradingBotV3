@@ -10,8 +10,9 @@ This cache is the only thing the Qt thread reads for a proxy bot:
 * ``peek`` is memory only. ``None`` means "never fetched" - UNKNOWN, which a
   caller must treat as unknown, never as "no bars" or "confirmed".
 * One worker thread (this object's) refreshes every key asked for in the last
-  ``WANT_TTL_SECONDS``, at most once per ``REFRESH_SECONDS``, one RPC per
-  (symbol, sessions). Never-fetched keys go first.
+  ``WANT_TTL_SECONDS`` once per 5-minute bar (after the boundary plus a short
+  grace), one RPC per (symbol, sessions), ~10 ms apart so Qt-thread RPCs are
+  not starved of the proxy's lock. Never-fetched keys go first, at once.
 * The value is always `m5_chart_bars`' own output, so a poll given the same
   bars decides exactly what it decided before.
 
@@ -27,8 +28,15 @@ import time
 
 from PySide6.QtCore import QObject, Signal
 
-#: A wanted key is refetched at most this often.
+#: Whole-bot values (zone arms, regime label) are refetched at most this often,
+#: and a failed first fetch is retried after it.
 REFRESH_SECONDS = 15.0
+#: Bars are refetched once per M5 bar: a completed bar is all a poll may use.
+BAR_SECONDS = 300
+#: How long after a bar boundary the refetch waits, so the child has the bar.
+BOUNDARY_GRACE_SECONDS = 20.0
+#: Gap between two refresh RPCs; the proxy's RPC lock is not fair.
+RPC_GAP_SECONDS = 0.01
 #: A key nobody has asked for in this long stops being refreshed.
 WANT_TTL_SECONDS = 300.0
 #: How long the idle worker sleeps between checks.
@@ -58,8 +66,13 @@ class M5BarCache(QObject):
         self.refresh_seconds = float(refresh_seconds)
         self._lock = threading.Lock()
         self._bot = None
-        # (symbol, sessions) -> (bars, fetched_at monotonic)
-        self._entries: dict[tuple[str, int], tuple[list, float]] = {}
+        # Wall clock for the bar-boundary rule (a test seam).
+        self._clock = time.time
+        # (symbol, sessions) -> (bars, fetched_at monotonic, bar bucket fetched in)
+        self._entries: dict[tuple[str, int], tuple[list, float, int]] = {}
+        # (symbol, sessions) -> monotonic of a failed first fetch (retry backoff)
+        self._failed: dict[tuple[str, int], float] = {}
+        self._shut = False
         # (symbol, sessions) -> last asked monotonic
         self._wanted: dict[tuple[str, int], float] = {}
         # Small whole-bot values (e.g. `d1_zone_arms`): name -> (value, fetched_at)
@@ -69,6 +82,17 @@ class M5BarCache(QObject):
         self._closing = threading.Event()
         self._thread: threading.Thread | None = None
         self.fetches = 0
+
+    def _bucket(self) -> int:
+        """Which 5-minute bar we are in, shifted by the grace after its boundary."""
+        return int((self._clock() - BOUNDARY_GRACE_SECONDS) // BAR_SECONDS)
+
+    def _bars_due(self, entry, now: float, key) -> bool:
+        """Caller holds the lock."""
+        if entry is None:
+            failed = self._failed.get(key)
+            return failed is None or now - failed >= self.refresh_seconds
+        return self._bucket() > entry[2]
 
     @staticmethod
     def _key(symbol: str, sessions: int) -> tuple[str, int]:
@@ -82,6 +106,7 @@ class M5BarCache(QObject):
             self._wanted.clear()
             self._values.clear()
             self._wanted_values.clear()
+            self._failed.clear()
 
     # -- Qt-thread half: memory only -----------------------------------------
     def peek(self, bot, symbol: str, sessions: int = 1) -> list | None:
@@ -96,7 +121,7 @@ class M5BarCache(QObject):
             self._adopt_bot(bot)
             self._wanted[key] = now
             entry = self._entries.get(key)
-            due = entry is None or now - entry[1] >= self.refresh_seconds
+            due = self._bars_due(entry, now, key)
         if due:
             self._ensure_worker()
             self._wake.set()
@@ -136,7 +161,8 @@ class M5BarCache(QObject):
                     return  # an answer from a retired child
                 self._bot = bot
             previous = self._entries.get(key)
-            self._entries[key] = (bars, time.monotonic())
+            self._entries[key] = (bars, time.monotonic(), self._bucket())
+            self._failed.pop(key, None)
             self._wanted.setdefault(key, time.monotonic())
         self.fetches += 1
         if previous is None or _stamp(previous[0]) != _stamp(bars):
@@ -148,6 +174,8 @@ class M5BarCache(QObject):
     # -- the worker ----------------------------------------------------------
     def _ensure_worker(self) -> None:
         with self._lock:
+            if self._shut:
+                return  # shut down at app close: never restarted
             if self._thread is not None and self._thread.is_alive():
                 return
             self._closing.clear()
@@ -165,9 +193,11 @@ class M5BarCache(QObject):
             fresh, stale = [], []
             for key in self._wanted:
                 entry = self._entries.get(key)
+                if not self._bars_due(entry, now, key):
+                    continue
                 if entry is None:
                     fresh.append(key)
-                elif now - entry[1] >= self.refresh_seconds:
+                else:
                     stale.append((entry[1], key))
         stale.sort()
         return bot, fresh + [key for _at, key in stale]
@@ -209,16 +239,20 @@ class M5BarCache(QObject):
                 try:
                     bars = list(bot.m5_chart_bars(key[0], max_sessions=key[1]) or [])
                 except Exception:
-                    # Unknown stays unknown; a known entry keeps its last answer
-                    # and is retried after the refresh period.
+                    # Unknown stays unknown (retried after REFRESH_SECONDS); a known
+                    # entry keeps its last answer until the next bar.
                     logging.debug("M5 cache fetch failed for %s.", key[0], exc_info=True)
                     with self._lock:
                         entry = self._entries.get(key)
                         if entry is not None:
-                            self._entries[key] = (entry[0], time.monotonic())
-                    continue
-                self._store(bot, key, bars)
-            # Nothing is due again for at least the refresh period.
+                            self._entries[key] = (entry[0], entry[1], self._bucket())
+                        else:
+                            self._failed[key] = time.monotonic()
+                else:
+                    self._store(bot, key, bars)
+                if self._closing.wait(RPC_GAP_SECONDS):
+                    return
+            # Idle until woken by a peek or the next check.
             self._wake.wait(IDLE_WAIT_SECONDS)
             self._wake.clear()
 
@@ -232,6 +266,8 @@ class M5BarCache(QObject):
         return False
 
     def shutdown(self, timeout: float = 1.0) -> None:
+        with self._lock:
+            self._shut = True
         self._closing.set()
         self._wake.set()
         thread = self._thread
@@ -242,6 +278,7 @@ class M5BarCache(QObject):
             self._wanted.clear()
             self._values.clear()
             self._wanted_values.clear()
+            self._failed.clear()
             self._bot = None
 
 
@@ -254,6 +291,12 @@ def shared_m5_cache() -> M5BarCache:
     if _SHARED is None:
         _SHARED = M5BarCache()
     return _SHARED
+
+
+def shutdown_shared_m5_cache(timeout: float = 1.0) -> None:
+    """App close: stop the worker (bounded join). Builds nothing if never used."""
+    if _SHARED is not None:
+        _SHARED.shutdown(timeout)
 
 
 def reset_shared_m5_cache() -> None:
