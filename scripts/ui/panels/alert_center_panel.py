@@ -1302,13 +1302,17 @@ class AlertCenterPanel(QFrame):
         controls.setSpacing(6)
         show_label = QLabel("Show")
         show_label.setObjectName("MutedLabel")
-        controls.addWidget(show_label)
-        controls.addWidget(self.min_tier_input)
-        controls.addWidget(self.sound_input)
-        controls.addWidget(self.hide_sector_input)
-        controls.addStretch(1)
-        controls.addWidget(self.ignored_button)
-        controls.addWidget(clear_button)
+        self._controls_layout = controls
+        self._control_widgets = (
+            show_label,
+            self.min_tier_input,
+            self.sound_input,
+            self.hide_sector_input,
+            None,  # the stretch
+            self.ignored_button,
+            clear_button,
+        )
+        self._fill_controls(controls)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -1322,6 +1326,7 @@ class AlertCenterPanel(QFrame):
         self._compact_layout = False
         self._classic_policies: dict[str, object] = {}
         self._drawer = TabDrawer(self, self.tabs)
+        self._root_layout = layout
         layout.addWidget(self._drawer.splitter, 1)
 
     # ------------------------------------------------------------------
@@ -1342,6 +1347,9 @@ class AlertCenterPanel(QFrame):
         if compact == self._compact_layout:
             return
         self._compact_layout = compact
+        # Compact trims the column's own margins; the charts get the pixels.
+        self._root_layout.setContentsMargins(*((4, 2, 4, 2) if compact else (8, 6, 8, 6)))
+        self._root_layout.setSpacing(2 if compact else 6)
         if compact:
             self._classic_policies = {
                 "chart_review": self.chart_review.sizePolicy(),
@@ -1351,9 +1359,11 @@ class AlertCenterPanel(QFrame):
             # The desk takes the column next; until then it has no parent.
             self.movers_column.setParent(None)
             self.splitter.setVisible(False)
+            self._set_controls_in_tab_corner(True)
             self._drawer.activate(self.chart_review, self.tabs_row)
         else:
             self._drawer.deactivate()
+            self._set_controls_in_tab_corner(False)
             self.splitter.insertWidget(0, self.chart_review)
             self.splitter.insertWidget(1, self.tabs_row)
             if self.movers_column.parent() is not self.tabs_row:
@@ -1372,6 +1382,43 @@ class AlertCenterPanel(QFrame):
                 self.tabs_row, ALERT_TABS_SPLIT_KEY, desk_layout.ALERT_TABS_ROW_WEIGHTS
             )
         self.chart_review.set_compact_controls(compact)
+
+    def _fill_controls(self, row) -> None:
+        """(Re)fill the Show/sound/filter control row in its canonical order."""
+        while row.count():
+            row.takeAt(0)
+        for widget in self._control_widgets:
+            if widget is None:
+                row.addStretch(1)
+            else:
+                row.addWidget(widget)
+
+    def _set_controls_in_tab_corner(self, corner: bool) -> None:
+        """Compact: the control row rides the drawer's tab bar, not a row of its own."""
+        if corner:
+            host = getattr(self, "_controls_corner", None)
+            if host is None:
+                host = QWidget()
+                host.setObjectName("AlertControlsCorner")
+                row = QHBoxLayout(host)
+                row.setContentsMargins(0, 0, theme.px(4), 0)
+                row.setSpacing(6)
+                self._controls_corner = host
+            while self._controls_layout.count():
+                self._controls_layout.takeAt(0)
+            self._fill_controls(host.layout())
+            self.tabs.setCornerWidget(host, Qt.Corner.TopRightCorner)
+            host.setVisible(True)
+        else:
+            host = getattr(self, "_controls_corner", None)
+            if host is None:
+                return
+            self.tabs.setCornerWidget(None, Qt.Corner.TopRightCorner)
+            host.setParent(self)
+            host.setVisible(False)
+            while host.layout().count():
+                host.layout().takeAt(0)
+            self._fill_controls(self._controls_layout)
 
     def _reveal_drawer(self) -> None:
         """A hotkey that raises a tab opens the compact drawer too."""

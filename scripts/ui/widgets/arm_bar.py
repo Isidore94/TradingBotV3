@@ -333,10 +333,12 @@ class ArmBar(QFrame):
             ):
                 row_layout.addWidget(widget)
             root.insertWidget(0, self.compact_row)
+            root.setContentsMargins(theme.px(6), theme.px(1), theme.px(6), theme.px(1))
             self.compact_row.setVisible(True)
             self.sync_compact_menus()
         else:
             root.removeWidget(self.compact_row)
+            root.setContentsMargins(theme.px(6), theme.px(4), theme.px(6), theme.px(4))
             self.compact_row.setVisible(False)
             _empty_layout(self.compact_row.layout())
             self._fill_classic_rows()

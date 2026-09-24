@@ -127,6 +127,7 @@ class BounceStatusProxy(QWidget):
 def _menu_button(text: str, menu: QMenu) -> QToolButton:
     button = QToolButton()
     button.setObjectName("CompactMenuButton")
+    button.setProperty("statusProxy", True)
     button.setText(text)
     button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
     button.setMenu(menu)

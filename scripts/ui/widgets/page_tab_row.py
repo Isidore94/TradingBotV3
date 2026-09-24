@@ -56,7 +56,7 @@ class PageTabRow(QFrame):
         self.brand.setObjectName("PageTabBrand")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(theme.px(8), theme.px(3), theme.px(8), theme.px(3))
+        layout.setContentsMargins(theme.px(8), theme.px(1), theme.px(8), theme.px(1))
         layout.setSpacing(theme.px(4))
         layout.addWidget(self.brand)
         layout.addSpacing(theme.px(10))

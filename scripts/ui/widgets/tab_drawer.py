@@ -55,7 +55,11 @@ class TabDrawer(QObject):
 
     def collapsed_height(self) -> int:
         """The tab bar plus the tab widget's frame: all a closed drawer shows."""
-        return self._tabs.tabBar().sizeHint().height() + theme.px(2)
+        bar = self._tabs.tabBar().sizeHint().height()
+        corner = self._tabs.cornerWidget(Qt.Corner.TopRightCorner)
+        if corner is not None and not corner.isHidden():
+            bar = max(bar, corner.sizeHint().height())
+        return bar + theme.px(2)
 
     def expanded_height(self) -> int:
         if self._expanded_px is not None:

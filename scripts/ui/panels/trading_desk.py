@@ -355,6 +355,7 @@ class TradingDeskPanel(QWidget):
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
+        self._root_layout = layout
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self.center_container)
 
@@ -400,6 +401,8 @@ class TradingDeskPanel(QWidget):
         compact = desk_layout == "compact"
         self._detach_mode_panels()
         _clear_layout(self.center_layout)
+        margin = 4 if compact else 8
+        self._root_layout.setContentsMargins(margin, margin, margin, margin)
         # The tape makes no fetches while compact hides it; classic resumes it.
         if compact:
             self.group_tape_service.pause()
