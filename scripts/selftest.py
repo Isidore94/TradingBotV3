@@ -123,6 +123,12 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "day_review_index",
     "day_review_bars",
     "forecast_brief",
+    # Econ morning brief (2026-09-24): reached through FUNCTION-LEVEL imports -
+    # the reminder service's worker builds the view, which parses the brief.
+    "econ_brief",
+    "econ_events",
+    "ui.services.econ_reminder_service",
+    "ui.widgets.econ_brief_block",
     # TJ-4: the day pack and the night's narration of it. Both are reached
     # through FUNCTION-LEVEL imports - the page's worker builds the pack after
     # the grades, the page reads the two verified files, and the Redo button
