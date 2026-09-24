@@ -22,7 +22,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Perf fixes** merged 2026-09-23 (`f3b2bfc8`), live at the next restart: test-run guard (the 09-23 07:52 bluescreen came from two parallel
   `-n 8` suites beside the desk), queued arms + no bot RPC on the Qt thread (gate #197), yfinance SQLite gc freeze fix + memory in `thread_cpu.jsonl`.
   Suite 10,681 passed. Owed: memory numbers in the swing-scan phase log (the scan child hit 4.7 GB).
-- **Day Recap coach** on `claude/recap-coach-2026-09-23`, not on `main`: cleaned Day Review, 5-min Walk with Mentor,
+- **Day Recap coach** merged 2026-09-23, live at the next restart: cleaned Day Review, 5-min Walk with Mentor,
   day records + week rollups, find-it-next-time, grade/regime history, chart clues, rule loop, week view + Ask the AI
   (gates #198–201). Owed: rule line in the phone brief; `_mentor_rule_lane` list_trades on the Qt thread.
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
