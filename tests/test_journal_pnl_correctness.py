@@ -362,3 +362,16 @@ def test_every_reader_uses_the_one_side_list():
     # still stores verbatim until the trader runs journal_reclassify (gate #162).
     for word in SELL_SIDE_WORDS - PRE_TJ9Q_VERBATIM_SIDES:
         assert journal_store._signed_quantity({"side": word, "quantity": 2}) == -2.0, word
+
+
+def test_the_new_stat_cards_leave_out_a_made_up_entry():
+    from journal_analytics import calendar_day_stats, trade_performance_stats
+
+    real = {"trade_id": "R", "status": "CLOSED", "net_pnl": 10.0, "trade_date": "2026-06-10",
+            "closed_at": "2026-06-10T15:00:00-04:00", "direction": "LONG"}
+    made_up = {"trade_id": "M", "status": "CLOSED", "net_pnl": 400.0, "trade_date": "2026-06-10",
+               "closed_at": "2026-06-10T15:05:00-04:00", "direction": "SHORT", "entry_invented": True}
+
+    stats = trade_performance_stats([real, made_up], "net_pnl")
+    assert stats["net"] == 10.0
+    assert calendar_day_stats([real, made_up], pnl_key="net_pnl")["2026-06-10"]["net"] == 10.0

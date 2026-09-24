@@ -139,6 +139,12 @@ def test_the_journal_is_five_tabs_over_one_header(panel):
     assert panel.header is panel.trades_tab._header is panel.fees_tab._header
 
 
+def test_every_tab_says_what_it_is_for(panel):
+    tips = [panel.tabs.tabToolTip(i) for i in range(panel.tabs.count())]
+    assert all(tip.strip() for tip in tips), tips
+    assert "profit factor" in tips[2]
+
+
 def test_the_panel_keeps_the_surface_the_app_depends_on(panel):
     for name in ("statusChanged", "shutdown"):
         assert hasattr(panel, name), f"ui/app.py calls {name}"

@@ -152,6 +152,15 @@ def _derived_tokens(values: Mapping[str, str]) -> dict[str, str]:
         "group_chip_short_bg": with_alpha(short, 0.10),
         "group_chip_unknown_border": with_alpha(neutral, 0.35),
         "group_chip_unknown_bg": with_alpha(neutral, 0.06),
+        # Journal calendar and stat cards: P&L tints, two strengths per side.
+        "pnl_win_bg": with_alpha(long_, 0.16),
+        "pnl_win_strong_bg": with_alpha(long_, 0.34),
+        "pnl_win_border": with_alpha(long_, 0.55),
+        "pnl_loss_bg": with_alpha(short, 0.16),
+        "pnl_loss_strong_bg": with_alpha(short, 0.34),
+        "pnl_loss_border": with_alpha(short, 0.55),
+        "pnl_flat_bg": with_alpha(neutral, 0.22),
+        "pnl_flat_border": with_alpha(neutral, 0.60),
     }
 
 
