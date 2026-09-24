@@ -207,7 +207,6 @@ class MoversBoard(QWidget):
     reviewAllRequested = Signal()
     fadedReviewRequested = Signal()
     deepReadToggled = Signal(bool)
-    refreshRequested = Signal()
 
     def __init__(self, parent=None, *, persist: bool = True) -> None:
         super().__init__(parent)
