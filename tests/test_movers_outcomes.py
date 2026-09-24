@@ -64,13 +64,64 @@ def test_flag_once_then_outcome_after_six_bars():
     assert [r["kind"] for r in last] == ["outcome"]
     out = last[0]
     assert out["end_reason"] == "six_bars"
-    assert out["anchor_bar"] == HOLD[11]["dt"].isoformat()
-    low = HOLD[11]["low"]
-    assert out["ret3_pct"] == pytest.approx((100.3 / low - 1) * 100)
-    assert out["ret6_pct"] == pytest.approx((100.8 / low - 1) * 100)
-    assert out["spy_ret3_pct"] == pytest.approx((SPY[14]["close"] / SPY[11]["close"] - 1) * 100)
+    # PRIMARY (lead 2026-09-23): both legs from the close of the flag bar (12).
+    assert out["flag_bar"] == HOLD[12]["dt"].isoformat()
+    assert out["ret3_pct"] == pytest.approx((HOLD[15]["close"] / HOLD[12]["close"] - 1) * 100)
+    assert out["ret6_pct"] == pytest.approx((HOLD[18]["close"] / HOLD[12]["close"] - 1) * 100)
+    assert out["spy_ret3_pct"] == pytest.approx((SPY[15]["close"] / SPY[12]["close"] - 1) * 100)
     assert out["excess6_pct"] == pytest.approx(out["ret6_pct"] - out["spy_ret6_pct"])
+    # SECONDARY best-possible entry: each leg from its OWN pullback low.
+    assert out["best_anchor_bar"] == HOLD[11]["dt"].isoformat()
+    assert out["best_ret3_pct"] == pytest.approx((HOLD[14]["close"] / HOLD[11]["low"] - 1) * 100)
+    spy_low = min(range(9, 19), key=lambda i: SPY[i]["low"])
+    assert out["best_spy_anchor_bar"] == SPY[spy_low]["dt"].isoformat()
+    assert out["best_spy_ret3_pct"] == pytest.approx(
+        (SPY[spy_low + 3]["close"] / SPY[spy_low]["low"] - 1) * 100
+    )
     assert tracker.episodes == {}
+
+
+def test_a_name_identical_to_spy_is_zero_excess_and_no_hit():
+    tracker = mo.DipOutcomeTracker()
+    twin = [dict(bar) for bar in SPY]
+    rows = []
+    for upto in range(12, 19):
+        now = SPY[upto]["dt"] + timedelta(minutes=5, seconds=20)
+        board = _board()
+        board["dip"]["long"] = [{"symbol": "TWIN"}]
+        rows += tracker.observe(board, {"TWIN": twin[: upto + 1]}, SPY[: upto + 1], now=now)
+    out = [r for r in rows if r["kind"] == "outcome"][0]
+    for key in ("excess3_pct", "excess6_pct", "best_excess3_pct"):
+        assert out[key] == pytest.approx(0.0), key
+    summary = mo.summarize(rows)
+    assert summary["all"]["hit_rate"] == 0.0
+    assert summary["best_possible_entry"]["avg_best_excess3_pct"] == pytest.approx(0.0)
+    assert "best-possible entry" in summary["best_possible_entry"]["label"]
+
+
+def test_restart_does_not_reflag_and_still_resolves_the_restored_episode():
+    first = mo.DipOutcomeTracker()
+    flags = _tick(first, 12)
+    fresh = mo.DipOutcomeTracker()
+    assert fresh.restore(flags, session=START.date(), now=START) == []
+    assert _tick(fresh, 13) == []  # HOLD was flagged before the restart
+    for upto in range(14, 18):
+        _tick(fresh, upto)
+    outcome = _tick(fresh, 18)
+    assert [r["kind"] for r in outcome] == ["outcome"]
+    assert outcome[0]["flag_bar"] == HOLD[12]["dt"].isoformat()
+
+
+def test_an_unresolved_restored_episode_is_logged_abandoned_at_the_session_roll():
+    first = mo.DipOutcomeTracker()
+    flags = _tick(first, 12)
+    fresh = mo.DipOutcomeTracker()
+    fresh.restore(flags, session=START.date(), now=START)
+    tomorrow = _bars([401.0] * 3, start=OPEN + timedelta(days=1))
+    rows = fresh.observe({"state": {}}, {}, tomorrow, now=tomorrow[-1]["dt"] + timedelta(minutes=6))
+    assert [r["kind"] for r in rows] == ["abandoned"]
+    assert rows[0]["reason"] == "episode abandoned at restart"
+    assert rows[0]["symbols"] == ["HOLD"]
 
 
 def test_episode_ends_when_spy_reclaims_the_high():

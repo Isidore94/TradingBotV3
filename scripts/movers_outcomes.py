@@ -4,10 +4,21 @@ Evidence only. A pullback (or bounce) episode is keyed by SPY's start bar and
 side. While it is ON, every name Dip-strong lists is recorded once, point in
 time (`kind: flag`). The episode ends when SPY closes back beyond the
 pre-pullback extreme, 6 bars after it opened, or at the session's last bar.
-Each flagged name then gets one `kind: outcome` row: its move from its own
-pullback low (high for a short) to +3 and +6 bars, next to SPY's move over
-the same bars. A bar that is not there yet is waited for; at the session's
-last bar what is missing is recorded as None (unknown).
+Each flagged name then gets one `kind: outcome` row.
+
+PRIMARY outcome (lead decision 2026-09-23, trader can overrule): both legs are
+measured from the CLOSE of the completed bar on which the name was first
+flagged - the name and SPY alike - to +3 and +6 bars; excess = name - SPY
+(SPY - name for a short). Only this drives the hit rate.
+SECONDARY `best_*` fields: each leg from its OWN pullback low (high for a
+short) inside the episode - a best-possible entry, never a tradable result
+and never part of the hit rate.
+A bar not there yet is waited for; at the session's last bar what is missing
+is None (unknown).
+
+Restart: `restore` rebuilds today's pending episodes from the flag rows in the
+log, so names are never re-flagged and their outcomes still resolve. A
+pending episode dropped at a session roll gets one `kind: abandoned` row.
 
 `summarize` and the CLI (`python scripts/movers_outcomes.py --summary`) read
 the file for the night AI. Pure except `append_records` and `load_records`.
@@ -24,10 +35,14 @@ from typing import Any, Iterable, Mapping, Sequence
 
 #: An episode ends this many bars after it opened.
 EPISODE_MAX_BARS = 6
-#: Outcome horizons, in bars after the name's own pullback extreme.
+#: Outcome horizons, in bars after the flag bar (and after each leg's own low).
 HORIZONS = (3, 6)
 #: The session's last regular M5 bar starts here (New York).
 LAST_BAR_START = time(15, 55)
+BEST_ENTRY_LABEL = (
+    "best-possible entry: each leg from its own pullback low/high - hindsight, "
+    "not tradable, never in the hit rate"
+)
 
 
 def _iso(value: Any) -> str:
@@ -40,12 +55,66 @@ def _pct(value: float | None, base: float | None) -> float | None:
     return (value / base - 1.0) * 100.0
 
 
+def _excess(side: str, ret: float | None, spy_ret: float | None) -> float | None:
+    if ret is None or spy_ret is None:
+        return None
+    return ret - spy_ret if side == "long" else spy_ret - ret
+
+
+def _forward(bars, index, horizon, base) -> float | None:
+    target = index + horizon
+    if index < 0 or target >= len(bars):
+        return None
+    return _pct(bars[target]["close"], base)
+
+
 class DipOutcomeTracker:
     """In-memory episode state. `observe` returns the rows to append."""
 
     def __init__(self) -> None:
         self.episodes: dict[tuple[str, str], dict[str, Any]] = {}
 
+    # ------------------------------------------------------------ restart
+    def restore(self, records: Iterable[Mapping[str, Any]], *, session: date,
+                now: datetime) -> list[dict[str, Any]]:
+        """Rebuild today's pending episodes from logged flag/outcome rows."""
+        day = session.isoformat()
+        rows = [r for r in records or () if str(r.get("session") or "") == day]
+        resolved = {(r.get("episode"), r.get("side"), r.get("symbol"))
+                    for r in rows if r.get("kind") == "outcome"}
+        for row in rows:
+            if row.get("kind") != "flag":
+                continue
+            key = (str(row.get("episode") or ""), str(row.get("side") or ""))
+            try:
+                flagged_bar = datetime.fromisoformat(str(row.get("flagged_bar")))
+            except ValueError:
+                continue
+            episode = self.episodes.setdefault(key, {
+                "session": session, "side": key[1], "start": key[0],
+                "extreme": row.get("spy_start_extreme"), "opened_at": flagged_bar,
+                "end": None, "end_reason": "", "flagged": {}, "resolved": set(),
+                "restored": True,
+            })
+            episode["opened_at"] = min(episode["opened_at"], flagged_bar)
+            symbol = str(row.get("symbol") or "")
+            episode["flagged"][symbol] = dict(row)
+            if (key[0], key[1], symbol) in resolved:
+                episode["resolved"].add(symbol)
+        for key in [k for k, ep in self.episodes.items()
+                    if len(ep["resolved"]) >= len(ep["flagged"])]:
+            self.episodes.pop(key)
+        return []
+
+    def _abandon(self, episode, now) -> dict[str, Any]:
+        pending = sorted(set(episode["flagged"]) - episode["resolved"])
+        reason = ("episode abandoned at restart" if episode.get("restored")
+                  else "episode abandoned at session roll")
+        return {"kind": "abandoned", "reason": reason,
+                "session": episode["session"].isoformat(), "episode": episode["start"],
+                "side": episode["side"], "symbols": pending, "recorded_at": _iso(now)}
+
+    # ------------------------------------------------------------ tick
     def observe(
         self,
         board: Mapping[str, Any],
@@ -62,7 +131,7 @@ class DipOutcomeTracker:
             return out
         session = spy_today[-1]["dt"].date()
         for key in [k for k, ep in self.episodes.items() if ep["session"] != session]:
-            self.episodes.pop(key)  # a new session: yesterday's leftovers are gone
+            out.append(self._abandon(self.episodes.pop(key), now))
         side = "long" if state.get("pullback") else "short" if state.get("bounce") else ""
         start = state.get("start_dt")
         start_text = _iso(start)
@@ -131,41 +200,55 @@ class DipOutcomeTracker:
         out = []
         side = episode["side"]
         start = datetime.fromisoformat(episode["start"])
-        spy_close = {bar["dt"]: bar["close"] for bar in spy_today}
+        spy_index = {bar["dt"]: i for i, bar in enumerate(spy_today)}
+        pick = min if side == "long" else max
+        extreme_of = (lambda b: b["low"]) if side == "long" else (lambda b: b["high"])
+        spy_window = [b for b in spy_today if start <= b["dt"] <= episode["end"]]
+        spy_anchor = pick(spy_window, key=extreme_of) if spy_window else None
         for symbol, flag in episode["flagged"].items():
             if symbol in episode["resolved"]:
                 continue
             bars = _today(series.get(symbol) or ())
-            window = [bar for bar in bars if start <= bar["dt"] <= episode["end"]]
-            if not window:
+            try:
+                flag_dt = datetime.fromisoformat(str(flag.get("flagged_bar")))
+            except ValueError:
+                flag_dt = None
+            index = {bar["dt"]: i for i, bar in enumerate(bars)}
+            f_i = index.get(flag_dt, -1)
+            s_i = spy_index.get(flag_dt, -1)
+            if f_i < 0 or s_i < 0:
                 if closed:
-                    episode["resolved"].add(symbol)
+                    episode["resolved"].add(symbol)  # no bar at the flag: unknown
                 continue
-            pick = min if side == "long" else max
-            anchor = pick(window, key=lambda b: (b["low"] if side == "long" else b["high"]))
-            index = bars.index(anchor)
-            if index + max(HORIZONS) >= len(bars) and not closed:
-                continue  # wait for +6 bars
-            price = anchor["low"] if side == "long" else anchor["high"]
+            if f_i + max(HORIZONS) >= len(bars) and not closed:
+                continue  # wait for +6 bars after the flag
             record = {
                 "kind": "outcome", "session": flag["session"], "episode": flag["episode"],
-                "side": side, "symbol": symbol, "rank": flag["rank"],
+                "side": side, "symbol": symbol, "rank": flag.get("rank"),
                 "end_reason": episode["end_reason"], "episode_end_bar": _iso(episode["end"]),
-                "anchor_bar": _iso(anchor["dt"]), "anchor_price": price,
-                "recorded_at": _iso(now),
+                "flag_bar": _iso(flag_dt), "recorded_at": _iso(now),
             }
+            base, spy_base = bars[f_i]["close"], spy_today[s_i]["close"]
             for horizon in HORIZONS:
-                target = bars[index + horizon] if index + horizon < len(bars) else None
-                ret = _pct(target["close"], price) if target else None
-                spy_ret = None
-                if target and anchor["dt"] in spy_close and target["dt"] in spy_close:
-                    spy_ret = _pct(spy_close[target["dt"]], spy_close[anchor["dt"]])
-                excess = None
-                if ret is not None and spy_ret is not None:
-                    excess = ret - spy_ret if side == "long" else spy_ret - ret
+                ret = _forward(bars, f_i, horizon, base)
+                spy_ret = _forward(spy_today, s_i, horizon, spy_base)
                 record[f"ret{horizon}_pct"] = ret
                 record[f"spy_ret{horizon}_pct"] = spy_ret
-                record[f"excess{horizon}_pct"] = excess
+                record[f"excess{horizon}_pct"] = _excess(side, ret, spy_ret)
+            window = [b for b in bars if start <= b["dt"] <= episode["end"]]
+            anchor = pick(window, key=extreme_of) if window else None
+            record["best_anchor_bar"] = _iso(anchor["dt"]) if anchor else ""
+            record["best_spy_anchor_bar"] = _iso(spy_anchor["dt"]) if spy_anchor else ""
+            for horizon in HORIZONS:
+                best = spy_best = None
+                if anchor is not None:
+                    best = _forward(bars, index[anchor["dt"]], horizon, extreme_of(anchor))
+                if spy_anchor is not None:
+                    spy_best = _forward(spy_today, spy_index[spy_anchor["dt"]], horizon,
+                                        extreme_of(spy_anchor))
+                record[f"best_ret{horizon}_pct"] = best
+                record[f"best_spy_ret{horizon}_pct"] = spy_best
+                record[f"best_excess{horizon}_pct"] = _excess(side, best, spy_best)
             episode["resolved"].add(symbol)
             out.append(record)
         return out
@@ -248,9 +331,19 @@ def summarize(
             "episodes": len({(r.get("session"), r.get("episode"), r.get("side")) for r in rows}),
         }
 
+    def mean(key):
+        values = [float(r[key]) for r in outcomes if r.get(key) is not None]
+        return (sum(values) / len(values)) if values else None
+
     return {
         "start": start.isoformat() if start else None,
         "end": end.isoformat() if end else None,
+        "measure": "from the flag bar's close, name vs SPY (drives hit_rate)",
+        "best_possible_entry": {
+            "label": BEST_ENTRY_LABEL,
+            "avg_best_excess3_pct": mean("best_excess3_pct"),
+            "avg_best_excess6_pct": mean("best_excess6_pct"),
+        },
         "all": block(outcomes),
         "long": block([r for r in outcomes if r.get("side") == "long"]),
         "short": block([r for r in outcomes if r.get("side") == "short"]),
