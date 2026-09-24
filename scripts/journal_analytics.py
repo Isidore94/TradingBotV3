@@ -410,6 +410,7 @@ class AutoTagger:
         avwap_signals_path: Path = AVWAP_SIGNALS_FILE,
         intraday_bounces_path: Path = INTRADAY_BOUNCES_FILE,
         lookback_calendar_days: int = DEFAULT_SWING_LOOKBACK_CALENDAR_DAYS,
+        evidence: Any = None,
     ) -> None:
         self.setup_tracker_path = Path(setup_tracker_path)
         self.focus_path = Path(focus_path)
@@ -419,6 +420,22 @@ class AutoTagger:
         self._context_rows: list[dict[str, Any]] | None = None
         self._capture_rows: list[dict[str, Any]] | None = None
         self._note_rows: list[dict[str, Any]] | None = None
+        # `journal_setup_evidence.EvidenceIndex`; loaded from the live logs on first use.
+        self._evidence = evidence
+
+    def load_evidence(self):
+        """The pre-entry evidence index (alerts, armed watches, claims, Focus). Never raises."""
+        if self._evidence is None:
+            try:
+                from journal_setup_evidence import EvidenceIndex
+
+                self._evidence = EvidenceIndex.load()
+            except Exception:  # noqa: BLE001 - a suggestion source is never fatal
+                logging.debug("Evidence lane unavailable to the auto-tagger.", exc_info=True)
+                from journal_setup_evidence import EvidenceIndex
+
+                self._evidence = EvidenceIndex()
+        return self._evidence
 
     def load_capture_rows(self) -> list[dict[str, Any]]:
         """The trader's OWN statements about a name, with their event ids.
@@ -1037,8 +1054,14 @@ class AutoTagger:
                 continue
             candidates[tag] = dict(note)
 
+        # The scanner lane matches an option on its UNDERLYING, and on the side
+        # the option takes on it (a long put is short the underlying).
+        from journal_setup_evidence import underlying_view
+
+        scan_symbol, scan_side = underlying_view(trade)
+        scan_side = scan_side or direction
         for row in self.load_context_rows():
-            if _normalize_symbol(row.get("symbol")) != symbol:
+            if _normalize_symbol(row.get("symbol")) != scan_symbol:
                 continue
             context_date = row.get("date")
             if not isinstance(context_date, date):
@@ -1048,7 +1071,7 @@ class AutoTagger:
                 continue
 
             row_side = _normalize_side(row.get("side"))
-            side_score = 0.16 if not row_side or not direction or row_side == direction else -0.10
+            side_score = 0.16 if not row_side or not scan_side or row_side == scan_side else -0.10
             source = str(row.get("source") or "bot_context")
             source_score = {
                 "setup_tracker": 0.28,
@@ -1083,6 +1106,22 @@ class AutoTagger:
                     "rationale": rationale,
                     "context_row_id": "",
                 }
+
+        # Evidence lane (same rank as the scanner): alerts that fired, watches
+        # armed, cards liked and setups claimed on this name BEFORE the entry.
+        for item in self.load_evidence().candidates_for(trade):
+            tag = str(item.get("tag") or "").strip()
+            if not tag:
+                continue
+            current = candidates.get(tag)
+            if current is not None and (
+                str(current.get("source") or "").startswith(
+                    (f"{TRADER_CAPTURE_SOURCE}:", f"{TRADER_NOTE_SOURCE}:")
+                )
+                or float(current.get("confidence", 0.0) or 0.0) >= float(item["confidence"])
+            ):
+                continue
+            candidates[tag] = dict(item)
 
         for correction in corrections or []:
             if _normalize_symbol(correction.get("symbol")) != symbol:
