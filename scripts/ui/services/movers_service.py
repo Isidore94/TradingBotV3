@@ -1,6 +1,6 @@
 """Owner of the Movers board's data: one QObject, one timer, one worker at a time.
 
-Each tick (every minute in regular hours, idle outside) the worker:
+Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
 1. reads cached M5 bars from the live bot (`m5_chart_bars`, cache only, never an
    IB request; on the process proxy that is one RPC per symbol, spaced out, and
    always off the Qt thread) for the bot's scan set, SPY and the Focus names;
@@ -26,10 +26,12 @@ from typing import Any, Callable, Iterable, Mapping
 from PySide6.QtCore import QObject, QTimer, Signal
 
 import movers_scan
-from ui.timer_utils import start_staggered, stop_staggered
 
-#: Tick cadence in regular hours.
-MOVERS_TICK_MS = 60_000
+
+#: One tick per 5-minute bar, this many seconds after the boundary (completed
+#: bars only change then; the bot's cache needs a moment to take the new bar).
+BAR_SECONDS = 300
+TICK_GRACE_SECONDS = 20
 #: Below this many bot-scanned names, the yfinance universe sweep is added.
 BOT_UNIVERSE_MIN = 300
 #: yfinance intraday sweep cadence (minutes); settings-tunable.
@@ -54,6 +56,16 @@ def in_regular_hours(now: datetime) -> bool:
     moment = now if now.tzinfo is not None else now.astimezone()
     ny = moment.astimezone(movers_scan.NY_TZ)
     return ny.weekday() < 5 and _RTH_START <= ny.time() <= _RTH_END
+
+
+def next_tick_delay_ms(now: datetime) -> int:
+    """Milliseconds until the next bar boundary + TICK_GRACE_SECONDS."""
+    moment = now if now.tzinfo is not None else now.astimezone()
+    into_bar = (moment.minute % 5) * 60 + moment.second + moment.microsecond / 1e6
+    wait = TICK_GRACE_SECONDS - into_bar
+    if wait <= 0:
+        wait += BAR_SECONDS
+    return int(round(wait * 1000))
 
 
 def _market_local_tz() -> tzinfo:
@@ -192,11 +204,12 @@ class MoversService(QObject):
         self._baseline_day: date | None = None
         self._baseline_tried: dict[str, datetime] = {}
         self.bot_universe_size: int | None = None
+        self._stopped = False
         self._timer = QTimer(self)
-        self._timer.setInterval(MOVERS_TICK_MS)
+        self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._tick)
         if autostart:
-            start_staggered(self._timer, 23_000)
+            self._arm()
 
     # ------------------------------------------------------------ wiring
     def set_bot_provider(self, provider: Callable[[], Any] | None) -> None:
@@ -229,15 +242,27 @@ class MoversService(QObject):
         return self._start()
 
     def shutdown(self) -> None:
-        stop_staggered(self._timer)
+        self._stopped = True
+        self._timer.stop()
+
+    def _arm(self) -> None:
+        """Schedule the next tick at the next bar boundary plus the grace."""
+        if self._stopped:
+            return
+        try:
+            delay = next_tick_delay_ms(self._clock())
+        except Exception:
+            delay = BAR_SECONDS * 1000
+        self._timer.start(delay)
 
     def _tick(self) -> None:
         try:
-            if self._running or not in_regular_hours(self._clock()):
-                return
-            self._start()
+            if not self._running and in_regular_hours(self._clock()):
+                self._start()
         except Exception:
             logging.exception("Movers tick failed")
+        finally:
+            self._arm()
 
     def _focus_snapshot(self) -> dict[str, list[str]]:
         """Focus names by side. Read on the Qt thread: an in-memory store read."""
@@ -310,8 +335,9 @@ class MoversService(QObject):
                 pool = wanted
             fetched = fetch_yahoo_bars(pool, downloader=downloader, period=YAHOO_TODAY_PERIOD)
             if fetched:
+                # Only a sweep that returned bars moves the clock; a failed one retries.
                 self._yahoo_bars = fetched
-            self._yahoo_at = now
+                self._yahoo_at = now
 
         series = choose_freshest(bot_bars, self._yahoo_bars, now=now, local_tz=local_tz)
         spy = series.pop("SPY", [])

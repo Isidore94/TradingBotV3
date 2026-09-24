@@ -179,6 +179,45 @@ def test_failed_refresh_keeps_the_last_good_board():
     assert "FAILED" in service.status_text()
 
 
+def test_failed_yahoo_sweep_does_not_move_the_sweep_clock():
+    class Broken:
+        calls = 0
+
+        def __call__(self, symbols, *, period, interval):
+            Broken.calls += 1
+            raise RuntimeError("yahoo down")
+
+    bot = FakeBot(["AAA"], {"SPY": _naive_la_bars([400.0] * 14)})
+    service = _service(bot, Broken())
+    service._run_once({"long": [], "short": []})
+    assert service._yahoo_at is None
+    assert service._yahoo_due(NOW)  # the next tick retries the sweep
+
+
+def test_next_tick_is_the_bar_boundary_plus_grace():
+    at = datetime(2026, 9, 22, 10, 41, 0, tzinfo=NY)
+    assert svc.next_tick_delay_ms(at) == (4 * 60 + svc.TICK_GRACE_SECONDS) * 1000
+    just_after = datetime(2026, 9, 22, 10, 45, 5, tzinfo=NY)
+    assert svc.next_tick_delay_ms(just_after) == (svc.TICK_GRACE_SECONDS - 5) * 1000
+    past_grace = datetime(2026, 9, 22, 10, 45, 30, tzinfo=NY)
+    assert svc.next_tick_delay_ms(past_grace) == (5 * 60 - 10) * 1000
+
+
+def test_timer_is_single_shot_and_rearms_after_a_tick():
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    service = _service(None, FakeDownloader({}))
+    assert service._timer.isSingleShot()
+    service._clock = lambda: datetime(2026, 9, 22, 8, 0, tzinfo=NY)  # idle hours
+    service._tick()
+    assert service._timer.isActive()
+    service.shutdown()
+    assert not service._timer.isActive()
+    service._tick()
+    assert not service._timer.isActive()  # a stopped service never re-arms
+
+
 def test_tick_is_idle_outside_regular_hours():
     service = _service(None, FakeDownloader({}))
     service._clock = lambda: datetime(2026, 9, 22, 8, 0, tzinfo=NY)
