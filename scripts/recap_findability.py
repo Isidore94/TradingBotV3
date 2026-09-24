@@ -1100,8 +1100,17 @@ def _read_csv(path: Path, keep=None) -> list[dict[str, str]]:
         return []
 
 
-def read_inputs(session_date: str, *, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Build ``inputs`` from the `project_paths` stores. Read-only; each store in its own guard."""
+def read_inputs(
+    session_date: str,
+    *,
+    payload: Mapping[str, Any] | None = None,
+    extra_symbols: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Build ``inputs`` from the `project_paths` stores. Read-only; each store in its own guard.
+
+    `extra_symbols` widens the per-name reads (setup tracker, Focus, watchlist) past the
+    notable names, so a caller can ask `traits_for` about a losing trade too.
+    """
     import project_paths as pp
     import walkaway_day
 
@@ -1139,6 +1148,7 @@ def read_inputs(session_date: str, *, payload: Mapping[str, Any] | None = None) 
         payload = guard("day review", _day, {})
     inputs["notable"] = guard("notable names", lambda: notable_from_payload(payload or {}), [])
     symbols = {_text(p.get("symbol")).upper() for p in inputs["notable"]}
+    symbols |= {_text(s).upper() for s in extra_symbols or () if _text(s)}
 
     def _d1_env():
         import d1_environment_store
