@@ -47,6 +47,8 @@ ALLOWED = {
     "ui/panels/day_review_panel.py",
     "ui/panels/weekend_prep_panel.py",
     "ui/widgets/ideas_card.py",
+    # The per-day archive for later review; it copies ideas and their keep/dismiss state, never acts on them.
+    "day_session_record.py",
 }
 
 #: The seams that MUST exist once TJ-6 lands, so this file cannot pass by the
