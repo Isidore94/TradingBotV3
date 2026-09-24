@@ -157,8 +157,14 @@ def reimport(
 
 
 def _backup_path(db_path: Path) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return db_path.parent / f"{db_path.stem}.pre-qt-reimport-{stamp}{db_path.suffix}.bak"
+    # Microseconds plus a counter so a second run never overwrites the first backup.
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    path = db_path.parent / f"{db_path.stem}.pre-qt-reimport-{stamp}{db_path.suffix}.bak"
+    n = 1
+    while path.exists():
+        path = db_path.parent / f"{db_path.stem}.pre-qt-reimport-{stamp}-{n}{db_path.suffix}.bak"
+        n += 1
+    return path
 
 
 def main(

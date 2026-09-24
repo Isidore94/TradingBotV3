@@ -145,3 +145,12 @@ def test_apply_refuses_the_live_folder_without_the_traders_flag(tmp_path, monkey
 
     assert journal_pnl_repair.main(["--db", str(db), "--apply"]) == journal_pnl_repair.EXIT_REFUSED_TO_START
     assert _sha(db) == before
+
+
+def test_two_backups_in_the_same_second_never_overwrite(tmp_path):
+    db = tmp_path / "trade_journal.sqlite3"
+    first = journal_pnl_repair._backup_path(db)
+    first.write_bytes(b"pre-repair")
+    second = journal_pnl_repair._backup_path(db)
+    assert second != first
+    assert first.read_bytes() == b"pre-repair"

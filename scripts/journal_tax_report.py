@@ -226,7 +226,7 @@ def build_tax_report(
             position.missing_amounts += 1
             continue
         amount = float(net)
-        if side == "SELL":
+        if _signed_quantity(side, 1.0) < 0:
             position.proceeds += amount
         else:
             position.cost += amount
