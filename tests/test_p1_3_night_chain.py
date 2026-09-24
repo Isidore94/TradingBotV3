@@ -371,6 +371,188 @@ def test_health_names_the_slots_the_budget_skipped(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
+# 3b: ticker briefs, Saturday only, the week's names, 7-day week cache
+# ---------------------------------------------------------------------------
+
+
+def test_ticker_briefs_are_saturday_only_and_run_the_weekly_wrapper():
+    from ai_jobs import briefs, runner
+
+    assert "ticker_briefs" in runner.WEEKEND_ONLY_SLOTS
+    assert "ticker_briefs" not in [slot.name for slot in runner.slots_for("weeknight")]
+    saturday = {slot.name: slot for slot in runner.slots_for("saturday")}
+    assert saturday["ticker_briefs"].run is briefs.run_weekly_ticker_briefs
+
+
+def _week_sources(tmp_path: Path) -> dict:
+    import sqlite3
+
+    db = tmp_path / "journal.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE trades (symbol TEXT, opened_at TEXT, closed_at TEXT, trade_date TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO trades VALUES (?, ?, ?, ?)",
+        [
+            ("TSLA", "2026-09-22T10:00:00", "2026-09-22T11:00:00", "2026-09-22"),
+            ("AAPL 261016C00250000", "2026-09-23T10:00:00", "", "2026-09-23"),
+            ("OLD", "2026-09-10T10:00:00", "2026-09-10T11:00:00", "2026-09-10"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    claimed = tmp_path / "claimed_picks.jsonl"
+    claimed.write_text(
+        json.dumps({"action": "claim", "symbol": "SEDG", "session_date": "2026-09-24"}) + "\n"
+        + json.dumps({"action": "unclaim", "symbol": "XOM", "session_date": "2026-09-24"}) + "\n"
+        + json.dumps({"action": "claim", "symbol": "OLDC", "session_date": "2026-09-18"}) + "\n",
+        encoding="utf-8",
+    )
+    feedback = tmp_path / "pick_feedback.jsonl"
+    feedback.write_text(
+        json.dumps({"verdict": "like", "symbol": "NVDA", "trade_date": "2026-09-25"}) + "\n"
+        + json.dumps({"verdict": "not_today", "symbol": "TYRA", "trade_date": "2026-09-24"}) + "\n",
+        encoding="utf-8",
+    )
+    swing = tmp_path / "focus_swing_longs.txt"
+    swing.write_text("MSFT\n# comment\nTSLA\n", encoding="utf-8")
+    alerts = tmp_path / "intraday_bounces.csv"
+    alerts.write_text(
+        "time_local,trade_date,symbol,direction\n"
+        "09:40:00,2026-09-24,AMD,long\n"
+        "09:45:00,2026-09-24,PLTR,long\n"
+        "10:40:00,2026-09-25,PLTR,short\n"
+        "10:40:00,2026-09-19,IGNORED,short\n",
+        encoding="utf-8",
+    )
+    return {
+        "journal": db,
+        "claimed": claimed,
+        "feedback": feedback,
+        "swing_focus_longs": swing,
+        "swing_focus_shorts": tmp_path / "missing_swing_shorts.txt",
+        "alerts": alerts,
+    }
+
+
+def test_the_week_names_are_traded_then_picked_then_alerted(tmp_path):
+    from ai_jobs import week_names
+
+    week = week_names.load_week_names("2026-09-25", sources=_week_sources(tmp_path))
+
+    assert week.week == "2026-W39"
+    assert week.ordered == ["TSLA", "AAPL", "SEDG", "NVDA", "MSFT", "PLTR", "AMD"]
+    assert week.reasons["AAPL"] == "traded"
+    assert week.reasons["NVDA"] == "liked"
+    assert week.reasons["PLTR"] == "alerted"
+    assert week.unreadable == ["swing_focus_shorts"]
+
+
+def _week(names: dict, key: str = "2026-W33"):
+    from ai_jobs.week_names import WeekNames
+
+    week = WeekNames(week=key)
+    for symbol, reason in names.items():
+        week.add(symbol, reason)
+    return week
+
+
+def _patch_briefs(monkeypatch, calls):
+    import ai_summary
+    from ai_jobs import window
+    from tests.test_ai_ticker_briefs import _base_evidence, _model_result
+
+    monkeypatch.setattr(window, "market_session_block", lambda now=None: "")
+    monkeypatch.setattr(window, "in_offhours_window", lambda now=None: True)
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+    monkeypatch.setattr(ai_summary, "local_model", lambda tier: f"{tier}-model")
+    monkeypatch.setattr(ai_summary, "build_evidence_package", lambda *a, **k: _base_evidence())
+
+    def endpoint(**kwargs):
+        symbol = kwargs["evidence"]["brief_symbol"]
+        calls.append(symbol)
+        return _model_result(symbol, "setups.rows")
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint)
+
+
+def test_the_briefs_skip_names_outside_the_week_and_over_the_cap(tmp_path, monkeypatch):
+    from ai_jobs import briefs
+
+    calls: list[str] = []
+    _patch_briefs(monkeypatch, calls)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\nMSFT\nAMD\n", encoding="utf-8")
+
+    outcome = briefs.run_ticker_briefs(
+        session_date="2026-08-11",
+        now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus},
+        output_root=tmp_path / "briefs",
+        morning_path=tmp_path / "morning.txt",
+        week=_week({"MSFT": "traded", "NVDA": "alerted"}),
+        name_cap=1,
+    )
+
+    assert calls == ["MSFT"]
+    assert outcome["status"] == "ok"
+    assert (
+        "1 watchlist name(s) skipped: not picked, alerted or traded in week 2026-W33; "
+        "1 week name(s) skipped: over the 1-name cap"
+    ) in outcome["reason"]
+
+
+def test_the_week_cache_reuses_a_brief_for_the_same_symbol_and_week(tmp_path, monkeypatch):
+    from ai_jobs import briefs
+
+    calls: list[str] = []
+    _patch_briefs(monkeypatch, calls)
+    week = _week({"MSFT": "traded", "NVDA": "liked"})
+    common = dict(
+        now=OVERNIGHT,
+        watchlist_paths={"focus_longs": tmp_path / "none.txt"},
+        output_root=tmp_path / "briefs",
+        morning_path=tmp_path / "morning.txt",
+        week=week,
+        name_cap=10,
+    )
+    briefs.run_ticker_briefs(session_date="2026-08-11", **common)
+    assert calls == ["MSFT", "NVDA"]
+
+    # a different session of the same week: its manifest is new, the week cache is not
+    second = briefs.run_ticker_briefs(session_date="2026-08-12", **common)
+    assert calls == ["MSFT", "NVDA"], "no model call for a name briefed this week"
+    assert second["tokens"]["tickers_week_cache_reused"] == 2
+    assert "2 reused from the week cache" in second["reason"]
+
+    # a new week briefs again
+    briefs.run_ticker_briefs(
+        session_date="2026-08-18", **{**common, "week": _week({"MSFT": "traded"}, "2026-W34")}
+    )
+    assert calls == ["MSFT", "NVDA", "MSFT"]
+
+
+def test_an_unreadable_empty_week_refuses_rather_than_publishing_nothing(tmp_path, monkeypatch):
+    from ai_jobs import briefs
+    from ai_jobs.week_names import WeekNames
+
+    _patch_briefs(monkeypatch, [])
+    morning = tmp_path / "morning.txt"
+    outcome = briefs.run_ticker_briefs(
+        session_date="2026-08-11",
+        now=OVERNIGHT,
+        watchlist_paths={"focus_longs": tmp_path / "none.txt"},
+        output_root=tmp_path / "briefs",
+        morning_path=morning,
+        week=WeekNames(week="2026-W33", unreadable=["journal"]),
+    )
+    assert outcome["status"] == "skipped"
+    assert "unreadable: journal" in outcome["reason"]
+    assert not morning.exists()
+
+
 def test_a_healthy_probe_is_not_in_the_phone_digest(tmp_path):
     import operations_audit
 

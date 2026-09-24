@@ -1359,9 +1359,10 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         JobSlot(
             name="ticker_briefs",
-            run=briefs.run_ticker_briefs,
+            # Saturday only, for the week's picks, alerts and traded names (P1-3 3b).
+            run=briefs.run_weekly_ticker_briefs,
             reserve_minutes=120.0,
-            description="Medium-tier advisory briefs for Focus/watchlist tickers",
+            description="Medium-tier advisory briefs for the week's picked, alerted and traded names",
             max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
             uses_model=True,
         ),
@@ -1507,7 +1508,10 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 #: slate, on Saturday, on Sunday only when owed", which is exactly the week
 #: story's cadence. It is weekly work on the largest local model the desk owns,
 #: and a Tuesday night has a session behind it and another in front.
-WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration")
+#:
+#: `ticker_briefs` joins it (trader, 2026-09-24, WISHLIST P1-3 3b): 66-139
+#: minutes a weeknight for briefs only the Saturday summary reads.
+WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "ticker_briefs")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
 #: ENDS at `day_review_facts`, which closes that stage today; a later packet
