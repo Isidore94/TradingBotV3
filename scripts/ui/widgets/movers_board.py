@@ -276,6 +276,8 @@ class MoversBoard(QWidget):
         if self._side not in ("long", "short"):
             self._side = "long"
         self._auto_switched_episode = ""
+        # Session date + day state the side last followed (or the trader overrode).
+        self._day_followed = ""
         self._focus_service = None
         self._render_coalescer = SignalCoalescer(self._render, parent=self)
         self._counts_coalescer = SignalCoalescer(self._render_counts, parent=self)
@@ -524,6 +526,7 @@ class MoversBoard(QWidget):
     def update_board(self, board: Any) -> None:
         """New board from the service. Coalesced: a burst is one render."""
         self._board = board if isinstance(board, dict) else {}
+        self._maybe_follow_day()
         self._maybe_auto_switch()
         self._render_coalescer.request()
 
@@ -548,6 +551,21 @@ class MoversBoard(QWidget):
     def _dip_live(self) -> bool:
         state = self._state()
         return bool(state.get("pullback") or state.get("bounce"))
+
+    def _day_key(self) -> str:
+        state = self._state().get("state")
+        if state not in ("up_day", "down_day"):
+            return ""
+        return f"{str(self._board.get('as_of') or '')[:10]}|{state}"
+
+    def _maybe_follow_day(self) -> None:
+        """Long on an up day, Short on a down day, once per day state; a tap holds until it changes."""
+        key = self._day_key()
+        if not key or key == self._day_followed:
+            return
+        self._day_followed = key
+        self._side = "long" if key.endswith("up_day") else "short"
+        self._sync_controls()
 
     def _maybe_auto_switch(self) -> None:
         """Jump to Dip-strong once per pullback/bounce episode; never fight the trader."""
@@ -581,6 +599,7 @@ class MoversBoard(QWidget):
         self._render()
 
     def _on_side_clicked(self) -> None:
+        self._day_followed = self._day_key() or self._day_followed
         self.set_side("short" if self._side == "long" else "long", user=True)
 
     def _on_deep_read(self, checked: bool) -> None:
