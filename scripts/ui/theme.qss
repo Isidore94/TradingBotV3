@@ -374,6 +374,16 @@ QTableView::item {
     padding-right: @cell_pad@;
 }
 
+/* The Movers table packs up to eight columns into a 170-420 px column. */
+QTableView#MoversTable::item {
+    padding-left: 2px;
+    padding-right: 2px;
+}
+
+QTableView#MoversTable QHeaderView::section {
+    padding: @header_pad_v@ 2px;
+}
+
 QTabWidget::pane {
     border: 1px solid @border@;
     border-radius: @radius@;

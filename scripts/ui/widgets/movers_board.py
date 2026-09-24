@@ -41,8 +41,9 @@ MIN_BOARD_WIDTH = 170
 #: Rows the table shows without scrolling.
 VISIBLE_ROWS = 10
 #: Width that one numeric column needs; narrower tables show fewer columns.
-COLUMN_MIN_PX = 56
-SYMBOL_COLUMN_PX = 56
+COLUMN_MIN_PX = 48
+SYMBOL_COLUMN_PX = 88
+LVL_COLUMN_PX = 70
 
 MODES = ("pop", "dip", "mine")
 MODE_LABELS = {"pop": "Pop", "dip": "Dip-strong", "mine": "My names"}
@@ -356,6 +357,7 @@ class MoversBoard(QWidget):
 
         self.model = MoversTableModel(self)
         self.table = QTableView()
+        self.table.setObjectName("MoversTable")
         self.table.setModel(self.model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -435,20 +437,41 @@ class MoversBoard(QWidget):
         super().resizeEvent(event)
         self._fit_columns()
 
+    def _column_px(self, key: str) -> int:
+        if key == "symbol":
+            return theme.px(SYMBOL_COLUMN_PX)
+        if key == "lvl":
+            return theme.px(LVL_COLUMN_PX)
+        return theme.px(COLUMN_MIN_PX)
+
     def visible_column_count(self) -> int:
-        """Columns that fit the board's width (symbol + N numbers, at least 2)."""
+        """Columns that fit the board's width, in priority order (at least 2)."""
         margins = self.layout().contentsMargins() if self.layout() is not None else None
         width = self.width() - (margins.left() + margins.right() if margins else 0)
-        fit = 1 + max(0, (width - theme.px(SYMBOL_COLUMN_PX)) // theme.px(COLUMN_MIN_PX))
-        return max(2, min(len(COLUMNS[self._mode]), int(fit)))
+        used = count = 0
+        for key, _header in COLUMNS[self._mode]:
+            used += self._column_px(key)
+            if used > width:
+                break
+            count += 1
+        return max(2, count)
 
     def _fit_columns(self) -> None:
         count = self.visible_column_count()
-        for column in range(self.model.columnCount()):
+        header = self.table.horizontalHeader()
+        for column, (key, _h) in enumerate(COLUMNS[self._mode]):
             hidden = column >= count
             if self.table.isColumnHidden(column) != hidden:
                 self.table.setColumnHidden(column, hidden)
+            if key in ("symbol", "lvl") and column < self.model.columnCount():
+                if header.sectionResizeMode(column) != QHeaderView.ResizeMode.Fixed:
+                    header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+                if header.sectionSize(column) != self._column_px(key):
+                    header.resizeSection(column, self._column_px(key))
         narrow = self.width() < theme.px(NARROW_PX)
+        # The +F chip is the first control to go on a narrow board (the row menu stays).
+        if self.add_focus_button.isHidden() != narrow:
+            self.add_focus_button.setVisible(not narrow)
         labels = MODE_SHORT if narrow else MODE_LABELS
         for mode, button in self.mode_buttons.items():
             text = labels[mode] + (" ●" if mode == "dip" and self._dip_live() else "")
