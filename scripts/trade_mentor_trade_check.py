@@ -77,6 +77,7 @@ queue (plan.md sec 5).
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -620,13 +621,25 @@ def setup_guess_for(
         eligible = eligible_setup_names(trade.get("setup_tags"))
         if eligible:
             return eligible[0], LANE_PROVISIONAL
+    entry_day = str(trade.get("opened_at") or trade.get("trade_date") or "")[:10]
     for candidate in candidates or ():
         if not _candidate_is_setup_lane(candidate):
+            continue
+        if _scanner_row_not_before_entry(candidate, entry_day):
             continue
         eligible = eligible_setup_names(candidate.get("tag"))
         if eligible:
             return eligible[0], LANE_EVIDENCE
     return "", ""
+
+
+_SCANNER_CONTEXT_DAY = re.compile(r"\bcontext (\d{4}-\d{2}-\d{2})\b")
+
+
+def _scanner_row_not_before_entry(candidate: Mapping[str, Any], entry_day: str) -> bool:
+    """A scanner row carries only a date, so one dated on or after the entry day may postdate the fill."""
+    match = _SCANNER_CONTEXT_DAY.search(str(candidate.get("rationale") or ""))
+    return bool(match and entry_day and match.group(1) >= entry_day)
 
 
 def _stored_candidates(store: Any, trade_id: str) -> list[dict[str, Any]]:

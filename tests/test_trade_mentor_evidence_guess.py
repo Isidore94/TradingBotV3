@@ -79,6 +79,21 @@ def test_a_trade_with_only_below_threshold_evidence_still_gets_a_guess(tmp_path)
     assert "(0.62)" in question.setup_guess_evidence
 
 
+def test_a_scanner_row_from_the_entry_day_is_never_offered(tmp_path):
+    """It has a date and no time, so it may have been logged after the fill."""
+    store = _store(tmp_path)
+    _trade(store, "T1")
+    store.mark_tags_needing_review("T1")
+    _candidate(
+        store, "T1", "pullback_long", 0.5, "setup_tracker",
+        f"setup_tracker; AAA; context {REVIEWED}; pullback_long",
+    )
+
+    question = _question(store, "T1")
+
+    assert question.setup_guess == ""
+
+
 def test_shape_link_and_rejection_candidates_are_never_offered(tmp_path):
     store = _store(tmp_path)
     _trade(store, "T1")
