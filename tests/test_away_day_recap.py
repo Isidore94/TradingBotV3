@@ -78,8 +78,8 @@ def test_an_away_day_accumulates_no_review_queue(monkeypatch):
 def test_the_desk_lists_intraday_alerts_in_the_m5_bar_and_queues_none(monkeypatch):
     """DESK was untouched by the AWAY amendment. Since 2026-08-27 (trader
     rule) an ordinary intraday alert lists in the M5 alert bar instead of
-    queueing a chart - in DESK and EVENING alike - while AWAY still assembles
-    the recap and never posts to the bar."""
+    queueing a chart in DESK, while AWAY and EVENING (since 2026-09-23) never
+    post to the bar."""
     panel = _panel(monkeypatch, mode="DESK")
     posted = []
     panel.m5AlertPosted.connect(posted.append)
@@ -92,10 +92,10 @@ def test_the_desk_lists_intraday_alerts_in_the_m5_bar_and_queues_none(monkeypatc
     assert panel._review_queue == []
 
 
-def test_evening_lists_intraday_alerts_in_the_m5_bar_too(monkeypatch):
-    """The amendment changed AWAY only; EVENING is for sleeping through the
-    morning, and what the trader wakes up to is now the M5 bar plus the D1
-    queue rather than a queue of M5 charts."""
+def test_evening_leaves_the_m5_bar_and_the_queue_empty(monkeypatch):
+    """EVENING diverts like AWAY (trader, 2026-09-23): the trader flips out of
+    EVENING to an empty queue and reads the catch-up card instead. The alerts
+    are kept for that card; the backing list still fills."""
     panel = _panel(monkeypatch, mode="EVENING")
     posted = []
     panel.m5AlertPosted.connect(posted.append)
@@ -103,9 +103,11 @@ def test_evening_lists_intraday_alerts_in_the_m5_bar_too(monkeypatch):
     panel.add_alert(_alert("AAA"))
     panel.add_alert(_alert("BBB"))
 
-    assert [alert.symbol for alert in posted] == ["AAA", "BBB"]
+    assert posted == []
     assert panel._current_review_alert is None
     assert panel._review_queue == []
+    assert [alert.symbol for alert in panel.evening_catchup_alerts()] == ["AAA", "BBB"]
+    assert len(panel._alerts) == 2
 
 
 # ==========================================================================

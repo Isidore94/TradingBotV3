@@ -202,6 +202,10 @@ class MainWindow(QMainWindow):
         self.autopilot_panel.service.autoModeChanged.connect(
             self.trading_panel.price_alert_service.on_auto_mode_changed
         )
+        # EVENING diverts the review queue; the flip out of it empties it.
+        self.autopilot_panel.service.autoModeChanged.connect(
+            self.trading_panel.alert_center.on_auto_mode_changed
+        )
         # TJ-1 item 6(b): the staged-pick table lives on the Auto Pilot page now.
         # The ADD is still performed here, by the store's own owner.
         self.autopilot_panel.focusAddRequested.connect(self._add_staged_pick_to_focus)
