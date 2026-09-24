@@ -288,6 +288,9 @@ NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     # Only the bulk tagger ever writes `provisional`, which is what keeps a
     # machine-applied tag distinguishable from a hand-typed one forever (I7).
     ("trade_annotations", "tag_status", "TEXT NOT NULL DEFAULT 'confirmed'"),
+    # Who wrote a `regimes` row: 'auto' (journal_regime_fill) or '' (the
+    # trader). An auto writer never touches a row whose source is not 'auto'.
+    ("regimes", "source", "TEXT NOT NULL DEFAULT ''"),
 )
 
 TRADER_TAX_STATUS_SETTING = "journal_trader_tax_statuses"

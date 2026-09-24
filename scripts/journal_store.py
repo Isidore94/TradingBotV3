@@ -81,6 +81,9 @@ PROVISIONAL_TAG_ADJUSTMENT = "APPLY_PROVISIONAL_TAG"
 #: what the UI reads to say where a suggestion came from.
 TRADE_SHAPE_SOURCE = "trade_shape"
 
+#: `regimes.source` of a row the nightly market-environment fill wrote.
+REGIME_SOURCE_AUTO = "auto"
+
 #: P6's EXACT-ID lane, RE-EXPORTED from `journal_analytics`, which owns it and
 #: which this module already imports from. The stored value is
 #: ``trader_capture:<kind>`` - veto, like_claim, pass or a take-class review
@@ -2993,6 +2996,8 @@ class JournalStore:
         intraday_regime: str = "",
         notes: str = "",
     ) -> None:
+        """The TRADER's regime writer. Marks the row trader-owned (`source=''`),
+        so the nightly auto fill never touches it again."""
         date_value = _date_text(trade_date)
         with self.connection() as conn:
             existing = conn.execute("SELECT * FROM regimes WHERE trade_date = ?", (date_value,)).fetchone()
@@ -3000,14 +3005,16 @@ class JournalStore:
             conn.execute(
                 """
                 INSERT INTO regimes(
-                    trade_date, mid_term_regime, short_term_regime, intraday_regime, notes, updated_at
-                ) VALUES(?, ?, ?, ?, ?, ?)
+                    trade_date, mid_term_regime, short_term_regime, intraday_regime, notes, updated_at,
+                    source
+                ) VALUES(?, ?, ?, ?, ?, ?, '')
                 ON CONFLICT(trade_date) DO UPDATE SET
                     mid_term_regime = excluded.mid_term_regime,
                     short_term_regime = excluded.short_term_regime,
                     intraday_regime = excluded.intraday_regime,
                     notes = excluded.notes,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    source = ''
                 """,
                 (
                     date_value,
@@ -3018,6 +3025,57 @@ class JournalStore:
                     _now_iso(),
                 ),
             )
+
+    def upsert_auto_regime(
+        self,
+        trade_date: str | date,
+        *,
+        mid_term_regime: str,
+        short_term_regime: str,
+        intraday_regime: str,
+        notes: str = "",
+    ) -> bool:
+        """The machine's regime writer. Writes only a missing row or a row it
+        wrote itself (`source='auto'`); returns False when a trader row exists."""
+        date_value = _date_text(trade_date)
+        with self.connection() as conn:
+            existing = conn.execute(
+                "SELECT source FROM regimes WHERE trade_date = ?", (date_value,)
+            ).fetchone()
+            if existing is not None and str(_row_to_dict(existing).get("source") or "") != REGIME_SOURCE_AUTO:
+                return False
+            conn.execute(
+                """
+                INSERT INTO regimes(
+                    trade_date, mid_term_regime, short_term_regime, intraday_regime, notes, updated_at,
+                    source
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_date) DO UPDATE SET
+                    mid_term_regime = excluded.mid_term_regime,
+                    short_term_regime = excluded.short_term_regime,
+                    intraday_regime = excluded.intraday_regime,
+                    notes = excluded.notes,
+                    updated_at = excluded.updated_at,
+                    source = excluded.source
+                WHERE regimes.source = excluded.source
+                """,
+                (
+                    date_value,
+                    str(mid_term_regime or "").strip(),
+                    str(short_term_regime or "").strip(),
+                    str(intraday_regime or "").strip(),
+                    str(notes or "").strip(),
+                    _now_iso(),
+                    REGIME_SOURCE_AUTO,
+                ),
+            )
+        return True
+
+    def list_regime_rows(self) -> list[dict[str, Any]]:
+        """Every `regimes` row with its `source` ('auto' or '' for the trader)."""
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM regimes ORDER BY trade_date").fetchall()
+        return [_row_to_dict(row) for row in rows]
 
     def get_regimes_for_dates(self, trade_dates: Iterable[Any]) -> dict[str, dict[str, str]]:
         """The regime block for many dates, in ONE connection and ONE query.
