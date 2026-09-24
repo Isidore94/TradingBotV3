@@ -553,6 +553,84 @@ def test_an_unreadable_empty_week_refuses_rather_than_publishing_nothing(tmp_pat
     assert not morning.exists()
 
 
+# ---------------------------------------------------------------------------
+# 3c: the summary reads at most N slices per run
+# ---------------------------------------------------------------------------
+
+
+def _mr_package(sources):
+    return {
+        "schema_version": "ai_evidence_package_v2",
+        "session_date": "2026-09-25",
+        "sources": [
+            {"source_id": sid, "label": sid, "status": "available", "content": content}
+            for sid, content in sources
+        ],
+    }
+
+
+def _mr_summary(ref):
+    sections = ("what_is_working", "what_is_not_working", "best_candidates",
+                "lessons_for_tomorrow", "risk_notes")
+    out = {"executive_summary": "e", **{name: [] for name in sections}}
+    out["what_is_working"] = [{"statement": "f", "evidence_refs": [ref], "confidence": "high"}]
+    return out
+
+
+def test_cap_chunks_keeps_every_source_before_any_second_slice():
+    from ai_jobs import map_reduce
+
+    chunks = [
+        map_reduce.Chunk("a", 1, 3, "", "a1"),
+        map_reduce.Chunk("a", 2, 3, "", "a2"),
+        map_reduce.Chunk("a", 3, 3, "", "a3"),
+        map_reduce.Chunk("b", 1, 1, "", "b1"),
+        map_reduce.Chunk("c", 1, 2, "", "c1"),
+        map_reduce.Chunk("c", 2, 2, "", "c2"),
+    ]
+    kept, left_out = map_reduce.cap_chunks(chunks, 4)
+    assert [chunk.content for chunk in kept] == ["a1", "a2", "b1", "c1"]
+    assert left_out == 2
+    assert map_reduce.cap_chunks(chunks, 0) == (chunks, 0)
+    assert map_reduce.cap_chunks(chunks, 10) == (chunks, 0)
+
+
+def test_a_capped_summary_reads_only_the_cap_and_says_so():
+    from ai_jobs import map_reduce
+
+    rows = [{"symbol": f"S{i}", "pad": "x" * 200} for i in range(60)]
+    ev = _mr_package([("setups.type_stats", rows), ("daily.auto_report", "short")])
+    calls: list[str] = []
+
+    def request(**kwargs):
+        sources = kwargs["evidence"].get("sources") or []
+        calls.append(str(sources[0].get("source_id")) if sources else "?")
+        return {"summary": _mr_summary("setups.type_stats")}
+
+    result = map_reduce.run_map_reduce(
+        evidence=ev, model="m", request=request, chars=4_000, slice_cap=3
+    )
+    stats = result["map_reduce"]
+
+    planned = len(map_reduce.plan_chunks(ev, chars=4_000))
+    assert planned > 3
+    assert len(calls) == 3 + 1, "three map slices and one synthesis"
+    assert stats["slices_planned"] == planned
+    assert stats["slices_read"] == 3
+    assert stats["slices_capped"] == planned - 3
+    assert stats["slice_cap"] == 3
+    assert "were not read because one run reads at most 3" in stats["coverage_statement"]
+    assert "daily.auto_report" in calls, "the small source keeps its one slice"
+
+
+def test_the_slice_cap_is_a_setting_with_a_default_of_24():
+    from ai_jobs import map_reduce
+
+    assert map_reduce.max_slices(lambda key, default=None: default) == 24
+    assert map_reduce.max_slices(lambda key, default=None: 10) == 10
+    assert map_reduce.max_slices(lambda key, default=None: "junk") == 24
+
+
 def test_a_healthy_probe_is_not_in_the_phone_digest(tmp_path):
     import operations_audit
 

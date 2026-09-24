@@ -307,7 +307,13 @@ def run_daily_summary(
         reason = (
             f"summary for {session_date} from {counts.get('usable', 0)} usable source(s) "
             f"read as {stats.get('slices_read')} of {stats.get('slices_planned')} slice(s); "
-            f"completion={completion}"
+            + (
+                f"{stats.get('slices_capped')} slice(s) left out by the per-run cap of "
+                f"{stats.get('slice_cap')}; "
+                if stats.get("slices_capped")
+                else ""
+            )
+            + f"completion={completion}"
             # The CAUSE, verbatim from the exception, so "why was this not
             # synthesized" is answered in the ledger row rather than in a log.
             + (f" after {synthesis_error}" if synthesis_error else "")
