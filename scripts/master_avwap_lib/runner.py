@@ -3142,6 +3142,10 @@ def _run_master_impl(
     save_json(PREV_CACHE_FILE, prev_cache)
     # Warehouse evidence only (see bridge_earnings_anchor_caches_to_csv).
     bridge_earnings_anchor_caches_to_csv(curr_cache, prev_cache, longs, shorts)
+    # Shadow evidence only (WISHLIST 7 / packet WS-ENV): one D1 environment row
+    # per benchmark for the session that just finished. Failure is logged, never
+    # raised, and the returned labels reach the log line and nothing else.
+    run_result["d1_environment"] = record_d1_environment(ib, now=datetime.now())
     save_history(history)
     save_json(AI_STATE_FILE, ai_state)
     _output_t = _log_phase_duration("output/state", _output_t)
@@ -3234,10 +3238,6 @@ def _run_master_impl(
     _phase_t = _log_phase_duration("tracker update+calibrate", _phase_t)
     disconnect_daily_data_client(ib)
     _output_t = time.perf_counter()
-    # Shadow evidence only (WISHLIST 7 / packet WS-ENV): one D1 environment row
-    # per benchmark for the session that just finished. Failure is logged, never
-    # raised, and the returned labels reach the log line and nothing else.
-    run_result["d1_environment"] = record_d1_environment(ib, now=datetime.now())
 
     theta_enrichment_pending = _schedule_deferred_theta_enrichment(
         run_id=run_id,
@@ -3254,7 +3254,7 @@ def _run_master_impl(
     if not theta_enrichment_pending:
         run_result["theta_enrichment_mode"] = "not_needed"
 
-    _log_phase_duration("output/d1-environment+theta", _output_t)
+    _log_phase_duration("output/theta-schedule", _output_t)
     _log_phase_duration("TOTAL (theta enrichment deferred)", _run_t0)
     logging.info(
         f"Master AVWAP run complete. "
