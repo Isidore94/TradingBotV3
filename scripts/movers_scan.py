@@ -21,7 +21,7 @@ importable on their own so other tools can share them.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
@@ -62,6 +62,24 @@ RVOL_BASELINE_SESSIONS = 20
 RVOL_BASELINE_MIN_SESSIONS = 5
 #: Rows kept per list.
 MOVERS_TOP_N = 15
+#: "ext": more than this many ATRs from session VWAP (information only).
+EXT_ATR = 2.0
+#: Group tag: this many names of one industry inside a list's top N.
+GROUP_MIN_COUNT = 3
+GROUP_TOP_N = 15
+GROUP_LABEL_CHARS = 10
+GROUP_ABBREVIATIONS = {
+    "semiconductor": "Semis",
+    "software": "Software",
+    "biotechnology": "Biotech",
+    "banks": "Banks",
+    "oil & gas": "Oil&Gas",
+    "internet": "Internet",
+    "drug manufacturers": "Pharma",
+    "solar": "Solar",
+    "gold": "Gold",
+    "auto": "Autos",
+}
 
 
 # ---------------------------------------------------------------- time
@@ -308,6 +326,21 @@ class MoverRow:
     stale: bool = False
     note: str = ""
     focus_side: str = ""
+    # Stretch / level (information only; never part of a score).
+    hod: float | None = None
+    lod: float | None = None
+    session_vwap: float | None = None
+    prev_high: float | None = None
+    prev_low: float | None = None
+    from_hod_atr: float | None = None  # <= 0: ATRs below the session high
+    from_lod_atr: float | None = None  # >= 0: ATRs above the session low
+    from_vwap_atr: float | None = None
+    hod_break: bool = False  # last completed bar made a new session high
+    lod_break: bool = False
+    ext_up: bool = False  # more than EXT_ATR above VWAP
+    ext_down: bool = False
+    er: bool = False  # reports today or reported after the last close
+    group: str = ""  # short industry label when 3+ share a list's top 15
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -385,12 +418,116 @@ def measure_symbol(
                 dip = (excess_price / atr) * rvol_weight(span_rvol)
     if atr is None:
         note = note or "ATR unmeasurable"
+    levels = _levels(prior, today, atr)
     return MoverRow(
         symbol=symbol, last=last, move15_pct=move15, move30_pct=move30, day_pct=day_pct,
         rvol=rvol, vs_spy15_pct=vs_spy, atr=atr, pop_score=pop_score,
         since_start_pct=since, dip_score=dip, session_volume=session_vol,
-        passes_floors=passes, stale=stale, note=note,
+        passes_floors=passes, stale=stale, note=note, **levels,
     )
+
+
+def _levels(prior: Sequence[Mapping[str, Any]], today: Sequence[Mapping[str, Any]],
+            atr: float | None) -> dict[str, Any]:
+    """HOD/LOD/VWAP distances in ATRs and the break/extension tags."""
+    last = today[-1]["close"]
+    hod = max(bar["high"] for bar in today)
+    lod = min(bar["low"] for bar in today)
+    earlier = today[:-1]
+    hod_break = bool(earlier) and today[-1]["high"] > max(bar["high"] for bar in earlier)
+    lod_break = bool(earlier) and today[-1]["low"] < min(bar["low"] for bar in earlier)
+    prev_session = [bar for bar in prior if prior and bar["dt"].date() == prior[-1]["dt"].date()]
+    try:
+        from chart_snapshot import session_vwap_series
+
+        vwap = session_vwap_series(list(today))["vwap"][-1]
+    except Exception:
+        vwap = None
+    out: dict[str, Any] = {
+        "hod": hod, "lod": lod, "session_vwap": vwap,
+        "prev_high": max(bar["high"] for bar in prev_session) if prev_session else None,
+        "prev_low": min(bar["low"] for bar in prev_session) if prev_session else None,
+        "hod_break": hod_break, "lod_break": lod_break,
+    }
+    if atr and atr > 0:
+        out["from_hod_atr"] = (last - hod) / atr
+        out["from_lod_atr"] = (last - lod) / atr
+        if vwap is not None:
+            out["from_vwap_atr"] = (last - vwap) / atr
+            out["ext_up"] = out["from_vwap_atr"] > EXT_ATR
+            out["ext_down"] = out["from_vwap_atr"] < -EXT_ATR
+    return out
+
+
+# ---------------------------------------------------------------- tags
+def earnings_symbols(events: Iterable[Mapping[str, Any]], *, today: date, previous: date) -> set[str]:
+    """Names reporting today (any session) or after the previous session's close (AMC)."""
+    out: set[str] = set()
+    for event in events or ():
+        symbol = str(event.get("ticker") or event.get("symbol") or "").strip().upper()
+        when = str(event.get("earnings_date") or "")[:10]
+        session = str(event.get("release_session") or "").strip().upper()
+        if not symbol:
+            continue
+        if when == today.isoformat() or (when == previous.isoformat() and session == "AMC"):
+            out.add(symbol)
+    return out
+
+
+def short_group(industry: str) -> str:
+    """A compact industry label for a narrow cell."""
+    text = str(industry or "").strip()
+    for long_name, short in GROUP_ABBREVIATIONS.items():
+        if text.lower().startswith(long_name):
+            return short
+    return text[:GROUP_LABEL_CHARS]
+
+
+def apply_group_tags(board: dict[str, Any], industry_by_symbol: Mapping[str, str]) -> dict[str, Any]:
+    """Tag rows whose industry has GROUP_MIN_COUNT+ names in a list's top GROUP_TOP_N."""
+    groups: dict[str, dict[str, list]] = {}
+    for mode in ("pop", "dip"):
+        groups[mode] = {}
+        for side in ("long", "short"):
+            rows = ((board.get(mode) or {}).get(side)) or []
+            counts: dict[str, int] = {}
+            for row in rows[:GROUP_TOP_N]:
+                industry = industry_by_symbol.get(str(row.get("symbol") or "").upper())
+                if industry:
+                    counts[industry] = counts.get(industry, 0) + 1
+            hot = {name for name, count in counts.items() if count >= GROUP_MIN_COUNT}
+            for row in rows:
+                industry = industry_by_symbol.get(str(row.get("symbol") or "").upper())
+                row["group"] = short_group(industry) if industry in hot else ""
+            groups[mode][side] = [
+                [short_group(name), counts[name]]
+                for name in sorted(hot, key=lambda n: (-counts[n], n))
+            ]
+    board["groups"] = groups
+    return board
+
+
+def apply_persistence(board: dict[str, Any], memory: dict[str, Any], *, session: date) -> dict[str, Any]:
+    """Stamp each listed row with `streak` (consecutive ticks on that list) and
+    `rank_change` (+ = up, None = new). Returns the memory for the next tick."""
+    if memory.get("session") != session:
+        memory = {"session": session, "lists": {}}
+    lists = memory["lists"]
+    fresh: dict[str, dict[str, tuple[int, int]]] = {}
+    for mode in ("pop", "dip"):
+        for side in ("long", "short"):
+            key = f"{mode}:{side}"
+            before = lists.get(key, {})
+            now_list: dict[str, tuple[int, int]] = {}
+            for rank, row in enumerate(((board.get(mode) or {}).get(side)) or [], start=1):
+                symbol = str(row.get("symbol") or "").upper()
+                previous = before.get(symbol)
+                row["streak"] = previous[1] + 1 if previous else 1
+                row["rank_change"] = previous[0] - rank if previous else None
+                now_list[symbol] = (rank, row["streak"])
+            fresh[key] = now_list
+    memory["lists"] = fresh
+    return memory
 
 
 # ---------------------------------------------------------------- board
@@ -403,13 +540,16 @@ def build_movers_board(
     focus_by_side: Mapping[str, Iterable[str]] | None = None,
     local_tz: tzinfo | None = None,
     top_n: int = MOVERS_TOP_N,
+    earnings: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """The whole board as plain dicts (safe to emit across threads).
 
     `focus_by_side` is {"long": [...], "short": [...]} of the trader's Focus
-    names. Lists: pop/dip/mine, each {"long": rows, "short": rows}.
+    names; `earnings` the names to tag ER. Lists: pop/dip/mine, each
+    {"long": rows, "short": rows}.
     """
     baselines = baselines or {}
+    er_names = {str(s or "").strip().upper() for s in earnings or ()}
     spy = normalize_bars(spy_bars or (), now=now, local_tz=local_tz)
     moment = now if now.tzinfo is not None else now.replace(tzinfo=local_tz or NY_TZ)
     today_date = moment.astimezone(NY_TZ).date()
@@ -429,6 +569,8 @@ def build_movers_board(
             symbol, bars, baseline=baselines.get(symbol), spy_bars=spy,
             state=state, reference_end=reference_end, today_date=today_date,
         )
+        if symbol in er_names:
+            rows[symbol] = replace(rows[symbol], er=True)
 
     def rankable(row: MoverRow) -> bool:
         return row.passes_floors and not row.stale and row.atr is not None

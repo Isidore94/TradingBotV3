@@ -64,7 +64,7 @@ def _flat_spy(n=20):
     return _series([400.0] * n, prior_close=400.0)
 
 
-def _board(symbols, *, spy=None, n=20, baselines=None, focus=None, now=None):
+def _board(symbols, *, spy=None, n=20, baselines=None, focus=None, now=None, earnings=None):
     return ms.build_movers_board(
         symbols,
         _flat_spy(n) if spy is None else spy,
@@ -72,6 +72,7 @@ def _board(symbols, *, spy=None, n=20, baselines=None, focus=None, now=None):
         baselines=baselines,
         focus_by_side=focus,
         local_tz=LA,
+        earnings=earnings,
     )
 
 
@@ -354,6 +355,89 @@ def test_as_of_is_spy_last_completed_bar_and_fresh_count():
 def test_freshness_cutoff_is_floor5_minus_two_bars():
     now = datetime(2026, 9, 22, 10, 43, 10, tzinfo=NY)
     assert ms.freshness_cutoff(now) == datetime(2026, 9, 22, 10, 30, tzinfo=NY)
+
+
+# ------------------------------------------------------------------ B: stretch / level
+def test_level_fields_hod_break_and_distance_in_atr():
+    n = 20
+    board = _board({"AAA": _series(_pop([101.0, 102.0, 103.0], n=n))}, n=n)
+    row = board["pop"]["long"][0]
+    assert row["hod_break"] is True and row["lod_break"] is False
+    assert row["from_hod_atr"] == pytest.approx((103.0 - 103.5) / row["atr"])
+    assert row["from_vwap_atr"] > 0
+    assert row["prev_high"] == pytest.approx(100.5) and row["prev_low"] == pytest.approx(99.5)
+    assert row["session_vwap"] is not None
+
+
+def test_ext_tag_past_the_named_atr_limit_and_ranking_unchanged():
+    n = 20
+    far = _series(_pop([104.0, 108.0, 112.0], n=n))  # far above VWAP
+    near = _series(_pop([100.33, 100.67, 101.0], n=n))
+    board = _board({"FAR": far, "NEAR": near}, n=n)
+    rows = {r["symbol"]: r for r in board["pop"]["long"]}
+    assert rows["FAR"]["ext_up"] is True and rows["FAR"]["from_vwap_atr"] > ms.EXT_ATR
+    assert rows["NEAR"]["ext_up"] is False
+    assert [r["symbol"] for r in board["pop"]["long"]] == ["FAR", "NEAR"]  # info only
+
+
+def test_hod_break_false_when_last_bar_is_below_the_session_high():
+    n = 20
+    board = _board({"AAA": _series(_pop([102.0, 103.0, 102.6], n=n))}, n=n)
+    row = board["pop"]["long"][0]
+    assert row["hod_break"] is False and row["from_hod_atr"] < 0
+
+
+# ------------------------------------------------------------------ C: persistence
+def test_persistence_counts_ticks_and_rank_changes_and_resets_per_session():
+    def board(order):
+        return {"pop": {"long": [{"symbol": s} for s in order], "short": []}, "dip": {}}
+
+    memory: dict = {}
+    first = board(["AAA", "BBB"])
+    memory = ms.apply_persistence(first, memory, session=TODAY)
+    assert [(r["streak"], r["rank_change"]) for r in first["pop"]["long"]] == [(1, None), (1, None)]
+    second = board(["BBB", "AAA", "CCC"])
+    memory = ms.apply_persistence(second, memory, session=TODAY)
+    rows = {r["symbol"]: r for r in second["pop"]["long"]}
+    assert (rows["BBB"]["streak"], rows["BBB"]["rank_change"]) == (2, 1)
+    assert (rows["AAA"]["streak"], rows["AAA"]["rank_change"]) == (2, -1)
+    assert (rows["CCC"]["streak"], rows["CCC"]["rank_change"]) == (1, None)
+    third = board(["BBB"])
+    ms.apply_persistence(third, memory, session=date(2026, 9, 23))
+    assert third["pop"]["long"][0]["streak"] == 1  # new session starts over
+
+
+# ------------------------------------------------------------------ D: group tag
+def test_group_tag_needs_three_in_the_top_list():
+    board = {"pop": {"long": [{"symbol": s} for s in ("NVDA", "AMD", "MU", "AAPL", "XOM")],
+                     "short": [{"symbol": s} for s in ("NVDA", "AMD")]},
+             "dip": {"long": [], "short": []}}
+    industry = {"NVDA": "Semiconductors", "AMD": "Semiconductors", "MU": "Semiconductors",
+                "AAPL": "Consumer Electronics"}
+    ms.apply_group_tags(board, industry)
+    rows = {r["symbol"]: r for r in board["pop"]["long"]}
+    assert rows["NVDA"]["group"] == ms.short_group("Semiconductors")
+    assert rows["AAPL"]["group"] == "" and rows["XOM"]["group"] == ""
+    assert board["groups"]["pop"]["long"] == [[ms.short_group("Semiconductors"), 3]]
+    assert board["groups"]["pop"]["short"] == []  # only two
+
+
+# ------------------------------------------------------------------ E: earnings tag
+def test_earnings_flags_today_bmo_and_yesterday_amc_only():
+    events = [
+        {"ticker": "AAA", "earnings_date": "2026-09-22", "release_session": "BMO"},
+        {"ticker": "BBB", "earnings_date": "2026-09-21", "release_session": "AMC"},
+        {"ticker": "CCC", "earnings_date": "2026-09-21", "release_session": "BMO"},
+        {"ticker": "DDD", "earnings_date": "2026-09-22", "release_session": "AMC"},
+        {"ticker": "EEE", "earnings_date": "2026-09-22", "release_session": "TBD"},
+    ]
+    flags = ms.earnings_symbols(events, today=TODAY, previous=PRIOR)
+    assert flags == {"AAA", "BBB", "DDD", "EEE"}
+
+
+def test_board_marks_er_rows():
+    board = _board({"AAA": _series(_pop([101.0, 102.0, 103.0]))}, earnings={"AAA"})
+    assert board["pop"]["long"][0]["er"] is True
 
 
 # ------------------------------------------------------------------ pullback below VWAP
