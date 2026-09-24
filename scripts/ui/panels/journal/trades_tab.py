@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QTableWidget,
@@ -41,6 +42,14 @@ from journal_store import (
     TRADE_SHAPE_SOURCE,
 )
 from ui.models.journal import JournalTrade
+from ui.panels.journal.tag_chips import (
+    MultiTagCompleter,
+    TagChipBar,
+    add_tag,
+    common_tags,
+    parse_tags,
+    remove_tag,
+)
 from ui.services import journal_feed
 from ui.widgets.data_table import apply_width_rule_to_table_widget
 
@@ -489,9 +498,12 @@ class TradesTab(QFrame):
         self.legs_table = QTableWidget(0, 5)
         self.legs_table.setHorizontalHeaderLabels(["Role", "Side", "Qty", "Price", "Source"])
         self.legs_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.legs_table.setMinimumHeight(110)
 
         self.auto_tags = QListWidget()
         self.auto_tags.setSelectionMode(QListWidget.ExtendedSelection)
+        self.auto_tags.setMinimumHeight(60)
+        self.auto_tags.setMaximumHeight(110)
         self.accept_tags_button = QPushButton("Accept selected tags")
         self.accept_tags_button.clicked.connect(self._accept_tags)
         self.accept_all_tags_button = QPushButton("Accept all")
@@ -513,7 +525,21 @@ class TradesTab(QFrame):
         self._tag_buttons_row = tag_buttons
 
         self.tags_input = QLineEdit()
+        self.tags_input.setPlaceholderText("Type a tag; separate tags with ;")
+        self.tag_completer = MultiTagCompleter(self.tags_input)
+        self.tags_input.setCompleter(self.tag_completer)
+        # Chips edit the tags field; the field stays what Save writes.
+        self.tag_chips = TagChipBar(
+            "mine", empty_text="No tags yet. Type one below or click a common tag."
+        )
+        self.tag_chips.tagClicked.connect(self._remove_tag_chip)
+        self.tags_input.textChanged.connect(self._sync_tag_chips)
+        self.quick_tag_chips = TagChipBar("quick", "Your common tags:")
+        self.quick_tag_chips.tagClicked.connect(self._add_tag_chip)
+        self.suggested_tag_chips = TagChipBar("suggested", "Suggested (click to accept):")
+        self.suggested_tag_chips.tagClicked.connect(lambda tag: self._accept([tag]))
         self.notes_input = QPlainTextEdit()
+        self.notes_input.setPlaceholderText("Notes")
         self.save_notes_button = QPushButton("Save tags and notes")
         self.save_notes_button.clicked.connect(self._save_annotation)
 
@@ -588,12 +614,15 @@ class TradesTab(QFrame):
         layout.addLayout(risk_row)
         layout.addWidget(QLabel("Legs"))
         layout.addWidget(self.legs_table)
-        layout.addWidget(QLabel("Suggested tags"))
-        layout.addWidget(self.auto_tags)
-        layout.addLayout(self._tag_buttons_row)
         layout.addWidget(QLabel("My tags"))
         layout.addWidget(self.provisional_note)
+        layout.addWidget(self.tag_chips)
         layout.addWidget(self.tags_input)
+        layout.addWidget(self.quick_tag_chips)
+        layout.addWidget(self.suggested_tag_chips)
+        layout.addWidget(QLabel("All suggestions (with confidence)"))
+        layout.addWidget(self.auto_tags)
+        layout.addLayout(self._tag_buttons_row)
         layout.addWidget(self.notes_input)
         layout.addWidget(self.save_notes_button)
         layout.addWidget(self.confirm_tags_button)
@@ -611,7 +640,12 @@ class TradesTab(QFrame):
         layout.addLayout(corrections_row)
         layout.addWidget(QLabel("Corrections on this trade"))
         layout.addWidget(self.adjustments_list)
-        return body
+        # Scrolls rather than squeezing the legs and suggestion lists to nothing.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(body)
+        return scroll
 
     # -- loading -----------------------------------------------------------
 
@@ -621,7 +655,36 @@ class TradesTab(QFrame):
         except Exception as exc:  # noqa: BLE001 - a broken read is a status line
             self._trades = []
             self.statusChanged.emit(f"could not load trades: {exc}")
+        self._refresh_tag_vocabulary()
         self._populate_table()
+
+    # -- tag chips -----------------------------------------------------------
+
+    def _refresh_tag_vocabulary(self) -> None:
+        """Completer and common-tag chips from what is already loaded; no query."""
+        raws = [trade.raw for trade in self._trades]
+        names: set[str] = set()
+        picker = getattr(self._header, "tag_input", None)
+        if picker is not None:
+            names.update(
+                picker.itemText(index) for index in range(picker.count())
+                if picker.itemText(index) != "All"
+            )
+        for raw in raws:
+            names.update(parse_tags(str(raw.get("setup_tags") or "")))
+        from journal_analytics import is_link_candidate
+
+        self.tag_completer.set_tags(name for name in names if not is_link_candidate(name))
+        self.quick_tag_chips.set_tags(common_tags(raws))
+
+    def _sync_tag_chips(self, text: str = "") -> None:
+        self.tag_chips.set_tags(parse_tags(text or self.tags_input.text()))
+
+    def _add_tag_chip(self, tag: str) -> None:
+        self.tags_input.setText(add_tag(self.tags_input.text(), tag))
+
+    def _remove_tag_chip(self, tag: str) -> None:
+        self.tags_input.setText(remove_tag(self.tags_input.text(), tag))
 
     def select_trade(self, trade_id: str) -> bool:
         """Put one trade on screen by id. Returns whether it was found.
@@ -797,6 +860,15 @@ class TradesTab(QFrame):
             item.setData(Qt.UserRole, candidate.get("tag"))
             item.setToolTip(str(candidate.get("rationale") or ""))
             self.auto_tags.addItem(item)
+        from journal_analytics import is_link_candidate
+
+        suggested = [
+            str(self.auto_tags.item(row).data(Qt.UserRole) or "")
+            for row in range(self.auto_tags.count())
+        ]
+        self.suggested_tag_chips.set_tags(
+            list(dict.fromkeys(tag for tag in suggested if tag and not is_link_candidate(tag)))
+        )
 
         self.tags_input.setText(str(raw.get("setup_tags") or ""))
         self.notes_input.setPlainText(str(raw.get("notes") or ""))
@@ -905,6 +977,7 @@ class TradesTab(QFrame):
             self.provisional_note.setText("")
         self.provisional_note.setVisible(bool(self.provisional_note.text()))
         self.confirm_tags_button.setVisible(status == TAG_STATUS_PROVISIONAL)
+        self.tag_chips.set_provisional(status == TAG_STATUS_PROVISIONAL)
 
     def _confirm_tags(self) -> None:
         if self._current is None:
