@@ -38,11 +38,24 @@ from PySide6.QtWidgets import (
 from chart_watch import (
     ANY_BOUNCE_KINDS,
     D1_EVENT_KINDS,
+    D1_LEGACY_KINDS,
+    D1_MENU_GROUPS,
+    D1_MENU_LABELS,
     PERSISTENT_WATCH_KINDS,
     WATCH_KINDS,
 )
 from ui import theme
 from ui.widgets.flow_layout import FlowLayout
+
+# Chart-watch kinds that live on the D1 menu (the Pullback alert), not the M5 one.
+_D1_MENU_WATCH_KINDS = frozenset(
+    kind for _title, kinds in D1_MENU_GROUPS for kind in kinds if kind in WATCH_KINDS
+)
+_LEGACY_HEADER = "ARMED EARLIER — click to disarm"
+
+
+def _watch_label(kind: str) -> str:
+    return D1_MENU_LABELS.get(kind, WATCH_KINDS[kind])
 
 
 def quick_fill_value(source: str, bars, overlays) -> float | None:
@@ -140,8 +153,8 @@ class ArmBar(QFrame):
 
         self._watch_warning = ""
         self.watch_buttons: dict[str, QPushButton] = {}
-        for kind, label in WATCH_KINDS.items():
-            button = QPushButton(label)
+        for kind in WATCH_KINDS:
+            button = QPushButton(_watch_label(kind))
             button.setCheckable(True)
             button.clicked.connect(lambda _checked=False, k=kind: self.watchToggled.emit(k))
             self.watch_buttons[kind] = button
@@ -229,15 +242,53 @@ class ArmBar(QFrame):
         self.d1_menu_button: QToolButton | None = None
         self.m5_actions: dict[str, QAction] = {}
         self.d1_actions: dict[str, QAction] = {}
+        self.d1_menu_headers: list[QAction] = []
+        self._legacy_header_action: QAction | None = None
+
+        # One muted title per D1 menu group, for the classic row.
+        self._d1_group_labels: list[QLabel] = []
+        for title, _kinds in D1_MENU_GROUPS:
+            group_label = QLabel(title.split(" — ", 1)[0].title() + ":")
+            group_label.setObjectName("MutedLabel")
+            group_label.setToolTip(title)
+            self._d1_group_labels.append(group_label)
+        # Off-menu buttons currently shown in the classic row (armed ones only).
+        # The rest wait in the hidden parking widget the compact row also uses.
+        self._legacy_in_row: list[QPushButton] = []
+        self._compact_parking = QWidget(self)
+        self._compact_parking.setObjectName("ArmBarParking")
+        self._compact_parking.hide()
+        for button in self._legacy_buttons().values():
+            button.setParent(self._compact_parking)
 
         self.apply_scaled_metrics()
         self._build_layout()
         self.set_enabled_for_symbol(False)
 
+    def _menu_button_for(self, kind: str) -> QPushButton:
+        """The real button behind one D1 menu entry (a watch or a D1 event)."""
+        if kind in WATCH_KINDS:
+            return self.watch_buttons[kind]
+        return self.d1_event_buttons[kind]
+
+    def _legacy_buttons(self) -> dict:
+        """Off-menu D1 buttons that still show while armed, so they can be disarmed."""
+        return {
+            **{kind: self.d1_event_buttons[kind] for kind in D1_LEGACY_KINDS},
+            "any_bounce": self.any_bounce_button,
+        }
+
+    def _legacy_shown(self) -> list[QPushButton]:
+        return [button for button in self._legacy_buttons().values() if button.isChecked()]
+
     def _classic_top_widgets(self) -> list:
         return [
             self.symbol_input,
-            *self.watch_buttons.values(),
+            *(
+                button
+                for kind, button in self.watch_buttons.items()
+                if kind not in _D1_MENU_WATCH_KINDS
+            ),
             self.level_input,
             self.direction_input,
             self.arm_level_button,
@@ -245,13 +296,31 @@ class ArmBar(QFrame):
         ]
 
     def _classic_d1_widgets(self) -> list:
+        grouped: list = []
+        for group_label, (_title, kinds) in zip(self._d1_group_labels, D1_MENU_GROUPS):
+            grouped.append(group_label)
+            grouped.extend(self._menu_button_for(kind) for kind in kinds)
         return [
             self._d1_label,
-            *self.d1_event_buttons.values(),
-            self.any_bounce_button,
+            *grouped,
+            *self._legacy_shown(),
             self.external_chart_button,
             self.armed_row,
         ]
+
+    def _sync_legacy_classic(self) -> None:
+        """Show an off-menu D1 button in the classic row only while it is armed."""
+        if self._compact or not hasattr(self, "_d1_flow"):
+            return
+        shown = self._legacy_shown()
+        if shown != self._legacy_in_row:
+            self._legacy_in_row = shown
+            self._fill_classic_rows()
+        for button in self._legacy_buttons().values():
+            if button in shown:
+                button.show()
+            elif button.parentWidget() is not self._compact_parking:
+                button.setParent(self._compact_parking)
 
     def _build_layout(self) -> None:
         # Both control rows WRAP rather than compress. A QHBoxLayout hands every
@@ -313,6 +382,7 @@ class ArmBar(QFrame):
             _empty_layout(self._d1_flow)
             for widget in (
                 self._d1_label,
+                *self._d1_group_labels,
                 *self.watch_buttons.values(),
                 *self.d1_event_buttons.values(),
                 self.any_bounce_button,
@@ -341,14 +411,13 @@ class ArmBar(QFrame):
             root.setContentsMargins(theme.px(6), theme.px(4), theme.px(6), theme.px(4))
             self.compact_row.setVisible(False)
             _empty_layout(self.compact_row.layout())
+            self._legacy_in_row = self._legacy_shown()
             self._fill_classic_rows()
+            self._sync_legacy_classic()
 
     def _ensure_compact_row(self) -> None:
         if self.compact_row is not None:
             return
-        self._compact_parking = QWidget(self)
-        self._compact_parking.setObjectName("ArmBarParking")
-        self._compact_parking.hide()
         self.compact_row = QWidget(self)
         self.compact_row.setObjectName("ArmBarCompactRow")
         row_layout = QHBoxLayout(self.compact_row)
@@ -358,6 +427,8 @@ class ArmBar(QFrame):
         m5_menu = QMenu(self)
         m5_menu.setToolTipsVisible(True)
         for kind, button in self.watch_buttons.items():
+            if kind in _D1_MENU_WATCH_KINDS:
+                continue
             action = QAction(button.text(), self)
             action.setCheckable(True)
             action.triggered.connect(lambda _checked=False, b=button: self._click_from_menu(b))
@@ -368,22 +439,36 @@ class ArmBar(QFrame):
 
         d1_menu = QMenu(self)
         d1_menu.setToolTipsVisible(True)
-        for kind, button in self.d1_event_buttons.items():
-            action = QAction(button.text(), self)
-            action.setCheckable(True)
-            action.triggered.connect(lambda _checked=False, b=button: self._click_from_menu(b))
-            d1_menu.addAction(action)
-            self.d1_actions[kind] = action
-        d1_menu.addSeparator()
-        for key, button, checkable in (
-            ("any_bounce", self.any_bounce_button, True),
-            ("external_chart", self.external_chart_button, False),
-        ):
+
+        def add_header(text: str) -> QAction:
+            header = QAction(text, self)
+            header.setEnabled(False)
+            font = header.font()
+            font.setBold(True)
+            header.setFont(font)
+            d1_menu.addAction(header)
+            self.d1_menu_headers.append(header)
+            return header
+
+        def add_button_action(key: str, button: QPushButton, checkable: bool = True) -> None:
             action = QAction(button.text(), self)
             action.setCheckable(checkable)
             action.triggered.connect(lambda _checked=False, b=button: self._click_from_menu(b))
             d1_menu.addAction(action)
             self.d1_actions[key] = action
+
+        for index, (title, kinds) in enumerate(D1_MENU_GROUPS):
+            if index:
+                d1_menu.addSeparator()
+            add_header(title)
+            for kind in kinds:
+                add_button_action(kind, self._menu_button_for(kind))
+        # Off-menu kinds: hidden unless armed, so an old arm can still be disarmed.
+        self._legacy_header_action = add_header(_LEGACY_HEADER)
+        for key, button in self._legacy_buttons().items():
+            add_button_action(key, button)
+        d1_menu.addSeparator()
+        add_button_action("external_chart", self.external_chart_button, checkable=False)
         d1_menu.aboutToShow.connect(self.sync_compact_menus)
         self.d1_menu_button = _menu_button(d1_menu)
         self.compact_row.setVisible(False)
@@ -394,8 +479,12 @@ class ArmBar(QFrame):
 
     def _d1_menu_sources(self) -> dict:
         return {
-            **self.d1_event_buttons,
-            "any_bounce": self.any_bounce_button,
+            **{
+                kind: self._menu_button_for(kind)
+                for _title, kinds in D1_MENU_GROUPS
+                for kind in kinds
+            },
+            **self._legacy_buttons(),
             "external_chart": self.external_chart_button,
         }
 
@@ -416,7 +505,7 @@ class ArmBar(QFrame):
                 self._d1_menu_sources(),
                 self.d1_menu_button,
                 "D1 alert",
-                "Persistent D1 event alerts, Any bounce and TradingView.",
+                "D1 alerts by kind: pullback, breakout, line break - and TradingView.",
             ),
         ):
             armed = 0
@@ -431,6 +520,13 @@ class ArmBar(QFrame):
             menu_button.setText(f"{title} ({armed}) ▾" if armed else f"{title} ▾")
             menu_button.setToolTip(tip)
             menu_button.setEnabled(self._has_symbol)
+        legacy = self._legacy_buttons()
+        for key, button in legacy.items():
+            self.d1_actions[key].setVisible(button.isChecked())
+        if self._legacy_header_action is not None:
+            self._legacy_header_action.setVisible(
+                any(button.isChecked() for button in legacy.values())
+            )
 
     def apply_scaled_metrics(self) -> None:
         """Re-apply the input widths that are pixel budgets, not stylesheet."""
@@ -575,7 +671,7 @@ class ArmBar(QFrame):
         armed = set(kinds or ())
         self._armed_watch = armed
         for kind, button in self.watch_buttons.items():
-            label = WATCH_KINDS[kind]
+            label = _watch_label(kind)
             queued = kind in self._pending_watch and kind not in armed
             button.setText(
                 f"⏳ {label}" if queued else f"{label} ✓ armed" if kind in armed else label
@@ -592,6 +688,7 @@ class ArmBar(QFrame):
             queued = kind in self._pending_d1 and kind not in armed
             button.setText(f"⏳ {label}" if queued else f"{label} ✓" if kind in armed else label)
             button.setChecked(kind in armed or queued)
+        self._sync_legacy_classic()
         self.sync_compact_menus()
 
     def set_any_bounce_armed(self, armed: bool) -> None:
@@ -602,6 +699,7 @@ class ArmBar(QFrame):
             "⏳ Any bounce" if queued else "Any bounce ✓" if armed else "Any bounce"
         )
         self.any_bounce_button.setChecked(bool(armed) or queued)
+        self._sync_legacy_classic()
         self.sync_compact_menus()
 
     def set_pending_arms(
@@ -667,6 +765,18 @@ class ArmBar(QFrame):
             "trendline_break_retest": (
                 "a completed D1 bar breaks the saved scan trendline, a later "
                 "bar retests it, and a third completed bar confirms"
+            ),
+            "d1_line_pullback": (
+                "price tags the D1 15EMA, the AVWAPE line or its 1σ band and "
+                "closes back; the alert names the line"
+            ),
+            "range_breakout": (
+                "a new 20-day high or low, but only out of a tight 20-day base "
+                "(range at most 4x ATR14)"
+            ),
+            "line_break": (
+                "a completed bar closes through the SMA50/100/200, the AVWAPE "
+                "line or its 1σ band; the alert names the line"
             ),
         }.get(kind, "")
         return (

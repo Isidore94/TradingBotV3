@@ -102,6 +102,8 @@ D1_KINDS = frozenset(
         "d1_level_above",
         "d1_level_below",
         "trendline_break",
+        "range_breakout",
+        "line_break",
     }
 )
 

@@ -124,7 +124,32 @@ D1_EVENT_KINDS = {
     # the alert that was requested.
     "trendline_break": "Trendline break",
     "trendline_break_retest": "Trendline break + retest",
+    # Grouped menu kinds (2026-09-24): each fires on the FIRST of its parts.
+    "d1_line_pullback": "Pullback to D1 line",
+    "range_breakout": "Range breakout",
+    "line_break": "Line break",
 }
+
+# The parts each grouped kind checks, in order; the fire names the part that hit.
+D1_LINE_PULLBACK_PARTS = ("ema15_reject", "avwape_bounce", "avwape_dev1_bounce")
+D1_LINE_BREAK_PARTS = ("sma_break", "avwape_break", "avwape_dev1_break")
+
+# The D1 alert menu, grouped by principle. "pullback" is the M5-store Pullback
+# alert (WATCH_KINDS); every other entry is a D1 event kind.
+D1_MENU_GROUPS = (
+    ("PULLBACK — it ran, let it calm down", ("pullback", "d1_line_pullback")),
+    ("BREAKOUT — it was tight, let it go", ("range_breakout",)),
+    (
+        "LINE BREAK — it crossed a big line",
+        ("line_break", "trendline_break", "trendline_break_retest"),
+    ),
+)
+D1_MENU_LABELS = {"pullback": "Pullback (fast)"}
+D1_MENU_KINDS = tuple(
+    kind for _title, kinds in D1_MENU_GROUPS for kind in kinds if kind in D1_EVENT_KINDS
+)
+# Kinds off the menu that still load, evaluate and fire for saved rows.
+D1_LEGACY_KINDS = tuple(kind for kind in D1_EVENT_KINDS if kind not in D1_MENU_KINDS)
 
 # EXTENSION events say "the move is going": a new range high/low, or a close
 # THROUGH a major line. PULLBACK events say "it came back to something": a
@@ -145,11 +170,14 @@ D1_EXTENSION_KINDS = frozenset(
         "avwape_break",
         "avwape_dev1_break",
         "trendline_break",
+        "range_breakout",
+        "line_break",
     }
 )
 # Multi-bar thesis watches are armed only by the trader.  They are neither an
-# automatic Focus pullback nor a one-bar extension.
-D1_TRADER_ONLY_KINDS = frozenset({"trendline_break_retest"})
+# automatic Focus pullback nor a one-bar extension. `d1_line_pullback` repeats
+# the auto lane's own kinds, so it stays out of that lane (no double fire).
+D1_TRADER_ONLY_KINDS = frozenset({"trendline_break_retest", "d1_line_pullback"})
 D1_PULLBACK_KINDS = (
     frozenset(D1_EVENT_KINDS) - D1_EXTENSION_KINDS - D1_TRADER_ONLY_KINDS
 )
@@ -167,6 +195,20 @@ _AVWAPE_KIND_BANDS = {
     "avwape_dev1_bounce": ("+1σ", "-1σ"),
     "avwape_dev1_break": ("+1σ", "-1σ"),
 }
+
+# range_breakout: a new 20-day high/low only when the prior 20 sessions'
+# high-low range is <= 4.0 x D1 ATR14 (about the tightest third of such events).
+RANGE_BREAKOUT_RULE_VERSION = "range_breakout_v1"
+RANGE_BREAKOUT_BASE_SESSIONS = 20
+RANGE_BREAKOUT_TIGHT_ATR = 4.0
+RANGE_BREAKOUT_ATR_LENGTH = 14
+# ATR input tail: enough bars for Wilder smoothing to settle, cheap per poll.
+RANGE_BREAKOUT_ATR_WINDOW = 60
+
+
+def d1_kind_needs_avwape(kind: str) -> bool:
+    """Whether a D1 event kind reads the AVWAPE levels (needs the earnings anchor)."""
+    return kind in _AVWAPE_KIND_BANDS or kind in ("d1_line_pullback", "line_break")
 
 # SMA periods the sma_break watch monitors ("anyone up or down"): the desk's
 # three D1 majors, matching the snapshot chart's overlays.
@@ -1196,6 +1238,17 @@ def d1_event_levels(
             tail = completed[-count:]
             levels[f"high_{count}d"] = max(float(bar["high"]) for bar in tail)
             levels[f"low_{count}d"] = min(float(bar["low"]) for bar in tail)
+    if len(completed) >= RANGE_BREAKOUT_BASE_SESSIONS:
+        from indicators.atr import wilder_atr
+
+        atr = wilder_atr(completed[-RANGE_BREAKOUT_ATR_WINDOW:], RANGE_BREAKOUT_ATR_LENGTH)
+        if atr is not None and atr > 0:
+            base = completed[-RANGE_BREAKOUT_BASE_SESSIONS:]
+            base_range = max(float(bar["high"]) for bar in base) - min(
+                float(bar["low"]) for bar in base
+            )
+            levels["atr14"] = float(atr)
+            levels["base_range_20d"] = base_range
     for period in D1_BREAK_SMA_PERIODS:
         if len(closes) >= period:
             levels[f"sma{period}"] = sum(closes[-period:]) / float(period)
@@ -1233,6 +1286,42 @@ def _d1_event_hit(
     close: float,
 ) -> tuple[str, str, float] | None:
     """(message core, resolved side, trigger price) for one evidence bar."""
+    if kind in ("d1_line_pullback", "line_break"):
+        parts = D1_LINE_PULLBACK_PARTS if kind == "d1_line_pullback" else D1_LINE_BREAK_PARTS
+        title = "Pullback to D1 line" if kind == "d1_line_pullback" else "Line break"
+        for part in parts:
+            hit = _d1_event_hit(part, levels, prev_close, high, low, close)
+            if hit is not None:
+                message, side, price = hit
+                return f"{title}: {message}", side, price
+        return None
+    if kind == "range_breakout":
+        atr = levels.get("atr14")
+        base_range = levels.get("base_range_20d")
+        top = levels.get("high_20d")
+        bottom = levels.get("low_20d")
+        if not atr or base_range is None or top is None or bottom is None:
+            return None
+        ratio = base_range / atr
+        if ratio > RANGE_BREAKOUT_TIGHT_ATR:
+            return None
+        tight = (
+            f"tight base: 20-session range {base_range:.2f} = {ratio:.1f}x ATR14 "
+            f"{atr:.2f}, needs <= {RANGE_BREAKOUT_TIGHT_ATR:.1f}x"
+        )
+        if high > top:
+            return (
+                f"Range breakout (long): {high:.2f} > {top:.2f} 20-day high ({tight})",
+                "long",
+                high,
+            )
+        if low < bottom:
+            return (
+                f"Range breakout (short): {low:.2f} < {bottom:.2f} 20-day low ({tight})",
+                "short",
+                low,
+            )
+        return None
     if kind in ("new_5d_high", "new_20d_high"):
         key = "high_5d" if kind == "new_5d_high" else "high_20d"
         level = levels.get(key)

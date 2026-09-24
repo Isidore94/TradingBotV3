@@ -53,6 +53,7 @@ from chart_watch import (
     any_bounce_levels,
     arm_chart_watch,
     d1_event_levels,
+    d1_kind_needs_avwape,
     evaluate_any_bounce_watch,
     evaluate_chart_watch,
     evaluate_d1_event_watch,
@@ -8304,7 +8305,7 @@ class AlertCenterPanel(QFrame):
                 # daily store for its reference; without it there is nothing
                 # to measure against yet and the watch just waits.
                 avwape_anchor = None
-                if watch.kind.startswith("avwape_"):
+                if d1_kind_needs_avwape(watch.kind):
                     try:
                         from ui.services.chart_data_service import shared_service
 

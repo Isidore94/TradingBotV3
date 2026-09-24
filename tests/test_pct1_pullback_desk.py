@@ -497,7 +497,8 @@ def test_the_arm_bar_shows_one_pullback_button_and_no_h1_retester():
     labels = {button.text() for button in bar.watch_buttons.values()}
 
     assert WATCH_KIND in bar.watch_buttons
-    assert any(BUTTON_LABEL in label for label in labels)
+    # The D1 menu regroup (2026-09-24) shows this watch as "Pullback (fast)".
+    assert any("Pullback (fast)" in label for label in labels)
     assert not any(RETIRED_BUTTON_LABEL in label for label in labels), labels
 
     emitted: list[str] = []

@@ -324,13 +324,16 @@ def _qt_app():
     return QApplication.instance() or QApplication([])
 
 
-def _visible_menu_rows(menu):
+def _visible_menu_rows(menu, headers=()):
     rows = []
     for action in menu.actions():
         if not action.isVisible():
             continue
         if action.isSeparator():
-            rows.append(f"== {action.text()}" if action.text() else "--")
+            rows.append("--")
+        elif action in headers:
+            assert not action.isEnabled()
+            rows.append(f"== {action.text()}")
         else:
             rows.append(action.text())
     return rows
@@ -348,12 +351,14 @@ def _compact_bar():
 
 def test_compact_d1_menu_order_and_labels():
     bar = _compact_bar()
-    assert _visible_menu_rows(bar.d1_menu_button.menu()) == [
+    assert _visible_menu_rows(bar.d1_menu_button.menu(), bar.d1_menu_headers) == [
         "== PULLBACK — it ran, let it calm down",
         "Pullback (fast)",
         "Pullback to D1 line",
+        "--",
         "== BREAKOUT — it was tight, let it go",
         "Range breakout",
+        "--",
         "== LINE BREAK — it crossed a big line",
         "Line break",
         "Trendline break",
@@ -493,3 +498,10 @@ def test_panel_arms_each_new_kind(tmp_path, monkeypatch):
         "range_breakout",
         "line_break",
     }
+
+
+def test_journal_evidence_reads_the_new_kinds_as_d1():
+    import journal_setup_evidence
+
+    for kind in ("d1_line_pullback", "range_breakout", "line_break"):
+        assert journal_setup_evidence._event_horizon({}, kind) == "d1", kind
