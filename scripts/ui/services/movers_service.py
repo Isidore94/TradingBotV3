@@ -74,6 +74,8 @@ IB_VOLUME_LOT_SIZE = 100
 #: tick (most liquid first), over this short window.
 GAP_FILL_MAX = 600
 GAP_FILL_PERIOD = "5d"
+#: A name Yahoo returned nothing for is skipped for this many ticks.
+GAP_EMPTY_BACKOFF_TICKS = 3
 #: A symbol whose baseline download returned nothing is retried after this long.
 BASELINE_RETRY_MINUTES = 15
 #: Gap between two proxy RPCs, so Qt-thread RPCs are not starved of its lock.
@@ -236,8 +238,11 @@ class MoversService(QObject):
         self._earnings: set[str] = set()
         self._tags_day: date | None = None
         self._persistence: dict[str, Any] = {}
-        self._gap_at: datetime | None = None
+        self._gap_at: datetime | None = None  # last gap-fill that returned bars
         self._gap_count = 0
+        self._gap_skip_until: dict[str, int] = {}
+        self._tick_no = 0
+        self._tracker_restored = False
         self._bot_provider = bot_provider
         self._focus_provider = focus_provider
         self._downloader = downloader
@@ -355,6 +360,7 @@ class MoversService(QObject):
             self.statusChanged.emit(self.status_text())
 
     def _run_once(self, focus: dict[str, list[str]]) -> None:
+        self._tick_no += 1
         now = self._clock()
         if now.tzinfo is None:
             now = now.astimezone()
@@ -431,10 +437,22 @@ class MoversService(QObject):
         board["bot_universe"] = self.bot_universe_size
         board["yahoo_universe"] = len(self._yahoo_bars)
         board["gap_filled"] = self._gap_count
+        board["gap_filled_at"] = self._gap_at.isoformat(timespec="seconds") if self._gap_at else ""
         self._board = board
         self._last_success = datetime.now()
         self.moversChanged.emit(dict(board))
         if final:
+            if not self._tracker_restored:
+                # Once per desk start: today's logged flags rebuild pending
+                # episodes, so a restart never re-flags a name (worker thread).
+                self._tracker_restored = True
+                try:
+                    self._tracker.restore(
+                        movers_outcomes.load_records(self._outcomes_path),
+                        session=session, now=now,
+                    )
+                except Exception:
+                    logging.warning("Movers outcome log could not be read back", exc_info=True)
             try:
                 records = self._tracker.observe(board, series, spy, now=now)
             except Exception:
@@ -473,7 +491,7 @@ class MoversService(QObject):
                 if bars and bars[-1]["dt"] >= cutoff:
                     fresh = True
                     break
-            if not fresh:
+            if not fresh and self._gap_skip_until.get(symbol, 0) < self._tick_no:
                 need.append(symbol)
         if not need:
             self._gap_count = 0
@@ -484,6 +502,10 @@ class MoversService(QObject):
             need = sorted(need, key=lambda s: (-self._liquidity(s, bot_bars), s))
         fetched = fetch_yahoo_bars(need, downloader=downloader, period=GAP_FILL_PERIOD)
         self._gap_count = len(fetched)
+        for symbol in need:
+            if symbol not in fetched:
+                # Yahoo had nothing for it: skip it for the next few ticks.
+                self._gap_skip_until[symbol] = self._tick_no + GAP_EMPTY_BACKOFF_TICKS
         if fetched:
             # Only a fetch that returned bars moves the clock; failures keep the last bars.
             self._yahoo_bars.update(fetched)

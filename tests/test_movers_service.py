@@ -301,6 +301,47 @@ def test_outcome_rows_are_appended_and_a_failed_write_keeps_the_board(tmp_path, 
     assert service.board() and "state" in service.board()
 
 
+def test_first_tick_restores_todays_flags_from_the_log(tmp_path):
+    import movers_outcomes
+
+    path = tmp_path / "out.jsonl"
+    movers_outcomes.append_records(path, [
+        {"kind": "flag", "session": "2026-09-22", "episode": "2026-09-22T10:15:00-04:00",
+         "side": "long", "symbol": "HOLD", "flagged_bar": "2026-09-22T10:30:00-04:00"},
+        {"kind": "flag", "session": "2026-09-19", "episode": "old", "side": "long",
+         "symbol": "OLD", "flagged_bar": "2026-09-19T10:30:00-04:00"},
+    ])
+    bot = FakeBot([], {"SPY": _naive_la_bars([400.0] * 14)})
+    service = svc.MoversService(
+        bot_provider=lambda: bot, downloader=FakeDownloader({}),
+        universe_provider=lambda: [], clock=lambda: NOW, autostart=False,
+        outcomes_path=path,
+    )
+    service._run_once({"long": [], "short": []})
+    flagged = {s for ep in service._tracker.episodes.values() for s in ep["flagged"]}
+    assert flagged == {"HOLD"}
+
+
+def test_a_name_yahoo_returns_empty_is_skipped_for_three_ticks():
+    bot = _big_universe_bot()
+    downloader = FakeDownloader({})
+    service = _service(bot, downloader)
+
+    def gap_names():
+        return {s for symbols, period in downloader.calls if period == svc.GAP_FILL_PERIOD
+                for s in symbols}
+
+    service._run_once({"long": [], "short": []})
+    assert "S001" in gap_names()
+    for _ in range(svc.GAP_EMPTY_BACKOFF_TICKS):
+        downloader.calls.clear()
+        service._run_once({"long": [], "short": []})
+        assert "S001" not in gap_names()
+    downloader.calls.clear()
+    service._run_once({"long": [], "short": []})
+    assert "S001" in gap_names()
+
+
 def test_tick_is_idle_outside_regular_hours():
     service = _service(None, FakeDownloader({}))
     service._clock = lambda: datetime(2026, 9, 22, 8, 0, tzinfo=NY)
