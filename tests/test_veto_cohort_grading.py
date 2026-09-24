@@ -662,6 +662,9 @@ def test_the_scope_can_be_selected_on_demand():
         # and before the two-hour briefs.
         "exit_note_fields",
         "ticker_briefs",
+        # Econ morning brief (2026-09-24): "what to watch today" from the
+        # pasted brief, a stage 2 model slot directly after the briefs.
+        "econ_brief",
         "market_story_narration",
         # Day Recap coach (2026-09-23): cited answers to the trader's Week
         # Review questions, appended at the end of stage 2.

@@ -112,6 +112,9 @@ class TradeMentorService(QObject):
         #: `_journal_retry_date` lived in memory and a restart before 10:00
         #: allowed a second morning pull).
         self._pull_tally: dict[str, object] = {}
+        #: The session whose "Today's news & econ" block was already shown, so
+        #: a restart the same day never pops it again.
+        self._econ_brief_shown = ""
         self._load()
         # Delivered ONCE per instance. Persisted `delivered_at` says the card
         # was put up at some point; this says this process has already put it
@@ -165,6 +168,7 @@ class TradeMentorService(QObject):
         tally = payload.get("pull_tally")
         if isinstance(tally, dict):
             self._pull_tally = dict(tally)
+        self._econ_brief_shown = str(payload.get("econ_brief_shown") or "")
 
     def _save(self) -> None:
         """Persist, and never let a failed persist cost the prompt.
@@ -179,6 +183,7 @@ class TradeMentorService(QObject):
             "paused_date": self._paused_date,
             "retired_subjects": sorted(self._retired),
             "pull_tally": dict(self._pull_tally),
+            "econ_brief_shown": self._econ_brief_shown,
         }
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -248,6 +253,14 @@ class TradeMentorService(QObject):
     def set_pull_tally(self, tally) -> None:
         """Persist the tally the pull owner handed back. One owner, one number."""
         self._pull_tally = dict(tally) if isinstance(tally, dict) else {}
+        self._save()
+
+    def econ_brief_shown(self, session: str) -> bool:
+        """Was the morning econ block already shown for this session?"""
+        return bool(session) and self._econ_brief_shown == str(session)
+
+    def mark_econ_brief_shown(self, session: str) -> None:
+        self._econ_brief_shown = str(session or "")
         self._save()
 
     def pause_today(self, *, now: datetime | None = None) -> str:

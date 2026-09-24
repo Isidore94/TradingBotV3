@@ -327,6 +327,22 @@ class MainWindow(QMainWindow):
             )
         )
         self.settings_panel.mentorPauseRequested.connect(self._pause_trade_mentor)
+        # Econ morning brief (trader, 2026-09-24): the Mentor's first card of the
+        # day shows today's news & econ, and timed releases warn at T-30 and T-0.
+        # One owner for the view and the warnings; the view is read on its worker.
+        from ui.services.econ_reminder_service import EconReminderService
+        from ui.services.market_journal_service import shared_journal_service as _journal
+
+        self.econ_reminder_service = EconReminderService(
+            self, engine_enabled=self.trading_panel.price_alert_service.engine_enabled
+        )
+        self.econ_reminder_service.viewChanged.connect(self._on_econ_view)
+        self.econ_reminder_service.reminderFired.connect(self._on_econ_reminder)
+        self.autopilot_panel.service.autoModeChanged.connect(
+            self.econ_reminder_service.on_auto_mode_changed
+        )
+        _journal().entryWritten.connect(self.econ_reminder_service.on_journal_entry)
+        self.econ_toasts = None
 
         self.working_lately_service = WorkingLatelyService(self)
         self.working_lately_service.snapshotChanged.connect(
@@ -1288,12 +1304,48 @@ class MainWindow(QMainWindow):
         # while a test is still monkeypatching what it reads.
         self.trade_mentor_service.start()
         self._sync_trade_mentor_label()
+        # Econ morning brief: same seam - its first refresh reads the journal.
+        self.econ_reminder_service.start()
         # Trader request 2026-09-14, kept by TJ-1: the day page reads today by
         # itself at 12:00 Pacific, and its post-close tick builds that session's
         # index. Same seam, same reason - the tick reads a setting.
         self.day_review_panel.start()
 
     # -- Trade Mentor (WISHLIST 10J) --------------------------------------
+    # -- Econ morning brief (2026-09-24) ------------------------------------
+    def _on_econ_view(self, view: dict) -> None:
+        """Show today's news & econ once per session; later views redraw in place."""
+        try:
+            review = self.trading_panel.alert_center.chart_review
+            session = str(view.get("session") or "")
+            mentor = self.trade_mentor_service
+            if mentor.econ_brief_shown(session):
+                review.update_econ_brief(view)
+                return
+            if not mentor.enabled() or mentor.is_paused():
+                return
+            # Nobody is at the desk to read it, or the ET day has only just
+            # rolled over; the next refresh (or mode flip) tries again.
+            if self._auto_mode_now() in ("AWAY", "EVENING"):
+                return
+            if not self.econ_reminder_service.morning_has_started():
+                return
+            review.show_econ_brief(view)
+            mentor.mark_econ_brief_shown(session)
+        except Exception:  # noqa: BLE001 - the brief never costs the desk
+            logging.debug("Econ block could not be shown.", exc_info=True)
+
+    def _on_econ_reminder(self, payload: dict) -> None:
+        """A due econ warning: a desk toast with a beep (the phone is the service's)."""
+        try:
+            if self.econ_toasts is None:
+                from ui.widgets.econ_brief_block import EconToastManager
+
+                self.econ_toasts = EconToastManager(self)
+            self.econ_toasts.show_reminder(payload)
+        except Exception:  # noqa: BLE001
+            logging.debug("Econ toast could not be shown.", exc_info=True)
+
     def _trade_mentor_cached_bars(self, timeframe, symbols, *, now, timeout_seconds):
         """Read existing desk caches only; a miss is left for the service batch.
 
@@ -1990,6 +2042,10 @@ class MainWindow(QMainWindow):
         # Same list, same reason (WISHLIST 10J): one timer, owned here.
         try:
             self.trade_mentor_service.shutdown()
+        except Exception:
+            pass
+        try:
+            self.econ_reminder_service.shutdown()
         except Exception:
             pass
         try:

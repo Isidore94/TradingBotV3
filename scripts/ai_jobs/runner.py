@@ -1129,6 +1129,24 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
             uses_model=True,
         ),
+        # Econ morning brief (trader, 2026-09-24): "what to watch today" from the
+        # newest pasted brief, for the Mentor's first card of the next session.
+        # A local MEDIUM model words it; every time and event is checked against
+        # the deterministic pack, and the card falls back to the brief's own
+        # lines if this never runs. Stage 2, directly after the briefs: the
+        # slots before `ticker_briefs` are pinned closed, and `week_questions`
+        # is pinned directly after `market_story_narration`.
+        JobSlot(
+            name="econ_brief",
+            run=econ_brief_narration.run_econ_brief,
+            reserve_minutes=10.0,
+            description=(
+                "Short 'what to watch today' from the newest pasted brief; "
+                "times come from the fixed parser, never the model"
+            ),
+            max_attempts=3,
+            uses_model=True,
+        ),
         # Phase 0.31 / WISHLIST 10D step 3. Appended at the end of the
         # narration stage. It reads only the deterministic story packs above,
         # and a failure preserves the last verified narration.
@@ -1139,23 +1157,6 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Grounded weekly/monthly/quarterly Market Journal narration "
                 "and one Trade Mentor coaching question"
-            ),
-            max_attempts=3,
-            uses_model=True,
-        ),
-        # Econ morning brief (trader, 2026-09-24): "what to watch today" from the
-        # newest pasted brief, for the Mentor's first card of the next session.
-        # A local MEDIUM model words it; every time and event is checked against
-        # the deterministic pack, and the card falls back to the brief's own
-        # lines if this never runs. Stage 2, after the market story: the pins
-        # keep the slots before `ticker_briefs` closed.
-        JobSlot(
-            name="econ_brief",
-            run=econ_brief_narration.run_econ_brief,
-            reserve_minutes=10.0,
-            description=(
-                "Short 'what to watch today' from the newest pasted brief; "
-                "times come from the fixed parser, never the model"
             ),
             max_attempts=3,
             uses_model=True,

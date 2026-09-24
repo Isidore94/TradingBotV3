@@ -40,6 +40,9 @@ LATE_GRACE = timedelta(minutes=2)
 STAGE_SOON = "t30"
 STAGE_NOW = "t0"
 
+#: The morning econ block is not popped before this ET hour (the premarket).
+MORNING_START_ET = 4
+
 #: Modes that send the warning to the phone. DESK and OFF are at the desk.
 PHONE_MODES = ("AWAY", "EVENING")
 
@@ -174,7 +177,9 @@ class EconReminderService(QObject):
 
     # -- lifecycle --------------------------------------------------------
     def start(self) -> None:
-        """Begin. Called after the window is up, never in a constructor."""
+        """Begin. Called after the window is up, never in a constructor. Idempotent."""
+        if self._tick_timer.isActive():
+            return
         if not self._mode:
             self._mode = self._read_mode()
         self._tick_timer.start()
@@ -201,9 +206,16 @@ class EconReminderService(QObject):
     def set_auto_mode(self, mode: str) -> None:
         self._mode = str(mode or "").strip().upper() or "OFF"
 
-    def on_auto_mode_changed(self, _previous: str, current: str) -> None:
-        """Slot for `AutopilotService.autoModeChanged`."""
+    def on_auto_mode_changed(self, previous: str, current: str) -> None:
+        """Slot for `AutopilotService.autoModeChanged`. Back at the desk: re-read the view."""
         self.set_auto_mode(current)
+        if str(previous or "").upper() in PHONE_MODES and not self.phone_mode():
+            self.refresh()
+
+    def morning_has_started(self, now: datetime | None = None) -> bool:
+        """At or after `MORNING_START_ET` on the ET clock (the morning block waits for it)."""
+        moment = (now or self._clock()).astimezone(EASTERN)
+        return moment.hour >= MORNING_START_ET
 
     def phone_mode(self) -> bool:
         return self._mode in PHONE_MODES
