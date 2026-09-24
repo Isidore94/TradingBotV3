@@ -464,6 +464,7 @@ class ArmBar(QFrame):
             for kind in kinds:
                 add_button_action(kind, self._menu_button_for(kind))
         # Off-menu kinds: hidden unless armed, so an old arm can still be disarmed.
+        self._legacy_separator = d1_menu.addSeparator()
         self._legacy_header_action = add_header(_LEGACY_HEADER)
         for key, button in self._legacy_buttons().items():
             add_button_action(key, button)
@@ -524,9 +525,9 @@ class ArmBar(QFrame):
         for key, button in legacy.items():
             self.d1_actions[key].setVisible(button.isChecked())
         if self._legacy_header_action is not None:
-            self._legacy_header_action.setVisible(
-                any(button.isChecked() for button in legacy.values())
-            )
+            any_legacy = any(button.isChecked() for button in legacy.values())
+            self._legacy_header_action.setVisible(any_legacy)
+            self._legacy_separator.setVisible(any_legacy)
 
     def apply_scaled_metrics(self) -> None:
         """Re-apply the input widths that are pixel budgets, not stylesheet."""

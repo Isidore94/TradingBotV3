@@ -48,7 +48,7 @@ in the same commit.
 
 ## Focus, gating and modes
 - The M5 Focus adoption gate is defined once in `focus_adoption_gate.py`: beyond yesterday's extreme AND on the right side of `chart_snapshot.session_vwap_series`, on the last completed M5 bar. UNKNOWN fails. Stored verdicts expire after 45 minutes or 2 completed bars.
-- A Focus pick's automatic D1 alerts are pullbacks only. Extensions fire only when the trader arms them; enforce this while generating flags, never by suppressing downstream alerts.
+- A Focus pick's automatic D1 alerts are pullbacks only. Extensions fire only when the trader arms them; enforce this while generating flags, never by suppressing downstream alerts. The auto lane is exactly `D1_PULLBACK_KINDS` (15EMA reject, AVWAPE bounce, 1σ bounce); the grouped menu kinds (`d1_line_pullback`, `range_breakout`, `line_break`) are trader-armed only. A kind taken off the D1 menu keeps loading, firing and showing while armed so it can be disarmed.
 - Armed alerts expire in TRADING days (5 for a five-day extreme watch, 10 otherwise), counted by `market_calendar.trading_days_between` in `armed_alert_expiry.py`. Uncertainty never deletes; every expiry appends a row, price alerts are disarmed never deleted, and expiry runs at the start of the poll owning that store.
 - A quiet Focus pick fades reversibly after 10 trading days through `FocusPickStore`'s removal path; it never touches a watchlist line or writes a `pick_feedback` verdict. Keep the faded marker and append-only record; a faded swing favorite appends a retraction. Check on day roll and the half-hour timer.
 - `focus_auto_picks.json` marks machine picks. No marker means the trader owns the pick; only marked entries may receive Not today or desync repair.
