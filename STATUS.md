@@ -4,17 +4,12 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 
 **Updated:** 2026-09-23
 
-- **Live on `main`:** everything through the 2026-09-22 integration (`cf9c6b2a`):
-  overnight AI repair (AI-R1/R2/R3), setup-score repair (SP1/SP2), alert review
-  follow-up (AR-1/2A/2B/3), recap learning (TJ-17A–D), TJ-9E exit notes and the
-  per-trade Mentor Save.
+- **Live on `main`:** everything through the 2026-09-23 integrations below.
 - **Desk:** it runs from source on `main`. It was down for the 09-22 update and was
   not restarted. The next start is the trader's call.
-- **Last full suite:** 10,429 passed, 14 skipped, 1 known flaky test (G7 research tab,
-  green when run alone). Ruff clean, smoke 7/7, source and frozen selftest 97/97.
+- **Last full suite:** 10,933 passed, 14 skipped (09-23 night-AI integration). Ruff clean, smoke 7/7, selftest 97/97 source and frozen.
 - **09-22 merges:** repo slim-down, setup grades + 8-core tests (gate #190), Working now strip (#191).
-- **Close-scan freshness fix** merged 2026-09-23: the close scan no longer reuses a cache missing today's bar. Gate #192. Follow-up owed: halted names refetch each evening scan (reviewer advisory).
-- **M5 swing context** merged 2026-09-23: M5 alert rows show the D1 swing grade and claim star. Gate #193.
+- **09-23 early merges:** close-scan freshness (gate #192; owed: halted names refetch each evening), M5 swing context (#193).
 - **2026-09-23 integration** (`80d86afd`): Mentor asks once (gate #194), Pullback dip gate v2 (#195),
   Capture tab fill + veto v4 (q/w/e), AGENTS.md test lines. Suite 10,524 passed, 2 load flakes green alone; selftest 97/97 source and frozen.
   Mentor-ask-once merged without a reviewer round.
@@ -25,6 +20,9 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Day Recap coach** merged 2026-09-23, live at the next restart: cleaned Day Review, 5-min Walk with Mentor,
   day records + week rollups, find-it-next-time, grade/regime history, chart clues, rule loop, week view + Ask the AI
   (gates #198–201). Owed: rule line in the phone brief; `_mentor_rule_lane` list_trades on the Qt thread.
+- **Night AI + research fixes** merged 2026-09-23 (no reviewer round): swing report tickers, digest names best trades,
+  day-story prompt trimmed, enrichment schema echo fixed, `scripts/research_pack.py`, lake SPY/QQQ/IWM D1 + context v2. Gate #202.
+  Owed: run the two `--apply` backfills (trader); pre-Aug entry_at pinned to 2026-08-04 (outcome code, ask first).
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
   `claude/chart-wheel-zoom-2026-09-21` (`11c3a339`). It is not on `main`. Merge it only
   while the desk is down.
