@@ -23,6 +23,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Night AI + research fixes** merged 2026-09-23 (no reviewer round): swing report tickers, digest names best trades,
   day-story prompt trimmed, enrichment schema echo fixed, `scripts/research_pack.py`, lake SPY/QQQ/IWM D1 + context v2. Gate #202.
   Backfills applied 09-23 as context v3 (v2 wrote all unknown). Owed: pre-Aug entry_at pinned to 2026-08-04 (outcome code, ask first).
+- **RVOL on chart review** merged 2026-09-23 (`ca5bc040`, no exe build on the trader's word): D1 volume coloured by rvol band, `RVOL x.xx×` on the D1 and M5 headers. Live at the next restart. Gate #203.
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
   `claude/chart-wheel-zoom-2026-09-21` (`11c3a339`). It is not on `main`. Merge it only
   while the desk is down.
