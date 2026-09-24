@@ -277,8 +277,13 @@ class AutopilotService(QObject):
         self._auto_window_open: bool | None = None
         #: One Evening SPY alarm send at a time. The send is a blocking HTTPS
         #: POST on a worker; without this a hung ntfy would stack one thread
-        #: per 30-second tick.
+        #: per tick.
         self._spy_alarm_sending = False
+        #: The SPY alarm's own 10 s clock, running only while in EVENING.
+        self._spy_alarm_timer = QTimer(self)
+        self._spy_alarm_timer.setInterval(core.EVENING_SPY_ALARM_REPEAT_SECONDS * 1000)
+        self._spy_alarm_timer.timeout.connect(self._on_spy_alarm_tick)
+        self._sync_spy_alarm_timer()
 
         if bounce_service is not None:
             bounce_service.alertReceived.connect(self._on_alert)
@@ -374,6 +379,12 @@ class AutopilotService(QObject):
         current = self.auto_mode
         if current == previous_mode:
             return
+        sync_alarm = getattr(self, "_sync_spy_alarm_timer", None)
+        if sync_alarm is not None:
+            try:
+                sync_alarm()
+            except Exception:  # noqa: BLE001
+                logging.exception("The SPY alarm timer could not follow the mode.")
         try:
             self.autoModeChanged.emit(str(previous_mode), str(current))
         except Exception:  # noqa: BLE001
@@ -580,7 +591,6 @@ class AutopilotService(QObject):
             self._maybe_run_evening_prep(now)
             self._maybe_hourly_away_report(now)
             self._maybe_push_d1_events(now)
-            self._maybe_push_spy_alarm(now)
             # One snapshot per tick: it reads files, and the heartbeat and the
             # emit want the same moment anyway.
             snapshot = self.status_snapshot()
@@ -616,6 +626,7 @@ class AutopilotService(QObject):
                 "spy_alarm_last_sent": None,
                 "spy_alarm_last_attempt": None,
                 "spy_alarm_failures": 0,
+                "spy_alarm_latched": False,
                 # What Auto Pilot itself wrote survives the day roll - it is
                 # how tomorrow's build tells its own picks from the trader's.
                 "autopilot_written": self._state.get("autopilot_written") or {"longs": [], "shorts": []},
@@ -2190,19 +2201,61 @@ class AutopilotService(QObject):
             for side in ("long", "short")
         }
 
+    def _sync_spy_alarm_timer(self) -> None:
+        """Run the SPY alarm's 10 s timer only while Auto mode is EVENING."""
+        timer = getattr(self, "_spy_alarm_timer", None)
+        if timer is None:
+            return
+        if self.auto_mode == AUTO_PROFILE_EVENING:
+            if not timer.isActive():
+                timer.start()
+        else:
+            timer.stop()
+            self._clear_spy_alarm_latch()
+
+    @Slot()
+    def _on_spy_alarm_tick(self) -> None:
+        try:
+            self._maybe_push_spy_alarm(datetime.now())
+        except Exception:
+            logging.exception("Evening SPY alarm tick failed")
+
+    def _clear_spy_alarm_latch(self) -> None:
+        if self._state.get("spy_alarm_latched"):
+            self._state["spy_alarm_latched"] = False
+            self._save_state()
+
+    def _spy_day_pct(self, now: datetime) -> float | None:
+        """SPY's move on the day from today's cached bars, or None.
+
+        Champion data path, cached read only: this runs on the GUI thread and
+        must never trigger an IB fetch. A last bar dated before today is stale
+        (the overnight cache still holds yesterday's move), never a move.
+        """
+        bot = self._current_bot()
+        if bot is None:
+            return None
+        spy_today, prev_close = bot._spy_session_bars(cached_only=True)
+        if not spy_today or not prev_close:
+            return None
+        last_bar = spy_today[-1]
+        stamp = getattr(last_bar, "dt", None)
+        bar_date = stamp.date() if hasattr(stamp, "date") else None
+        if bar_date != now.date():
+            return None
+        return (last_bar.close - prev_close) / prev_close * 100.0
+
     def _maybe_push_spy_alarm(self, now: datetime) -> None:
-        """EVENING only: phone the trader when SPY has moved a full percent.
+        """EVENING only: ring the phone when SPY has moved a full percent.
 
-        The second deliberate exception to the AWAY-only push rule (the first is
-        the always-on Research/Focus price alerts). Evening exists because the
-        trader worked late and is asleep through the open; a tape that has
-        already moved 1% is the thing worth waking up for.
-
-        Repeats every five minutes while the condition holds - the alarm has to
-        survive being slept through - and stops the moment the trader flips out
-        of EVENING, which is the acknowledgement.
+        Trader 2026-09-23: once SPY crosses the threshold the alarm LATCHES and
+        rings every 10 seconds (its own timer) until the trader changes Auto
+        mode, even if SPY drifts back. A failed or rate-limited send is tried
+        again on the next tick; there is no backoff and no cap. Leaving
+        EVENING clears the latch.
         """
         if self.auto_mode != AUTO_PROFILE_EVENING:
+            self._clear_spy_alarm_latch()
             return
         if self._spy_alarm_sending:
             return  # one send in flight; a slow ntfy must not stack alarms
@@ -2218,55 +2271,34 @@ class AutopilotService(QObject):
                 threshold = float(threshold)
             except (TypeError, ValueError):
                 threshold = core.EVENING_SPY_ALARM_PCT
-            # The alarm belongs to the session, not to the night before it.
-            allowed, _reason = self._auto_work_due(now)
-            if not allowed:
-                return
             if not push_notify.push_configured():
                 return
-            bot = self._current_bot()
-            if bot is None:
-                return
-            # Champion data path, cached read only: this runs on the GUI thread
-            # and must never trigger an IB fetch. No shadow engine is involved.
-            spy_today, prev_close = bot._spy_session_bars(cached_only=True)
-            if not spy_today or not prev_close:
-                return  # missing bars are uncertainty, never confirmation
-            # `_spy_session_bars` calls the LAST cached bar's date "today", so
-            # overnight it hands back yesterday's session in good faith. The
-            # sweep is paused outside the window, so on an Evening morning
-            # after a +/-1% day the cache still holds that move and this would
-            # wake the trader every five minutes over a tape that already
-            # closed. A bar older than today is stale data, not a move.
-            last_bar = spy_today[-1]
-            stamp = getattr(last_bar, "dt", None)
-            bar_date = stamp.date() if hasattr(stamp, "date") else None
-            if bar_date != now.date():
-                return
-            day_pct = (last_bar.close - prev_close) / prev_close * 100.0
-            last_sent = self._spy_alarm_last_sent()
-            if not core.spy_move_alarm_due(
-                day_pct, last_sent, now, threshold_pct=threshold
-            ):
-                return
-            if not self._spy_alarm_attempt_due(now):
-                return
+            latched = bool(self._state.get("spy_alarm_latched"))
+            if not latched:
+                # The alarm belongs to the session, not to the night before it.
+                allowed, _reason = self._auto_work_due(now)
+                if not allowed:
+                    return
+            day_pct = self._spy_day_pct(now)
+            if not latched:
+                if not core.spy_move_alarm_due(day_pct, None, now, threshold_pct=threshold):
+                    return
+                self._state["spy_alarm_latched"] = True
+                self._state["spy_alarm_latched_pct"] = day_pct
+                self._save_state()
+            if day_pct is None:
+                day_pct = float(self._state.get("spy_alarm_latched_pct") or 0.0)
             # Everything above is a cheap local read. The SEND is a blocking
-            # HTTPS POST with a timeout, and it used to run right here on the
-            # GUI thread - so a hung ntfy froze the desk for the request
-            # timeout, every tick, in the mode where the trader is asleep and
-            # cannot see it. It goes to a worker now, single-flight, so a slow
-            # send delays the next attempt instead of stacking sends.
+            # HTTPS POST, so it goes to a worker, single-flight.
             self._spy_alarm_sending = True
             self._state["spy_alarm_last_attempt"] = now.isoformat(timespec="seconds")
-            self._save_state()
             direction = "UP" if day_pct >= 0 else "DOWN"
             title = f"SPY {day_pct:+.2f}% - market is moving"
             message = (
                 f"SPY is {direction} {abs(day_pct):.2f}% on the day at "
                 f"{now.strftime('%H:%M')}.\n"
                 f"Evening wake alarm (threshold ±{threshold:.2f}%). It repeats "
-                "every 5 minutes until you flip Auto Pilot out of EVENING."
+                "every 10 seconds until you change Auto mode."
             )
             threading.Thread(
                 target=self._send_spy_alarm,
@@ -2281,21 +2313,11 @@ class AutopilotService(QObject):
     def _send_spy_alarm(self, title: str, message: str, day_pct: float) -> None:
         """Deliver one alarm off the GUI thread and record what happened.
 
-        Three outcomes, treated differently because they are different:
-
-        - delivered: stamp `spy_alarm_last_sent`, which is what the five-minute
-          repeat clock reads, and clear the failure count.
-        - rejected: the server answered and said no. Definite, so nothing was
-          delivered - but retrying immediately would just fail again, so it
-          backs off.
-        - ambiguous: a timeout or transport error after the request went out.
-          The push may already be on the trader's phone. Retrying immediately
-          could wake them twice for one move, so this backs off too, and is
-          logged as unknown rather than as a failure.
-
-        Follows the service's existing worker convention (the watchlist build
-        does the same): the worker owns the state it writes here, and the tick
-        never touches these keys.
+        Delivered stamps `spy_alarm_last_sent` and clears the failure count.
+        Rejected and ambiguous (a timeout after the request went out) are
+        counted and logged; either way the next 10 s tick tries again. Only
+        the first delivery and the first miss of each 30 are logged, so a
+        ringing alarm does not flood the Auto Pilot log.
         """
         try:
             result = push_notify.send_push(
@@ -2303,56 +2325,34 @@ class AutopilotService(QObject):
             )
             kind = str(result.get("kind") or ("delivered" if result.get("ok") else "rejected"))
             if result.get("ok"):
+                first = not self._state.get("spy_alarm_last_sent")
                 self._state["spy_alarm_last_sent"] = datetime.now().isoformat(timespec="seconds")
                 self._state["spy_alarm_failures"] = 0
-                self._save_state()
-                self._log(f"Evening SPY alarm sent: SPY {day_pct:+.2f}% on the day.")
+                if first:
+                    self._save_state()
+                    self._log(f"Evening SPY alarm sent: SPY {day_pct:+.2f}% on the day.")
                 return
             if kind == "unconfigured":
-                # Nothing was transmitted, so this is not a delivery failure and
-                # must not push the backoff out - there is simply no phone
-                # configured to send to.
+                # Nothing was transmitted, so this is not a delivery failure.
                 return
             failures = int(self._state.get("spy_alarm_failures") or 0) + 1
             self._state["spy_alarm_failures"] = failures
-            self._save_state()
-            if kind == "ambiguous":
-                self._log(
-                    f"Evening SPY alarm outcome UNKNOWN (attempt {failures}) - it may "
-                    f"have reached the phone: {result.get('error')}. Backing off rather "
-                    "than risking a duplicate wake-up."
-                )
-            else:
-                self._log(
-                    f"Evening SPY alarm REJECTED (attempt {failures}): {result.get('error')}"
-                )
+            if failures == 1 or failures % 30 == 0:
+                if kind == "ambiguous":
+                    self._log(
+                        f"Evening SPY alarm outcome UNKNOWN (attempt {failures}) - it may "
+                        f"have reached the phone: {result.get('error')}. Trying again in "
+                        "10 seconds."
+                    )
+                else:
+                    self._log(
+                        f"Evening SPY alarm REJECTED (attempt {failures}): "
+                        f"{result.get('error')}. Trying again in 10 seconds."
+                    )
         except Exception as exc:
             self._log(f"Evening SPY alarm send failed: {exc}")
         finally:
             self._spy_alarm_sending = False
-
-    def _spy_alarm_attempt_due(self, now: datetime) -> bool:
-        """Backoff between ATTEMPTS, separate from the five-minute repeat.
-
-        The repeat clock counts delivered alarms; this counts attempts, so a
-        broken ntfy cannot turn a 30-second tick into a 30-second retry storm.
-        Floor 60s, doubling, capped at one attempt per five minutes - the same
-        ceiling as the repeat itself, so a failing alarm never sends faster
-        than a working one.
-        """
-        raw = str(self._state.get("spy_alarm_last_attempt") or "")
-        if not raw:
-            return True
-        try:
-            last_attempt = datetime.fromisoformat(raw)
-        except ValueError:
-            return True
-        failures = int(self._state.get("spy_alarm_failures") or 0)
-        if failures <= 0:
-            return True
-        backoff = min(300.0, 60.0 * (2 ** (failures - 1)))
-        elapsed = (now - last_attempt).total_seconds()
-        return elapsed >= backoff or elapsed < 0
 
     def _spy_alarm_last_sent(self) -> datetime | None:
         """Last delivered alarm, or None. Day-rolls with the state file, so a
@@ -2444,6 +2444,7 @@ class AutopilotService(QObject):
         payload.setdefault("spy_alarm_last_sent", None)
         payload.setdefault("spy_alarm_last_attempt", None)
         payload.setdefault("spy_alarm_failures", 0)
+        payload.setdefault("spy_alarm_latched", False)
         payload.setdefault("autopilot_written", {"longs": [], "shorts": []})
         return payload
 
