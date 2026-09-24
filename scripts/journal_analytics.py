@@ -151,8 +151,20 @@ TRACKER_CONTEXT_FIELDS = (
 )
 
 
-def _tracker_context_row(setup: dict[str, Any]) -> dict[str, Any]:
+def _nan_as_none(value: Any) -> Any:
+    """NaN (at any depth) read as None: SQLite's JSON extraction turns NaN into null."""
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _nan_as_none(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_nan_as_none(item) for item in value]
+    return value
+
+
+def _tracker_context_row(record: dict[str, Any]) -> dict[str, Any]:
     """One tracker setup (whole record or its projection) as a tagger context row."""
+    setup = {name: _nan_as_none(record.get(name)) for name in TRACKER_CONTEXT_FIELDS}
     return {
         "source": "setup_tracker",
         "symbol": _normalize_symbol(setup.get("symbol")),

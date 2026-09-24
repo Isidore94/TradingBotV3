@@ -5988,13 +5988,26 @@ def save_setup_tracker_payload(
             logging.warning("Could not rotate setup tracker backup before save: %s", exc)
 
     save_json(SETUP_TRACKER_FILE, payload)
+    # The file's stamp right after OUR write: the mirror is stamped only if the
+    # file still carries it at commit, so another writer in between leaves it unstamped.
+    try:
+        from tracker_store import file_stamp as _tracker_file_stamp
+
+        saved_stamp = _tracker_file_stamp(SETUP_TRACKER_FILE)
+    except Exception:
+        saved_stamp = None
     # Mirror the SAME payload into the SQLite store, encoded as the JSON was and
     # stamped with the JSON file's size/mtime; readers use the store only while
     # that stamp matches. A mirror failure never costs the save.
     try:
         from tracker_store import mirror_payload as _mirror_tracker_payload
 
-        _mirror_tracker_payload(payload, source_path=SETUP_TRACKER_FILE, json_default=_json_default)
+        _mirror_tracker_payload(
+            payload,
+            source_path=SETUP_TRACKER_FILE,
+            source_stamp=saved_stamp,
+            json_default=_json_default,
+        )
     except Exception as exc:
         logging.warning("Setup tracker SQLite mirror unavailable: %s", exc)
     try:

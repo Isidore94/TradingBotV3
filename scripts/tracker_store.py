@@ -93,6 +93,11 @@ def _source_stamp(path: Path | str) -> dict[str, str] | None:
     }
 
 
+def file_stamp(path: Path | str) -> dict[str, str] | None:
+    """The stamp a mirror of ``path`` carries: take it when payload and file are known to match."""
+    return _source_stamp(path)
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
 
@@ -173,13 +178,16 @@ class TrackerStore:
         *,
         now: datetime | None = None,
         source_path: Path | str | None = None,
+        source_stamp: dict | None = None,
         json_default=None,
     ) -> SaveReport:
         """Mirror ``payload`` into the store, rewriting only what changed.
 
-        ``source_path`` is the JSON file this payload was just saved to; the
-        mirror is stamped with its size and mtime so readers can tell it is
-        current. Without it the stamp is cleared and readers use the JSON.
+        ``source_stamp`` is ``file_stamp(source_path)`` taken when ``payload``
+        and the file were known to match (right after the save, or before the
+        read). The mirror is stamped only if the file still has that stamp at
+        commit; otherwise, or without both arguments, the stamp is cleared and
+        readers use the JSON.
         """
         started = datetime.now(timezone.utc)
         stamp = (now or started).isoformat(timespec="seconds")
@@ -243,7 +251,16 @@ class TrackerStore:
                             "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                             (order_key, order_text),
                         )
-                stamp_meta = _source_stamp(source_path) if source_path is not None else None
+                stamp_meta = None
+                if source_path is not None and source_stamp is not None:
+                    stamp_meta = _source_stamp(source_path)
+                    if stamp_meta != source_stamp:
+                        logging.warning(
+                            "Setup tracker mirror left unstamped: %s changed between its save and the mirror "
+                            "(expected %s, found %s); readers will use the JSON.",
+                            source_path, source_stamp, stamp_meta,
+                        )
+                        stamp_meta = None
                 if stamp_meta is None:
                     conn.executemany("DELETE FROM meta WHERE key = ?", [(key,) for key in SOURCE_META_KEYS])
                 else:
@@ -483,6 +500,7 @@ def mirror_payload(
     *,
     path: Path | str | None = None,
     source_path: Path | str | None = None,
+    source_stamp: dict | None = None,
     json_default=None,
 ) -> SaveReport | None:
     """The scanner's hook: mirror after the JSON save. Never raises."""
@@ -490,7 +508,9 @@ def mirror_payload(
         return None
     try:
         store = TrackerStore(path or default_store_path())
-        report = store.save_payload(payload, source_path=source_path, json_default=json_default)
+        report = store.save_payload(
+            payload, source_path=source_path, source_stamp=source_stamp, json_default=json_default
+        )
         logging.info(
             "Setup tracker mirrored to %s: %d records seen, %d written, %d deleted, %d sections, %.1fs",
             report.path, report.records_seen, report.records_written, report.records_deleted,
@@ -696,9 +716,10 @@ def _main(argv: list[str] | None = None) -> int:
     if args.command == "counts":
         print(json.dumps({"path": str(store.path), "records": store.counts()}, indent=2))
         return 0
+    stamp_before_read = file_stamp(json_path)  # a rewrite during the read or mirror leaves it unstamped
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     if args.command == "mirror":
-        report = store.save_payload(payload, source_path=json_path)
+        report = store.save_payload(payload, source_path=json_path, source_stamp=stamp_before_read)
         print(json.dumps(report.__dict__, indent=2))
         return 0
     report = store.verify(payload)

@@ -441,3 +441,98 @@ def test_journal_context_rows_fall_back_to_the_json_when_the_store_is_stale(trac
         "not the SQLite store" in r.getMessage() and "changed after the last mirror" in r.getMessage()
         for r in caplog.records
     )
+
+
+def test_journal_rows_match_when_the_truthy_fields_hold_nan(tracker, tmp_path, monkeypatch):
+    """SQLite's `->` reads NaN as null; the JSON path must treat NaN the same way."""
+    import journal_analytics
+
+    json_path, db_path = tracker
+    payload = _payload()
+    payload["setups"].update(
+        {
+            "n1": {"symbol": "NANA", "side": "LONG", "scan_date": "2026-09-22", "compression_flag": float("nan"),
+                   "retest_reference_level": float("nan"), "mid_earnings_primary_trigger_level": 12.5},
+            "n2": {"symbol": "NANB", "compression_flag": [float("nan")],
+                   "retest_reference_level": {"level": float("nan")}, "favorite_zone": float("nan")},
+        }
+    )
+    legacy.save_setup_tracker_payload(payload, data_session="2026-09-22")
+    expected = _json_rows(json_path, tmp_path)
+    got = journal_analytics.AutoTagger(setup_tracker_path=json_path, setup_tracker_db_path=db_path)._load_tracker_rows()
+    assert _rows_text(got) == _rows_text(expected)
+    nana = next(row for row in got if row["symbol"] == "NANA")
+    assert nana["compression"] is False and nana["retest"] == 12.5
+
+
+# ---------------------------------------------------------------------------
+# Reviewer blocker: the stamp must describe the file the mirrored payload came from.
+
+
+def _write(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, default=legacy._json_default), encoding="utf-8")
+
+
+def test_a_mirror_of_an_older_payload_is_never_stamped_current(tmp_path):
+    json_path = tmp_path / "t.json"
+    db_path = tmp_path / "t.sqlite"
+    j0 = _payload()
+    j0.pop("study_setups")
+    _write(json_path, j0)
+    stamp_j0 = tracker_store.file_stamp(json_path)
+    loaded_j0 = json.loads(json_path.read_text(encoding="utf-8"))
+    j1 = json.loads(json_path.read_text(encoding="utf-8"))
+    j1["setups"]["2026-09-23:NVDA:LONG:2026-06-01:favorite_setup"] = {"symbol": "NVDA"}
+    _write(json_path, j1)
+    os.utime(json_path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+
+    store = tracker_store.TrackerStore(db_path)
+    # The reviewer's reproduction: a source path alone never stamps the mirror.
+    store.save_payload(loaded_j0, source_path=json_path)
+    assert tracker_store.load_fresh_payload(json_path, db_path)[0] is None
+    # With the stamp taken while J0 was on disk, the rewrite is caught at commit.
+    store.save_payload(loaded_j0, source_path=json_path, source_stamp=stamp_j0)
+    payload, reason = tracker_store.load_fresh_payload(json_path, db_path)
+    assert payload is None and "no format-2 source stamp" in reason
+    # The honest case still stamps.
+    store.save_payload(j1, source_path=json_path, source_stamp=tracker_store.file_stamp(json_path))
+    payload, reason = tracker_store.load_fresh_payload(json_path, db_path)
+    assert reason == "" and "2026-09-23:NVDA:LONG:2026-06-01:favorite_setup" in payload["setups"]
+
+
+def _rewrite_json_before_mirroring(monkeypatch, json_path: Path) -> None:
+    real = tracker_store.TrackerStore.save_payload
+
+    def racing(self, payload, **kwargs):
+        newer = json.loads(json_path.read_text(encoding="utf-8"))
+        newer["setups"]["2026-09-24:LATE:LONG:2026-06-01:favorite_setup"] = {"symbol": "LATE"}
+        _write(json_path, newer)
+        os.utime(json_path, ns=(1_800_000_000_000_000_000, 1_800_000_000_000_000_000))
+        return real(self, payload, **kwargs)
+
+    monkeypatch.setattr(tracker_store.TrackerStore, "save_payload", racing)
+
+
+def test_a_writer_between_the_save_and_the_mirror_leaves_the_store_unstamped(tracker, monkeypatch, caplog):
+    json_path, db_path = tracker
+    _rewrite_json_before_mirroring(monkeypatch, json_path)
+    with caplog.at_level(logging.WARNING):
+        legacy.save_setup_tracker_payload(_payload(), data_session="2026-09-22")
+
+    assert tracker_store.load_fresh_payload(json_path, db_path)[0] is None
+    got = runner.load_setup_tracker_payload()
+    assert "2026-09-24:LATE:LONG:2026-06-01:favorite_setup" in got["setups"], "the newer JSON wins"
+    assert any("mirror left unstamped" in r.getMessage() for r in caplog.records)
+
+
+def test_the_cli_mirror_does_not_stamp_a_file_rewritten_during_its_run(tmp_path, monkeypatch):
+    json_path = tmp_path / "t.json"
+    db_path = tmp_path / "t.sqlite"
+    j0 = _payload()
+    j0.pop("study_setups")
+    _write(json_path, j0)
+    _rewrite_json_before_mirroring(monkeypatch, json_path)
+
+    assert tracker_store._main(["mirror", "--json", str(json_path), "--db", str(db_path)]) == 0
+    payload, reason = tracker_store.load_fresh_payload(json_path, db_path)
+    assert payload is None and reason
