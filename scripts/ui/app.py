@@ -1324,8 +1324,8 @@ class MainWindow(QMainWindow):
                 return
             if not mentor.enabled() or mentor.is_paused():
                 return
-            # Nobody is at the desk to read it, or the ET day has only just
-            # rolled over; the next refresh (or mode flip) tries again.
+            # Nobody is at the desk to read it, or it is before 05:00 PT; the
+            # next refresh (or mode flip) tries again.
             if self._auto_mode_now() in ("AWAY", "EVENING"):
                 return
             if not self.econ_reminder_service.morning_has_started():

@@ -257,3 +257,15 @@ def test_a_push_queued_as_the_sender_finds_the_queue_empty_is_still_sent(make_se
     while len(service.sent) < 2 and time.monotonic() < deadline:
         time.sleep(0.02)
     assert [message for _title, message in service.sent] == ["first", "second"]
+
+
+def test_the_morning_starts_at_five_pacific_not_one(make_service):
+    """04:00 ET is 01:00 PT; the block waits for 05:00 on the trader's clock."""
+    service = make_service()
+    assert service.morning_has_started(_at(4, 0)) is False  # 01:00 PT
+    assert service.morning_has_started(_at(7, 59)) is False  # 04:59 PT
+    assert service.morning_has_started(_at(8, 0)) is True  # 05:00 PT
+    assert service.morning_has_started(_at(12, 0)) is True
+    # 21:30 PT is already tomorrow in ET; that session's morning has not started.
+    late = datetime(2026, 9, 25, 0, 30, tzinfo=ET)
+    assert service.morning_has_started(late) is False

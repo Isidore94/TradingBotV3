@@ -40,8 +40,9 @@ LATE_GRACE = timedelta(minutes=2)
 STAGE_SOON = "t30"
 STAGE_NOW = "t0"
 
-#: The morning econ block is not popped before this ET hour (the premarket).
-MORNING_START_ET = 4
+#: The morning econ block is not popped before this hour on the trader's own
+#: (Pacific) clock.
+MORNING_START_PT = 5
 
 #: Modes that send the warning to the phone. DESK and OFF are at the desk.
 PHONE_MODES = ("AWAY", "EVENING")
@@ -215,9 +216,14 @@ class EconReminderService(QObject):
             self.refresh()
 
     def morning_has_started(self, now: datetime | None = None) -> bool:
-        """At or after `MORNING_START_ET` on the ET clock (the morning block waits for it)."""
-        moment = (now or self._clock()).astimezone(EASTERN)
-        return moment.hour >= MORNING_START_ET
+        """At or after `MORNING_START_PT` on the trader's clock, on the ET session's date.
+
+        The date check keeps a late Pacific evening (already tomorrow in ET)
+        from counting as tomorrow's morning.
+        """
+        moment = now or self._clock()
+        local = moment.astimezone(PACIFIC)
+        return local.date() == moment.astimezone(EASTERN).date() and local.hour >= MORNING_START_PT
 
     def phone_mode(self) -> bool:
         return self._mode in PHONE_MODES
