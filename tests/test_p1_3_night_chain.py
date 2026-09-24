@@ -311,6 +311,38 @@ def test_the_estimate_comes_from_measured_runs_not_the_reserve(tmp_path, night):
     assert calls == ["briefs"], "a 5-minute measured job fits a 30-minute budget"
 
 
+def test_a_budget_cut_digest_still_writes_its_facts_once_as_degraded(tmp_path, night):
+    """The budget never skips deterministic work: the digest runs its facts half."""
+    from ai_jobs import runner
+
+    led = _write_rows(
+        tmp_path / "ledger.jsonl",
+        [{"job": "journal_import", "status": "ok", "session_date": "2026-08-11",
+          "started_at": "2026-08-11T22:00:00-04:00", "duration_seconds": 40.0}],
+    )
+    seen: list[dict] = []
+    slot = _slot("daily_digest", lambda **k: seen.append(k) or {"reason": "fact pack"},
+                 uses_model=True, model_free_kwargs={"narrate": False}, reserve=10.0)
+    runner.run_slots([slot], now=OVERNIGHT, ledger_path=led, budget_minutes=150.0)
+    runner.run_slots([slot], now=OVERNIGHT, ledger_path=led, budget_minutes=150.0)
+
+    assert seen == [{"session_date": "2026-08-11", "now": OVERNIGHT, "narrate": False}]
+    rows = [r for r in _rows(led) if r["job"] == "daily_digest"]
+    assert [r["status"] for r in rows] == ["degraded_no_narrative"]
+    assert rows[0]["night_budget"] is True
+    assert "night budget: 0 of 150 min left" in rows[0]["reason"]
+    assert "deterministic facts only" in rows[0]["reason"]
+
+
+def test_the_journal_import_reserve_covers_the_flex_waits():
+    import journal_runner
+    from ai_jobs import runner
+
+    slot = {s.name: s for s in runner.default_slots()}["journal_import"]
+    assert slot.reserve_minutes >= 5.0 + sum(journal_runner.NIGHTLY_FLEX_NOT_READY_WAITS) / 60.0
+    assert slot.reserve_minutes == 12.0
+
+
 def test_measured_slot_minutes_is_the_median_of_recent_real_runs(tmp_path):
     from ai_jobs import model_probe
 

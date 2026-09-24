@@ -538,6 +538,7 @@ def _run_slots_locked(
             continue
 
         # P1-3 3a: the night budget, with room held for higher-priority model slots.
+        budget_cut = ""
         if budget and slot.uses_model and not model_free:
             budget_reason = _budget_refusal(
                 slot,
@@ -553,10 +554,15 @@ def _run_slots_locked(
                 spent=night_elapsed + (time.perf_counter() - firing_clock) / 60.0,
                 estimates=estimates,
             )
-            if budget_reason:
-                if not _already_flagged(
-                    slot.name, run_session, NIGHT_BUDGET_FLAG, path=ledger_path
-                ):
+            already_cut = budget_reason and _already_flagged(
+                slot.name, run_session, NIGHT_BUDGET_FLAG, path=ledger_path
+            )
+            if budget_reason and slot.model_free_kwargs and not already_cut:
+                # Deterministic work is never budgeted: run the facts half once.
+                model_free = True
+                budget_cut = budget_reason
+            elif budget_reason:
+                if not already_cut:
                     row = ledger.record(
                         job=slot.name,
                         status=ledger.STATUS_SKIPPED,
@@ -643,7 +649,15 @@ def _run_slots_locked(
                 # coverage. Degraded and failed keep their own meaning.
                 status = ledger.STATUS_MANUAL
             row_reason = _failure_reason(slot.name, status, outcome)
-            if model_down:
+            if budget_cut:
+                # Facts only because the budget could not hold the narration.
+                if status in (ledger.STATUS_OK, ledger.STATUS_MANUAL):
+                    status = ledger.STATUS_DEGRADED
+                row_reason = (
+                    f"{row_reason} [{budget_cut.removesuffix('; skipped')}: deterministic "
+                    "facts only, narration left out]"
+                ).strip()
+            elif model_down:
                 # Facts only because the model is down: degraded, so a later
                 # firing with a live model retries the narration.
                 if status in (ledger.STATUS_OK, ledger.STATUS_MANUAL):
@@ -671,7 +685,11 @@ def _run_slots_locked(
                 # WS-AI1: a slot may add fields of its own to its ledger row -
                 # the daily summary adds `completion`. `ledger.record` only ever
                 # ADDS (setdefault), so a slot cannot overwrite a ledger field.
-                extra=outcome.get("extra") or None,
+                extra=(
+                    {**dict(outcome.get("extra") or {}), NIGHT_BUDGET_FLAG: True}
+                    if budget_cut
+                    else outcome.get("extra") or None
+                ),
                 path=ledger_path,
             )
             logging.info(
@@ -864,7 +882,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         week_review_narration,
         week_questions,
     )
-    from journal_runner import run_nightly_journal_import
+    from journal_runner import NIGHTLY_FLEX_NOT_READY_WAITS, run_nightly_journal_import
     from market_story_rollups import run_market_story_rollups
     from preference_trade_outcomes import run_preference_trade_outcomes
 
@@ -876,7 +894,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         JobSlot(
             name="journal_import",
             run=lambda **kwargs: run_nightly_journal_import(trigger="nightly"),
-            reserve_minutes=5.0,
+            # 5 minutes of import plus the Flex not-ready waits (P1-3 3d).
+            reserve_minutes=5.0 + sum(NIGHTLY_FLEX_NOT_READY_WAITS) / 60.0,
             description="Broker journal pull, gap self-heal, FX booking and reconciliation",
             max_attempts=3,
         ),
