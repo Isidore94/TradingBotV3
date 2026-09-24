@@ -658,8 +658,9 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=journal_auto_tag.run_journal_auto_tag,
             reserve_minutes=5.0,
             description=(
-                "Provisional setup tags on the night's closed trades "
-                "(deterministic, no model; never overwrites a confirmed tag)"
+                "Provisional setup tags on the night's closed trades, then the "
+                "auto market environment per journal date "
+                "(deterministic, no model; never overwrites a confirmed tag or a trader regime)"
             ),
             max_attempts=3,
         ),

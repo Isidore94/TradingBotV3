@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -17,10 +17,13 @@ from journal_analytics import (
     TRADER_CAPTURE_SOURCE,
     TRADER_NOTE_SOURCE,
     AutoTagger,
+    has_invented_entry,
     split_tags,
 )
 from journal_trade_shape import is_shape_tag, shape_tags
 from journal_identity import (
+    PRE_TJ9Q_VERBATIM_SIDES,
+    SELL_SIDE_WORDS,
     contract_multiplier as _contract_multiplier_shared,
     group_key,
     group_key_text,
@@ -80,6 +83,9 @@ PROVISIONAL_TAG_ADJUSTMENT = "APPLY_PROVISIONAL_TAG"
 #: value is ``trade_shape:<kind>``; the prefix is what orders the two lanes and
 #: what the UI reads to say where a suggestion came from.
 TRADE_SHAPE_SOURCE = "trade_shape"
+
+#: `regimes.source` of a row the nightly market-environment fill wrote.
+REGIME_SOURCE_AUTO = "auto"
 
 #: P6's EXACT-ID lane, RE-EXPORTED from `journal_analytics`, which owns it and
 #: which this module already imports from. The stored value is
@@ -235,10 +241,16 @@ def _row_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
 
+_STORED_SELL_WORDS = SELL_SIDE_WORDS - PRE_TJ9Q_VERBATIM_SIDES
+
+
 def _signed_quantity(row: dict[str, Any]) -> float:
     side = str(row.get("side") or "").strip().upper()
     qty = abs(_coerce_float(row.get("quantity")))
-    if side in {"SELL", "SLD", "STC", "SSHORT", "SHORT"}:
+    # The shared sell words, less the ones still stored verbatim (read as today
+    # until journal_reclassify moves them; a stored STO turning SHORT alone would
+    # also need its option multiplier).
+    if side in _STORED_SELL_WORDS:
         return -qty
     return qty
 
@@ -256,7 +268,19 @@ def _contract_multiplier(row: dict[str, Any]) -> float:
 
 def _execution_assembly_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
     """Normalized position identity first, then chronological fill order."""
-    return (*group_key(row), str(row.get("timestamp") or ""), str(row.get("execution_uid") or ""))
+    return (*group_key(row), _instant_sort_text(row.get("timestamp")), str(row.get("execution_uid") or ""))
+
+
+def _instant_sort_text(value: Any) -> str:
+    """A timestamp as UTC text, so fills stamped in different zones sort by instant."""
+    text = str(value or "")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        return text
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _hash_id(*parts: Any) -> str:
@@ -2200,7 +2224,20 @@ class JournalStore:
                        -- stored on `trades`. A trade the tagger has not visited
                        -- since this packet landed reads '', which every reader
                        -- renders as silence rather than as an empty window.
-                       COALESCE(n.note_lane_json, '') AS note_lane_json
+                       COALESCE(n.note_lane_json, '') AS note_lane_json,
+                       -- The rebuild stood a closing fill in for a missing entry.
+                       EXISTS(
+                           SELECT 1 FROM trade_legs l
+                           WHERE l.trade_id = t.trade_id AND l.role = 'SYNTHETIC_OPEN'
+                       ) AS synthetic_entry,
+                       COALESCE((
+                           SELECT acc.tax_status FROM accounts acc
+                           WHERE acc.broker = t.broker AND acc.account_number = t.account_number
+                       ), '') AS account_tax_status,
+                       COALESCE((
+                           SELECT acc.account_type FROM accounts acc
+                           WHERE acc.broker = t.broker AND acc.account_number = t.account_number
+                       ), '') AS account_type
                 FROM trades t
                 LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id
                 LEFT JOIN note_lane_verdicts n ON n.trade_id = t.trade_id
@@ -2210,6 +2247,10 @@ class JournalStore:
                 params,
             ).fetchall()
         trades = [_row_to_dict(row) for row in rows]
+        for trade in trades:
+            trade["synthetic_entry"] = bool(trade.get("synthetic_entry"))
+            # Kept and shown, but left out of every P&L total.
+            trade["entry_invented"] = has_invented_entry(trade)
         # One query for every trade on the tab, not one CONNECTION per trade.
         regime_dates = [
             _date_text(trade.get("opened_at") or trade.get("trade_date")) for trade in trades
@@ -2993,6 +3034,8 @@ class JournalStore:
         intraday_regime: str = "",
         notes: str = "",
     ) -> None:
+        """The TRADER's regime writer. Marks the row trader-owned (`source=''`),
+        so the nightly auto fill never touches it again."""
         date_value = _date_text(trade_date)
         with self.connection() as conn:
             existing = conn.execute("SELECT * FROM regimes WHERE trade_date = ?", (date_value,)).fetchone()
@@ -3000,14 +3043,16 @@ class JournalStore:
             conn.execute(
                 """
                 INSERT INTO regimes(
-                    trade_date, mid_term_regime, short_term_regime, intraday_regime, notes, updated_at
-                ) VALUES(?, ?, ?, ?, ?, ?)
+                    trade_date, mid_term_regime, short_term_regime, intraday_regime, notes, updated_at,
+                    source
+                ) VALUES(?, ?, ?, ?, ?, ?, '')
                 ON CONFLICT(trade_date) DO UPDATE SET
                     mid_term_regime = excluded.mid_term_regime,
                     short_term_regime = excluded.short_term_regime,
                     intraday_regime = excluded.intraday_regime,
                     notes = excluded.notes,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    source = ''
                 """,
                 (
                     date_value,
@@ -3018,6 +3063,57 @@ class JournalStore:
                     _now_iso(),
                 ),
             )
+
+    def upsert_auto_regime(
+        self,
+        trade_date: str | date,
+        *,
+        mid_term_regime: str,
+        short_term_regime: str,
+        intraday_regime: str,
+        notes: str = "",
+    ) -> bool:
+        """The machine's regime writer. Writes only a missing row or a row it
+        wrote itself (`source='auto'`); returns False when a trader row exists."""
+        date_value = _date_text(trade_date)
+        with self.connection() as conn:
+            existing = conn.execute(
+                "SELECT source FROM regimes WHERE trade_date = ?", (date_value,)
+            ).fetchone()
+            if existing is not None and str(_row_to_dict(existing).get("source") or "") != REGIME_SOURCE_AUTO:
+                return False
+            conn.execute(
+                """
+                INSERT INTO regimes(
+                    trade_date, mid_term_regime, short_term_regime, intraday_regime, notes, updated_at,
+                    source
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_date) DO UPDATE SET
+                    mid_term_regime = excluded.mid_term_regime,
+                    short_term_regime = excluded.short_term_regime,
+                    intraday_regime = excluded.intraday_regime,
+                    notes = excluded.notes,
+                    updated_at = excluded.updated_at,
+                    source = excluded.source
+                WHERE regimes.source = excluded.source
+                """,
+                (
+                    date_value,
+                    str(mid_term_regime or "").strip(),
+                    str(short_term_regime or "").strip(),
+                    str(intraday_regime or "").strip(),
+                    str(notes or "").strip(),
+                    _now_iso(),
+                    REGIME_SOURCE_AUTO,
+                ),
+            )
+        return True
+
+    def list_regime_rows(self) -> list[dict[str, Any]]:
+        """Every `regimes` row with its `source` ('auto' or '' for the trader)."""
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM regimes ORDER BY trade_date").fetchall()
+        return [_row_to_dict(row) for row in rows]
 
     def get_regimes_for_dates(self, trade_dates: Iterable[Any]) -> dict[str, dict[str, str]]:
         """The regime block for many dates, in ONE connection and ONE query.

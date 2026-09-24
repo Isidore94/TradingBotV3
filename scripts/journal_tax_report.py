@@ -113,7 +113,9 @@ def _as_date(value: Any) -> date | None:
 
 
 def _signed_quantity(side: str, quantity: float) -> float:
-    return -quantity if str(side or "").strip().upper() == "SELL" else quantity
+    from journal_identity import SELL_SIDE_WORDS
+
+    return -quantity if str(side or "").strip().upper() in SELL_SIDE_WORDS else quantity
 
 
 def build_tax_report(
@@ -224,7 +226,7 @@ def build_tax_report(
             position.missing_amounts += 1
             continue
         amount = float(net)
-        if side == "SELL":
+        if _signed_quantity(side, 1.0) < 0:
             position.proceeds += amount
         else:
             position.cost += amount

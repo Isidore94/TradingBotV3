@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from journal_identity import normalize_security_type
+from journal_identity import BUY_SIDE_WORDS, normalize_security_type
 
 #: A day's cash may differ by this much before the file is treated as
 #: disagreeing, plus :data:`TOLERANCE_PER_FILL` for each fill the file lists.
@@ -67,7 +67,7 @@ TOLERANCE_PER_FILL = 0.01
 #: twice the cover, inside the comparison whose whole job is to decide whether
 #: the broker's file disagrees with us. Correcting the word is a correction to
 #: the money (TJ-9Q).
-_BUY_SIDES = frozenset({"BUY", "BOT", "BTO", "BTC", "COV", "COVER"})
+_BUY_SIDES = BUY_SIDE_WORDS
 
 
 @dataclass

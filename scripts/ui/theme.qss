@@ -686,3 +686,151 @@ QLabel#LiveResultsLine {
 QFrame#LiveResultsStrip[hasRows="true"] QLabel#LiveResultsLine {
     color: @text_primary@;
 }
+
+/* 2026-09-23 - Journal calendar, stat cards and tag chips. The P&L tint is a
+   `tone` dynamic property (none, outside, flat, win, win_strong, loss,
+   loss_strong), so a month change costs property sets, not stylesheet parses. */
+QFrame#JournalDayCell,
+QFrame#JournalWeekCell,
+QFrame#JournalMonthCard,
+QFrame#JournalStatCard {
+    background: @bg_elevated@;
+    border: 1px solid @border@;
+    border-radius: 6px;
+}
+
+QFrame#JournalWeekCell {
+    border-left: 3px solid @border@;
+}
+
+QFrame#JournalDayCell[tone="outside"],
+QFrame#JournalWeekCell[tone="outside"] {
+    background: transparent;
+    border: none;
+}
+
+QFrame#JournalDayCell[tone="flat"],
+QFrame#JournalWeekCell[tone="flat"],
+QFrame#JournalMonthCard[tone="flat"],
+QFrame#JournalStatCard[tone="flat"] {
+    background: @pnl_flat_bg@;
+    border: 1px dashed @pnl_flat_border@;
+}
+
+QFrame#JournalDayCell[tone="win"],
+QFrame#JournalWeekCell[tone="win"],
+QFrame#JournalMonthCard[tone="win"],
+QFrame#JournalStatCard[tone="win"] {
+    background: @pnl_win_bg@;
+    border: 1px solid @pnl_win_border@;
+}
+
+QFrame#JournalDayCell[tone="win_strong"],
+QFrame#JournalWeekCell[tone="win_strong"],
+QFrame#JournalMonthCard[tone="win_strong"] {
+    background: @pnl_win_strong_bg@;
+    border: 1px solid @long@;
+}
+
+QFrame#JournalDayCell[tone="loss"],
+QFrame#JournalWeekCell[tone="loss"],
+QFrame#JournalMonthCard[tone="loss"],
+QFrame#JournalStatCard[tone="loss"] {
+    background: @pnl_loss_bg@;
+    border: 1px solid @pnl_loss_border@;
+}
+
+QFrame#JournalDayCell[tone="loss_strong"],
+QFrame#JournalWeekCell[tone="loss_strong"],
+QFrame#JournalMonthCard[tone="loss_strong"] {
+    background: @pnl_loss_strong_bg@;
+    border: 1px solid @short@;
+}
+
+QFrame#JournalMonthCard[selected="true"] {
+    border: 2px solid @accent@;
+}
+
+QFrame#JournalDayCell QLabel,
+QFrame#JournalWeekCell QLabel,
+QFrame#JournalMonthCard QLabel,
+QFrame#JournalStatCard QLabel {
+    background: transparent;
+    border: none;
+}
+
+QLabel#JournalCellDay,
+QLabel#JournalCalendarHead,
+QLabel#JournalStatTitle {
+    color: @text_secondary@;
+    font-weight: 600;
+}
+
+QLabel#JournalCellNet {
+    font-size: @font_section@;
+    font-weight: 700;
+}
+
+QLabel#JournalMonthNet,
+QLabel#JournalStatValue {
+    font-size: @font_setup@;
+    font-weight: 700;
+}
+
+QLabel#JournalCellDetail,
+QLabel#JournalStatDetail {
+    color: @text_secondary@;
+}
+
+QLabel#JournalSummaryStrip {
+    background: @bg_elevated@;
+    border: 1px solid @border@;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-weight: 600;
+}
+
+QLabel#JournalCurrencyBadge {
+    background: @accent_soft@;
+    color: @text_primary@;
+    border: 1px solid @accent@;
+    border-radius: 6px;
+    padding: 2px 10px;
+    font-weight: 650;
+}
+
+QPushButton#JournalTagChip {
+    background: @accent_soft@;
+    border: 1px solid @accent@;
+    border-radius: 10px;
+    padding: 2px 10px;
+}
+
+QPushButton#JournalTagChip[provisional="true"] {
+    background: transparent;
+    border: 1px dashed @caution@;
+    color: @caution@;
+}
+
+QPushButton#JournalSuggestedTagChip {
+    background: transparent;
+    border: 1px dashed @text_secondary@;
+    border-radius: 10px;
+    color: @text_secondary@;
+    padding: 2px 10px;
+}
+
+QPushButton#JournalQuickTagChip {
+    background: @bg_elevated@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    color: @text_secondary@;
+    padding: 2px 10px;
+}
+
+QPushButton#JournalTagChip:hover,
+QPushButton#JournalSuggestedTagChip:hover,
+QPushButton#JournalQuickTagChip:hover {
+    border-color: @text_primary@;
+    color: @text_primary@;
+}

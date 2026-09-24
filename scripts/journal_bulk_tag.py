@@ -52,7 +52,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
-from journal_analytics import is_link_candidate
+from journal_analytics import is_link_candidate, is_rejection_tag
 from journal_store import (
     PROVISIONAL_TAG_ADJUSTMENT,
     TAG_STATUS_CONFIRMED,
@@ -172,6 +172,9 @@ def _setup_lane(candidates: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if source.startswith(f"{TRADE_SHAPE_SOURCE}:"):
             continue
         if is_link_candidate(candidate):
+            continue
+        # A rejection (`vetoed:...`, `passed:...`) says why a setup was skipped; it is never one.
+        if is_rejection_tag(str(candidate.get("tag") or "")):
             continue
         lane.append(candidate)
     return lane

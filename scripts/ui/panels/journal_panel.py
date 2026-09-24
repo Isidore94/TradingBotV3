@@ -27,6 +27,16 @@ from ui.panels.journal.trades_tab import TradesTab
 from ui.services import journal_feed
 
 
+#: What each Journal tab is for, shown when the mouse rests on its label.
+TAB_TOOLTIPS = (
+    "Every trade: its plan, legs, tags and notes. Click a row to open it.",
+    "Daily P&L by month, with weekly totals and a 12-month strip. Click a day to see its trades.",
+    "Stats: win rate, profit factor, expectancy, drawdown, long vs short, and breakdowns.",
+    "Is the journal complete? Broker syncs, coverage gaps and reconciliation.",
+    "Commissions, fees and the broker-stated tax report.",
+)
+
+
 class _JournalInitWorker(QThread):
     ready = Signal(dict)
     failed = Signal(str)
@@ -82,6 +92,8 @@ class JournalPanel(QFrame):
         self.tabs.addTab(self.analytics_tab, "Analytics")
         self.tabs.addTab(self.health_tab, "Health")
         self.tabs.addTab(self.fees_tab, "Fees")
+        for index, tip in enumerate(TAB_TOOLTIPS):
+            self.tabs.setTabToolTip(index, tip)
         # Only the visible tab reloads. Analytics and Health are the expensive
         # ones, and rebuilding all five on every click of the account tree is
         # work nobody is looking at.

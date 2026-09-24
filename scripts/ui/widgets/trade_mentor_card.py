@@ -2377,12 +2377,16 @@ class TradeMentorCard(QWidget):
             choice.addItem(name, name)
         choice.setCurrentIndex(0)
         button = QPushButton("Confirm setup", row)
+        evidence = str(getattr(question, "setup_guess_evidence", "") or "")
         button.setToolTip(
             "The machine's best guess"
             + (f", from {lane.replace('_', ' ')}" if lane else "")
+            + (f": {evidence}" if evidence else "")
             + ". Nothing is written until you press this, and what is written "
             "is whatever this list shows."
         )
+        if evidence:
+            choice.setToolTip(f"Why: {evidence}")
         button.clicked.connect(
             lambda _checked=False, trade_id=question.trade_id: self._confirm_setup(trade_id)
         )

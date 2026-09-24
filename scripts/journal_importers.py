@@ -19,7 +19,15 @@ import zoneinfo
 
 import requests
 
-from journal_identity import canonical_option_symbol, normalize_security_type, stable_execution_uid
+from journal_identity import (
+    BUY_SIDE_WORDS,
+    PRE_TJ9Q_VERBATIM_SIDES,
+    SELL_SIDE_WORDS,
+    canonical_ibkr_exec_id,
+    canonical_option_symbol,
+    normalize_security_type,
+    stable_execution_uid,
+)
 from project_paths import get_local_setting, save_local_setting, save_local_settings
 
 try:  # pragma: no cover - the primitive ships beside this module
@@ -257,12 +265,15 @@ def _split_timezone_suffix(text: str) -> tuple[str, zoneinfo.ZoneInfo | None]:
         return text, None
 
 
-def parse_broker_datetime(value: Any, *, strict: bool = False) -> datetime:
+def parse_broker_datetime(
+    value: Any, *, strict: bool = False, default_tz: str = PACIFIC_TZ_NAME
+) -> datetime:
     """Parse a broker timestamp.
 
     ``strict=True`` raises :class:`BrokerTimestampError` instead of falling back
     to the current time. Import paths pass it; the default is unchanged so that
-    nothing outside this packet's scope changes behaviour.
+    nothing outside this packet's scope changes behaviour. ``default_tz`` labels
+    a timestamp that names no zone of its own (Flex passes New York time).
     """
     if isinstance(value, datetime):
         return value
@@ -273,7 +284,7 @@ def parse_broker_datetime(value: Any, *, strict: bool = False) -> datetime:
         return pacific_now()
 
     body, suffix_tz = _split_timezone_suffix(text)
-    fallback_tz = suffix_tz or zoneinfo.ZoneInfo(PACIFIC_TZ_NAME)
+    fallback_tz = suffix_tz or zoneinfo.ZoneInfo(default_tz or PACIFIC_TZ_NAME)
 
     normalized = body.replace("Z", "+00:00")
     try:
@@ -302,7 +313,7 @@ def parse_broker_datetime(value: Any, *, strict: bool = False) -> datetime:
 #: buy - so ``STO`` opened the trader's sold puts LONG and ``BTC`` added to them
 #: instead of closing them. ``COV`` came out right by accident there and wrong in
 #: ``journal_file_authority``, whose buy set holds ``COVER`` and not ``COV``.
-EXTENDED_SIDE_WORDS = frozenset({"STO", "BTC", "COV"})
+EXTENDED_SIDE_WORDS = PRE_TJ9Q_VERBATIM_SIDES
 
 
 def normalize_side(value: Any) -> str:
@@ -317,9 +328,9 @@ def normalize_side(value: Any) -> str:
     convention and half in the other.
     """
     text = str(value or "").strip().upper()
-    if text in {"BUY", "BOT", "BTO", "BTC", "COV", "COVER", "BUYTOCOVER"}:
+    if text in BUY_SIDE_WORDS:
         return "BUY"
-    if text in {"SELL", "SLD", "STO", "STC", "SSHORT", "SELLSHORT"}:
+    if text in SELL_SIDE_WORDS:
         return "SELL"
     if text in {"LONG"}:
         return "BUY"
@@ -945,10 +956,22 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
                 f"{len(self.executions)} execution(s) had arrived but the set is not known to be "
                 f"complete.{detail}"
             )
+        return self._normalized_results()
+
+    def _normalized_results(self) -> list[NormalizedExecution]:
+        """Normalize every received fill, dropping combo (BAG) parent rows.
+
+        The socket reports a combo order as a BAG row plus one row per leg; Flex
+        reports only the legs, and the legs carry the money. A stored BAG row
+        is a second, fake position.
+        """
         results: list[NormalizedExecution] = []
         for item in self.executions:
             try:
-                results.append(self.normalize_execution(item["contract"], item["execution"]))
+                normalized = self.normalize_execution(item["contract"], item["execution"])
+                if normalized.security_type == "BAG":
+                    continue
+                results.append(normalized)
             except BrokerTimestampError as exc:
                 self.quarantined.append(
                     _quarantine_record(
@@ -969,7 +992,9 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
 
     def normalize_execution(self, contract: Contract, execution: Any) -> NormalizedExecution:
         timestamp = parse_broker_datetime(getattr(execution, "time", ""), strict=True)
-        exec_id = str(getattr(execution, "execId", "") or "")
+        raw_exec_id = str(getattr(execution, "execId", "") or "")
+        # Flex's spelling, so a socket fill and its Flex row share one uid.
+        exec_id = canonical_ibkr_exec_id(raw_exec_id)
         account_number = str(getattr(execution, "acctNumber", "") or "")
         security_type = normalize_security_type(getattr(contract, "secType", ""))
         symbol = str(
@@ -984,7 +1009,7 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
             strike=getattr(contract, "strike", None), right=getattr(contract, "right", ""),
         )
         currency = str(getattr(contract, "currency", "") or "").upper()
-        commission_report = self.commissions.get(exec_id, {})
+        commission_report = self.commissions.get(raw_exec_id) or self.commissions.get(exec_id, {})
         if not currency:
             currency = str(commission_report.get("currency") or "USD").upper()
         side = normalize_side(getattr(execution, "side", ""))
@@ -1023,7 +1048,7 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
                         "exchange": str(getattr(contract, "exchange", "") or ""),
                     },
                     "execution": {
-                        "execId": exec_id,
+                        "execId": raw_exec_id,
                         "time": str(getattr(execution, "time", "") or ""),
                         "acctNumber": account_number,
                         "side": str(getattr(execution, "side", "") or ""),
@@ -1085,6 +1110,8 @@ IBKR_FLEX_QUERY_ID_SETTING = "journal_ibkr_flex_query_id"
 IBKR_FLEX_SEND_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
 IBKR_FLEX_GET_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement"
 IBKR_FLEX_POLL_SECONDS = 5.0
+#: Flex ``dateTime`` values carry no zone and are New York time.
+IBKR_FLEX_TZ_NAME = "America/New_York"
 IBKR_FLEX_POLL_ATTEMPTS = 12
 
 
@@ -1166,7 +1193,7 @@ def parse_ibkr_flex_statement(
             continue
         raw_datetime = str(attrs.get("dateTime") or attrs.get("tradeDate") or "").replace(";", " ").strip()
         try:
-            timestamp = parse_broker_datetime(raw_datetime, strict=True)
+            timestamp = parse_broker_datetime(raw_datetime, strict=True, default_tz=IBKR_FLEX_TZ_NAME)
         except BrokerTimestampError as exc:
             if quarantine is not None:
                 quarantine.append(_quarantine_record("IBKR", str(exc), attrs))

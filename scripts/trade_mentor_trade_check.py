@@ -77,6 +77,7 @@ queue (plan.md sec 5).
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -194,7 +195,10 @@ REASON_DATE_ONLY_FILL = "the fill is date-only; there is no time to be before"
 #: the bulk tagger guessed afterwards.
 LANE_CLAIMED_LIKE = "claimed_like"
 LANE_PROVISIONAL = "provisional"
-GUESS_LANES = (LANE_CLAIMED_LIKE, LANE_PROVISIONAL)
+#: The best stored auto-tag candidate (scanner or pre-entry evidence) when the
+#: first two lanes have nothing - so every trade with any evidence gets a guess.
+LANE_EVIDENCE = "evidence"
+GUESS_LANES = (LANE_CLAIMED_LIKE, LANE_PROVISIONAL, LANE_EVIDENCE)
 
 #: How many days the ONE morning import retry asks for. Three, because a long
 #: weekend is three sessions and the importer is idempotent per day.
@@ -236,6 +240,9 @@ class TradeQuestion:
     exit_note: str = ""
     #: Or the answer state they gave instead of words.
     exit_answer_state: str = ""
+    #: Why the machine guessed `setup_guess`: the candidate's evidence sentence
+    #: and confidence, e.g. "alert fired vwap_bounce on AAA 20 min before entry (0.78)".
+    setup_guess_evidence: str = ""
 
 
 @dataclass(frozen=True)
@@ -537,8 +544,35 @@ def eligible_setup_names(tags: Any) -> tuple[str, ...]:
     return tuple(kept)
 
 
+def _candidate_is_setup_lane(candidate: Mapping[str, Any]) -> bool:
+    source = str(candidate.get("source") or "")
+    return not source.startswith("trade_shape:") and not is_rejection_or_link(candidate.get("tag"))
+
+
+def evidence_line(candidate: Mapping[str, Any]) -> str:
+    """One readable sentence for a stored candidate: its rationale and confidence."""
+    rationale = str(candidate.get("rationale") or candidate.get("source") or "").strip()
+    try:
+        confidence = f" ({float(candidate.get('confidence')):.2f})"
+    except (TypeError, ValueError):
+        confidence = ""
+    return f"{rationale}{confidence}".strip()
+
+
+def evidence_for_guess(guess: str, candidates: Any = ()) -> str:
+    """The evidence sentence behind `guess`, from the trade's stored candidates, or ""."""
+    if not guess:
+        return ""
+    for candidate in candidates or ():
+        if not _candidate_is_setup_lane(candidate):
+            continue
+        if guess in eligible_setup_names(candidate.get("tag")):
+            return evidence_line(candidate)
+    return ""
+
+
 def setup_guess_for(
-    trade: Mapping[str, Any], claims: Any = ()
+    trade: Mapping[str, Any], claims: Any = (), candidates: Any = ()
 ) -> tuple[str, str]:
     """The machine's best setup suggestion for one trade, and its lane.
 
@@ -546,7 +580,11 @@ def setup_guess_for(
 
     1. the setup of a CLAIMED like on that name and side stamped BEFORE the
        first fill - what the trader themselves named at the time;
-    2. the `provisional` tag the bulk tagger parked on the row.
+    2. the `provisional` tag the bulk tagger parked on the row;
+    3. the best stored auto-tag candidate that names a setup (`candidates`, in
+       `JournalStore.list_auto_tag_candidates` order) - scanner or pre-entry
+       evidence below the bulk threshold. Shape tags, links and rejections are
+       never offered.
 
     ``("", "")`` when there is nothing to suggest - including for a trade whose
     setup the trader already confirmed, which is never offered a guess at all.
@@ -583,7 +621,33 @@ def setup_guess_for(
         eligible = eligible_setup_names(trade.get("setup_tags"))
         if eligible:
             return eligible[0], LANE_PROVISIONAL
+    entry_day = str(trade.get("opened_at") or trade.get("trade_date") or "")[:10]
+    for candidate in candidates or ():
+        if not _candidate_is_setup_lane(candidate):
+            continue
+        if _scanner_row_not_before_entry(candidate, entry_day):
+            continue
+        eligible = eligible_setup_names(candidate.get("tag"))
+        if eligible:
+            return eligible[0], LANE_EVIDENCE
     return "", ""
+
+
+_SCANNER_CONTEXT_DAY = re.compile(r"\bcontext (\d{4}-\d{2}-\d{2})\b")
+
+
+def _scanner_row_not_before_entry(candidate: Mapping[str, Any], entry_day: str) -> bool:
+    """A scanner row carries only a date, so one dated on or after the entry day may postdate the fill."""
+    match = _SCANNER_CONTEXT_DAY.search(str(candidate.get("rationale") or ""))
+    return bool(match and entry_day and match.group(1) >= entry_day)
+
+
+def _stored_candidates(store: Any, trade_id: str) -> list[dict[str, Any]]:
+    try:
+        return list(store.list_auto_tag_candidates(str(trade_id)) or ())
+    except Exception:  # noqa: BLE001 - a missing candidate table is no suggestion
+        logging.debug("Auto-tag candidates unreadable.", exc_info=True)
+        return []
 
 
 def recalled_fields(store: Any, trade_id: str) -> list[dict[str, Any]]:
@@ -772,7 +836,11 @@ def questions_for_session(
         # The row survives only while something on it is still OPEN.
         if not gaps and (not exit_session or exit_closed):
             continue
-        guess, lane = setup_guess_for(trade, claims) if "setup" in gaps else ("", "")
+        guess, lane, evidence = "", "", ""
+        if "setup" in gaps:
+            candidates = _stored_candidates(store, trade_id)
+            guess, lane = setup_guess_for(trade, claims, candidates)
+            evidence = evidence_for_guess(guess, candidates)
         questions.append(
             TradeQuestion(
                 trade_id=trade_id,
@@ -787,6 +855,7 @@ def questions_for_session(
                 exit_answered=bool(answered),
                 exit_note=str(answered.get("raw_text") or ""),
                 exit_answer_state=str(answered.get("answer_state") or ""),
+                setup_guess_evidence=evidence,
             )
         )
     return questions

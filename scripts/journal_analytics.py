@@ -62,9 +62,11 @@ def _normalize_symbol(value: Any) -> str:
 
 def _normalize_side(value: Any) -> str:
     text = str(value or "").strip().upper()
-    if text in {"LONG", "BUY", "BOT", "BTO", "COVER"}:
+    from journal_identity import BUY_SIDE_WORDS, SELL_SIDE_WORDS
+
+    if text == "LONG" or text in BUY_SIDE_WORDS:
         return "LONG"
-    if text in {"SHORT", "SELL", "SLD", "STO", "SSHORT"}:
+    if text in SELL_SIDE_WORDS:
         return "SHORT"
     return text
 
@@ -410,6 +412,7 @@ class AutoTagger:
         avwap_signals_path: Path = AVWAP_SIGNALS_FILE,
         intraday_bounces_path: Path = INTRADAY_BOUNCES_FILE,
         lookback_calendar_days: int = DEFAULT_SWING_LOOKBACK_CALENDAR_DAYS,
+        evidence: Any = None,
     ) -> None:
         self.setup_tracker_path = Path(setup_tracker_path)
         self.focus_path = Path(focus_path)
@@ -419,6 +422,22 @@ class AutoTagger:
         self._context_rows: list[dict[str, Any]] | None = None
         self._capture_rows: list[dict[str, Any]] | None = None
         self._note_rows: list[dict[str, Any]] | None = None
+        # `journal_setup_evidence.EvidenceIndex`; loaded from the live logs on first use.
+        self._evidence = evidence
+
+    def load_evidence(self):
+        """The pre-entry evidence index (alerts, armed watches, claims, Focus). Never raises."""
+        if self._evidence is None:
+            try:
+                from journal_setup_evidence import EvidenceIndex
+
+                self._evidence = EvidenceIndex.load()
+            except Exception:  # noqa: BLE001 - a suggestion source is never fatal
+                logging.debug("Evidence lane unavailable to the auto-tagger.", exc_info=True)
+                from journal_setup_evidence import EvidenceIndex
+
+                self._evidence = EvidenceIndex()
+        return self._evidence
 
     def load_capture_rows(self) -> list[dict[str, Any]]:
         """The trader's OWN statements about a name, with their event ids.
@@ -1037,8 +1056,14 @@ class AutoTagger:
                 continue
             candidates[tag] = dict(note)
 
+        # The scanner lane matches an option on its UNDERLYING, and on the side
+        # the option takes on it (a long put is short the underlying).
+        from journal_setup_evidence import underlying_view
+
+        scan_symbol, scan_side = underlying_view(trade)
+        scan_side = scan_side or direction
         for row in self.load_context_rows():
-            if _normalize_symbol(row.get("symbol")) != symbol:
+            if _normalize_symbol(row.get("symbol")) != scan_symbol:
                 continue
             context_date = row.get("date")
             if not isinstance(context_date, date):
@@ -1048,7 +1073,7 @@ class AutoTagger:
                 continue
 
             row_side = _normalize_side(row.get("side"))
-            side_score = 0.16 if not row_side or not direction or row_side == direction else -0.10
+            side_score = 0.16 if not row_side or not scan_side or row_side == scan_side else -0.10
             source = str(row.get("source") or "bot_context")
             source_score = {
                 "setup_tracker": 0.28,
@@ -1083,6 +1108,22 @@ class AutoTagger:
                     "rationale": rationale,
                     "context_row_id": "",
                 }
+
+        # Evidence lane (same rank as the scanner): alerts that fired, watches
+        # armed, cards liked and setups claimed on this name BEFORE the entry.
+        for item in self.load_evidence().candidates_for(trade):
+            tag = str(item.get("tag") or "").strip()
+            if not tag:
+                continue
+            current = candidates.get(tag)
+            if current is not None and (
+                str(current.get("source") or "").startswith(
+                    (f"{TRADER_CAPTURE_SOURCE}:", f"{TRADER_NOTE_SOURCE}:")
+                )
+                or float(current.get("confidence", 0.0) or 0.0) >= float(item["confidence"])
+            ):
+                continue
+            candidates[tag] = dict(item)
 
         for correction in corrections or []:
             if _normalize_symbol(correction.get("symbol")) != symbol:
@@ -1121,10 +1162,82 @@ class AutoTagger:
         return ordered[: max(1, int(limit))]
 
 
+#: Account tax statuses that cannot hold a stock short (TFSA, RRSP and kin).
+REGISTERED_TAX_STATUSES = frozenset({"TAX_FREE", "TAX_DEFERRED"})
+#: Account labels that name a registered account when no tax status is stored.
+REGISTERED_ACCOUNT_WORDS = ("TFSA", "RRSP", "RRIF", "FHSA", "RESP", "LIRA", "LIF", "RDSP")
+
+
+def _is_option_row(row: dict[str, Any]) -> bool:
+    from journal_identity import normalize_security_type
+
+    security_type = normalize_security_type(row.get("security_type"))
+    if security_type in {"OPT", "FOP", "WAR"}:
+        return True
+    if security_type != "UNKNOWN":
+        return False
+    from journal_importers import classify_questrade_security_type
+
+    return classify_questrade_security_type({"symbol": row.get("symbol")}) == "OPT"
+
+
+def is_registered_account(row: dict[str, Any]) -> bool:
+    """True for a TFSA/RRSP-style account: stored tax status first, label second."""
+    status = str(row.get("account_tax_status") or "").strip().upper()
+    if status:
+        return status in REGISTERED_TAX_STATUSES
+    words = f"{row.get('account_label') or ''} {row.get('account_type') or ''}".upper()
+    return any(word in words for word in REGISTERED_ACCOUNT_WORDS)
+
+
+def is_registered_stock_short(row: dict[str, Any]) -> bool:
+    """A stock SHORT in a registered account: impossible, so its buy is missing.
+
+    Writing an option there is allowed, so options are never flagged.
+    """
+    if str(row.get("direction") or "").upper() != "SHORT":
+        return False
+    if not is_registered_account(row):
+        return False
+    return not _is_option_row(row)
+
+
+def has_invented_entry(row: dict[str, Any]) -> bool:
+    """True when the trade's entry was made up rather than imported.
+
+    Either the rebuild stood the closing fill in for a missing opening fill (a
+    ``SYNTHETIC_OPEN`` leg), or it is a stock short a registered account cannot
+    hold. The trade stays in the journal; it is left out of P&L totals.
+    """
+    if row.get("entry_invented") or row.get("synthetic_entry"):
+        return True
+    return is_registered_stock_short(row)
+
+
+def counts_in_pnl(row: dict[str, Any]) -> bool:
+    """A CLOSED trade whose entry is real: the only kind P&L totals may add up."""
+    return str(row.get("status") or "").upper() == "CLOSED" and not has_invented_entry(row)
+
+
+def not_counted_summary(trades: list[dict[str, Any]], pnl_key: str = "net_pnl") -> dict[str, Any]:
+    """The CLOSED trades left out of totals for a made-up entry, and one line saying so."""
+    left_out = [
+        row for row in trades
+        if str(row.get("status") or "").upper() == "CLOSED" and has_invented_entry(row)
+    ]
+    pnl = sum(_coerce_float(row.get(pnl_key)) or 0.0 for row in left_out)
+    count = len(left_out)
+    line = ""
+    if count:
+        noun = "trade needs" if count == 1 else "trades need"
+        line = f"{count} {noun} missing fills - not counted (${pnl:,.2f})"
+    return {"trades": count, "net_pnl": pnl, "line": line}
+
+
 def calendar_pnl_by_day(trades: list[dict[str, Any]], *, pnl_key: str = "net_pnl") -> dict[str, float]:
     totals: dict[str, float] = defaultdict(float)
     for trade in trades:
-        if str(trade.get("status") or "").upper() != "CLOSED":
+        if not counts_in_pnl(trade):
             continue
         trade_day = _parse_date(trade.get("closed_at") or trade.get("trade_date") or trade.get("opened_at"))
         if trade_day is None:
@@ -1136,8 +1249,107 @@ def calendar_pnl_by_day(trades: list[dict[str, Any]], *, pnl_key: str = "net_pnl
     return dict(totals)
 
 
+# ---------------------------------------------------------------------------
+# Derived per-trade fields. Pure functions of the trade's own stamps, computed
+# on read and never stored. Unmeasurable is "unknown" (or None for minutes).
+# ---------------------------------------------------------------------------
+
+UNKNOWN_FIELD = "unknown"
+OPEN_FIELD = "open"
+WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+#: `journal_trade_shape.hold_bucket` names that mean the trade was flat the same session.
+DAY_HOLD_BUCKETS = frozenset({"scalp", "day_trade"})
+
+
+def trade_time_of_day(trade: dict[str, Any]) -> str:
+    """Session bucket of the first fill (`opening_drive`, `midday`, ...), ET clock.
+
+    Same buckets as the `trade_shape:entry_time` tag; `unknown` for a date-only fill.
+    """
+    from journal_trade_shape import session_bucket
+
+    return session_bucket(trade.get("opened_at")) or UNKNOWN_FIELD
+
+
+def trade_weekday(trade: dict[str, Any]) -> str:
+    """`Mon`..`Fri` of the first fill in market-local time, or `unknown`."""
+    from journal_trade_shape import _coerce_datetime
+
+    moment = _coerce_datetime(trade.get("opened_at"))
+    return WEEKDAY_NAMES[moment.weekday()] if moment is not None else UNKNOWN_FIELD
+
+
+def trade_hold_minutes(trade: dict[str, Any]) -> float | None:
+    """Minutes from first fill to close, or None (open, unparseable or date-only)."""
+    from journal_trade_shape import _coerce_datetime, is_date_only
+
+    opened = _coerce_datetime(trade.get("opened_at"))
+    closed = _coerce_datetime(trade.get("closed_at"))
+    if opened is None or closed is None or closed < opened:
+        return None
+    if is_date_only(opened) or is_date_only(closed):
+        return None
+    return round((closed - opened).total_seconds() / 60.0, 1)
+
+
+def trade_hold_bucket(trade: dict[str, Any]) -> str:
+    """`scalp` / `day_trade` / `overnight` / `swing` / `position`, `open`, or `unknown`."""
+    if str(trade.get("status") or "").upper() not in {"", "CLOSED"}:
+        return OPEN_FIELD
+    from journal_trade_shape import hold_bucket
+
+    found = hold_bucket(trade.get("opened_at"), trade.get("closed_at"))
+    return found[0] if found else UNKNOWN_FIELD
+
+
+def trade_horizon(trade: dict[str, Any]) -> str:
+    """`day` (flat the same session) / `swing` (held overnight or longer), `open`, or `unknown`."""
+    bucket = trade_hold_bucket(trade)
+    if bucket in (OPEN_FIELD, UNKNOWN_FIELD):
+        return bucket
+    return "day" if bucket in DAY_HOLD_BUCKETS else "swing"
+
+
+def derived_trade_fields(trade: dict[str, Any]) -> dict[str, Any]:
+    """All derived fields for one trade: time_of_day, weekday, hold_minutes, hold_bucket, horizon."""
+    return {
+        "time_of_day": trade_time_of_day(trade),
+        "weekday": trade_weekday(trade),
+        "hold_minutes": trade_hold_minutes(trade),
+        "hold_bucket": trade_hold_bucket(trade),
+        "horizon": trade_horizon(trade),
+    }
+
+
+#: Group name -> key function, for a UI that groups trades by a derived field.
+DERIVED_GROUPS = {
+    "time of day": trade_time_of_day,
+    "weekday": trade_weekday,
+    "hold": trade_hold_bucket,
+    "day vs swing": trade_horizon,
+}
+
+
+def derived_group_summary(
+    trades: list[dict[str, Any]], group: str, *, pnl_key: str = "net_pnl"
+) -> list[dict[str, Any]]:
+    """One `_summary_for_rows` row per bucket of a `DERIVED_GROUPS` field, most trades first."""
+    key_fn = DERIVED_GROUPS[group]
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for trade in trades:
+        buckets[str(key_fn(trade))].append(trade)
+    rows = []
+    for label, bucket_rows in buckets.items():
+        item = _summary_for_rows(bucket_rows, pnl_key)
+        item["label"] = label
+        rows.append(item)
+    rows.sort(key=lambda item: (-int(item.get("closed", 0)), str(item["label"])))
+    return rows
+
+
 def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> dict[str, Any]:
-    closed = [row for row in rows if str(row.get("status") or "").upper() == "CLOSED"]
+    closed = [row for row in rows if counts_in_pnl(row)]
+    all_closed = sum(1 for row in rows if str(row.get("status") or "").upper() == "CLOSED")
     pnl_values = [_coerce_float(row.get(pnl_key)) or 0.0 for row in closed]
     wins = [value for value in pnl_values if value > 0]
     losses = [value for value in pnl_values if value < 0]
@@ -1147,7 +1359,8 @@ def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> d
     return {
         "trades": len(rows),
         "closed": len(closed),
-        "open": len(rows) - len(closed),
+        "open": len(rows) - all_closed,
+        "not_counted": all_closed - len(closed),
         "wins": len(wins),
         "losses": len(losses),
         "win_rate": (len(wins) / len(closed)) if closed else None,
@@ -1224,7 +1437,7 @@ def resolve_pnl_key(
       ``("", reason)`` and shows the reason instead of a number, because a total
       that silently omits the unconverted rows is worse than no total.
     """
-    closed = [row for row in trades if str(row.get("status") or "").upper() == "CLOSED"]
+    closed = [row for row in trades if counts_in_pnl(row)]
     mode = str(currency_mode or "").strip().upper()
     currencies = {str(row.get("currency") or "").upper() for row in closed if row.get("currency")}
     if mode == "CAD":
@@ -1421,6 +1634,8 @@ def build_analytics_summary(
         "pnl_key": pnl_key,
         "pnl_note": pnl_note,
         "currencies": sorted({str(row.get("currency") or "").upper() for row in trades if row.get("currency")}),
+        # Native money: a left-out trade has no converted value worth trusting.
+        "not_counted": not_counted_summary(trades),
     }
     if not pnl_key:
         # Mixed currencies with unconverted rows: the per-group totals would be
@@ -1597,7 +1812,12 @@ def personal_evidence_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
     from journal_exposure import BIAS_UNKNOWN, DIRECTIONAL_BIASES, classify_all
     from swing_headline import wilson_lower_bound
 
-    rows = [row for row in trades if isinstance(row, dict)]
+    # A CLOSED trade with a made-up entry is not a result; it is left out here too.
+    rows = [
+        row for row in trades
+        if isinstance(row, dict)
+        and not (str(row.get("status") or "").upper() == "CLOSED" and has_invented_entry(row))
+    ]
     exposures = classify_all(rows)
 
     def _exposure_of(row):
@@ -1860,7 +2080,7 @@ def _empty_dimension_notes(
     Coverage is measured against CLOSED trades, which is the denominator every
     number in these groups is computed over.
     """
-    closed = [row for row in trades if str(row.get("status") or "").upper() == "CLOSED"]
+    closed = [row for row in trades if counts_in_pnl(row)]
     if not closed:
         return {}
     notes: dict[str, str] = {}
@@ -1941,3 +2161,245 @@ def build_analytics_text(trades: list[dict[str, Any]]) -> str:
             )
         lines.append("")
     return "\n".join(lines).strip()
+
+
+# -- Journal page stats (journal UI overhaul 2026-09-23) ---------------------
+#
+# Pure functions over trade rows the page has already loaded. Each takes the
+# P&L column `resolve_pnl_key` chose, so every number agrees with the headline.
+
+WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+#: Hold-time buckets as (label, upper bound in minutes). The first four are
+#: same-day holds; the last two are for trades held past the entry day.
+HOLD_TIME_BUCKETS = (
+    ("under 5 min", 5.0),
+    ("5-30 min", 30.0),
+    ("30 min-2 h", 120.0),
+    ("2 h+ same day", None),
+    ("overnight, 1-5 days", 5 * 24 * 60.0),
+    ("over 5 days", None),
+)
+
+#: A closed trade whose P&L is within this of zero is breakeven, not a win or loss.
+BREAKEVEN_EPSILON = 0.005
+
+
+def _is_closed(row: dict[str, Any]) -> bool:
+    # Closed with a real entry: a made-up entry never reaches a stat.
+    return counts_in_pnl(row)
+
+
+def close_order_key(row: dict[str, Any]) -> tuple[str, str]:
+    """Sort key putting closed trades in the order they actually closed."""
+    moment = _market_moment(row.get("closed_at") or row.get("trade_date") or row.get("opened_at"))
+    stamp = moment.isoformat() if moment is not None else str(row.get("trade_date") or "")
+    return (stamp, str(row.get("trade_id") or ""))
+
+
+def trade_r_multiple(row: dict[str, Any]) -> float | None:
+    """`net_pnl_cad / |planned_risk|`, the journal's one R, or None."""
+    risk = _coerce_float(row.get("planned_risk"))
+    pnl = _coerce_float(row.get("net_pnl_cad"))
+    if risk is None or pnl is None or abs(risk) < 1e-9:
+        return None
+    return pnl / abs(risk)
+
+
+def trade_performance_stats(
+    trades: list[dict[str, Any]], pnl_key: str = "net_pnl"
+) -> dict[str, Any]:
+    """The stat-card numbers for closed trades, ordered by close time.
+
+    A closed trade with no value in ``pnl_key`` is counted in ``unpriced`` and
+    left out of every figure - missing is unknown, never zero.
+    """
+    closed = sorted((row for row in trades if _is_closed(row)), key=close_order_key)
+    values: list[float] = []
+    unpriced = 0
+    for row in closed:
+        value = _coerce_float(row.get(pnl_key)) if pnl_key else None
+        if value is None:
+            unpriced += 1
+            continue
+        values.append(value)
+    wins = [value for value in values if value > BREAKEVEN_EPSILON]
+    losses = [value for value in values if value < -BREAKEVEN_EPSILON]
+    gross_win = sum(wins)
+    gross_loss = sum(losses)
+    count = len(values)
+    net = sum(values)
+
+    peak = 0.0
+    running = 0.0
+    max_drawdown = 0.0
+    win_streak = loss_streak = best_win_streak = best_loss_streak = 0
+    for value in values:
+        running += value
+        peak = max(peak, running)
+        max_drawdown = min(max_drawdown, running - peak)
+        if value > BREAKEVEN_EPSILON:
+            win_streak, loss_streak = win_streak + 1, 0
+        elif value < -BREAKEVEN_EPSILON:
+            win_streak, loss_streak = 0, loss_streak + 1
+        else:
+            win_streak = loss_streak = 0
+        best_win_streak = max(best_win_streak, win_streak)
+        best_loss_streak = max(best_loss_streak, loss_streak)
+
+    r_values = [r for r in (trade_r_multiple(row) for row in closed) if r is not None]
+    avg_win = (gross_win / len(wins)) if wins else None
+    avg_loss = (gross_loss / len(losses)) if losses else None
+    return {
+        "trades": len(trades),
+        "closed": count,
+        "unpriced": unpriced,
+        "wins": len(wins),
+        "losses": len(losses),
+        "breakeven": count - len(wins) - len(losses),
+        "win_rate": (len(wins) / count) if count else None,
+        "net_pnl": net if count else None,
+        "gross_win": gross_win,
+        "gross_loss": gross_loss,
+        "profit_factor": (gross_win / abs(gross_loss)) if gross_loss < 0 else None,
+        "expectancy": (net / count) if count else None,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "payoff_ratio": (avg_win / abs(avg_loss)) if avg_win is not None and avg_loss else None,
+        "largest_win": max(wins) if wins else None,
+        "largest_loss": min(losses) if losses else None,
+        "max_drawdown": max_drawdown if count else None,
+        "max_win_streak": best_win_streak,
+        "max_loss_streak": best_loss_streak,
+        "current_streak": win_streak if win_streak else -loss_streak,
+        "avg_r": (sum(r_values) / len(r_values)) if r_values else None,
+        "r_trades": len(r_values),
+    }
+
+
+def direction_split_stats(
+    trades: list[dict[str, Any]], pnl_key: str = "net_pnl"
+) -> dict[str, dict[str, Any]]:
+    """`trade_performance_stats` for longs and shorts, side by side."""
+    split: dict[str, list[dict[str, Any]]] = {"LONG": [], "SHORT": []}
+    for row in trades:
+        side = _normalize_side(row.get("direction"))
+        if side in split:
+            split[side].append(row)
+    return {side: trade_performance_stats(rows, pnl_key) for side, rows in split.items()}
+
+
+def group_expectancy(row: dict[str, Any]) -> float | None:
+    """Net per closed trade for one `_summary_for_rows` bucket, or None."""
+    net = _coerce_float(row.get("net_pnl"))
+    closed = int(row.get("closed") or 0)
+    if net is None or closed <= 0:
+        return None
+    return net / closed
+
+
+def hold_time_bucket(row: dict[str, Any]) -> str | None:
+    """Which `HOLD_TIME_BUCKETS` label a closed trade falls in, or None."""
+    if not _is_closed(row):
+        return None
+    opened = _market_moment(row.get("opened_at"))
+    closed = _market_moment(row.get("closed_at"))
+    if opened is None or closed is None:
+        return None
+    minutes = max(0.0, (closed - opened).total_seconds() / 60.0)
+    if closed.date() == opened.date():
+        for label, bound in HOLD_TIME_BUCKETS[:4]:
+            if bound is None or minutes < bound:
+                return label
+    overnight_label, overnight_bound = HOLD_TIME_BUCKETS[4]
+    return overnight_label if minutes <= overnight_bound else HOLD_TIME_BUCKETS[5][0]
+
+
+def entry_hour_label(moment: datetime) -> str:
+    """One-hour entry bucket in market time, e.g. ``09:00-10:00 ET``."""
+    return f"{moment.hour:02d}:00-{(moment.hour + 1) % 24:02d}:00 ET"
+
+
+def time_breakdown_groups(
+    trades: list[dict[str, Any]], pnl_key: str = "net_pnl"
+) -> dict[str, list[dict[str, Any]]]:
+    """By weekday and hour of ENTRY, and by hold time, in natural order.
+
+    Rows have the same shape as `build_analytics_summary` group rows, plus
+    ``expectancy``. A trade with no readable timestamp is in no bucket.
+    """
+    weekday: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    hour: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    hold: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trades:
+        moment = _market_moment(row.get("opened_at"))
+        if moment is not None:
+            weekday[WEEKDAY_LABELS[moment.weekday()]].append(row)
+            hour[entry_hour_label(moment)].append(row)
+        bucket = hold_time_bucket(row)
+        if bucket is not None:
+            hold[bucket].append(row)
+
+    def rows_for(buckets: dict[str, list[dict[str, Any]]], order: list[str]) -> list[dict[str, Any]]:
+        out = []
+        for label in order:
+            if label not in buckets:
+                continue
+            item = _summary_for_rows(buckets[label], pnl_key or "net_pnl")
+            if not pnl_key:
+                item = {**item, "net_pnl": None, "gross_win": None, "gross_loss": None}
+            item["label"] = label
+            item["expectancy"] = group_expectancy(item)
+            out.append(item)
+        return out
+
+    return {
+        "weekday (entry)": rows_for(weekday, list(WEEKDAY_LABELS)),
+        "hour of entry": rows_for(hour, sorted(hour)),
+        "hold time": rows_for(hold, [label for label, _bound in HOLD_TIME_BUCKETS]),
+    }
+
+
+def calendar_day_stats(
+    trades: list[dict[str, Any]], *, pnl_key: str = "net_pnl"
+) -> dict[str, dict[str, Any]]:
+    """Per-day net, trade count, wins and losses; days as `calendar_pnl_by_day`."""
+    days: dict[str, dict[str, Any]] = {}
+    for trade in trades:
+        if not _is_closed(trade):
+            continue
+        trade_day = _parse_date(trade.get("closed_at") or trade.get("trade_date") or trade.get("opened_at"))
+        if trade_day is None:
+            continue
+        pnl = _coerce_float(trade.get(pnl_key))
+        if pnl is None:
+            continue
+        entry = days.setdefault(
+            trade_day.isoformat(), {"net": 0.0, "trades": 0, "wins": 0, "losses": 0}
+        )
+        entry["net"] += pnl
+        entry["trades"] += 1
+        if pnl > BREAKEVEN_EPSILON:
+            entry["wins"] += 1
+        elif pnl < -BREAKEVEN_EPSILON:
+            entry["losses"] += 1
+    return days
+
+
+def pnl_currency_label(
+    currency_mode: str | None, pnl_key: str, currencies: list[str] | None = None
+) -> str:
+    """What currency the page's totals are in, in a few words."""
+    if not pnl_key:
+        return "no total (mixed currencies)"
+    if pnl_key == "net_pnl_cad":
+        return "CAD"
+    if pnl_key == USD_BOOKED_KEY:
+        return "USD"
+    if pnl_key == USD_ESTIMATE_KEY:
+        return "USD (estimate)"
+    found = {str(code).upper() for code in (currencies or []) if code}
+    if len(found) == 1:
+        return next(iter(found))
+    mode = str(currency_mode or "").strip().upper()
+    return mode if mode in {"CAD", "USD"} else "native currency"
