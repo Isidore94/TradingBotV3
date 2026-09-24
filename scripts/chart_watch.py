@@ -1900,7 +1900,7 @@ def _d1_event_details(kind: str, levels: Mapping[str, Any]) -> dict[str, Any]:
 def d1_event_fired_detail(hit: ChartWatchTrigger) -> dict[str, Any]:
     """The `d1_event_fired` review-log detail: kind, message and the trigger's details."""
     return {
-        **dict(hit.details or {}),
+        **dict(getattr(hit, "details", None) or {}),
         "kind": hit.watch.kind,
         "message": str(hit.message or ""),
     }
