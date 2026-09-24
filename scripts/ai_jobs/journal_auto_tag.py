@@ -38,9 +38,12 @@ def run_journal_auto_tag(
     *,
     threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
     db_path=None,
+    regime_loader=None,
     **_ignored: Any,
 ) -> dict[str, Any]:
-    """Plan and apply provisional tags for the night. Returns a ledger row.
+    """Plan and apply provisional tags, then fill the market environment. Returns a ledger row.
+
+    `regime_loader` replaces `journal_regime_fill.load_benchmark_bars` (tests).
 
     `refresh=True`, as the hand-run default is: most of this journal was imported
     from broker statements long after the scan files that could explain it, so a
@@ -82,6 +85,29 @@ def run_journal_auto_tag(
         f"({plan.considered} closed trade(s) considered, "
         f"{plan.already_confirmed} already confirmed by the trader)"
     )
+
+    # Market environment: this slot is the one owner of the auto `regimes` fill.
+    try:
+        from journal_regime_fill import fill_regimes
+
+        kwargs = {"loader": regime_loader} if regime_loader is not None else {}
+        regimes = fill_regimes(store, apply=True, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - a journal write fails loudly
+        return {
+            "status": "failed",
+            "model": "",
+            "reason": f"{reason}; market environment fill failed: {exc}",
+            "outputs": [],
+        }
+    if regimes.get("status") == "no_bars":
+        reason += "; regimes: no benchmark bars readable, nothing written"
+    else:
+        reason += (
+            f"; regimes: {regimes.get('written', 0)} written "
+            f"({regimes.get('with_unknown', 0)} with an unknown field), "
+            f"{regimes.get('trader_owned', 0)} trader-owned left alone, "
+            f"bars {regimes.get('bars_source')}"
+        )
     return {"status": "ok", "model": "", "reason": reason, "outputs": []}
 
 

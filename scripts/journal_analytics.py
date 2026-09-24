@@ -412,6 +412,7 @@ class AutoTagger:
         avwap_signals_path: Path = AVWAP_SIGNALS_FILE,
         intraday_bounces_path: Path = INTRADAY_BOUNCES_FILE,
         lookback_calendar_days: int = DEFAULT_SWING_LOOKBACK_CALENDAR_DAYS,
+        evidence: Any = None,
     ) -> None:
         self.setup_tracker_path = Path(setup_tracker_path)
         self.focus_path = Path(focus_path)
@@ -421,6 +422,22 @@ class AutoTagger:
         self._context_rows: list[dict[str, Any]] | None = None
         self._capture_rows: list[dict[str, Any]] | None = None
         self._note_rows: list[dict[str, Any]] | None = None
+        # `journal_setup_evidence.EvidenceIndex`; loaded from the live logs on first use.
+        self._evidence = evidence
+
+    def load_evidence(self):
+        """The pre-entry evidence index (alerts, armed watches, claims, Focus). Never raises."""
+        if self._evidence is None:
+            try:
+                from journal_setup_evidence import EvidenceIndex
+
+                self._evidence = EvidenceIndex.load()
+            except Exception:  # noqa: BLE001 - a suggestion source is never fatal
+                logging.debug("Evidence lane unavailable to the auto-tagger.", exc_info=True)
+                from journal_setup_evidence import EvidenceIndex
+
+                self._evidence = EvidenceIndex()
+        return self._evidence
 
     def load_capture_rows(self) -> list[dict[str, Any]]:
         """The trader's OWN statements about a name, with their event ids.
@@ -1039,8 +1056,14 @@ class AutoTagger:
                 continue
             candidates[tag] = dict(note)
 
+        # The scanner lane matches an option on its UNDERLYING, and on the side
+        # the option takes on it (a long put is short the underlying).
+        from journal_setup_evidence import underlying_view
+
+        scan_symbol, scan_side = underlying_view(trade)
+        scan_side = scan_side or direction
         for row in self.load_context_rows():
-            if _normalize_symbol(row.get("symbol")) != symbol:
+            if _normalize_symbol(row.get("symbol")) != scan_symbol:
                 continue
             context_date = row.get("date")
             if not isinstance(context_date, date):
@@ -1050,7 +1073,7 @@ class AutoTagger:
                 continue
 
             row_side = _normalize_side(row.get("side"))
-            side_score = 0.16 if not row_side or not direction or row_side == direction else -0.10
+            side_score = 0.16 if not row_side or not scan_side or row_side == scan_side else -0.10
             source = str(row.get("source") or "bot_context")
             source_score = {
                 "setup_tracker": 0.28,
@@ -1085,6 +1108,22 @@ class AutoTagger:
                     "rationale": rationale,
                     "context_row_id": "",
                 }
+
+        # Evidence lane (same rank as the scanner): alerts that fired, watches
+        # armed, cards liked and setups claimed on this name BEFORE the entry.
+        for item in self.load_evidence().candidates_for(trade):
+            tag = str(item.get("tag") or "").strip()
+            if not tag:
+                continue
+            current = candidates.get(tag)
+            if current is not None and (
+                str(current.get("source") or "").startswith(
+                    (f"{TRADER_CAPTURE_SOURCE}:", f"{TRADER_NOTE_SOURCE}:")
+                )
+                or float(current.get("confidence", 0.0) or 0.0) >= float(item["confidence"])
+            ):
+                continue
+            candidates[tag] = dict(item)
 
         for correction in corrections or []:
             if _normalize_symbol(correction.get("symbol")) != symbol:
@@ -1208,6 +1247,104 @@ def calendar_pnl_by_day(trades: list[dict[str, Any]], *, pnl_key: str = "net_pnl
             continue
         totals[trade_day.isoformat()] += pnl
     return dict(totals)
+
+
+# ---------------------------------------------------------------------------
+# Derived per-trade fields. Pure functions of the trade's own stamps, computed
+# on read and never stored. Unmeasurable is "unknown" (or None for minutes).
+# ---------------------------------------------------------------------------
+
+UNKNOWN_FIELD = "unknown"
+OPEN_FIELD = "open"
+WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+#: `journal_trade_shape.hold_bucket` names that mean the trade was flat the same session.
+DAY_HOLD_BUCKETS = frozenset({"scalp", "day_trade"})
+
+
+def trade_time_of_day(trade: dict[str, Any]) -> str:
+    """Session bucket of the first fill (`opening_drive`, `midday`, ...), ET clock.
+
+    Same buckets as the `trade_shape:entry_time` tag; `unknown` for a date-only fill.
+    """
+    from journal_trade_shape import session_bucket
+
+    return session_bucket(trade.get("opened_at")) or UNKNOWN_FIELD
+
+
+def trade_weekday(trade: dict[str, Any]) -> str:
+    """`Mon`..`Fri` of the first fill in market-local time, or `unknown`."""
+    from journal_trade_shape import _coerce_datetime
+
+    moment = _coerce_datetime(trade.get("opened_at"))
+    return WEEKDAY_NAMES[moment.weekday()] if moment is not None else UNKNOWN_FIELD
+
+
+def trade_hold_minutes(trade: dict[str, Any]) -> float | None:
+    """Minutes from first fill to close, or None (open, unparseable or date-only)."""
+    from journal_trade_shape import _coerce_datetime, is_date_only
+
+    opened = _coerce_datetime(trade.get("opened_at"))
+    closed = _coerce_datetime(trade.get("closed_at"))
+    if opened is None or closed is None or closed < opened:
+        return None
+    if is_date_only(opened) or is_date_only(closed):
+        return None
+    return round((closed - opened).total_seconds() / 60.0, 1)
+
+
+def trade_hold_bucket(trade: dict[str, Any]) -> str:
+    """`scalp` / `day_trade` / `overnight` / `swing` / `position`, `open`, or `unknown`."""
+    if str(trade.get("status") or "").upper() not in {"", "CLOSED"}:
+        return OPEN_FIELD
+    from journal_trade_shape import hold_bucket
+
+    found = hold_bucket(trade.get("opened_at"), trade.get("closed_at"))
+    return found[0] if found else UNKNOWN_FIELD
+
+
+def trade_horizon(trade: dict[str, Any]) -> str:
+    """`day` (flat the same session) / `swing` (held overnight or longer), `open`, or `unknown`."""
+    bucket = trade_hold_bucket(trade)
+    if bucket in (OPEN_FIELD, UNKNOWN_FIELD):
+        return bucket
+    return "day" if bucket in DAY_HOLD_BUCKETS else "swing"
+
+
+def derived_trade_fields(trade: dict[str, Any]) -> dict[str, Any]:
+    """All derived fields for one trade: time_of_day, weekday, hold_minutes, hold_bucket, horizon."""
+    return {
+        "time_of_day": trade_time_of_day(trade),
+        "weekday": trade_weekday(trade),
+        "hold_minutes": trade_hold_minutes(trade),
+        "hold_bucket": trade_hold_bucket(trade),
+        "horizon": trade_horizon(trade),
+    }
+
+
+#: Group name -> key function, for a UI that groups trades by a derived field.
+DERIVED_GROUPS = {
+    "time of day": trade_time_of_day,
+    "weekday": trade_weekday,
+    "hold": trade_hold_bucket,
+    "day vs swing": trade_horizon,
+}
+
+
+def derived_group_summary(
+    trades: list[dict[str, Any]], group: str, *, pnl_key: str = "net_pnl"
+) -> list[dict[str, Any]]:
+    """One `_summary_for_rows` row per bucket of a `DERIVED_GROUPS` field, most trades first."""
+    key_fn = DERIVED_GROUPS[group]
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for trade in trades:
+        buckets[str(key_fn(trade))].append(trade)
+    rows = []
+    for label, bucket_rows in buckets.items():
+        item = _summary_for_rows(bucket_rows, pnl_key)
+        item["label"] = label
+        rows.append(item)
+    rows.sort(key=lambda item: (-int(item.get("closed", 0)), str(item["label"])))
+    return rows
 
 
 def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> dict[str, Any]:
