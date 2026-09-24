@@ -276,14 +276,31 @@ def test_a_calendar_row_at_or_before_as_of_on_the_brief_date_is_past():
     assert not [e for e in parsed.events if "claims" in e.label.casefold()]
 
 
-def test_alarms_are_only_for_timed_events_at_or_after_seven_et():
+def test_alarms_are_only_for_timed_events_at_or_after_seven_pacific():
+    """Trader, 2026-09-24: the cutoff is 07:00 PACIFIC (10:00 ET)."""
     import econ_events
 
     parsed = _calendar()
     assert [e.label for e in econ_events.alarm_events(parsed.events, day="2026-09-28")] == []
     today = econ_events.alarm_events(parsed.events, day="2026-09-24")
     assert [e.time_et for e in today] == ["10:00", "13:00"]
+    # 08:30 ET durable goods is listed, but 05:30 PT gets no warning.
+    tomorrow = econ_events.alarm_events(parsed.events, day="2026-09-25")
+    assert [e.time_et for e in tomorrow] == ["10:00"]
+    assert _row(parsed, "2026-09-25", "Durable goods").time_et == "08:30"
     assert econ_events.alarm_events(parsed.events, day="2026-09-30") == ()
+
+
+def test_the_cutoff_is_seven_pacific_on_the_event_date():
+    import econ_events
+
+    assert econ_events.alarm_allowed("2026-09-25", "10:00") is True
+    assert econ_events.alarm_allowed("2026-09-25", "09:59") is False
+    assert econ_events.alarm_allowed("2026-09-25", "08:30") is False
+    # Converted on each event's own date (a winter date too), never a fixed 10:00 ET.
+    assert econ_events.alarm_allowed("2026-12-15", "10:00") is True
+    assert econ_events.alarm_allowed("2026-12-15", "09:30") is False
+    assert econ_events.alarm_allowed("", "10:00") is False
 
 
 def test_the_calendar_heading_matches_any_level_bold_or_hyphen():

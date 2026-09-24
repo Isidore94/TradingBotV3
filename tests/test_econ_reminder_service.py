@@ -1,4 +1,4 @@
-"""Econ warnings: 07:00 ET cutoff, T-30 and T-0, no re-fire after restart,
+"""Econ warnings: 07:00 PT (10:00 ET) cutoff, T-30 and T-0, no re-fire after restart,
 late drop, and routing by Auto mode (DESK/OFF on the desk, AWAY/EVENING phone).
 """
 
@@ -83,12 +83,12 @@ def make_service(tmp_path):
         service.shutdown()
 
 
-def test_only_timed_events_at_or_after_seven_et_are_planned(make_service):
+def test_only_timed_events_at_or_after_seven_pacific_are_planned(make_service):
+    """06:00 and 08:30 ET are before 07:00 PT: listed in the block, never warned."""
     service = make_service()
     service.apply_view(_view())
     keys = [item["key"] for item in service.planned()]
     assert keys == [
-        f"{SESSION}|08:30|t30", f"{SESSION}|08:30|t0",
         f"{SESSION}|10:00|t30", f"{SESSION}|10:00|t0",
         f"{SESSION}|13:00|t30", f"{SESSION}|13:00|t0",
     ]
@@ -133,7 +133,7 @@ def test_a_warning_more_than_two_minutes_late_is_dropped(make_service):
     # The desk opened at 09:33: the 09:30 warning is dropped, not sent late.
     assert service.tick(_at(9, 33)) == []
     assert service.fired()[f"{SESSION}|10:00|t30"] == "dropped"
-    assert service.fired()[f"{SESSION}|08:30|t0"] == "dropped"
+    assert f"{SESSION}|08:30|t0" not in service.fired()
     assert service.shown == []
 
 

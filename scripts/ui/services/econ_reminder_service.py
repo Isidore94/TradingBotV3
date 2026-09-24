@@ -1,7 +1,7 @@
 """Econ warnings from the pasted brief, and the Mentor's morning econ view.
 
 One owner: one timer, one fired-keys file, one worker for the view. For each
-event today with a known ET time at or after 07:00 ET it warns twice: 30
+event today with a known ET time at or after 07:00 Pacific it warns twice: 30
 minutes before ("In 30 min: ...") and at the time ("Now: ..."). Events at the
 same time share one warning.
 
@@ -75,7 +75,7 @@ def _et_moment(day: str, time_et: str) -> datetime | None:
 
 
 def plan_reminders(view: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Two warnings per ET time today at or after 07:00 ET, in time order."""
+    """Two warnings per ET time today at or after 07:00 Pacific, in time order."""
     import econ_events
 
     session = str(view.get("session") or "")
@@ -84,7 +84,7 @@ def plan_reminders(view: Mapping[str, Any]) -> list[dict[str, Any]]:
         time_et = str(row.get("time_et") or "")
         if str(row.get("date") or "") != session or not time_et:
             continue
-        if time_et < econ_events.ALARM_EARLIEST_ET:
+        if not econ_events.alarm_allowed(session, time_et):
             continue
         label = str(row.get("label") or "").strip()
         if label and label not in grouped.setdefault(time_et, []):

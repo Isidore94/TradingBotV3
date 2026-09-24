@@ -35,7 +35,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import forecast_brief
 
@@ -62,8 +63,11 @@ class BriefEvents:
     unread_lines: int = 0
 
 
-#: Warnings are only for events at or after this ET clock time (trader, 2026-09-24).
-ALARM_EARLIEST_ET = "07:00"
+#: Warnings are only for events at or after 07:00 on the trader's own clock
+#: (Pacific; trader, 2026-09-24), converted on each event's date.
+ALARM_EARLIEST_LOCAL = time(7, 0)
+ALARM_ZONE = ZoneInfo("America/Los_Angeles")
+EASTERN = ZoneInfo("America/New_York")
 
 SOURCE_CALENDAR = "calendar"
 SOURCE_PROSE = "prose"
@@ -219,12 +223,24 @@ def parse_events(text: str) -> tuple[EconEvent, ...]:
     return parse(text).events
 
 
+def alarm_allowed(day: str, time_et: str) -> bool:
+    """Is `time_et` on `day` at or after 07:00 Pacific that day? Unknown -> False."""
+    try:
+        base = date.fromisoformat(str(day))
+        moment = datetime(
+            base.year, base.month, base.day, int(time_et[:2]), int(time_et[3:5]), tzinfo=EASTERN
+        )
+    except (TypeError, ValueError):
+        return False
+    return moment.astimezone(ALARM_ZONE).time() >= ALARM_EARLIEST_LOCAL
+
+
 def alarm_events(events, *, day: str) -> tuple[EconEvent, ...]:
-    """The events on `day` with a known ET time at or after `ALARM_EARLIEST_ET`."""
+    """The events on `day` with a known ET time at or after 07:00 Pacific."""
     return tuple(
         event
         for event in events
-        if event.date == day and event.time_et and event.time_et >= ALARM_EARLIEST_ET
+        if event.date == day and event.time_et and alarm_allowed(day, event.time_et)
     )
 
 
