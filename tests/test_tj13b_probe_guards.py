@@ -655,7 +655,11 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # `EXPECTED_SLOT_ORDER` and then set aside here, because this guard is
         # about the set of slots as it stood at e8c04f88.
         "improvement_ideas",
+        # Day Recap coach (2026-09-23): `week_questions`, pinned by
+        # `EXPECTED_SLOT_ORDER` at the end of stage 2 and set aside here.
+        "week_questions",
     )
+    assert slate[slate.index("market_story_narration") + 1] == "week_questions"
     today = tuple(name for name in slate if name not in set_aside)
 
     assert len(today) == len(pinned_at_e8c04f88)
