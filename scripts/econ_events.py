@@ -27,6 +27,7 @@ present it is the ONLY source of events (prose times are ignored):
 
 The ET time is used; PT + 3 h must equal it or the event keeps no time (never
 a guess which one is right). A malformed line is skipped whole and counted.
+Calendar rows are never merged with each other.
 
 Pure: no I/O, no clock, no network.
 """
@@ -201,7 +202,8 @@ def parse(text: str) -> BriefEvents:
     if calendar is not None:
         found, unread = calendar
         source = SOURCE_CALENDAR
-    events = _dedup(found)
+    # Prose says one event twice; each calendar row is its own event.
+    events = list(found) if source == SOURCE_CALENDAR else _dedup(found)
     if brief_day is not None:
         events = [
             event

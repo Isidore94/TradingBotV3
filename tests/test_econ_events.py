@@ -328,3 +328,19 @@ def test_a_brief_without_the_block_falls_back_to_prose():
     parsed = econ_events.parse(_text())
     assert parsed.source == "prose"
     assert parsed.unread_lines == 0
+
+
+def test_calendar_rows_are_never_merged_with_each_other():
+    """Two block rows of one kind, day and time keep both labels."""
+    import econ_events
+
+    parsed = econ_events.parse(
+        "# Brief - Monday, October 5, 2026\n\n## NEXT 7 DAYS — ECONOMIC CALENDAR\n"
+        "2026-10-06 | 05:30 PT / 08:30 ET | Core PCE (Aug)\n"
+        "2026-10-06 | 05:30 PT / 08:30 ET | PCE (Aug)\n"
+        "2026-10-07 | TIME TBD | JOLTS (Aug)\n"
+        "2026-10-07 | 07:00 PT / 10:00 ET | JOLTS revision\n"
+    )
+    assert sorted(e.label for e in parsed.events) == [
+        "Core PCE (Aug)", "JOLTS (Aug)", "JOLTS revision", "PCE (Aug)",
+    ]
