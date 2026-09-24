@@ -355,3 +355,89 @@ def test_golden_the_write_slot_publishes_byte_identical_files_from_the_store(tmp
     assert any(name.endswith("master_avwap_setup_tracker.json") for name in from_json), sorted(from_json)
     assert len(from_json) > 3, sorted(from_json)
     assert from_store == from_json
+
+
+# ---------------------------------------------------------------------------
+# Step 3: journal_analytics context rows (the parse behind the Corrections OK button).
+
+
+def _journal_payload() -> dict:
+    payload = _payload()
+    payload["setups"].update(
+        {
+            "k1": {"symbol": "shop", "side": "short", "entry_trade_date": "2026-09-19",
+                   "retest_reference_level": 0, "mid_earnings_primary_trigger_level": 101.5,
+                   "compression_flag": "false", "priority_score": "1.5"},
+            "k2": {"symbol": "TSLA", "side": "LONG", "scan_date": "2026-09-22", "compression_flag": [],
+                   "retest_reference_level": "UPPER_2", "priority_score": float("nan"), "setup_family": ""},
+            "k3": {"symbol": "AMD", "compression_flag": {}, "favorite_zone": None, "priority_bucket": 0},
+            "k4": {"symbol": "IBM", "compression_flag": 1, "retest_reference_level": {"level": 3},
+                   "setup_family": "favorite", "scan_date": "garbage"},
+            "k5": 42,
+        }
+    )
+    return payload
+
+
+def _json_rows(json_path: Path, tmp_path: Path) -> list[dict]:
+    import journal_analytics
+
+    tagger = journal_analytics.AutoTagger(
+        setup_tracker_path=json_path, setup_tracker_db_path=tmp_path / "no-such.sqlite"
+    )
+    return tagger._load_tracker_rows()
+
+
+def _rows_text(rows: list[dict]) -> str:
+    return json.dumps(rows, default=str, ensure_ascii=False)
+
+
+def test_journal_context_rows_come_from_the_store_and_match_the_json(tracker, tmp_path, monkeypatch):
+    import journal_analytics
+
+    json_path, db_path = tracker
+    legacy.save_setup_tracker_payload(_journal_payload(), data_session="2026-09-22")
+    expected = _json_rows(json_path, tmp_path)
+    assert len(expected) == 7
+
+    real = journal_analytics._load_json
+
+    def guarded(path):
+        if Path(path) == json_path:
+            raise AssertionError("the auto-tagger parsed the tracker JSON")
+        return real(path)
+
+    monkeypatch.setattr(journal_analytics, "_load_json", guarded)
+    journal_analytics.clear_context_row_cache()
+    tagger = journal_analytics.AutoTagger(
+        setup_tracker_path=json_path,
+        setup_tracker_db_path=db_path,
+        focus_path=tmp_path / "none.json",
+        avwap_signals_path=tmp_path / "none.csv",
+        intraday_bounces_path=tmp_path / "none2.csv",
+    )
+    got = tagger.load_context_rows()
+    journal_analytics.clear_context_row_cache()
+
+    assert _rows_text(got) == _rows_text(expected)
+
+
+def test_journal_context_rows_fall_back_to_the_json_when_the_store_is_stale(tracker, tmp_path, caplog):
+    import journal_analytics
+
+    json_path, db_path = tracker
+    legacy.save_setup_tracker_payload(_journal_payload(), data_session="2026-09-22")
+    raw = json.loads(json_path.read_text(encoding="utf-8"))
+    raw["setups"]["late"] = {"symbol": "LATE", "side": "LONG", "scan_date": "2026-09-23"}
+    json_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    tagger = journal_analytics.AutoTagger(setup_tracker_path=json_path, setup_tracker_db_path=db_path)
+    with caplog.at_level(logging.WARNING):
+        got = tagger._load_tracker_rows()
+
+    assert [row["symbol"] for row in got][-1] == "LATE"
+    assert _rows_text(got) == _rows_text(_json_rows(json_path, tmp_path))
+    assert any(
+        "not the SQLite store" in r.getMessage() and "changed after the last mirror" in r.getMessage()
+        for r in caplog.records
+    )

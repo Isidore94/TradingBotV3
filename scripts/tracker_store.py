@@ -27,7 +27,8 @@ scoring or tracker logic changes - the payload is copied, not interpreted.
 Moving the readers and retiring the JSON is F3 step 2, gated on ``verify``
 reporting zero differences across a week of live saves.
 
-**Readers (P0-2 2d, decision 0017).** ``load_fresh_payload`` serves the store only when its source stamp matches
+**Readers (P0-2 2d, decision 0017).** ``load_fresh_payload`` and
+``load_fresh_projection`` serve the store only when its source stamp matches
 the JSON file on disk (path, size, mtime); otherwise they return the reason and
 the caller reads the JSON. The JSON is still written first and stays the truth.
 """
@@ -418,6 +419,48 @@ def load_fresh_payload(json_path: Path | str, db_path: Path | str | None = None)
     except Exception as exc:
         return None, f"store unreadable: {type(exc).__name__}: {exc}"
     return payload, ""
+
+
+def load_fresh_projection(
+    json_path: Path | str,
+    fields: Iterable[str],
+    *,
+    section: str = "setups",
+    db_path: Path | str | None = None,
+) -> tuple[list[dict] | None, str]:
+    """A few top-level fields of every dict record in ``section``, in the JSON's order.
+
+    SQLite extracts the fields, so no record is parsed whole in Python. A field
+    the record lacks is absent from its row, so ``row.get`` reads ``None`` as it
+    would on the JSON dict. ``(None, reason)`` unless the store mirrors
+    ``json_path`` exactly. Never raises.
+    """
+    names = [str(name) for name in fields]
+    json_path = Path(json_path)
+    store_path = Path(db_path) if db_path is not None else default_store_path()
+    if not store_path.exists():
+        return None, f"no SQLite store at {store_path}"
+    columns = ", ".join(["json_type(payload)"] + ["payload -> ?"] * len(names))
+    paths = ['$."' + name.replace('"', '""') + '"' for name in names]
+    try:
+        conn = _open_reader(store_path)
+        try:
+            meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+            reason = _staleness_reason(meta, json_path)
+            if reason:
+                return None, reason
+            by_key: dict[str, dict] = {}
+            for row in conn.execute(
+                f"SELECT key, {columns} FROM records WHERE section = ? ORDER BY rowid", [*paths, section]
+            ):
+                if row[1] != "object":
+                    continue
+                by_key[row[0]] = {name: json.loads(text) for name, text in zip(names, row[2:]) if text is not None}
+        finally:
+            conn.close()
+    except Exception as exc:
+        return None, f"store unreadable: {type(exc).__name__}: {exc}"
+    return list(_apply_order(by_key, meta.get(ORDER_META_PREFIX + section)).values()), ""
 
 
 def default_store_path() -> Path:
