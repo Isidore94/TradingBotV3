@@ -97,6 +97,46 @@ def test_attach_movers_service_feeds_the_board(panel):
     assert [r["symbol"] for r in panel.movers_board.model.rows()] == ["BBB"]
 
 
+class _FocusStub:
+    def __init__(self):
+        self.added = []
+
+    def add(self, symbol, side, category="m5", *, origin="", context=""):
+        self.added.append((symbol, side, category, origin))
+        return True
+
+
+def _gate_board(last):
+    row = {"symbol": "NVDA", "last": last, "prev_high": 100.0, "prev_low": 98.0,
+           "session_vwap": 101.0, "move15_pct": 1.0}
+    return {"state": {"state": "up_day"}, "pop": {"long": [row], "short": []}}
+
+
+def test_plus_focus_goes_through_the_adoption_gate_and_the_focus_service(panel):
+    stub = _FocusStub()
+    panel.focus_service = stub
+    statuses = []
+    panel.statusChanged.connect(statuses.append)
+    panel.movers_board.update_board(_gate_board(105.0))
+    panel.movers_board.flush_pending_refresh()
+    panel.movers_board.focusAddRequested.emit("NVDA", "long")
+    assert stub.added == [("NVDA", "long", "m5", "movers_board")]
+    assert "added to M5 Focus" in statuses[-1]
+
+
+def test_plus_focus_refused_by_the_gate_adds_nothing(panel):
+    stub = _FocusStub()
+    panel.focus_service = stub
+    panel.movers_board.update_board(_gate_board(100.5))  # above the prior high but below session VWAP
+    panel.movers_board.flush_pending_refresh()
+    panel.movers_board.focusAddRequested.emit("NVDA", "long")
+    assert stub.added == []
+    assert "✕" in panel.movers_board.status_label.text()
+    panel.movers_board.focusAddRequested.emit("GONE", "long")
+    assert stub.added == []
+    assert "no longer on the board" in panel.movers_board.status_label.text()
+
+
 def test_main_window_owns_one_movers_service_and_stops_it():
     source = (SCRIPTS_DIR / "ui" / "app.py").read_text(encoding="utf-8")
     assert source.count("MoversService(") == 1

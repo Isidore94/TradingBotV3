@@ -1139,6 +1139,7 @@ class AlertCenterPanel(QFrame):
         self.movers_board.symbolActivated.connect(
             lambda symbol, side: self._chart_board_symbol(symbol, side, "the Movers board")
         )
+        self.movers_board.focusAddRequested.connect(self._add_movers_row_to_focus)
         self.movers_board.reviewAllRequested.connect(self.review_focus_picks)
         self.movers_board.fadedReviewRequested.connect(self.review_faded_picks)
         if self.focus_service is not None:
@@ -8971,6 +8972,48 @@ class AlertCenterPanel(QFrame):
         self.strength_page.setVisible(bool(on))
         layout = self.movers_column.layout()
         layout.setStretchFactor(self.movers_board, 0 if on else 1)
+
+    def _add_movers_row_to_focus(self, symbol: str, side: str) -> None:
+        """The trader's explicit +F click on a Movers row: M5 Focus through the one
+        adoption gate, then `FocusService.add` - the same manual path the Strength
+        Board's Add uses (the store injects into longs.txt/shorts.txt)."""
+        symbol = str(symbol or "").strip().upper()
+        side = "short" if str(side or "").lower().startswith("short") else "long"
+        board = self.movers_board.board()
+        row = None
+        for mode in ("pop", "dip", "mine"):
+            for candidate in ((board.get(mode) or {}).get(side)) or []:
+                if str(candidate.get("symbol") or "").upper() == symbol:
+                    row = candidate
+                    break
+            if row is not None:
+                break
+        if self.focus_service is None:
+            message = f"✕ {symbol} (no Focus service on this desk)"
+        elif row is None:
+            message = f"✕ {symbol} (no longer on the board)"
+        else:
+            passes, reason = focus_adoption_gate.passes_focus_adoption_gate(
+                side, row.get("last"), row.get("prev_high"), row.get("prev_low"),
+                row.get("session_vwap"),
+            )
+            if not passes:
+                message = f"✕ {symbol} ({reason})"
+            else:
+                try:
+                    added = self.focus_service.add(
+                        symbol, side, "m5", origin="movers_board",
+                        context=f"movers 15m {row.get('move15_pct')}",
+                    )
+                    message = (
+                        f"★ {symbol} added to M5 Focus ({side})." if added
+                        else f"{symbol} is already in M5 Focus ({side})."
+                    )
+                except Exception:
+                    logging.warning("Movers board could not add %s.", symbol, exc_info=True)
+                    message = f"✕ {symbol} (add failed)"
+        self.movers_board.show_status(message)
+        self.statusChanged.emit(message)
 
     def attach_movers_service(self, service) -> None:
         """Feed the Movers board from `MainWindow`'s one MoversService. Hosting only."""
