@@ -13,6 +13,11 @@ try:
 except ImportError:  # pragma: no cover - exercised only when yfinance is absent
     yf = None
 
+try:  # the process-wide yfinance lock when scripts/ is on sys.path
+    from yahoo_download import download as _download
+except ImportError:  # pragma: no cover - standalone market_prep use
+    _download = None
+
 
 MARKET_SNAPSHOT_TICKERS = [
     "SPY",
@@ -49,7 +54,7 @@ def fetch_market_snapshot(tickers: list[str] | None = None) -> dict[str, Any]:
     ticker_list = tickers or MARKET_SNAPSHOT_TICKERS
     generated_at = datetime.now().isoformat(timespec="seconds")
     try:
-        data = yf.download(
+        data = (_download or getattr(yf, "download"))(
             tickers=" ".join(ticker_list),
             period="90d",
             interval="1d",

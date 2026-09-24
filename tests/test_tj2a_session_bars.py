@@ -109,7 +109,9 @@ def test_injected_downloader_means_pytest_never_calls_real_yfinance(monkeypatch)
         real_calls.append(True)
         raise AssertionError("pytest attempted a real yfinance download")
 
-    monkeypatch.setattr(bars.yf, "download", no_real_download)
+    import yfinance
+
+    monkeypatch.setattr(yfinance, "download", no_real_download)
     answer = bars.fetch_session_bars(
         ["SPY"], SESSION, downloader=lambda *_a, **_k: {"SPY": [_bar(9, 30)]}
     )

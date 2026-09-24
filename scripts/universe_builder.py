@@ -352,10 +352,10 @@ def fetch_price_history(
             except Exception:
                 pass
 
-    import yfinance as yf
+    from yahoo_download import download
 
     def _download_chunk(chunk: list[str]):
-        return yf.download(
+        return download(
             tickers=" ".join(chunk),
             period=HISTORY_PERIOD,
             interval="1d",

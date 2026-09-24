@@ -1078,9 +1078,9 @@ def load_universe_pool(max_symbols: int = AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS) -> li
 
 
 def _default_downloader(symbols: list[str], *, period: str, interval: str):
-    import yfinance as yf
+    from yahoo_download import download
 
-    return yf.download(
+    return download(
         tickers=" ".join(symbols),
         period=period,
         interval=interval,

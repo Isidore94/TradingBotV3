@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #215 Movers IB scanner: the Movers board fills within 10 min of the open and its status line shows `ib_scanner`; trading_bot.log has no `dictionary changed size during iteration` and no Movers `stuck` line [trader + lead]
 - #214 Veto follow-ups: a Compressed veto arms Range breakout, SMA incoming arms SMA break + 15EMA retest on the chart side, Incoming trendline arms Trendline break + retest (or says "no trendline"), each shows on the Armed tab and the chart still retires; the snapshot popup shows the same grouped D1 menu [trader]
 - #213 D1 alert menu regroup: Pullback (fast)/Pullback to D1 line/Range breakout/Line break fire and old armed 15EMA rejects still fire [trader]
 - #212 Tracker write stamp (P0-2 2b): after the next close slot, Health's top line ends `tracker last written <today's stamp>`; if a tracker write fails, the phone digest's OPERATIONS shows `setup tracker write failed <stamp>; last good <stamp>` and the scan's reports are still today's [trader]

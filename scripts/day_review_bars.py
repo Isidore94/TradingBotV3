@@ -13,9 +13,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
-import yfinance as yf
-
 import daily_recap_reader
+import yahoo_download
 from completed_bars import completed_m5_bars
 from project_paths import DAY_REVIEW_DIR
 from ui.services.market_journal_service import shared_journal_service
@@ -170,7 +169,7 @@ def _normalise(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
 def fetch_session_bars(symbols: Iterable[str], session: str, *, downloader=None) -> dict[str, list[dict[str, Any]]]:
     """Download regular-hours completed M5 bars, batching symbols at fifty."""
     day = date.fromisoformat(_session_text(session))
-    download = downloader or yf.download
+    download = downloader or yahoo_download.download
     answer: dict[str, list[dict[str, Any]]] = {}
     for tickers in _chunks(symbols):
         try:
