@@ -29,7 +29,7 @@ import re
 import hashlib
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from ai_jobs import ledger
 
@@ -116,6 +116,45 @@ def narration_for(root: Path, report_id: str) -> str:
     return ""
 
 
+#: The identity columns an outcome row lacks and its occurrence carries.
+OCCURRENCE_IDENTITY_COLUMNS = ("symbol", "side", "canonical_setup_id")
+
+
+def join_occurrence_identity(store: Any, rows: list[dict[str, Any]]) -> None:
+    """Copy symbol, side and setup from `setup_occurrence` onto outcome rows.
+
+    Latest revision per occurrence wins. A failed read leaves the rows as they
+    are, so the report shows "unknown symbol" rather than losing the numbers.
+    """
+    wanted = sorted({str(row.get("occurrence_id") or "") for row in rows} - {""})
+    if not wanted:
+        return
+    try:
+        occurrences = store.read_rows(
+            "setup_occurrence",
+            occurrence_ids=wanted,
+            columns=["occurrence_id", *OCCURRENCE_IDENTITY_COLUMNS, "computed_at"],
+        )
+    except Exception as exc:  # noqa: BLE001 - identity is display, never a number
+        _log.info("Measured report: occurrence identity unavailable (%s).", exc)
+        return
+    latest: dict[str, Mapping[str, Any]] = {}
+    for row in occurrences:
+        key = str(row.get("occurrence_id") or "")
+        current = latest.get(key)
+        if current is None or str(row.get("computed_at") or "") >= str(
+            current.get("computed_at") or ""
+        ):
+            latest[key] = row
+    for row in rows:
+        found = latest.get(str(row.get("occurrence_id") or ""))
+        if not found:
+            continue
+        for column in OCCURRENCE_IDENTITY_COLUMNS:
+            if not row.get(column) and found.get(column):
+                row[column] = found.get(column)
+
+
 def default_warehouse() -> Any | None:
     """The warehouse seam over the research lake, or None when it is disabled.
 
@@ -176,7 +215,9 @@ def default_warehouse() -> Any | None:
                     current.get("computed_at") or ""
                 ):
                     latest[key] = row
-            return list(latest.values())
+            rows = list(latest.values())
+            join_occurrence_identity(store, rows)
+            return rows
 
         def read_entry_quality(self, session_date: str, *, now: datetime | None = None):
             """Read only one session from the month-partitioned flat window lake."""
