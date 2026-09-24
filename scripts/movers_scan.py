@@ -1,4 +1,4 @@
-"""The Movers board's pure model: pops, SPY pullback state, dip-strong names.
+"""The Movers board's pure model: pops, SPY pullback state, dip-strong and dip-weak names.
 
 Display-only ranking (trader, 2026-09-23: "what's the strongest thing moving
 right now" and "what's strong during a SPY pullback"). No Qt, no network, no
@@ -243,10 +243,11 @@ def market_state(
 ) -> MarketState:
     """SPY up/down day and pullback/bounce from normalised completed bars.
 
-    Pullback: SPY above its session open, its session high made while above
-    the running session VWAP, and now >= PULLBACK_MIN_PCT off that high (it may
-    be below VWAP now). Bounce mirrors it on a down day. SPY bars older than
-    `fresh_after` make the state unknown.
+    Pullback: SPY's session high made while above the running session VWAP,
+    and now >= PULLBACK_MIN_PCT off that high (it may be below VWAP or the
+    open now). Bounce mirrors it off the session low; when both qualify, the
+    later turn wins. Up/down day is SPY vs its session open. SPY bars older
+    than `fresh_after` make the state unknown.
     """
     prior, today = split_today(spy_bars, today_date)
     if not today:
@@ -278,33 +279,39 @@ def market_state(
             and beyond
         )
 
-    if last > session_open:
-        index = max(range(len(today)), key=lambda i: (today[i]["high"], -i))
-        high = today[index]["high"]
-        off = _pct(last, high)
-        at_high = vwaps[index]
-        made_above = at_high is not None and today[index]["close"] > at_high
-        on = made_above and turn_on(index, off, off is not None and off <= -PULLBACK_MIN_PCT)
-        if on or last > vwap:
-            return MarketState(
-                "up_day", pullback=on, extreme_time=today[index]["dt"].strftime("%H:%M"),
-                extreme_price=high, start_dt=today[index]["dt"] if on else None,
-                spy_from_extreme_pct=off, **common,
-            )
-    if last < session_open:
-        index = min(range(len(today)), key=lambda i: (today[i]["low"], i))
-        low = today[index]["low"]
-        off = _pct(last, low)
-        at_low = vwaps[index]
-        made_below = at_low is not None and today[index]["close"] < at_low
-        on = made_below and turn_on(index, off, off is not None and off >= PULLBACK_MIN_PCT)
-        if on or last < vwap:
-            return MarketState(
-                "down_day", bounce=on, extreme_time=today[index]["dt"].strftime("%H:%M"),
-                extreme_price=low, start_dt=today[index]["dt"] if on else None,
-                spy_from_extreme_pct=off, **common,
-            )
-    return MarketState("flat", **common)
+    high_index = max(range(len(today)), key=lambda i: (today[i]["high"], -i))
+    high = today[high_index]["high"]
+    off_high = _pct(last, high)
+    at_high = vwaps[high_index]
+    pull = (at_high is not None and today[high_index]["close"] > at_high
+            and turn_on(high_index, off_high,
+                        off_high is not None and off_high <= -PULLBACK_MIN_PCT))
+    low_index = min(range(len(today)), key=lambda i: (today[i]["low"], i))
+    low = today[low_index]["low"]
+    off_low = _pct(last, low)
+    at_low = vwaps[low_index]
+    bounce = (at_low is not None and today[low_index]["close"] < at_low
+              and turn_on(low_index, off_low,
+                          off_low is not None and off_low >= PULLBACK_MIN_PCT))
+    if pull and bounce:
+        # Both turns qualify (chop): the later one is the live one.
+        pull, bounce = high_index > low_index, low_index > high_index
+    live = pull or bounce
+    if last > session_open and (live or last > vwap):
+        day = "up_day"
+    elif last < session_open and (live or last < vwap):
+        day = "down_day"
+    elif live:
+        day = "flat"
+    else:
+        return MarketState("flat", **common)
+    use_high = pull or (not bounce and day == "up_day")
+    index, extreme, off = (high_index, high, off_high) if use_high else (low_index, low, off_low)
+    return MarketState(
+        day, pullback=pull, bounce=bounce, extreme_time=today[index]["dt"].strftime("%H:%M"),
+        extreme_price=extreme, start_dt=today[index]["dt"] if live else None,
+        spy_from_extreme_pct=off, **common,
+    )
 
 
 # ---------------------------------------------------------------- rows
@@ -585,18 +592,19 @@ def build_movers_board(
          and r.pop_score <= -POP_MIN_ATR_MOVE),
         key=lambda r: (r.pop_score, r.symbol),
     )
+    # Dip lists, lit by a pullback or a bounce: long = beating SPY since the
+    # turn (strong), short = lagging it (weak).
     dip_long: list[MoverRow] = []
     dip_short: list[MoverRow] = []
-    if state.pullback:
+    if state.pullback or state.bounce:
         dip_long = sorted(
             (r for r in rows.values() if rankable(r) and r.dip_score is not None
              and r.dip_score >= 0),
             key=lambda r: (-r.dip_score, r.symbol),
         )
-    if state.bounce:
         dip_short = sorted(
             (r for r in rows.values() if rankable(r) and r.dip_score is not None
-             and r.dip_score <= 0),
+             and r.dip_score < 0),
             key=lambda r: (r.dip_score, r.symbol),
         )
 

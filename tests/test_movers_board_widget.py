@@ -40,7 +40,7 @@ def _board(pullback=False, start="2026-09-22T10:15:00-04:00"):
         "state": state,
         "pop": {"long": [_row("AAA"), _row("BBB", rvol=None)], "short": [_row("ZZZ", move15_pct=-1.0)]},
         "dip": {"long": [_row("HOLD", dip_score=1.2, since_start_pct=0.3)] if pullback else [],
-                "short": []},
+                "short": [_row("SINK", dip_score=-1.5, since_start_pct=-0.9)] if pullback else []},
         "mine": {"long": [_row("MYA", pop_score=0.2), _row("MYB", pop_score=2.0)], "short": []},
     }
 
@@ -72,7 +72,7 @@ def test_pop_mode_shows_both_sides_and_rvol_none_as_dash(app):
     assert widget.model.data(widget.model.index(0, rvol_col), Qt.ItemDataRole.BackgroundRole) is not None
     assert widget.model.data(widget.model.index(1, rvol_col), Qt.ItemDataRole.BackgroundRole) is None
     assert "no pullback" in widget.banner.text()
-    widget.mode_buttons["dip"].click()
+    widget.mode_buttons["mine"].click()
     assert not widget.side_button.isHidden()
 
 
@@ -87,36 +87,93 @@ def test_side_toggle_and_mine_sorted_by_score(app):
     assert _symbols(widget) == ["MYB", "MYA"]
 
 
-def test_pullback_lights_dip_and_auto_switches_once_per_episode(app):
+def _section_symbols(section):
+    return [row["symbol"] for row in section.visible_rows()]
+
+
+def test_pullback_lights_both_dip_tables_under_pop_and_auto_switches_once(app):
     widget = _widget(app)
+    widget.set_mode("mine")
     widget.update_board(_board(pullback=False))
     widget.flush_pending_refresh()
-    assert widget.mode == "pop"
+    assert widget.mode == "mine"
     widget.update_board(_board(pullback=True))
     widget.flush_pending_refresh()
-    assert widget.mode == "dip"
-    assert "●" in widget.mode_buttons["dip"].text()
+    # Pop, Dip-strong and Dip-weak all show at once.
+    assert widget.mode == "pop"
+    assert "●" in widget.mode_buttons["pop"].text()
     assert "PULLBACK" in widget.banner.text() and "-0.42%" in widget.banner.text()
-    assert _symbols(widget) == ["HOLD"]
-    # The trader goes back to Pop; the same episode does not pull them away again.
-    widget.mode_buttons["pop"].click()
+    assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
+    assert not widget.strong.isHidden() and not widget.weak.isHidden()
+    assert widget.dip_hint.isHidden()
+    assert _section_symbols(widget.strong) == ["HOLD"]
+    assert _section_symbols(widget.weak) == ["SINK"]
+    assert widget.strong.title_label.text().startswith("Dip-strong")
+    assert widget.weak.title_label.text().startswith("Dip-weak")
+    # The trader goes to My names; the same episode does not pull them away again.
+    widget.mode_buttons["mine"].click()
+    assert widget.strong.isHidden() and widget.weak.isHidden()
     widget.update_board(_board(pullback=True))
     widget.flush_pending_refresh()
-    assert widget.mode == "pop"
+    assert widget.mode == "mine"
     # A new episode does.
     widget.update_board(_board(pullback=True, start="2026-09-22T12:00:00-04:00"))
     widget.flush_pending_refresh()
-    assert widget.mode == "dip"
+    assert widget.mode == "pop"
 
 
-def test_unknown_state_banner_and_empty_dip_text(app):
+def test_dip_weak_rows_are_shorts_for_click_and_plus_focus(app):
+    widget = _widget(app)
+    widget.update_board(_board(pullback=True))
+    widget.flush_pending_refresh()
+    got, asked = [], []
+    widget.symbolActivated.connect(lambda s, side: got.append((s, side)))
+    widget.focusAddRequested.connect(lambda s, side: asked.append((s, side)))
+    widget._on_clicked(widget.weak.proxy.index(0, 0))
+    widget._on_clicked(widget.strong.proxy.index(0, 0))
+    assert got == [("SINK", "SHORT"), ("HOLD", "LONG")]
+    # One selection across the tables: picking a weak row clears the Pop selection.
+    widget.table.selectRow(0)
+    widget.weak.table.selectRow(0)
+    assert not widget.table.selectionModel().hasSelection()
+    widget.add_focus_button.click()
+    assert asked == [("SINK", "short")]
+    widget._hide_selected()
+    assert _section_symbols(widget.weak) == []
+    assert "lagging" in widget.weak.empty_label.text()
+
+
+def test_bounce_titles_the_dip_tables_bounce(app):
+    widget = _widget(app)
+    board = _board(pullback=True)
+    board["state"] = dict(board["state"], state="down_day", pullback=False, bounce=True)
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert widget.strong.title_label.text().startswith("Bounce-strong")
+    assert "low" in widget.weak.title_label.text()
+
+
+def test_new_names_get_a_tinted_symbol_cell(app):
+    from PySide6.QtCore import Qt
+
+    widget = _widget(app)
+    widget.update_board(_tagged_board())
+    widget.flush_pending_refresh()
+    col = [k for k, _h in widget.model._columns].index("symbol")
+    background = [widget.model.data(widget.model.index(r, col), Qt.ItemDataRole.BackgroundRole)
+                  for r in range(3)]
+    assert background[1] is not None  # AMD: first tick on the list
+    assert background[0] is None and background[2] is None
+
+
+def test_unknown_state_banner_and_dip_hint(app):
     widget = _widget(app)
     widget.update_board({"state": {"state": "unknown"}, "pop": {}, "dip": {}, "mine": {}})
     widget.flush_pending_refresh()
     assert "unknown" in widget.banner.text()
-    widget.mode_buttons["dip"].click()
-    assert widget.model.rowCount() == 0
-    assert "No SPY pullback" in widget.empty_label.text()
+    assert widget.strong.isHidden() and widget.weak.isHidden()
+    assert "no SPY pullback or bounce" in widget.dip_hint.text()
+    assert not widget.dip_hint.isHidden()
 
 
 def test_row_click_emits_symbol_and_side(app):
