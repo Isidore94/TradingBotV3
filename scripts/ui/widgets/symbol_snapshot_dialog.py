@@ -29,8 +29,9 @@ from datetime import datetime, timedelta
 
 import chart_levels
 import chart_snapshot
-from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
+from chart_watch import D1_EVENT_KINDS, D1_LEGACY_KINDS, D1_MENU_GROUPS, D1_SIDED_KINDS, WATCH_KINDS
 from ui import theme
+from ui.widgets.arm_bar import _D1_MENU_WATCH_KINDS, GroupedD1Menu, _menu_button, _watch_label
 from ui.timer_utils import start_staggered
 from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_VETO
 from ui.widgets.candle_chart import CandleChart
@@ -1276,7 +1277,7 @@ class SymbolSnapshotDialog(QDialog):
         self.m5_focus_button.clicked.connect(self._toggle_m5_focus)
         self.watch_buttons: dict[str, QPushButton] = {}
         for kind, label in WATCH_KINDS.items():
-            button = QPushButton(label)
+            button = QPushButton(_watch_label(kind))
             button.setCheckable(True)
             button.setToolTip(
                 f"Toggle a one-shot {label} watch for this symbol. The first "
@@ -1305,6 +1306,27 @@ class SymbolSnapshotDialog(QDialog):
                 lambda _checked=False, k=kind: self._toggle_d1_event(k)
             )
             self.d1_event_buttons[kind] = button
+        # The D1 alerts (and the Pullback watch) live behind the same grouped
+        # menu as the arm bar; their buttons wait in a hidden parking widget.
+        self._d1_parking = QWidget(self)
+        self._d1_parking.hide()
+        for kind in _D1_MENU_WATCH_KINDS:
+            self.watch_buttons[kind].setParent(self._d1_parking)
+        for button in self.d1_event_buttons.values():
+            button.setParent(self._d1_parking)
+        self._grouped_d1 = GroupedD1Menu(
+            self,
+            {
+                kind: self.watch_buttons[kind] if kind in WATCH_KINDS else self.d1_event_buttons[kind]
+                for _title, kinds in D1_MENU_GROUPS
+                for kind in kinds
+            },
+            {kind: self.d1_event_buttons[kind] for kind in D1_LEGACY_KINDS},
+            on_click=self._click_d1_menu,
+        )
+        self.d1_actions = self._grouped_d1.actions
+        self._grouped_d1.menu.aboutToShow.connect(self.sync_d1_menu)
+        self.d1_menu_button = _menu_button(self._grouped_d1.menu)
 
         # Review-flow ✕: log a dislike (with the typed reason) and advance to
         # the next visible setup row's chart. Only shown when a review host
@@ -1343,10 +1365,10 @@ class SymbolSnapshotDialog(QDialog):
         action_layout.addWidget(self.dislike_button)
         action_layout.addWidget(self.d1_focus_button)
         action_layout.addWidget(self.m5_focus_button)
-        for button in self.watch_buttons.values():
-            action_layout.addWidget(button)
-        for button in self.d1_event_buttons.values():
-            action_layout.addWidget(button)
+        for kind, button in self.watch_buttons.items():
+            if kind not in _D1_MENU_WATCH_KINDS:
+                action_layout.addWidget(button)
+        action_layout.addWidget(self.d1_menu_button)
         action_layout.addStretch(1)
         self.action_row.setVisible(False)
 
@@ -1544,6 +1566,7 @@ class SymbolSnapshotDialog(QDialog):
             self.m5_focus_button,
             *self.watch_buttons.values(),
             *self.d1_event_buttons.values(),
+            self.d1_menu_button,
         ):
             button.setVisible(host is not None)
         if host is None:
@@ -1558,7 +1581,7 @@ class SymbolSnapshotDialog(QDialog):
             pending = {}
         queued_watch = set(pending.get("watch") or ()) - armed
         for kind, button in self.watch_buttons.items():
-            label = WATCH_KINDS[kind]
+            label = _watch_label(kind)
             is_armed = kind in armed
             queued = kind in queued_watch
             button.setText(f"⏳ {label}" if queued else f"{label} ✓ armed" if is_armed else label)
@@ -1582,6 +1605,17 @@ class SymbolSnapshotDialog(QDialog):
         in_m5 = bool(host.is_m5_focus(self._symbol, self._side))
         self.m5_focus_button.setText("✓ In M5 Focus" if in_m5 else "Add to M5 Focus")
         self.m5_focus_button.setChecked(in_m5)
+        self.sync_d1_menu()
+
+    def sync_d1_menu(self) -> None:
+        """Mirror the parked D1 buttons onto the grouped menu and its count."""
+        armed = self._grouped_d1.sync()
+        self.d1_menu_button.setText(f"D1 alert ({armed}) ▾" if armed else "D1 alert ▾")
+        self.d1_menu_button.setToolTip("D1 alerts by kind: pullback, breakout, line break.")
+
+    def _click_d1_menu(self, button: QPushButton) -> None:
+        button.click()
+        self.sync_d1_menu()
 
     def _follow_host_arms(self, host) -> None:
         """Repaint the arm buttons when the host's queued arms change."""
@@ -1629,12 +1663,14 @@ class SymbolSnapshotDialog(QDialog):
         if not hasattr(host, "arm_d1_event_watch"):
             return  # older host: the button is inert rather than a crash
         toggle = getattr(host, "toggle_d1_event_watch", None)
+        # Sided kinds (SMA break + retest, trendline) need this chart's side.
+        side_kw = {"side": self._side or ""} if kind in D1_SIDED_KINDS else {}
         if callable(toggle):
-            toggle(self._symbol, kind)
+            toggle(self._symbol, kind, **side_kw)
         elif kind in set(host.armed_d1_event_kinds(self._symbol)):
             host.disarm_d1_event_watch(self._symbol, kind)
         else:
-            host.arm_d1_event_watch(self._symbol, kind)
+            host.arm_d1_event_watch(self._symbol, kind, **side_kw)
         self._refresh_watch_actions()
 
     def _review_next(self) -> None:

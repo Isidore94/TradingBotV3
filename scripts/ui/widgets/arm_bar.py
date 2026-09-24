@@ -243,7 +243,6 @@ class ArmBar(QFrame):
         self.m5_actions: dict[str, QAction] = {}
         self.d1_actions: dict[str, QAction] = {}
         self.d1_menu_headers: list[QAction] = []
-        self._legacy_header_action: QAction | None = None
 
         # One muted title per D1 menu group, for the classic row.
         self._d1_group_labels: list[QLabel] = []
@@ -437,97 +436,37 @@ class ArmBar(QFrame):
         m5_menu.aboutToShow.connect(self.sync_compact_menus)
         self.m5_menu_button = _menu_button(m5_menu)
 
-        d1_menu = QMenu(self)
-        d1_menu.setToolTipsVisible(True)
-
-        def add_header(text: str) -> QAction:
-            header = QAction(text, self)
-            header.setEnabled(False)
-            font = header.font()
-            font.setBold(True)
-            header.setFont(font)
-            d1_menu.addAction(header)
-            self.d1_menu_headers.append(header)
-            return header
-
-        def add_button_action(key: str, button: QPushButton, checkable: bool = True) -> None:
-            action = QAction(button.text(), self)
-            action.setCheckable(checkable)
-            action.triggered.connect(lambda _checked=False, b=button: self._click_from_menu(b))
-            d1_menu.addAction(action)
-            self.d1_actions[key] = action
-
-        for index, (title, kinds) in enumerate(D1_MENU_GROUPS):
-            if index:
-                d1_menu.addSeparator()
-            add_header(title)
-            for kind in kinds:
-                add_button_action(kind, self._menu_button_for(kind))
-        # Off-menu kinds: hidden unless armed, so an old arm can still be disarmed.
-        self._legacy_separator = d1_menu.addSeparator()
-        self._legacy_header_action = add_header(_LEGACY_HEADER)
-        for key, button in self._legacy_buttons().items():
-            add_button_action(key, button)
-        d1_menu.addSeparator()
-        add_button_action("external_chart", self.external_chart_button, checkable=False)
-        d1_menu.aboutToShow.connect(self.sync_compact_menus)
-        self.d1_menu_button = _menu_button(d1_menu)
+        self._grouped_d1 = GroupedD1Menu(
+            self,
+            {kind: self._menu_button_for(kind) for _t, kinds in D1_MENU_GROUPS for kind in kinds},
+            self._legacy_buttons(),
+            on_click=self._click_from_menu,
+            trailing={"external_chart": self.external_chart_button},
+        )
+        self.d1_actions = self._grouped_d1.actions
+        self.d1_menu_headers = self._grouped_d1.headers
+        self._grouped_d1.menu.aboutToShow.connect(self.sync_compact_menus)
+        self.d1_menu_button = _menu_button(self._grouped_d1.menu)
         self.compact_row.setVisible(False)
 
     def _click_from_menu(self, button: QPushButton) -> None:
         button.click()
         self.sync_compact_menus()
 
-    def _d1_menu_sources(self) -> dict:
-        return {
-            **{
-                kind: self._menu_button_for(kind)
-                for _title, kinds in D1_MENU_GROUPS
-                for kind in kinds
-            },
-            **self._legacy_buttons(),
-            "external_chart": self.external_chart_button,
-        }
-
     def sync_compact_menus(self) -> None:
         """Mirror each button's text, checked, enabled and tooltip onto its action."""
         if self.compact_row is None:
             return
-        for actions, sources, menu_button, title, tip in (
-            (
-                self.m5_actions,
-                self.watch_buttons,
-                self.m5_menu_button,
-                "M5 alert",
-                "One-shot M5 chart watches for this symbol.",
-            ),
-            (
-                self.d1_actions,
-                self._d1_menu_sources(),
-                self.d1_menu_button,
-                "D1 alert",
-                "D1 alerts by kind: pullback, breakout, line break - and TradingView.",
-            ),
-        ):
-            armed = 0
-            for key, action in actions.items():
-                button = sources[key]
-                action.setText(button.text())
-                action.setToolTip(button.toolTip())
-                action.setEnabled(button.isEnabled())
-                if button.isCheckable():
-                    action.setChecked(button.isChecked())
-                    armed += int(button.isChecked())
-            menu_button.setText(f"{title} ({armed}) ▾" if armed else f"{title} ▾")
-            menu_button.setToolTip(tip)
-            menu_button.setEnabled(self._has_symbol)
-        legacy = self._legacy_buttons()
-        for key, button in legacy.items():
-            self.d1_actions[key].setVisible(button.isChecked())
-        if self._legacy_header_action is not None:
-            any_legacy = any(button.isChecked() for button in legacy.values())
-            self._legacy_header_action.setVisible(any_legacy)
-            self._legacy_separator.setVisible(any_legacy)
+        armed = _mirror_actions(self.m5_actions, self.watch_buttons)
+        self.m5_menu_button.setText(f"M5 alert ({armed}) ▾" if armed else "M5 alert ▾")
+        self.m5_menu_button.setToolTip("One-shot M5 chart watches for this symbol.")
+        self.m5_menu_button.setEnabled(self._has_symbol)
+        armed = self._grouped_d1.sync()
+        self.d1_menu_button.setText(f"D1 alert ({armed}) ▾" if armed else "D1 alert ▾")
+        self.d1_menu_button.setToolTip(
+            "D1 alerts by kind: pullback, breakout, line break - and TradingView."
+        )
+        self.d1_menu_button.setEnabled(self._has_symbol)
 
     def apply_scaled_metrics(self) -> None:
         """Re-apply the input widths that are pixel budgets, not stylesheet."""
@@ -775,6 +714,10 @@ class ArmBar(QFrame):
                 "a new 20-day high or low, but only out of a tight 20-day base "
                 "(range at most 4x ATR14)"
             ),
+            "sma_break_retest": (
+                "a completed D1 close through the SMA50/100/200 your way, then "
+                "within 10 sessions a later bar tags the D1 15EMA and closes back"
+            ),
             "line_break": (
                 "a completed bar closes through the SMA50/100/200, the AVWAPE "
                 "line or its 1σ band; the alert names the line"
@@ -820,6 +763,80 @@ class ArmBar(QFrame):
             self.levelArmRequested.emit(
                 str(self.direction_input.currentData() or "above"), level
             )
+
+
+def _mirror_actions(actions: dict, sources: dict) -> int:
+    """Copy each button's text/tooltip/enabled/checked onto its action; count checked."""
+    armed = 0
+    for key, action in actions.items():
+        button = sources[key]
+        action.setText(button.text())
+        action.setToolTip(button.toolTip())
+        action.setEnabled(button.isEnabled())
+        if button.isCheckable():
+            action.setChecked(button.isChecked())
+            armed += int(button.isChecked())
+    return armed
+
+
+class GroupedD1Menu:
+    """The D1 alert menu grouped by `D1_MENU_GROUPS`; its actions click real buttons.
+
+    Shared by the arm bar and the snapshot popup. Off-menu (legacy) buttons get
+    actions that show only while their button is checked (armed or queued).
+    """
+
+    def __init__(self, owner, grouped: dict, legacy: dict, *, on_click, trailing=None) -> None:
+        self.menu = QMenu(owner)
+        self.menu.setToolTipsVisible(True)
+        self.actions: dict[str, QAction] = {}
+        self.headers: list[QAction] = []
+        self._sources = {**grouped, **legacy, **(trailing or {})}
+        self._legacy = dict(legacy)
+
+        def add_header(text: str) -> QAction:
+            header = QAction(text, owner)
+            header.setEnabled(False)
+            font = header.font()
+            font.setBold(True)
+            header.setFont(font)
+            self.menu.addAction(header)
+            self.headers.append(header)
+            return header
+
+        def add_action(key: str, button: QPushButton) -> None:
+            action = QAction(button.text(), owner)
+            action.setCheckable(button.isCheckable())
+            action.triggered.connect(lambda _checked=False, b=button: on_click(b))
+            self.menu.addAction(action)
+            self.actions[key] = action
+
+        for index, (title, kinds) in enumerate(D1_MENU_GROUPS):
+            if index:
+                self.menu.addSeparator()
+            add_header(title)
+            for kind in kinds:
+                add_action(kind, grouped[kind])
+        self._legacy_separator = self.menu.addSeparator()
+        self._legacy_header = add_header(_LEGACY_HEADER)
+        for key, button in self._legacy.items():
+            add_action(key, button)
+        if trailing:
+            self.menu.addSeparator()
+            for key, button in trailing.items():
+                add_action(key, button)
+
+    def sync(self) -> int:
+        """Mirror the buttons; show legacy rows only while checked. Returns the checked count."""
+        armed = _mirror_actions(self.actions, self._sources)
+        any_legacy = False
+        for key, button in self._legacy.items():
+            shown = button.isChecked()
+            self.actions[key].setVisible(shown)
+            any_legacy = any_legacy or shown
+        self._legacy_header.setVisible(any_legacy)
+        self._legacy_separator.setVisible(any_legacy)
+        return armed
 
 
 def _empty_layout(layout) -> None:

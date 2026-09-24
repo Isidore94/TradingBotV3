@@ -8,7 +8,7 @@ import time
 from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -49,11 +49,13 @@ from chart_watch import (
     D1_EVENT_KINDS,
     D1_LEVEL_KINDS,
     D1_PULLBACK_KINDS,
+    D1_SIDED_KINDS,
     WATCH_KINDS,
     any_bounce_levels,
     arm_chart_watch,
     d1_event_levels,
     d1_kind_needs_avwape,
+    incoming_trendline_type,
     evaluate_any_bounce_watch,
     evaluate_chart_watch,
     evaluate_d1_event_watch,
@@ -7213,6 +7215,14 @@ class AlertCenterPanel(QFrame):
                     trendline_knowledge_at=knowledge_at,
                 )
             )
+        elif kind == "sma_break_retest":
+            resolved_side = str(side or "").strip().upper()
+            if resolved_side not in {"LONG", "SHORT"}:
+                self.statusChanged.emit(f"{symbol}: {label} needs a long or short chart to arm.")
+                return False
+            self._d1_event_watches.append(
+                D1EventWatch(symbol=symbol, kind=kind, armed_at=moment, side=resolved_side)
+            )
         else:
             self._d1_event_watches.append(
                 D1EventWatch(symbol=symbol, kind=kind, armed_at=moment)
@@ -8600,21 +8610,33 @@ class AlertCenterPanel(QFrame):
         self._retire_review_alert(alert, write_not_today_annotation=False)
         self.reviewDecisionRecorded.emit()
 
+    #: A saved veto reason -> the follow-up alert it arms (trader, 2026-09-24).
+    #: "pullback" is the chart-watch Pullback alert; the rest are D1 event kinds.
+    #: Any reason not listed arms nothing. compressed -> range_breakout is the
+    #: lead's choice; the trader can overrule it.
+    VETO_FOLLOW_UPS = {
+        "too_extended_from_base": PULLBACK_KIND,
+        "incoming_trendline": "trendline_break_retest",
+        "sma_incoming": "sma_break_retest",
+        "compressed": "range_breakout",
+    }
+
     def _arm_saved_extended_veto(self, alert: BounceAlert, row: dict) -> None:
-        """Arm the one trader-requested pullback after its veto was saved.
+        """Arm the follow-up alert a saved veto reason asks for.
 
         The widget forwards only a saved, identity-matching row; repeat the
         match at the store-owning host so a delayed capture can neither arm nor
         retire the chart now in front.  This runs before ``vetoRetireRequested``
         in the widget, so the normal retirement can advance immediately after
-        the durable arm attempt.
+        the durable arm attempt, armed or not.
         """
         reason_code = str(row.get("reason_code") or "")
         symbol = str(row.get("symbol") or "").strip().upper()
         side = str(row.get("side") or "").strip().upper()
         current = self._current_review_alert
+        follow_up = self.VETO_FOLLOW_UPS.get(reason_code)
         if (
-            reason_code != "too_extended_from_base"
+            follow_up is None
             or current is None
             or current is not alert
             or symbol != str(current.symbol or "").strip().upper()
@@ -8622,6 +8644,91 @@ class AlertCenterPanel(QFrame):
             or side not in ("LONG", "SHORT")
         ):
             return
+        if follow_up == PULLBACK_KIND:
+            self._arm_veto_pullback(symbol, side)
+        else:
+            self._arm_veto_d1_event(reason_code, follow_up, symbol, side)
+
+    def _arm_veto_d1_event(self, reason_code: str, kind: str, symbol: str, side: str) -> None:
+        """Arm one D1 event follow-up for a saved veto; say why when it cannot."""
+        label = D1_EVENT_KINDS.get(kind, kind)
+
+        def not_armed(why: str) -> None:
+            self.chart_review.capture_rail.set_capture_status(
+                f"VETO {symbol} - {reason_code}; {label} not armed ({why})", ok=False
+            )
+
+        existing = next(
+            (w for w in self._d1_event_watches if w.symbol == symbol and w.kind == kind),
+            None,
+        )
+        if existing is not None:
+            existing_side = str(existing.side or "").strip().upper()
+            if kind in D1_SIDED_KINDS and existing_side and existing_side != side:
+                not_armed(f"{existing_side} one already armed")
+            return  # already armed for this name: never reset or duplicate it
+        evidence = _UNREAD
+        if kind == "trendline_break_retest":
+            evidence, why = self._incoming_trendline_evidence(symbol, side)
+            if evidence is None:
+                not_armed(why)
+                return
+        armed = self.arm_d1_event_watch(
+            symbol,
+            kind,
+            side=side if kind in D1_SIDED_KINDS else "",
+            trendline_evidence=evidence,
+        )
+        if not armed:
+            not_armed("arm failed")
+
+    def _wall_trendline_knowledge_at(self) -> datetime | None:
+        """When the scan's trendline records were written (aware), or None."""
+        try:
+            stamp = Path(MASTER_AVWAP_AI_STATE_FILE).stat().st_mtime
+        except OSError:
+            return None
+        return datetime.fromtimestamp(stamp, tz=timezone.utc)
+
+    def _incoming_trendline_evidence(self, symbol: str, side: str):
+        """((candidate, knowledge_at), "") for the nearest in-path incoming line, else (None, why).
+
+        Same records as the wall gate (`_wall_trendlines_for`), same projection
+        (`wall_gate.trendline_value`): the not-yet-broken line of the side's
+        type (H- above a long, L+ below a short) nearest to the last close.
+        """
+        wanted = incoming_trendline_type(side)
+        moment = datetime.now()
+        completed = wall_gate.completed_daily_bars(self._d1_bars_for(symbol), today=moment.date())
+        if not completed:
+            return None, "no daily bars"
+        try:
+            price = float(completed[-1]["close"])
+        except (KeyError, TypeError, ValueError):
+            return None, "no price"
+        best = None
+        for record in self._wall_trendlines_for(symbol):
+            if not isinstance(record, dict) or str(record.get("type") or "") != wanted:
+                continue
+            if record.get("break_date"):
+                continue
+            value = wall_gate.trendline_value(record, completed, today=moment.date())
+            if value is None:
+                continue
+            if (side == "LONG" and value < price) or (side == "SHORT" and value > price):
+                continue
+            distance = abs(value - price)
+            if best is None or distance < best[0]:
+                best = (distance, record)
+        if best is None:
+            return None, "no trendline"
+        knowledge_at = self._wall_trendline_knowledge_at()
+        if knowledge_at is None:
+            return None, "no scan time for the trendline"
+        return (dict(best[1], side=side), knowledge_at), ""
+
+    def _arm_veto_pullback(self, symbol: str, side: str) -> None:
+        """too_extended_from_base: the narrow M30/H1 Pullback alert (unchanged)."""
         source = "veto: too_extended_from_base"
         active_existing = next(
             (
