@@ -37,9 +37,14 @@ BOTTOM_LINE_HEADING = "bottom line"
 #: The two intraday conditions, as the brief bolds them. Matched inside a
 #: paragraph rather than at its start: the trader's brief writes "The **bullish
 #: continuation** requires…", and a reader anchored to the first character
-#: would have found neither.
-_BULLISH_MARKER = re.compile(r"\*\*\s*bullish\s+continuation\s*\*\*", re.IGNORECASE)
-_BEARISH_MARKER = re.compile(r"\*\*\s*bearish\s+reversal\s*\*\*", re.IGNORECASE)
+#: would have found neither. Either word names either side ("**Bullish
+#: reversal:**" / "**Bearish continuation:**" on 2026-09-24), colon optional.
+_BULLISH_MARKER = re.compile(
+    r"\*\*\s*bullish\s+(?:continuation|reversal)\s*:?\s*\*\*", re.IGNORECASE
+)
+_BEARISH_MARKER = re.compile(
+    r"\*\*\s*bearish\s+(?:continuation|reversal)\s*:?\s*\*\*", re.IGNORECASE
+)
 
 #: A Markdown heading of any level.
 _HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")

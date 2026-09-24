@@ -377,6 +377,11 @@ EXPECTED_SLOT_ORDER = (
     # `ticker_briefs`, whose two hours of reserve it must not queue behind.
     "exit_note_fields",
     "ticker_briefs",
+    # Econ morning brief (2026-09-24): the next session's "what to watch" from
+    # the newest pasted brief. Stage 2, directly after the briefs (the slots
+    # before them are pinned closed, `week_questions` is pinned after the
+    # market story); a local model words it and the fixed parser owns every time.
+    "econ_brief",
     "market_story_narration",
     # Day Recap coach (2026-09-23): answer the trader's Week Review questions
     # from the day/week records, cited. End of stage 2: after `day_review_facts`

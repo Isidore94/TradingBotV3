@@ -488,7 +488,21 @@ class AlertChartReview(QWidget):
         self.mentor_scroll.setObjectName("TradeMentorScroll")
         self.mentor_scroll.setWidgetResizable(True)
         self.mentor_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.mentor_scroll.setWidget(self.mentor_card)
+        # The morning "Today's news & econ" block sits above the card in the
+        # same popup; it can be up with no prompt due.
+        from ui.widgets.econ_brief_block import EconBriefBlock
+
+        mentor_body = QWidget(self.mentor_popup)
+        mentor_body_layout = QVBoxLayout(mentor_body)
+        mentor_body_layout.setContentsMargins(0, 0, 0, 0)
+        mentor_body_layout.setSpacing(6)
+        self.econ_block = EconBriefBlock(mentor_body)
+        self.econ_block.setVisible(False)
+        self.econ_block.hideRequested.connect(self.hide_econ_brief)
+        mentor_body_layout.addWidget(self.econ_block)
+        mentor_body_layout.addWidget(self.mentor_card)
+        mentor_body_layout.addStretch(1)
+        self.mentor_scroll.setWidget(mentor_body)
         popup_layout.addWidget(self.mentor_scroll)
         self.mentor_card.setVisible(False)
         self.mentor_popup.dismissed.connect(self._dismiss_mentor_popup)
@@ -875,6 +889,32 @@ class AlertChartReview(QWidget):
 
             logging.debug("Trade Mentor card could not be shown.", exc_info=True)
 
+    def show_econ_brief(self, view) -> None:
+        """Put the morning econ block up, opening the popup if it is closed."""
+        try:
+            self.econ_block.set_view(view)
+            self.econ_block.setVisible(True)
+            self.mentor_popup.show()
+        except Exception:  # noqa: BLE001 - the block never costs the chart
+            import logging
+
+            logging.debug("Econ block could not be shown.", exc_info=True)
+
+    def update_econ_brief(self, view) -> None:
+        """Redraw the block in place (a fresh paste); never opens the popup."""
+        try:
+            if str(view.get("session") or "") == self.econ_block.session() or self.econ_block.isVisible():
+                self.econ_block.set_view(view)
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.debug("Econ block could not be redrawn.", exc_info=True)
+
+    def hide_econ_brief(self) -> None:
+        self.econ_block.setVisible(False)
+        if not self.mentor_card.isVisible():
+            self._hide_mentor_popup_window()
+
     def hide_mentor_popup(self) -> None:
         try:
             self.mentor_card.hide_card()
@@ -897,6 +937,8 @@ class AlertChartReview(QWidget):
         try:
             self.mentor_card.skip()
         finally:
+            # Closing the window also closes the morning econ block.
+            self.econ_block.setVisible(False)
             self.mentor_popup.hide()
 
     def _on_give_a_read(self) -> None:

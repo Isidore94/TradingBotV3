@@ -1,5 +1,6 @@
 """Tests for the self-sufficient universe builder (pure parsing/screening only)."""
 
+import contextlib
 import json
 import sys
 import tempfile
@@ -15,6 +16,24 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import universe_builder as ub  # noqa: E402
+
+
+@contextlib.contextmanager
+def _fake_module(name, module):
+    """Swap one sys.modules entry and restore only that one.
+
+    patch.dict(sys.modules) would also drop every module first imported inside
+    the block (pyarrow's pandas types), and re-importing them later fails.
+    """
+    saved = sys.modules.get(name)
+    sys.modules[name] = module
+    try:
+        yield module
+    finally:
+        if saved is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = saved
 
 NASDAQ_SAMPLE = """Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
 AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N
@@ -223,7 +242,7 @@ class PriceHistoryShapeTests(unittest.TestCase):
             original = getattr(
                 ub, "_offline_original_fetch_price_history", ub.fetch_price_history
             )
-            with patch.dict(sys.modules, {"yfinance": module}), \
+            with _fake_module("yfinance", module), \
                     patch.object(ub, "PRICE_HISTORY_CACHE", cache):
                 return original(["AAPL"], refresh=True)
 
@@ -520,7 +539,7 @@ class PriceFetchBatchErrorTests(unittest.TestCase):
             fake_yf = type(sys)("yfinance")
             fake_yf.download = fake_download
             stats: dict = {}
-            with patch.dict(sys.modules, {"yfinance": fake_yf}), \
+            with _fake_module("yfinance", fake_yf), \
                     patch.object(ub, "PRICE_HISTORY_CACHE", Path(tmp) / "ph.parquet"), \
                     patch.object(ub, "YF_CHUNK_RETRY_PAUSE_SECONDS", 0), \
                     patch.object(ub, "YF_CHUNK_PAUSE_SECONDS", 0), \

@@ -608,6 +608,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         day_review_narration,
         day_review_facts,
         digest,
+        econ_brief_narration,
         enrichment,
         evidence_report,
         exit_note_fields,
@@ -1126,6 +1127,24 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=120.0,
             description="Medium-tier advisory briefs for Focus/watchlist tickers",
             max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
+            uses_model=True,
+        ),
+        # Econ morning brief (trader, 2026-09-24): "what to watch today" from the
+        # newest pasted brief, for the Mentor's first card of the next session.
+        # A local MEDIUM model words it; every time and event is checked against
+        # the deterministic pack, and the card falls back to the brief's own
+        # lines if this never runs. Stage 2, directly after the briefs: the
+        # slots before `ticker_briefs` are pinned closed, and `week_questions`
+        # is pinned directly after `market_story_narration`.
+        JobSlot(
+            name="econ_brief",
+            run=econ_brief_narration.run_econ_brief,
+            reserve_minutes=10.0,
+            description=(
+                "Short 'what to watch today' from the newest pasted brief; "
+                "times come from the fixed parser, never the model"
+            ),
+            max_attempts=3,
             uses_model=True,
         ),
         # Phase 0.31 / WISHLIST 10D step 3. Appended at the end of the
