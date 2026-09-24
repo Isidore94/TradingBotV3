@@ -4,6 +4,7 @@ One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-24 Movers board: Pop + Dip stacks three tables (Pop, Dip-strong, Dip-weak; Bounce-strong/-weak in a bounce), sized to their rows; names new to a list get a blue Sym cell; a SPY pullback now stays lit when SPY falls through the open (it went dark after one bar on 09-24), and when a pullback and a bounce both qualify the later turn wins.
 - 2026-09-24 Movers board: Pop shows longs and shorts together (side toggle hidden there), column headers sort (desc, asc, board order; unmeasured last), and right-click Hide / Del hides a name for today with an Unhide chip.
 - 2026-09-24 WISHLIST.md cleared and replaced by the build plan from the deep review (11 packets, P0 universe floor and swing scan first); an item is work only when the trader moves it to TODO.md or says go.
 - 2026-09-24 Chart wheel zoom (branch `claude/chart-wheel-zoom-2026-09-21`, merged): scrolling back shows more - the wheel anchors on the newest candle and the price scale follows the view.

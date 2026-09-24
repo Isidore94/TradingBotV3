@@ -1,9 +1,10 @@
-"""The Movers board: what is popping now, and what holds up in a SPY pullback.
+"""The Movers board: what is popping now, and who is strong or weak in a SPY turn.
 
 Sits at the top of the Alert Center's lower-right column (trader, 2026-09-23).
-Three modes - Pop (longs and shorts together), Dip-strong, My names - a
-Long/Short toggle for the last two, a SPY state banner and one model/view
-table. Header clicks sort (third click = board order); the trader can hide a
+Two modes. Pop stacks three tables (trader, 2026-09-24): Pop (longs and shorts
+together), then Dip-strong and Dip-weak, lit by a SPY pullback or bounce. My
+names is one table with a Long/Short toggle. A SPY state banner tops both.
+Names new to a list get a tinted Sym cell. Header clicks sort (third click = board order); the trader can hide a
 row for the day (right-click or Delete) and bring hidden rows back. The "Review" menu holds the Focus pick and
 Faded review doors; "Deep read" shows the old Strength page (Focus strength,
 entry board, RRS snapshot, M5 Strength Board) underneath.
@@ -40,16 +41,17 @@ from ui.timer_utils import SignalCoalescer
 
 #: Same floor as the Strength page it sits above (alert column budget: 360 px).
 MIN_BOARD_WIDTH = 170
-#: Rows the table shows without scrolling.
-VISIBLE_ROWS = 10
+#: Rows each table shows without scrolling: the main table, and each dip table.
+VISIBLE_ROWS = 6
+DIP_VISIBLE_ROWS = 4
 #: Width that one numeric column needs; narrower tables show fewer columns.
 COLUMN_MIN_PX = 48
 SYMBOL_COLUMN_PX = 88
 LVL_COLUMN_PX = 70
 
-MODES = ("pop", "dip", "mine")
-MODE_LABELS = {"pop": "Pop", "dip": "Dip-strong", "mine": "My names"}
-MODE_SHORT = {"pop": "Pop", "dip": "Dip", "mine": "Mine"}
+MODES = ("pop", "mine")
+MODE_LABELS = {"pop": "Pop + Dip", "mine": "My names"}
+MODE_SHORT = {"pop": "Pop", "mine": "Mine"}
 #: Below this width the chips and header buttons use short labels.
 NARROW_PX = 300
 MOVERS_MODE_SETTING = "movers_board_mode"
@@ -91,6 +93,11 @@ def symbol_text(row: dict[str, Any]) -> str:
         elif change < 0:
             parts.append(f"▼{-change}")
     return " ".join(parts)
+
+
+def is_new(row: dict[str, Any]) -> bool:
+    """First tick on this list (lists only; My names carries no streak)."""
+    return "streak" in row and row.get("rank_change") is None
 
 
 def level_text(row: dict[str, Any], side: str) -> str:
@@ -147,8 +154,12 @@ def banner_text(state: dict[str, Any] | None) -> str:
 
 
 def rows_for(board: dict[str, Any] | None, mode: str, side: str) -> list[dict[str, Any]]:
-    """Rows for one mode, each tagged `_side`. Pop shows both sides, biggest move first."""
+    """Rows for one list, each tagged `_side`. Pop shows both sides, biggest move first;
+    "strong"/"weak" are the dip lists (beating / lagging SPY since the turn)."""
     board = board or {}
+    if mode in ("strong", "weak"):
+        side = "long" if mode == "strong" else "short"
+        return [dict(row, _side=side) for row in (((board.get("dip") or {}).get(side)) or [])]
     if mode == "pop":
         both = [dict(row, _side=s) for s in ("long", "short")
                 for row in (((board.get(mode) or {}).get(s)) or [])]
@@ -271,6 +282,10 @@ class MoversTableModel(QAbstractTableModel):
                 return QColor(theme.color("long" if float(value) >= 0 else "short"))
             if key == "rvol" and value is None:
                 return QColor(theme.color("text_secondary"))
+        if role == Qt.ItemDataRole.BackgroundRole and key == "symbol" and is_new(row):
+            color = QColor(theme.color("accent"))
+            color.setAlphaF(0.35)
+            return color
         if role == Qt.ItemDataRole.BackgroundRole and key == "rvol" and value is not None:
             # Busier than usual reads warmer: alpha grows from 1x to 3x.
             strength = max(0.0, min(1.0, (float(value) - 1.0) / 2.0))
@@ -306,8 +321,131 @@ def _row_tooltip(row: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+class MoversSection(QWidget):
+    """One titled table with its own model, sort proxy and header-click sort."""
+
+    def __init__(self, parent=None, *, titled: bool = False) -> None:
+        super().__init__(parent)
+        self.columns_mode = "pop"
+        # Column sort (key, order) or None = board order.
+        self.sort: tuple[str, Qt.SortOrder] | None = None
+        self.title_label = QLabel("")
+        self.title_label.setObjectName("MutedLabel")
+        self.title_label.setVisible(titled)
+        self.model = MoversTableModel(self)
+        self.proxy = MoversSortProxy(self)
+        self.proxy.setSourceModel(self.model)
+        self.proxy.setSortRole(SORT_ROLE)
+        self.table = QTableView()
+        self.table.setObjectName("MoversTable")
+        self.table.setModel(self.proxy)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setWordWrap(False)
+        self.table.setShowGrid(False)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setMinimumSectionSize(theme.px(30))
+        self.table.horizontalHeader().setSectionsClickable(True)
+        self.table.horizontalHeader().setSortIndicatorShown(False)
+        self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.empty_label = QLabel("")
+        self.empty_label.setObjectName("MutedLabel")
+        self.empty_label.setWordWrap(True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.table, 1)
+        layout.addWidget(self.empty_label)
+
+    def set_rows(self, rows: list[dict[str, Any]], columns_mode: str, side: str) -> None:
+        self.columns_mode = columns_mode
+        self.model.set_rows(rows, columns_mode, side)
+        self.apply_sort()
+
+    def columns(self):
+        return COLUMNS.get(self.columns_mode, COLUMNS["pop"])
+
+    def _on_header_clicked(self, column: int) -> None:
+        """Numbers sort biggest first, text A-Z; the next click flips; the third restores board order."""
+        columns = self.columns()
+        if not 0 <= column < len(columns):
+            return
+        key = columns[column][0]
+        first = (Qt.SortOrder.AscendingOrder if key in _TEXT_SORT_KEYS
+                 else Qt.SortOrder.DescendingOrder)
+        if self.sort is None or self.sort[0] != key:
+            self.sort = (key, first)
+        elif self.sort[1] == first:
+            flipped = (Qt.SortOrder.DescendingOrder if first == Qt.SortOrder.AscendingOrder
+                       else Qt.SortOrder.AscendingOrder)
+            self.sort = (key, flipped)
+        else:
+            self.sort = None
+        self.apply_sort()
+
+    def apply_sort(self) -> None:
+        header = self.table.horizontalHeader()
+        keys = [k for k, _h in self.columns()]
+        if self.sort is None or self.sort[0] not in keys:
+            self.proxy.sort(-1)
+            header.setSortIndicatorShown(False)
+            return
+        column = keys.index(self.sort[0])
+        self.proxy.sort(column, self.sort[1])
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(column, self.sort[1])
+
+    def visible_rows(self) -> list[dict[str, Any]]:
+        """Rows in the order the table shows them."""
+        rows = []
+        for r in range(self.proxy.rowCount()):
+            row = self.model.row(self.proxy.mapToSource(self.proxy.index(r, 0)).row())
+            if row is not None:
+                rows.append(row)
+        return rows
+
+    def owns(self, index) -> bool:
+        return index.isValid() and index.model() in (self.proxy, self.model)
+
+    def source_row(self, index) -> dict[str, Any] | None:
+        if not self.owns(index):
+            return None
+        if index.model() is self.proxy:
+            index = self.proxy.mapToSource(index)
+        return self.model.row(index.row())
+
+    def selected_row(self) -> dict[str, Any] | None:
+        selection = self.table.selectionModel()
+        rows = selection.selectedRows() if selection is not None else []
+        return self.source_row(rows[0]) if rows else None
+
+    def set_min_rows(self, rows: int) -> None:
+        row_height = self.table.fontMetrics().height() + theme.px(6)
+        self.table.verticalHeader().setDefaultSectionSize(row_height)
+        chrome = self.table.horizontalHeader().sizeHint().height() + 2 * self.table.frameWidth()
+        self.table.setMinimumHeight(chrome + rows * row_height)
+
+    def fit_columns(self, count: int, column_px) -> None:
+        header = self.table.horizontalHeader()
+        for column, (key, _h) in enumerate(self.columns()):
+            hidden = column >= count
+            if self.table.isColumnHidden(column) != hidden:
+                self.table.setColumnHidden(column, hidden)
+            if key in ("symbol", "lvl") and column < self.model.columnCount():
+                if header.sectionResizeMode(column) != QHeaderView.ResizeMode.Fixed:
+                    header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+                if header.sectionSize(column) != column_px(key):
+                    header.resizeSection(column, column_px(key))
+
+
 class MoversBoard(QWidget):
-    """Header, banner, table. The Alert Center wires its signals."""
+    """Header, banner, and the Pop / Dip-strong / Dip-weak tables. The Alert Center wires its signals."""
 
     symbolActivated = Signal(str, str)
     reviewAllRequested = Signal()
@@ -331,9 +469,8 @@ class MoversBoard(QWidget):
         # Session date + day state the side last followed (or the trader overrode).
         self._day_followed = ""
         self._focus_service = None
-        # Rows the trader hid today ("SYM|side"), and the column sort (key, order) or None.
+        # Rows the trader hid today ("SYM|side").
         self._hidden_day, self._hidden = self._load_hidden()
-        self._sort: tuple[str, Qt.SortOrder] | None = None
         self._render_coalescer = SignalCoalescer(self._render, parent=self)
         self._counts_coalescer = SignalCoalescer(self._render_counts, parent=self)
 
@@ -418,33 +555,32 @@ class MoversBoard(QWidget):
         banner_row.addWidget(self.meta_label, 0, Qt.AlignmentFlag.AlignTop)
         banner_row.addWidget(self.banner, 1)
 
-        self.model = MoversTableModel(self)
-        self.proxy = MoversSortProxy(self)
-        self.proxy.setSourceModel(self.model)
-        self.proxy.setSortRole(SORT_ROLE)
-        self.table = QTableView()
-        self.table.setObjectName("MoversTable")
-        self.table.setModel(self.proxy)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.table.setWordWrap(False)
-        self.table.setShowGrid(False)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setMinimumSectionSize(theme.px(30))
-        self.table.horizontalHeader().setSectionsClickable(True)
-        self.table.horizontalHeader().setSortIndicatorShown(False)
-        self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
-        hide_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.table)
-        hide_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
-        hide_shortcut.activated.connect(self._hide_selected)
-        self.table.clicked.connect(self._on_clicked)
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self._on_context_menu)
-        self.table.selectionModel().selectionChanged.connect(self._sync_add_button)
+        # Main table (Pop or My names), then the two dip tables under it.
+        self.main = MoversSection(self)
+        self.strong = MoversSection(self, titled=True)
+        self.weak = MoversSection(self, titled=True)
+        self.sections = (self.main, self.strong, self.weak)
+        self.model = self.main.model
+        self.proxy = self.main.proxy
+        self.table = self.main.table
+        self.empty_label = self.main.empty_label
+        for section in self.sections:
+            table = section.table
+            hide_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), table)
+            hide_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            hide_shortcut.activated.connect(self._hide_selected)
+            table.clicked.connect(self._on_clicked)
+            table.customContextMenuRequested.connect(
+                lambda pos, t=table: self._on_context_menu(t, pos)
+            )
+            table.selectionModel().selectionChanged.connect(
+                lambda *_a, s=section: self._on_selection(s)
+            )
+
+        self.dip_hint = QLabel("")
+        self.dip_hint.setObjectName("MutedLabel")
+        self.dip_hint.setWordWrap(True)
+        self.dip_hint.setVisible(False)
 
         self.groups_label = QLabel("")
         self.groups_label.setObjectName("MutedLabel")
@@ -455,10 +591,6 @@ class MoversBoard(QWidget):
         self.status_label.setWordWrap(True)
         self.status_label.setVisible(False)
 
-        self.empty_label = QLabel("")
-        self.empty_label.setObjectName("MutedLabel")
-        self.empty_label.setWordWrap(True)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 0, 0, 0)
         layout.setSpacing(3)
@@ -466,9 +598,11 @@ class MoversBoard(QWidget):
         layout.addLayout(modes_row)
         layout.addLayout(banner_row)
         layout.addWidget(self.groups_label)
-        layout.addWidget(self.table, 1)
+        layout.addWidget(self.main, 1)
+        layout.addWidget(self.dip_hint)
+        layout.addWidget(self.strong, 1)
+        layout.addWidget(self.weak, 1)
         layout.addWidget(self.status_label)
-        layout.addWidget(self.empty_label)
 
         self.apply_scaled_metrics()
         self._sync_controls()
@@ -531,60 +665,29 @@ class MoversBoard(QWidget):
         if row:
             self.hide_row(row)
 
-    # ------------------------------------------------------------ sort
-    def _on_header_clicked(self, column: int) -> None:
-        """Numbers sort biggest first, text A-Z; the next click flips; the third restores board order."""
-        columns = COLUMNS.get(self._mode, COLUMNS["pop"])
-        if not 0 <= column < len(columns):
-            return
-        key = columns[column][0]
-        first = (Qt.SortOrder.AscendingOrder if key in _TEXT_SORT_KEYS
-                 else Qt.SortOrder.DescendingOrder)
-        if self._sort is None or self._sort[0] != key:
-            self._sort = (key, first)
-        elif self._sort[1] == first:
-            flipped = (Qt.SortOrder.DescendingOrder if first == Qt.SortOrder.AscendingOrder
-                       else Qt.SortOrder.AscendingOrder)
-            self._sort = (key, flipped)
-        else:
-            self._sort = None
-        self._apply_sort()
-
-    def _apply_sort(self) -> None:
-        header = self.table.horizontalHeader()
-        keys = [k for k, _h in COLUMNS.get(self._mode, COLUMNS["pop"])]
-        if self._sort is None or self._sort[0] not in keys:
-            self.proxy.sort(-1)
-            header.setSortIndicatorShown(False)
-            return
-        column = keys.index(self._sort[0])
-        self.proxy.sort(column, self._sort[1])
-        header.setSortIndicatorShown(True)
-        header.setSortIndicator(column, self._sort[1])
-
+    # ------------------------------------------------------------ rows
     def visible_rows(self) -> list[dict[str, Any]]:
-        """Rows in the order the table shows them."""
-        rows = []
-        for r in range(self.proxy.rowCount()):
-            row = self.model.row(self.proxy.mapToSource(self.proxy.index(r, 0)).row())
-            if row is not None:
-                rows.append(row)
-        return rows
+        """Main-table rows in the order the table shows them."""
+        return self.main.visible_rows()
 
     def _source_row(self, index) -> dict[str, Any] | None:
-        if not index.isValid():
-            return None
-        if index.model() is self.proxy:
-            index = self.proxy.mapToSource(index)
-        return self.model.row(index.row())
+        for section in self.sections:
+            if section.owns(index):
+                return section.source_row(index)
+        return None
+
+    def _lists_in_view(self) -> list[tuple[MoversSection, str]]:
+        """(section, list) pairs the current mode shows."""
+        if self._mode == "pop":
+            return [(self.main, "pop"), (self.strong, "strong"), (self.weak, "weak")]
+        return [(self.main, self._mode)]
 
     # ------------------------------------------------------------ metrics
     def apply_scaled_metrics(self) -> None:
         self.setMinimumWidth(theme.px(MIN_BOARD_WIDTH))
-        row_height = self.table.fontMetrics().height() + theme.px(6)
-        self.table.verticalHeader().setDefaultSectionSize(row_height)
-        chrome = self.table.horizontalHeader().sizeHint().height() + 2 * self.table.frameWidth()
-        self.table.setMinimumHeight(chrome + VISIBLE_ROWS * row_height)
+        self.main.set_min_rows(VISIBLE_ROWS)
+        self.strong.set_min_rows(DIP_VISIBLE_ROWS)
+        self.weak.set_min_rows(DIP_VISIBLE_ROWS)
         self._fit_columns()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -598,12 +701,12 @@ class MoversBoard(QWidget):
             return theme.px(LVL_COLUMN_PX)
         return theme.px(COLUMN_MIN_PX)
 
-    def visible_column_count(self) -> int:
+    def visible_column_count(self, mode: str | None = None) -> int:
         """Columns that fit the board's width, in priority order (at least 2)."""
         margins = self.layout().contentsMargins() if self.layout() is not None else None
         width = self.width() - (margins.left() + margins.right() if margins else 0)
         used = count = 0
-        for key, _header in COLUMNS[self._mode]:
+        for key, _header in COLUMNS[mode or self._mode]:
             used += self._column_px(key)
             if used > width:
                 break
@@ -611,24 +714,15 @@ class MoversBoard(QWidget):
         return max(2, count)
 
     def _fit_columns(self) -> None:
-        count = self.visible_column_count()
-        header = self.table.horizontalHeader()
-        for column, (key, _h) in enumerate(COLUMNS[self._mode]):
-            hidden = column >= count
-            if self.table.isColumnHidden(column) != hidden:
-                self.table.setColumnHidden(column, hidden)
-            if key in ("symbol", "lvl") and column < self.model.columnCount():
-                if header.sectionResizeMode(column) != QHeaderView.ResizeMode.Fixed:
-                    header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
-                if header.sectionSize(column) != self._column_px(key):
-                    header.resizeSection(column, self._column_px(key))
+        for section in self.sections:
+            section.fit_columns(self.visible_column_count(section.columns_mode), self._column_px)
         narrow = self.width() < theme.px(NARROW_PX)
         # The +F chip is the first control to go on a narrow board (the row menu stays).
         if self.add_focus_button.isHidden() != narrow:
             self.add_focus_button.setVisible(not narrow)
         labels = MODE_SHORT if narrow else MODE_LABELS
         for mode, button in self.mode_buttons.items():
-            text = labels[mode] + (" ●" if mode == "dip" and self._dip_live() else "")
+            text = labels[mode] + (" ●" if mode == "pop" and self._dip_live() else "")
             if button.text() != text:
                 button.setText(text)
         long_side = self._side == "long"
@@ -724,7 +818,7 @@ class MoversBoard(QWidget):
         self._sync_controls()
 
     def _maybe_auto_switch(self) -> None:
-        """Jump to Dip-strong once per pullback/bounce episode; never fight the trader."""
+        """Jump to Pop + Dip once per pullback/bounce episode; never fight the trader."""
         state = self._state()
         if not (state.get("pullback") or state.get("bounce")):
             return
@@ -732,8 +826,7 @@ class MoversBoard(QWidget):
         if episode == self._auto_switched_episode:
             return
         self._auto_switched_episode = episode
-        self._mode = "dip"
-        self._side = "long" if state.get("pullback") else "short"
+        self._mode = "pop"
         self._sync_controls()
 
     def set_mode(self, mode: str, *, user: bool = False) -> None:
@@ -768,7 +861,7 @@ class MoversBoard(QWidget):
             button.setChecked(True)
         self.side_button.setToolTip("Showing longs" if self._side == "long" else "Showing shorts")
         self.side_button.setChecked(self._side == "short")
-        # Pop always shows both sides, so its side toggle would do nothing.
+        # Pop shows both sides (and the dip tables are one per side), so the toggle is Mine's only.
         if self.side_button.isHidden() != (self._mode == "pop"):
             self.side_button.setVisible(self._mode != "pop")
         self._fit_columns()
@@ -777,14 +870,45 @@ class MoversBoard(QWidget):
         hidden = self.hidden_keys()
         if not hidden:
             return []
-        return [r for r in rows_for(self._board, self._mode, self._side) if hidden_key(r) in hidden]
+        seen: dict[str, dict[str, Any]] = {}
+        for _section, name in self._lists_in_view():
+            for row in rows_for(self._board, name, self._side):
+                key = hidden_key(row)
+                if key in hidden:
+                    seen.setdefault(key, row)
+        return list(seen.values())
 
     def _render(self) -> None:
         hidden = self.hidden_keys()
-        rows = [r for r in rows_for(self._board, self._mode, self._side)
-                if hidden_key(r) not in hidden]
-        self.model.set_rows(rows, self._mode, self._side)
-        self._apply_sort()
+        pop_mode = self._mode == "pop"
+        dip_live = pop_mode and self._dip_live()
+        for section, name in self._lists_in_view():
+            rows = [r for r in rows_for(self._board, name, self._side)
+                    if hidden_key(r) not in hidden]
+            columns_mode = "dip" if name in ("strong", "weak") else self._mode
+            section.set_rows(rows, columns_mode, "short" if name == "weak" else self._side)
+            section.empty_label.setText(self._empty_text(rows, name))
+            section.empty_label.setVisible(not rows)
+            # Height follows the row counts, so no table idles half empty.
+            floor = VISIBLE_ROWS if section is self.main else DIP_VISIBLE_ROWS
+            self.layout().setStretchFactor(section, max(len(rows), floor) + 2)
+        for section in (self.strong, self.weak):
+            if section.isHidden() != (not dip_live):
+                section.setVisible(dip_live)
+        state = self._state()
+        pullback = bool(state.get("pullback"))
+        when = _local_clock(state.get("start_dt")) or state.get("extreme_time") or ""
+        turn = f"since the {when} {'high' if pullback else 'low'}" if when else "since the turn"
+        word = "Dip" if pullback else "Bounce"
+        self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
+        self.weak.title_label.setText(f"{word}-weak ● · lagging SPY {turn}")
+        hint = ""
+        if pop_mode and not dip_live and self._board:
+            hint = ("Dip-strong / Dip-weak: no SPY pullback or bounce now. "
+                    f"They light at {movers_scan.PULLBACK_MIN_PCT:.2f}% off the high or low.")
+        if self.dip_hint.text() != hint:
+            self.dip_hint.setText(hint)
+        self.dip_hint.setVisible(bool(hint))
         hidden_count = len(self._hidden_in_view())
         if self.unhide_button.isHidden() != (hidden_count == 0):
             self.unhide_button.setVisible(hidden_count > 0)
@@ -797,10 +921,8 @@ class MoversBoard(QWidget):
         if self._board and self._board.get("as_of_stale"):
             stamp += " stale"
         self.meta_label.setText(stamp)
-        self.empty_label.setText(self._empty_text(rows))
-        self.empty_label.setVisible(not rows)
         by_side = (self._board.get("groups") or {}).get(self._mode) or {}
-        if self._mode == "pop":
+        if pop_mode:
             labels = [f"{name} ×{count}{tag}" for s, tag in (("long", ""), ("short", " S"))
                       for name, count in (by_side.get(s) or [])]
         else:
@@ -812,12 +934,21 @@ class MoversBoard(QWidget):
         self._sync_add_button()
 
     # ------------------------------------------------------------ +Focus
+    def _on_selection(self, section: MoversSection) -> None:
+        """One selection across the tables: selecting in one clears the others."""
+        if section.selected_row() is not None:
+            for other in self.sections:
+                if other is not section and other.table.selectionModel().hasSelection():
+                    other.table.clearSelection()
+        self._sync_add_button()
+
     def _selected_row(self) -> dict[str, Any] | None:
-        selection = self.table.selectionModel()
-        if selection is None:
-            return None
-        rows = selection.selectedRows()
-        return self._source_row(rows[0]) if rows else None
+        for section in self.sections:
+            if not section.isHidden():
+                row = section.selected_row()
+                if row is not None:
+                    return row
+        return None
 
     def _sync_add_button(self, *_args) -> None:
         self.add_focus_button.setEnabled(self._selected_row() is not None)
@@ -848,28 +979,27 @@ class MoversBoard(QWidget):
             menu.addAction(f"Unhide {hidden} hidden").triggered.connect(self.unhide_all)
         return menu
 
-    def _on_context_menu(self, pos) -> None:
-        index = self.table.indexAt(pos)
+    def _on_context_menu(self, table: QTableView, pos) -> None:
+        index = table.indexAt(pos)
         if not index.isValid():
             return
-        self.row_menu(index).exec(self.table.viewport().mapToGlobal(pos))
+        self.row_menu(index).exec(table.viewport().mapToGlobal(pos))
 
     def show_status(self, text: str) -> None:
-        """One line under the table (e.g. the +Focus result)."""
+        """One line under the tables (e.g. the +Focus result)."""
         self.status_label.setText(str(text or ""))
         self.status_label.setVisible(bool(text))
 
-    def _empty_text(self, rows) -> str:
+    def _empty_text(self, rows, name: str) -> str:
         if rows:
             return ""
         if not self._board:
             return "No Movers read yet. It refreshes every 5-minute bar in market hours."
-        if self._mode == "dip":
-            which = "pullback" if self._side == "long" else "bounce"
-            if not self._state().get("pullback" if self._side == "long" else "bounce"):
-                return f"No SPY {which} right now. Dip-strong lights when one starts."
+        if name == "strong":
             return "No name is beating SPY since the turn."
-        if self._mode == "mine":
+        if name == "weak":
+            return "No name is lagging SPY since the turn."
+        if name == "mine":
             return "No Focus names on this side."
         if self._hidden_in_view():
             return "Every popping name is hidden. Tap Unhide to see them."
