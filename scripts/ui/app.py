@@ -543,9 +543,10 @@ class MainWindow(QMainWindow):
 
         self.rule_chip = RuleChip(self)
         # Compact layout only: the hidden BounceBot strip's controls, proxied.
-        self.bounce_status_proxy = BounceStatusProxy(self.trading_panel.bounce_panel)
+        # Added to the bar only while compact - QStatusBar sizes itself from
+        # hidden items too, so a parked proxy would change the classic bar.
+        self.bounce_status_proxy = BounceStatusProxy(self.trading_panel.bounce_panel, self)
         self.bounce_status_proxy.setVisible(False)
-        status.addPermanentWidget(self.bounce_status_proxy)
         status.addPermanentWidget(self.rule_chip)
         status.addPermanentWidget(self.setup_status)
         self.market_regime_status = QLabel("Auto regime: n/a")
@@ -1129,7 +1130,12 @@ class MainWindow(QMainWindow):
         self.nav_rail.setVisible(not compact)
         self.top_bar.setVisible(not compact)
         row.setVisible(compact)
-        self.bounce_status_proxy.setVisible(compact)
+        if compact:
+            self.statusBar().insertPermanentWidget(0, self.bounce_status_proxy)
+            self.bounce_status_proxy.setVisible(True)
+        elif self._desk_layout_applied == "compact":
+            self.statusBar().removeWidget(self.bounce_status_proxy)
+            self.bounce_status_proxy.setVisible(False)
         self._desk_layout_applied = wanted
         mode_visible = self.pages.currentIndex() == 0
         self.workspace_button.setVisible(mode_visible)

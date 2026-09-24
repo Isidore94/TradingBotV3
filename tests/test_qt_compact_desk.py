@@ -371,7 +371,15 @@ def test_classic_compact_classic_restores_the_classic_tree(window):
     assert not center.chart_review.arm_bar.is_compact()
     assert desk.setups_toggle.parent() is desk.tape_host
     assert window.workspace_button.parent() is window.top_bar
+    # QStatusBar sizes itself from hidden items too, so the classic bar must
+    # not hold the parked proxy at all.
+    in_bar: list = []
+    _layout_widgets(window.statusBar().layout(), in_bar)
+    assert window.bounce_status_proxy not in in_bar
     _switch(window, "compact")
+    in_bar = []
+    _layout_widgets(window.statusBar().layout(), in_bar)
+    assert window.bounce_status_proxy in in_bar
 
 
 def test_tabs_mode_keeps_the_classic_alert_center_inside(window):
