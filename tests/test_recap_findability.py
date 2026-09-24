@@ -403,3 +403,15 @@ def test_swing_grade_at_the_pick_comes_from_the_grade_history_written_before_it(
     assert traits["grade"] == "C" and traits["grade_now"] == "A"  # the 11:00 snapshot came after the pick
     early = rf.traits_for(dict(pick, pick_at=_et("08:30")), inputs)
     assert early["grade"] == rf.UNKNOWN  # nothing written yet at 08:30
+
+
+def test_grade_history_wins_over_a_latest_file_rewritten_after_the_pick():
+    key = "LONG|near_favorite_zone|avwape_to_1stdev"
+    latest = {"as_of": "2026-09-21", "swing": [{"key": key, "grade": "A"}]}  # rewritten mid-session
+    history = {"swing": [{"key": key, "grade": "C"}], "written_at": "2026-09-22T09:00:00-04:00"}
+    pick = {"symbol": "ABC", "side": "LONG", "timeframe": "D1", "pick_at": _et("10:00"), "category": rf.REAL_MISS}
+    inputs = _inputs(
+        tracker_events=[_tracker("ABC", "LONG", "avwape_to_1stdev", "near_favorite_zone", _et("08:00"))],
+        grades_now=latest, grades_as_of=lambda when: history,
+    )
+    assert rf.traits_for(pick, inputs)["grade"] == "C"

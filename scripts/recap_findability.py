@@ -439,7 +439,8 @@ def traits_for(pick: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[str, 
     if timeframe == "D1":
         g = swing_grade_at(inputs.get("grades_now"), side, traits["bucket"], traits["family"], session)
         then = _grades_then(inputs.get("grades_as_of"), at)
-        if then and g["grade"] == UNKNOWN:
+        # The dated history is the primary source; the latest file is only a fallback.
+        if then:
             past = swing_grade_at({**then, "as_of": "0000-00-00"}, side, traits["bucket"], traits["family"], session)
             if past["grade"] != UNKNOWN:
                 g = {**g, "grade": past["grade"], "basis": f"grade history written {then.get('written_at', '')}"}
