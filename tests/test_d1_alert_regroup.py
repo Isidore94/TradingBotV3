@@ -508,3 +508,23 @@ def test_journal_evidence_reads_the_new_kinds_as_d1():
 
     for kind in ("d1_line_pullback", "range_breakout", "line_break"):
         assert journal_setup_evidence._event_horizon({}, kind) == "d1", kind
+
+
+def test_range_breakout_fire_carries_its_rule_version_and_measure():
+    hit = evaluate_d1_event_watch(
+        _watch("range_breakout"), [_m5(10, 5, h=101.5, low=100.5, c=101.2)], _flat_daily(), now=NOW
+    )
+    assert hit is not None
+    assert hit.details["rule_version"] == "range_breakout_v1"
+    assert hit.details["base_range_20d"] == pytest.approx(2.0)
+    assert hit.details["range_atr_ratio"] == pytest.approx(1.0, abs=0.05)
+
+
+def test_the_fired_record_keeps_the_trigger_details():
+    hit = evaluate_d1_event_watch(
+        _watch("range_breakout"), [_m5(10, 5, h=101.5, low=100.5, c=101.2)], _flat_daily(), now=NOW
+    )
+    detail = chart_watch.d1_event_fired_detail(hit)
+    assert detail["kind"] == "range_breakout"
+    assert detail["message"] == hit.message
+    assert detail["rule_version"] == "range_breakout_v1"

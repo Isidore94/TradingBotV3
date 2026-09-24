@@ -29,6 +29,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+import chart_watch  # noqa: E402
+
 KNOWN_AT = datetime(2026, 9, 24, 6, 0, tzinfo=timezone.utc)
 
 
@@ -345,3 +347,11 @@ def test_snapshot_popup_uses_the_grouped_d1_menu(tmp_path, monkeypatch):
         dialog.deleteLater()
         panel.close()
         panel.deleteLater()
+
+
+def test_an_incoming_line_with_a_garbled_break_date_is_not_frozen():
+    last = _daily()[-1]["dt"].date().isoformat()
+    assert chart_watch._trendline_candidate_is_frozen(_line("H-", 101.0, last))
+    assert not chart_watch._trendline_candidate_is_frozen(_line("H-", 101.0, last, break_date="bad"))
+    assert not chart_watch._trendline_candidate_is_frozen(_line("L+", 95.0, last, break_date="bad",
+                                                                 line_id="d1_trendline:L+:2026-08-03_2026-08-20"))
