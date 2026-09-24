@@ -1941,3 +1941,244 @@ def build_analytics_text(trades: list[dict[str, Any]]) -> str:
             )
         lines.append("")
     return "\n".join(lines).strip()
+
+
+# -- Journal page stats (journal UI overhaul 2026-09-23) ---------------------
+#
+# Pure functions over trade rows the page has already loaded. Each takes the
+# P&L column `resolve_pnl_key` chose, so every number agrees with the headline.
+
+WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+#: Hold-time buckets as (label, upper bound in minutes). The first four are
+#: same-day holds; the last two are for trades held past the entry day.
+HOLD_TIME_BUCKETS = (
+    ("under 5 min", 5.0),
+    ("5-30 min", 30.0),
+    ("30 min-2 h", 120.0),
+    ("2 h+ same day", None),
+    ("overnight, 1-5 days", 5 * 24 * 60.0),
+    ("over 5 days", None),
+)
+
+#: A closed trade whose P&L is within this of zero is breakeven, not a win or loss.
+BREAKEVEN_EPSILON = 0.005
+
+
+def _is_closed(row: dict[str, Any]) -> bool:
+    return str(row.get("status") or "").upper() == "CLOSED"
+
+
+def _close_order_key(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("closed_at") or row.get("trade_date") or row.get("opened_at") or ""),
+        str(row.get("trade_id") or ""),
+    )
+
+
+def trade_r_multiple(row: dict[str, Any]) -> float | None:
+    """`net_pnl_cad / |planned_risk|`, the journal's one R, or None."""
+    risk = _coerce_float(row.get("planned_risk"))
+    pnl = _coerce_float(row.get("net_pnl_cad"))
+    if risk is None or pnl is None or abs(risk) < 1e-9:
+        return None
+    return pnl / abs(risk)
+
+
+def trade_performance_stats(
+    trades: list[dict[str, Any]], pnl_key: str = "net_pnl"
+) -> dict[str, Any]:
+    """The stat-card numbers for closed trades, ordered by close time.
+
+    A closed trade with no value in ``pnl_key`` is counted in ``unpriced`` and
+    left out of every figure - missing is unknown, never zero.
+    """
+    closed = sorted((row for row in trades if _is_closed(row)), key=_close_order_key)
+    values: list[float] = []
+    unpriced = 0
+    for row in closed:
+        value = _coerce_float(row.get(pnl_key)) if pnl_key else None
+        if value is None:
+            unpriced += 1
+            continue
+        values.append(value)
+    wins = [value for value in values if value > BREAKEVEN_EPSILON]
+    losses = [value for value in values if value < -BREAKEVEN_EPSILON]
+    gross_win = sum(wins)
+    gross_loss = sum(losses)
+    count = len(values)
+    net = sum(values)
+
+    peak = 0.0
+    running = 0.0
+    max_drawdown = 0.0
+    win_streak = loss_streak = best_win_streak = best_loss_streak = 0
+    for value in values:
+        running += value
+        peak = max(peak, running)
+        max_drawdown = min(max_drawdown, running - peak)
+        if value > BREAKEVEN_EPSILON:
+            win_streak, loss_streak = win_streak + 1, 0
+        elif value < -BREAKEVEN_EPSILON:
+            win_streak, loss_streak = 0, loss_streak + 1
+        else:
+            win_streak = loss_streak = 0
+        best_win_streak = max(best_win_streak, win_streak)
+        best_loss_streak = max(best_loss_streak, loss_streak)
+
+    r_values = [r for r in (trade_r_multiple(row) for row in closed) if r is not None]
+    avg_win = (gross_win / len(wins)) if wins else None
+    avg_loss = (gross_loss / len(losses)) if losses else None
+    return {
+        "trades": len(trades),
+        "closed": count,
+        "unpriced": unpriced,
+        "wins": len(wins),
+        "losses": len(losses),
+        "breakeven": count - len(wins) - len(losses),
+        "win_rate": (len(wins) / count) if count else None,
+        "net_pnl": net if count else None,
+        "gross_win": gross_win,
+        "gross_loss": gross_loss,
+        "profit_factor": (gross_win / abs(gross_loss)) if gross_loss < 0 else None,
+        "expectancy": (net / count) if count else None,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "payoff_ratio": (avg_win / abs(avg_loss)) if avg_win is not None and avg_loss else None,
+        "largest_win": max(wins) if wins else None,
+        "largest_loss": min(losses) if losses else None,
+        "max_drawdown": max_drawdown if count else None,
+        "max_win_streak": best_win_streak,
+        "max_loss_streak": best_loss_streak,
+        "current_streak": win_streak if win_streak else -loss_streak,
+        "avg_r": (sum(r_values) / len(r_values)) if r_values else None,
+        "r_trades": len(r_values),
+    }
+
+
+def direction_split_stats(
+    trades: list[dict[str, Any]], pnl_key: str = "net_pnl"
+) -> dict[str, dict[str, Any]]:
+    """`trade_performance_stats` for longs and shorts, side by side."""
+    split: dict[str, list[dict[str, Any]]] = {"LONG": [], "SHORT": []}
+    for row in trades:
+        side = _normalize_side(row.get("direction"))
+        if side in split:
+            split[side].append(row)
+    return {side: trade_performance_stats(rows, pnl_key) for side, rows in split.items()}
+
+
+def group_expectancy(row: dict[str, Any]) -> float | None:
+    """Net per closed trade for one `_summary_for_rows` bucket, or None."""
+    net = _coerce_float(row.get("net_pnl"))
+    closed = int(row.get("closed") or 0)
+    if net is None or closed <= 0:
+        return None
+    return net / closed
+
+
+def hold_time_bucket(row: dict[str, Any]) -> str | None:
+    """Which `HOLD_TIME_BUCKETS` label a closed trade falls in, or None."""
+    if not _is_closed(row):
+        return None
+    opened = _market_moment(row.get("opened_at"))
+    closed = _market_moment(row.get("closed_at"))
+    if opened is None or closed is None:
+        return None
+    minutes = max(0.0, (closed - opened).total_seconds() / 60.0)
+    if closed.date() == opened.date():
+        for label, bound in HOLD_TIME_BUCKETS[:4]:
+            if bound is None or minutes < bound:
+                return label
+    overnight_label, overnight_bound = HOLD_TIME_BUCKETS[4]
+    return overnight_label if minutes <= overnight_bound else HOLD_TIME_BUCKETS[5][0]
+
+
+def entry_hour_label(moment: datetime) -> str:
+    """One-hour entry bucket in market time, e.g. ``09:00-10:00 ET``."""
+    return f"{moment.hour:02d}:00-{(moment.hour + 1) % 24:02d}:00 ET"
+
+
+def time_breakdown_groups(
+    trades: list[dict[str, Any]], pnl_key: str = "net_pnl"
+) -> dict[str, list[dict[str, Any]]]:
+    """By weekday and hour of ENTRY, and by hold time, in natural order.
+
+    Rows have the same shape as `build_analytics_summary` group rows, plus
+    ``expectancy``. A trade with no readable timestamp is in no bucket.
+    """
+    weekday: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    hour: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    hold: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in trades:
+        moment = _market_moment(row.get("opened_at"))
+        if moment is not None:
+            weekday[WEEKDAY_LABELS[moment.weekday()]].append(row)
+            hour[entry_hour_label(moment)].append(row)
+        bucket = hold_time_bucket(row)
+        if bucket is not None:
+            hold[bucket].append(row)
+
+    def rows_for(buckets: dict[str, list[dict[str, Any]]], order: list[str]) -> list[dict[str, Any]]:
+        out = []
+        for label in order:
+            if label not in buckets:
+                continue
+            item = _summary_for_rows(buckets[label], pnl_key or "net_pnl")
+            if not pnl_key:
+                item = {**item, "net_pnl": None, "gross_win": None, "gross_loss": None}
+            item["label"] = label
+            item["expectancy"] = group_expectancy(item)
+            out.append(item)
+        return out
+
+    return {
+        "weekday (entry)": rows_for(weekday, list(WEEKDAY_LABELS)),
+        "hour of entry": rows_for(hour, sorted(hour)),
+        "hold time": rows_for(hold, [label for label, _bound in HOLD_TIME_BUCKETS]),
+    }
+
+
+def calendar_day_stats(
+    trades: list[dict[str, Any]], *, pnl_key: str = "net_pnl"
+) -> dict[str, dict[str, Any]]:
+    """Per-day net, trade count, wins and losses; days as `calendar_pnl_by_day`."""
+    days: dict[str, dict[str, Any]] = {}
+    for trade in trades:
+        if not _is_closed(trade):
+            continue
+        trade_day = _parse_date(trade.get("closed_at") or trade.get("trade_date") or trade.get("opened_at"))
+        if trade_day is None:
+            continue
+        pnl = _coerce_float(trade.get(pnl_key))
+        if pnl is None:
+            continue
+        entry = days.setdefault(
+            trade_day.isoformat(), {"net": 0.0, "trades": 0, "wins": 0, "losses": 0}
+        )
+        entry["net"] += pnl
+        entry["trades"] += 1
+        if pnl > BREAKEVEN_EPSILON:
+            entry["wins"] += 1
+        elif pnl < -BREAKEVEN_EPSILON:
+            entry["losses"] += 1
+    return days
+
+
+def pnl_currency_label(
+    currency_mode: str | None, pnl_key: str, currencies: list[str] | None = None
+) -> str:
+    """What currency the page's totals are in, in a few words."""
+    if not pnl_key:
+        return "no total (mixed currencies)"
+    if pnl_key == "net_pnl_cad":
+        return "CAD"
+    if pnl_key == USD_BOOKED_KEY:
+        return "USD"
+    if pnl_key == USD_ESTIMATE_KEY:
+        return "USD (estimate)"
+    found = {str(code).upper() for code in (currencies or []) if code}
+    if len(found) == 1:
+        return next(iter(found))
+    mode = str(currency_mode or "").strip().upper()
+    return mode if mode in {"CAD", "USD"} else "native currency"
