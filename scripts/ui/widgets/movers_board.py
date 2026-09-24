@@ -498,8 +498,14 @@ class MoversBoard(QWidget):
         rows = rows_for(self._board, self._mode, self._side)
         self.model.set_rows(rows, self._mode, self._side)
         self._fit_columns()
-        self.banner.setText(banner_text(self._board.get("state") if self._board else None))
-        self.meta_label.setText(_stamp(self._board.get("as_of")))
+        banner = banner_text(self._board.get("state") if self._board else None)
+        if self._board.get("offered"):
+            banner += f" · {int(self._board.get('fresh') or 0)} of {int(self._board['offered'])} fresh"
+        self.banner.setText(banner)
+        stamp = _local_clock(self._board.get("as_of")) or "--:--"
+        if self._board and self._board.get("as_of_stale"):
+            stamp += " stale"
+        self.meta_label.setText(stamp)
         self.empty_label.setText(self._empty_text(rows))
         self.empty_label.setVisible(not rows)
 
@@ -538,13 +544,3 @@ def _local_clock(value: Any) -> str:
     if moment.tzinfo is not None:
         moment = moment.astimezone()
     return moment.strftime("%H:%M")
-
-
-def _stamp(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "--:--"
-    try:
-        return datetime.fromisoformat(text).strftime("%H:%M")
-    except ValueError:
-        return text

@@ -165,6 +165,30 @@ def test_narrow_board_shows_fewer_columns_and_short_labels(app):
     assert widget.minimumWidth() == theme.px(170)
 
 
+def test_header_shows_spy_bar_time_and_stale_flag(app):
+    from ui.widgets import movers_board as mb
+
+    widget = _widget(app)
+    board = _board()
+    board["as_of_stale"] = False
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    clock = mb._local_clock(board["as_of"])
+    assert widget.meta_label.text() == clock
+    board = dict(board, as_of_stale=True)
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert widget.meta_label.text() == f"{clock} stale"
+
+
+def test_banner_counts_fresh_names(app):
+    widget = _widget(app)
+    board = dict(_board(), fresh=412, offered=504)
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert "412 of 504 fresh" in widget.banner.text()
+
+
 def test_model_updates_in_place_without_reset(app):
     widget = _widget(app)
     resets = []
