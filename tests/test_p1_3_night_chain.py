@@ -186,6 +186,14 @@ def test_probe_local_model_answers_in_one_plain_sentence(monkeypatch):
     ok, detail = ollama_probe.probe_local_model(post=lambda url, **k: _Response())
     assert ok and "answered one token" in detail
 
+    # a slow cold load can be given more time through one local setting
+    monkeypatch.setattr(
+        ai_summary, "get_local_setting",
+        lambda key, default=None: 90 if key == "ai_ollama_probe_timeout_seconds" else default,
+    )
+    ollama_probe.probe_local_model(post=timeout_post)
+    assert seen["timeout"] == 90.0
+
 
 def _write_rows(path: Path, rows: list[dict]) -> Path:
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")

@@ -17,12 +17,14 @@ from ai_jobs import ledger
 PROBE_JOB = "ollama_probe"
 #: Hard cap for the one call, in seconds (connect + load + one token).
 PROBE_TIMEOUT_SECONDS = 30.0
+#: Local setting that overrides the cap if a cold model load needs longer.
+PROBE_TIMEOUT_SETTING = "ai_ollama_probe_timeout_seconds"
 
 
 def probe_local_model(
     *,
     post: Callable[..., Any] | None = None,
-    timeout_seconds: float = PROBE_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[bool, str]:
     """(answered, one plain sentence). Never raises."""
@@ -31,6 +33,12 @@ def probe_local_model(
 
         endpoint = ai_summary.local_endpoint_url()
         model = ai_summary.local_model("medium")
+        if timeout_seconds is None:
+            raw = ai_summary.get_local_setting(PROBE_TIMEOUT_SETTING, PROBE_TIMEOUT_SECONDS)
+            try:
+                timeout_seconds = float(raw) if float(raw) > 0 else PROBE_TIMEOUT_SECONDS
+            except (TypeError, ValueError):
+                timeout_seconds = PROBE_TIMEOUT_SECONDS
     except Exception as exc:  # noqa: BLE001 - an unreadable setting is a failed probe
         return False, f"local model settings unreadable ({type(exc).__name__}: {exc})"
     if not endpoint:
