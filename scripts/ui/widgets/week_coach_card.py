@@ -113,6 +113,7 @@ class WeekCoachCard(QFrame):
         self._questions_layout = QVBoxLayout(self.questions)
         self._questions_layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.questions)
+        layout.addStretch(1)
 
     @staticmethod
     def _block(columns: QHBoxLayout, title: str) -> QLabel:
@@ -128,7 +129,8 @@ class WeekCoachCard(QFrame):
         body.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         body.setTextInteractionFlags(Qt.TextSelectableByMouse)
         box.addWidget(heading)
-        box.addWidget(body, 1)
+        box.addWidget(body)
+        box.addStretch(1)
         return body
 
     # -- reading ------------------------------------------------------------

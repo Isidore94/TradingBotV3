@@ -184,6 +184,10 @@ def test_read_view_from_records_on_disk(tmp_path):
     month = week_coach.read_view("2026-W38", month=True, root=root, questions_path=tmp_path / "q.jsonl",
                                  answers_path=tmp_path / "a.jsonl")
     assert month["month"] == "2026-09" and month["covered_weeks"] == ["2026-W38"]
+    # Month view picked from an earlier week of the month: the trend ends at its last recorded week.
+    early = week_coach.read_view("2026-W36", month=True, root=root, questions_path=tmp_path / "q.jsonl",
+                                 answers_path=tmp_path / "a.jsonl")
+    assert early["covered_weeks"] == ["2026-W38"] and early["trend"][-1]["week"] == "2026-W38"
 
 
 # ---------------------------------------------------------------------------

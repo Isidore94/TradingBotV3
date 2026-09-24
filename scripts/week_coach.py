@@ -603,7 +603,8 @@ def read_view(
         "repeats": repeats(body, records),
         "rule_kept": dict(body.get("rule_kept") or {}),
         "calls": calls_right(records),
-        "trend": trend(chosen, root),
+        # Month view: the trend ends at the month's last recorded week.
+        "trend": trend(covered[-1] if month and covered else chosen, root),
         "questions": read_questions(questions_path=questions_path, answers_path=answers_path),
     }
 
@@ -629,7 +630,7 @@ def row_line(row: Mapping[str, Any]) -> str:
         value = f"avg {row['avg_r']:+.2f}R (n {row['r_n']})"
     else:
         value = f"{fmt_money(row.get('pnl_cad'))} (n {row['pnl_known_n']})"
-    return f"{row['label']}: {row['key']} - {value}, {row['wins']} won / {row['losses']} lost"
+    return f"{row['label']} {row['key']}: {value}, {row['wins']} won / {row['losses']} lost"
 
 
 # ---------------------------------------------------------------------------
