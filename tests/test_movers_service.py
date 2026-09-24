@@ -353,3 +353,140 @@ def test_tick_is_idle_outside_regular_hours():
     service._tick()
     assert started == [1]
     assert not svc.in_regular_hours(datetime(2026, 9, 26, 11, 0, tzinfo=NY))  # Saturday
+
+
+# ------------------------------------------------------------ IB scanner source
+class FakeScanner:
+    """Stands in for the IB market scanner: a list of answers, or an exception."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _scanner_service(bot, downloader, scanner, *, clock=lambda: NOW):
+    swept = []
+
+    def universe():
+        swept.append(1)
+        return ["QQQ"]
+
+    service = svc.MoversService(
+        bot_provider=lambda: bot, downloader=downloader, universe_provider=universe,
+        clock=clock, autostart=False, scanner=scanner,
+    )
+    return service, swept
+
+
+def _small_bot():
+    return FakeBot(["AAA"], {"SPY": _naive_la_bars([400.0] * 14),
+                             "AAA": _naive_la_bars([100.0] * 14)})
+
+
+def _gap_names(downloader):
+    return {s for symbols, period in downloader.calls if period == svc.GAP_FILL_PERIOD
+            for s in symbols}
+
+
+def test_scanner_names_enter_the_pool_and_replace_the_universe_sweep():
+    downloader = FakeDownloader({"GAIN": _history_frame(), "LOSE": _history_frame()})
+    scanner = FakeScanner({"TOP_PERC_GAIN": ["GAIN"], "TOP_PERC_LOSE": ["LOSE", "AAA"],
+                           "HOT_BY_VOLUME": []})
+    service, swept = _scanner_service(_small_bot(), downloader, scanner)
+    emitted = []
+    service.moversChanged.connect(emitted.append)
+    service._run_once({"long": [], "short": []})
+
+    assert scanner.calls == 1
+    assert swept == []  # no liquid-universe read
+    assert all(period != svc.YAHOO_TODAY_PERIOD for _s, period in downloader.calls)
+    gap = _gap_names(downloader)
+    assert {"GAIN", "LOSE"} <= gap
+    assert "AAA" not in gap  # fresh in the bot cache: no Yahoo for it
+    board = emitted[-1]
+    assert board["candidate_source"] == "ib_scanner"
+    assert board["scanner_names"] == 3
+    assert board["scanner_error"] == ""
+
+
+def test_scanner_failure_reuses_todays_last_list_then_reports_stale():
+    downloader = FakeDownloader({})
+    scanner = FakeScanner({"TOP_PERC_GAIN": ["GAIN"]}, RuntimeError("TWS gone"))
+    service, swept = _scanner_service(_small_bot(), downloader, scanner)
+    service._run_once({"long": [], "short": []})
+    downloader.calls.clear()
+    service._gap_skip_until.clear()
+    service._run_once({"long": [], "short": []})
+
+    assert swept == []
+    assert "GAIN" in _gap_names(downloader)
+    board = service.board()
+    assert board["candidate_source"] == "ib_scanner_stale"
+    assert "TWS gone" in board["scanner_error"]
+
+
+def test_scanner_failure_with_no_list_today_falls_back_to_the_universe_sweep():
+    downloader = FakeDownloader({})
+    scanner = FakeScanner(RuntimeError("no scanner permission"))
+    service, swept = _scanner_service(_small_bot(), downloader, scanner)
+    service._run_once({"long": [], "short": []})
+
+    assert swept == [1]
+    assert any(period == svc.YAHOO_TODAY_PERIOD for _s, period in downloader.calls)
+    board = service.board()
+    assert board["candidate_source"] == "yahoo_universe"
+    assert "no scanner permission" in board["scanner_error"]
+
+
+def test_yesterdays_scanner_list_is_not_reused():
+    downloader = FakeDownloader({})
+    moments = [NOW - timedelta(days=1), NOW]
+    scanner = FakeScanner({"TOP_PERC_GAIN": ["OLD"]}, RuntimeError("down"))
+    service, swept = _scanner_service(_small_bot(), downloader, scanner,
+                                      clock=lambda: moments[0])
+    service._run_once({"long": [], "short": []})
+    moments.pop(0)
+    downloader.calls.clear()
+    service._gap_skip_until.clear()
+    service._run_once({"long": [], "short": []})
+
+    assert "OLD" not in _gap_names(downloader)
+    assert service.board()["candidate_source"] == "yahoo_universe"
+
+
+def test_an_empty_scanner_answer_counts_as_a_failure():
+    downloader = FakeDownloader({})
+    scanner = FakeScanner({"TOP_PERC_GAIN": [], "TOP_PERC_LOSE": []})
+    service, swept = _scanner_service(_small_bot(), downloader, scanner)
+    service._run_once({"long": [], "short": []})
+    assert swept == [1]
+    assert service.board()["candidate_source"] == "yahoo_universe"
+
+
+def test_a_hung_worker_is_named_in_the_status_after_four_minutes(caplog):
+    service = _service(None, FakeDownloader({}))
+    service._running = True
+    service._run_started = NOW - timedelta(minutes=svc.HUNG_WORKER_MINUTES, seconds=1)
+    statuses = []
+    service.statusChanged.connect(statuses.append)
+    with caplog.at_level("WARNING"):
+        service._tick()
+    assert "stuck" in service.status_text()
+    assert statuses and "stuck" in statuses[-1]
+    assert any("stuck" in record.getMessage() for record in caplog.records)
+    service.shutdown()
+
+
+def test_a_short_running_worker_is_not_called_stuck():
+    service = _service(None, FakeDownloader({}))
+    service._running = True
+    service._run_started = NOW - timedelta(minutes=1)
+    assert "stuck" not in service.status_text()
+    service.shutdown()
