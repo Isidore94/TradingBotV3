@@ -28,7 +28,7 @@ import argparse
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
@@ -39,6 +39,8 @@ PRIMARY = "SPY"
 UNKNOWN = "unknown"
 MID_WINDOW = 20
 SHORT_WINDOW = 5
+#: SPY M5 history handed to the intraday read (M30 needs ~2 sessions of bars).
+M5_LOOKBACK = timedelta(days=10)
 #: Written into every auto row's notes so a reader knows which rule made it.
 REGIME_RULE = "journal_regime_auto_v1"
 
@@ -140,7 +142,15 @@ def _intraday_read(
         return UNKNOWN, UNKNOWN, "not a session"
     moment = min(entry_at, session.rth_close_at)
     d1_rows = [{**dict(row), "session_date": _session_day(row)} for row in spy_d1]
-    readings = bias.context_at(moment, spy_m5=list(spy_m5), spy_d1=d1_rows)
+    # M5 and M30 need at most a few sessions; bound the tape so a year of bars is not re-aggregated per date.
+    floor = moment - M5_LOOKBACK
+    window = [
+        row for row in spy_m5
+        if isinstance(row.get("interval_start"), datetime) and floor <= row["interval_start"] < moment
+    ]
+    if not window:
+        return UNKNOWN, UNKNOWN, "no M5 bars"
+    readings = bias.context_at(moment, spy_m5=window, spy_d1=d1_rows)
     stamp = moment.astimezone(MARKET_TZ).strftime("%H:%M ET")
     return (
         str(readings.get("M5", {}).get("env_key") or UNKNOWN),
