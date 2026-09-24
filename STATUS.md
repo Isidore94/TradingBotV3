@@ -7,7 +7,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Live on `main`:** everything through the 2026-09-23 integrations below.
 - **Desk:** it runs from source on `main`. It was down for the 09-22 update and was
   not restarted. The next start is the trader's call.
-- **Last full suite:** 10,933 passed, 14 skipped (09-23 night-AI integration). Ruff clean, smoke 7/7, selftest 97/97 source and frozen.
+- **Last full suite:** 11,036 passed, 14 skipped (Movers merge). Ruff clean, smoke 7/7, selftest 97/97 source.
 - **09-22 merges:** repo slim-down, setup grades + 8-core tests (gate #190), Working now strip (#191).
 - **09-23 early merges:** close-scan freshness (gate #192; owed: halted names refetch each evening), M5 swing context (#193).
 - **2026-09-23 integration** (`80d86afd`): Mentor asks once (gate #194), Pullback dip gate v2 (#195),
@@ -24,6 +24,8 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   day-story prompt trimmed, enrichment schema echo fixed, `scripts/research_pack.py`, lake SPY/QQQ/IWM D1 + context v2. Gate #202.
   Backfills applied 09-23 as context v3 (v2 wrote all unknown). Owed: pre-Aug entry_at pinned to 2026-08-04 (outcome code, ask first).
 - **RVOL on chart review** merged 2026-09-23 (`ca5bc040`, no exe build on the trader's word): D1 volume coloured by rvol band, `RVOL x.xx×` on the D1 and M5 headers. Live at the next restart. Gate #203.
+- **Movers board** merged 2026-09-23 (`625b2c15`, no exe build on the trader's word): Pop / Dip-strong / My names atop the Alert Center's right column. Live at the next restart. Gate #204.
+  Owed: hook `movers_outcomes.py --summary` into the night AI; share one RVOL baseline with `rvol.py`.
 - **Waiting for the trader's word:** chart scroll-back zoom fix on
   `claude/chart-wheel-zoom-2026-09-21` (`11c3a339`). It is not on `main`. Merge it only
   while the desk is down.
