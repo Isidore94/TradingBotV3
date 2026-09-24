@@ -167,6 +167,8 @@ class EconReminderService(QObject):
         self._push_queue: queue.Queue = queue.Queue()
         self._push_thread: threading.Thread | None = None
         self._push_lock = threading.Lock()
+        #: True from a sender's start until it leaves on an empty queue (under the lock).
+        self._push_running = False
         self._viewLoaded.connect(self.apply_view)
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(TICK_MS)
@@ -324,11 +326,17 @@ class EconReminderService(QObject):
         return payload
 
     def _queue_push(self, title: str, message: str) -> None:
-        """One sender thread drains the queue; a slow ntfy never stacks threads."""
-        self._push_queue.put((title, message))
+        """One sender thread drains the queue; a slow ntfy never stacks threads.
+
+        The put and the "is a sender running?" check share `_push_lock` with
+        the sender's own empty-queue exit, so a push can never land between
+        the sender finding the queue empty and the sender stopping.
+        """
         with self._push_lock:
-            if self._push_thread is not None and self._push_thread.is_alive():
+            self._push_queue.put((title, message))
+            if self._push_running:
                 return
+            self._push_running = True
             self._push_thread = threading.Thread(
                 target=self._drain_pushes, name="econ-push", daemon=True
             )
@@ -341,10 +349,12 @@ class EconReminderService(QObject):
 
             send = push_notify.send_push
         while True:
-            try:
-                title, message = self._push_queue.get_nowait()
-            except queue.Empty:
-                return
+            with self._push_lock:
+                try:
+                    title, message = self._push_queue.get_nowait()
+                except queue.Empty:
+                    self._push_running = False
+                    return
             try:
                 result = send(title, message, priority="high", tags="calendar")
                 if not (result or {}).get("ok"):

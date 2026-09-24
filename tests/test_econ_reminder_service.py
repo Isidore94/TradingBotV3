@@ -220,3 +220,40 @@ def test_the_view_loads_off_the_qt_thread_and_arrives_as_a_signal(make_service):
         time.sleep(0.01)
     assert views and views[0]["session"] == SESSION
     assert seen_threads == [False]
+
+
+def test_a_push_queued_as_the_sender_finds_the_queue_empty_is_still_sent(make_service):
+    """The sender sees an empty queue; before it exits, another warning is queued.
+
+    The queuer must not see a live-but-finishing sender and start none: the
+    second push would wait for the next warning, maybe hours later.
+    """
+    import queue
+    import threading
+    import time
+
+    service = make_service(mode="AWAY")
+    real = service._push_queue
+    raced = []
+
+    class _RacingQueue(queue.Queue):
+        def put(self, item, *args, **kwargs):
+            real.put(item, *args, **kwargs)
+
+        def get_nowait(self):
+            try:
+                return real.get_nowait()
+            except queue.Empty:
+                if not raced:
+                    raced.append(1)
+                    other = threading.Thread(target=service._queue_push, args=("Econ now", "second"))
+                    other.start()
+                    other.join(0.5)
+                raise
+
+    service._push_queue = _RacingQueue()
+    service._queue_push("Econ in 30 min", "first")
+    deadline = time.monotonic() + 5
+    while len(service.sent) < 2 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert [message for _title, message in service.sent] == ["first", "second"]
