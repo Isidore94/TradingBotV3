@@ -64,6 +64,8 @@ TAG_REVIEW_FILTERS = (
 #: brush here would be the one place in the desk that paints outside the theme.
 PROVISIONAL_BADGE = "  (provisional)"
 NEEDS_REVIEW_BADGE = "needs review"
+#: A trade whose entry was made up: kept, flagged, and left out of totals.
+NOT_COUNTED_TEXT = "Opening fill missing - not counted in P&L totals until the fill is imported."
 
 #: Actions the corrections dialog offers, with the wording the trader reads.
 CORRECTION_ACTIONS = (
@@ -696,7 +698,9 @@ class TradesTab(QFrame):
             ]
             for column, text in enumerate(cells):
                 item = QTableWidgetItem(str(text))
-                if str(trade.raw.get("reconcile_status") or "") == "NEEDS_REVIEW":
+                if trade.raw.get("entry_invented"):
+                    item.setToolTip(NOT_COUNTED_TEXT)
+                elif str(trade.raw.get("reconcile_status") or "") == "NEEDS_REVIEW":
                     item.setToolTip("Does not match the broker's reported position")
                 self.table.setItem(row, column, item)
         self._visible = visible
@@ -742,7 +746,10 @@ class TradesTab(QFrame):
     def _show_trade(self, trade: JournalTrade) -> None:
         raw = trade.raw
         status = str(raw.get("reconcile_status") or "")
-        if status == "NEEDS_REVIEW":
+        if raw.get("entry_invented"):
+            status = status or "NOT_COUNTED"
+            self.review_banner.setText(NOT_COUNTED_TEXT)
+        elif status == "NEEDS_REVIEW":
             self.review_banner.setText(
                 "Needs review: the broker's reported position does not match this trade."
             )

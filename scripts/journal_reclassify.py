@@ -52,6 +52,7 @@ if str(ROOT_DIR) not in sys.path:  # pragma: no cover - import convenience
 
 from journal_file_authority import cash_by_day  # noqa: E402
 from journal_identity import (  # noqa: E402
+    SELL_SIDE_WORDS,
     contract_multiplier,
     group_key,
     group_key_text,
@@ -89,7 +90,7 @@ EXIT_BUSY = 3
 EXIT_SWITCH_STAYED_OFF = 4
 
 #: Sides the broker spells for a sale, used only to read the broker's own cash.
-_BROKER_SELL_WORDS = frozenset({"SELL", "SLD", "STO", "STC", "SHORT", "SSHORT", "SELLSHORT"})
+_BROKER_SELL_WORDS = SELL_SIDE_WORDS
 
 
 # ---------------------------------------------------------------------------

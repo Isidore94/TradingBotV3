@@ -852,6 +852,16 @@ def calendar_pnl_by_day(*, currency_mode: str = "Native", **kwargs: Any) -> dict
     return _calendar(trades, pnl_key=pnl_key) if pnl_key else {}
 
 
+def calendar_view(*, currency_mode: str = "Native", **kwargs: Any) -> tuple[dict[str, float], str]:
+    """Daily P&L plus the "not counted" line, from one load of the trades."""
+    from journal_analytics import calendar_pnl_by_day as _calendar, not_counted_summary, resolve_pnl_key
+
+    trades = [trade.raw for trade in load_trades(**kwargs)]
+    pnl_key, _note = resolve_pnl_key(trades, currency_mode)
+    by_day = _calendar(trades, pnl_key=pnl_key) if pnl_key else {}
+    return by_day, str(not_counted_summary(trades)["line"])
+
+
 def equity_curve(trades: list[JournalTrade], currency_mode: str = "CAD") -> list[tuple[str, float]]:
     """Cumulative P&L by trade date, in the header's currency.
 
@@ -861,13 +871,13 @@ def equity_curve(trades: list[JournalTrade], currency_mode: str = "CAD") -> list
     """
     points: list[tuple[str, float]] = []
     running = 0.0
-    from journal_analytics import resolve_pnl_key
+    from journal_analytics import counts_in_pnl, resolve_pnl_key
 
     pnl_key, _note = resolve_pnl_key([trade.raw for trade in trades], currency_mode)
     if not pnl_key:
         return []
     for trade in sorted(trades, key=lambda item: (item.trade_date, item.trade_id)):
-        if not trade.is_closed:
+        if not counts_in_pnl(trade.raw):
             continue
         value = trade.raw.get(pnl_key)
         if value is None:
@@ -878,9 +888,11 @@ def equity_curve(trades: list[JournalTrade], currency_mode: str = "CAD") -> list
 
 
 def unconvertible_count(trades: list[JournalTrade], currency_mode: str = "CAD") -> int:
+    from journal_analytics import counts_in_pnl
+
     return sum(
         1 for trade in trades
-        if trade.is_closed and convert_amount(trade, currency_mode)[0] is None
+        if counts_in_pnl(trade.raw) and convert_amount(trade, currency_mode)[0] is None
     )
 
 

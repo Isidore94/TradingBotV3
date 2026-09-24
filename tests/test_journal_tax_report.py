@@ -333,3 +333,19 @@ def test_the_summary_names_what_it_could_not_count(store):
     assert "still open" in text
     assert "TAXABLE" in text
     assert "Cross-check" in text
+
+
+def test_a_sell_to_open_counts_as_proceeds_not_cost(store):
+    """STO is a sale: its cash lands in proceeds, the BTC in cost."""
+    store.upsert_executions(
+        [
+            _fill("o1", "STO", 1.0, 2.0, 199.0, symbol="AAPL260320P00100000", security_type="OPT"),
+            _fill("c1", "BTC", 1.0, 1.0, -101.0, symbol="AAPL260320P00100000", security_type="OPT"),
+        ]
+    )
+    store.rebuild_trades(refresh_tags=False)
+
+    position = tax.build_tax_report(store)["positions"][0]
+    assert position["proceeds"] == pytest.approx(199.0)
+    assert position["cost"] == pytest.approx(-101.0)
+    assert position["realised"] == pytest.approx(98.0)
