@@ -1240,7 +1240,6 @@ class MainWindow(QMainWindow):
         self.universe_status.setStyleSheet("color: #E5C07B;")
         threading.Thread(
             target=core.rebuild_universe_if_stale,
-            kwargs={"force": False},
             name="universe-self-heal",
             daemon=True,
         ).start()

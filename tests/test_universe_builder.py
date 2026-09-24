@@ -478,6 +478,161 @@ class UniverseWriteFloorTests(unittest.TestCase):
         self.assertEqual(len(result["all"]), 1450)
 
 
+    # -- P0-1: a typed refusal and per-stage evidence --------------------
+    def test_the_refusal_carries_its_counts(self):
+        self._seed_previous(1455)
+        with self.assertRaises(ub.UniverseWriteRefused) as caught:
+            self._build(343)
+        self.assertEqual(caught.exception.produced, 343)
+        self.assertEqual(caught.exception.floor, 727)
+        self.assertEqual(caught.exception.kept, 1455)
+        self.assertIsInstance(caught.exception, RuntimeError)
+
+    def test_the_ledger_row_counts_every_stage(self):
+        self._seed_previous(1487)
+        self._build(1450)
+        row = [r for r in self._ledger_rows() if r.get("event") == "universe_rebuild"][0]
+        stages = row["stages"]
+        for key in (
+            "directory",
+            "after_options_filter",
+            "priced",
+            "passed_screen",
+            "after_include_lists",
+        ):
+            self.assertIn(key, stages)
+        self.assertEqual(stages["priced"], 1450)
+        self.assertEqual(stages["after_include_lists"], 1450)
+        self.assertIn("yfinance", row)
+
+
+class PriceFetchBatchErrorTests(unittest.TestCase):
+    """The 104 s run on 2026-09-23 hints at failed yfinance batches; count them."""
+
+    def test_failed_batches_are_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls: list[str] = []
+
+            def fake_download(**kwargs):
+                calls.append(kwargs["tickers"])
+                raise ValueError("rate limited")
+
+            fake_yf = type(sys)("yfinance")
+            fake_yf.download = fake_download
+            stats: dict = {}
+            with patch.dict(sys.modules, {"yfinance": fake_yf}), \
+                    patch.object(ub, "PRICE_HISTORY_CACHE", Path(tmp) / "ph.parquet"), \
+                    patch.object(ub, "YF_CHUNK_RETRY_PAUSE_SECONDS", 0), \
+                    patch.object(ub, "YF_CHUNK_PAUSE_SECONDS", 0), \
+                    patch.object(ub, "YF_CHUNK_SIZE", 2):
+                # conftest's offline guard stubs fetch_price_history; yfinance is faked above.
+                fetch = getattr(ub, "_offline_original_fetch_price_history", ub.fetch_price_history)
+                history = fetch(["A", "B", "C"], refresh=True, stats=stats)
+        self.assertTrue(history.empty)
+        self.assertEqual(stats["batches"], 2)
+        self.assertEqual(stats["batch_errors"], 2)
+        self.assertEqual(stats["batch_retry_failures"], 2)
+        self.assertEqual(len(calls), 4)
+
+
+class UniverseRestoreSnapshotTests(unittest.TestCase):
+    """``--restore-snapshot`` is the tested CLI for putting a good universe back."""
+
+    STAMP = "20260922T130004"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.lists = {
+            "all": root / "universe_all.txt",
+            "longs": root / "universe_longs.txt",
+            "shorts": root / "universe_shorts.txt",
+        }
+        self.snapshots = root / "snapshots"
+        self.ledger_file = root / "job_ledger.jsonl"
+        for attr, value in (
+            ("UNIVERSE_ALL_FILE", self.lists["all"]),
+            ("UNIVERSE_LONGS_FILE", self.lists["longs"]),
+            ("UNIVERSE_SHORTS_FILE", self.lists["shorts"]),
+            ("UNIVERSE_SNAPSHOT_DIR", self.snapshots),
+        ):
+            patcher = patch.object(ub, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(ub, "_universe_ledger_path", lambda: self.ledger_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # The collapsed lists now on disk.
+        for name, count in (("all", 343), ("longs", 109), ("shorts", 165)):
+            self._write(self.lists[name], "C", count)
+        # The good snapshot.
+        good = self.snapshots / f"universe-{self.STAMP}"
+        good.mkdir(parents=True)
+        for name, count in (("all", 1455), ("longs", 542), ("shorts", 584)):
+            self._write(good / f"universe_{name}.txt", "G", count)
+
+    @staticmethod
+    def _write(path: Path, prefix: str, count: int) -> None:
+        path.write_text("\n".join(f"{prefix}{i:05d}" for i in range(count)) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _count(path: Path) -> int:
+        return len(path.read_text(encoding="utf-8").split())
+
+    def _rows(self) -> list[dict]:
+        if not self.ledger_file.exists():
+            return []
+        return [json.loads(line) for line in self.ledger_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def test_round_trip_restores_all_three_lists_and_records_it(self):
+        self.assertEqual(ub.main(["--restore-snapshot", self.STAMP]), 0)
+        self.assertEqual(self._count(self.lists["all"]), 1455)
+        self.assertEqual(self._count(self.lists["longs"]), 542)
+        self.assertEqual(self._count(self.lists["shorts"]), 584)
+        rows = [r for r in self._rows() if r.get("event") == "universe_restore"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["stamp"], self.STAMP)
+        self.assertEqual(rows[0]["before"]["all"], 343)
+        self.assertEqual(rows[0]["after"]["all"], 1455)
+        self.assertNotIn("key", rows[0])
+        # The collapsed lists were snapshotted first, so the restore is reversible.
+        aside = [p for p in self.snapshots.iterdir() if p.name != f"universe-{self.STAMP}"]
+        self.assertEqual(len(aside), 1)
+        self.assertEqual(self._count(aside[0] / "universe_all.txt"), 343)
+
+    def test_the_universe_prefix_is_accepted(self):
+        self.assertEqual(ub.main(["--restore-snapshot", f"universe-{self.STAMP}"]), 0)
+        self.assertEqual(self._count(self.lists["all"]), 1455)
+
+    def test_a_restore_survives_its_own_snapshot_pruning(self):
+        """A full snapshot folder prunes the oldest; the source may be that one."""
+        with patch.object(ub, "UNIVERSE_SNAPSHOT_KEEP", 1):
+            self.assertEqual(ub.main(["--restore-snapshot", self.STAMP]), 0)
+        self.assertEqual(self._count(self.lists["all"]), 1455)
+        self.assertEqual(self._count(self.lists["shorts"]), 584)
+
+    def test_a_missing_snapshot_changes_nothing(self):
+        self.assertEqual(ub.main(["--restore-snapshot", "20990101T000000"]), 2)
+        self.assertEqual(self._count(self.lists["all"]), 343)
+        self.assertEqual([r for r in self._rows() if r.get("event") == "universe_restore"], [])
+
+    def test_a_path_like_stamp_is_refused(self):
+        self.assertEqual(ub.main(["--restore-snapshot", "../universe-" + self.STAMP]), 2)
+        self.assertEqual(self._count(self.lists["all"]), 343)
+
+    def test_an_incomplete_snapshot_is_refused(self):
+        (self.snapshots / f"universe-{self.STAMP}" / "universe_shorts.txt").unlink()
+        self.assertEqual(ub.main(["--restore-snapshot", self.STAMP]), 2)
+        self.assertEqual(self._count(self.lists["all"]), 343)
+        self.assertEqual(self._count(self.lists["shorts"]), 165)
+
+    def test_an_empty_snapshot_is_refused(self):
+        (self.snapshots / f"universe-{self.STAMP}" / "universe_all.txt").write_text("", encoding="utf-8")
+        self.assertEqual(ub.main(["--restore-snapshot", self.STAMP]), 2)
+        self.assertEqual(self._count(self.lists["all"]), 343)
+
+
 class UniverseForceCarveOutWiringTests(unittest.TestCase):
     """The floor's carve-out is only real if a manual rebuild actually reaches it.
 
@@ -486,7 +641,13 @@ class UniverseForceCarveOutWiringTests(unittest.TestCase):
     wiring cannot be dropped while the flag quietly survives.
     """
 
-    def test_the_autopilot_manual_rebuild_forwards_force(self):
+    def test_only_override_floor_reaches_the_write_floor(self):
+        """``skip_stale_check`` and ``override_floor`` are separate (P0-1).
+
+        On 2026-09-23 the 13:02 stale tick passed ``force=True`` to skip the
+        stale check, and the same flag skipped the write floor: 343 names
+        replaced 1,455.
+        """
         import autopilot_core as core
 
         seen: list[bool] = []
@@ -501,11 +662,28 @@ class UniverseForceCarveOutWiringTests(unittest.TestCase):
         ):
             sys.modules["universe_builder"].build_universe = fake_build
             sys.modules["universe_builder"].DEFAULT_OPTIONS_FILTER = "optionable"
-            # The manual button: force=True all the way down to the write floor.
-            self.assertEqual(core.rebuild_universe_if_stale(force=True, built_at=None), "rebuilt")
-            # The scheduled stale tick: never carves out.
-            self.assertEqual(core.rebuild_universe_if_stale(force=False, built_at=None), "rebuilt")
+            sys.modules["universe_builder"].UniverseWriteRefused = ub.UniverseWriteRefused
+            # The manual button: override all the way down to the write floor.
+            self.assertEqual(
+                core.rebuild_universe_if_stale(skip_stale_check=True, override_floor=True, built_at=None),
+                "rebuilt",
+            )
+            # The scheduled stale tick: skips the stale check, never the floor.
+            self.assertEqual(
+                core.rebuild_universe_if_stale(skip_stale_check=True, override_floor=False, built_at=None),
+                "rebuilt",
+            )
         self.assertEqual(seen, [True, False])
+
+    def test_the_old_force_flag_is_gone(self):
+        import inspect
+
+        import autopilot_core as core
+
+        params = inspect.signature(core.rebuild_universe_if_stale).parameters
+        self.assertNotIn("force", params)
+        self.assertIn("skip_stale_check", params)
+        self.assertIn("override_floor", params)
 
     def test_the_universe_tab_button_forces(self):
         """The Build button is an operator looking straight at the result."""

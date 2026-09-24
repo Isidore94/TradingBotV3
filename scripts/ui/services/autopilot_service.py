@@ -506,6 +506,14 @@ class AutopilotService(QObject):
         state = "stale" if core.universe_is_stale(now, built_at) else "fresh"
         return f"Universe: {state} (built {built_at:%Y-%m-%d %H:%M})"
 
+    def _universe_refusal_line(self) -> str:
+        """Digest OPERATIONS line for the last refused rebuild; empty after a good one."""
+        refusal = self._state.get("universe_refusal")
+        if not isinstance(refusal, dict):
+            return ""
+        text = core.format_universe_refusal(refusal.get("produced"), refusal.get("floor"), refusal.get("kept"))
+        return f"{text} ({refusal.get('at') or 'time unknown'})"
+
     @staticmethod
     def _industry_line() -> str:
         def parse(path: Path) -> dict:
@@ -871,8 +879,28 @@ class AutopilotService(QObject):
 
         def worker() -> None:
             try:
-                outcome = core.rebuild_universe_if_stale(force=True, log=self._log)
+                # The manual button alone may override the write floor.
+                details: dict = {}
+                outcome = core.rebuild_universe_if_stale(
+                    skip_stale_check=True,
+                    override_floor=force,
+                    log=self._log,
+                    details=details,
+                )
                 if outcome == "rebuilt":
+                    if self._state.pop("universe_refusal", None) is not None:
+                        self._save_state()
+                    self._write_report()
+                elif outcome == "refused":
+                    self._state["universe_refusal"] = {
+                        **{key: details.get(key) for key in ("produced", "floor", "kept")},
+                        "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    }
+                    self._save_state()
+                    self._log(
+                        f"{self._universe_refusal_line()} - retrying in "
+                        f"~{core.AUTOPILOT_UNIVERSE_RETRY_MINUTES}m."
+                    )
                     self._write_report()
                 elif outcome == "busy":
                     self._log("Universe rebuild already running elsewhere (launch self-heal?) - skipping.")
@@ -1969,6 +1997,7 @@ class AutopilotService(QObject):
                 "next_slot": snapshot["next_slot"],
                 "log_lines": list(self._log_lines)[-_MAX_REPORT_LOG_LINES:][::-1],
                 "universe_line": snapshot.get("universe_line", ""),
+                "universe_refusal_line": self._universe_refusal_line(),
                 "industry_line": snapshot.get("industry_line", ""),
                 "scorecard_line": self._scorecard_line,
                 "outcome_coverage_line": self._outcome_coverage_line,
