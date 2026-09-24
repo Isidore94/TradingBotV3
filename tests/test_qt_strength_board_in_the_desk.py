@@ -280,7 +280,10 @@ def test_the_strength_window_is_one_flat_page_in_reading_order(qt_desk):
     center = qt_desk.trading_panel.alert_center
     page = center.strength_page
     assert isinstance(page, StrengthPage)
-    assert center.tabs_row.widget(1) is page
+    # Since 2026-09-23 the Movers board tops the column and this page sits
+    # under it behind "Deep read" - hosted, never removed.
+    assert center.tabs_row.widget(1) is center.movers_column
+    assert center.movers_column.isAncestorOf(page)
     # Reading order, top to bottom: my names, the auto RS/RW read, the RRS
     # sweep, then the TC2000 board - the order the two sections had, flattened.
     blocks = page.blocks()

@@ -276,6 +276,11 @@ QToolButton[rowChrome="true"] {
     padding: 0px @pad_small@;
 }
 
+/* The Movers board's mode chips share a 170 px column; tight padding. */
+QToolButton#MoversChip {
+    padding: 2px 4px;
+}
+
 QPushButton[rowChrome="true"]:hover,
 QToolButton[rowChrome="true"]:hover {
     background: @bg_hover@;
@@ -367,6 +372,16 @@ QTableView::item {
     min-height: @row_height@;
     padding-left: @cell_pad@;
     padding-right: @cell_pad@;
+}
+
+/* The Movers table packs up to eight columns into a 170-420 px column. */
+QTableView#MoversTable::item {
+    padding-left: 2px;
+    padding-right: 2px;
+}
+
+QTableView#MoversTable QHeaderView::section {
+    padding: @header_pad_v@ 2px;
 }
 
 QTabWidget::pane {

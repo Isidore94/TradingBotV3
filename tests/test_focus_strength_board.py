@@ -229,7 +229,11 @@ def test_alert_center_puts_the_board_beside_the_tab_stack(tmp_path):
     # Since 2026-09-07 the right-hand half is ONE flat scrolling PAGE: this
     # board on top, the RS/RW reads and the M5 Strength Board under it. The
     # board itself is still beside the tab stack rather than inside a tab.
-    assert panel.tabs_row.widget(1) is panel.strength_page
+    # Since 2026-09-23 the Movers board tops that half and the page sits
+    # under it behind "Deep read"; the page itself is unchanged.
+    assert panel.tabs_row.widget(1) is panel.movers_column
+    assert panel.movers_column.isAncestorOf(panel.movers_board)
+    assert panel.movers_column.isAncestorOf(panel.strength_page)
     assert panel.strength_page.isAncestorOf(panel.focus_strength)
     assert panel.strength_page.blocks()[0] is panel.focus_strength
     # The board is beside the tabs, not inside one, so it stays visible when
@@ -241,6 +245,7 @@ def test_alert_center_puts_the_board_beside_the_tab_stack(tmp_path):
     # because everything under the board is part of that width.
     assert panel.tabs.minimumWidth() + panel.strength_page.minimumWidth() <= 360
     assert panel.tabs.minimumWidth() + panel.focus_strength.minimumWidth() <= 360
+    assert panel.tabs.minimumWidth() + panel.movers_board.minimumWidth() <= 360
 
     panel.focus_strength.update_snapshot(_payload())
     assert {row.symbol for row in panel.focus_strength.current_board().strong}

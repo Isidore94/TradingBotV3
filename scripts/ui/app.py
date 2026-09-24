@@ -53,6 +53,7 @@ from ui.panels.trading_desk import TradingDeskPanel
 from ui.panels.universe_panel import UniversePanel
 from ui import theme
 from ui.services.strength_board_service import StrengthBoardService
+from ui.services.movers_service import MoversService
 from ui.services.working_lately_service import WorkingLatelyService
 from ui.state import VALID_UI_SCALES, UiState
 from ui.theme import apply_theme
@@ -232,6 +233,18 @@ class MainWindow(QMainWindow):
             self.strength_board_service,
             focus_service=self.trading_panel.focus_service,
         )
+        # The Movers board (trader, 2026-09-23): one service, one timer, owned
+        # here and stopped on exit; the Alert Center only hosts the board.
+        bounce_service = self.trading_panel.bounce_panel.service
+        focus_service = self.trading_panel.focus_service
+        self.movers_service = MoversService(
+            self,
+            bot_provider=bounce_service.current_bot,
+            focus_provider=(
+                focus_service.all_focus_by_category if focus_service is not None else None
+            ),
+        )
+        self.trading_panel.alert_center.attach_movers_service(self.movers_service)
         # The AWAY Recap charts through the SAME popup, for the same reason: a
         # trader reading the day back needs the chart beside the alert, and a
         # second chart widget on that page would be a second definition of what
@@ -1826,6 +1839,10 @@ class MainWindow(QMainWindow):
         # thing it holds.
         try:
             self.strength_board_service.shutdown()
+        except Exception:
+            pass
+        try:
+            self.movers_service.shutdown()
         except Exception:
             pass
         # Same reason, same list: the Working-lately service is owned by the

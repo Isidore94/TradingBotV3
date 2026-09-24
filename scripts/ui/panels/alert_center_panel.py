@@ -140,6 +140,7 @@ from ui.widgets.alert_feed_item import AlertFeedItem
 from ui.widgets.armed_watch_list import ArmedWatchList
 from ui.widgets.entry_assist_board import EntryAssistBoard
 from ui.widgets.focus_strength_board import FocusStrengthBoard
+from ui.widgets.movers_board import MoversBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 from ui.widgets.section_header import SectionHeader
 from ui.widgets.strength_page import StrengthPage
@@ -1129,9 +1130,35 @@ class AlertCenterPanel(QFrame):
             rrs_snapshot=self.rrs_snapshot,
         )
 
+        # THE MOVERS BOARD (trader, 2026-09-23: "what's the strongest thing
+        # moving right now ... and what's strong during a SPY pullback"). It
+        # tops the column; the Strength page above sits behind its "Deep read"
+        # toggle, unchanged. The two review doors moved into its "Review" menu.
+        # Display only; `MainWindow` owns the one MoversService.
+        self.movers_board = MoversBoard()
+        self.movers_board.symbolActivated.connect(
+            lambda symbol, side: self._chart_board_symbol(symbol, side, "the Movers board")
+        )
+        self.movers_board.focusAddRequested.connect(self._add_movers_row_to_focus)
+        self.movers_board.reviewAllRequested.connect(self.review_focus_picks)
+        self.movers_board.fadedReviewRequested.connect(self.review_faded_picks)
+        if self.focus_service is not None:
+            self.movers_board.set_focus_service(self.focus_service)
+        self.focusFadedChanged.connect(self.movers_board.request_counts_refresh)
+        self.focus_strength.review_button.setVisible(False)
+        self.focus_strength.faded_button.setVisible(False)
+        self.movers_column = QWidget()
+        movers_layout = QVBoxLayout(self.movers_column)
+        movers_layout.setContentsMargins(0, 0, 0, 0)
+        movers_layout.setSpacing(theme.px(4))
+        movers_layout.addWidget(self.movers_board, 1)
+        movers_layout.addWidget(self.strength_page, 2)
+        self.movers_board.deepReadToggled.connect(self._set_deep_read)
+        self._set_deep_read(self.movers_board.deep_read_button.isChecked())
+
         self.tabs_row = QSplitter(Qt.Orientation.Horizontal)
         self.tabs_row.addWidget(self.tabs)
-        self.tabs_row.addWidget(self.strength_page)
+        self.tabs_row.addWidget(self.movers_column)
         self.tabs_row.setStretchFactor(0, 3)
         self.tabs_row.setStretchFactor(1, 2)
         self.tabs_row.setChildrenCollapsible(False)
@@ -8840,6 +8867,7 @@ class AlertCenterPanel(QFrame):
         self.tabs.setMinimumWidth(theme.px(170))
         self.focus_strength.apply_scaled_metrics()
         self.strength_page.apply_scaled_metrics()
+        self.movers_board.apply_scaled_metrics()
         self.chart_review.arm_bar.apply_scaled_metrics()
 
     def set_embedded_detail_enabled(self, enabled: bool) -> None:
@@ -8938,6 +8966,61 @@ class AlertCenterPanel(QFrame):
         if not wanted and self.tabs.tabText(self.tabs.currentIndex()) in self.UNUSED_TAB_TITLES:
             # Never leave the trader looking at a tab that just vanished.
             self.tabs.setCurrentIndex(self._capture_tab_index)
+
+    def _set_deep_read(self, on: bool) -> None:
+        """Show or hide the old Strength page under the Movers board."""
+        self.strength_page.setVisible(bool(on))
+        layout = self.movers_column.layout()
+        layout.setStretchFactor(self.movers_board, 0 if on else 1)
+
+    def _add_movers_row_to_focus(self, symbol: str, side: str) -> None:
+        """The trader's explicit +F click on a Movers row: M5 Focus through the one
+        adoption gate, then `FocusService.add` - the same manual path the Strength
+        Board's Add uses (the store injects into longs.txt/shorts.txt)."""
+        symbol = str(symbol or "").strip().upper()
+        side = "short" if str(side or "").lower().startswith("short") else "long"
+        board = self.movers_board.board()
+        row = None
+        for mode in ("pop", "dip", "mine"):
+            for candidate in ((board.get(mode) or {}).get(side)) or []:
+                if str(candidate.get("symbol") or "").upper() == symbol:
+                    row = candidate
+                    break
+            if row is not None:
+                break
+        if self.focus_service is None:
+            message = f"✕ {symbol} (no Focus service on this desk)"
+        elif row is None:
+            message = f"✕ {symbol} (no longer on the board)"
+        else:
+            passes, reason = focus_adoption_gate.passes_focus_adoption_gate(
+                side, row.get("last"), row.get("prev_high"), row.get("prev_low"),
+                row.get("session_vwap"),
+            )
+            if not passes:
+                message = f"✕ {symbol} ({reason})"
+            else:
+                try:
+                    added = self.focus_service.add(
+                        symbol, side, "m5", origin="movers_board",
+                        context=f"movers 15m {row.get('move15_pct')}",
+                    )
+                    message = (
+                        f"★ {symbol} added to M5 Focus ({side})." if added
+                        else f"{symbol} is already in M5 Focus ({side})."
+                    )
+                except Exception:
+                    logging.warning("Movers board could not add %s.", symbol, exc_info=True)
+                    message = f"✕ {symbol} (add failed)"
+        self.movers_board.show_status(message)
+        self.statusChanged.emit(message)
+
+    def attach_movers_service(self, service) -> None:
+        """Feed the Movers board from `MainWindow`'s one MoversService. Hosting only."""
+        service.moversChanged.connect(self.movers_board.update_board)
+        board = service.board()
+        if board:
+            self.movers_board.update_board(board)
 
     def attach_strength_board(self, service, focus_service=None) -> None:
         """Host the M5 Strength Board at the foot of the Strength page.
