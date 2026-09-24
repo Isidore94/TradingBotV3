@@ -157,6 +157,16 @@ def test_stale_series_is_not_ranked():
     assert [row["symbol"] for row in board["pop"]["long"]] == ["FRESH"]
 
 
+def test_yesterdays_bars_are_not_today():
+    """A series that stopped yesterday has no bars today (never yesterday's move)."""
+    only_prior = _bars(PRIOR, _pop([100.33, 100.67, 101.0], n=78))
+    spy_prior = _bars(PRIOR, [400.0] * 78)
+    board = _board({"OLD": only_prior}, spy=spy_prior, focus={"long": ["OLD"]})
+    assert board["state"]["state"] == "unknown"
+    assert board["pop"] == {"long": [], "short": []}
+    assert board["mine"]["long"][0]["note"] == "no bars today"
+
+
 # ------------------------------------------------------------------ market state
 def _spy_pullback(drop_pct, *, high_index=9):
     """SPY: heavy-volume open at 400, rally to 405 by `high_index`, then fall."""

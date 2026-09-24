@@ -110,11 +110,14 @@ def normalize_bars(
     return completed_m5_bars(out, now=moment.astimezone(NY_TZ))
 
 
-def split_today(bars: Sequence[Mapping[str, Any]]) -> tuple[list, list]:
-    """(prior-session bars, today's bars), today = the last bar's NY date."""
+def split_today(
+    bars: Sequence[Mapping[str, Any]], today: date | None = None
+) -> tuple[list, list]:
+    """(prior-session bars, today's bars). `today` defaults to the last bar's NY date;
+    a series whose last bar is older than `today` has no bars today."""
     if not bars:
         return [], []
-    today = bars[-1]["dt"].date()
+    today = today or bars[-1]["dt"].date()
     return (
         [bar for bar in bars if bar["dt"].date() < today],
         [bar for bar in bars if bar["dt"].date() == today],
@@ -206,9 +209,11 @@ class MarketState:
         return data
 
 
-def market_state(spy_bars: Sequence[Mapping[str, Any]]) -> MarketState:
+def market_state(
+    spy_bars: Sequence[Mapping[str, Any]], today_date: date | None = None
+) -> MarketState:
     """SPY up/down day and pullback/bounce from normalised completed bars."""
-    prior, today = split_today(spy_bars)
+    prior, today = split_today(spy_bars, today_date)
     if not today:
         return MarketState("unknown", reason="no SPY bars")
     try:
@@ -313,9 +318,11 @@ def measure_symbol(
     spy_bars: Sequence[Mapping[str, Any]],
     state: MarketState,
     reference_end: datetime | None,
+    today_date: date | None = None,
 ) -> MoverRow:
     """Every Movers number for one symbol from normalised completed bars."""
-    prior, today = split_today(bars)
+    prior, today = split_today(bars, today_date)
+    spy_today = split_today(spy_bars, today_date)[1] if spy_bars else []
     if not today:
         return MoverRow(symbol, note="no bars today")
     last_bar = today[-1]
@@ -336,10 +343,8 @@ def measure_symbol(
     move30 = _pct(last, today[-POP_LONG_BARS]["open"]) if len(today) >= POP_LONG_BARS else None
     rvol = recent_rvol(today, baseline, bars=POP_BARS)
     vs_spy = None
-    if move15 is not None and spy_bars:
-        spy_move = _window_move_pct(
-            split_today(spy_bars)[1], today[-POP_BARS]["dt"], last_bar["dt"]
-        )
+    if move15 is not None and spy_today:
+        spy_move = _window_move_pct(spy_today, today[-POP_BARS]["dt"], last_bar["dt"])
         if spy_move is not None:
             vs_spy = move15 - spy_move
     pop_score = None
@@ -351,8 +356,8 @@ def measure_symbol(
     note = ""
     if state.start_dt is not None:
         start_close = _close_at(today, state.start_dt)
-        spy_start = _close_at(split_today(spy_bars)[1], state.start_dt) if spy_bars else None
-        spy_last = split_today(spy_bars)[1][-1]["close"] if spy_bars else None
+        spy_start = _close_at(spy_today, state.start_dt)
+        spy_last = spy_today[-1]["close"] if spy_today else None
         if start_close is None or spy_start is None or spy_last is None:
             note = "no bar at the pullback start"
         else:
@@ -391,15 +396,18 @@ def build_movers_board(
     """
     baselines = baselines or {}
     spy = normalize_bars(spy_bars or (), now=now, local_tz=local_tz)
-    state = market_state(spy)
+    moment = now if now.tzinfo is not None else now.replace(tzinfo=local_tz or NY_TZ)
+    today_date = moment.astimezone(NY_TZ).date()
+    state = market_state(spy, today_date)
     normalised = {
         str(sym).strip().upper(): normalize_bars(bars, now=now, local_tz=local_tz)
         for sym, bars in (bars_by_symbol or {}).items()
         if str(sym or "").strip()
     }
     normalised.pop("SPY", None)
-    ends = [bars[-1]["dt"] for bars in normalised.values() if bars]
-    if spy:
+    ends = [bars[-1]["dt"] for bars in normalised.values() if bars
+            and bars[-1]["dt"].date() == today_date]
+    if spy and spy[-1]["dt"].date() == today_date:
         ends.append(spy[-1]["dt"])
     reference_end = max(ends) if ends else None
 
@@ -407,7 +415,7 @@ def build_movers_board(
     for symbol, bars in normalised.items():
         rows[symbol] = measure_symbol(
             symbol, bars, baseline=baselines.get(symbol), spy_bars=spy,
-            state=state, reference_end=reference_end,
+            state=state, reference_end=reference_end, today_date=today_date,
         )
 
     def rankable(row: MoverRow) -> bool:
