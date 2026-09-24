@@ -401,13 +401,12 @@ it held out.
   included); import it lazily where the UI does not need it at boot. The 8
   `setStyleSheet` calls in `focus_picks_panel.py` move to `theme.qss` variants. Measure
   the 43 timers with `thread_cpu_gauge` for one live day before touching any.
-- **11f** Branches. Decided 2026-09-24: review, then merge what passes. A reviewer
-  rebases each of `claude/compact-desk-2026-09-23` (4 untested WIP commits), the six
-  `codex/*` branches from 09-18 and 09-22 (small fixes with red tests) onto `main` in a
-  worktree, runs their tests, and reports GO / NO-GO per branch; GO branches merge on
-  the trader's word, NO-GO and `claude/token-cost-flags-2026-09-23` (stale, based on an
-  old main) are deleted. `claude/chart-wheel-zoom-2026-09-21` stays as it is, waiting
-  for the trader's word with the desk down.
+- **11f** Branches. Decided 2026-09-24: review, then merge what passes. Compact desk
+  and chart wheel zoom were merged on 2026-09-24 (`a46295c0`, `da485cac`). A reviewer
+  rebases each of the six `codex/*` branches from 09-18 and 09-22 (small fixes with red
+  tests) onto `main` in a worktree, runs their tests, and reports GO / NO-GO per
+  branch; GO branches merge on the trader's word, NO-GO branches and
+  `claude/token-cost-flags-2026-09-23` (stale, based on an old main) are deleted.
 
 ---
 
