@@ -216,6 +216,20 @@ def stable_execution_uid(prefix: str, account_number: str, exec_id: Any, *fallba
     return f"{prefix}:{account}:auto-{digest}"
 
 
+def canonical_ibkr_exec_id(exec_id: Any) -> str:
+    """The Flex spelling of an IBKR execution id.
+
+    The socket reports a combo leg with one extra trailing ``.01``
+    (``00021ab9.6a2c031e.03.01.01``) where Flex writes ``00021ab9.6a2c031e.03.01``.
+    Only that exact five-part shape is trimmed; anything else is returned as is.
+    """
+    text = str(exec_id or "").strip()
+    parts = text.split(".")
+    if len(parts) == 5 and parts[4] == "01" and all(parts):
+        return ".".join(parts[:4])
+    return text
+
+
 def classify_execution_source(row: dict[str, Any]) -> str:
     """Which importer wrote this row, read from the shape of its raw payload.
 

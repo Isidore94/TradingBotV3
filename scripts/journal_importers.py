@@ -19,7 +19,12 @@ import zoneinfo
 
 import requests
 
-from journal_identity import canonical_option_symbol, normalize_security_type, stable_execution_uid
+from journal_identity import (
+    canonical_ibkr_exec_id,
+    canonical_option_symbol,
+    normalize_security_type,
+    stable_execution_uid,
+)
 from project_paths import get_local_setting, save_local_setting, save_local_settings
 
 try:  # pragma: no cover - the primitive ships beside this module
@@ -948,10 +953,22 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
                 f"{len(self.executions)} execution(s) had arrived but the set is not known to be "
                 f"complete.{detail}"
             )
+        return self._normalized_results()
+
+    def _normalized_results(self) -> list[NormalizedExecution]:
+        """Normalize every received fill, dropping combo (BAG) parent rows.
+
+        The socket reports a combo order as a BAG row plus one row per leg; Flex
+        reports only the legs, and the legs carry the money. A stored BAG row
+        is a second, fake position.
+        """
         results: list[NormalizedExecution] = []
         for item in self.executions:
             try:
-                results.append(self.normalize_execution(item["contract"], item["execution"]))
+                normalized = self.normalize_execution(item["contract"], item["execution"])
+                if normalized.security_type == "BAG":
+                    continue
+                results.append(normalized)
             except BrokerTimestampError as exc:
                 self.quarantined.append(
                     _quarantine_record(
@@ -972,7 +989,9 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
 
     def normalize_execution(self, contract: Contract, execution: Any) -> NormalizedExecution:
         timestamp = parse_broker_datetime(getattr(execution, "time", ""), strict=True)
-        exec_id = str(getattr(execution, "execId", "") or "")
+        raw_exec_id = str(getattr(execution, "execId", "") or "")
+        # Flex's spelling, so a socket fill and its Flex row share one uid.
+        exec_id = canonical_ibkr_exec_id(raw_exec_id)
         account_number = str(getattr(execution, "acctNumber", "") or "")
         security_type = normalize_security_type(getattr(contract, "secType", ""))
         symbol = str(
@@ -987,7 +1006,7 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
             strike=getattr(contract, "strike", None), right=getattr(contract, "right", ""),
         )
         currency = str(getattr(contract, "currency", "") or "").upper()
-        commission_report = self.commissions.get(exec_id, {})
+        commission_report = self.commissions.get(raw_exec_id) or self.commissions.get(exec_id, {})
         if not currency:
             currency = str(commission_report.get("currency") or "USD").upper()
         side = normalize_side(getattr(execution, "side", ""))
@@ -1026,7 +1045,7 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
                         "exchange": str(getattr(contract, "exchange", "") or ""),
                     },
                     "execution": {
-                        "execId": exec_id,
+                        "execId": raw_exec_id,
                         "time": str(getattr(execution, "time", "") or ""),
                         "acctNumber": account_number,
                         "side": str(getattr(execution, "side", "") or ""),

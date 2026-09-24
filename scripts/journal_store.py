@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -256,7 +256,19 @@ def _contract_multiplier(row: dict[str, Any]) -> float:
 
 def _execution_assembly_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
     """Normalized position identity first, then chronological fill order."""
-    return (*group_key(row), str(row.get("timestamp") or ""), str(row.get("execution_uid") or ""))
+    return (*group_key(row), _instant_sort_text(row.get("timestamp")), str(row.get("execution_uid") or ""))
+
+
+def _instant_sort_text(value: Any) -> str:
+    """A timestamp as UTC text, so fills stamped in different zones sort by instant."""
+    text = str(value or "")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        return text
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _hash_id(*parts: Any) -> str:
