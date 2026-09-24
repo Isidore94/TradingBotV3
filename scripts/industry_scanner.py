@@ -667,9 +667,9 @@ def fetch_daily_frames_yf(symbols: list[str], *, period: str = FETCH_PERIOD) -> 
 
 
 def _fetch_daily_frames_chunk(tickers: list[str], *, period: str) -> dict[str, pd.DataFrame]:
-    import yfinance as yf
+    from yahoo_download import download
 
-    raw = yf.download(
+    raw = download(
         tickers=" ".join(tickers),
         period=period,
         interval="1d",

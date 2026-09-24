@@ -490,9 +490,9 @@ def run_shadow_pass(
 
 def _fetch_batched_m5(symbols: Sequence[str]) -> dict[str, list[dict]]:
     """Batched yfinance M5 bars. Zero IB traffic (the Strength Board template)."""
-    import yfinance as yf
+    from yahoo_download import download
 
-    frame = yf.download(
+    frame = download(
         list(symbols),
         period="1d",
         interval="5m",

@@ -126,13 +126,13 @@ def _download(symbols, *, period: str, interval: str):
     `scripts/group_rrs.py` already relies on for the RS/RW tape. Imported
     lazily, like every other caller.
     """
-    import yfinance as yf
+    from yahoo_download import download
 
     tickers = [str(name or "").strip().upper() for name in symbols]
     tickers = [name for name in tickers if name]
     if not tickers:
         return {}
-    frame = yf.download(
+    frame = download(
         tickers=tickers if len(tickers) > 1 else tickers[0],
         period=period,
         interval=interval,
