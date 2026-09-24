@@ -18,19 +18,24 @@ import csv
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from ui import theme
 from ui.services import journal_feed
 
 try:  # pragma: no cover - the desk has pyqtgraph; a headless box may not.
@@ -82,6 +87,199 @@ def group_chart_series(rows: list[dict]) -> tuple[list[str], list[float], int]:
     return labels, values, dropped
 
 
+#: The stat cards, in reading order: (key, title). Two rows of six.
+STAT_CARDS = (
+    ("net_pnl", "Net P&L"),
+    ("closed", "Closed trades"),
+    ("win_rate", "Win rate"),
+    ("profit_factor", "Profit factor"),
+    ("expectancy", "Expectancy / trade"),
+    ("avg_r", "Average R"),
+    ("avg_win", "Average win"),
+    ("avg_loss", "Average loss"),
+    ("largest_win", "Largest win"),
+    ("largest_loss", "Largest loss"),
+    ("max_drawdown", "Max drawdown"),
+    ("streaks", "Longest streaks"),
+)
+
+#: Keys whose sign colours the card green or red.
+SIGNED_CARD_KEYS = {"net_pnl", "expectancy", "avg_r"}
+
+#: Rows of the Long vs Short table: (label, stats key, kind).
+SIDE_ROWS = (
+    ("Closed trades", "closed", "count"),
+    ("Net P&L", "net_pnl", "money"),
+    ("Win rate", "win_rate", "pct"),
+    ("Profit factor", "profit_factor", "ratio"),
+    ("Expectancy / trade", "expectancy", "money"),
+    ("Average win", "avg_win", "money"),
+    ("Average loss", "avg_loss", "money"),
+    ("Largest win", "largest_win", "money"),
+    ("Largest loss", "largest_loss", "money"),
+    ("Max drawdown", "max_drawdown", "money"),
+)
+
+#: The breakdown table's columns.
+GROUP_TABLE_COLUMNS = (
+    "Bucket", "Trades", "Closed", "Win rate", "Profit factor",
+    "Avg win", "Avg loss", "Expectancy", "Net",
+)
+
+#: What each breakdown means, shown as the picker's tooltip and under the chart.
+GROUP_DESCRIPTIONS = {
+    "my setups": "Tags you typed or confirmed. Machine guesses are never counted here.",
+    "provisional setups": "Tags a machine applied that you have not confirmed yet.",
+    "auto tags": "The automatic tags on every trade (time of day, shape, scanner match).",
+    "weekday (entry)": "Day of the week you ENTERED the trade, market time.",
+    "hour of entry": "Hour you entered the trade, New York time.",
+    "hold time": "How long each closed trade was held.",
+}
+
+
+def format_stat(value, kind: str) -> str:
+    """Text for one stat value; a dash when unknown."""
+    if value is None:
+        return "-"
+    if kind == "count":
+        return f"{int(value):,}"
+    if kind == "pct":
+        return f"{float(value):.0%}"
+    if kind == "ratio":
+        return f"{float(value):.2f}"
+    if kind == "r":
+        return f"{float(value):+.2f}R"
+    return f"{float(value):+,.2f}"
+
+
+def stat_card_values(stats: dict) -> dict[str, tuple[str, str, str]]:
+    """(value text, detail text, tone) for every card in `STAT_CARDS`."""
+    wins = int(stats.get("wins") or 0)
+    losses = int(stats.get("losses") or 0)
+    breakeven = int(stats.get("breakeven") or 0)
+    open_count = max(0, int(stats.get("trades") or 0) - int(stats.get("closed") or 0)
+                     - int(stats.get("unpriced") or 0))
+    avg_win, avg_loss = stats.get("avg_win"), stats.get("avg_loss")
+    payoff = stats.get("payoff_ratio")
+
+    def tone(key):
+        value = stats.get(key)
+        if value is None or key not in SIGNED_CARD_KEYS | {"largest_win", "largest_loss",
+                                                           "avg_win", "avg_loss", "max_drawdown"}:
+            return "none"
+        if abs(float(value)) < 0.005:
+            return "flat"
+        return "win" if float(value) > 0 else "loss"
+
+    pf = stats.get("profit_factor")
+    values = {
+        "net_pnl": (format_stat(stats.get("net_pnl"), "money"), "", tone("net_pnl")),
+        "closed": (
+            format_stat(stats.get("closed"), "count"),
+            f"{wins}W {losses}L" + (f" {breakeven} even" if breakeven else "")
+            + (f", {open_count} open" if open_count else ""),
+            "none",
+        ),
+        "win_rate": (format_stat(stats.get("win_rate"), "pct"), f"{wins} of {stats.get('closed') or 0}", "none"),
+        "profit_factor": (
+            format_stat(pf, "ratio"),
+            "gross win / gross loss" if pf is not None else "no losing trades yet",
+            "none" if pf is None else ("win" if pf >= 1 else "loss"),
+        ),
+        "expectancy": (format_stat(stats.get("expectancy"), "money"), "net per closed trade", tone("expectancy")),
+        "avg_r": (
+            format_stat(stats.get("avg_r"), "r"),
+            f"{stats.get('r_trades') or 0} trade(s) with a planned risk",
+            tone("avg_r"),
+        ),
+        "avg_win": (format_stat(avg_win, "money"), "", tone("avg_win")),
+        "avg_loss": (
+            format_stat(avg_loss, "money"),
+            f"win/loss size {payoff:.2f}" if payoff is not None else "",
+            tone("avg_loss"),
+        ),
+        "largest_win": (format_stat(stats.get("largest_win"), "money"), "", tone("largest_win")),
+        "largest_loss": (format_stat(stats.get("largest_loss"), "money"), "", tone("largest_loss")),
+        "max_drawdown": (
+            format_stat(stats.get("max_drawdown"), "money"),
+            "worst drop from a peak",
+            "loss" if (stats.get("max_drawdown") or 0) < -0.005 else "none",
+        ),
+        "streaks": (
+            f"{int(stats.get('max_win_streak') or 0)}W / {int(stats.get('max_loss_streak') or 0)}L",
+            _current_streak_text(int(stats.get("current_streak") or 0)),
+            "none",
+        ),
+    }
+    return values
+
+
+def _current_streak_text(streak: int) -> str:
+    if streak > 0:
+        return f"now {streak} win(s) in a row"
+    if streak < 0:
+        return f"now {-streak} loss(es) in a row"
+    return ""
+
+
+def group_table_row(stats: dict) -> list[str]:
+    """One breakdown bucket as the table's text cells, in `GROUP_TABLE_COLUMNS` order."""
+    from journal_analytics import group_expectancy
+
+    expectancy = stats.get("expectancy")
+    if expectancy is None and "expectancy" not in stats:
+        expectancy = group_expectancy(stats)
+    net = stats.get("net_pnl")
+    return [
+        str(stats.get("label", "")),
+        str(stats.get("trades", 0)),
+        str(stats.get("closed", 0)),
+        format_stat(stats.get("win_rate"), "pct"),
+        format_stat(stats.get("profit_factor"), "ratio"),
+        format_stat(stats.get("avg_win") if net is not None else None, "money"),
+        format_stat(stats.get("avg_loss") if net is not None else None, "money"),
+        format_stat(expectancy, "money"),
+        format_stat(net, "money"),
+    ]
+
+
+def _repolish(widget: QWidget) -> None:
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+
+
+class StatCard(QFrame):
+    """One headline number with a title and a small detail line."""
+
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("JournalStatCard")
+        self.setProperty("tone", "none")
+        self._tone = "none"
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("JournalStatTitle")
+        self.value_label = QLabel("-")
+        self.value_label.setObjectName("JournalStatValue")
+        self.detail_label = QLabel("")
+        self.detail_label.setObjectName("JournalStatDetail")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(1)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.value_label)
+        layout.addWidget(self.detail_label)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def show_value(self, value: str, detail: str, tone: str) -> None:
+        self.value_label.setText(value)
+        self.detail_label.setText(detail)
+        if tone != self._tone:
+            self._tone = tone
+            self.setProperty("tone", tone)
+            _repolish(self)
+
+
 class _WalkawayWorker(QThread):
     """Walk-away replays daily bars, so it never runs on the GUI thread."""
 
@@ -109,7 +307,13 @@ class AnalyticsTab(QFrame):
         self._worker: _WalkawayWorker | None = None
 
         self.headline = QLabel("")
+        self.headline.setObjectName("SectionTitle")
         self.headline.setWordWrap(True)
+        self.currency_badge = QLabel("")
+        self.currency_badge.setObjectName("JournalCurrencyBadge")
+        self.currency_badge.setToolTip(
+            "Every money number on this tab is in this currency. Change it in the header."
+        )
         self.currency_note = QLabel("")
         self.currency_note.setObjectName("CurrencyNote")
         self.currency_note.setWordWrap(True)
@@ -121,32 +325,54 @@ class AnalyticsTab(QFrame):
         self.evidence_note.setObjectName("MutedLabel")
         self.evidence_note.setWordWrap(True)
 
-        self.curve = pg.PlotWidget(title="Cumulative P&L") if PYQTGRAPH_AVAILABLE else QLabel(
+        cards_host = QWidget()
+        cards_grid = QGridLayout(cards_host)
+        cards_grid.setContentsMargins(0, 0, 0, 0)
+        cards_grid.setSpacing(6)
+        self.stat_cards: dict[str, StatCard] = {}
+        for index, (key, title) in enumerate(STAT_CARDS):
+            card = StatCard(title)
+            cards_grid.addWidget(card, index // 6, index % 6)
+            self.stat_cards[key] = card
+
+        self.side_table = QTableWidget(len(SIDE_ROWS), 2)
+        self.side_table.setHorizontalHeaderLabels(["Long", "Short"])
+        self.side_table.setVerticalHeaderLabels([label for label, _key, _kind in SIDE_ROWS])
+        self.side_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.side_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        self.curve = pg.PlotWidget(
+            title="Cumulative P&L (closed trades)", background=theme.color("bg_panel")
+        ) if PYQTGRAPH_AVAILABLE else QLabel(
             "pyqtgraph is not installed; the table below carries the same numbers."
         )
         self.curve_table = QTableWidget(0, 2)
         self.curve_table.setHorizontalHeaderLabels(["Date", "Cumulative"])
         self.curve_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.curve_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.curve_table.setMinimumHeight(200)
 
-        self.groups_table = QTableWidget(0, 6)
-        self.groups_table.setHorizontalHeaderLabels(
-            ["Group", "Bucket", "Trades", "Win rate", "Profit factor", "Net"]
-        )
+        self.groups_table = QTableWidget(0, len(GROUP_TABLE_COLUMNS))
+        self.groups_table.setHorizontalHeaderLabels(list(GROUP_TABLE_COLUMNS))
         self.groups_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.groups_table.setMinimumHeight(240)
+        self.groups_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         # R7's deferred per-group charts, built 2026-08-18. The table below
         # already carries every number; what was missing is the SHAPE, and the
         # n count beside each bar is what stops a two-trade setup from looking
         # like a finding.
         self.group_picker = QComboBox()
+        self.group_picker.setMinimumWidth(220)
         self.group_chart = (
-            pg.PlotWidget(title="Net by group")
+            pg.PlotWidget(title="Net by group", background=theme.color("bg_panel"))
             if PYQTGRAPH_AVAILABLE
             else QLabel("pyqtgraph is not installed; the table below carries the same numbers.")
         )
+        self.group_chart.setFixedHeight(260)
         self.group_note = QLabel("")
         self.group_note.setWordWrap(True)
-        self.group_picker.currentTextChanged.connect(lambda _text: self._draw_group_chart())
+        self.group_picker.currentTextChanged.connect(lambda _text: self._on_group_picked())
         self.group_csv_button = QPushButton("Export this breakdown CSV")
         self.group_csv_button.clicked.connect(self._export_group_csv)
         self._summary: dict = {}
@@ -165,25 +391,55 @@ class AnalyticsTab(QFrame):
         buttons.addWidget(self.group_csv_button)
         buttons.addStretch(1)
 
+        title_row = QHBoxLayout()
+        title_row.addWidget(self.headline, 1)
+        title_row.addWidget(self.currency_badge, 0, Qt.AlignTop)
+
+        side_box = QVBoxLayout()
+        side_title = QLabel("Long vs Short")
+        side_title.setObjectName("SectionTitle")
+        side_box.addWidget(side_title)
+        side_box.addWidget(self.side_table, 1)
+        curve_host = QWidget()
+        curve_host.setFixedHeight(400)
+        curve_row = QHBoxLayout(curve_host)
+        curve_row.setContentsMargins(0, 0, 0, 0)
+        curve_row.addWidget(self.curve, 3)
+        curve_row.addLayout(side_box, 2)
+
         picker_row = QHBoxLayout()
-        picker_row.addWidget(QLabel("Chart group"))
+        breakdown_title = QLabel("Break down by")
+        breakdown_title.setObjectName("SectionTitle")
+        picker_row.addWidget(breakdown_title)
         picker_row.addWidget(self.group_picker)
         picker_row.addStretch(1)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.headline)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 4, 8, 0)
+        layout.addLayout(title_row)
         layout.addWidget(self.currency_note)
+        layout.addWidget(cards_host)
         layout.addWidget(self.evidence_note)
-        layout.addWidget(self.curve, 3)
-        layout.addWidget(self.curve_table, 1)
-        layout.addWidget(QLabel("By group"))
+        layout.addWidget(curve_host)
         layout.addLayout(picker_row)
-        layout.addWidget(self.group_chart, 2)
         layout.addWidget(self.group_note)
-        layout.addWidget(self.groups_table, 2)
+        layout.addWidget(self.group_chart)
+        layout.addWidget(self.groups_table)
+        daily_title = QLabel("Cumulative P&L by date")
+        daily_title.setObjectName("SectionTitle")
+        layout.addWidget(daily_title)
+        layout.addWidget(self.curve_table)
         layout.addLayout(buttons)
         layout.addWidget(self.walkaway_output)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setWidget(body)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.scroll)
 
     def reload(self) -> None:
         try:
@@ -191,8 +447,19 @@ class AnalyticsTab(QFrame):
         except Exception as exc:  # noqa: BLE001
             self.statusChanged.emit(f"analytics unavailable: {exc}")
             return
+        from journal_analytics import (
+            direction_split_stats,
+            pnl_currency_label,
+            time_breakdown_groups,
+            trade_performance_stats,
+        )
+
         mode = self._header.currency_mode
         summary = journal_feed.analytics_summary(trades, mode)
+        raw = [trade.raw for trade in trades]
+        pnl_key = str(summary.get("pnl_key") or "")
+        currency = pnl_currency_label(mode, pnl_key, summary.get("currencies"))
+        self.currency_badge.setText(f"Numbers in {currency}")
 
         overall = summary.get("overall") or {}
         net = overall.get("net_pnl")
@@ -200,7 +467,7 @@ class AnalyticsTab(QFrame):
         self.headline.setText(
             f"{overall.get('trades', 0)} trades, {overall.get('closed', 0)} closed"
             + (f", win rate {win_rate:.0%}" if win_rate is not None else "")
-            + (f", net {net:,.2f}" if net is not None else ", net not shown")
+            + (f", net {net:,.2f} {currency}" if net is not None else ", net not shown")
         )
         # The refusal, rendered. `pnl_note` carries the reason the total is
         # missing, and a missing total with a reason beats a wrong one.
@@ -212,6 +479,17 @@ class AnalyticsTab(QFrame):
             )
         self.currency_note.setText(note)
         self.currency_note.setVisible(bool(note))
+
+        stats = trade_performance_stats(raw, pnl_key)
+        for key, (value, detail, tone) in stat_card_values(stats).items():
+            self.stat_cards[key].show_value(value, detail, tone)
+        sides = direction_split_stats(raw, pnl_key)
+        for column, side in enumerate(("LONG", "SHORT")):
+            side_stats = sides.get(side) or {}
+            for row, (_label, key, kind) in enumerate(SIDE_ROWS):
+                item = QTableWidgetItem(format_stat(side_stats.get(key), kind))
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.side_table.setItem(row, column, item)
 
         # ST5.4: the coverage line and the refusal that stands where a "best
         # personal setup" would otherwise be named. In memory over the rows
@@ -228,33 +506,35 @@ class AnalyticsTab(QFrame):
         if PYQTGRAPH_AVAILABLE:
             self.curve.clear()
             if points:
-                self.curve.plot(list(range(len(points))), [value for _day, value in points])
+                self.curve.plot(
+                    list(range(len(points))),
+                    [value for _day, value in points],
+                    pen=pg.mkPen(theme.color("accent"), width=2),
+                )
         self.curve_table.setRowCount(len(points))
         for row, (day, value) in enumerate(points):
             self.curve_table.setItem(row, 0, QTableWidgetItem(day))
             self.curve_table.setItem(row, 1, QTableWidgetItem(f"{value:,.2f}"))
 
+        summary["groups"] = {**(summary.get("groups") or {}), **time_breakdown_groups(raw, pnl_key)}
         self._summary = summary
-        groups = summary.get("groups") or {}
-        self._sync_group_picker(groups)
+        self._sync_group_picker(summary["groups"])
+        self._on_group_picked()
+
+    def _on_group_picked(self) -> None:
         self._draw_group_chart()
-        rows = [
-            (group_name, stats)
-            for group_name, buckets in groups.items()
-            for stats in (buckets or [])
-        ]
+        self._fill_groups_table()
+
+    def _fill_groups_table(self) -> None:
+        """The picked breakdown only, so confirmed and provisional tags never share a table."""
+        rows = group_breakdown_rows(self._summary, self.group_picker.currentText())
         self.groups_table.setRowCount(len(rows))
-        for row, (group_name, stats) in enumerate(rows):
-            values = [
-                group_name,
-                stats.get("label", ""),
-                stats.get("trades", 0),
-                f"{stats['win_rate']:.0%}" if stats.get("win_rate") is not None else "-",
-                f"{stats['profit_factor']:.2f}" if stats.get("profit_factor") is not None else "-",
-                f"{stats['net_pnl']:,.2f}" if stats.get("net_pnl") is not None else "-",
-            ]
-            for column, text in enumerate(values):
-                self.groups_table.setItem(row, column, QTableWidgetItem(str(text)))
+        for row, stats in enumerate(rows):
+            for column, text in enumerate(group_table_row(stats)):
+                item = QTableWidgetItem(text)
+                if column:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.groups_table.setItem(row, column, item)
 
     def _sync_group_picker(self, groups: dict) -> None:
         names = list(groups.keys())
@@ -265,6 +545,10 @@ class AnalyticsTab(QFrame):
         self.group_picker.blockSignals(True)
         self.group_picker.clear()
         self.group_picker.addItems(names)
+        for index, name in enumerate(names):
+            description = GROUP_DESCRIPTIONS.get(name)
+            if description:
+                self.group_picker.setItemData(index, description, Qt.ToolTipRole)
         if current in names:
             self.group_picker.setCurrentText(current)
         self.group_picker.blockSignals(False)
@@ -281,13 +565,20 @@ class AnalyticsTab(QFrame):
         if PYQTGRAPH_AVAILABLE:
             self.group_chart.clear()
             if values:
-                bars = pg.BarGraphItem(x=list(range(len(values))), height=values, width=0.6)
+                brushes = [
+                    pg.mkBrush(theme.color("long" if value >= 0 else "short")) for value in values
+                ]
+                bars = pg.BarGraphItem(
+                    x=list(range(len(values))), height=values, width=0.6, brushes=brushes
+                )
                 self.group_chart.addItem(bars)
                 self.group_chart.getAxis("bottom").setTicks([list(enumerate(labels))])
             self.group_chart.setTitle(f"Net by {group_name}" if group_name else "Net by group")
         parts = []
         if coverage_note:
             parts.append(coverage_note)
+        if GROUP_DESCRIPTIONS.get(group_name):
+            parts.append(GROUP_DESCRIPTIONS[group_name])
         if not rows:
             parts.append("No trades in this range for that grouping.")
         else:
@@ -334,12 +625,18 @@ class AnalyticsTab(QFrame):
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             target = Path(JOURNAL_EXPORT_DIR) / f"journal_by_{slug}_{stamp}.csv"
             target.parent.mkdir(parents=True, exist_ok=True)
-            columns = ["label", "trades", "closed", "win_rate", "profit_factor", "net_pnl"]
+            from journal_analytics import group_expectancy
+
+            columns = [
+                "label", "trades", "closed", "win_rate", "profit_factor",
+                "avg_win", "avg_loss", "expectancy", "net_pnl",
+            ]
             with target.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
                 writer.writeheader()
                 for row in rows:
-                    writer.writerow({column: row.get(column, "") for column in columns})
+                    values = {**row, "expectancy": row.get("expectancy", group_expectancy(row))}
+                    writer.writerow({column: values.get(column, "") for column in columns})
         except Exception as exc:  # noqa: BLE001
             self.statusChanged.emit(f"breakdown export failed: {exc}")
             return

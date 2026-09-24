@@ -1969,11 +1969,11 @@ def _is_closed(row: dict[str, Any]) -> bool:
     return str(row.get("status") or "").upper() == "CLOSED"
 
 
-def _close_order_key(row: dict[str, Any]) -> tuple[str, str]:
-    return (
-        str(row.get("closed_at") or row.get("trade_date") or row.get("opened_at") or ""),
-        str(row.get("trade_id") or ""),
-    )
+def close_order_key(row: dict[str, Any]) -> tuple[str, str]:
+    """Sort key putting closed trades in the order they actually closed."""
+    moment = _market_moment(row.get("closed_at") or row.get("trade_date") or row.get("opened_at"))
+    stamp = moment.isoformat() if moment is not None else str(row.get("trade_date") or "")
+    return (stamp, str(row.get("trade_id") or ""))
 
 
 def trade_r_multiple(row: dict[str, Any]) -> float | None:
@@ -1993,7 +1993,7 @@ def trade_performance_stats(
     A closed trade with no value in ``pnl_key`` is counted in ``unpriced`` and
     left out of every figure - missing is unknown, never zero.
     """
-    closed = sorted((row for row in trades if _is_closed(row)), key=_close_order_key)
+    closed = sorted((row for row in trades if _is_closed(row)), key=close_order_key)
     values: list[float] = []
     unpriced = 0
     for row in closed:

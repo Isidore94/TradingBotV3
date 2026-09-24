@@ -876,12 +876,13 @@ def equity_curve(trades: list[JournalTrade], currency_mode: str = "CAD") -> list
     """
     points: list[tuple[str, float]] = []
     running = 0.0
-    from journal_analytics import resolve_pnl_key
+    from journal_analytics import close_order_key, resolve_pnl_key
 
     pnl_key, _note = resolve_pnl_key([trade.raw for trade in trades], currency_mode)
     if not pnl_key:
         return []
-    for trade in sorted(trades, key=lambda item: (item.trade_date, item.trade_id)):
+    # Within one day, trades step the curve in the order they closed.
+    for trade in sorted(trades, key=lambda item: (item.trade_date, close_order_key(item.raw))):
         if not trade.is_closed:
             continue
         value = trade.raw.get(pnl_key)
