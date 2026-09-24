@@ -177,3 +177,72 @@ def split_sessions(volumes_by_day: Iterable[tuple[object, float]]) -> list[list[
         except (TypeError, ValueError):
             sessions[-1].append(0.0)
     return sessions
+
+
+#: Daily relative volume: a day's volume over the 50-day volume average that
+#: includes it - the same rule as the high-rvol D1 levels
+#: (``master_avwap_lib.levels.compute_relvol``, ``HV_VOL_SMA``).
+D1_RVOL_LOOKBACK = 50
+
+#: The trader's colour bands (2026-09-23), lowest first: (floor, band name).
+#: under 1.0 white, 1.0-1.5 yellow, 1.5-2.0 orange, 2.0-3.0 green, 3.0+ blue.
+RVOL_BANDS: tuple[tuple[float, str], ...] = (
+    (3.0, "extreme"),
+    (2.0, "strong"),
+    (1.5, "hot"),
+    (1.0, "warm"),
+    (0.0, "quiet"),
+)
+
+
+def rvol_band(value: float | None) -> str | None:
+    """The colour band name for an rvol reading, or None when unmeasured."""
+    if value is None:
+        return None
+    try:
+        reading = float(value)
+    except (TypeError, ValueError):
+        return None
+    if reading != reading or reading < 0:
+        return None
+    for floor, name in RVOL_BANDS:
+        if reading >= floor:
+            return name
+    return None
+
+
+def daily_rvol_series(
+    volumes: Sequence[float | None], *, lookback: int = D1_RVOL_LOOKBACK
+) -> list[float | None]:
+    """Per-day volume / average volume of the ``lookback`` days ending there.
+
+    None where the window is short or holds a missing (zero or unreadable)
+    volume: an unmeasured day is unknown, never quiet.
+    """
+    lookback = max(1, int(lookback))
+    clean: list[float | None] = []
+    for raw in volumes:
+        try:
+            value = float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            value = None
+        clean.append(value if value is not None and value > 0 else None)
+    out: list[float | None] = []
+    total = 0.0
+    missing = 0
+    for index, value in enumerate(clean):
+        if value is None:
+            missing += 1
+        else:
+            total += value
+        if index >= lookback:
+            dropped = clean[index - lookback]
+            if dropped is None:
+                missing -= 1
+            else:
+                total -= dropped
+        if index + 1 < lookback or missing or value is None or total <= 0:
+            out.append(None)
+        else:
+            out.append(value / (total / lookback))
+    return out

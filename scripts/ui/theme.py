@@ -48,6 +48,7 @@ THEMES: dict[str, dict[str, str]] = {
         "chart_white": "#F5F7FA",
         "chart_blue": "#3B82F6",
         "chart_green": "#34D399",
+        "chart_orange": "#FB923C",
     },
     "light": {
         "bg_app": "#F4F6F9",
@@ -83,11 +84,21 @@ THEMES: dict[str, dict[str, str]] = {
         "chart_white": "#1F2937",
         "chart_blue": "#1D4ED8",
         "chart_green": "#059669",
+        "chart_orange": "#EA580C",
     },
 }
 
 
 _ACTIVE_THEME = "dark"
+
+#: Relative-volume colour bands (``rvol.RVOL_BANDS``) -> theme tokens.
+RVOL_BAND_TOKENS: dict[str, str] = {
+    "quiet": "chart_white",
+    "warm": "chart_yellow",
+    "hot": "chart_orange",
+    "strong": "chart_green",
+    "extreme": "chart_blue",
+}
 
 
 def tokens(theme_name: str) -> dict[str, str]:
@@ -156,6 +167,14 @@ def color(name: str, theme_name: str | None = None) -> str:
     """
     values = THEMES.get(theme_name or _ACTIVE_THEME, THEMES["dark"])
     return values.get(name, values["neutral"])
+
+
+def rvol_color(value: float | None, theme_name: str | None = None) -> str | None:
+    """The trader's rvol band colour for ``value``, or None when unmeasured."""
+    from rvol import rvol_band
+
+    band = rvol_band(value)
+    return color(RVOL_BAND_TOKENS[band], theme_name) if band else None
 
 
 def with_alpha(hex_color: str, alpha: float) -> str:

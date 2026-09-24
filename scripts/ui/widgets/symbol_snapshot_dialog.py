@@ -268,6 +268,46 @@ def _levels_fingerprint(levels: list) -> tuple:
     )
 
 
+def rvol_label_html(reading, *, with_bar: bool = False) -> str:
+    """``RVOL 1.84×`` in its band colour; a muted dash when unmeasured.
+
+    ``with_bar`` adds the last completed 5-minute bar's own rvol (M5 header).
+    """
+    muted = theme.color("text_muted")
+    value = getattr(reading, "session_rvol", None)
+    if value is None:
+        return f"<span style='color:{muted};'>RVOL –</span>"
+    colour = theme.rvol_color(value) or muted
+    text = f"<b style='color:{colour};'>RVOL {value:.2f}×</b>"
+    bar_value = getattr(reading, "last_bar_rvol", None)
+    if with_bar and bar_value is not None:
+        bar_colour = theme.rvol_color(bar_value) or muted
+        text += f" <span style='color:{bar_colour};'>· bar {bar_value:.2f}×</span>"
+    session_date = getattr(reading, "session_date", None)
+    if session_date is not None and session_date != datetime.now().date():
+        text += f" <span style='color:{muted};'>{session_date:%m/%d}</span>"
+    return text
+
+
+def rvol_tooltip(reading) -> str:
+    if reading is None or reading.session_rvol is None:
+        return (
+            "Relative volume: not measured yet (needs 5+ earlier sessions of "
+            "5-minute bars from yfinance)."
+        )
+    lines = [
+        f"Today's volume so far vs the same time of day over the last "
+        f"{reading.prior_sessions} sessions.",
+        "White under 1 · yellow 1-1.5 · orange 1.5-2 · green 2-3 · blue 3+.",
+    ]
+    if reading.last_bar_rvol is not None and reading.last_bar_at is not None:
+        lines.append(
+            f"Last 5-min bar ({reading.last_bar_at:%H:%M}): {reading.last_bar_rvol:.2f}×"
+        )
+    lines.append(f"Updated {reading.fetched_at:%H:%M}.")
+    return "\n".join(lines)
+
+
 class SymbolSnapshotWidget(QWidget):
     """Reusable embedded D1-over-M5 snapshot view.
 
@@ -389,6 +429,13 @@ class SymbolSnapshotWidget(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
         header_layout.addWidget(self.d1_legend, 1)
+        # Intraday relative volume (trader, 2026-09-23): today's volume so far
+        # vs the same time of day, coloured by the same bands as the D1 volume.
+        self.rvol_label = QLabel()
+        self.rvol_label.setObjectName("RvolLabel")
+        self.rvol_label.setTextFormat(Qt.TextFormat.RichText)
+        self.rvol_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        header_layout.addWidget(self.rvol_label, 0)
         header_layout.addWidget(self.paint_lines_button, 0)
 
         self.d1_chart = CandleChart()
@@ -441,6 +488,12 @@ class SymbolSnapshotWidget(QWidget):
         m5_header_layout.setContentsMargins(0, 0, 0, 0)
         m5_header_layout.setSpacing(6)
         m5_header_layout.addWidget(self.m5_legend, 1)
+        # The same intraday reading, plus the last 5-minute bar's own rvol.
+        self.m5_rvol_label = QLabel()
+        self.m5_rvol_label.setObjectName("RvolLabel")
+        self.m5_rvol_label.setTextFormat(Qt.TextFormat.RichText)
+        self.m5_rvol_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        m5_header_layout.addWidget(self.m5_rvol_label, 0)
         m5_header_layout.addWidget(self.m5_older_button, 0)
         self.m5_chart = CandleChart()
         # M5 candle clicks used to be inert: only the D1 chart was wired, so an
@@ -494,6 +547,7 @@ class SymbolSnapshotWidget(QWidget):
             self._m5_older_failed = False
             self._m5_view_restore = None
         self._symbol = symbol
+        self._request_rvol()
         # Retained so refresh() can re-pull the M5 cache on a timer tick. The
         # hosting panel passes a fresh bot on its own ticks; this reference
         # only carries the popup between clicks.
@@ -513,6 +567,8 @@ class SymbolSnapshotWidget(QWidget):
         """Drop the rendered state that belongs only to the previous symbol."""
         self._d1 = {}
         self._m5 = {}
+        self.rvol_label.clear()
+        self.m5_rvol_label.clear()
         # Clearing levels first also clears a selected painted level.  Clear
         # the earnings payload explicitly because its markers are retained by
         # CandleChart independently of the D1 bars.
@@ -575,6 +631,35 @@ class SymbolSnapshotWidget(QWidget):
             view_sessions=self._d1_view_sessions,
         )
         return True
+
+    # -- intraday relative volume ----------------------------------------
+    def _rvol_service(self):
+        """The shared rvol service, subscribed once per widget."""
+        from ui.services.intraday_rvol_service import shared_rvol_service
+
+        service = shared_rvol_service()
+        if getattr(self, "_rvol_subscribed", None) is not service:
+            service.readingReady.connect(self._on_rvol_ready)
+            self._rvol_subscribed = service
+        return service
+
+    def _request_rvol(self) -> None:
+        """Show the cached reading now and ask for a fresh one (never blocks)."""
+        if not self._symbol:
+            return
+        service = self._rvol_service()
+        service.request(self._symbol)
+        self._show_rvol(service.reading(self._symbol))
+
+    def _on_rvol_ready(self, symbol: str) -> None:
+        if symbol and symbol == self._symbol:
+            self._show_rvol(self._rvol_service().reading(symbol))
+
+    def _show_rvol(self, reading) -> None:
+        self.rvol_label.setText(rvol_label_html(reading))
+        self.rvol_label.setToolTip(rvol_tooltip(reading))
+        self.m5_rvol_label.setText(rvol_label_html(reading, with_bar=True))
+        self.m5_rvol_label.setToolTip(rvol_tooltip(reading))
 
     # -- intraday history (WS-CH item 2) ---------------------------------
     def _drawn_m5_sessions(self) -> int:
@@ -753,6 +838,7 @@ class SymbolSnapshotWidget(QWidget):
             return False
         if bot is not None:
             self._bot = bot
+        self._request_rvol()
         return self._request_snapshots()
 
     @staticmethod
