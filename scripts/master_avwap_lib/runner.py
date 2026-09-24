@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from copy import deepcopy
@@ -418,10 +419,54 @@ def record_d1_environment(ib=None, *, now, path=None, benchmarks=None) -> dict:
     return labels
 
 
+def process_memory_mb() -> tuple[float, float] | None:
+    """(peak working set, working set) of this process in MB; None off Windows or on error."""
+    try:
+        if sys.platform != "win32":
+            return None
+        import ctypes
+        from ctypes import wintypes
+
+        class _ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        counters = _ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi = ctypes.windll.psapi
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_ProcessMemoryCounters),
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+            return None
+        mb = 1024.0 * 1024.0
+        return counters.PeakWorkingSetSize / mb, counters.WorkingSetSize / mb
+    except Exception:
+        return None
+
+
 def _log_phase_duration(label: str, since: float) -> float:
     """Log wall-clock seconds elapsed for a run_master phase; returns a fresh mark."""
     now = time.perf_counter()
     logging.info("[run_master timing] %-26s %6.1fs", label, now - since)
+    memory = process_memory_mb()
+    if memory is not None:
+        logging.info("[run_master memory] %s peak_ws=%.0f ws=%.0f", label, memory[0], memory[1])
     try:
         from diagnostics import get_active_recorder
 
