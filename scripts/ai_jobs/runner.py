@@ -160,6 +160,11 @@ def market_calendar_describe(now: datetime | None = None) -> str:
 
 def _already_recorded_no_session(job: str, session_date: str, *, path=None) -> bool:
     """Has this job already logged a no-session skip for this session?"""
+    return _already_flagged(job, session_date, "no_session", path=path)
+
+
+def _already_flagged(job: str, session_date: str, flag: str, *, path=None) -> bool:
+    """Has this job already logged a row carrying ``flag`` for this session?"""
     target = path if path is not None else ledger.ledger_path(create=False)
     try:
         rows = ledger._read_rows(target)
@@ -168,9 +173,13 @@ def _already_recorded_no_session(job: str, session_date: str, *, path=None) -> b
     return any(
         str(row.get("job") or "") == job
         and str(row.get("session_date") or "") == session_date
-        and row.get("no_session")
+        and row.get(flag)
         for row in rows
     )
+
+
+#: Ledger flag on a model slot skipped because the night-start Ollama probe failed.
+MODEL_DOWN_FLAG = "model_down"
 
 
 def run_slots(
@@ -181,6 +190,7 @@ def run_slots(
     only: str = "",
     ledger_path=None,
     session_override: str = "",
+    probe: Callable[[], tuple[bool, str]] | None = None,
 ) -> RunReport:
     """Run every due slot once. Never raises: a crash here is a lost night.
 
@@ -188,6 +198,10 @@ def run_slots(
     THAT day": it applies only to the slot named by ``only`` and reaches
     nothing else. `session_date_for`, `night_kind` and every other slot's
     already-done check are untouched, so a redo cannot re-key the night.
+
+    ``probe`` (P1-3 3e) is called once, before the first model slot this
+    firing would run; if it fails, model slots are skipped (or run their
+    deterministic half) and the night is deterministic only.
     """
 
     # ONE runner at a time on this machine (2026-08-28). The scheduled task
@@ -214,6 +228,7 @@ def run_slots(
                 only=only,
                 ledger_path=ledger_path,
                 session_override=session_override,
+                probe=probe,
             )
     except LocalLockUnavailable as exc:
         # The lock reports both "someone else holds it" and "this box has no
@@ -238,6 +253,7 @@ def run_slots(
                 only=only,
                 ledger_path=ledger_path,
                 session_override=session_override,
+                probe=probe,
             )
         logging.info(
             "AI jobs: another run is already in progress on this machine; leaving it "
@@ -254,6 +270,7 @@ def _run_slots_locked(
     only: str = "",
     ledger_path=None,
     session_override: str = "",
+    probe: Callable[[], tuple[bool, str]] | None = None,
 ) -> RunReport:
     """The body of :func:`run_slots`, always under the machine-local lock."""
     from market_calendar import SessionCalendarError
@@ -290,6 +307,8 @@ def _run_slots_locked(
     # being deliberate, it runs even when the session is already covered.
     manual = bool(force)
     already = set() if force else ledger.completed_jobs(session_date, path=ledger_path)
+    #: (answered, detail) once the Ollama probe has run this firing.
+    probe_state: tuple[bool, str] | None = None
 
     for slot in slots:
         if only and slot.name != only:
@@ -427,6 +446,35 @@ def _run_slots_locked(
             logging.info("AI job %s skipped: %s", slot.name, reason)
             continue
 
+        # P1-3 3e: one Ollama probe per firing, before the first model slot.
+        model_down = ""
+        if slot.uses_model and not model_free and probe is not None:
+            if probe_state is None:
+                probe_state = _run_probe(probe, session_date, ledger_path)
+            if not probe_state[0]:
+                model_down = probe_state[1]
+                if slot.model_free_kwargs:
+                    model_free = True
+                else:
+                    reason = (
+                        f"Ollama probe failed ({model_down}); model slot skipped, "
+                        "deterministic work only tonight"
+                    )
+                    if not _already_flagged(
+                        slot.name, run_session, MODEL_DOWN_FLAG, path=ledger_path
+                    ):
+                        row = ledger.record(
+                            job=slot.name,
+                            status=ledger.STATUS_SKIPPED,
+                            session_date=run_session,
+                            reason=reason,
+                            path=ledger_path,
+                            extra={MODEL_DOWN_FLAG: True},
+                        )
+                        report.results.append(row)
+                    logging.warning("AI job %s skipped: %s", slot.name, reason)
+                    continue
+
         started = datetime.now().astimezone()
         clock = time.perf_counter()
         try:
@@ -472,7 +520,16 @@ def _run_slots_locked(
                 # coverage. Degraded and failed keep their own meaning.
                 status = ledger.STATUS_MANUAL
             row_reason = _failure_reason(slot.name, status, outcome)
-            if model_free:
+            if model_down:
+                # Facts only because the model is down: degraded, so a later
+                # firing with a live model retries the narration.
+                if status in (ledger.STATUS_OK, ledger.STATUS_MANUAL):
+                    status = ledger.STATUS_DEGRADED
+                row_reason = (
+                    f"{row_reason} [Ollama probe failed ({model_down}): deterministic "
+                    "facts only, narration left out]"
+                ).strip()
+            elif model_free:
                 # A reader of this row must never take it for the night's full
                 # digest. It says what ran and what was left out, in that order.
                 row_reason = (
@@ -522,6 +579,29 @@ def _run_slots_locked(
             break
 
     return report
+
+
+def _run_probe(
+    probe: Callable[[], tuple[bool, str]], session_date: str, ledger_path
+) -> tuple[bool, str]:
+    """Call the probe once and write its ledger row. Never raises."""
+    from ai_jobs import ollama_probe
+
+    try:
+        answered, detail = probe()
+    except Exception as exc:  # noqa: BLE001 - a crashing probe is a failed probe
+        answered, detail = False, f"probe crashed ({type(exc).__name__}: {exc})"
+    try:
+        ollama_probe.record_probe(
+            bool(answered), str(detail), session_date=session_date, path=ledger_path
+        )
+    except Exception:  # noqa: BLE001 - a lost probe row must not cost the night
+        logging.exception("AI jobs: the Ollama probe row was not written.")
+    if answered:
+        logging.info("AI jobs: Ollama probe ok: %s", detail)
+    else:
+        logging.warning("AI jobs: Ollama probe failed: %s", detail)
+    return bool(answered), str(detail)
 
 
 def _failure_reason(job: str, status: str, outcome: Mapping[str, Any]) -> str:

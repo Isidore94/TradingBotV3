@@ -114,6 +114,20 @@ def _with_tracker_write_line(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
 
+def _with_ai_night_lines(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add the night AI chain lines (Ollama probe, budget, journal import); audit worker only."""
+    if not isinstance(payload, dict):
+        return payload
+    try:
+        from operations_audit import ai_night_lines
+
+        merged = dict(payload)
+        merged["ai_night_lines"] = list(ai_night_lines())
+        return merged
+    except Exception:
+        return payload
+
+
 # UNKNOWN is its own tone on purpose: "we never measured this" must not look
 # like "we measured this and it is bad" (plan.md sec 6.3 - the page must show
 # UNKNOWN when evidence is absent, and must not convert missing telemetry into
@@ -353,6 +367,7 @@ class HealthPanel(QFrame):
             payload = build_operations_audit()
             payload = _with_warehouse_checks(payload)
             payload = _with_tracker_write_line(payload)
+            payload = _with_ai_night_lines(payload)
         except Exception as exc:
             payload = {
                 "status": "unhealthy",
@@ -437,6 +452,9 @@ class HealthPanel(QFrame):
         tracker_line = str(self._payload.get("tracker_last_written_line") or "").strip()
         if tracker_line:
             meta_text += f" | {tracker_line}"
+        for night_line in self._payload.get("ai_night_lines") or ():
+            if str(night_line).strip():
+                meta_text += f" | {str(night_line).strip()}"
         self.meta_label.setText(meta_text)
 
         checks = [item for item in self._payload.get("checks", []) if isinstance(item, dict)]

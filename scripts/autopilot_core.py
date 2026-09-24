@@ -4268,6 +4268,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
             "industry_line",
             "tracker_line",
             "tracker_write_failure_line",
+            "ai_night_line",
         )
         if payload.get(key)
     ]

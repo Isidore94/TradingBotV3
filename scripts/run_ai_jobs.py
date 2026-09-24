@@ -350,8 +350,14 @@ def main(argv: list[str] | None = None) -> int:
             summary_scopes=scopes or None,
             session_date=_session_date_or_blank(),
         )
+    from ai_jobs import ollama_probe
+
     report = runner.run_slots(
-        slots, force=args.force, only=args.slot, session_override=session_override
+        slots,
+        force=args.force,
+        only=args.slot,
+        session_override=session_override,
+        probe=ollama_probe.probe_local_model,
     )
     logging.info("%s", report.summary())
 
