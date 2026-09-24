@@ -49,6 +49,7 @@ from chart_watch import (
     D1_EVENT_KINDS,
     D1_LEVEL_KINDS,
     D1_PULLBACK_KINDS,
+    d1_event_fired_detail,
     D1_SIDED_KINDS,
     WATCH_KINDS,
     any_bounce_levels,
@@ -8359,10 +8360,7 @@ class AlertCenterPanel(QFrame):
                 "d1_event_fired",
                 symbol=hit.watch.symbol,
                 side=getattr(hit, "resolved_side", "") or "",
-                detail={
-                    "kind": hit.watch.kind,
-                    "message": str(hit.message or ""),
-                },
+                detail=d1_event_fired_detail(hit),
             )
             self.add_alert(self._chart_watch_alert(hit, moment))
 

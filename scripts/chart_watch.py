@@ -1531,7 +1531,10 @@ def _trendline_candidate_is_frozen(candidate: Mapping[str, Any] | None) -> bool:
         start_date = _parse_date(candidate.get("start_date"))
         end_date = _parse_date(candidate.get("end_date"))
         lookback_end = _parse_date(candidate.get("lookback_end"))
-        break_date = _parse_date(candidate.get("break_date"))
+        raw_break_date = str(candidate.get("break_date") or "").strip()
+        break_date = _parse_date(raw_break_date) if raw_break_date else None
+        if raw_break_date and break_date is None:
+            return False
         start_price = float(candidate.get("start_price"))
         end_price = float(candidate.get("end_price"))
         price = float(candidate.get("current_line_price"))
@@ -1880,6 +1883,29 @@ def _evaluate_sma_break_retest(
     return None
 
 
+def _d1_event_details(kind: str, levels: Mapping[str, Any]) -> dict[str, Any]:
+    """Rule version and measure a fire carries into the evidence log (range_breakout only)."""
+    if kind != "range_breakout":
+        return {}
+    atr = levels.get("atr14")
+    base_range = levels.get("base_range_20d")
+    return {
+        "rule_version": RANGE_BREAKOUT_RULE_VERSION,
+        "atr14": atr,
+        "base_range_20d": base_range,
+        "range_atr_ratio": (base_range / atr) if atr and base_range is not None else None,
+    }
+
+
+def d1_event_fired_detail(hit: ChartWatchTrigger) -> dict[str, Any]:
+    """The `d1_event_fired` review-log detail: kind, message and the trigger's details."""
+    return {
+        **dict(hit.details or {}),
+        "kind": hit.watch.kind,
+        "message": str(hit.message or ""),
+    }
+
+
 def evaluate_d1_event_watch(
     watch: D1EventWatch,
     m5_bars: Iterable[Mapping[str, Any]] | None,
@@ -1951,6 +1977,7 @@ def evaluate_d1_event_watch(
                     bar_dt=stamp,
                     message=f"{message} (M5 bar {stamp:%m/%d %H:%M})",
                     resolved_side=side,
+                    details=_d1_event_details(watch.kind, levels),
                 )
 
     for bar in daily:
@@ -1976,6 +2003,7 @@ def evaluate_d1_event_watch(
                 bar_dt=_naive(bar["dt"]),
                 message=f"{message} (D1 bar {bar_date:%m/%d})",
                 resolved_side=side,
+                details=_d1_event_details(watch.kind, levels),
             )
     return None
 
