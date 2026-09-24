@@ -424,7 +424,7 @@ def test_swing_slots_are_refused_outside_the_window(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Evening prepares the morning and then stops
+# Evening scans like DESK all morning (trader, 2026-09-23)
 # ---------------------------------------------------------------------------
 
 
@@ -450,33 +450,32 @@ def test_evening_runs_the_early_slot(monkeypatch):
     assert started == ["07:00"]
 
 
-def test_evening_refuses_every_slot_after_the_early_one(monkeypatch):
+def test_evening_keeps_running_slots_after_the_early_one(monkeypatch):
+    """EVENING scans like DESK all morning (trader, 2026-09-23); it used to
+    stop after the early slot."""
     service, started = _slot_service(
         monkeypatch,
         profile=AUTO_PROFILE_EVENING,
         slots=["07:00", "07:30", "09:00", "10:00"],
-        done=["07:00"],
+        done=["07:00", "07:30", "09:00"],
     )
     service._maybe_run_swing_slot(THURSDAY.replace(hour=10, minute=5))
-    assert started == []
-    assert any("not run" in line for line in service._logged)
+    assert started == ["10:00"]
+    assert not any("not run" in line for line in service._logged)
 
 
-def test_evening_marks_refused_slots_done_so_the_wrapup_still_runs(monkeypatch):
-    """Refused slots are RESOLVED, not left pending.
-
-    `after_close_wrapup_due` requires every slot to be done, so leaving them
-    pending would silently cancel the whole after-close wrap-up - the universe
-    rebuild, the learning refresh and the integrity calibration - for the day.
-    """
-    service, _started = _slot_service(
+def test_evening_never_marks_a_slot_done_that_it_did_not_run(monkeypatch):
+    """The old rule resolved EVENING's later slots unrun. Now the due slot
+    runs, and nothing is marked done before its scan finishes."""
+    service, started = _slot_service(
         monkeypatch,
         profile=AUTO_PROFILE_EVENING,
         slots=["07:00", "07:30", "09:00"],
-        done=["07:00"],
+        done=["07:00", "07:30"],
     )
     service._maybe_run_swing_slot(THURSDAY.replace(hour=9, minute=5))
-    assert set(service._state["slots_done"]) == {"07:00", "07:30", "09:00"}
+    assert started == ["09:00"]
+    assert set(service._state["slots_done"]) == {"07:00", "07:30"}
 
 
 def test_desk_runs_the_ordinary_hourly_slots(monkeypatch):
@@ -487,23 +486,16 @@ def test_desk_runs_the_ordinary_hourly_slots(monkeypatch):
     assert started == ["09:00"]
 
 
-def test_evening_skips_the_open_self_build_without_a_sticky_marker(monkeypatch):
-    """The skip must not survive the wake-up flip to DESK.
-
-    Recording it as `watchlist_built_at` would suppress the build for the rest
-    of the morning - the one time the trader actually wants it.
-    """
+def test_evening_builds_the_open_watchlists_like_desk(monkeypatch):
+    """EVENING scans like DESK (trader, 2026-09-23): the open self-build runs."""
     service = _bare_service(profile=AUTO_PROFILE_EVENING)
     _pin_window(monkeypatch, True)
     monkeypatch.setattr(core, "minutes_since_open", lambda *_a, **_k: 45.0)
-    monkeypatch.setattr("threading.Thread", _NeverStartThread)
+    monkeypatch.setattr(core, "universe_is_stale", lambda *_a, **_k: False)
+    built: list[bool] = []
+    service._start_watchlist_build = lambda *, manual: built.append(manual)  # type: ignore[method-assign]
     service._maybe_build_watchlists(THURSDAY.replace(hour=7, minute=15))
-    assert not service._state.get("watchlist_built_at")
-    assert any("Evening mode" in line for line in service._logged)
-
-    # Logged once a day, not once every 30-second tick.
-    service._maybe_build_watchlists(THURSDAY.replace(hour=7, minute=16))
-    assert len(service._logged) == 1
+    assert built == [False]
 
 
 # ---------------------------------------------------------------------------

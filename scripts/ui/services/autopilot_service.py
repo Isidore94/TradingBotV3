@@ -355,9 +355,10 @@ class AutopilotService(QObject):
         self._save_state()
         if profile == AUTO_PROFILE_EVENING:
             self._log(
-                "Auto profile -> EVENING (sleep-in mode: same discovery, picks stage "
-                "silently, 07:00 early swing scan + morning briefing, price alerts "
-                "push to the phone at urgent priority)."
+                "Auto profile -> EVENING (sleep-in mode: scans like DESK all morning, "
+                "picks stage, the review queue stays empty, 07:00 early swing scan + "
+                "morning briefing; price alerts and the SPY alarm ring the phone "
+                "every 10 seconds until you change mode)."
             )
         else:
             self._log(f"Auto profile -> {profile} (same decisions; presentation/cadence only).")
@@ -896,21 +897,6 @@ class AutopilotService(QObject):
             return
         if since_open > core.AUTOPILOT_WATCHLIST_BUILD_DEADLINE_MINUTES:
             return
-        if self._profile == AUTO_PROFILE_EVENING:
-            # Evening prepares the morning and then stops (trader rule
-            # 2026-08-14). Deliberately NOT recorded as `watchlist_built_at`:
-            # a skip marker would survive the wake-up flip to DESK and suppress
-            # the build for the rest of the morning, which is the one time the
-            # trader does want it.
-            today = now.date()
-            if getattr(self, "_evening_build_skip_logged_date", None) != today:
-                self._evening_build_skip_logged_date = today
-                self._log(
-                    "Evening mode: skipping the open watchlist self-build - Evening "
-                    "runs the early swing slot, the strength checks and the briefing, "
-                    "then stops. Flip to DESK to build."
-                )
-            return
         # The build only makes sense off a fresh pool - wait for the rebuild.
         if self._universe_rebuild_running or core.universe_is_stale(now):
             return
@@ -1150,9 +1136,6 @@ class AutopilotService(QObject):
         ]
         if not due:
             return
-        due = self._evening_filter_slots(due, now, done)
-        if not due:
-            return
         slot = due[-1]
         ledger = getattr(self, "_job_ledger", None)
         if ledger is not None:
@@ -1179,8 +1162,7 @@ class AutopilotService(QObject):
     def _resolve_slots_after_window(self, now: datetime) -> None:
         """Once the window has closed, resolve slots that never ran.
 
-        Same reasoning as Evening's refused slots: `after_close_wrapup_due`
-        requires EVERY slot to be done, so slots still pending after the window
+        `after_close_wrapup_due` requires EVERY slot to be done, so slots still pending after the window
         closes - a desk that crashed, or slept through the close as this one did
         for 4h39m on 2026-08-11 - would stay pending forever and silently cancel
         the whole after-close wrap-up for the day.
@@ -1210,40 +1192,6 @@ class AutopilotService(QObject):
             f"{len(pending)} swing slot(s) never run ({', '.join(pending)}) - "
             "marking them resolved so the after-close wrap-up still runs."
         )
-
-    def _evening_filter_slots(
-        self, due: list[str], now: datetime, done: set[str]
-    ) -> list[str]:
-        """Evening runs the open+30 slot only; the rest are resolved, not run.
-
-        Trader rule 2026-08-14: Evening's job is to have the day ready on waking
-        and to wake the trader if the market moves - not to scan all day. The
-        refused slots are marked DONE rather than left pending on purpose. They
-        are not going to run, and `after_close_wrapup_due` requires every slot
-        to be done, so leaving them pending would silently cancel the after-close
-        wrap-up (universe rebuild, learning refresh, integrity calibration) for
-        the whole day.
-        """
-        if self._profile != AUTO_PROFILE_EVENING:
-            return due
-        try:
-            early = core.autopilot_evening_early_slot(now)
-        except Exception:
-            # Fail open, as everywhere else here: a session lookup this cannot
-            # answer must not be the reason a slot is silently dropped.
-            logging.exception("Evening early-slot lookup failed; running slots as scheduled.")
-            return due
-        refused = [slot for slot in due if slot != early]
-        if refused:
-            done.update(refused)
-            self._state["slots_done"] = sorted(done)
-            self._save_state()
-            self._log(
-                f"Evening mode: swing slot(s) {', '.join(refused)} not run - Evening "
-                f"scans the {early} early slot and the strength checks, then stops "
-                "for the day. Flip to DESK to resume the hourly schedule."
-            )
-        return [slot for slot in due if slot == early]
 
     def _start_swing_scan(self, *, slot_label: str, update_setup_tracker: bool, mark_slots: list[str]) -> None:
         if self._scan_service.running:
