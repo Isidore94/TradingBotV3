@@ -35,6 +35,7 @@ the caller reads the JSON. The JSON is still written first and stays the truth.
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import logging
@@ -412,8 +413,16 @@ def load_fresh_payload(json_path: Path | str, db_path: Path | str | None = None)
                     payload[name] = json.loads(meta[name])
             for name, text in conn.execute("SELECT name, payload FROM sections"):
                 payload[name] = json.loads(text)
-            for section in RECORD_SECTIONS:
-                payload[section] = _ordered_section(conn, meta, section)
+            # ~18k json.loads calls build millions of containers; cyclic GC passes
+            # over them cost ~5 s on the live tracker and free nothing.
+            gc_was_enabled = gc.isenabled()
+            gc.disable()
+            try:
+                for section in RECORD_SECTIONS:
+                    payload[section] = _ordered_section(conn, meta, section)
+            finally:
+                if gc_was_enabled:
+                    gc.enable()
         finally:
             conn.close()
     except Exception as exc:
