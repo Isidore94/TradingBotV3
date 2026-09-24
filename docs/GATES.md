@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #203 RVOL: on a live chart review the D1 volume columns show white/yellow/orange/green/blue, and `RVOL x.xx×` on the D1 header matches TC2000's 5-minute RVOL within ~0.2 during the session; no desk lag flipping names [trader]
 - #202 Night AI + research fixes: after tonight's run the ledger shows `day_review_narration` ok, `journal_enrichment` without "missing required field(s)", `digests/narration/<date>.json` best_candidates naming tickers from the facts `names` block, and `measured_report_<date>.md` swing rows as tickers; after `backfill-benchmark-d1 --apply` then `backfill-market-context --apply`, v2 `setup_market_context` D1/M5 rows are known [lead]
 - #201 Ask the AI: type a question on Weekend Prep > Week Review; next morning it shows answered with citations, a session citation opens that day in Day Review, no claim is shown without a citation, and `records/week-<W>-frontier.md` exists; the ledger row `week_questions` names answered/pending [trader + lead]
 - #200 Rule loop: after a recap sets a rule, the next morning the status bar shows `Rule: <text>` (tooltip = streak) and Research > Market Prep shows `Today's rule: <text> (streak N)`; a trade that breaks a checkable rule gets ONE "kept it or broke it?" on a later Mentor card, never more than 3 a day [trader]
