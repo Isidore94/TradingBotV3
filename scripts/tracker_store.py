@@ -394,17 +394,107 @@ def tracker_write_failure_line(state: dict | None = None) -> str:
     )
 
 
+#: The only two stale tracker copies ``--prune-copies`` may delete (decided 2026-09-24).
+PRUNABLE_COPY_NAMES = (
+    "master_avwap_setup_tracker.json.bak",
+    "master_avwap_setup_tracker.sqlite.damaged-20260905T200233",
+)
+
+
+def prune_copies(
+    directory: Path | str,
+    names: Iterable[str] = PRUNABLE_COPY_NAMES,
+    *,
+    delete: bool = False,
+    ledger_path: Path | None = None,
+) -> tuple[int, dict]:
+    """List (and with ``delete`` remove) the stale tracker copies in ``directory``.
+
+    Returns ``(exit_code, report)``. Any name outside ``PRUNABLE_COPY_NAMES``, or a
+    target that is not a plain file, refuses the whole run: exit 2, nothing deleted,
+    no ledger row. A listing or deletion writes one keyless ``tracker_prune_copies``
+    ledger row.
+    """
+    root = Path(directory)
+    requested = [str(name) for name in names]
+    report: dict[str, Any] = {"dir": str(root), "delete": bool(delete), "candidates": [], "refused": []}
+    for name in requested:
+        target = root / name
+        if name not in PRUNABLE_COPY_NAMES or Path(name).name != name:
+            report["refused"].append({"name": name, "reason": "not one of the two prunable copies"})
+        elif target.is_symlink() or (target.exists() and not target.is_file()):
+            report["refused"].append({"name": name, "reason": "not a plain file"})
+    if report["refused"]:
+        return 2, report
+    for name in requested:
+        target = root / name
+        exists = target.is_file()
+        report["candidates"].append(
+            {"name": name, "exists": exists, "bytes": target.stat().st_size if exists else 0, "deleted": False}
+        )
+    exit_code = 0
+    if delete:
+        for item in report["candidates"]:
+            if not item["exists"]:
+                continue
+            try:
+                (root / item["name"]).unlink()
+                item["deleted"] = True
+            except OSError as exc:
+                item["error"] = str(exc)
+                exit_code = 1
+    report["total_bytes"] = sum(int(item["bytes"]) for item in report["candidates"])
+    try:
+        from job_ledger import append_keyless_event
+
+        append_keyless_event(
+            "tracker_prune_copies",
+            {
+                "dir": str(root),
+                "names": [item["name"] for item in report["candidates"] if item["exists"]],
+                "bytes": report["total_bytes"],
+                "deleted": bool(delete) and exit_code == 0,
+                "deleted_names": [item["name"] for item in report["candidates"] if item["deleted"]],
+            },
+            path=ledger_path,
+        )
+    except Exception:
+        logging.warning("tracker_prune_copies ledger row not written.", exc_info=True)
+    return exit_code, report
+
+
 def _main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
 
     parser = argparse.ArgumentParser(description="Setup tracker SQLite mirror: verify parity or mirror once.")
-    parser.add_argument("command", choices=("verify", "mirror", "counts"))
+    parser.add_argument("command", nargs="?", choices=("verify", "mirror", "counts"))
     parser.add_argument("--json", default="", help="tracker JSON path (default: the desk's)")
     parser.add_argument("--db", default="", help="SQLite path (default: beside the JSON)")
+    parser.add_argument(
+        "--prune-copies",
+        action="store_true",
+        help="list the two stale tracker copies (.bak, .damaged-20260905T200233); delete only with --yes",
+    )
+    parser.add_argument("--yes", action="store_true", help="with --prune-copies: actually delete")
+    parser.add_argument("--dry-run", action="store_true", help="with --prune-copies: list only (the default)")
+    parser.add_argument("--tracker-dir", default="", help="with --prune-copies: directory (default: the tracker's)")
+    parser.add_argument("--name", action="append", default=None, help="with --prune-copies: one copy name")
     args = parser.parse_args(argv)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from project_paths import MASTER_AVWAP_SETUP_TRACKER_FILE
+
+    if args.prune_copies:
+        directory = Path(args.tracker_dir) if args.tracker_dir else Path(MASTER_AVWAP_SETUP_TRACKER_FILE).parent
+        code, report = prune_copies(
+            directory,
+            args.name or PRUNABLE_COPY_NAMES,
+            delete=bool(args.yes) and not args.dry_run,
+        )
+        print(json.dumps(report, indent=2))
+        return code
+    if not args.command:
+        parser.error("a command (verify, mirror, counts) or --prune-copies is required")
 
     json_path = Path(args.json) if args.json else Path(MASTER_AVWAP_SETUP_TRACKER_FILE)
     store = TrackerStore(Path(args.db) if args.db else default_store_path())
