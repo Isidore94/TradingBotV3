@@ -428,6 +428,7 @@ def test_d1_event_kind_labels_cover_all_buttons():
         "d1_line_pullback",
         "range_breakout",
         "line_break",
+        "sma_break_retest",
     }
     assert all(label for label in D1_EVENT_KINDS.values())
     # Kind namespaces never collide - the feed badge resolves across all three.

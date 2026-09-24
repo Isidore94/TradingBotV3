@@ -104,6 +104,7 @@ D1_KINDS = frozenset(
         "trendline_break",
         "range_breakout",
         "line_break",
+        "sma_break_retest",
     }
 )
 

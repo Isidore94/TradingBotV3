@@ -128,6 +128,7 @@ D1_EVENT_KINDS = {
     "d1_line_pullback": "Pullback to D1 line",
     "range_breakout": "Range breakout",
     "line_break": "Line break",
+    "sma_break_retest": "SMA break + 15EMA retest",
 }
 
 # The parts each grouped kind checks, in order; the fire names the part that hit.
@@ -141,7 +142,7 @@ D1_MENU_GROUPS = (
     ("BREAKOUT — it was tight, let it go", ("range_breakout",)),
     (
         "LINE BREAK — it crossed a big line",
-        ("line_break", "trendline_break", "trendline_break_retest"),
+        ("line_break", "sma_break_retest", "trendline_break", "trendline_break_retest"),
     ),
 )
 D1_MENU_LABELS = {"pullback": "Pullback (fast)"}
@@ -177,7 +178,11 @@ D1_EXTENSION_KINDS = frozenset(
 # Multi-bar thesis watches are armed only by the trader.  They are neither an
 # automatic Focus pullback nor a one-bar extension. `d1_line_pullback` repeats
 # the auto lane's own kinds, so it stays out of that lane (no double fire).
-D1_TRADER_ONLY_KINDS = frozenset({"trendline_break_retest", "d1_line_pullback"})
+D1_TRADER_ONLY_KINDS = frozenset(
+    {"trendline_break_retest", "d1_line_pullback", "sma_break_retest"}
+)
+# Kinds that carry the trader's side on the stored watch.
+D1_SIDED_KINDS = frozenset({"trendline_break", "trendline_break_retest", "sma_break_retest"})
 D1_PULLBACK_KINDS = (
     frozenset(D1_EVENT_KINDS) - D1_EXTENSION_KINDS - D1_TRADER_ONLY_KINDS
 )
@@ -187,6 +192,19 @@ TRENDLINE_BREAK_RETEST_ATR_LENGTH = 14
 TRENDLINE_RETEST_TOUCH_ATR = 0.25
 TRENDLINE_RETEST_CONFIRM_ATR = 0.10
 TRENDLINE_RETEST_MAX_BARS = 10
+# The scan's not-yet-broken line types: H- sits above price (a long breaks up
+# through it), L+ below (a short breaks down through it).
+INCOMING_TRENDLINE_TYPES = {"LONG": "H-", "SHORT": "L+"}
+
+# sma_break_retest: a completed D1 close through SMA50/100/200 in the side's
+# direction, then a later session (<= 10 after) tags the D1 15EMA and closes back.
+SMA_BREAK_RETEST_RULE_VERSION = "sma_break_retest_v1"
+SMA_BREAK_RETEST_MAX_SESSIONS = 10
+
+
+def incoming_trendline_type(side: str) -> str:
+    """The incoming scan-line type a veto on this side waits to break."""
+    return INCOMING_TRENDLINE_TYPES.get(str(side or "").strip().upper(), "")
 
 # Which of the derived AVWAPE levels each kind watches ("" = the line).
 _AVWAPE_KIND_BANDS = {
@@ -1133,6 +1151,8 @@ def d1_event_watch_to_dict(watch: D1EventWatch) -> dict:
         "kind": watch.kind,
         "armed_at": _naive(watch.armed_at).isoformat(),
     }
+    if watch.kind == "sma_break_retest":
+        payload["side"] = str(watch.side or "").strip().upper()
     if watch.kind in {"trendline_break", "trendline_break_retest"}:
         payload.update(
             {
@@ -1157,6 +1177,13 @@ def d1_event_watch_from_dict(payload: Mapping[str, Any]) -> D1EventWatch | None:
         return None
     if not symbol or kind not in D1_EVENT_KINDS:
         return None
+    if kind == "sma_break_retest":
+        return D1EventWatch(
+            symbol=symbol,
+            kind=kind,
+            armed_at=armed_at,
+            side=str(payload.get("side") or "").strip().upper(),
+        )
     if kind not in {"trendline_break", "trendline_break_retest"}:
         return D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
     candidate = payload.get("trendline_candidate")
@@ -1517,11 +1544,10 @@ def _trendline_candidate_is_frozen(candidate: Mapping[str, Any] | None) -> bool:
         or start_date is None
         or end_date is None
         or lookback_end is None
-        or break_date is None
+        or (break_date is None and kind not in INCOMING_TRENDLINE_TYPES.values())
         or start_date >= end_date
         or end_date > lookback_end
-        or break_date < end_date
-        or break_date > lookback_end
+        or (break_date is not None and (break_date < end_date or break_date > lookback_end))
         or line_id != f"d1_trendline:{kind}:{start_date.isoformat()}_{end_date.isoformat()}"
     ):
         return False
@@ -1743,6 +1769,117 @@ def _evaluate_frozen_trendline_break_retest(
     return None
 
 
+def _sma_cross(levels: Mapping[str, Any], prev_close: float, close: float, side: str) -> int | None:
+    """The first SMA period a close crossed in the side's direction, or None."""
+    for period in D1_BREAK_SMA_PERIODS:
+        sma = levels.get(f"sma{period}")
+        if sma is None:
+            continue
+        if side == "LONG" and prev_close < sma < close:
+            return period
+        if side == "SHORT" and prev_close > sma > close:
+            return period
+    return None
+
+
+def _evaluate_sma_break_retest(
+    watch: D1EventWatch,
+    daily: list[dict],
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    moment: datetime,
+    levels_cache: dict | None,
+) -> ChartWatchTrigger | None:
+    """Completed D1 close through an SMA, then a later-session 15EMA retest.
+
+    The break is a completed daily close after the arm date. The retest is a
+    completed D1 bar or today's completed M5 bar, in a LATER session no more
+    than SMA_BREAK_RETEST_MAX_SESSIONS after the break, that tags the D1 15EMA
+    and closes back on the break side. A daily close back through the broken
+    SMA, or an expired window, resets to waiting-for-break.
+    """
+    side = str(watch.side or "").strip().upper()
+    if side not in {"LONG", "SHORT"}:
+        return None
+    want = side.lower()
+    armed_at = _naive(watch.armed_at)
+    break_period: int | None = None
+    break_date: date | None = None
+    sessions_since = 0
+
+    def _hit(stamp: datetime, retest: tuple[str, str, float], ema_label: str) -> ChartWatchTrigger:
+        _message, _side, price = retest
+        return ChartWatchTrigger(
+            watch=watch,  # type: ignore[arg-type]
+            price=price,
+            bar_dt=stamp,
+            message=(
+                f"SMA{break_period} break + 15EMA retest ({want}): broke "
+                f"{break_date:%m/%d}, tagged the D1 15EMA and closed back at "
+                f"{price:.2f} ({ema_label})"
+            ),
+            resolved_side=want,
+            details={
+                "rule_version": SMA_BREAK_RETEST_RULE_VERSION,
+                "sma_period": break_period,
+                "break_date": break_date.isoformat() if break_date else "",
+                "retest_date": stamp.date().isoformat(),
+            },
+        )
+
+    for bar in daily:
+        bar_date = _naive(bar["dt"]).date()
+        if bar_date <= armed_at.date() or bar_date >= moment.date():
+            continue
+        levels = _cached_d1_event_levels(levels_cache, daily, bar_date, None)
+        prev_close = levels.get("prev_close")
+        try:
+            high, low, close = float(bar["high"]), float(bar["low"]), float(bar["close"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if prev_close is None:
+            continue
+        if break_period is not None:
+            sessions_since += 1
+            sma = levels.get(f"sma{break_period}")
+            failed = sma is not None and (close < sma if side == "LONG" else close > sma)
+            if failed or sessions_since > SMA_BREAK_RETEST_MAX_SESSIONS:
+                break_period, break_date, sessions_since = None, None, 0
+            else:
+                retest = _d1_event_hit("ema15_reject", levels, prev_close, high, low, close)
+                if retest is not None and retest[1] == want:
+                    return _hit(_naive(bar["dt"]), retest, f"D1 bar {bar_date:%m/%d}")
+                continue
+        period = _sma_cross(levels, float(prev_close), close, side)
+        if period is not None:
+            break_period, break_date, sessions_since = period, bar_date, 0
+
+    if break_period is None or sessions_since + 1 > SMA_BREAK_RETEST_MAX_SESSIONS:
+        return None
+    session_bars = _session_bars(m5_bars, moment)
+    completed = [bar for bar in session_bars if _bar_end(bar) <= moment]
+    if not completed:
+        return None
+    session = _naive(completed[0]["dt"]).date()
+    if session <= break_date:
+        return None
+    levels = _cached_d1_event_levels(levels_cache, daily, session, None)
+    for bar in completed:
+        if _bar_end(bar) <= armed_at:
+            continue
+        retest = _d1_event_hit(
+            "ema15_reject",
+            levels,
+            None,
+            float(bar["high"]),
+            float(bar["low"]),
+            float(bar["close"]),
+        )
+        if retest is not None and retest[1] == want:
+            stamp = _naive(bar["dt"])
+            return _hit(stamp, retest, f"M5 bar {stamp:%m/%d %H:%M}")
+    return None
+
+
 def evaluate_d1_event_watch(
     watch: D1EventWatch,
     m5_bars: Iterable[Mapping[str, Any]] | None,
@@ -1784,6 +1921,8 @@ def evaluate_d1_event_watch(
         # Like the direct break, this is completed-D1 evidence only.  The
         # break, retest and confirmation must be three distinct bars.
         return _evaluate_frozen_trendline_break_retest(watch, daily, moment)
+    if watch.kind == "sma_break_retest":
+        return _evaluate_sma_break_retest(watch, daily, m5_bars, moment, levels_cache)
 
     session_bars = _session_bars(m5_bars, moment)
     completed = [bar for bar in session_bars if _bar_end(bar) <= moment]
