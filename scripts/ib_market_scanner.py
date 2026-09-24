@@ -36,6 +36,8 @@ ABOVE_PRICE = 5.0
 ABOVE_VOLUME = 200_000
 INSTRUMENT = "STK"
 LOCATION_CODE = "STK.US.MAJOR"
+#: Common stock only: drops ETFs and ETNs from the scans.
+STOCK_TYPE_FILTER = "CORP"
 
 CLIENT_ID_SETTING = "movers_ib_scanner_client_id"
 DEFAULT_CLIENT_ID = 9135
@@ -86,6 +88,16 @@ def resolve_connection() -> tuple[str, int, int]:
     return host, port, client_id if client_id > 0 else DEFAULT_CLIENT_ID
 
 
+#: IB suffixes for preferreds, warrants, units and rights ("DBRG PRJ", "XYZ WS").
+_NON_COMMON_SUFFIXES = ("PR", "WS", "U", "RT", "W")
+
+
+def is_common_symbol(symbol: str) -> bool:
+    """False for an IB symbol whose class suffix marks a preferred, warrant, unit or right."""
+    parts = str(symbol or "").strip().upper().split()
+    return len(parts) < 2 or not any(parts[-1].startswith(s) for s in _NON_COMMON_SUFFIXES)
+
+
 def ib_symbol_to_yahoo(symbol: str) -> str:
     """IB writes share classes with a space ("BRK B"); Yahoo and the lists use a dash."""
     return "-".join(str(symbol or "").strip().upper().split())
@@ -130,7 +142,8 @@ class _ScannerApp(EWrapper, EClient):  # type: ignore[misc]
 
     def scannerData(self, reqId, rank, contractDetails, distance, benchmark, projection, legsStr=""):  # noqa: N802,N803
         contract = getattr(contractDetails, "contract", None)
-        symbol = ib_symbol_to_yahoo(getattr(contract, "symbol", "") or "")
+        raw = getattr(contract, "symbol", "") or ""
+        symbol = ib_symbol_to_yahoo(raw) if is_common_symbol(raw) else ""
         with self._lock:
             if reqId in self._rows and symbol:
                 self._rows[reqId].append((int(rank), symbol))
@@ -268,6 +281,7 @@ class IBMarketScanner:
                 sub.numberOfRows = int(rows)
                 sub.abovePrice = float(above_price)
                 sub.aboveVolume = int(above_volume)
+                sub.stockTypeFilter = STOCK_TYPE_FILTER
                 done = app.expect(req_id)
                 try:
                     app.reqScannerSubscription(req_id, sub, [], [])

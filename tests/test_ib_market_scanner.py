@@ -88,6 +88,7 @@ def test_scanner_rows_come_back_in_rank_order_per_scan_and_are_cancelled():
     sub = app.subs[0]
     assert (sub.instrument, sub.locationCode, sub.numberOfRows) == ("STK", "STK.US.MAJOR", 50)
     assert sub.abovePrice == ims.ABOVE_PRICE and sub.aboveVolume == ims.ABOVE_VOLUME
+    assert sub.stockTypeFilter == "CORP"
     assert app.cancelled == [1, 2, 3]
     assert ims.pooled_symbols(result) == ["AAA", "BRK-B", "CCC", "ZZZ"]
 
@@ -153,3 +154,9 @@ def test_scanner_module_never_places_orders_or_asks_for_data():
     forbidden = {"placeOrder", "reqHistoricalData", "reqMktData", "reqRealTimeBars",
                  "reqTickByTickData", "reqIds", "cancelOrder"}
     assert not (called & forbidden)
+
+
+def test_preferreds_warrants_units_and_rights_are_dropped():
+    assert ims.is_common_symbol("AAPL") and ims.is_common_symbol("BRK B")
+    for raw in ("DBRG PRJ", "DBRG PRI", "XYZ WS", "ABCD U", "EFG RT"):
+        assert not ims.is_common_symbol(raw), raw
