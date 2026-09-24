@@ -10,6 +10,7 @@ exactly as it was, and every proxy must drive the REAL control.
 from __future__ import annotations
 
 import os
+import time
 import sys
 from pathlib import Path
 
@@ -54,6 +55,15 @@ def window():
     made.resize(2560, 1400)
     made.show()
     _pump(40)
+    # Stop the movers poll and let any refresh in flight land, so its board
+    # update cannot change the widget tree between two snapshots.
+    made.movers_service.shutdown()
+    for _ in range(200):
+        if not made.movers_service.running:
+            break
+        _app.processEvents()
+        time.sleep(0.01)
+    _pump(20)
     yield made
     try:
         made.close()
