@@ -9,16 +9,19 @@ QObject only orchestrates, mirroring AutopilotService.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
 import price_alerts
 import push_notify
+from project_paths import PRICE_ALERT_RING_FILE
 
 _POLL_INTERVAL_MS = 60_000
 # Extended-hours coverage on a Pacific clock: ET premarket opens 04:00 ET =
@@ -89,12 +92,16 @@ class PriceAlertService(QObject):
         self._auto_mode_cache: tuple[float, str] | None = None
         #: EVENING-fired alert messages that ring until the mode changes.
         self._ringing: list[str] = []
+        #: The day the ring list belongs to; it never rings into the next day.
+        self._ring_date: date | None = None
         self._ring_lock = threading.Lock()
         self._ring_sending = False
         self._ring_timer = QTimer(self)
         self._ring_timer.setInterval(RING_INTERVAL_MS)
         self._ring_timer.timeout.connect(self._ring_tick)
         self._ringRequested.connect(self._start_ringing)
+        if self.engine_enabled:
+            self._restore_ringing()
         self._timer = QTimer(self)
         self._timer.setInterval(_POLL_INTERVAL_MS)
         self._timer.timeout.connect(self.check_now)
@@ -220,8 +227,43 @@ class PriceAlertService(QObject):
 
     def _stop_ringing(self) -> None:
         with self._ring_lock:
+            had_ring = bool(self._ringing)
             self._ringing = []
         self._ring_timer.stop()
+        if had_ring or Path(PRICE_ALERT_RING_FILE).exists():
+            self._save_ringing([])
+
+    def _save_ringing(self, messages: list[str]) -> None:
+        """Persist the ring list for this machine and day. Never raises."""
+        path = Path(PRICE_ALERT_RING_FILE)
+        try:
+            if not messages:
+                path.unlink(missing_ok=True)
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"date": date.today().isoformat(), "messages": list(messages)}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        except OSError:
+            logging.warning("PRICE ALERT ring list not saved", exc_info=True)
+
+    def _restore_ringing(self) -> None:
+        """At startup: resume today's ring in EVENING, otherwise clear it."""
+        path = Path(PRICE_ALERT_RING_FILE)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        messages = []
+        if isinstance(payload, dict) and payload.get("date") == date.today().isoformat():
+            messages = [str(m) for m in payload.get("messages") or [] if str(m)]
+        if not messages or self._current_auto_mode() != RING_MODE:
+            self._save_ringing([])
+            return
+        with self._ring_lock:
+            self._ringing = messages
+            self._ring_date = date.today()
+        self._ring_timer.start()
+        logging.info("PRICE ALERT ring resumed after restart (%d alerts)", len(messages))
 
     def _ring_tick(self) -> None:
         """Every 10 s in EVENING: one combined push of the fired alerts.
@@ -229,7 +271,8 @@ class PriceAlertService(QObject):
         Stops the moment the mode is not EVENING. Single-flight and off the
         Qt thread; a failed send is simply tried again on the next tick.
         """
-        if self._current_auto_mode() != RING_MODE:
+        if self._current_auto_mode() != RING_MODE or self._ring_date != date.today():
+            # The mode changed, or the day rolled: the ring is over.
             self._stop_ringing()
             return
         with self._ring_lock:
@@ -596,7 +639,12 @@ class PriceAlertService(QObject):
             )
             if rings:
                 with self._ring_lock:
+                    if self._ring_date != date.today():
+                        self._ringing = []
+                    self._ring_date = date.today()
                     self._ringing.append(message)
+                    ringing = list(self._ringing)
+                self._save_ringing(ringing)
             # Push deliberately happens before either local presentation or
             # A broken display path cannot suppress the phone.
             self.triggered.emit(message)

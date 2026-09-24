@@ -770,6 +770,8 @@ AUTOPILOT_SCORECARD_FILE = RUNTIME_DATA_DIR / "autopilot_pick_scorecard.csv"
 PRICE_ALERTS_FILE = SHARED_HOME_DIR / "price_alerts.json"
 PRICE_ALERT_TRIGGERS_FILE = RUNTIME_DATA_DIR / "price_alert_triggers.csv"
 EVENING_BRIEFING_STATE_FILE = LOCAL_MACHINE_CACHE_DIR / "evening_briefing_state.json"
+#: EVENING price alerts still ringing the phone (day-scoped, this machine only).
+PRICE_ALERT_RING_FILE = LOCAL_MACHINE_CACHE_DIR / "price_alert_ringing.json"
 EVENING_BRIEFING_FILE = SHARED_HOME_DIR / "evening_briefing.txt"
 
 BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"

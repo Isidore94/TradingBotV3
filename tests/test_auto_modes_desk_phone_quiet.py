@@ -35,9 +35,19 @@ _TRIGGER = {
 
 
 def _service(monkeypatch, mode: str, sent: list):
+    import tempfile
+
     import autopilot_core
     import push_notify
+    from ui.services import price_alert_service
     from ui.services.price_alert_service import PriceAlertService
+
+    # An EVENING fire persists its ring list; keep it out of later tests.
+    monkeypatch.setattr(
+        price_alert_service,
+        "PRICE_ALERT_RING_FILE",
+        Path(tempfile.mkdtemp()) / "ring.json",
+    )
 
     monkeypatch.setattr(
         push_notify,

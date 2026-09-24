@@ -52,11 +52,17 @@ class _Sender:
         return dict(self.result)
 
 
-def _service(monkeypatch, mode, sender):
+def _service(monkeypatch, mode, sender, *, ring_file=None):
+    import tempfile
+
     import autopilot_core
     import push_notify
+    from ui.services import price_alert_service
     from ui.services.price_alert_service import PriceAlertService
 
+    if ring_file is None:
+        ring_file = Path(tempfile.mkdtemp()) / "ring.json"
+    monkeypatch.setattr(price_alert_service, "PRICE_ALERT_RING_FILE", ring_file, raising=False)
     monkeypatch.setattr(push_notify, "send_push", sender)
     monkeypatch.setattr(autopilot_core, "read_auto_pilot_mode", lambda *a, **kw: mode)
     service = PriceAlertService()
@@ -191,6 +197,79 @@ def test_an_armed_chart_watch_does_not_ring_in_evening(monkeypatch):
     try:
         service.notify_armed_watch(watch_id="w", title="Pullback: AAPL", message="AAPL")
         _app.processEvents()
+        assert not service._ring_timer.isActive()
+    finally:
+        service.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# The ring list survives a desk restart (per machine, day-scoped)
+# ---------------------------------------------------------------------------
+def test_a_restart_in_evening_keeps_ringing(monkeypatch, tmp_path):
+    path = tmp_path / "ring.json"
+    sender = _Sender()
+    first = _service(monkeypatch, "EVENING", sender, ring_file=path)
+    try:
+        first._notify([_trigger("AAPL")])
+        _app.processEvents()
+    finally:
+        first.shutdown()
+
+    second = _service(monkeypatch, "EVENING", sender, ring_file=path)
+    try:
+        assert second._ring_timer.isActive()
+        second._ring_tick()
+        _wait_for_ring(second)
+        assert len(sender.calls) == 2
+        assert "AAPL" in sender.calls[-1][1]
+    finally:
+        second.shutdown()
+
+
+def test_a_restart_outside_evening_clears_the_saved_ring(monkeypatch, tmp_path):
+    path = tmp_path / "ring.json"
+    sender = _Sender()
+    first = _service(monkeypatch, "EVENING", sender, ring_file=path)
+    try:
+        first._notify([_trigger("AAPL")])
+        _app.processEvents()
+    finally:
+        first.shutdown()
+
+    second = _service(monkeypatch, "DESK", sender, ring_file=path)
+    try:
+        assert not second._ring_timer.isActive()
+    finally:
+        second.shutdown()
+    third = _service(monkeypatch, "EVENING", sender, ring_file=path)
+    try:
+        assert not third._ring_timer.isActive()
+    finally:
+        third.shutdown()
+
+
+def test_leaving_evening_clears_the_saved_ring(monkeypatch, tmp_path):
+    path = tmp_path / "ring.json"
+    service = _service(monkeypatch, "EVENING", _Sender(), ring_file=path)
+    try:
+        service._notify([_trigger("AAPL")])
+        _app.processEvents()
+        assert "AAPL" in path.read_text(encoding="utf-8")
+        service.set_auto_mode("DESK")
+    finally:
+        service.shutdown()
+    assert not path.exists() or "AAPL" not in path.read_text(encoding="utf-8")
+
+
+def test_yesterdays_saved_ring_is_dropped(monkeypatch, tmp_path):
+    import json
+
+    path = tmp_path / "ring.json"
+    path.write_text(
+        json.dumps({"date": "2000-01-03", "messages": ["OLD crossed"]}), encoding="utf-8"
+    )
+    service = _service(monkeypatch, "EVENING", _Sender(), ring_file=path)
+    try:
         assert not service._ring_timer.isActive()
     finally:
         service.shutdown()
