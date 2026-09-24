@@ -4,9 +4,9 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 
 **Updated:** 2026-09-24
 
-- **Live on `main`:** everything through the 2026-09-24 Movers merge (Pop both sides, sortable columns, hide for today). Older 09-22/09-23 merges are in `git log`.
-- **Desk:** runs from source on `main`. Down for the 2026-09-24 ~03:40 ET merge; restart is the trader's call.
-- **Last full suite:** 11,222 passed, 14 skipped (2026-09-24 Movers branch). Ruff clean, selftest 97/97 frozen.
+- **Live on `main`:** everything through the 2026-09-24 Movers Dip merge (Pop + Dip-strong + Dip-weak stacked, new-name tint, pullback survives the open; frozen exe not rebuilt, trader's call). Older 09-22/09-23 merges are in `git log`.
+- **Desk:** runs from source on `main`. Needs a restart to pick up the 2026-09-24 Movers Dip merge; restart is the trader's call.
+- **Last full suite:** 11,228 passed, 14 skipped (2026-09-24 Movers Dip branch). Ruff clean; frozen selftest last 97/97 before this merge.
 - **Compact desk** merged 2026-09-24: Settings > General > Desk layout (New default / Old). Charts 541 px vs 216 px. Gate #208.
 - **Auto modes** merged 2026-09-23 (`48d6cebb`, reviewer GO): DESK sends nothing to the phone; EVENING scans all morning,
   keeps the queue empty, rings SPY ±1% + price alerts every 10 s until the mode changes, catch-up card on the flip out. Gate #207.
