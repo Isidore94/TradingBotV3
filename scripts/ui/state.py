@@ -11,6 +11,9 @@ VALID_THEMES = {"dark", "light"}
 # "auto" reads the screen; the rest are explicit multipliers. Per-machine like
 # every other qt_* setting, so the 4K desk and the MacBook keep their own value.
 VALID_UI_SCALES = {"auto", "0.80", "0.85", "0.90", "0.95", "1.00", "1.10", "1.25"}
+# The desk's shell: "compact" (page tabs, movers column, tab drawer, one arm row)
+# or "classic" (left menu, tape, BounceBot strip). Presentation only.
+VALID_DESK_LAYOUTS = {"classic", "compact"}
 
 
 @dataclass
@@ -27,6 +30,7 @@ class UiState:
     # desk are different questions, and one switch answering both would mean
     # turning off the scanner to stop the prompts.
     trade_mentor_enabled: bool = False
+    desk_layout: str = "compact"
 
     @classmethod
     def load(cls) -> "UiState":
@@ -40,6 +44,7 @@ class UiState:
             nav_collapsed=bool(get_local_setting("qt_nav_collapsed", False)),
             ui_scale=_choice("qt_ui_scale", "auto", VALID_UI_SCALES),
             trade_mentor_enabled=bool(get_local_setting("qt_trade_mentor_enabled", False)),
+            desk_layout=_choice("qt_desk_layout", "compact", VALID_DESK_LAYOUTS),
         )
 
     def save(self) -> None:
@@ -50,6 +55,13 @@ class UiState:
         save_local_setting("qt_nav_collapsed", bool(self.nav_collapsed))
         save_local_setting("qt_ui_scale", self.ui_scale)
         save_local_setting("qt_trade_mentor_enabled", bool(self.trade_mentor_enabled))
+        save_local_setting("qt_desk_layout", normalize_desk_layout(self.desk_layout))
+
+
+def normalize_desk_layout(value: Any) -> str:
+    """One of VALID_DESK_LAYOUTS; anything else is the default, "compact"."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in VALID_DESK_LAYOUTS else "compact"
 
 
 def _choice(key: str, default: str, valid: set[str]) -> str:

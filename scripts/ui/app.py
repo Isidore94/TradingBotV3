@@ -55,8 +55,10 @@ from ui import theme
 from ui.services.strength_board_service import StrengthBoardService
 from ui.services.movers_service import MoversService
 from ui.services.working_lately_service import WorkingLatelyService
-from ui.state import VALID_UI_SCALES, UiState
+from ui.state import VALID_UI_SCALES, UiState, normalize_desk_layout
 from ui.theme import apply_theme
+from ui.widgets.bounce_status_proxy import BounceStatusProxy
+from ui.widgets.page_tab_row import PageTabRow
 from ui.widgets.price_alert_toast import PriceAlertToastManager
 from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
 
@@ -141,7 +143,10 @@ class MainWindow(QMainWindow):
             min(theme.px(1180), available[0]), min(theme.px(760), available[1])
         )
 
-        self.trading_panel = TradingDeskPanel(workspace_mode=self.state.workspace_mode)
+        self.trading_panel = TradingDeskPanel(
+            workspace_mode=self.state.workspace_mode,
+            layout_name=normalize_desk_layout(self.state.desk_layout),
+        )
         self.journal_panel = JournalPanel()
         from ui.services.market_journal_service import shared_journal_service
 
@@ -387,6 +392,9 @@ class MainWindow(QMainWindow):
         self._build_status_bar()
         self._bind_shortcuts()
         self._sync_mode_buttons()
+        #: The desk layout the shell currently shows ("classic"/"compact").
+        self._desk_layout_applied: str | None = None
+        self._apply_desk_layout()
 
         self.trading_panel.statusChanged.connect(self._set_scan_status)
         self.trading_panel.rowsChanged.connect(self._set_setup_counts)
@@ -462,13 +470,20 @@ class MainWindow(QMainWindow):
             nav_layout.addWidget(button)
         nav_layout.addStretch(1)
         self.nav_buttons[0].setChecked(True)
+        # The compact layout's page tabs, built from the same list as the nav.
+        self.page_tab_row = PageTabRow([spec.title for spec in PAGE_SPECS])
+        self.page_tab_row.pageRequested.connect(self._select_page)
+        self.page_tab_row.set_current(0)
+        self.page_tab_row.setVisible(False)
         self.apply_unused_surface_visibility()
         #: V2 item 1's badge is started from `showEvent`, not here. See it.
         self._tag_badge_started = False
 
         top_bar = QFrame()
         top_bar.setObjectName("TopBar")
+        self.top_bar = top_bar
         top_layout = QHBoxLayout(top_bar)
+        self._top_bar_layout = top_layout
         top_layout.setContentsMargins(
             theme.px(12), theme.px(10), theme.px(12), theme.px(10)
         )
@@ -481,6 +496,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
+        right_layout.addWidget(self.page_tab_row)
         right_layout.addWidget(top_bar)
         right_layout.addWidget(self.pages, 1)
 
@@ -526,6 +542,10 @@ class MainWindow(QMainWindow):
         from ui.widgets.rule_chip import RuleChip
 
         self.rule_chip = RuleChip(self)
+        # Compact layout only: the hidden BounceBot strip's controls, proxied.
+        self.bounce_status_proxy = BounceStatusProxy(self.trading_panel.bounce_panel)
+        self.bounce_status_proxy.setVisible(False)
+        status.addPermanentWidget(self.bounce_status_proxy)
         status.addPermanentWidget(self.rule_chip)
         status.addPermanentWidget(self.setup_status)
         self.market_regime_status = QLabel("Auto regime: n/a")
@@ -741,9 +761,12 @@ class MainWindow(QMainWindow):
         one nav button's visibility.
         """
         show = self.show_unused_surfaces()
+        page_tab_row = getattr(self, "page_tab_row", None)
         for index, spec in enumerate(PAGE_SPECS):
             if spec.title in self.UNUSED_PAGE_TITLES and index < len(self.nav_buttons):
                 self.nav_buttons[index].setVisible(show)
+                if page_tab_row is not None:
+                    page_tab_row.set_page_visible(index, show)
         try:
             self.trading_panel.alert_center.apply_unused_tab_visibility(show)
         except Exception:  # noqa: BLE001 - a hidden tab is never worth a broken desk
@@ -799,8 +822,8 @@ class MainWindow(QMainWindow):
             if spec.title != "Journal":
                 continue
             if index < len(self.nav_buttons):
-                self.nav_buttons[index].setText(
-                    f"Journal ({count} to review)" if count > 0 else "Journal"
+                self._set_page_label(
+                    index, f"Journal ({count} to review)" if count > 0 else "Journal"
                 )
             return
 
@@ -811,8 +834,15 @@ class MainWindow(QMainWindow):
                 continue
             buttons = getattr(self, "nav_buttons", ())
             if index < len(buttons):
-                buttons[index].setText(f"{spec.title} •" if ready else spec.title)
+                self._set_page_label(index, f"{spec.title} •" if ready else spec.title)
             return
+
+    def _set_page_label(self, index: int, text: str) -> None:
+        """One page's label on the nav button AND the compact page tab."""
+        self.nav_buttons[index].setText(text)
+        page_tab_row = getattr(self, "page_tab_row", None)
+        if page_tab_row is not None:
+            page_tab_row.set_label(index, text)
 
     def _select_page(self, index: int) -> None:
         # Diagnostics only (P1 item 3): a stall sampled inside Qt's own event
@@ -828,9 +858,11 @@ class MainWindow(QMainWindow):
             self.title_label.setText(PAGE_SPECS[index].title)
             for button_index, button in enumerate(self.nav_buttons):
                 button.setChecked(button_index == index)
+            self.page_tab_row.set_current(index)
             mode_visible = index == 0
             self.workspace_button.setVisible(mode_visible)
             self.tabs_button.setVisible(mode_visible)
+            self._sync_compact_setups_toggle()
             interaction_trace.mark("layout")
             if (
                 PAGE_SPECS[index].title == DAY_REVIEW_PAGE_TITLE
@@ -1054,10 +1086,62 @@ class MainWindow(QMainWindow):
         self.settings_panel.mode_input.setCurrentText(mode)
         self.settings_panel.mode_input.blockSignals(False)
         self._sync_mode_buttons()
+        self._sync_compact_setups_toggle()
 
     def _sync_mode_buttons(self) -> None:
         self.workspace_button.setChecked(self.state.workspace_mode == "workspace")
         self.tabs_button.setChecked(self.state.workspace_mode == "tabs")
+
+    def desk_layout(self) -> str:
+        """The layout the shell is showing now: "classic" or "compact"."""
+        return self._desk_layout_applied or "classic"
+
+    def _apply_desk_layout(self) -> None:
+        """Show the classic or compact shell. No-op when the value is unchanged.
+
+        Compact: page tabs replace the left menu and the title bar, the mode
+        buttons and the setups toggle move into the tab row, and the BounceBot
+        strip's controls show in the status bar. The desk panel swaps its own
+        inside (tape, movers, drawer, arm row). Widgets move; none is rebuilt.
+        """
+        wanted = normalize_desk_layout(self.state.desk_layout)
+        if wanted == self._desk_layout_applied:
+            return
+        compact = wanted == "compact"
+        row = self.page_tab_row
+        toggle = self.trading_panel.setups_toggle
+        movable = (toggle, self.workspace_button, self.tabs_button)
+        if not compact:
+            # Out of the tab row first, so the desk can take its toggle back.
+            for widget in movable:
+                row.take_right_widget(widget)
+        self.trading_panel.set_desk_layout(wanted)
+        if compact:
+            self._top_bar_layout.removeWidget(self.workspace_button)
+            self._top_bar_layout.removeWidget(self.tabs_button)
+            for widget in movable:
+                row.add_right_widget(widget)
+        else:
+            self._top_bar_layout.addWidget(self.workspace_button)
+            self._top_bar_layout.addWidget(self.tabs_button)
+        self.nav_rail.setVisible(not compact)
+        self.top_bar.setVisible(not compact)
+        row.setVisible(compact)
+        self.bounce_status_proxy.setVisible(compact)
+        self._desk_layout_applied = wanted
+        mode_visible = self.pages.currentIndex() == 0
+        self.workspace_button.setVisible(mode_visible)
+        self.tabs_button.setVisible(mode_visible)
+        self._sync_compact_setups_toggle()
+
+    def _sync_compact_setups_toggle(self) -> None:
+        """In compact the setups toggle sits in the tab row: Desk page, workspace only."""
+        if getattr(self, "_desk_layout_applied", None) != "compact":
+            return
+        self.trading_panel.setups_toggle.setVisible(
+            self.pages.currentIndex() == 0
+            and self.trading_panel.workspace_mode == "workspace"
+        )
 
     def _apply_state_changes(self) -> None:
         app = QApplication.instance()
@@ -1069,8 +1153,10 @@ class MainWindow(QMainWindow):
                 theme.resolve_scale(self.state.ui_scale, _available_screen_size()),
             )
         self._apply_scaled_metrics()
+        self._apply_desk_layout()
         self.trading_panel.set_mode(self.state.workspace_mode)
         self._sync_mode_buttons()
+        self._sync_compact_setups_toggle()
         # The Trade Mentor checkbox lives on this panel, so the "next prompt"
         # line beside it has to answer the switch the trader just flipped
         # rather than whatever it said when the window opened.

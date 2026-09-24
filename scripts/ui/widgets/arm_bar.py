@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Callable, Iterable
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -27,7 +28,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -218,9 +221,37 @@ class ArmBar(QFrame):
         self.armed_layout.addWidget(self.armed_hint)
         self.armed_layout.addStretch(1)
 
+        # The compact desk's one-row variant (built on first use). Its menus
+        # only click the buttons above, so every signal path stays theirs.
+        self._compact = False
+        self.compact_row: QWidget | None = None
+        self.m5_menu_button: QToolButton | None = None
+        self.d1_menu_button: QToolButton | None = None
+        self.m5_actions: dict[str, QAction] = {}
+        self.d1_actions: dict[str, QAction] = {}
+
         self.apply_scaled_metrics()
         self._build_layout()
         self.set_enabled_for_symbol(False)
+
+    def _classic_top_widgets(self) -> list:
+        return [
+            self.symbol_input,
+            *self.watch_buttons.values(),
+            self.level_input,
+            self.direction_input,
+            self.arm_level_button,
+            self.phone_alert_button,
+        ]
+
+    def _classic_d1_widgets(self) -> list:
+        return [
+            self._d1_label,
+            *self.d1_event_buttons.values(),
+            self.any_bounce_button,
+            self.external_chart_button,
+            self.armed_row,
+        ]
 
     def _build_layout(self) -> None:
         # Both control rows WRAP rather than compress. A QHBoxLayout hands every
@@ -230,13 +261,7 @@ class ArmBar(QFrame):
         # them could be identified. Flowing onto a second line costs vertical
         # space the alert column has and buys back every label.
         top = FlowLayout(margin=0, spacing=theme.px(6))
-        top.addWidget(self.symbol_input)
-        for button in self.watch_buttons.values():
-            top.addWidget(button)
-        top.addWidget(self.level_input)
-        top.addWidget(self.direction_input)
-        top.addWidget(self.arm_level_button)
-        top.addWidget(self.phone_alert_button)
+        self._top_flow = top
 
         d1_label = QLabel("D1:")
         d1_label.setObjectName("MutedLabel")
@@ -245,19 +270,165 @@ class ArmBar(QFrame):
             "from the daily store every poll, so they track the moving "
             "average / rolling extreme instead of a frozen price."
         )
+        self._d1_label = d1_label
         d1_row = FlowLayout(margin=0, spacing=theme.px(4))
-        d1_row.addWidget(d1_label)
-        for button in self.d1_event_buttons.values():
-            d1_row.addWidget(button)
-        d1_row.addWidget(self.any_bounce_button)
-        d1_row.addWidget(self.external_chart_button)
-        d1_row.addWidget(self.armed_row)
+        self._d1_flow = d1_row
+        self._fill_classic_rows()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(theme.px(6), theme.px(4), theme.px(6), theme.px(4))
         layout.setSpacing(theme.px(4))
         layout.addLayout(top)
         layout.addLayout(d1_row)
+
+    def _fill_classic_rows(self) -> None:
+        """(Re)fill the two classic rows in their one canonical order."""
+        for flow, widgets in (
+            (self._top_flow, self._classic_top_widgets()),
+            (self._d1_flow, self._classic_d1_widgets()),
+        ):
+            _empty_layout(flow)
+            for widget in widgets:
+                flow.addWidget(widget)
+
+    # ------------------------------------------------------------ compact row
+    def is_compact(self) -> bool:
+        return self._compact
+
+    def set_compact(self, compact: bool) -> None:
+        """One row (compact desk) or the classic rows, live and reversible.
+
+        Compact keeps the symbol box, level controls and armed chips, and puts
+        the M5 and D1 alert buttons behind two menus whose actions click the
+        real buttons. The buttons themselves are parked, never deleted.
+        """
+        compact = bool(compact)
+        if compact == self._compact:
+            return
+        self._compact = compact
+        root = self.layout()
+        if compact:
+            self._ensure_compact_row()
+            _empty_layout(self._top_flow)
+            _empty_layout(self._d1_flow)
+            for widget in (
+                self._d1_label,
+                *self.watch_buttons.values(),
+                *self.d1_event_buttons.values(),
+                self.any_bounce_button,
+                self.external_chart_button,
+            ):
+                widget.setParent(self._compact_parking)
+            row_layout = self.compact_row.layout()
+            _empty_layout(row_layout)
+            for widget in (
+                self.symbol_input,
+                self.m5_menu_button,
+                self.d1_menu_button,
+                self.level_input,
+                self.direction_input,
+                self.arm_level_button,
+                self.phone_alert_button,
+                self.armed_row,
+            ):
+                row_layout.addWidget(widget)
+            root.insertWidget(0, self.compact_row)
+            self.compact_row.setVisible(True)
+            self.sync_compact_menus()
+        else:
+            root.removeWidget(self.compact_row)
+            self.compact_row.setVisible(False)
+            _empty_layout(self.compact_row.layout())
+            self._fill_classic_rows()
+
+    def _ensure_compact_row(self) -> None:
+        if self.compact_row is not None:
+            return
+        self._compact_parking = QWidget(self)
+        self._compact_parking.setObjectName("ArmBarParking")
+        self._compact_parking.hide()
+        self.compact_row = QWidget(self)
+        self.compact_row.setObjectName("ArmBarCompactRow")
+        row_layout = QHBoxLayout(self.compact_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(theme.px(6))
+
+        m5_menu = QMenu(self)
+        m5_menu.setToolTipsVisible(True)
+        for kind, button in self.watch_buttons.items():
+            action = QAction(button.text(), self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, b=button: self._click_from_menu(b))
+            m5_menu.addAction(action)
+            self.m5_actions[kind] = action
+        m5_menu.aboutToShow.connect(self.sync_compact_menus)
+        self.m5_menu_button = _menu_button(m5_menu)
+
+        d1_menu = QMenu(self)
+        d1_menu.setToolTipsVisible(True)
+        for kind, button in self.d1_event_buttons.items():
+            action = QAction(button.text(), self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, b=button: self._click_from_menu(b))
+            d1_menu.addAction(action)
+            self.d1_actions[kind] = action
+        d1_menu.addSeparator()
+        for key, button, checkable in (
+            ("any_bounce", self.any_bounce_button, True),
+            ("external_chart", self.external_chart_button, False),
+        ):
+            action = QAction(button.text(), self)
+            action.setCheckable(checkable)
+            action.triggered.connect(lambda _checked=False, b=button: self._click_from_menu(b))
+            d1_menu.addAction(action)
+            self.d1_actions[key] = action
+        d1_menu.aboutToShow.connect(self.sync_compact_menus)
+        self.d1_menu_button = _menu_button(d1_menu)
+        self.compact_row.setVisible(False)
+
+    def _click_from_menu(self, button: QPushButton) -> None:
+        button.click()
+        self.sync_compact_menus()
+
+    def _d1_menu_sources(self) -> dict:
+        return {
+            **self.d1_event_buttons,
+            "any_bounce": self.any_bounce_button,
+            "external_chart": self.external_chart_button,
+        }
+
+    def sync_compact_menus(self) -> None:
+        """Mirror each button's text, checked, enabled and tooltip onto its action."""
+        if self.compact_row is None:
+            return
+        for actions, sources, menu_button, title, tip in (
+            (
+                self.m5_actions,
+                self.watch_buttons,
+                self.m5_menu_button,
+                "M5 alert",
+                "One-shot M5 chart watches for this symbol.",
+            ),
+            (
+                self.d1_actions,
+                self._d1_menu_sources(),
+                self.d1_menu_button,
+                "D1 alert",
+                "Persistent D1 event alerts, Any bounce and TradingView.",
+            ),
+        ):
+            armed = 0
+            for key, action in actions.items():
+                button = sources[key]
+                action.setText(button.text())
+                action.setToolTip(button.toolTip())
+                action.setEnabled(button.isEnabled())
+                if button.isCheckable():
+                    action.setChecked(button.isChecked())
+                    armed += int(button.isChecked())
+            menu_button.setText(f"{title} ({armed}) ▾" if armed else f"{title} ▾")
+            menu_button.setToolTip(tip)
+            menu_button.setEnabled(self._has_symbol)
 
     def apply_scaled_metrics(self) -> None:
         """Re-apply the input widths that are pixel budgets, not stylesheet."""
@@ -315,6 +486,7 @@ class ArmBar(QFrame):
             widget.setEnabled(bool(has_symbol))
         self._has_symbol = bool(has_symbol)
         self._sync_level_alert_button()
+        self.sync_compact_menus()
 
     def set_level_alert_available(self, available: bool) -> None:
         """Offer the phone-alert button only while a painted level is picked.
@@ -344,6 +516,7 @@ class ArmBar(QFrame):
         self._watch_warning = "" if available else str(reason or "")
         for kind, button in self.watch_buttons.items():
             button.setToolTip(self._tooltip_for(kind))
+        self.sync_compact_menus()
 
     _WATCH_KIND_DETAILS = {
         "pullback": (
@@ -406,6 +579,7 @@ class ArmBar(QFrame):
                 f"⏳ {label}" if queued else f"{label} ✓ armed" if kind in armed else label
             )
             button.setChecked(kind in armed or queued)
+        self.sync_compact_menus()
 
     def set_armed_d1_events(self, kinds: Iterable[str]) -> None:
         """Reflect this symbol's armed D1 event watches; a second click disarms."""
@@ -416,6 +590,7 @@ class ArmBar(QFrame):
             queued = kind in self._pending_d1 and kind not in armed
             button.setText(f"⏳ {label}" if queued else f"{label} ✓" if kind in armed else label)
             button.setChecked(kind in armed or queued)
+        self.sync_compact_menus()
 
     def set_any_bounce_armed(self, armed: bool) -> None:
         """Reflect this symbol's any-bounce watch; a second click disarms."""
@@ -425,6 +600,7 @@ class ArmBar(QFrame):
             "⏳ Any bounce" if queued else "Any bounce ✓" if armed else "Any bounce"
         )
         self.any_bounce_button.setChecked(bool(armed) or queued)
+        self.sync_compact_menus()
 
     def set_pending_arms(
         self, watch_kinds: Iterable[str] = (), d1_kinds: Iterable[str] = (), any_bounce: bool = False
@@ -531,6 +707,20 @@ class ArmBar(QFrame):
             self.levelArmRequested.emit(
                 str(self.direction_input.currentData() or "above"), level
             )
+
+
+def _empty_layout(layout) -> None:
+    """Take every item out of `layout` without deleting any widget."""
+    while layout.count():
+        layout.takeAt(0)
+
+
+def _menu_button(menu: QMenu) -> QToolButton:
+    button = QToolButton()
+    button.setObjectName("CompactMenuButton")
+    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    button.setMenu(menu)
+    return button
 
 
 class _ArmedLevelChip(QFrame):

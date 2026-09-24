@@ -30,6 +30,13 @@ THEME_LABELS = {
     "Light": "light",
 }
 
+#: The desk layout switch (trader, 2026-09-23: "a setting in the settings tab
+#: that lets me select old vs new UI"). Applied live; presentation only.
+DESK_LAYOUT_LABELS = {
+    "New (compact)": "compact",
+    "Old (classic)": "classic",
+}
+
 # Scales the whole shell - type, padding, row height, and the panel minimum
 # widths that decide whether a column can shrink. Auto reads the screen, which
 # is the point: a 4K desktop and a 1680px laptop cannot share one layout.
@@ -82,6 +89,19 @@ class SettingsPanel(QFrame):
         self.mode_input.addItems(["workspace", "tabs"])
         self.mode_input.setCurrentText(self.state.workspace_mode)
         self.mode_input.currentTextChanged.connect(self._save)
+
+        self.desk_layout_input = QComboBox()
+        self.desk_layout_input.addItems(DESK_LAYOUT_LABELS)
+        self.desk_layout_input.setCurrentText(
+            _desk_layout_label(getattr(self.state, "desk_layout", "compact"))
+        )
+        self.desk_layout_input.setToolTip(
+            "New: page tabs on top, Movers on the right, a tab drawer under the "
+            "charts and one row of alert buttons, so the charts get the height. "
+            "Old: the left menu, the sector tape and the BounceBot strip. "
+            "Switches at once; nothing about alerts changes."
+        )
+        self.desk_layout_input.currentTextChanged.connect(self._save)
 
         self.explain_input = QCheckBox("Show inline explanations and extra tooltips")
         self.explain_input.setChecked(self.state.explain_mode)
@@ -140,6 +160,7 @@ class SettingsPanel(QFrame):
         form.setSpacing(10)
         form.addRow("Theme", self.theme_input)
         form.addRow("Trading Desk mode", self.mode_input)
+        form.addRow("Desk layout", self.desk_layout_input)
         form.addRow("Explain mode", self.explain_input)
         form.addRow("Density", self.compact_input)
         form.addRow("UI scale", self.ui_scale_input)
@@ -289,6 +310,9 @@ class SettingsPanel(QFrame):
             self.ui_scale_input.currentText(), "auto"
         )
         self.state.trade_mentor_enabled = self.trade_mentor_input.isChecked()
+        self.state.desk_layout = DESK_LAYOUT_LABELS.get(
+            self.desk_layout_input.currentText(), "compact"
+        )
         self.state.save()
         self._sync_scale_hint()
         self.stateChanged.emit()
@@ -345,6 +369,13 @@ def _theme_label(theme_name: str) -> str:
         if value == theme_name:
             return label
     return "Dark"
+
+
+def _desk_layout_label(value: str) -> str:
+    for label, stored in DESK_LAYOUT_LABELS.items():
+        if stored == value:
+            return label
+    return "New (compact)"
 
 
 def _ui_scale_label(value: str) -> str:
