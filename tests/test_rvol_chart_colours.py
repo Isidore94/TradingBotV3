@@ -264,6 +264,9 @@ def test_header_shows_the_reading_in_its_band_colour(_qapp, monkeypatch):
         assert "RVOL 3.50×" in text
         assert theme.rvol_color(3.5) in text
         assert "same time of day" in widget.rvol_label.toolTip()
+        # The M5 chart carries it too, with the last bar's own reading.
+        m5_text = widget.m5_rvol_label.text()
+        assert "RVOL 3.50×" in m5_text and "bar 3.50×" in m5_text
     finally:
         widget.close()
         widget.deleteLater()

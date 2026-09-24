@@ -268,14 +268,21 @@ def _levels_fingerprint(levels: list) -> tuple:
     )
 
 
-def rvol_label_html(reading) -> str:
-    """``RVOL 1.84×`` in its band colour; a muted dash when unmeasured."""
+def rvol_label_html(reading, *, with_bar: bool = False) -> str:
+    """``RVOL 1.84×`` in its band colour; a muted dash when unmeasured.
+
+    ``with_bar`` adds the last completed 5-minute bar's own rvol (M5 header).
+    """
     muted = theme.color("text_muted")
     value = getattr(reading, "session_rvol", None)
     if value is None:
         return f"<span style='color:{muted};'>RVOL –</span>"
     colour = theme.rvol_color(value) or muted
     text = f"<b style='color:{colour};'>RVOL {value:.2f}×</b>"
+    bar_value = getattr(reading, "last_bar_rvol", None)
+    if with_bar and bar_value is not None:
+        bar_colour = theme.rvol_color(bar_value) or muted
+        text += f" <span style='color:{bar_colour};'>· bar {bar_value:.2f}×</span>"
     session_date = getattr(reading, "session_date", None)
     if session_date is not None and session_date != datetime.now().date():
         text += f" <span style='color:{muted};'>{session_date:%m/%d}</span>"
@@ -481,6 +488,12 @@ class SymbolSnapshotWidget(QWidget):
         m5_header_layout.setContentsMargins(0, 0, 0, 0)
         m5_header_layout.setSpacing(6)
         m5_header_layout.addWidget(self.m5_legend, 1)
+        # The same intraday reading, plus the last 5-minute bar's own rvol.
+        self.m5_rvol_label = QLabel()
+        self.m5_rvol_label.setObjectName("RvolLabel")
+        self.m5_rvol_label.setTextFormat(Qt.TextFormat.RichText)
+        self.m5_rvol_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        m5_header_layout.addWidget(self.m5_rvol_label, 0)
         m5_header_layout.addWidget(self.m5_older_button, 0)
         self.m5_chart = CandleChart()
         # M5 candle clicks used to be inert: only the D1 chart was wired, so an
@@ -555,6 +568,7 @@ class SymbolSnapshotWidget(QWidget):
         self._d1 = {}
         self._m5 = {}
         self.rvol_label.clear()
+        self.m5_rvol_label.clear()
         # Clearing levels first also clears a selected painted level.  Clear
         # the earnings payload explicitly because its markers are retained by
         # CandleChart independently of the D1 bars.
@@ -644,6 +658,8 @@ class SymbolSnapshotWidget(QWidget):
     def _show_rvol(self, reading) -> None:
         self.rvol_label.setText(rvol_label_html(reading))
         self.rvol_label.setToolTip(rvol_tooltip(reading))
+        self.m5_rvol_label.setText(rvol_label_html(reading, with_bar=True))
+        self.m5_rvol_label.setToolTip(rvol_tooltip(reading))
 
     # -- intraday history (WS-CH item 2) ---------------------------------
     def _drawn_m5_sessions(self) -> int:
