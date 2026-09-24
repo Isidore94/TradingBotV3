@@ -33,6 +33,7 @@ the chart to reach itself.
 
 import math
 
+import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPicture, QPen
@@ -46,6 +47,17 @@ _CANDLE_HALF_WIDTH = 0.27
 # that a continuous drag never re-enables it mid-gesture, short enough that
 # the lines look right again as soon as the trader lets go.
 _AA_RESTORE_MS = 150
+# The wheel. One notch (120 eighths of a degree) changes the visible span by
+# the same ~35% pyqtgraph's own ViewBox uses, so the feel did not change - only
+# WHERE the zoom is anchored and what the price scale does about it.
+_WHEEL_ZOOM_BASE = 1.02
+_WHEEL_EIGHTHS_PER_STEP = 8.0
+# Zooming in stops here: fewer candles than this is a blank panel with two
+# sticks in it, and one more notch would make it one.
+_MIN_VISIBLE_BARS = 10
+# The breathing room past either end of the tape, as a share of the payload -
+# the same 1% ``set_data`` opens with.
+_X_EDGE_PADDING = 0.01
 # Where the earnings ribbon sits, as a fraction of the view height measured
 # down from the top. The E glyphs ride the first line and their connectors
 # start just under it.
@@ -677,6 +689,9 @@ class CandleChart(pg.PlotWidget):
             axisItems={"left": self._price_axis},
         )
         self._bars: list[dict] = []
+        #: (lows, highs) of the well-formed bars, +/-inf where a bar has no say
+        #: in the scale. Built lazily by :meth:`_scale_range`.
+        self._scale_index: tuple[np.ndarray, np.ndarray] | None = None
         self._overlays: list[dict] = []
         self._levels: list[dict] = []
         self._selected_level_id = ""
@@ -1136,6 +1151,9 @@ class CandleChart(pg.PlotWidget):
         behaviour of framing the whole payload.
         """
         self._bars = [dict(bar) for bar in bars or []]
+        # The zoom re-frame's per-bar index belongs to the old tape. Rebuilt on
+        # the first zoom or pan, so a chart nobody scrolls pays nothing for it.
+        self._scale_index = None
         # New bars are a new tape, so every index in a marker payload built
         # against the old one names a different moment. The host pushes the
         # markers again after the bars (TJ-3).
@@ -1200,14 +1218,7 @@ class CandleChart(pg.PlotWidget):
         # for every symbol when the rail is enabled, so the scale never depends
         # on whether this particular name happens to have an earnings date.
         if span_range is not None:
-            low_y, high_y = self._y(span_range[0]), self._y(span_range[1])
-            span = (high_y - low_y) or abs(high_y) or 1.0
-            headroom = _EARNINGS_RIBBON_FRACTION if self._show_earnings else 0.0
-            plot.setYRange(
-                low_y - span * 0.05,
-                high_y + span * (0.05 + headroom),
-                padding=0,
-            )
+            self._frame_y(span_range)
         self._sync_volume()
         self._sync_earnings()
         self._sync_note_markers()
@@ -1462,9 +1473,125 @@ class CandleChart(pg.PlotWidget):
             item.setVisible(False)
 
     def _on_manual_range_change(self, *_args) -> None:
-        """User-driven pan/zoom: drop antialiasing until they settle."""
+        """User-driven pan/zoom: re-frame the prices, and drop antialiasing
+        until they settle."""
+        self._refit_y_to_visible()
         self._set_overlay_antialias(False)
         self._aa_restore_timer.start()
+
+    # ------------------------------------------------------------------
+    # zoom: scrolling back shows MORE (trader, 2026-09-21)
+    # ------------------------------------------------------------------
+    def _frame_y(self, price_span: tuple[float, float]) -> None:
+        """Set the y-range around a (low, high) PRICE pair.
+
+        The one place the padding and the earnings ribbon's reserved headroom
+        are applied, so the chart a zoom produces is framed exactly like the
+        chart ``set_data`` opens on.
+        """
+        low_y, high_y = self._y(price_span[0]), self._y(price_span[1])
+        span = (high_y - low_y) or abs(high_y) or 1.0
+        headroom = _EARNINGS_RIBBON_FRACTION if self._show_earnings else 0.0
+        self.getPlotItem().setYRange(
+            low_y - span * 0.05,
+            high_y + span * (0.05 + headroom),
+            padding=0,
+        )
+
+    def _scale_range(self, first: int, stop: int) -> tuple[float, float] | None:
+        """(low, high) of the WELL-FORMED bars in ``[first, stop)``, or None.
+
+        The per-bar judgement is :func:`bar_integrity.scale_vote`'s, indexed
+        once per payload: a wheel notch is then two array slices, not a pass
+        over every visible dict on the Qt thread. A malformed bar gets no vote
+        here, the same as when the chart opens.
+        """
+        if self._scale_index is None:
+            lows = np.full(len(self._bars), np.inf)
+            highs = np.full(len(self._bars), -np.inf)
+            for index, bar in enumerate(self._bars):
+                vote = bar_integrity.scale_vote(bar)
+                if vote is not None and vote[2]:
+                    lows[index], highs[index] = vote[0], vote[1]
+            self._scale_index = (lows, highs)
+        lows, highs = self._scale_index
+        if stop <= first:
+            return None
+        low = float(lows[first:stop].min())
+        high = float(highs[first:stop].max())
+        if not (math.isfinite(low) and math.isfinite(high)):
+            return None
+        return (low, high)
+
+    def _refit_y_to_visible(self) -> None:
+        """Take the price scale from the candles ON SCREEN.
+
+        ``set_data`` frames the window the chart opens on and, until this,
+        nothing ever framed again - so every older candle a scroll brought into
+        view was drawn against today's prices: clipped off the top or bottom,
+        squeezed sideways, never smaller. The y axis is not mouse-driven
+        (``setMouseEnabled(y=False)``), so there is no hand-set scale here to
+        trample. Levels and overlays still get no vote.
+
+        Nothing trustworthy in view - the trader dragged past the tape, or the
+        only bars on screen are malformed - leaves the scale where it was:
+        missing data is uncertainty, never a reason to re-draw the chart.
+        """
+        if not self._bars:
+            return
+        try:
+            (x_low, x_high), _y_range = self.getPlotItem().vb.viewRange()
+        except Exception:
+            return
+        first = max(0, int(math.ceil(x_low)))
+        last = min(len(self._bars) - 1, int(math.floor(x_high)))
+        price_span = self._scale_range(first, last + 1)
+        if price_span is not None:
+            self._frame_y(price_span)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Scroll back = more candles, smaller; scroll forward = fewer, bigger.
+
+        pyqtgraph's own wheel zooms x around the cursor. With the newest candle
+        on screen that spends half of every zoom-out on the empty space to its
+        RIGHT, so the chart slides left and squashes instead of showing more.
+        Here the newest candle, when it is in view, is the anchor and the whole
+        zoom goes into the past; anywhere else in the tape the cursor is the
+        anchor, as before. The span is held between ``_MIN_VISIBLE_BARS`` and
+        the whole payload.
+        """
+        delta = event.angleDelta().y()
+        if not self._bars or not delta:
+            event.ignore()
+            return
+        event.accept()
+        view = self.getPlotItem().vb
+        (x_low, x_high), _y_range = view.viewRange()
+        span = x_high - x_low
+        if span <= 0:
+            return
+        count = len(self._bars)
+        edge = _X_EDGE_PADDING * (count + 1)
+        floor, ceiling = -1.0 - edge, count + edge
+        factor = _WHEEL_ZOOM_BASE ** (-delta / _WHEEL_EIGHTHS_PER_STEP)
+        wanted = min(max(span * factor, float(_MIN_VISIBLE_BARS)), ceiling - floor)
+        if factor < 1.0 and span <= _MIN_VISIBLE_BARS:
+            return  # already as close as it goes; never zoom OUT on a zoom-in
+        if x_low <= count - 1 <= x_high:
+            anchor, share = x_high, 1.0  # the newest candle stays where it is
+        else:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            anchor = min(max(view.mapSceneToView(scene_pos).x(), x_low), x_high)
+            share = (anchor - x_low) / span
+        new_low = anchor - wanted * share
+        new_high = new_low + wanted
+        if new_low < floor:
+            new_low, new_high = floor, min(max(floor + wanted, new_high), max(ceiling, x_high))
+        elif new_high > max(ceiling, x_high):
+            new_high = max(ceiling, x_high)
+            new_low = max(floor, new_high - wanted)
+        self.getPlotItem().setXRange(new_low, new_high, padding=0)
+        self._on_manual_range_change()
 
     def _set_overlay_antialias(self, enabled: bool) -> None:
         enabled = bool(enabled)
