@@ -314,3 +314,58 @@ def test_my_names_include_unmeasured_focus_and_sort_by_mode():
     assert mine[2]["note"] == "no bars" and mine[2]["pop_score"] is None
     ordered = ms.sort_mine(mine, "pop", "long")
     assert [row["symbol"] for row in ordered] == ["AAA", "BBB", "GONE"]
+
+
+# ------------------------------------------------------------------ freshness vs now
+def test_reviewer_repro_bars_end_0955_now_1140_is_unknown_and_nothing_fresh():
+    six = _pop([100.33, 100.67, 101.0], n=6)  # last bar starts 09:55 NY
+    now = datetime(2026, 9, 22, 11, 40, tzinfo=NY)
+    board = ms.build_movers_board(
+        {"XYZ": _series(six)}, _series([400.0] * 6, prior_close=400.0),
+        now=now, baselines={"XYZ": FLAT_BASELINE}, local_tz=LA,
+    )
+    assert board["state"]["state"] == "unknown"
+    assert board["state"]["reason"] == "SPY bars stale"
+    assert board["pop"] == {"long": [], "short": []}
+    assert board["fresh"] == 0 and board["offered"] == 1
+    assert board["as_of_stale"] is True
+    assert board["as_of"].startswith("2026-09-22T09:55:00")
+
+
+def test_fresh_symbols_with_stale_spy_light_nothing():
+    n = 20
+    spy_old = _series([400.0] * (n - 3), prior_close=400.0)
+    board = _board({"AAA": _series(_pop([101.0, 102.0, 103.0], n=n))}, spy=spy_old, n=n)
+    assert board["state"]["state"] == "unknown"
+    assert board["fresh"] == 1  # the symbol is fresh; SPY is not
+
+
+def test_as_of_is_spy_last_completed_bar_and_fresh_count():
+    n = 20
+    fresh = _series(_pop([100.33, 100.67, 101.0], n=n))
+    stale = _series(_pop([101.0, 102.0, 103.0], n=n - 2))
+    board = _board({"FRESH": fresh, "STALE": stale}, now=_now(n, extra_seconds=30))
+    last_start = datetime(2026, 9, 22, 6, 30, tzinfo=LA) + timedelta(minutes=5 * (n - 1))
+    assert datetime.fromisoformat(board["as_of"]) == last_start
+    assert board["as_of_stale"] is False
+    assert (board["fresh"], board["offered"]) == (1, 2)
+
+
+def test_freshness_cutoff_is_floor5_minus_two_bars():
+    now = datetime(2026, 9, 22, 10, 43, 10, tzinfo=NY)
+    assert ms.freshness_cutoff(now) == datetime(2026, 9, 22, 10, 30, tzinfo=NY)
+
+
+# ------------------------------------------------------------------ pullback below VWAP
+def test_pullback_stays_on_when_spy_dips_below_vwap_above_the_open():
+    closes = [400.0, 401.0] + [405.0] * 8 + [404.4, 403.8, 403.2]
+    volumes = [100_000.0, 100_000.0] + [1_000_000.0] * 8 + [100_000.0] * 3
+    bars = _series(closes, prior_close=400.0, today_volumes=volumes)
+    today = [b for b in bars if b["dt"].date() == TODAY]
+    for index, bar in enumerate(today):
+        bar["high"] = max(bar["open"], bar["close"]) + (0.6 if index == 9 else 0.05)
+        bar["low"] = min(bar["open"], bar["close"]) - 0.05
+    state = _state(bars, len(closes))
+    assert state.spy_last < state.spy_vwap  # below VWAP now
+    assert state.spy_last > 400.0  # still above the open
+    assert state.state == "up_day" and state.pullback is True

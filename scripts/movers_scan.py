@@ -53,8 +53,9 @@ MIN_SESSION_VOLUME = 50_000.0
 PULLBACK_MIN_PCT = 0.30
 #: The session high must be on bar index >= this (i.e. after the first 2 bars).
 PULLBACK_MIN_HIGH_INDEX = 2
-#: A symbol whose last completed bar is more than this many bars behind SPY's
-#: (or the freshest series on the board) is stale and not ranked.
+#: A series whose last completed bar starts before
+#: floor5(now) - 5 min x (STALE_BARS_ALLOWED + 1) is stale: not ranked, and a
+#: stale SPY makes the market state unknown.
 STALE_BARS_ALLOWED = 1
 #: RVOL baseline: prior sessions averaged, and the fewest that still count.
 RVOL_BASELINE_SESSIONS = 20
@@ -209,19 +210,38 @@ class MarketState:
         return data
 
 
+def freshness_cutoff(now: datetime) -> datetime:
+    """Oldest bar START still fresh: floor5(now) - 5 min x (STALE_BARS_ALLOWED + 1)."""
+    ny = now.astimezone(NY_TZ)
+    floor = ny.replace(minute=ny.minute - ny.minute % BAR_MINUTES, second=0, microsecond=0)
+    return floor - timedelta(minutes=BAR_MINUTES * (STALE_BARS_ALLOWED + 1))
+
+
 def market_state(
-    spy_bars: Sequence[Mapping[str, Any]], today_date: date | None = None
+    spy_bars: Sequence[Mapping[str, Any]],
+    today_date: date | None = None,
+    *,
+    fresh_after: datetime | None = None,
 ) -> MarketState:
-    """SPY up/down day and pullback/bounce from normalised completed bars."""
+    """SPY up/down day and pullback/bounce from normalised completed bars.
+
+    Pullback: SPY above its session open, its session high made while above
+    the running session VWAP, and now >= PULLBACK_MIN_PCT off that high (it may
+    be below VWAP now). Bounce mirrors it on a down day. SPY bars older than
+    `fresh_after` make the state unknown.
+    """
     prior, today = split_today(spy_bars, today_date)
     if not today:
         return MarketState("unknown", reason="no SPY bars")
+    if fresh_after is not None and today[-1]["dt"] < fresh_after:
+        return MarketState("unknown", spy_last=today[-1]["close"], reason="SPY bars stale")
     try:
         from chart_snapshot import session_vwap_series
 
-        vwap = session_vwap_series(today)["vwap"][-1]
+        vwaps = session_vwap_series(today)["vwap"]
     except Exception:
-        vwap = None
+        vwaps = [None] * len(today)
+    vwap = vwaps[-1] if vwaps else None
     last = today[-1]["close"]
     session_open = today[0]["open"]
     reference = prior[-1]["close"] if prior else session_open
@@ -230,45 +250,43 @@ def market_state(
         return MarketState(
             "unknown", spy_last=last, spy_day_pct=day_pct, reason="SPY VWAP unknown"
         )
-    if last > session_open and last > vwap:
-        kind = "up_day"
-    elif last < session_open and last < vwap:
-        kind = "down_day"
-    else:
-        kind = "flat"
     common = {"spy_last": last, "spy_vwap": vwap, "spy_day_pct": day_pct}
     last_index = len(today) - 1
-    if kind == "up_day":
+
+    def turn_on(index: int, off: float | None, beyond: bool) -> bool:
+        return (
+            PULLBACK_MIN_HIGH_INDEX <= index < last_index
+            and off is not None
+            and beyond
+        )
+
+    if last > session_open:
         index = max(range(len(today)), key=lambda i: (today[i]["high"], -i))
         high = today[index]["high"]
         off = _pct(last, high)
-        on = (
-            index >= PULLBACK_MIN_HIGH_INDEX
-            and index < last_index
-            and off is not None
-            and off <= -PULLBACK_MIN_PCT
-        )
-        return MarketState(
-            kind, pullback=on, extreme_time=today[index]["dt"].strftime("%H:%M"),
-            extreme_price=high, start_dt=today[index]["dt"] if on else None,
-            spy_from_extreme_pct=off, **common,
-        )
-    if kind == "down_day":
+        at_high = vwaps[index]
+        made_above = at_high is not None and today[index]["close"] > at_high
+        on = made_above and turn_on(index, off, off is not None and off <= -PULLBACK_MIN_PCT)
+        if on or last > vwap:
+            return MarketState(
+                "up_day", pullback=on, extreme_time=today[index]["dt"].strftime("%H:%M"),
+                extreme_price=high, start_dt=today[index]["dt"] if on else None,
+                spy_from_extreme_pct=off, **common,
+            )
+    if last < session_open:
         index = min(range(len(today)), key=lambda i: (today[i]["low"], i))
         low = today[index]["low"]
         off = _pct(last, low)
-        on = (
-            index >= PULLBACK_MIN_HIGH_INDEX
-            and index < last_index
-            and off is not None
-            and off >= PULLBACK_MIN_PCT
-        )
-        return MarketState(
-            kind, bounce=on, extreme_time=today[index]["dt"].strftime("%H:%M"),
-            extreme_price=low, start_dt=today[index]["dt"] if on else None,
-            spy_from_extreme_pct=off, **common,
-        )
-    return MarketState(kind, **common)
+        at_low = vwaps[index]
+        made_below = at_low is not None and today[index]["close"] < at_low
+        on = made_below and turn_on(index, off, off is not None and off >= PULLBACK_MIN_PCT)
+        if on or last < vwap:
+            return MarketState(
+                "down_day", bounce=on, extreme_time=today[index]["dt"].strftime("%H:%M"),
+                extreme_price=low, start_dt=today[index]["dt"] if on else None,
+                spy_from_extreme_pct=off, **common,
+            )
+    return MarketState("flat", **common)
 
 
 # ---------------------------------------------------------------- rows
@@ -332,10 +350,7 @@ def measure_symbol(
     day_pct = _pct(last, reference)
     volumes = [bar.get("volume") for bar in today]
     session_vol = None if any(v is None for v in volumes) else float(sum(volumes))
-    stale = bool(
-        reference_end is not None
-        and last_bar["dt"] < reference_end - timedelta(minutes=BAR_MINUTES * STALE_BARS_ALLOWED)
-    )
+    stale = bool(reference_end is not None and last_bar["dt"] < reference_end)
     passes = (
         last > MIN_PRICE and session_vol is not None and session_vol >= MIN_SESSION_VOLUME
     )
@@ -398,18 +413,15 @@ def build_movers_board(
     spy = normalize_bars(spy_bars or (), now=now, local_tz=local_tz)
     moment = now if now.tzinfo is not None else now.replace(tzinfo=local_tz or NY_TZ)
     today_date = moment.astimezone(NY_TZ).date()
-    state = market_state(spy, today_date)
+    cutoff = freshness_cutoff(moment)
+    state = market_state(spy, today_date, fresh_after=cutoff)
     normalised = {
         str(sym).strip().upper(): normalize_bars(bars, now=now, local_tz=local_tz)
         for sym, bars in (bars_by_symbol or {}).items()
         if str(sym or "").strip()
     }
     normalised.pop("SPY", None)
-    ends = [bars[-1]["dt"] for bars in normalised.values() if bars
-            and bars[-1]["dt"].date() == today_date]
-    if spy and spy[-1]["dt"].date() == today_date:
-        ends.append(spy[-1]["dt"])
-    reference_end = max(ends) if ends else None
+    reference_end = cutoff
 
     rows: dict[str, MoverRow] = {}
     for symbol, bars in normalised.items():
@@ -457,8 +469,13 @@ def build_movers_board(
             data["focus_side"] = side
             mine[side].append(data)
 
+    spy_today = split_today(spy, today_date)[1]
+    spy_last_bar = spy_today[-1]["dt"] if spy_today else None
     return {
-        "as_of": now.isoformat(timespec="seconds"),
+        "as_of": spy_last_bar.isoformat(timespec="seconds") if spy_last_bar else "",
+        "as_of_stale": spy_last_bar is None or spy_last_bar < cutoff,
+        "tick_at": now.isoformat(timespec="seconds"),
+        "fresh": sum(1 for r in rows.values() if r.last is not None and not r.stale),
         "state": state.to_dict(),
         "pop": {"long": [r.to_dict() for r in pop_long[:top_n]],
                 "short": [r.to_dict() for r in pop_short[:top_n]]},
