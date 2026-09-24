@@ -131,9 +131,9 @@ def symbol_for_stem(stem: str) -> str:
 
 def _default_downloader(symbols: list[str], *, period: str):
     """The one network call. yfinance, batched, adjusted prices OFF."""
-    import yfinance as yf
+    from yahoo_download import download
 
-    return yf.download(
+    return download(
         tickers=" ".join(symbols),
         period=period,
         interval="1d",

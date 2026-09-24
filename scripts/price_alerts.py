@@ -316,9 +316,9 @@ def fetch_last_quotes(
 
 
 def _default_quote_downloader(symbols: list[str]):
-    import yfinance as yf
+    from yahoo_download import download
 
-    return yf.download(
+    return download(
         tickers=" ".join(symbols),
         period="1d",
         interval="1m",

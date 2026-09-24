@@ -1,13 +1,17 @@
 """Owner of the Movers board's data: one QObject, one timer, one worker at a time.
 
 Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
-1. reads cached M5 bars from the live bot (`m5_chart_bars`, cache only, never an
+1. asks the IB market scanner (`ib_market_scanner`, its own client id, scanner
+   subscriptions only) for today's top % gainers, losers and hot-by-volume
+   names; a failed scan reuses today's last good list;
+2. reads cached M5 bars from the live bot (`m5_chart_bars`, cache only, never an
    IB request; on the process proxy that is one RPC per symbol, spaced out, and
-   always off the Qt thread) for the bot's scan set, SPY and the Focus names;
-2. when the bot's scan set is under `BOT_UNIVERSE_MIN` names, also downloads
-   the liquid universe's 5m bars from yfinance in batches, on its own 5-minute
-   cadence; otherwise gap-fills from yfinance only the names whose bot series
+   always off the Qt thread) for SPY, the bot's scan set, the Focus names and
+   the scanner names, then gap-fills from yfinance only the names whose series
    is stale or missing (capped at GAP_FILL_MAX, most liquid first);
+   with no scanner list today, falls back to the old path: under
+   `BOT_UNIVERSE_MIN` bot names it downloads the liquid universe's 5m bars on
+   its own 5-minute cadence, otherwise it gap-fills;
 3. fetches a ~20-session 5m history once per symbol per day for the RVOL
    baseline (batched yfinance, kept in memory);
 4. builds the board with `movers_scan.build_movers_board`, adds group tags
@@ -16,7 +20,8 @@ Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
 5. feeds the Dip-strong outcome tracker and appends its rows to
    `MOVERS_DIP_OUTCOMES_FILE` (a failed write loses the rows, never the board).
 
-Zero IB traffic. Display only: no alerts, no watchlist or Focus writes. A failed
+Zero IB historical or market-data traffic: the scanner client sends scanner
+subscriptions only, from the worker thread. Display only: no alerts, no watchlist or Focus writes. A failed
 tick keeps the last good board and says so in the status line.
 """
 
@@ -80,6 +85,13 @@ GAP_EMPTY_BACKOFF_TICKS = 3
 BASELINE_RETRY_MINUTES = 15
 #: Gap between two proxy RPCs, so Qt-thread RPCs are not starved of its lock.
 RPC_GAP_SECONDS = 0.01
+#: A worker running longer than this is called stuck in the status line.
+HUNG_WORKER_MINUTES = 4
+#: board["candidate_source"] values.
+SOURCE_SCANNER = "ib_scanner"
+SOURCE_SCANNER_STALE = "ib_scanner_stale"
+SOURCE_UNIVERSE = "yahoo_universe"
+SOURCE_BOT = "bot_scan_set"
 #: Regular session in New York, with a few minutes for the last bar to close.
 _RTH_START = dt_time(9, 30)
 _RTH_END = dt_time(16, 5)
@@ -224,6 +236,7 @@ class MoversService(QObject):
         industry_provider: Callable[[], Mapping[str, str]] | None = None,
         earnings_provider: Callable[[date], Iterable[str]] | None = None,
         outcomes_path=None,
+        scanner: Callable[[], Mapping[str, list[str]]] | None = None,
     ) -> None:
         super().__init__(parent)
         self._industry_provider = industry_provider or default_industry_map
@@ -248,6 +261,13 @@ class MoversService(QObject):
         self._downloader = downloader
         self._universe_provider = universe_provider or liquid_universe
         self._clock = clock or (lambda: datetime.now().astimezone())
+        self._scanner = scanner
+        self._ib_scanner = None  # the real client, built on the worker thread
+        self._scanner_names: list[str] = []
+        self._scanner_day: date | None = None
+        self._scanner_error = ""
+        self._candidate_source = ""
+        self._run_started: datetime | None = None
         self._running = False
         self._board: dict[str, Any] = {}
         self._last_success: datetime | None = None
@@ -280,7 +300,23 @@ class MoversService(QObject):
     def board(self) -> dict[str, Any]:
         return dict(self._board)
 
+    def _stuck_since(self) -> datetime | None:
+        """When the running worker started, if that was over HUNG_WORKER_MINUTES ago."""
+        started = self._run_started
+        if not self._running or started is None:
+            return None
+        try:
+            if self._clock() - started > timedelta(minutes=HUNG_WORKER_MINUTES):
+                return started
+        except Exception:
+            return None
+        return None
+
     def status_text(self) -> str:
+        stuck = self._stuck_since()
+        if stuck is not None:
+            return (f"Movers: refresh stuck since {stuck.strftime('%H:%M')} "
+                    "- board not updating (restart the desk to clear)")
         if self._running:
             return "Movers: refreshing..."
         if self._last_success is None:
@@ -288,7 +324,10 @@ class MoversService(QObject):
                 f" (last attempt failed: {self._last_error})" if self._last_error else ""
             )
         suffix = f" · last refresh FAILED: {self._last_error}" if self._last_error else ""
-        return f"Movers {self._last_success.strftime('%H:%M:%S')}{suffix}"
+        source = f" · {self._candidate_source}" if self._candidate_source else ""
+        if self._scanner_error and self._candidate_source != SOURCE_SCANNER:
+            source += f" (scanner: {self._scanner_error})"
+        return f"Movers {self._last_success.strftime('%H:%M:%S')}{source}{suffix}"
 
     # ------------------------------------------------------------ control
     def refresh_now(self) -> bool:
@@ -298,6 +337,11 @@ class MoversService(QObject):
     def shutdown(self) -> None:
         self._stopped = True
         self._timer.stop()
+        client = self._ib_scanner
+        if client is not None:
+            # Disconnect joins a thread: never on the Qt thread.
+            threading.Thread(target=client.close, name="movers-ib-scanner-close",
+                             daemon=True).start()
 
     def _arm(self) -> None:
         """Schedule the next tick at the next bar boundary plus the grace."""
@@ -311,7 +355,11 @@ class MoversService(QObject):
 
     def _tick(self) -> None:
         try:
-            if not self._running and in_regular_hours(self._clock()):
+            stuck = self._stuck_since()
+            if stuck is not None:
+                logging.warning("Movers worker stuck since %s; ticks are skipped", stuck.isoformat())
+                self.statusChanged.emit(self.status_text())
+            elif not self._running and in_regular_hours(self._clock()):
                 self._start()
         except Exception:
             logging.exception("Movers tick failed")
@@ -341,6 +389,10 @@ class MoversService(QObject):
         if self._running:
             return False
         self._running = True
+        try:
+            self._run_started = self._clock()
+        except Exception:
+            self._run_started = None
         focus = self._focus_snapshot()
         threading.Thread(
             target=self._worker, args=(focus,), name="movers-board", daemon=True
@@ -371,11 +423,12 @@ class MoversService(QObject):
             self._baseline_tried = {}
             self._baseline_day = today
 
+        scanned = self._scanner_candidates(today)
         bot = self._bot_provider() if self._bot_provider is not None else None
         universe = bot_universe(bot)
         self.bot_universe_size = len(universe) if bot is not None else None
         focus_names = [*focus.get("long", []), *focus.get("short", [])]
-        wanted = list(dict.fromkeys(["SPY", *universe, *focus_names]))
+        wanted = list(dict.fromkeys(["SPY", *universe, *focus_names, *scanned]))
         bot_bars = read_bot_bars(bot, wanted)
 
         downloader = self._downloader
@@ -383,7 +436,11 @@ class MoversService(QObject):
             import autopilot_core as core
 
             downloader = core._default_downloader
-        if len(universe) < BOT_UNIVERSE_MIN and self._yahoo_due(now):
+        if scanned:
+            # The scanner picked the candidates: Yahoo only for names the bot lacks.
+            self._gap_fill(wanted, bot_bars, now=now, local_tz=local_tz, downloader=downloader)
+        elif len(universe) < BOT_UNIVERSE_MIN and self._yahoo_due(now):
+            self._candidate_source = SOURCE_UNIVERSE
             try:
                 pool = list(dict.fromkeys(["SPY", *self._universe_provider(), *wanted]))
             except Exception:
@@ -395,6 +452,10 @@ class MoversService(QObject):
                 self._yahoo_at = now
 
         else:
+            if len(universe) >= BOT_UNIVERSE_MIN:
+                self._candidate_source = SOURCE_BOT
+            elif not self._candidate_source:
+                self._candidate_source = SOURCE_UNIVERSE  # sweep not due: last sweep's bars
             self._gap_fill(wanted, bot_bars, now=now, local_tz=local_tz, downloader=downloader)
 
         self._refresh_daily_tags(today)
@@ -438,6 +499,9 @@ class MoversService(QObject):
         board["yahoo_universe"] = len(self._yahoo_bars)
         board["gap_filled"] = self._gap_count
         board["gap_filled_at"] = self._gap_at.isoformat(timespec="seconds") if self._gap_at else ""
+        board["candidate_source"] = self._candidate_source
+        board["scanner_names"] = len(self._scanner_names)
+        board["scanner_error"] = self._scanner_error
         self._board = board
         self._last_success = datetime.now()
         self.moversChanged.emit(dict(board))
@@ -460,6 +524,46 @@ class MoversService(QObject):
                 records = []
             if records:
                 movers_outcomes.append_records(self._outcomes_path, records)
+
+    # ------------------------------------------------------------ IB scanner
+    def _run_scanner(self) -> Mapping[str, list[str]]:
+        """The injected scanner, or the real IB client built lazily here (worker thread)."""
+        if self._scanner is not None:
+            return self._scanner()
+        if self._ib_scanner is None:
+            import ib_market_scanner
+
+            self._ib_scanner = ib_market_scanner.IBMarketScanner()
+        return self._ib_scanner.run_scans()
+
+    def _scanner_candidates(self, today: date) -> list[str]:
+        """Scanner names for this tick; today's last good list when the scan fails;
+        empty when there is no list today (the caller falls back to the old path)."""
+        error = ""
+        names: list[str] = []
+        try:
+            results = self._run_scanner() or {}
+            names = list(dict.fromkeys(
+                str(s or "").strip().upper()
+                for scan in results.values() for s in (scan or ()) if str(s or "").strip()
+            ))
+            if not names:
+                error = "scanner returned no names"
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+        if names:
+            self._scanner_names, self._scanner_day = names, today
+            self._scanner_error = ""
+            self._candidate_source = SOURCE_SCANNER
+            return names
+        if error != self._scanner_error:
+            logging.warning("Movers: IB scanner unavailable: %s", error)
+        self._scanner_error = error
+        if self._scanner_day == today and self._scanner_names:
+            self._candidate_source = SOURCE_SCANNER_STALE
+            return list(self._scanner_names)
+        self._candidate_source = ""
+        return []
 
     # ------------------------------------------------------------ daily tags
     def _refresh_daily_tags(self, today: date) -> None:

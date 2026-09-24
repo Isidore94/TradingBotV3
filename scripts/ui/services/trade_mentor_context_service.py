@@ -310,8 +310,8 @@ def _yahoo_loader(timeframe: str, symbols: tuple[str, ...], *, now: datetime, ti
     """One Yahoo batch for the names whose local cache could not answer."""
     if not symbols:
         return {}
-    import yfinance as yf
     from autopilot_core import _frame_rows
+    from yahoo_download import download
 
     kwargs = {
         "tickers": " ".join(symbols),
@@ -322,7 +322,7 @@ def _yahoo_loader(timeframe: str, symbols: tuple[str, ...], *, now: datetime, ti
     }
     if timeframe == "m5":
         kwargs["prepost"] = False
-    data = yf.download(**kwargs)
+    data = download(**kwargs)
     result: dict[str, list[dict[str, Any]]] = {}
     for symbol in symbols:
         frame = _symbol_frame(data, symbol, len(symbols))
