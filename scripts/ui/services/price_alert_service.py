@@ -37,6 +37,13 @@ _ANNOUNCED_WATCH_ID_LIMIT = 2_000
 #: still running when the budget expires can never hold the process.
 ARMED_PUSH_SHUTDOWN_WAIT_SECONDS = 2.0
 
+#: How long a read of the Auto mode file is trusted. A flip reaches the
+#: service at once through `set_auto_mode`; this only bounds a missed wire.
+_AUTO_MODE_CACHE_SECONDS = 5.0
+
+#: DESK sends nothing to the phone (trader, 2026-09-23).
+PHONE_QUIET_MODE = "DESK"
+
 
 class PriceAlertService(QObject):
     """Polls last prices for armed alert entries and fires push notifications.
@@ -71,6 +78,8 @@ class PriceAlertService(QObject):
         #: thread adds to both while a worker may still be finishing.
         self._armed_push_threads: list[threading.Thread] = []
         self._armed_push_lock = threading.Lock()
+        #: (monotonic stamp, mode) of the last Auto mode reading.
+        self._auto_mode_cache: tuple[float, str] | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(_POLL_INTERVAL_MS)
         self._timer.timeout.connect(self.check_now)
@@ -154,6 +163,37 @@ class PriceAlertService(QObject):
         self.statusChanged.emit(self.status_snapshot())
         return result
 
+    # ------------------------------------------------------------------
+    # Auto mode
+    # ------------------------------------------------------------------
+    def set_auto_mode(self, mode: str) -> None:
+        """The Auto mode just changed; take it now rather than at the next read."""
+        text = str(mode or "").strip().upper() or "OFF"
+        self._auto_mode_cache = (time.monotonic(), text)
+
+    def on_auto_mode_changed(self, _previous: str, current: str) -> None:
+        """Slot for `AutopilotService.autoModeChanged`."""
+        self.set_auto_mode(current)
+
+    def _current_auto_mode(self) -> str:
+        """OFF/DESK/AWAY/EVENING, re-read from the Auto Pilot state file at most
+        every few seconds. An unreadable mode reads OFF, which still pushes."""
+        cached = self._auto_mode_cache
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < _AUTO_MODE_CACHE_SECONDS:
+            return cached[1]
+        try:
+            import autopilot_core as core
+
+            mode = str(core.read_auto_pilot_mode() or "OFF").upper()
+        except Exception:
+            mode = "OFF"
+        self._auto_mode_cache = (now, mode)
+        return mode
+
+    def _phone_quiet(self) -> bool:
+        return self._current_auto_mode() == PHONE_QUIET_MODE
+
     def notify_armed_watch(
         self,
         *,
@@ -162,9 +202,11 @@ class PriceAlertService(QObject):
         message: str,
         event_key: str | None = None,
     ) -> dict[str, Any]:
-        """Push one TRADER-ARMED watch hit, once, in every Auto mode.
+        """Push one TRADER-ARMED watch hit, once, in AWAY, EVENING and OFF.
 
-        AWAY is the only mode that pushes routine output. The armed
+        DESK sends nothing to the phone (trader, 2026-09-23): the hit is still
+        on the feed, only the push is skipped, and the result says
+        ``skipped: "DESK"``. The armed
         Research/Focus price alerts are the standing exception - the trader
         asked for that exact condition and is waiting on it - and an armed
         chart watch is the same request made from the chart instead of the
@@ -208,6 +250,9 @@ class PriceAlertService(QObject):
                 "ok": False,
                 "error": "Phone pushes originate from the main desk only.",
             }
+        if self._phone_quiet():
+            logging.info("ARMED WATCH %s (DESK - phone quiet)", message)
+            return {"ok": False, "skipped": PHONE_QUIET_MODE, "watch_id": watch_id}
         if key:
             with self._armed_push_lock:
                 if key in self._announced_watch_ids:
@@ -432,9 +477,26 @@ class PriceAlertService(QObject):
         # Trader decision: every price crossing is urgent, including rows made
         # from the advanced Research view. The store has no origin marker.
         priority = "urgent"
+        # DESK keeps the phone quiet; the desk still shows every crossing.
+        quiet = self._phone_quiet()
         for trigger in triggers:
             message = price_alerts.format_trigger_message(trigger)
             tags = "chart_with_upwards_trend" if trigger.get("side") == "above" else "chart_with_downwards_trend"
+            payload = dict(trigger)
+            if quiet:
+                logging.info("PRICE ALERT %s (DESK - phone quiet)", message)
+                payload.update(
+                    {
+                        "message": message,
+                        "priority": priority,
+                        "push_ok": None,
+                        "push_error": "",
+                        "push_skipped": PHONE_QUIET_MODE,
+                    }
+                )
+                self.triggered.emit(message)
+                self.alertTriggered.emit(payload)
+                continue
             result = push_notify.send_push(
                 "Price alert", message, priority=priority, tags=tags
             )
@@ -444,7 +506,6 @@ class PriceAlertService(QObject):
                 message,
                 "sent" if result.get("ok") else (self._last_push_error or "not configured"),
             )
-            payload = dict(trigger)
             payload.update(
                 {
                     "message": message,

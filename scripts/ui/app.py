@@ -198,6 +198,10 @@ class MainWindow(QMainWindow):
         # attached; the trader asked for that to stop. Nothing here reaches a
         # detector, score, alert, watchlist, Focus or the queue.
         self.autopilot_panel.service.autoModeChanged.connect(self._record_auto_mode_flip)
+        # The phone sender learns a flip at once (DESK is phone-quiet).
+        self.autopilot_panel.service.autoModeChanged.connect(
+            self.trading_panel.price_alert_service.on_auto_mode_changed
+        )
         # TJ-1 item 6(b): the staged-pick table lives on the Auto Pilot page now.
         # The ADD is still performed here, by the store's own owner.
         self.autopilot_panel.focusAddRequested.connect(self._add_staged_pick_to_focus)
