@@ -225,7 +225,8 @@ def test_benchmark_backfill_apply_refuses_while_a_build_runs(store, bars_dir, tm
 
 # --- 3. market context v2 --------------------------------------------------
 def test_the_bias_definition_is_versioned_and_v1_is_history():
-    assert market_bias_context.BIAS_DEFINITION_ID == "auto_market_bias_multiframe_v2"
+    assert market_bias_context.BIAS_DEFINITION_ID == "auto_market_bias_multiframe_v3"
+    assert "auto_market_bias_multiframe_v2" in market_bias_context.BIAS_DEFINITION_HISTORY
     assert market_bias_context.BIAS_DEFINITION_HISTORY[-1] == market_bias_context.BIAS_DEFINITION_ID
     assert "auto_market_bias_multiframe_v1" in market_bias_context.BIAS_DEFINITION_HISTORY
 
@@ -405,3 +406,41 @@ def test_context_entry_matches_the_outcome_entry_even_months_later(store, bars_d
     expected, _session = outcomes._entry_bar_after_d1_close(early, spy_m5)
     rows = [row for row in store.read_rows("setup_market_context") if row["occurrence_id"] == "occ-early"]
     assert {row["entry_at"] for row in rows} == {expected["interval_end"]}
+
+
+def test_the_champion_read_works_when_run_as_a_package_module():
+    """`python -m scripts.research_warehouse.cli` has no scripts/ on sys.path; the read must still work."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    code = (
+        "import sys\n"
+        "sys.path[:] = [p for p in sys.path if not p.replace(chr(92), '/').rstrip('/').lower().endswith('scripts')]\n"
+        "from scripts.research_warehouse import market_bias_context as m\n"
+        "rows = [{'open': 100 + i, 'high': 101 + i, 'low': 99 + i, 'close': 100 + i, 'volume': 1000} for i in range(20)]\n"
+        "print(m._champion_read(rows, 99.0)['env_key'])\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] != "unknown"
+
+
+def test_a_missing_champion_module_fails_loudly_rather_than_writing_unknown(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_legacy(name, *args, **kwargs):
+        if name.endswith("bounce_bot_lib.legacy"):
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(market_bias_context, "_REGIME_STATS", None, raising=False)
+    monkeypatch.setattr(builtins, "__import__", _no_legacy)
+    rows = [{"open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}]
+    with pytest.raises(ModuleNotFoundError):
+        market_bias_context._champion_read(rows, 1.0)

@@ -8,8 +8,10 @@ only; it cannot reach a detector, score or alert.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,9 +30,14 @@ except ImportError:  # pragma: no cover
 #: v2 is the v1 formula with SPY D1 bars actually in the lake. Every v1 D1 row
 #: and every v1 M5 row (needs the previous SPY D1 close) read no SPY D1 and is
 #: unknown; v1 rows stay as history and readers prefer the newest definition.
-BIAS_DEFINITION_ID = "auto_market_bias_multiframe_v2"
+#: v3 is v2 with the champion import working under ``python -m``.
+BIAS_DEFINITION_ID = "auto_market_bias_multiframe_v3"
 #: Oldest first; the last entry is the one written now.
-BIAS_DEFINITION_HISTORY = ("auto_market_bias_multiframe_v1", BIAS_DEFINITION_ID)
+BIAS_DEFINITION_HISTORY = (
+    "auto_market_bias_multiframe_v1",
+    "auto_market_bias_multiframe_v2",
+    BIAS_DEFINITION_ID,
+)
 TIMEFRAMES = ("M5", "M30", "H1", "H4", "D1")
 ROLLING_BARS = 20
 UNKNOWN = "unknown"
@@ -71,13 +78,28 @@ def _worst_capture_mode(rows) -> str:
     return max(modes, key=lambda mode: rank.get(mode, 4), default="")
 
 
+_SCRIPTS_DIR = str(Path(__file__).resolve().parents[1])
+_REGIME_STATS = None
+
+
+def _regime_stats():
+    """The champion's pure Auto Market Bias function, importable under ``python -m`` too."""
+    global _REGIME_STATS
+    if _REGIME_STATS is None:
+        if _SCRIPTS_DIR not in sys.path:
+            sys.path.insert(0, _SCRIPTS_DIR)
+        from bounce_bot_lib.legacy import _auto_market_regime_stats
+
+        _REGIME_STATS = _auto_market_regime_stats
+    return _REGIME_STATS
+
+
 def _champion_read(rows: list[dict], reference_close: float | None) -> dict[str, Any]:
     if reference_close is None or not rows:
         return {"env_key": UNKNOWN, "source": "insufficient_completed_bars"}
+    regime_stats = _regime_stats()  # an import failure raises: a code fault, never "unknown"
     try:
-        from bounce_bot_lib.legacy import _auto_market_regime_stats
-
-        reading = _auto_market_regime_stats([_bar_object(row) for row in rows], reference_close)
+        reading = regime_stats([_bar_object(row) for row in rows], reference_close)
     except Exception:
         reading = None
     if reading is None:
