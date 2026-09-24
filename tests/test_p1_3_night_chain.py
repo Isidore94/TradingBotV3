@@ -224,6 +224,153 @@ def test_health_and_phone_digest_say_when_the_probe_failed(tmp_path):
     assert "Night AI: Ollama: DOWN" in operations
 
 
+# ---------------------------------------------------------------------------
+# 3a: the night budget
+# ---------------------------------------------------------------------------
+
+
+def _ran(job, minutes, day="2026-08-05"):
+    return {
+        "job": job,
+        "status": "ok",
+        "session_date": day,
+        "started_at": f"{day}T23:00:00-04:00",
+        "duration_seconds": minutes * 60.0,
+    }
+
+
+def test_the_budget_holds_room_for_higher_priority_slots_that_run_later(tmp_path, night):
+    """`ticker_briefs` runs before `market_story_narration` and `setup_research`
+    in the slate, but it is last in priority, so it is the one skipped."""
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    calls: list[str] = []
+
+    def job(name):
+        return lambda **k: calls.append(name) or {}
+
+    slots = [
+        _slot("journal_import", job("journal_import")),
+        _slot("ticker_briefs", job("ticker_briefs"), uses_model=True, reserve=120.0),
+        _slot("market_story_narration", job("market_story_narration"), uses_model=True, reserve=15.0),
+        _slot("setup_research", job("setup_research"), uses_model=True, reserve=20.0),
+    ]
+    runner.run_slots(slots, now=OVERNIGHT, ledger_path=led, budget_minutes=150.0)
+
+    assert calls == ["journal_import", "market_story_narration", "setup_research"]
+    skip = [r for r in _rows(led) if r["job"] == "ticker_briefs"][0]
+    assert skip["status"] == "skipped" and skip["night_budget"] is True
+    assert skip["reason"].startswith("night budget: 150 of 150 min left")
+    assert "35 min held for market_story_narration, setup_research" in skip["reason"]
+
+
+def test_a_spent_night_skips_model_slots_but_not_deterministic_work(tmp_path, night):
+    from ai_jobs import runner
+
+    led = _write_rows(
+        tmp_path / "ledger.jsonl",
+        # this night's first row: 22:00 ET, four hours before OVERNIGHT
+        [{"job": "journal_import", "status": "ok", "session_date": "2026-08-11",
+          "started_at": "2026-08-11T22:00:00-04:00", "duration_seconds": 40.0}],
+    )
+    calls: list[str] = []
+    slots = [
+        _slot("evidence_report", lambda **k: calls.append("det") or {}),
+        _slot("day_review_narration", lambda **k: calls.append("story") or {},
+              uses_model=True, reserve=10.0),
+    ]
+    runner.run_slots(slots, now=OVERNIGHT, ledger_path=led, budget_minutes=150.0)
+    runner.run_slots(slots, now=OVERNIGHT, ledger_path=led, budget_minutes=150.0)
+
+    assert calls == ["det"], "deterministic work runs; the model slot never does"
+    skips = [r for r in _rows(led) if r["job"] == "day_review_narration"]
+    assert len(skips) == 1, "one budget row per slot per session, not one per firing"
+    assert skips[0]["reason"].startswith("night budget: 0 of 150 min left")
+
+
+def test_the_estimate_comes_from_measured_runs_not_the_reserve(tmp_path, night):
+    from ai_jobs import runner
+
+    led = _write_rows(
+        tmp_path / "ledger.jsonl",
+        [_ran("ticker_briefs", 4.0), _ran("ticker_briefs", 6.0), _ran("ticker_briefs", 5.0)],
+    )
+    calls: list[str] = []
+    slot = _slot("ticker_briefs", lambda **k: calls.append("briefs") or {},
+                 uses_model=True, reserve=120.0)
+    runner.run_slots([slot], now=OVERNIGHT, ledger_path=led, budget_minutes=30.0)
+    assert calls == ["briefs"], "a 5-minute measured job fits a 30-minute budget"
+
+
+def test_measured_slot_minutes_is_the_median_of_recent_real_runs(tmp_path):
+    from ai_jobs import model_probe
+
+    rows = [
+        _ran("a", 100.0), _ran("a", 1.0), _ran("a", 2.0), _ran("a", 3.0),
+        _ran("a", 4.0), _ran("a", 5.0),
+        {"job": "a", "status": "skipped", "duration_seconds": 9999.0},
+        _ran("b", 7.0),
+    ]
+    measured = model_probe.measured_slot_minutes(rows=rows, sample=5)
+    assert measured == {"a": 3.0, "b": 7.0}
+
+
+def test_the_budget_is_a_weeknight_rule_and_a_setting(monkeypatch):
+    from ai_jobs import runner, store
+
+    class _Paths:
+        settings: dict = {}
+
+        @classmethod
+        def get_local_setting(cls, key, default=None):
+            return cls.settings.get(key, default)
+
+    monkeypatch.setattr(store, "_paths", lambda: _Paths)
+    assert runner.night_budget_for("weeknight") == 150.0
+    assert runner.night_budget_for("saturday") == 0.0
+    assert runner.night_budget_for("sunday") == 0.0
+    _Paths.settings = {"ai_night_budget_minutes": 90}
+    assert runner.night_budget_for("weeknight") == 90.0
+    _Paths.settings = {"ai_night_budget_minutes": 0}
+    assert runner.night_budget_for("weeknight") == 0.0
+
+
+def test_priority_order_is_the_trader_list_with_ticker_briefs_last():
+    from ai_jobs import runner
+
+    order = sorted(
+        [
+            "ticker_briefs", "observation_tags", "econ_brief", "journal_enrichment",
+            "setup_research", "market_story_narration", "day_review_narration", "daily_digest",
+        ],
+        key=runner.model_slot_priority,
+    )
+    assert order == [
+        "daily_digest", "day_review_narration", "market_story_narration", "setup_research",
+        "journal_enrichment", "observation_tags", "econ_brief", "ticker_briefs",
+    ]
+
+
+def test_health_names_the_slots_the_budget_skipped(tmp_path):
+    import operations_audit
+
+    led = _write_rows(
+        tmp_path / "ai_job_ledger.jsonl",
+        [
+            {"job": "ticker_briefs", "status": "skipped", "session_date": "2026-09-22",
+             "night_budget": True, "reason": "night budget: ...", "started_at": "2026-09-23T01:00:00-07:00"},
+            {"job": "setup_research", "status": "skipped", "session_date": "2026-09-23",
+             "night_budget": True, "reason": "night budget: ...", "started_at": "2026-09-24T01:00:00-07:00"},
+            {"job": "observation_tags", "status": "skipped", "session_date": "2026-09-23",
+             "night_budget": True, "reason": "night budget: ...", "started_at": "2026-09-24T01:30:00-07:00"},
+        ],
+    )
+    assert "night budget 2026-09-23: skipped setup_research, observation_tags" in (
+        operations_audit.ai_night_lines(led)
+    )
+
+
 def test_a_healthy_probe_is_not_in_the_phone_digest(tmp_path):
     import operations_audit
 

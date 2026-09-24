@@ -496,10 +496,28 @@ def ai_probe_line(rows: list[dict[str, Any]]) -> str:
     return ""
 
 
+def ai_budget_line(rows: list[dict[str, Any]]) -> str:
+    """"night budget <session>: skipped a, b" for the newest session with budget skips, or ""."""
+    session = ""
+    for row in reversed(rows):
+        if row.get("night_budget"):
+            session = str(row.get("session_date") or "")
+            break
+    if not session:
+        return ""
+    names: list[str] = []
+    for row in rows:
+        if row.get("night_budget") and str(row.get("session_date") or "") == session:
+            name = str(row.get("job") or "")
+            if name and name not in names:
+                names.append(name)
+    return f"night budget {session}: skipped {', '.join(names)}"
+
+
 def ai_night_lines(path: Path | None = None) -> list[str]:
     """The Health page's night-chain lines (P1-3), read from the AI job ledger."""
     rows = _ai_ledger_rows(path)
-    return [line for line in (ai_probe_line(rows),) if line]
+    return [line for line in (ai_probe_line(rows), ai_budget_line(rows)) if line]
 
 
 def ai_night_digest_line(

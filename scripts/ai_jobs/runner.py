@@ -181,6 +181,81 @@ def _already_flagged(job: str, session_date: str, flag: str, *, path=None) -> bo
 #: Ledger flag on a model slot skipped because the night-start Ollama probe failed.
 MODEL_DOWN_FLAG = "model_down"
 
+#: P1-3 3a. Minutes a weeknight may spend, counted from its first ledger row.
+NIGHT_BUDGET_SETTING = "ai_night_budget_minutes"
+DEFAULT_NIGHT_BUDGET_MINUTES = 150.0
+#: Ledger flag on a model slot skipped because the night budget could not hold it.
+NIGHT_BUDGET_FLAG = "night_budget"
+#: Model slots in the order the budget protects them (the trader's P1-3 list).
+#: Slots not named sit after `observation_tags`; `ticker_briefs` is always last.
+#: The run order stays `EXPECTED_SLOT_ORDER`: a lower-priority slot that runs
+#: first must leave room for the higher-priority slots still to come.
+MODEL_SLOT_PRIORITY = (
+    "daily_digest",
+    "day_review_narration",
+    "market_story_narration",
+    "setup_research",
+    "journal_enrichment",
+    "observation_tags",
+)
+LAST_PRIORITY_SLOT = "ticker_briefs"
+
+
+def model_slot_priority(name: str) -> int:
+    """Lower is more important. Unlisted model slots rank after the list."""
+    if name == LAST_PRIORITY_SLOT:
+        return len(MODEL_SLOT_PRIORITY) + 1
+    if name in MODEL_SLOT_PRIORITY:
+        return MODEL_SLOT_PRIORITY.index(name)
+    return len(MODEL_SLOT_PRIORITY)
+
+
+def night_budget_minutes() -> float:
+    """The configured night budget in minutes; 0 means off."""
+    raw = store._paths().get_local_setting(NIGHT_BUDGET_SETTING, DEFAULT_NIGHT_BUDGET_MINUTES)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_NIGHT_BUDGET_MINUTES
+    return max(0.0, value)
+
+
+def night_budget_for(kind: str) -> float:
+    """The budget applies to weeknights; weekend nights keep the window as their limit."""
+    return night_budget_minutes() if str(kind) == NIGHT_WEEKNIGHT else 0.0
+
+
+def _night_elapsed_minutes(moment: datetime, ledger_path=None) -> float:
+    """Minutes since this night's first ledger row (0 when this firing is the first)."""
+    close = window.window_close_at(moment)
+    if close is None:
+        return 0.0
+    start, end = window.offhours_bounds()
+    length = (
+        datetime.combine(moment.date(), end) - datetime.combine(moment.date(), start)
+    ).total_seconds() / 60.0
+    if length <= 0:
+        length += 24 * 60
+    opened = close - timedelta(minutes=length)
+    target = ledger_path if ledger_path is not None else ledger.ledger_path(create=False)
+    try:
+        rows = ledger._read_rows(target)
+    except (OSError, ValueError):
+        return 0.0
+    first: datetime | None = None
+    for row in rows:
+        try:
+            stamp = datetime.fromisoformat(str(row.get("started_at") or ""))
+        except ValueError:
+            continue
+        if stamp.tzinfo is None or not (opened <= stamp <= moment):
+            continue
+        if first is None or stamp < first:
+            first = stamp
+    if first is None:
+        return 0.0
+    return max(0.0, (moment - first).total_seconds() / 60.0)
+
 
 def run_slots(
     slots: list[JobSlot],
@@ -191,6 +266,7 @@ def run_slots(
     ledger_path=None,
     session_override: str = "",
     probe: Callable[[], tuple[bool, str]] | None = None,
+    budget_minutes: float = 0.0,
 ) -> RunReport:
     """Run every due slot once. Never raises: a crash here is a lost night.
 
@@ -202,6 +278,10 @@ def run_slots(
     ``probe`` (P1-3 3e) is called once, before the first model slot this
     firing would run; if it fails, model slots are skipped (or run their
     deterministic half) and the night is deterministic only.
+
+    ``budget_minutes`` (P1-3 3a; 0 = off) caps the night: a model slot whose
+    measured cost does not fit what is left, after holding room for the
+    higher-priority model slots still to come, is skipped with a reason.
     """
 
     # ONE runner at a time on this machine (2026-08-28). The scheduled task
@@ -229,6 +309,7 @@ def run_slots(
                 ledger_path=ledger_path,
                 session_override=session_override,
                 probe=probe,
+                budget_minutes=budget_minutes,
             )
     except LocalLockUnavailable as exc:
         # The lock reports both "someone else holds it" and "this box has no
@@ -254,6 +335,7 @@ def run_slots(
                 ledger_path=ledger_path,
                 session_override=session_override,
                 probe=probe,
+                budget_minutes=budget_minutes,
             )
         logging.info(
             "AI jobs: another run is already in progress on this machine; leaving it "
@@ -271,6 +353,7 @@ def _run_slots_locked(
     ledger_path=None,
     session_override: str = "",
     probe: Callable[[], tuple[bool, str]] | None = None,
+    budget_minutes: float = 0.0,
 ) -> RunReport:
     """The body of :func:`run_slots`, always under the machine-local lock."""
     from market_calendar import SessionCalendarError
@@ -309,8 +392,16 @@ def _run_slots_locked(
     already = set() if force else ledger.completed_jobs(session_date, path=ledger_path)
     #: (answered, detail) once the Ollama probe has run this firing.
     probe_state: tuple[bool, str] | None = None
+    budget = float(budget_minutes or 0.0) if not force else 0.0
+    firing_clock = time.perf_counter()
+    night_elapsed = _night_elapsed_minutes(moment, ledger_path) if budget else 0.0
+    estimates: dict[str, float] = {}
+    if budget:
+        from ai_jobs import model_probe
 
-    for slot in slots:
+        estimates = model_probe.measured_slot_minutes(ledger_path=ledger_path)
+
+    for index, slot in enumerate(slots):
         if only and slot.name != only:
             continue
         if not slot.enabled:
@@ -446,6 +537,38 @@ def _run_slots_locked(
             logging.info("AI job %s skipped: %s", slot.name, reason)
             continue
 
+        # P1-3 3a: the night budget, with room held for higher-priority model slots.
+        if budget and slot.uses_model and not model_free:
+            budget_reason = _budget_refusal(
+                slot,
+                later=[
+                    other
+                    for other in slots[index + 1 :]
+                    if other.uses_model
+                    and other.enabled
+                    and other.name not in already
+                    and (not only or other.name == only)
+                ],
+                budget=budget,
+                spent=night_elapsed + (time.perf_counter() - firing_clock) / 60.0,
+                estimates=estimates,
+            )
+            if budget_reason:
+                if not _already_flagged(
+                    slot.name, run_session, NIGHT_BUDGET_FLAG, path=ledger_path
+                ):
+                    row = ledger.record(
+                        job=slot.name,
+                        status=ledger.STATUS_SKIPPED,
+                        session_date=run_session,
+                        reason=budget_reason,
+                        path=ledger_path,
+                        extra={NIGHT_BUDGET_FLAG: True},
+                    )
+                    report.results.append(row)
+                logging.info("AI job %s skipped: %s", slot.name, budget_reason)
+                continue
+
         # P1-3 3e: one Ollama probe per firing, before the first model slot.
         model_down = ""
         if slot.uses_model and not model_free and probe is not None:
@@ -579,6 +702,39 @@ def _run_slots_locked(
             break
 
     return report
+
+
+def _budget_refusal(
+    slot: JobSlot,
+    *,
+    later: list[JobSlot],
+    budget: float,
+    spent: float,
+    estimates: Mapping[str, float],
+) -> str:
+    """Why ``slot`` does not fit the night budget, or "" when it does."""
+
+    def _cost(item: JobSlot) -> float:
+        return float(estimates.get(item.name) or item.reserve_minutes or 0.0)
+
+    rank = model_slot_priority(slot.name)
+    held = [item for item in later if model_slot_priority(item.name) < rank]
+    held_minutes = sum(_cost(item) for item in held)
+    need = _cost(slot)
+    remaining = budget - spent
+    if need <= remaining - held_minutes:
+        return ""
+    measured = "measured" if slot.name in estimates else "reserved"
+    text = (
+        f"night budget: {max(0.0, remaining):.0f} of {budget:.0f} min left, "
+        f"this slot needs about {need:.0f} min ({measured})"
+    )
+    if held:
+        text += (
+            f"; {held_minutes:.0f} min held for "
+            + ", ".join(item.name for item in held)
+        )
+    return text + "; skipped"
 
 
 def _run_probe(
