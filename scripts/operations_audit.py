@@ -514,10 +514,38 @@ def ai_budget_line(rows: list[dict[str, Any]]) -> str:
     return f"night budget {session}: skipped {', '.join(names)}"
 
 
+def journal_import_line(rows: list[dict[str, Any]]) -> str:
+    """"journal import: last success <date>, last error <one line>" (P1-3 3d), or ""."""
+    runs = [row for row in rows if str(row.get("job") or "") == "journal_import"]
+    if not runs:
+        return ""
+    success = next(
+        (row for row in reversed(runs) if str(row.get("status") or "") in ("ok", "manual_test")),
+        None,
+    )
+    failure = next(
+        (row for row in reversed(runs) if str(row.get("status") or "") == "failed"), None
+    )
+    success_text = (
+        str(success.get("session_date") or "") or _short_ai_stamp(success.get("started_at"))
+        if success
+        else "never"
+    )
+    if failure:
+        error_text = (
+            f"{str(failure.get('session_date') or '')}: "
+            + _one_line(failure.get("error") or failure.get("reason"))
+        )
+    else:
+        error_text = "none"
+    return f"journal import: last success {success_text}, last error {error_text}"
+
+
 def ai_night_lines(path: Path | None = None) -> list[str]:
     """The Health page's night-chain lines (P1-3), read from the AI job ledger."""
     rows = _ai_ledger_rows(path)
-    return [line for line in (ai_probe_line(rows), ai_budget_line(rows)) if line]
+    lines = (ai_probe_line(rows), ai_budget_line(rows), journal_import_line(rows))
+    return [line for line in lines if line]
 
 
 def ai_night_digest_line(

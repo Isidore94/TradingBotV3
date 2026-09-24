@@ -13,7 +13,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 import zoneinfo
 
@@ -1232,14 +1232,63 @@ def parse_ibkr_flex_statement(
     return executions
 
 
+#: Flex answers that mean "the statement is not ready yet; ask again later".
+IBKR_FLEX_NOT_READY_MARKERS = (
+    "try again shortly",
+    "could not be generated at this time",
+    "could not be retrieved at this time",
+    "still generating",
+)
+
+
+def is_flex_not_ready(exc: BaseException) -> bool:
+    """True for a Flex "not ready" answer or a network that is not up yet."""
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in IBKR_FLEX_NOT_READY_MARKERS)
+
+
 def import_ibkr_flex_executions(
     *,
     token: str | None = None,
     query_id: str | None = None,
     session: requests.Session | None = None,
     with_metadata: bool = False,
+    not_ready_waits: Sequence[float] = (),
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[NormalizedExecution] | dict[str, Any]:
-    """Two-step Flex fetch: SendRequest -> poll GetStatement -> parse trades."""
+    """Two-step Flex fetch: SendRequest -> poll GetStatement -> parse trades.
+
+    ``not_ready_waits`` (P1-3 3d): seconds to wait before each retry when Flex
+    says the statement is not ready or the network is not up; () means no retry.
+    """
+    waits = list(not_ready_waits or ())
+    retries = 0
+    while True:
+        try:
+            return _import_ibkr_flex_once(
+                token=token, query_id=query_id, session=session, with_metadata=with_metadata
+            )
+        except Exception as exc:
+            if not waits or not is_flex_not_ready(exc):
+                if retries:
+                    raise RuntimeError(f"{exc} (after {retries} wait-and-retry)") from exc
+                raise
+            wait = float(waits.pop(0))
+            retries += 1
+            logging.info("IBKR Flex not ready (%s); retry %s in %.0f s.", exc, retries, wait)
+            sleep(wait)
+
+
+def _import_ibkr_flex_once(
+    *,
+    token: str | None,
+    query_id: str | None,
+    session: requests.Session | None,
+    with_metadata: bool,
+) -> list[NormalizedExecution] | dict[str, Any]:
+    """One SendRequest -> GetStatement round trip."""
     resolved_token = str(token or get_local_setting(IBKR_FLEX_TOKEN_SETTING, "") or "").strip()
     resolved_query = str(query_id or get_local_setting(IBKR_FLEX_QUERY_ID_SETTING, "") or "").strip()
     if not resolved_token or not resolved_query:

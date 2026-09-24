@@ -631,6 +631,163 @@ def test_the_slice_cap_is_a_setting_with_a_default_of_24():
     assert map_reduce.max_slices(lambda key, default=None: "junk") == 24
 
 
+# ---------------------------------------------------------------------------
+# 3d: IBKR Flex wait-and-retry, and the Health line
+# ---------------------------------------------------------------------------
+
+#: The exact Flex texts from the live AI job ledger (read 2026-09-24).
+FLEX_NOT_GENERATED = "Statement could not be generated at this time. Please try again shortly."
+FLEX_NOT_RETRIEVED = "Statement could not be retrieved at this time. Please try again shortly."
+FLEX_STATEMENT = (
+    '<FlexQueryResponse><FlexStatements><FlexStatement accountId="U1" '
+    'fromDate="20260920" toDate="20260924"><Trades></Trades></FlexStatement>'
+    "</FlexStatements></FlexQueryResponse>"
+)
+
+
+class _Resp:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        return None
+
+
+class _FlexSession:
+    """Answers each GET from a script: SendRequest texts, then GetStatement texts."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.urls: list[str] = []
+
+    def get(self, url, params=None, timeout=None):
+        self.urls.append(url)
+        item = self.script.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return _Resp(item)
+
+
+def _send(status="Success", message=""):
+    if status == "Success":
+        return (
+            "<FlexStatementResponse><Status>Success</Status><ReferenceCode>42</ReferenceCode>"
+            "<Url>https://example.invalid/Get</Url></FlexStatementResponse>"
+        )
+    return (
+        f"<FlexStatementResponse><Status>Fail</Status><ErrorCode>1019</ErrorCode>"
+        f"<ErrorMessage>{message}</ErrorMessage></FlexStatementResponse>"
+    )
+
+
+def _not_retrieved():
+    return (
+        "<FlexStatementResponse><Status>Fail</Status>"
+        f"<ErrorMessage>{FLEX_NOT_RETRIEVED}</ErrorMessage></FlexStatementResponse>"
+    )
+
+
+def test_flex_waits_and_retries_when_the_statement_is_not_ready():
+    import journal_importers
+
+    session = _FlexSession(
+        [
+            _send("Fail", FLEX_NOT_GENERATED),  # SendRequest: not generated yet
+            _send(),  # SendRequest ok
+            _not_retrieved(),  # GetStatement: not retrieved yet
+            _send(),  # SendRequest ok
+            FLEX_STATEMENT,  # GetStatement: the statement
+        ]
+    )
+    slept: list[float] = []
+    result = journal_importers.import_ibkr_flex_executions(
+        token="t", query_id="q", session=session,
+        not_ready_waits=(60.0, 120.0, 240.0), sleep=slept.append,
+    )
+    assert result == []
+    assert slept == [60.0, 120.0]
+
+
+def test_flex_does_not_retry_a_real_error_or_retry_forever():
+    import journal_importers
+
+    slept: list[float] = []
+    session = _FlexSession([_send("Fail", "Token has expired.")])
+    with pytest.raises(RuntimeError, match="Token has expired"):
+        journal_importers.import_ibkr_flex_executions(
+            token="t", query_id="q", session=session, not_ready_waits=(60.0,), sleep=slept.append
+        )
+    assert slept == []
+
+    session = _FlexSession([_send("Fail", FLEX_NOT_GENERATED)] * 3)
+    with pytest.raises(RuntimeError, match=r"after 2 wait-and-retry"):
+        journal_importers.import_ibkr_flex_executions(
+            token="t", query_id="q", session=session,
+            not_ready_waits=(1.0, 2.0), sleep=slept.append,
+        )
+    assert slept == [1.0, 2.0]
+
+    # no waits given (the GUI / CLI default): one try, the old behaviour
+    session = _FlexSession([_send("Fail", FLEX_NOT_GENERATED)])
+    with pytest.raises(RuntimeError, match="could not be generated"):
+        journal_importers.import_ibkr_flex_executions(token="t", query_id="q", session=session)
+
+
+def test_flex_retries_a_network_that_is_not_up_yet():
+    import requests
+
+    import journal_importers
+
+    session = _FlexSession(
+        [requests.exceptions.ConnectionError("Failed to resolve 'gdcdyn.interactivebrokers.com'"),
+         _send(), FLEX_STATEMENT]
+    )
+    slept: list[float] = []
+    assert journal_importers.import_ibkr_flex_executions(
+        token="t", query_id="q", session=session, not_ready_waits=(30.0,), sleep=slept.append
+    ) == []
+    assert slept == [30.0]
+
+
+def test_the_nightly_import_asks_for_the_wait_and_retry(monkeypatch, tmp_path):
+    import journal_runner
+
+    seen: dict = {}
+
+    class _Stop(Exception):
+        pass
+
+    def backfill(**kwargs):
+        seen.update(kwargs)
+        raise _Stop
+
+    monkeypatch.setattr(journal_runner, "run_journal_backfill", backfill)
+    with pytest.raises(_Stop):
+        journal_runner.run_nightly_journal_import(store=object())
+    assert seen["flex_not_ready_waits"] == journal_runner.NIGHTLY_FLEX_NOT_READY_WAITS
+    assert sum(journal_runner.NIGHTLY_FLEX_NOT_READY_WAITS) <= 10 * 60
+
+
+def test_health_says_when_the_journal_import_last_worked_and_why_it_failed(tmp_path):
+    import operations_audit
+
+    led = _write_rows(
+        tmp_path / "ai_job_ledger.jsonl",
+        [
+            {"job": "journal_import", "status": "ok", "session_date": "2026-09-21",
+             "started_at": "2026-09-21T22:00:24-07:00"},
+            {"job": "journal_import", "status": "failed", "session_date": "2026-09-22",
+             "started_at": "2026-09-22T22:00:22-07:00", "error": "",
+             "reason": f"failed: IBKR Flex: IBKR Flex error: {FLEX_NOT_RETRIEVED} | imported 29"},
+        ],
+    )
+    line = [ln for ln in operations_audit.ai_night_lines(led) if ln.startswith("journal import")]
+    assert line == [
+        "journal import: last success 2026-09-21, last error 2026-09-22: failed: IBKR Flex: "
+        f"IBKR Flex error: {FLEX_NOT_RETRIEVED} | imported 29"
+    ]
+
+
 def test_a_healthy_probe_is_not_in_the_phone_digest(tmp_path):
     import operations_audit
 

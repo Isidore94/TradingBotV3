@@ -250,6 +250,7 @@ def run_journal_backfill(
     include_questrade: bool = True,
     include_ibkr_flex: bool | None = None,
     rebuild: bool = True,
+    flex_not_ready_waits: tuple[float, ...] = (),
 ) -> dict[str, Any]:
     """Pull the COMPLETE trade list: Questrade executions across the whole date
     range (chunked to its 31-day API limit) and the IBKR Flex Query statement
@@ -390,7 +391,9 @@ def run_journal_backfill(
             "IBKR_FLEX", trigger="backfill", coverage_start=start_date, coverage_end=end_date
         )
         try:
-            statement = import_ibkr_flex_executions(with_metadata=True)
+            statement = import_ibkr_flex_executions(
+                with_metadata=True, not_ready_waits=flex_not_ready_waits
+            )
             prefetched_positions["IBKR"] = flex_open_positions(
                 statement.get("open_positions") or []
             )
@@ -496,6 +499,9 @@ def run_journal_backfill(
 #: broker can amend or late-report a fill for days after the fact, and a nightly
 #: job that only ever looked at yesterday would never see the amendment.
 NIGHTLY_LOOKBACK_DAYS = 7
+#: P1-3 3d. Seconds the nightly import waits before each retry when IBKR Flex
+#: says the statement is not ready (or the network is not up): about 7 minutes.
+NIGHTLY_FLEX_NOT_READY_WAITS = (60.0, 120.0, 240.0)
 
 
 #: Cap on how many named failures the ledger reason carries. A dead Questrade
@@ -598,7 +604,12 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
     end_date = date.today()
     start_date = end_date - timedelta(days=NIGHTLY_LOOKBACK_DAYS)
 
-    backfill = run_journal_backfill(days=NIGHTLY_LOOKBACK_DAYS, store=journal_store, rebuild=False)
+    backfill = run_journal_backfill(
+        days=NIGHTLY_LOOKBACK_DAYS,
+        store=journal_store,
+        rebuild=False,
+        flex_not_ready_waits=NIGHTLY_FLEX_NOT_READY_WAITS,
+    )
     messages.extend(backfill.get("messages") or [])
     had_errors = had_errors or backfill.get("status") == "FAILED"
     failures.extend(backfill.get("failures") or [])
