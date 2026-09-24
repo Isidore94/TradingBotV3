@@ -4,9 +4,11 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 
 **Updated:** 2026-09-23
 
-- **Live on `main`:** everything through the 2026-09-23 journal merge below. Older 09-22/09-23 merges are in `git log`.
-- **Desk:** runs from source on `main`. Closed for the journal merge 2026-09-23 23:55 ET.
-- **Last full suite:** 11,152 passed, 14 skipped (journal integration). Ruff clean, smoke 7/7, selftest 97/97 source and frozen.
+- **Live on `main`:** everything through the 2026-09-23 auto-modes merge below. Older 09-22/09-23 merges are in `git log`.
+- **Desk:** runs from source on `main`. Closed for the auto-modes merge 2026-09-24 ~01:00 ET; restart is the trader's call.
+- **Last full suite:** 11,190 passed, 14 skipped (auto-modes branch). Ruff clean, smoke 7/7, selftest 97/97 source and frozen.
+- **Auto modes** merged 2026-09-23 (`48d6cebb`, reviewer GO): DESK sends nothing to the phone; EVENING scans all morning,
+  keeps the queue empty, rings SPY ±1% + price alerts every 10 s until the mode changes, catch-up card on the flip out. Gate #207.
 - **Journal overhaul** merged 2026-09-23 (`6c92b650`, reviewers GO on P&L and auto-fill): Flex times as New York, socket/Flex dup
   collapse, made-up-entry trades kept but not counted, repair CLIs; setup evidence + Mentor suggestion lane; nightly regime fill;
   stat cards, long vs short, new calendar, tag chips. Gates #205-206.
