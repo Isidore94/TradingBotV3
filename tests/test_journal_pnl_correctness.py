@@ -328,3 +328,37 @@ def test_the_journal_tabs_say_what_they_left_out(tmp_path, monkeypatch):
     finally:
         panel.shutdown()
         panel.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# 5. One list of side words
+# ---------------------------------------------------------------------------
+
+
+def test_every_reader_uses_the_one_side_list():
+    import journal_file_authority
+    import journal_reclassify
+    import journal_store
+    import journal_tax_report
+    from journal_analytics import _normalize_side
+    from journal_identity import BUY_SIDE_WORDS, PRE_TJ9Q_VERBATIM_SIDES, SELL_SIDE_WORDS
+    from journal_importers import EXTENDED_SIDE_WORDS, normalize_side
+
+    assert {"STO", "STC", "SELL", "SLD", "SHORT", "SSHORT", "SELLSHORT"} <= SELL_SIDE_WORDS
+    assert {"BTO", "BTC", "BUY", "BOT", "COV", "COVER", "BUYTOCOVER"} <= BUY_SIDE_WORDS
+    assert not SELL_SIDE_WORDS & BUY_SIDE_WORDS
+    assert EXTENDED_SIDE_WORDS == PRE_TJ9Q_VERBATIM_SIDES
+    assert journal_reclassify._BROKER_SELL_WORDS == SELL_SIDE_WORDS
+    assert journal_file_authority._BUY_SIDES == BUY_SIDE_WORDS
+    for word in SELL_SIDE_WORDS:
+        assert normalize_side(word) == "SELL", word
+        assert journal_tax_report._signed_quantity(word, 2.0) == -2.0, word
+        assert _normalize_side(word) == "SHORT", word
+    for word in BUY_SIDE_WORDS:
+        assert normalize_side(word) == "BUY", word
+        assert journal_tax_report._signed_quantity(word, 2.0) == 2.0, word
+        assert _normalize_side(word) == "LONG", word
+    # The rebuild reads every sell word as a sell except the ones the journal
+    # still stores verbatim until the trader runs journal_reclassify (gate #162).
+    for word in SELL_SIDE_WORDS - PRE_TJ9Q_VERBATIM_SIDES:
+        assert journal_store._signed_quantity({"side": word, "quantity": 2}) == -2.0, word

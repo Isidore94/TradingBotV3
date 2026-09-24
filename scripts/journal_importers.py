@@ -20,6 +20,9 @@ import zoneinfo
 import requests
 
 from journal_identity import (
+    BUY_SIDE_WORDS,
+    PRE_TJ9Q_VERBATIM_SIDES,
+    SELL_SIDE_WORDS,
     canonical_ibkr_exec_id,
     canonical_option_symbol,
     normalize_security_type,
@@ -310,7 +313,7 @@ def parse_broker_datetime(
 #: buy - so ``STO`` opened the trader's sold puts LONG and ``BTC`` added to them
 #: instead of closing them. ``COV`` came out right by accident there and wrong in
 #: ``journal_file_authority``, whose buy set holds ``COVER`` and not ``COV``.
-EXTENDED_SIDE_WORDS = frozenset({"STO", "BTC", "COV"})
+EXTENDED_SIDE_WORDS = PRE_TJ9Q_VERBATIM_SIDES
 
 
 def normalize_side(value: Any) -> str:
@@ -325,9 +328,9 @@ def normalize_side(value: Any) -> str:
     convention and half in the other.
     """
     text = str(value or "").strip().upper()
-    if text in {"BUY", "BOT", "BTO", "BTC", "COV", "COVER", "BUYTOCOVER"}:
+    if text in BUY_SIDE_WORDS:
         return "BUY"
-    if text in {"SELL", "SLD", "STO", "STC", "SSHORT", "SELLSHORT"}:
+    if text in SELL_SIDE_WORDS:
         return "SELL"
     if text in {"LONG"}:
         return "BUY"

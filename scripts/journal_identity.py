@@ -216,6 +216,14 @@ def stable_execution_uid(prefix: str, account_number: str, exec_id: Any, *fallba
     return f"{prefix}:{account}:auto-{digest}"
 
 
+#: Every broker word for a fill that SELLS (Questrade and IBKR spellings).
+SELL_SIDE_WORDS = frozenset({"SELL", "SLD", "STO", "STC", "SHORT", "SSHORT", "SELLSHORT"})
+#: Every broker word for a fill that BUYS, covers included.
+BUY_SIDE_WORDS = frozenset({"BUY", "BOT", "BTO", "BTC", "COV", "COVER", "BUYTOCOVER"})
+#: Questrade words stored verbatim until ``journal_reclassify --apply`` (TJ-9Q).
+PRE_TJ9Q_VERBATIM_SIDES = frozenset({"STO", "BTC", "COV"})
+
+
 def canonical_ibkr_exec_id(exec_id: Any) -> str:
     """The Flex spelling of an IBKR execution id.
 

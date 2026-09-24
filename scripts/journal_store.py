@@ -22,6 +22,8 @@ from journal_analytics import (
 )
 from journal_trade_shape import is_shape_tag, shape_tags
 from journal_identity import (
+    PRE_TJ9Q_VERBATIM_SIDES,
+    SELL_SIDE_WORDS,
     contract_multiplier as _contract_multiplier_shared,
     group_key,
     group_key_text,
@@ -236,10 +238,16 @@ def _row_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
 
+_STORED_SELL_WORDS = SELL_SIDE_WORDS - PRE_TJ9Q_VERBATIM_SIDES
+
+
 def _signed_quantity(row: dict[str, Any]) -> float:
     side = str(row.get("side") or "").strip().upper()
     qty = abs(_coerce_float(row.get("quantity")))
-    if side in {"SELL", "SLD", "STC", "SSHORT", "SHORT"}:
+    # The shared sell words, less the ones still stored verbatim (read as today
+    # until journal_reclassify moves them; a stored STO turning SHORT alone would
+    # also need its option multiplier).
+    if side in _STORED_SELL_WORDS:
         return -qty
     return qty
 

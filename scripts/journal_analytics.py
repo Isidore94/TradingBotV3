@@ -62,9 +62,11 @@ def _normalize_symbol(value: Any) -> str:
 
 def _normalize_side(value: Any) -> str:
     text = str(value or "").strip().upper()
-    if text in {"LONG", "BUY", "BOT", "BTO", "COVER"}:
+    from journal_identity import BUY_SIDE_WORDS, SELL_SIDE_WORDS
+
+    if text == "LONG" or text in BUY_SIDE_WORDS:
         return "LONG"
-    if text in {"SHORT", "SELL", "SLD", "STO", "SSHORT"}:
+    if text in SELL_SIDE_WORDS:
         return "SHORT"
     return text
 
