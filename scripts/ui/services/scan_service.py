@@ -57,6 +57,55 @@ def active_scan_label() -> str:
         return str(getattr(owner, "_active_label", "") or "") if owner is not None else ""
 
 
+#: Child stderr lines kept for a failed scan (autopilot.log + scan_failures.jsonl).
+SCAN_FAILURE_STDERR_TAIL_LINES = 40
+
+
+class ScanChildFailed(RuntimeError):
+    """The scan child exited without its marker; carries exit code and stderr tail."""
+
+    def __init__(self, message: str, *, returncode: int | None, stderr_tail: list[str]) -> None:
+        super().__init__(message)
+        self.returncode = returncode
+        self.stderr_tail = list(stderr_tail)
+
+
+def stderr_tail_lines(text: str, limit: int = SCAN_FAILURE_STDERR_TAIL_LINES) -> list[str]:
+    """The last ``limit`` non-blank lines of ``text``, trailing whitespace stripped."""
+    lines = [line.rstrip() for line in str(text or "").splitlines() if line.strip()]
+    return lines[-limit:] if limit > 0 else []
+
+
+def record_scan_failure(
+    *,
+    slot: str,
+    exit_code: int | None,
+    stderr_tail: list[str],
+    path: Path | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Append one row to ``scan_failures.jsonl``. Best effort: never raises."""
+    try:
+        if path is None:
+            from project_paths import SCAN_FAILURES_FILE
+
+            path = SCAN_FAILURES_FILE
+        stamp = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
+        row = {
+            "ts": stamp,
+            "slot": str(slot or ""),
+            "exit_code": exit_code,
+            "stderr_tail": [str(line) for line in stderr_tail],
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+        return True
+    except Exception:
+        logging.exception("scan_failures.jsonl row not written (the scan path is unaffected).")
+        return False
+
+
 class ScanWorker(QObject):
     finished = Signal(dict, list, str)
     failed = Signal(str)
@@ -64,6 +113,8 @@ class ScanWorker(QObject):
     def __init__(self, target: Callable[[], Any]) -> None:
         super().__init__()
         self._target = target
+        #: Set before ``failed`` is emitted: {"exit_code", "stderr_tail"} or None.
+        self.failure: dict | None = None
 
     @Slot()
     def run(self) -> None:
@@ -82,6 +133,10 @@ class ScanWorker(QObject):
             self.finished.emit(run_result, rows, stamp)
         except Exception as exc:
             details = traceback.format_exc()
+            if isinstance(exc, ScanChildFailed):
+                self.failure = {"exit_code": exc.returncode, "stderr_tail": list(exc.stderr_tail)}
+            else:
+                self.failure = {"exit_code": None, "stderr_tail": stderr_tail_lines(details)}
             self.failed.emit(f"{exc}\n\n{details}")
 
 
@@ -100,6 +155,8 @@ class ScanService(QObject):
         self._active_worker_pid: int | None = None
         self._active_job_started = False
         self._last_rejection_reason = ""
+        #: Structured detail of the last failed scan: {"exit_code", "stderr_tail"}.
+        self.last_failure: dict | None = None
         # The research warehouse's post-scan build (plan sec 8.4, LD-01: one
         # post-scan/EOD CLI build job, no daemon). Owned here because this is
         # where a scan finishes; it runs on its own thread and can never affect
@@ -186,6 +243,7 @@ class ScanService(QObject):
         config_hash: str = "",
     ) -> bool:
         self._last_rejection_reason = ""
+        self.last_failure = None
         if self.running:
             self._last_rejection_reason = "service busy"
             return False
@@ -508,6 +566,7 @@ class ScanService(QObject):
     @Slot(str)
     def _handle_failed(self, message: str) -> None:
         error_class = "ib_disconnected" if "IB" in str(message or "") else "unexpected"
+        self.last_failure = getattr(self._worker, "failure", None)
         self._fail_ledger_job(error_class, str(message or ""))
         self.failed.emit(message)
 
@@ -879,9 +938,11 @@ def _wait_for_scan_marker(
     # activity feed keeps, and a bare "exited with code 1" sent the last
     # three desk failures to the run manifests to be identified at all.
     summary = child_failure_summary(stderr_text)
-    raise RuntimeError(
+    raise ScanChildFailed(
         f"Master AVWAP scan process exited with code {returncode}."
         + (f" {summary}" if summary else "")
-        + (f"\n\n{details}" if details else "")
+        + (f"\n\n{details}" if details else ""),
+        returncode=returncode,
+        stderr_tail=stderr_tail_lines(stderr_text),
     )
 

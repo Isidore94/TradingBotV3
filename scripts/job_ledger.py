@@ -229,6 +229,27 @@ def _ts(now: datetime | None) -> str:
     return (now or datetime.now()).isoformat(timespec="seconds")
 
 
+def append_keyless_event(event: str, fields: dict, *, path: Path | None = None) -> bool:
+    """Append one keyless evidence row (no ``key``, so replay ignores it). Never raises."""
+    try:
+        target = Path(path) if path is not None else default_ledger_path()
+        row = {
+            "schema": LEDGER_SCHEMA,
+            "event": str(event),
+            "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        row.update({key: value for key, value in dict(fields).items() if key not in ("key", "schema", "event")})
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, default=str) + "\n")
+        return True
+    except Exception:
+        import logging
+
+        logging.exception("job ledger %s row not written.", event)
+        return False
+
+
 def default_ledger_path() -> Path:
     try:
         from project_paths import get_diagnostics_dir

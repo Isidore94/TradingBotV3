@@ -3,6 +3,9 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #212 Tracker write stamp (P0-2 2b): after the next close slot, Health's top line ends `tracker last written <today's stamp>`; if a tracker write fails, the phone digest's OPERATIONS shows `setup tracker write failed <stamp>; last good <stamp>` and the scan's reports are still today's [trader]
+- #211 Scan memory lines (P0-2 2a): the next scan's trading_bot.log has a `[run_master memory] <phase> peak_ws=<MB> ws=<MB>` line after every `[run_master timing]` line [lead]
+- #210 Scan failure tail (P0-2 2a): the next failed swing scan leaves an indented 40-line stderr tail under its FAILED line in autopilot.log and one row in `%LOCALAPPDATA%\TradingBotV3\logs\scan_failures.jsonl` (ts, slot, exit_code, stderr_tail) [lead]
 - #209 Universe floor: after the restore, `universe_all.txt` has 1,455 names; on the next after-close rebuild the ledger `universe_rebuild` row has `stages` + `yfinance`, and if it comes in under the floor the phone digest OPERATIONS says "universe rebuild refused" and the list stays above 1,000 [trader + lead]
 - #208 Compact desk: switch Desk layout both ways in Settings (New <-> Old) with the desk live - each side looks complete, no restart; in New the charts are tall, Alt+V/K/N/P/L and Ctrl+J open the Capture/Journal drawer, and the M5/D1 alert menus arm the same watches as before [trader]
 - #207 Auto modes: a sleep-in morning in EVENING - the phone rings every 10 s after SPY moves 1% or a price alert fires, and stops when you change mode; on the flip to DESK the review queue is empty and the catch-up card shows (a row click charts it). A DESK day sends no phone pushes at all [trader]
