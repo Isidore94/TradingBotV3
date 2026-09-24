@@ -692,6 +692,8 @@ MASTER_AVWAP_SETUP_TRACKER_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_se
 # F3 step 1 (2026-09-04): the SQLite mirror of the tracker, one row per record, written
 # AFTER the JSON save and never read by the scanner yet (scripts/tracker_store.py).
 MASTER_AVWAP_SETUP_TRACKER_DB = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_tracker.sqlite"
+# Small stamp of the last tracker write attempt (last good / last failed), read by Health + digest.
+SETUP_TRACKER_WRITE_STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "setup_tracker_write_state.json"
 MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tracker_scoring_snapshot.json"
 MASTER_AVWAP_SETUP_SCENARIOS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_scenarios.csv"
 MASTER_AVWAP_SETUP_DAILY_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_daily.csv"

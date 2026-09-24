@@ -2016,6 +2016,12 @@ class AutopilotService(QObject):
                     }
                 )
             try:
+                from tracker_store import tracker_write_failure_line
+
+                payload["tracker_write_failure_line"] = tracker_write_failure_line()
+            except Exception:
+                logging.exception("Tracker write stamp unreadable; the report goes out without it.")
+            try:
                 payload = core.hide_sector_names(payload, pick_limit=10)
             except Exception:
                 # The view filter never costs the report; fall back to the cap alone.

@@ -307,6 +307,93 @@ def mirror_payload(payload: dict, *, path: Path | str | None = None) -> SaveRepo
         return None
 
 
+def write_state_path() -> Path:
+    from project_paths import SETUP_TRACKER_WRITE_STATE_FILE
+
+    return Path(SETUP_TRACKER_WRITE_STATE_FILE)
+
+
+def read_write_state(path: Path | str | None = None) -> dict:
+    """The tracker write stamp ({last_written_at, last_failed_at, last_error, last_result}); {} if unknown."""
+    try:
+        payload = json.loads(Path(path or write_state_path()).read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_state(update: dict, path: Path | str | None) -> None:
+    target = Path(path or write_state_path())
+    state = read_write_state(target)
+    state.update(update)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(target.name + ".tmp")
+    temp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    temp.replace(target)
+
+
+def record_write_success(*, path: Path | str | None = None, now: datetime | None = None) -> None:
+    """Stamp a good tracker write. Never raises."""
+    try:
+        stamp = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
+        _write_state({"last_written_at": stamp, "last_result": "ok"}, path)
+    except Exception:
+        logging.warning("Setup tracker write stamp not saved.", exc_info=True)
+
+
+def record_write_failure(
+    error: str,
+    *,
+    slot: str = "",
+    path: Path | str | None = None,
+    ledger_path: Path | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Stamp a failed tracker write and append a keyless ``setup_tracker_write_failed`` ledger row. Never raises."""
+    stamp = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
+    try:
+        _write_state({"last_failed_at": stamp, "last_error": str(error)[:500], "last_result": "failed"}, path)
+    except Exception:
+        logging.warning("Setup tracker failure stamp not saved.", exc_info=True)
+    try:
+        from job_ledger import append_keyless_event
+
+        append_keyless_event(
+            "setup_tracker_write_failed",
+            {"ts": stamp, "error": str(error)[:500], "slot": str(slot or "")},
+            path=ledger_path,
+        )
+    except Exception:
+        logging.warning("setup_tracker_write_failed ledger row not written.", exc_info=True)
+
+
+def _short_stamp(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "unknown"
+    try:
+        return datetime.fromisoformat(text).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
+
+
+def tracker_last_written_line(state: dict | None = None) -> str:
+    """Health line: ``tracker last written <stamp>``."""
+    state = read_write_state() if state is None else state
+    return f"tracker last written {_short_stamp(state.get('last_written_at'))}"
+
+
+def tracker_write_failure_line(state: dict | None = None) -> str:
+    """Digest line when the last tracker write failed; "" otherwise."""
+    state = read_write_state() if state is None else state
+    if str(state.get("last_result") or "") != "failed":
+        return ""
+    return (
+        f"setup tracker write failed {_short_stamp(state.get('last_failed_at'))}; "
+        f"last good {_short_stamp(state.get('last_written_at'))}"
+    )
+
+
 def _main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
