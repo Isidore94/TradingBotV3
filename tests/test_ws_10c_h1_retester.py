@@ -589,7 +589,8 @@ def test_the_arm_bar_offers_an_h1_retester_button_that_arms_the_kind():
     # Lead fix 2026-09-13: a watch toggle is disabled until a symbol is charted.
     bar.set_enabled_for_symbol(True)
     button = bar.watch_buttons[WATCH_KIND]
-    assert BUTTON_LABEL in button.text()
+    # The D1 menu regroup (2026-09-24) shows this watch as "Pullback (fast)".
+    assert "Pullback (fast)" in button.text()
 
     emitted: list[str] = []
     bar.watchToggled.connect(emitted.append)

@@ -32,7 +32,6 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from test_ws_10c_h1_retester import (  # noqa: E402
     ARM_REASON_LONG,
-    BUTTON_LABEL,
     GOLDEN_ATR,
     GOLDEN_CONFIRM_DT,
     PULLBACK_TIMEFRAME_TAIL,
@@ -107,7 +106,8 @@ def test_the_arm_bar_button_emits_the_kind_once_a_symbol_is_charted():
     # it (tests/test_qt_arm_dock.py).
     bar.set_enabled_for_symbol(True)
     button = bar.watch_buttons[WATCH_KIND]
-    assert BUTTON_LABEL in button.text()
+    # The D1 menu regroup (2026-09-24) shows this watch as "Pullback (fast)".
+    assert "Pullback (fast)" in button.text()
 
     emitted: list[str] = []
     bar.watchToggled.connect(emitted.append)
