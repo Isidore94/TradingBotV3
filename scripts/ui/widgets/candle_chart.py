@@ -37,6 +37,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPicture, QPen
 
+from rvol import daily_rvol_series
 from ui import bar_integrity, theme
 
 
@@ -415,6 +416,10 @@ class VolumeItem(pg.GraphicsObject):
     Scaling is by the PEAK of the drawn bars. That makes the columns a
     relative read ("today is heavy for this name"), which is what a volume
     underlay is for; it is not an axis and it deliberately has no ticks.
+
+    Each column is coloured by its daily relative volume (``rvol.RVOL_BANDS``:
+    white, yellow, orange, green, blue). A day without a reading - short
+    history, a missing volume, or today's unfinished preview bar - is grey.
     """
 
     def __init__(self, bars: list[dict] = (), *, height_fraction: float = 0.18) -> None:
@@ -423,6 +428,7 @@ class VolumeItem(pg.GraphicsObject):
         self._fraction = float(height_fraction)
         self._picture = QPicture()
         self._peak = 0.0
+        self._rvol: list[float | None] = []
         self.setZValue(-20)  # under the candles, the overlays and the levels
         self.set_bars(bars)
 
@@ -443,6 +449,10 @@ class VolumeItem(pg.GraphicsObject):
         """
         return self._peak > 0.0
 
+    def rvol_readings(self) -> list[float | None]:
+        """Each drawn bar's daily relative volume (None = grey, unmeasured)."""
+        return list(self._rvol)
+
     def _render(self) -> None:
         self._picture = QPicture()
         volumes = []
@@ -454,14 +464,26 @@ class VolumeItem(pg.GraphicsObject):
             # NaN fails this compare, which is the intent.
             volumes.append(value if value > 0 else 0.0)
         self._peak = max(volumes) if volumes else 0.0
+        self._rvol = daily_rvol_series(
+            [
+                None if bar.get("preview") else volumes[index]
+                for index, bar in enumerate(self._bars)
+            ]
+        )
         if not self._peak:
             return
-        up = QColor(theme.color("long"))
-        down = QColor(theme.color("short"))
         # Translucent: the candles, the overlays and the paint lines all draw
         # over this, and none of them may become harder to read for it.
-        up.setAlphaF(0.38)
-        down.setAlphaF(0.38)
+        brushes: dict[str, QColor] = {}
+
+        def brush_for(reading: float | None) -> QColor:
+            key = theme.rvol_color(reading) or theme.color("neutral")
+            if key not in brushes:
+                colour = QColor(key)
+                colour.setAlphaF(0.75 if reading is not None else 0.35)
+                brushes[key] = colour
+            return brushes[key]
+
         painter = QPainter(self._picture)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -469,7 +491,7 @@ class VolumeItem(pg.GraphicsObject):
             value = volumes[index]
             if value <= 0.0:
                 continue
-            painter.setBrush(up if bar.get("close", 0) >= bar.get("open", 0) else down)
+            painter.setBrush(brush_for(self._rvol[index]))
             painter.drawRect(
                 QRectF(
                     index - _CANDLE_HALF_WIDTH,
