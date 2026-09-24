@@ -822,8 +822,8 @@ class MainWindow(QMainWindow):
             if spec.title != "Journal":
                 continue
             if index < len(self.nav_buttons):
-                self._set_page_label(
-                    index, f"Journal ({count} to review)" if count > 0 else "Journal"
+                MainWindow._set_page_label(
+                    self, index, f"Journal ({count} to review)" if count > 0 else "Journal"
                 )
             return
 
@@ -834,7 +834,9 @@ class MainWindow(QMainWindow):
                 continue
             buttons = getattr(self, "nav_buttons", ())
             if index < len(buttons):
-                self._set_page_label(index, f"{spec.title} •" if ready else spec.title)
+                MainWindow._set_page_label(
+                    self, index, f"{spec.title} •" if ready else spec.title
+                )
             return
 
     def _set_page_label(self, index: int, text: str) -> None:

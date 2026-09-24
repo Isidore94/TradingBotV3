@@ -47,7 +47,8 @@ def qt_desk():
     from ui.app import MainWindow
     from ui.state import UiState
 
-    window = MainWindow(UiState(workspace_mode="workspace"))
+    # Pins the classic Alert Center (Movers inside the tab row).
+    window = MainWindow(UiState(workspace_mode="workspace", desk_layout="classic"))
     yield window
     try:
         window.close()
