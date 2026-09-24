@@ -508,6 +508,10 @@ MARKET_STORY_ROLLUPS_DIR = RUNTIME_DATA_DIR / "market_story_rollups"
 # Verified local-AI explanations of the deterministic packs. Derived and
 # replaceable; a failed model call keeps the last verified file untouched.
 MARKET_STORY_NARRATIONS_DIR = RUNTIME_DATA_DIR / "market_story_narrations"
+# The night's "what to watch today" econ summary, one JSON per target session.
+# Derived; a failed model call keeps the last verified file, and the Mentor
+# falls back to the deterministic event list from the pasted brief.
+ECON_BRIEF_DIR = RUNTIME_DATA_DIR / "econ_briefs"
 
 # Raw model replies that failed schema validation, one bounded JSON per
 # rejection (TJ-13A item 5). LOCAL, deliberately: it is written from inside an
@@ -776,6 +780,8 @@ PRICE_ALERT_TRIGGERS_FILE = RUNTIME_DATA_DIR / "price_alert_triggers.csv"
 EVENING_BRIEFING_STATE_FILE = LOCAL_MACHINE_CACHE_DIR / "evening_briefing_state.json"
 #: EVENING price alerts still ringing the phone (day-scoped, this machine only).
 PRICE_ALERT_RING_FILE = LOCAL_MACHINE_CACHE_DIR / "price_alert_ringing.json"
+#: Econ reminders already fired, keyed per date, so a restart never re-fires one.
+ECON_REMINDERS_FILE = LOCAL_MACHINE_CACHE_DIR / "econ_reminders_fired.json"
 EVENING_BRIEFING_FILE = SHARED_HOME_DIR / "evening_briefing.txt"
 
 BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"
