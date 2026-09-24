@@ -189,6 +189,67 @@ def test_banner_counts_fresh_names(app):
     assert "412 of 504 fresh" in widget.banner.text()
 
 
+def _tagged_board():
+    board = _board()
+    board["pop"]["long"] = [
+        _row("NVDA", er=True, rank_change=2, streak=3, group="Semis", hod_break=True,
+             from_hod_atr=0.0, from_vwap_atr=1.1, ext_up=False),
+        _row("AMD", rank_change=None, streak=1, group="Semis", hod_break=False,
+             from_hod_atr=-0.4, from_vwap_atr=2.5, ext_up=True),
+        _row("MU", rank_change=-1, streak=2, group="Semis", from_hod_atr=-0.8),
+    ]
+    board["groups"] = {"pop": {"long": [["Semis", 3]], "short": []}, "dip": {}}
+    return board
+
+
+def _cell(widget, row, key):
+    from PySide6.QtCore import Qt
+
+    col = [k for k, _h in widget.model._columns].index(key)
+    return widget.model.data(widget.model.index(row, col), Qt.ItemDataRole.DisplayRole)
+
+
+def test_sym_cell_carries_er_and_rank_change_and_lvl_tags(app):
+    widget = _widget(app)
+    widget.update_board(_tagged_board())
+    widget.flush_pending_refresh()
+    assert _cell(widget, 0, "symbol") == "NVDA ER ▲2"
+    assert _cell(widget, 1, "symbol") == "AMD new"
+    assert _cell(widget, 2, "symbol") == "MU ▼1"
+    assert _cell(widget, 0, "lvl") == "HOD brk"
+    assert _cell(widget, 1, "lvl") == "ext"
+    assert _cell(widget, 2, "lvl") == "-0.8H"
+    assert _cell(widget, 0, "group") == "Semis"
+    assert "Groups: Semis ×3" in widget.groups_label.text()
+    assert not widget.groups_label.isHidden()
+
+
+def test_column_priority_sym_score_rvol_lvl_first(app):
+    from ui.widgets.movers_board import COLUMNS
+
+    for mode, main in (("pop", "move15_pct"), ("dip", "dip_score"), ("mine", "move15_pct")):
+        keys = [k for k, _h in COLUMNS[mode]]
+        assert keys[:4] == ["symbol", main, "rvol", "lvl"]
+
+
+def test_plus_focus_emits_for_the_selected_row_only_on_click(app):
+    widget = _widget(app)
+    widget.update_board(_tagged_board())
+    widget.flush_pending_refresh()
+    asked = []
+    widget.focusAddRequested.connect(lambda s, side: asked.append((s, side)))
+    assert widget.add_focus_button.isEnabled() is False  # nothing selected
+    widget.table.selectRow(1)
+    assert widget.add_focus_button.isEnabled() is True
+    assert asked == []  # selecting never adds
+    widget.add_focus_button.click()
+    assert asked == [("AMD", "long")]
+    menu = widget.row_menu(widget.model.index(0, 0))
+    actions = [a for a in menu.actions() if "Focus" in a.text()]
+    actions[0].trigger()
+    assert asked[-1] == ("NVDA", "long")
+
+
 def test_model_updates_in_place_without_reset(app):
     widget = _widget(app)
     resets = []

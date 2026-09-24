@@ -53,20 +53,59 @@ MOVERS_MODE_SETTING = "movers_board_mode"
 MOVERS_SIDE_SETTING = "movers_board_side"
 MOVERS_DEEP_READ_SETTING = "movers_board_deep_read"
 
-#: (key, header) per mode, most important first; narrow widths drop from the end.
+#: (key, header) per mode. Priority order: Sym, main score, RVOL, Lvl, then the
+#: rest; narrow widths drop columns from the end.
 COLUMNS = {
-    "pop": (("symbol", "Sym"), ("move15_pct", "15m"), ("rvol", "RVOL"),
-            ("vs_spy15_pct", "vSPY"), ("move30_pct", "30m"), ("day_pct", "Day")),
-    "dip": (("symbol", "Sym"), ("since_start_pct", "Since"), ("dip_score", "xSPY"),
-            ("rvol", "RVOL"), ("day_pct", "Day"), ("move15_pct", "15m")),
-    "mine": (("symbol", "Sym"), ("move15_pct", "15m"), ("rvol", "RVOL"),
-             ("day_pct", "Day"), ("vs_spy15_pct", "vSPY"), ("since_start_pct", "Since")),
+    "pop": (("symbol", "Sym"), ("move15_pct", "15m"), ("rvol", "RVOL"), ("lvl", "Lvl"),
+            ("vs_spy15_pct", "vSPY"), ("move30_pct", "30m"), ("day_pct", "Day"),
+            ("group", "Grp")),
+    "dip": (("symbol", "Sym"), ("dip_score", "xSPY"), ("rvol", "RVOL"), ("lvl", "Lvl"),
+            ("since_start_pct", "Since"), ("day_pct", "Day"), ("move15_pct", "15m"),
+            ("group", "Grp")),
+    "mine": (("symbol", "Sym"), ("move15_pct", "15m"), ("rvol", "RVOL"), ("lvl", "Lvl"),
+             ("day_pct", "Day"), ("vs_spy15_pct", "vSPY"), ("since_start_pct", "Since"),
+             ("group", "Grp")),
 }
 _PCT_KEYS = {"move15_pct", "move30_pct", "day_pct", "vs_spy15_pct", "since_start_pct"}
 
 
+def symbol_text(row: dict[str, Any]) -> str:
+    """Symbol, an ER tag, and the rank change since the last tick (lists only)."""
+    parts = [str(row.get("symbol") or "")]
+    if row.get("er"):
+        parts.append("ER")
+    if "streak" in row:
+        change = row.get("rank_change")
+        if change is None:
+            parts.append("new")
+        elif change > 0:
+            parts.append(f"▲{change}")
+        elif change < 0:
+            parts.append(f"▼{-change}")
+    return " ".join(parts)
+
+
+def level_text(row: dict[str, Any], side: str) -> str:
+    """Compact Lvl cell: a break/extension tag, else ATRs from the day's extreme."""
+    long_side = side != "short"
+    brk = row.get("hod_break") if long_side else row.get("lod_break")
+    ext = row.get("ext_up") if long_side else row.get("ext_down")
+    if brk and ext:
+        return "brk ext"
+    if brk:
+        return "HOD brk" if long_side else "LOD brk"
+    if ext:
+        return "ext"
+    value = row.get("from_hod_atr") if long_side else row.get("from_lod_atr")
+    if value is None:
+        return "—"
+    return f"{float(value):+.1f}{'H' if long_side else 'L'}"
+
+
 def format_cell(key: str, value: Any) -> str:
     if key == "symbol":
+        return str(value or "")
+    if key == "group":
         return str(value or "")
     if value is None:
         return "—"
@@ -161,6 +200,10 @@ class MoversTableModel(QAbstractTableModel):
         key = self._columns[index.column()][0]
         value = row.get(key)
         if role == Qt.ItemDataRole.DisplayRole:
+            if key == "symbol":
+                return symbol_text(row)
+            if key == "lvl":
+                return level_text(row, self._side)
             return format_cell(key, value)
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if key == "symbol":
@@ -193,6 +236,16 @@ def _row_tooltip(row: dict[str, Any]) -> str:
                        ("vs_spy15_pct", "vs SPY 15m"), ("since_start_pct", "since start %")):
         parts.append(f"{label} {format_cell(key, row.get(key))}")
     parts.append(f"RVOL {format_cell('rvol', row.get('rvol'))}")
+    for key, label in (("from_hod_atr", "from HOD"), ("from_lod_atr", "from LOD"),
+                       ("from_vwap_atr", "from VWAP")):
+        value = row.get(key)
+        parts.append(f"{label} {'—' if value is None else f'{float(value):+.1f} ATR'}")
+    if row.get("streak"):
+        parts.append(f"on this list {row['streak']} tick(s)")
+    if row.get("group"):
+        parts.append(f"group {row['group']}")
+    if row.get("er"):
+        parts.append("earnings today / after last close")
     if row.get("stale"):
         parts.append("stale bars")
     if row.get("note"):
@@ -207,6 +260,8 @@ class MoversBoard(QWidget):
     reviewAllRequested = Signal()
     fadedReviewRequested = Signal()
     deepReadToggled = Signal(bool)
+    #: The trader's explicit "+F" click: (symbol, "long"|"short"). Never automatic.
+    focusAddRequested = Signal(str, str)
 
     def __init__(self, parent=None, *, persist: bool = True) -> None:
         super().__init__(parent)
@@ -280,6 +335,15 @@ class MoversBoard(QWidget):
         self.side_button.setCheckable(True)
         self.side_button.clicked.connect(self._on_side_clicked)
         modes_row.addWidget(self.side_button)
+        self.add_focus_button = QToolButton()
+        self.add_focus_button.setObjectName("MoversChip")
+        self.add_focus_button.setText("+F")
+        self.add_focus_button.setToolTip(
+            "Add the selected row to M5 Focus on this side (through the adoption gate)."
+        )
+        self.add_focus_button.setEnabled(False)
+        self.add_focus_button.clicked.connect(self._add_selected_to_focus)
+        modes_row.addWidget(self.add_focus_button)
 
         self.banner = QLabel(banner_text(None))
         self.banner.setObjectName("MutedLabel")
@@ -304,6 +368,18 @@ class MoversBoard(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setMinimumSectionSize(theme.px(30))
         self.table.clicked.connect(self._on_clicked)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_context_menu)
+        self.table.selectionModel().selectionChanged.connect(self._sync_add_button)
+
+        self.groups_label = QLabel("")
+        self.groups_label.setObjectName("MutedLabel")
+        self.groups_label.setWordWrap(True)
+        self.groups_label.setVisible(False)
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("MutedLabel")
+        self.status_label.setWordWrap(True)
+        self.status_label.setVisible(False)
 
         self.empty_label = QLabel("")
         self.empty_label.setObjectName("MutedLabel")
@@ -315,7 +391,9 @@ class MoversBoard(QWidget):
         layout.addLayout(header)
         layout.addLayout(modes_row)
         layout.addLayout(banner_row)
+        layout.addWidget(self.groups_label)
         layout.addWidget(self.table, 1)
+        layout.addWidget(self.status_label)
         layout.addWidget(self.empty_label)
 
         self.apply_scaled_metrics()
@@ -508,12 +586,60 @@ class MoversBoard(QWidget):
         self.meta_label.setText(stamp)
         self.empty_label.setText(self._empty_text(rows))
         self.empty_label.setVisible(not rows)
+        groups = ((self._board.get("groups") or {}).get(self._mode) or {}).get(self._side) or []
+        text = "Groups: " + ", ".join(f"{name} ×{count}" for name, count in groups) if groups else ""
+        if self.groups_label.text() != text:
+            self.groups_label.setText(text)
+        self.groups_label.setVisible(bool(text))
+        self._sync_add_button()
+
+    # ------------------------------------------------------------ +Focus
+    def _selected_row(self) -> dict[str, Any] | None:
+        selection = self.table.selectionModel()
+        if selection is None:
+            return None
+        rows = selection.selectedRows()
+        return self.model.row(rows[0].row()) if rows else None
+
+    def _sync_add_button(self, *_args) -> None:
+        self.add_focus_button.setEnabled(self._selected_row() is not None)
+
+    def _add_selected_to_focus(self) -> None:
+        row = self._selected_row()
+        if row:
+            self._request_focus(row)
+
+    def _request_focus(self, row: dict[str, Any]) -> None:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if symbol:
+            self.focusAddRequested.emit(symbol, self._side)
+
+    def row_menu(self, index) -> QMenu:
+        """The right-click menu for one row (built on demand)."""
+        menu = QMenu(self)
+        row = self.model.row(index.row()) if index.isValid() else None
+        if row:
+            symbol = str(row.get("symbol") or "")
+            action = menu.addAction(f"+F  Add {symbol} to M5 Focus ({self._side})")
+            action.triggered.connect(lambda _checked=False, r=dict(row): self._request_focus(r))
+        return menu
+
+    def _on_context_menu(self, pos) -> None:
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return
+        self.row_menu(index).exec(self.table.viewport().mapToGlobal(pos))
+
+    def show_status(self, text: str) -> None:
+        """One line under the table (e.g. the +Focus result)."""
+        self.status_label.setText(str(text or ""))
+        self.status_label.setVisible(bool(text))
 
     def _empty_text(self, rows) -> str:
         if rows:
             return ""
         if not self._board:
-            return "No Movers read yet. It refreshes every minute in market hours."
+            return "No Movers read yet. It refreshes every 5-minute bar in market hours."
         if self._mode == "dip":
             which = "pullback" if self._side == "long" else "bounce"
             if not self._state().get("pullback" if self._side == "long" else "bounce"):
