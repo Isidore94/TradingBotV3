@@ -1,4 +1,5 @@
-"""The Movers board widget: modes, side toggle, banner, auto-switch, review menu, clicks."""
+"""The Movers board widget: modes, side toggle, banner, auto-switch, review menu, clicks,
+column sort and hide-for-today."""
 
 from __future__ import annotations
 
@@ -56,29 +57,33 @@ def _symbols(widget):
     return [row["symbol"] for row in widget.model.rows()]
 
 
-def test_pop_mode_shows_long_rows_and_rvol_none_as_dash(app):
+def test_pop_mode_shows_both_sides_and_rvol_none_as_dash(app):
     from PySide6.QtCore import Qt
 
     widget = _widget(app)
     widget.update_board(_board())
     widget.flush_pending_refresh()
     assert widget.mode == "pop" and widget.side == "long"
-    assert _symbols(widget) == ["AAA", "BBB"]
+    # Pop always lists longs and shorts together; its side toggle is hidden.
+    assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
+    assert widget.side_button.isHidden()
     rvol_col = [key for key, _h in widget.model._columns].index("rvol")
     assert widget.model.data(widget.model.index(1, rvol_col), Qt.ItemDataRole.DisplayRole) == "—"
     assert widget.model.data(widget.model.index(0, rvol_col), Qt.ItemDataRole.BackgroundRole) is not None
     assert widget.model.data(widget.model.index(1, rvol_col), Qt.ItemDataRole.BackgroundRole) is None
     assert "no pullback" in widget.banner.text()
+    widget.mode_buttons["dip"].click()
+    assert not widget.side_button.isHidden()
 
 
 def test_side_toggle_and_mine_sorted_by_score(app):
     widget = _widget(app)
     widget.update_board(_board())
     widget.flush_pending_refresh()
-    widget.side_button.click()
-    assert widget.side == "short" and _symbols(widget) == ["ZZZ"]
-    widget.side_button.click()
     widget.mode_buttons["mine"].click()
+    widget.side_button.click()
+    assert widget.side == "short" and _symbols(widget) == []
+    widget.side_button.click()
     assert _symbols(widget) == ["MYB", "MYA"]
 
 
@@ -121,7 +126,8 @@ def test_row_click_emits_symbol_and_side(app):
     got = []
     widget.symbolActivated.connect(lambda s, side: got.append((s, side)))
     widget._on_clicked(widget.model.index(1, 0))
-    assert got == [("BBB", "LONG")]
+    widget._on_clicked(widget.model.index(2, 0))
+    assert got == [("BBB", "LONG"), ("ZZZ", "SHORT")]
 
 
 def test_review_menu_carries_counts_and_emits(app):
@@ -272,7 +278,7 @@ def test_side_follows_the_day_until_the_trader_taps_it(app):
     widget = _widget(app)
     widget.update_board(_day_board("down_day"))
     widget.flush_pending_refresh()
-    assert widget.side == "short" and _symbols(widget) == ["ZZZ"]
+    assert widget.side == "short"
     # The trader taps Long; the same down day does not pull them back.
     widget.side_button.click()
     widget.update_board(_day_board("down_day", as_of="2026-09-22T10:45:00-04:00"))
@@ -294,3 +300,115 @@ def test_side_does_not_follow_flat_or_unknown_days(app):
         widget.update_board(_day_board(state))
         widget.flush_pending_refresh()
         assert widget.side == "short"
+
+
+def _view_symbols(widget):
+    return [row["symbol"] for row in widget.visible_rows()]
+
+
+def _sort_board():
+    board = _board()
+    board["pop"] = {
+        "long": [_row("AAA", pop_score=3.0, move15_pct=0.9, rvol=1.2),
+                 _row("BBB", pop_score=2.0, move15_pct=1.6, rvol=None)],
+        "short": [_row("ZZZ", pop_score=-2.5, move15_pct=-1.4, rvol=4.0)],
+    }
+    return board
+
+
+def test_pop_board_order_is_biggest_move_either_side(app):
+    widget = _widget(app)
+    widget.update_board(_sort_board())
+    widget.flush_pending_refresh()
+    assert _view_symbols(widget) == ["AAA", "ZZZ", "BBB"]
+    # Each row keeps its own side for the Lvl cell, the chart click and +F.
+    asked = []
+    widget.focusAddRequested.connect(lambda s, side: asked.append((s, side)))
+    menu = widget.row_menu(widget.model.index(1, 0))
+    [a for a in menu.actions() if "Focus" in a.text()][0].trigger()
+    assert asked == [("ZZZ", "short")]
+
+
+def test_header_click_sorts_desc_then_asc_then_board_order(app):
+    widget = _widget(app)
+    widget.update_board(_sort_board())
+    widget.flush_pending_refresh()
+    col = [k for k, _h in widget.model._columns].index("move15_pct")
+    widget.table.horizontalHeader().sectionClicked.emit(col)
+    assert _view_symbols(widget) == ["BBB", "AAA", "ZZZ"]
+    widget.table.horizontalHeader().sectionClicked.emit(col)
+    assert _view_symbols(widget) == ["ZZZ", "AAA", "BBB"]
+    widget.table.horizontalHeader().sectionClicked.emit(col)
+    assert _view_symbols(widget) == ["AAA", "ZZZ", "BBB"]
+    # The sort holds across a new board.
+    widget.table.horizontalHeader().sectionClicked.emit(col)
+    widget.update_board(_sort_board())
+    widget.flush_pending_refresh()
+    assert _view_symbols(widget) == ["BBB", "AAA", "ZZZ"]
+
+
+def test_sort_keeps_unmeasured_last_both_ways_and_clicks_map_to_the_view(app):
+    widget = _widget(app)
+    widget.update_board(_sort_board())
+    widget.flush_pending_refresh()
+    col = [k for k, _h in widget.model._columns].index("rvol")
+    widget.table.horizontalHeader().sectionClicked.emit(col)
+    assert _view_symbols(widget) == ["ZZZ", "AAA", "BBB"]
+    widget.table.horizontalHeader().sectionClicked.emit(col)
+    assert _view_symbols(widget) == ["AAA", "ZZZ", "BBB"]
+    got = []
+    widget.symbolActivated.connect(lambda s, side: got.append((s, side)))
+    widget._on_clicked(widget.proxy.index(1, 0))
+    assert got == [("ZZZ", "SHORT")]
+
+
+def test_hide_for_today_removes_the_row_and_unhide_brings_it_back(app):
+    widget = _widget(app)
+    widget.update_board(_sort_board())
+    widget.flush_pending_refresh()
+    assert widget.unhide_button.isHidden()
+    menu = widget.row_menu(widget.model.index(1, 0))
+    [a for a in menu.actions() if a.text().startswith("Hide ZZZ")][0].trigger()
+    assert _view_symbols(widget) == ["AAA", "BBB"]
+    assert not widget.unhide_button.isHidden() and "1" in widget.unhide_button.text()
+    # A new tick the same day keeps it hidden.
+    widget.update_board(_sort_board())
+    widget.flush_pending_refresh()
+    assert _view_symbols(widget) == ["AAA", "BBB"]
+    # Delete on the selected row hides it too.
+    widget.table.selectRow(0)
+    widget._hide_selected()
+    assert _view_symbols(widget) == ["BBB"]
+    widget.unhide_button.click()
+    assert _view_symbols(widget) == ["AAA", "ZZZ", "BBB"]
+    assert widget.unhide_button.isHidden()
+
+
+def test_hidden_rows_come_back_the_next_day(app):
+    widget = _widget(app)
+    widget.update_board(_sort_board())
+    widget.flush_pending_refresh()
+    widget.hide_row({"symbol": "AAA", "_side": "long"})
+    assert "AAA" not in _view_symbols(widget)
+    tomorrow = dict(_sort_board(), as_of="2026-09-23T09:40:00-04:00")
+    widget.update_board(tomorrow)
+    widget.flush_pending_refresh()
+    assert "AAA" in _view_symbols(widget)
+
+
+def test_hide_persists_through_the_local_setting(app, monkeypatch):
+    import project_paths
+    from ui.widgets import movers_board as mb
+
+    saved = {}
+    monkeypatch.setattr(project_paths, "save_local_setting", lambda k, v: saved.__setitem__(k, v))
+    monkeypatch.setattr(project_paths, "get_local_setting", lambda k, d=None: saved.get(k, d))
+    first = mb.MoversBoard(persist=True)
+    first.update_board(_sort_board())
+    first.flush_pending_refresh()
+    first.hide_row({"symbol": "ZZZ", "_side": "short"})
+    assert saved[mb.MOVERS_HIDDEN_SETTING] == {"day": "2026-09-22", "keys": ["ZZZ|short"]}
+    second = mb.MoversBoard(persist=True)
+    second.update_board(_sort_board())
+    second.flush_pending_refresh()
+    assert "ZZZ" not in _view_symbols(second)
