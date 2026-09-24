@@ -852,6 +852,21 @@ def calendar_pnl_by_day(*, currency_mode: str = "Native", **kwargs: Any) -> dict
     return _calendar(trades, pnl_key=pnl_key) if pnl_key else {}
 
 
+def calendar_month_data(*, currency_mode: str = "Native", **kwargs: Any) -> dict[str, Any]:
+    """Per-day stats for the Calendar, with the currency and any refusal note."""
+    from journal_analytics import calendar_day_stats, pnl_currency_label, resolve_pnl_key
+
+    trades = [trade.raw for trade in load_trades(**kwargs)]
+    pnl_key, note = resolve_pnl_key(trades, currency_mode)
+    currencies = sorted({str(row.get("currency") or "").upper() for row in trades if row.get("currency")})
+    return {
+        "days": calendar_day_stats(trades, pnl_key=pnl_key) if pnl_key else {},
+        "pnl_key": pnl_key,
+        "note": note,
+        "currency": pnl_currency_label(currency_mode, pnl_key, currencies),
+    }
+
+
 def equity_curve(trades: list[JournalTrade], currency_mode: str = "CAD") -> list[tuple[str, float]]:
     """Cumulative P&L by trade date, in the header's currency.
 
