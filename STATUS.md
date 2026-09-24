@@ -8,8 +8,6 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Desk:** it runs from source on `main`. It was down for the 09-22 update and was
   not restarted. The next start is the trader's call.
 - **Last full suite:** 11,036 passed, 14 skipped (Movers merge). Ruff clean, smoke 7/7, selftest 97/97 source.
-- **09-22 merges:** repo slim-down, setup grades + 8-core tests (gate #190), Working now strip (#191).
-- **09-23 early merges:** close-scan freshness (gate #192; owed: halted names refetch each evening), M5 swing context (#193).
 - **2026-09-23 integration** (`80d86afd`): Mentor asks once (gate #194), Pullback dip gate v2 (#195),
   Capture tab fill + veto v4 (q/w/e), AGENTS.md test lines. Suite 10,524 passed, 2 load flakes green alone; selftest 97/97 source and frozen.
   Mentor-ask-once merged without a reviewer round.
