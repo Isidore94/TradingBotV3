@@ -120,6 +120,11 @@ class AnalyticsTab(QFrame):
         self.evidence_note = QLabel("")
         self.evidence_note.setObjectName("MutedLabel")
         self.evidence_note.setWordWrap(True)
+        #: Closed trades with a made-up entry: kept, but not in any total.
+        self.not_counted_note = QLabel("")
+        self.not_counted_note.setObjectName("CurrencyNote")
+        self.not_counted_note.setWordWrap(True)
+        self.not_counted_note.setVisible(False)
 
         self.curve = pg.PlotWidget(title="Cumulative P&L") if PYQTGRAPH_AVAILABLE else QLabel(
             "pyqtgraph is not installed; the table below carries the same numbers."
@@ -174,6 +179,7 @@ class AnalyticsTab(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.headline)
         layout.addWidget(self.currency_note)
+        layout.addWidget(self.not_counted_note)
         layout.addWidget(self.evidence_note)
         layout.addWidget(self.curve, 3)
         layout.addWidget(self.curve_table, 1)
@@ -212,6 +218,9 @@ class AnalyticsTab(QFrame):
             )
         self.currency_note.setText(note)
         self.currency_note.setVisible(bool(note))
+        not_counted_line = str((summary.get("not_counted") or {}).get("line") or "")
+        self.not_counted_note.setText(not_counted_line)
+        self.not_counted_note.setVisible(bool(not_counted_line))
 
         # ST5.4: the coverage line and the refusal that stands where a "best
         # personal setup" would otherwise be named. In memory over the rows

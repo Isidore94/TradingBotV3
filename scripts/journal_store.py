@@ -17,6 +17,7 @@ from journal_analytics import (
     TRADER_CAPTURE_SOURCE,
     TRADER_NOTE_SOURCE,
     AutoTagger,
+    has_invented_entry,
     split_tags,
 )
 from journal_trade_shape import is_shape_tag, shape_tags
@@ -2212,7 +2213,20 @@ class JournalStore:
                        -- stored on `trades`. A trade the tagger has not visited
                        -- since this packet landed reads '', which every reader
                        -- renders as silence rather than as an empty window.
-                       COALESCE(n.note_lane_json, '') AS note_lane_json
+                       COALESCE(n.note_lane_json, '') AS note_lane_json,
+                       -- The rebuild stood a closing fill in for a missing entry.
+                       EXISTS(
+                           SELECT 1 FROM trade_legs l
+                           WHERE l.trade_id = t.trade_id AND l.role = 'SYNTHETIC_OPEN'
+                       ) AS synthetic_entry,
+                       COALESCE((
+                           SELECT acc.tax_status FROM accounts acc
+                           WHERE acc.broker = t.broker AND acc.account_number = t.account_number
+                       ), '') AS account_tax_status,
+                       COALESCE((
+                           SELECT acc.account_type FROM accounts acc
+                           WHERE acc.broker = t.broker AND acc.account_number = t.account_number
+                       ), '') AS account_type
                 FROM trades t
                 LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id
                 LEFT JOIN note_lane_verdicts n ON n.trade_id = t.trade_id
@@ -2222,6 +2236,10 @@ class JournalStore:
                 params,
             ).fetchall()
         trades = [_row_to_dict(row) for row in rows]
+        for trade in trades:
+            trade["synthetic_entry"] = bool(trade.get("synthetic_entry"))
+            # Kept and shown, but left out of every P&L total.
+            trade["entry_invented"] = has_invented_entry(trade)
         # One query for every trade on the tab, not one CONNECTION per trade.
         regime_dates = [
             _date_text(trade.get("opened_at") or trade.get("trade_date")) for trade in trades

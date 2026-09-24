@@ -128,7 +128,7 @@ def test_the_socket_import_drops_the_combo_parent_row():
 
 
 def test_the_socket_then_flex_spread_rebuilds_one_position_per_leg(tmp_path):
-    """End to end on the live CVNA spread: socket rows by day, Flex that night,
+    """End to end on the live CVNA spread: socket rows by day, Flex that night.
     One position per leg, each opened once: no BAG, no doubled quantity."""
     from journal_store import JournalStore
 
@@ -190,3 +190,141 @@ def test_only_the_exact_combo_leg_shape_is_trimmed():
     assert canonical_ibkr_exec_id("00021ab9.6a2c031e.03.01") == "00021ab9.6a2c031e.03.01"
     assert canonical_ibkr_exec_id("00021ab9.6a2c031e.03.01.02") == "00021ab9.6a2c031e.03.01.02"
     assert canonical_ibkr_exec_id("socket-1") == "socket-1"
+
+
+# ---------------------------------------------------------------------------
+# 3. A trade with a made-up entry is kept, flagged, and not counted
+# ---------------------------------------------------------------------------
+
+
+def _qt_row(uid, side, quantity, price, stamp, *, symbol="SMH", account="51830546", label="TFSA"):
+    return {
+        "execution_uid": uid, "broker": "QUESTRADE", "account_number": account,
+        "account_label": label, "account_type": label, "symbol": symbol,
+        "security_type": "UNKNOWN", "currency": "USD", "side": side, "quantity": quantity,
+        "price": price, "timestamp": stamp, "trade_date": stamp[:10],
+        "commission": 0.0, "fees": 0.0, "gross_amount": None, "net_amount": None,
+        "order_id": "", "exchange_exec_id": "", "raw_json": "{}", "source": "QT_API",
+    }
+
+
+def _store_with_a_missing_buy(tmp_path):
+    """The live SMH shape: 8 bought, 11 sold (3 buys never imported), 3 covered.
+    Plus one honest AAPL round trip in the margin account."""
+    from journal_store import JournalStore
+
+    store = JournalStore(tmp_path / "journal.sqlite3")
+    store.initialize_schema()
+    store.upsert_executions([
+        _qt_row("QT:51830546:1", "BUY", 8, 580.0, "2026-08-12T10:00:00-04:00"),
+        _qt_row("QT:51830546:2", "SELL", 11, 589.49, "2026-08-13T15:46:08-04:00"),
+        _qt_row("QT:51830546:3", "BUY", 3, 552.25, "2026-09-03T13:45:41-04:00"),
+        _qt_row("QT:29347316:4", "BUY", 10, 100.0, "2026-08-12T10:00:00-04:00",
+                symbol="AAPL", account="29347316", label="Margin"),
+        _qt_row("QT:29347316:5", "SELL", 10, 110.0, "2026-08-13T10:00:00-04:00",
+                symbol="AAPL", account="29347316", label="Margin"),
+    ])
+    store.set_account_tax_status("QUESTRADE", "51830546", "TAX_FREE")
+    store.set_account_tax_status("QUESTRADE", "29347316", "TAXABLE")
+    store.rebuild_trades(refresh_tags=False)
+    return store
+
+
+def test_a_trade_with_a_made_up_entry_is_kept_and_marked(tmp_path):
+    store = _store_with_a_missing_buy(tmp_path)
+    trades = {(t["symbol"], t["direction"]): t for t in store.list_trades()}
+
+    fabricated = trades[("SMH", "SHORT")]
+    assert fabricated["status"] == "CLOSED"
+    assert fabricated["entry_invented"]
+    assert not trades[("SMH", "LONG")]["entry_invented"]
+    assert not trades[("AAPL", "LONG")]["entry_invented"]
+
+
+def test_a_made_up_entry_is_not_in_the_totals_calendar_or_stats(tmp_path):
+    from journal_analytics import build_analytics_summary, calendar_pnl_by_day, resolve_pnl_key
+
+    store = _store_with_a_missing_buy(tmp_path)
+    trades = store.list_trades()
+    fabricated = next(t for t in trades if t["entry_invented"])
+    honest = [t for t in trades if t["status"] == "CLOSED" and not t["entry_invented"]]
+
+    summary = build_analytics_summary(trades, "Native")
+    assert summary["overall"]["net_pnl"] == sum(t["net_pnl"] for t in honest)
+    assert summary["overall"]["closed"] == len(honest)
+    assert summary["not_counted"]["trades"] == 1
+    assert summary["not_counted"]["net_pnl"] == fabricated["net_pnl"]
+    assert "1 trade needs missing fills - not counted ($" in summary["not_counted"]["line"]
+
+    by_day = calendar_pnl_by_day(trades)
+    assert fabricated["closed_at"][:10] not in by_day
+
+    key, _note = resolve_pnl_key([fabricated], "Native")
+    assert key == "net_pnl"
+
+
+def test_a_stock_short_in_a_registered_account_is_a_missing_buy(tmp_path):
+    """A TFSA cannot short stock. A SHORT there means the buy was never imported,
+    even when no SYNTHETIC_OPEN leg says so (the sell had nothing to close)."""
+    from journal_analytics import has_invented_entry, is_registered_stock_short
+
+    store = _store_with_a_missing_buy(tmp_path)
+    store.upsert_executions([
+        _qt_row("QT:51830546:9", "SELL", 5, 60.0, "2026-08-20T10:00:00-04:00", symbol="DRAM"),
+    ])
+    store.rebuild_trades(refresh_tags=False)
+    dram = next(t for t in store.list_trades() if t["symbol"] == "DRAM")
+
+    assert dram["direction"] == "SHORT"
+    assert is_registered_stock_short(dram)
+    assert has_invented_entry(dram)
+    # A written option in a TFSA is allowed and is not flagged.
+    sold_put = {**dram, "symbol": "AAOI18JUN26P120.00", "security_type": "UNKNOWN"}
+    assert not is_registered_stock_short(sold_put)
+    assert not is_registered_stock_short({**dram, "security_type": "OPT"})
+    assert not is_registered_stock_short(
+        {**dram, "account_tax_status": "TAXABLE", "account_label": "Margin"}
+    )
+
+
+def test_the_equity_curve_skips_a_made_up_entry(tmp_path, monkeypatch):
+    from ui.services import journal_feed
+
+    store = _store_with_a_missing_buy(tmp_path)
+    monkeypatch.setattr(journal_feed, "_STORE", store)
+    monkeypatch.setattr(journal_feed, "_store", lambda: store)
+    trades = journal_feed.load_trades(date_from="2026-01-01", date_to="2026-12-31")
+    points = journal_feed.equity_curve(trades, "Native")
+    honest = sum(
+        t.net_pnl for t in trades if t.is_closed and (t.symbol, t.direction) != ("SMH", "SHORT")
+    )
+
+    assert points[-1][1] == honest
+
+
+def test_the_journal_tabs_say_what_they_left_out(tmp_path, monkeypatch):
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from ui.services import journal_feed
+
+    QApplication.instance() or QApplication([])
+    store = _store_with_a_missing_buy(tmp_path)
+    monkeypatch.setattr(journal_feed, "_STORE", store)
+    monkeypatch.setattr(journal_feed, "_store", lambda: store)
+    from ui.panels.journal_panel import JournalPanel
+
+    panel = JournalPanel()
+    try:
+        panel.header.range_input.setCurrentText("All")
+        panel.analytics_tab.reload()
+        assert "1 trade needs missing fills - not counted" in panel.analytics_tab.not_counted_note.text()
+        assert panel.analytics_tab.not_counted_note.isVisibleTo(panel.analytics_tab)
+
+        panel.calendar_tab.reload()
+        assert "1 trade needs missing fills - not counted" in panel.calendar_tab.summary.text()
+    finally:
+        panel.shutdown()
+        panel.deleteLater()

@@ -1121,10 +1121,82 @@ class AutoTagger:
         return ordered[: max(1, int(limit))]
 
 
+#: Account tax statuses that cannot hold a stock short (TFSA, RRSP and kin).
+REGISTERED_TAX_STATUSES = frozenset({"TAX_FREE", "TAX_DEFERRED"})
+#: Account labels that name a registered account when no tax status is stored.
+REGISTERED_ACCOUNT_WORDS = ("TFSA", "RRSP", "RRIF", "FHSA", "RESP", "LIRA", "LIF", "RDSP")
+
+
+def _is_option_row(row: dict[str, Any]) -> bool:
+    from journal_identity import normalize_security_type
+
+    security_type = normalize_security_type(row.get("security_type"))
+    if security_type in {"OPT", "FOP", "WAR"}:
+        return True
+    if security_type != "UNKNOWN":
+        return False
+    from journal_importers import classify_questrade_security_type
+
+    return classify_questrade_security_type({"symbol": row.get("symbol")}) == "OPT"
+
+
+def is_registered_account(row: dict[str, Any]) -> bool:
+    """True for a TFSA/RRSP-style account: stored tax status first, label second."""
+    status = str(row.get("account_tax_status") or "").strip().upper()
+    if status:
+        return status in REGISTERED_TAX_STATUSES
+    words = f"{row.get('account_label') or ''} {row.get('account_type') or ''}".upper()
+    return any(word in words for word in REGISTERED_ACCOUNT_WORDS)
+
+
+def is_registered_stock_short(row: dict[str, Any]) -> bool:
+    """A stock SHORT in a registered account: impossible, so its buy is missing.
+
+    Writing an option there is allowed, so options are never flagged.
+    """
+    if str(row.get("direction") or "").upper() != "SHORT":
+        return False
+    if not is_registered_account(row):
+        return False
+    return not _is_option_row(row)
+
+
+def has_invented_entry(row: dict[str, Any]) -> bool:
+    """True when the trade's entry was made up rather than imported.
+
+    Either the rebuild stood the closing fill in for a missing opening fill (a
+    ``SYNTHETIC_OPEN`` leg), or it is a stock short a registered account cannot
+    hold. The trade stays in the journal; it is left out of P&L totals.
+    """
+    if row.get("entry_invented") or row.get("synthetic_entry"):
+        return True
+    return is_registered_stock_short(row)
+
+
+def counts_in_pnl(row: dict[str, Any]) -> bool:
+    """A CLOSED trade whose entry is real: the only kind P&L totals may add up."""
+    return str(row.get("status") or "").upper() == "CLOSED" and not has_invented_entry(row)
+
+
+def not_counted_summary(trades: list[dict[str, Any]], pnl_key: str = "net_pnl") -> dict[str, Any]:
+    """The CLOSED trades left out of totals for a made-up entry, and one line saying so."""
+    left_out = [
+        row for row in trades
+        if str(row.get("status") or "").upper() == "CLOSED" and has_invented_entry(row)
+    ]
+    pnl = sum(_coerce_float(row.get(pnl_key)) or 0.0 for row in left_out)
+    count = len(left_out)
+    line = ""
+    if count:
+        noun = "trade needs" if count == 1 else "trades need"
+        line = f"{count} {noun} missing fills - not counted (${pnl:,.2f})"
+    return {"trades": count, "net_pnl": pnl, "line": line}
+
+
 def calendar_pnl_by_day(trades: list[dict[str, Any]], *, pnl_key: str = "net_pnl") -> dict[str, float]:
     totals: dict[str, float] = defaultdict(float)
     for trade in trades:
-        if str(trade.get("status") or "").upper() != "CLOSED":
+        if not counts_in_pnl(trade):
             continue
         trade_day = _parse_date(trade.get("closed_at") or trade.get("trade_date") or trade.get("opened_at"))
         if trade_day is None:
@@ -1137,7 +1209,8 @@ def calendar_pnl_by_day(trades: list[dict[str, Any]], *, pnl_key: str = "net_pnl
 
 
 def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> dict[str, Any]:
-    closed = [row for row in rows if str(row.get("status") or "").upper() == "CLOSED"]
+    closed = [row for row in rows if counts_in_pnl(row)]
+    all_closed = sum(1 for row in rows if str(row.get("status") or "").upper() == "CLOSED")
     pnl_values = [_coerce_float(row.get(pnl_key)) or 0.0 for row in closed]
     wins = [value for value in pnl_values if value > 0]
     losses = [value for value in pnl_values if value < 0]
@@ -1147,7 +1220,8 @@ def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> d
     return {
         "trades": len(rows),
         "closed": len(closed),
-        "open": len(rows) - len(closed),
+        "open": len(rows) - all_closed,
+        "not_counted": all_closed - len(closed),
         "wins": len(wins),
         "losses": len(losses),
         "win_rate": (len(wins) / len(closed)) if closed else None,
@@ -1224,7 +1298,7 @@ def resolve_pnl_key(
       ``("", reason)`` and shows the reason instead of a number, because a total
       that silently omits the unconverted rows is worse than no total.
     """
-    closed = [row for row in trades if str(row.get("status") or "").upper() == "CLOSED"]
+    closed = [row for row in trades if counts_in_pnl(row)]
     mode = str(currency_mode or "").strip().upper()
     currencies = {str(row.get("currency") or "").upper() for row in closed if row.get("currency")}
     if mode == "CAD":
@@ -1421,6 +1495,8 @@ def build_analytics_summary(
         "pnl_key": pnl_key,
         "pnl_note": pnl_note,
         "currencies": sorted({str(row.get("currency") or "").upper() for row in trades if row.get("currency")}),
+        # Native money: a left-out trade has no converted value worth trusting.
+        "not_counted": not_counted_summary(trades),
     }
     if not pnl_key:
         # Mixed currencies with unconverted rows: the per-group totals would be
@@ -1597,7 +1673,12 @@ def personal_evidence_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
     from journal_exposure import BIAS_UNKNOWN, DIRECTIONAL_BIASES, classify_all
     from swing_headline import wilson_lower_bound
 
-    rows = [row for row in trades if isinstance(row, dict)]
+    # A CLOSED trade with a made-up entry is not a result; it is left out here too.
+    rows = [
+        row for row in trades
+        if isinstance(row, dict)
+        and not (str(row.get("status") or "").upper() == "CLOSED" and has_invented_entry(row))
+    ]
     exposures = classify_all(rows)
 
     def _exposure_of(row):
@@ -1860,7 +1941,7 @@ def _empty_dimension_notes(
     Coverage is measured against CLOSED trades, which is the denominator every
     number in these groups is computed over.
     """
-    closed = [row for row in trades if str(row.get("status") or "").upper() == "CLOSED"]
+    closed = [row for row in trades if counts_in_pnl(row)]
     if not closed:
         return {}
     notes: dict[str, str] = {}

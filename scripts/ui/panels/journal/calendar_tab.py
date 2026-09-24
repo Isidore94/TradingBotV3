@@ -75,6 +75,7 @@ class CalendarTab(QFrame):
         super().__init__(parent)
         self._header = header
         self._by_day: dict[str, float] = {}
+        self._not_counted_line = ""
         today = date.today()
 
         self.year_input = QComboBox()
@@ -138,11 +139,12 @@ class CalendarTab(QFrame):
 
     def reload(self) -> None:
         try:
-            self._by_day = journal_feed.calendar_pnl_by_day(
+            self._by_day, self._not_counted_line = journal_feed.calendar_view(
                 currency_mode=self._header.currency_mode, **self._header.query()
             )
         except Exception as exc:  # noqa: BLE001
             self._by_day = {}
+            self._not_counted_line = ""
             self.statusChanged.emit(f"calendar unavailable: {exc}")
         self._render()
 
@@ -183,7 +185,10 @@ class CalendarTab(QFrame):
         self._render_heat_image(year)
 
         days = sum(1 for key in self._by_day if key.startswith(f"{year:04d}-{month:02d}"))
-        self.summary.setText(f"{days} trading day(s), {month_total:,.2f} this month")
+        text = f"{days} trading day(s), {month_total:,.2f} this month"
+        if self._not_counted_line:
+            text = f"{text}. {self._not_counted_line}"
+        self.summary.setText(text)
 
     def _render_heat_image(self, year: int) -> None:
         matrix, scale = year_heatmap_matrix(self._by_day, year)
