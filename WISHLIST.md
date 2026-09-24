@@ -15,75 +15,35 @@ no detector, score or alert changes without golden fixtures and the trader's wor
 The four open questions were answered by the trader on 2026-09-24; the decisions are
 written inline where they apply and listed at the end.
 
----
-
-## P0-1. Universe write floor is bypassed on the schedule (goals 1, 5)
-
-**Now.** The 13:02 stale tick calls `core.rebuild_universe_if_stale(force=True, ...)` at
-`scripts/ui/services/autopilot_service.py:874`. In `scripts/universe_builder.py:805` the
-same `force` flag skips the write floor. On 2026-09-23 the rebuild produced 343 names
-(previous 1455, floor 727) and was written anyway: job ledger row
-`{"forced": true, "floor": 727, "before": {"all": 1455}, "after": {"all": 343}}`. The D1
-scan now covers a quarter of the market. The good lists are in
-`%LOCALAPPDATA%\TradingBotV3\machine_cache\universe\snapshots\universe-<stamp>`.
-
-**Build.**
-1. Split the two meanings of `force`. `rebuild_universe_if_stale(*, skip_stale_check,
-   override_floor, log)`; `build_universe(..., force=override_floor)`. The stale tick
-   passes `skip_stale_check=True, override_floor=False`. The Settings/Auto Pilot
-   "Rebuild universe now" button (`rebuild_universe_now`, line 886) keeps the override.
-2. A refused rebuild does not stamp `built_at`, logs one WARNING line with both counts,
-   and adds one line to the phone digest OPERATIONS section
-   ("universe rebuild refused: 343 < floor 727, kept 1455"). Retry stays on the normal
-   cadence (`AUTOPILOT_UNIVERSE_RETRY_MINUTES`).
-3. Per-stage counts in the ledger row (directory rows, after options filter, priced,
-   passed screen, after include lists) so the next collapse says which stage lost names.
-   The 104 s run on 09-23 versus 5 s on 09-22 suggests yfinance batch failures; log the
-   batch error count too.
-4. Restore CLI (a live-store repair goes through a tested CLI):
-   `universe_builder.py --restore-snapshot <stamp>` copies the three lists back and
-   writes a ledger row `event=universe_restore`. Run it for the 2026-09-22 13:00
-   snapshot on the trader's word.
-
-**Tests.** `tests/test_universe_builder.py`: floor refuses when not overridden (exists;
-add the split-flag case); new `tests/test_autopilot_service_universe.py`: the stale tick
-never overrides the floor; restore CLI round-trip on a scratch home.
-
-**Done when.** A scheduled rebuild below the floor is refused, the digest says so, and
-`universe_all.txt` is back above 1,000 names.
+**Done so far (2026-09-24).** P0-1 universe floor (`6908769b`) and P0-2 packets 2a, 2b, 2f
+(`87c0bae6`) are merged; the universe was restored to 1,455 names from snapshot
+`20260922T130004` and the two stale tracker copies were pruned (2.6 GB). Live gates
+#209-#212 are owed. Finished packets are deleted from this file; `git log` has them.
 
 ---
 
-## P0-2. Swing scan: it fails, it is slow, and the tracker is stale (goals 5, 6, 11)
+## P0-2. Swing scan: speed, and the 1.4 GB tracker snapshot (goals 5, 6, 11)
 
-**Now.** Three of the last six scans failed (09-22 13:00 close slot, 09-23 07:30
-`MemoryError`, 09-23 12:45). The tracker snapshot was last written 2026-09-22 07:51.
-Last good run: 870 s = prep+fetch 450 s, studies 96 s, feature-history 25 s,
-scan-factors 186 s, tier-tracker 55 s, other output 25 s; the 10:00 slot started at
-10:46. `export_scan_factor_views` (`legacy.py:12322`) reads the whole 710 MB
-`d1_features_history.csv` every scan. The write slot parses the 1.35 GB
-`master_avwap_setup_tracker.json` (`runner.py:2580`); the `MemoryError` traceback died in
-a later `json.load` because the process was already at the ceiling. On disk:
-JSON 1.35 GB + `.bak` 1.32 GB + SQLite 1.39 GB + `.damaged-20260905` 1.14 GB. Decision
-0017 (readers move to SQLite) has moved no reader: only `tracker_store.py` opens the DB.
-The autopilot log truncates the child's failure reason, so two of the three failures have
-no recorded cause.
+**Done 2026-09-24** (`87c0bae6`): 2a keeps a failed child's 40-line stderr tail and logs
+`[run_master memory]` per phase; 2b publishes signals/reports/state before the tracker
+write and turns a tracker failure into a ledger row, a digest OPERATIONS line and the
+Health line "tracker last written <stamp>"; 2f pruned `.bak` and the damaged SQLite copy.
+Three empty leftovers named `*.damaged-20260905T200233` (`sqlite-shm`, `sqlite-wal`,
+`_digests.json`) are still in `data/runtime`; add them to `--prune-copies` on the next
+pass. Gates #210-#212 owed.
+
+**Now.** Last good run: 870 s = prep+fetch 450 s, studies 96 s, feature-history 25 s,
+scan-factors 186 s, tier-tracker 55 s, other output 25 s. `export_scan_factor_views`
+(`legacy.py:12322`) reads the whole 710 MB `d1_features_history.csv` every scan. The
+write slot parses the 1.38 GB `master_avwap_setup_tracker.json` (`runner.py:2580`); the
+tracker was last written 2026-09-24 07:46. Decision 0017 (readers move to SQLite) has
+moved no reader: only `tracker_store.py` opens the DB. The new memory lines say where
+the peak is; read a few sessions of them before starting 2c.
 
 **Build, in this order, one packet each.**
-- **2a Diagnose first.** Keep the child's full stderr tail (last 40 lines) in the
-  autopilot log entry and in a `scan_failures.jsonl` row. Add `[run_master memory]`
-  lines beside `[run_master timing]` (peak working set per phase via
-  `ctypes.windll.psapi.GetProcessMemoryInfo`, no new dependency). Read the next failure
-  before touching anything else.
-- **2b Publish outputs before the tracker write, and never lose both.** In the close
-  slot, write signals/reports/state first, then run the tracker update; a tracker
-  failure becomes a ledger row + one digest OPERATIONS line + a Health line "tracker
-  last written <stamp>", and the scan still counts as published. If the trader agrees,
-  the tracker update runs in its own child after the scan child exits (memory isolation).
-  `runner.py` is not ask-first; `legacy.py` functions it calls are read-only here.
 - **2c Scan factors read a window, not history.** Keep `d1_features_history.csv`
   append-only. Maintain a rolling `d1_features_window.csv` (last 40 sessions) and make
-  `export_scan_factor_views` read the window. Parity fixture: leaderboard from the
+  `export_scan_factor_views` read the window. Parity fixture: the leaderboard from the
   window must equal the leaderboard from the full file for the same window, built on a
   scratch copy before the change. This touches `legacy.py` (ask first).
 - **2d Readers to SQLite (decision 0017), one at a time, each with a parity test on a
@@ -95,18 +55,12 @@ no recorded cause.
 - **2e Fetch phase.** Measure the daily-bar cache hit rate per scan (log hits/misses/
   refreshes). Batch the misses through one `yf.download` call per 100 symbols. Target
   under 120 s for ~1,100 names.
-- **2f Disk.** Decided 2026-09-24: delete `.bak` and `.damaged-20260905` (2.5 GB) now.
-  Do it through a tested CLI (`tracker_store.py --prune-copies`) that lists what it will
-  remove, refuses anything but those two names, and writes a job-ledger row. The SQLite
-  mirror plus the append-only transition ledger (`setup_tracker_ledger`) are the durable
-  record. Run with the desk down.
 
-**Tests.** Fail-first for 2b (tracker exception leaves published outputs and writes the
-ledger row); parity fixtures for 2c and each 2d step; a timing budget test is not
-possible offline, so 2e lands with a gate line.
+**Tests.** Parity fixtures for 2c and each 2d step; 2e lands with a gate line (no
+offline timing test is honest).
 
-**Done when.** Ten consecutive sessions with every close slot written; scan under 6
-minutes; no reader parses the JSON.
+**Done when.** Scan under 6 minutes; no reader parses the JSON; ten consecutive close
+slots carry a fresh "tracker last written" stamp (gate #212 checks the first).
 
 ---
 
@@ -366,8 +320,6 @@ breadth, internals) and the evening grades it.
   with n, on Research → Results, from the same evidence cells (no new statistic).
 - **9b Hold-out beside the window** in `working_lately` and `setup_grades`: the last 20
   sessions shown next to the prior window so a leader that only led lately is visible.
-- **9c Nightly check** that the close slot wrote the tracker (from 2b) with a Health
-  line and a digest line.
 
 **Done when.** One page shows, for each population, what worked, since when, and whether
 it held out.
@@ -392,8 +344,8 @@ it held out.
   publishes and alerts first; each becomes a logged reason or a named `unknown`.
 - **11b** Ruff: widen from five codes to `E7`, all `F`, `B` on non-legacy code, fixing
   as it goes.
-- **11c** Health page: night chain status, tracker last written, universe count vs
-  floor, IB status, Ollama probe, journal import last success.
+- **11c** Health page: night chain status, universe count vs floor, IB status, Ollama
+  probe, journal import last success (the tracker stamp landed with 2b).
 - **11d** Secrets: the market-prep OpenAI key and the ntfy token sit in plain text in
   `local_settings.json`; move them to Windows Credential Manager (`keyring` is a new
   dependency, packaging trigger) or a separate file outside the settings JSON.
@@ -401,12 +353,20 @@ it held out.
   included); import it lazily where the UI does not need it at boot. The 8
   `setStyleSheet` calls in `focus_picks_panel.py` move to `theme.qss` variants. Measure
   the 43 timers with `thread_cpu_gauge` for one live day before touching any.
-- **11f** Branches. Decided 2026-09-24: review, then merge what passes. Compact desk
-  and chart wheel zoom were merged on 2026-09-24 (`a46295c0`, `da485cac`). A reviewer
-  rebases each of the six `codex/*` branches from 09-18 and 09-22 (small fixes with red
-  tests) onto `main` in a worktree, runs their tests, and reports GO / NO-GO per
-  branch; GO branches merge on the trader's word, NO-GO branches and
-  `claude/token-cost-flags-2026-09-23` (stale, based on an old main) are deleted.
+- **11f** Branches. Decided 2026-09-24: review, then merge what passes. As of the
+  evening of 09-24: `claude/d1-alert-regroup-2026-09-24` is in flight (8 commits: the
+  D1 alert menu regrouped by principle, three new kinds, an `sma_break_retest_v1`
+  engine, veto follow-ups; alert code, so ask-first and golden fixtures apply; its
+  commits cite gates #209/#210, which P0 now holds on `main`, so renumber on merge).
+  `claude/token-cost-flags-2026-09-23` is stale: delete. `codex/air3-recovery-fix`,
+  `codex/tj17-future-fix`, `codex/tj17a-read-integrity`: rebase onto `main` in a
+  worktree, run their tests, GO / NO-GO, merge on the trader's word or delete. Eleven
+  older `codex/*` remote branches (`alert-quality-2026-09-22`,
+  `overnight-ai-repair-tests`, `phase-031`, `setup-pqs-repair-2026-09-22`,
+  `setup-score-repair-2026-09-22`, `slimdown-review-fixes-2026-09-22`, `sol-p1-forward`,
+  `sol-p2-entry-comparison`, `sol-p3-research-proposal`, `tj17-recap-complete`,
+  `ws-rp-resume-2026-09-15`) predate the 09-22 integrations: check each with
+  `git log origin/main..<branch>` and delete the ones already integrated.
 
 ---
 

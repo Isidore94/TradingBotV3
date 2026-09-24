@@ -670,6 +670,11 @@ def universe_is_stale(
     return built_at < reference_close
 
 
+def format_universe_refusal(produced: int, floor: int, kept: int | None) -> str:
+    """One digest line for a refused rebuild, e.g. "... 343 < floor 727, kept 1455"."""
+    return f"universe rebuild refused: {produced} < floor {floor}, kept {kept if kept is not None else '?'}"
+
+
 # One rebuild at a time, no matter who asks (GUI-launch self-heal, Auto Pilot
 # tick, manual button) - they all funnel through this lock.
 _UNIVERSE_REBUILD_LOCK = threading.Lock()
@@ -678,28 +683,32 @@ _UNIVERSE_REBUILD_LOCK = threading.Lock()
 def rebuild_universe_if_stale(
     now: datetime | None = None,
     *,
-    force: bool = False,
+    skip_stale_check: bool = False,
+    override_floor: bool = False,
     log: Callable[[str], None] | None = None,
     builder: Callable[..., dict] | None = None,
     built_at: datetime | None | object = _UNSET,
+    details: dict | None = None,
 ) -> str:
     """Blocking rebuild (call from a worker thread). Returns one of
-    "fresh" | "rebuilt" | "busy" | "failed"."""
+    "fresh" | "rebuilt" | "refused" | "busy" | "failed".
+
+    ``skip_stale_check`` rebuilds a fresh universe; ``override_floor`` lets a
+    shrink below the write floor through. Only the manual button passes both.
+    A refusal fills ``details`` with ``refused/produced/floor/kept``."""
     now = now or datetime.now()
-    if not force and not universe_is_stale(now, built_at):
+    if not skip_stale_check and not universe_is_stale(now, built_at):
         return "fresh"
     if not _UNIVERSE_REBUILD_LOCK.acquire(blocking=False):
         return "busy"
     started = datetime.now()
     try:
+        from universe_builder import UniverseWriteRefused
+
         if builder is None:
             from universe_builder import DEFAULT_OPTIONS_FILTER, build_universe
 
-            # `force` is already the manual carve-out on staleness; R9.1 gives the
-            # write floor the same carve-out through the same flag, so "Rebuild
-            # universe now" can override a floor refusal while the scheduled
-            # stale-tick path cannot.
-            result = build_universe(options_filter=DEFAULT_OPTIONS_FILTER, force=force)
+            result = build_universe(options_filter=DEFAULT_OPTIONS_FILTER, force=override_floor)
         else:
             result = builder()
         if log:
@@ -709,6 +718,12 @@ def rebuild_universe_if_stale(
                 f"{len(result.get('longs', []))} longs / {len(result.get('shorts', []))} shorts."
             )
         return "rebuilt"
+    except UniverseWriteRefused as exc:
+        text = format_universe_refusal(exc.produced, exc.floor, exc.kept)
+        logging.warning("%s (%s)", text, exc)
+        if details is not None:
+            details.update({"refused": True, "produced": exc.produced, "floor": exc.floor, "kept": exc.kept})
+        return "refused"
     except Exception as exc:
         logging.exception("Universe rebuild failed")
         if log:
@@ -4242,6 +4257,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         str(payload[key])
         for key in (
             "universe_line",
+            "universe_refusal_line",
             "scorecard_line",
             # M2.3: beside the scorecard, because that is where the digest
             # already reports what today's outcomes came to.
@@ -4251,6 +4267,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
             "last_scan_line",
             "industry_line",
             "tracker_line",
+            "tracker_write_failure_line",
         )
         if payload.get(key)
     ]

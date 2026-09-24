@@ -453,3 +453,51 @@ def test_pullback_stays_on_when_spy_dips_below_vwap_above_the_open():
     assert state.spy_last < state.spy_vwap  # below VWAP now
     assert state.spy_last > 400.0  # still above the open
     assert state.state == "up_day" and state.pullback is True
+
+
+# ------------------------------------------------------------------ dip-weak, pullback through the open
+def test_dip_weak_lists_the_names_falling_harder_than_spy_in_a_pullback():
+    spy, n = _spy_pullback(0.45)
+    base = [100.0] * 10
+    series = {
+        "HOLD": _series(base + [100.2, 100.3, 100.4]),
+        "SINK": _series(base + [99.0, 98.5, 98.0]),
+        "DRIP": _series(base + [99.8, 99.6, 99.4]),
+    }
+    board = _board(series, spy=spy, n=n, baselines={s: FLAT_BASELINE for s in series})
+    assert [row["symbol"] for row in board["dip"]["long"]] == ["HOLD"]
+    assert [row["symbol"] for row in board["dip"]["short"]] == ["SINK", "DRIP"]
+    assert all(row["dip_score"] < 0 for row in board["dip"]["short"])
+
+
+def test_pullback_stays_on_when_spy_falls_through_the_open():
+    # 2026-09-24: SPY's pullback crossed below the open one bar after it lit, and
+    # the board went dark exactly when a deeper dip made the lists matter most.
+    closes = [400.0, 401.0] + [403.0] * 8 + [401.0, 399.5, 398.5]
+    volumes = [100_000.0, 100_000.0] + [1_000_000.0] * 8 + [100_000.0] * 3
+    bars = _series(closes, prior_close=400.0, today_volumes=volumes)
+    today = [b for b in bars if b["dt"].date() == TODAY]
+    for index, bar in enumerate(today):
+        bar["high"] = max(bar["open"], bar["close"]) + (0.6 if index == 9 else 0.05)
+        bar["low"] = min(bar["open"], bar["close"]) - 0.05
+    state = _state(bars, len(closes))
+    assert state.spy_last < 400.0  # below the open now
+    assert state.state == "down_day"
+    assert state.pullback is True and state.bounce is False
+    assert state.extreme_time == "10:15"
+
+
+def test_when_pullback_and_bounce_both_qualify_the_later_turn_wins():
+    # Morning low under VWAP at bar 3, rally to a high above VWAP at bar 12, then a drop:
+    # both qualify; the high is later, so it is a pullback.
+    closes = [400.0, 399.0, 398.0, 396.0, 397.0, 398.5, 400.0, 401.5, 402.5, 403.0,
+              403.5, 404.0, 404.5, 403.0, 402.0]
+    volumes = [100_000.0] * len(closes)
+    bars = _series(closes, prior_close=400.0, today_volumes=volumes)
+    today = [b for b in bars if b["dt"].date() == TODAY]
+    for index, bar in enumerate(today):
+        bar["high"] = max(bar["open"], bar["close"]) + 0.05
+        bar["low"] = min(bar["open"], bar["close"]) - 0.05
+    state = _state(bars, len(closes))
+    assert state.pullback is True and state.bounce is False
+    assert state.state == "up_day"

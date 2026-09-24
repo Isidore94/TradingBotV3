@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from copy import deepcopy
@@ -13,6 +14,8 @@ from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
+from tracker_store import record_write_failure as record_setup_tracker_write_failure
+from tracker_store import record_write_success as record_setup_tracker_write_success
 # Packet WS-TH (2026-09-12). The theta picks the scan just printed, recorded as
 # shadow evidence in the scan's own output pass - never from `legacy.py`'s
 # tracker save (lead ruling (c)). A failed append loses the row, never the scan.
@@ -418,10 +421,54 @@ def record_d1_environment(ib=None, *, now, path=None, benchmarks=None) -> dict:
     return labels
 
 
+def process_memory_mb() -> tuple[float, float] | None:
+    """(peak working set, working set) of this process in MB; None off Windows or on error."""
+    try:
+        if sys.platform != "win32":
+            return None
+        import ctypes
+        from ctypes import wintypes
+
+        class _ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        counters = _ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi = ctypes.windll.psapi
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_ProcessMemoryCounters),
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+            return None
+        mb = 1024.0 * 1024.0
+        return counters.PeakWorkingSetSize / mb, counters.WorkingSetSize / mb
+    except Exception:
+        return None
+
+
 def _log_phase_duration(label: str, since: float) -> float:
     """Log wall-clock seconds elapsed for a run_master phase; returns a fresh mark."""
     now = time.perf_counter()
     logging.info("[run_master timing] %-26s %6.1fs", label, now - since)
+    memory = process_memory_mb()
+    if memory is not None:
+        logging.info("[run_master memory] %s peak_ws=%.0f ws=%.0f", label, memory[0], memory[1])
     try:
         from diagnostics import get_active_recorder
 
@@ -2573,72 +2620,6 @@ def _run_master_impl(
     run_result["setup_tracker_quarantined_symbols"] = list(tracker_quarantined_symbols)
 
     _phase_t = _log_phase_duration("tracker scoring+ranking", _phase_t)
-    if setup_tracker_allowed:
-        # The compact snapshot is sufficient for scoring. Only post-close runs
-        # that actually passed the source-quality gate pay to load the large
-        # authoritative tracker for mutation and publication.
-        tracker_payload = load_setup_tracker_payload()
-        control_rows = select_tracker_control_rows(
-            priority_rows,
-            tracker_tracked_rows,
-            scan_date=today_run.isoformat() if hasattr(today_run, "isoformat") else str(today_run or ""),
-        )
-        update_setup_tracker_from_scan(
-            tracker_tracked_rows,
-            ai_state,
-            feature_rows_by_symbol,
-            tracker_daily_frames,
-            ib,
-            control_rows=control_rows,
-            study_rows=study_rows,
-            tracker_payload=tracker_payload,
-            saved_by=saved_by,
-        )
-        run_result["setup_tracker_updated"] = True
-        run_result["control_setups_tracked"] = len(control_rows)
-        run_result["study_setups_tracked"] = len(study_rows)
-        logging.info(
-            "Setup tracker updated for %s tracked symbol(s); %s control/holdout setup(s); %s study setup(s).",
-            len(tracker_tracked_rows),
-            len(control_rows),
-            len(study_rows),
-        )
-        # Re-fit the Expected-R prior anchors to the freshly-updated closed
-        # outcomes so the next scan's headline ranking is grounded in this
-        # trader's own realized R (no-op until enough closed history exists).
-        # tracker_payload is the just-updated in-memory tracker, so no reload.
-        calibrate_expected_r_prior_anchors(tracker_payload=tracker_payload, persist=True)
-        try:
-            refresh_playbook_study_if_stale()
-        except Exception as exc:  # never let the study block the scan pipeline
-            logging.warning("Playbook study refresh failed (non-fatal): %s", exc)
-        try:
-            # BounceBot's alert-time learning state rides the same after-close
-            # window so day-trade tiers/mutes stay current even on days the
-            # bounce bot itself is not restarted.
-            from bounce_bot_lib.learning import refresh_bounce_learning_if_stale
-
-            if refresh_bounce_learning_if_stale():
-                logging.info("Bounce learning state refreshed after close.")
-        except Exception as exc:
-            logging.warning("Bounce learning refresh failed (non-fatal): %s", exc)
-    else:
-        if setup_tracker_skip_reason:
-            logging.info(setup_tracker_skip_reason)
-        elif update_setup_tracker is None:
-            window_start, window_end = get_setup_tracker_update_window_labels()
-            logging.info(
-                "Setup tracker refresh skipped for this run because local time is before the post-close update window (starts %s; close %s).",
-                window_start,
-                window_end,
-            )
-        else:
-            logging.info(
-                "Setup tracker refresh skipped for this run; final scheduled slot will refresh stored setups."
-            )
-
-    _phase_t = _log_phase_duration("tracker update+calibrate", _phase_t)
-    disconnect_daily_data_client(ib)
     _output_t = time.perf_counter()
 
     if csv_rows:
@@ -3167,6 +3148,96 @@ def _run_master_impl(
     run_result["d1_environment"] = record_d1_environment(ib, now=datetime.now())
     save_history(history)
     save_json(AI_STATE_FILE, ai_state)
+    _output_t = _log_phase_duration("output/state", _output_t)
+    _phase_t = _log_phase_duration("output writes", _phase_t)
+
+    # Signals, reports and state are on disk. The tracker write runs last and a
+    # failure in it is recorded, never raised: the scan still counts as published.
+    tracker_written = False
+    try:
+        if setup_tracker_allowed:
+            # The compact snapshot is sufficient for scoring. Only post-close runs
+            # that actually passed the source-quality gate pay to load the large
+            # authoritative tracker for mutation and publication.
+            tracker_payload = load_setup_tracker_payload()
+            control_rows = select_tracker_control_rows(
+                priority_rows,
+                tracker_tracked_rows,
+                scan_date=today_run.isoformat() if hasattr(today_run, "isoformat") else str(today_run or ""),
+            )
+            update_setup_tracker_from_scan(
+                tracker_tracked_rows,
+                ai_state,
+                feature_rows_by_symbol,
+                tracker_daily_frames,
+                ib,
+                control_rows=control_rows,
+                study_rows=study_rows,
+                tracker_payload=tracker_payload,
+                saved_by=saved_by,
+            )
+            tracker_written = True
+            record_setup_tracker_write_success()
+            run_result["setup_tracker_updated"] = True
+            run_result["control_setups_tracked"] = len(control_rows)
+            run_result["study_setups_tracked"] = len(study_rows)
+            logging.info(
+                "Setup tracker updated for %s tracked symbol(s); %s control/holdout setup(s); %s study setup(s).",
+                len(tracker_tracked_rows),
+                len(control_rows),
+                len(study_rows),
+            )
+            # Re-fit the Expected-R prior anchors to the freshly-updated closed
+            # outcomes so the next scan's headline ranking is grounded in this
+            # trader's own realized R (no-op until enough closed history exists).
+            # tracker_payload is the just-updated in-memory tracker, so no reload.
+            calibrate_expected_r_prior_anchors(tracker_payload=tracker_payload, persist=True)
+            try:
+                refresh_playbook_study_if_stale()
+            except Exception as exc:  # never let the study block the scan pipeline
+                logging.warning("Playbook study refresh failed (non-fatal): %s", exc)
+            try:
+                # BounceBot's alert-time learning state rides the same after-close
+                # window so day-trade tiers/mutes stay current even on days the
+                # bounce bot itself is not restarted.
+                from bounce_bot_lib.learning import refresh_bounce_learning_if_stale
+
+                if refresh_bounce_learning_if_stale():
+                    logging.info("Bounce learning state refreshed after close.")
+            except Exception as exc:
+                logging.warning("Bounce learning refresh failed (non-fatal): %s", exc)
+        else:
+            if setup_tracker_skip_reason:
+                logging.info(setup_tracker_skip_reason)
+            elif update_setup_tracker is None:
+                window_start, window_end = get_setup_tracker_update_window_labels()
+                logging.info(
+                    "Setup tracker refresh skipped for this run because local time is before the post-close update window (starts %s; close %s).",
+                    window_start,
+                    window_end,
+                )
+            else:
+                logging.info(
+                    "Setup tracker refresh skipped for this run; final scheduled slot will refresh stored setups."
+                )
+    except Exception as exc:
+        error_text = f"{type(exc).__name__}: {exc}"
+        if tracker_written:
+            # The tracker itself is saved; only the calibration after it failed.
+            logging.exception("Setup tracker post-write calibration failed; the tracker write stands.")
+            run_result["setup_tracker_post_write_error"] = error_text
+        else:
+            logging.exception("Setup tracker write failed; the scan's published outputs stand.")
+            run_result["setup_tracker_updated"] = False
+            run_result["setup_tracker_write_error"] = error_text
+            run_result["setup_tracker_skip_reason"] = f"write failed: {error_text}"
+            record_setup_tracker_write_failure(
+                error_text,
+                slot=str(os.environ.get("TRADINGBOT_RUN_TRIGGER") or ""),
+            )
+    _phase_t = _log_phase_duration("tracker update+calibrate", _phase_t)
+    disconnect_daily_data_client(ib)
+    _output_t = time.perf_counter()
 
     theta_enrichment_pending = _schedule_deferred_theta_enrichment(
         run_id=run_id,
@@ -3183,9 +3254,7 @@ def _run_master_impl(
     if not theta_enrichment_pending:
         run_result["theta_enrichment_mode"] = "not_needed"
 
-    _log_phase_duration("output/state", _output_t)
-
-    _phase_t = _log_phase_duration("output writes", _phase_t)
+    _log_phase_duration("output/theta-schedule", _output_t)
     _log_phase_duration("TOTAL (theta enrichment deferred)", _run_t0)
     logging.info(
         f"Master AVWAP run complete. "

@@ -4,9 +4,9 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 
 **Updated:** 2026-09-24
 
-- **Live on `main`:** everything through the 2026-09-24 compact desk + chart wheel zoom merge. Older 09-22/09-23 merges are in `git log`.
-- **Desk:** runs from source on `main`. Down for the 2026-09-24 ~03:40 ET merge; restart is the trader's call.
-- **Last full suite:** 11,200 passed, 14 skipped; 16 parallel-only failures in 4 files passed alone (120/120). Ruff clean, smoke 7/7, selftest 97/97 source and frozen.
+- **Live on `main`:** everything through the 2026-09-24 P0-1 universe floor + P0-2 scan publish-first merges (`87c0bae6`), on top of Movers Dip. Older merges are in `git log`.
+- **Desk:** runs from source on `main`. Down; restart is the trader's call. 2026-09-24: universe restored to 1,455 (from snapshot 20260922T130004) and the tracker `.bak` + `.damaged` copies pruned (2.6 GB). Gates #209-#212.
+- **Last full suite:** per branch on 2026-09-24: P0-1 11,236 passed; P0-2 11,238 passed + 1 load flake (17/17 alone). Ruff clean, smoke 7/7, selftest 97/97 source and frozen on both.
 - **Compact desk** merged 2026-09-24: Settings > General > Desk layout (New default / Old). Charts 541 px vs 216 px. Gate #208.
 - **Auto modes** merged 2026-09-23 (`48d6cebb`, reviewer GO): DESK sends nothing to the phone; EVENING scans all morning,
   keeps the queue empty, rings SPY ±1% + price alerts every 10 s until the mode changes, catch-up card on the flip out. Gate #207.

@@ -692,6 +692,8 @@ MASTER_AVWAP_SETUP_TRACKER_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_se
 # F3 step 1 (2026-09-04): the SQLite mirror of the tracker, one row per record, written
 # AFTER the JSON save and never read by the scanner yet (scripts/tracker_store.py).
 MASTER_AVWAP_SETUP_TRACKER_DB = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_tracker.sqlite"
+# Small stamp of the last tracker write attempt (last good / last failed), read by Health + digest.
+SETUP_TRACKER_WRITE_STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "setup_tracker_write_state.json"
 MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tracker_scoring_snapshot.json"
 MASTER_AVWAP_SETUP_SCENARIOS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_scenarios.csv"
 MASTER_AVWAP_SETUP_DAILY_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_daily.csv"
@@ -754,6 +756,8 @@ EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE = REPORTS_DIR / "earnings_anchor_candidat
 AUTOPILOT_REPORT_FILE = SHARED_HOME_DIR / "autopilot_today.txt"
 AUTOPILOT_STATE_FILE = LOCAL_MACHINE_CACHE_DIR / "autopilot_state.json"
 AUTOPILOT_LOG_FILE = LOCAL_LOG_DIR / "autopilot.log"
+# One JSON row per failed swing-scan child: ts, slot, exit_code, stderr_tail.
+SCAN_FAILURES_FILE = LOCAL_LOG_DIR / "scan_failures.jsonl"
 # Auto-pick evidence trail: every self-built watchlist symbol (with its gap/RS
 # numbers) plus the per-day scorecard joining picks against day-trade outcomes,
 # so the gap/RS thresholds get tuned from data.

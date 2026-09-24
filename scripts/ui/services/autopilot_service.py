@@ -34,7 +34,12 @@ import autopilot_core as core
 import evening_mode
 import price_alerts
 import push_notify
-from ui.services.scan_service import ScanService, active_scan_label
+from ui.services.scan_service import (
+    ScanService,
+    active_scan_label,
+    record_scan_failure,
+    stderr_tail_lines,
+)
 from ui.timer_utils import start_staggered, stop_staggered
 
 
@@ -506,6 +511,14 @@ class AutopilotService(QObject):
         state = "stale" if core.universe_is_stale(now, built_at) else "fresh"
         return f"Universe: {state} (built {built_at:%Y-%m-%d %H:%M})"
 
+    def _universe_refusal_line(self) -> str:
+        """Digest OPERATIONS line for the last refused rebuild; empty after a good one."""
+        refusal = self._state.get("universe_refusal")
+        if not isinstance(refusal, dict):
+            return ""
+        text = core.format_universe_refusal(refusal.get("produced"), refusal.get("floor"), refusal.get("kept"))
+        return f"{text} ({refusal.get('at') or 'time unknown'})"
+
     @staticmethod
     def _industry_line() -> str:
         def parse(path: Path) -> dict:
@@ -871,8 +884,28 @@ class AutopilotService(QObject):
 
         def worker() -> None:
             try:
-                outcome = core.rebuild_universe_if_stale(force=True, log=self._log)
+                # The manual button alone may override the write floor.
+                details: dict = {}
+                outcome = core.rebuild_universe_if_stale(
+                    skip_stale_check=True,
+                    override_floor=force,
+                    log=self._log,
+                    details=details,
+                )
                 if outcome == "rebuilt":
+                    if self._state.pop("universe_refusal", None) is not None:
+                        self._save_state()
+                    self._write_report()
+                elif outcome == "refused":
+                    self._state["universe_refusal"] = {
+                        **{key: details.get(key) for key in ("produced", "floor", "kept")},
+                        "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    }
+                    self._save_state()
+                    self._log(
+                        f"{self._universe_refusal_line()} - retrying in "
+                        f"~{core.AUTOPILOT_UNIVERSE_RETRY_MINUTES}m."
+                    )
                     self._write_report()
                 elif outcome == "busy":
                     self._log("Universe rebuild already running elsewhere (launch self-heal?) - skipping.")
@@ -1255,6 +1288,12 @@ class AutopilotService(QObject):
         # stderr/traceback lives in the remaining lines - keep it findable.
         if detail and detail != first_line:
             logging.error("Auto Pilot swing scan for slot %s failed:\n%s", slot, detail)
+        # The child's own stderr tail goes into autopilot.log (file only, the
+        # feed keeps one line) and one scan_failures.jsonl row.
+        failure = getattr(getattr(self, "_scan_service", None), "last_failure", None) or {}
+        stderr_tail = list(failure.get("stderr_tail") or stderr_tail_lines(detail))
+        self._log_file_block(f"Swing scan for slot {slot} stderr tail", stderr_tail)
+        record_scan_failure(slot=str(slot), exit_code=failure.get("exit_code"), stderr_tail=stderr_tail)
         self._active_scan_slot = None
         self._waiting_scan_slot = None
         self._request_report_write()
@@ -1969,6 +2008,7 @@ class AutopilotService(QObject):
                 "next_slot": snapshot["next_slot"],
                 "log_lines": list(self._log_lines)[-_MAX_REPORT_LOG_LINES:][::-1],
                 "universe_line": snapshot.get("universe_line", ""),
+                "universe_refusal_line": self._universe_refusal_line(),
                 "industry_line": snapshot.get("industry_line", ""),
                 "scorecard_line": self._scorecard_line,
                 "outcome_coverage_line": self._outcome_coverage_line,
@@ -2004,6 +2044,12 @@ class AutopilotService(QObject):
                         "tracker_line": f"Tracker: UNKNOWN - {exc}",
                     }
                 )
+            try:
+                from tracker_store import tracker_write_failure_line
+
+                payload["tracker_write_failure_line"] = tracker_write_failure_line()
+            except Exception:
+                logging.exception("Tracker write stamp unreadable; the report goes out without it.")
             try:
                 payload = core.hide_sector_names(payload, pick_limit=10)
             except Exception:
@@ -2390,6 +2436,19 @@ class AutopilotService(QObject):
         except Exception:
             pass
         self.logMessage.emit(line)
+
+    def _log_file_block(self, title: str, lines: list[str]) -> None:
+        """Append an indented block to autopilot.log only (not the feed). Never raises."""
+        if not lines:
+            return
+        try:
+            now = datetime.now()
+            body = "".join(f"    | {line}\n" for line in lines)
+            AUTOPILOT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with AUTOPILOT_LOG_FILE.open("a", encoding="utf-8") as handle:
+                handle.write(f"{now:%Y-%m-%d} [{now:%H:%M:%S}] {title} ({len(lines)} lines):\n{body}")
+        except Exception:
+            pass
 
     def log(self, message: str) -> None:
         """Write one line into the Auto Pilot log from outside this service.

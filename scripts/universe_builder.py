@@ -35,6 +35,7 @@ import csv
 import io
 import json
 import logging
+import re
 import sys
 import time
 from datetime import datetime, timedelta
@@ -328,8 +329,14 @@ def _normalise_history_frame(sub: pd.DataFrame, symbol: str) -> pd.DataFrame | N
     return frame[["symbol", "datetime", "close", "volume"]]
 
 
-def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.DataFrame:
-    """Long-form frame [symbol, datetime, close, volume] for every fetchable symbol."""
+def fetch_price_history(
+    symbols: list[str], *, refresh: bool = False, stats: dict | None = None
+) -> pd.DataFrame:
+    """Long-form frame [symbol, datetime, close, volume] for every fetchable symbol.
+
+    ``stats``, when given, is filled with batch counts for the rebuild's ledger row."""
+    stats = stats if stats is not None else {}
+    stats.update({"cache_hit": False, "batches": 0, "batch_errors": 0, "batch_retry_failures": 0, "skipped_shapes": 0})
     tickers = sorted({str(s or "").strip().upper() for s in symbols if str(s or "").strip()})
     if not tickers:
         return pd.DataFrame(columns=["symbol", "datetime", "close", "volume"])
@@ -340,6 +347,7 @@ def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.Data
             try:
                 cached = pd.read_parquet(PRICE_HISTORY_CACHE)
                 if set(tickers) <= set(cached["symbol"].unique()):
+                    stats["cache_hit"] = True
                     return cached[cached["symbol"].isin(tickers)]
             except Exception:
                 pass
@@ -364,9 +372,11 @@ def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.Data
         logging.info("Universe price fetch %s-%s of %s...", start + 1, start + len(chunk), len(tickers))
         if start:
             time.sleep(YF_CHUNK_PAUSE_SECONDS)
+        stats["batches"] += 1
         try:
             raw = _download_chunk(chunk)
         except Exception as exc:
+            stats["batch_errors"] += 1
             logging.warning(
                 "Chunk download failed (%s); retrying once after %ss cool-off.",
                 exc,
@@ -376,6 +386,7 @@ def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.Data
             try:
                 raw = _download_chunk(chunk)
             except Exception as retry_exc:
+                stats["batch_retry_failures"] += 1
                 logging.warning("Chunk retry failed (%s); continuing without it.", retry_exc)
                 continue
         if raw is None or raw.empty:
@@ -405,6 +416,7 @@ def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.Data
                     )
                 continue
             parts.append(frame)
+    stats["skipped_shapes"] = skipped_shapes
     if skipped_shapes:
         logging.warning(
             "Universe price fetch skipped %s of %s symbol frame(s) with no usable date column.",
@@ -543,6 +555,16 @@ def compare_symbol_lists(ours: list[str], theirs: list[str]) -> dict:
     }
 
 
+class UniverseWriteRefused(RuntimeError):
+    """A rebuild that would shrink the universe below its write floor (or to zero)."""
+
+    def __init__(self, message: str, *, produced: int, floor: int, kept: int | None) -> None:
+        super().__init__(message)
+        self.produced = int(produced)
+        self.floor = int(floor)
+        self.kept = kept
+
+
 def _write_watchlist(path: Path, symbols: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(symbols) + ("\n" if symbols else ""), encoding="utf-8")
@@ -608,6 +630,8 @@ def _record_universe_rebuild(
     refused: bool,
     reason: str = "",
     forced: bool = False,
+    stages: dict[str, int] | None = None,
+    yfinance: dict | None = None,
 ) -> None:
     """Append a ``universe_rebuild`` audit row to the job ledger, always.
 
@@ -638,6 +662,10 @@ def _record_universe_rebuild(
             "before": before,
             "after": after,
         }
+        if stages is not None:
+            row["stages"] = stages
+        if yfinance is not None:
+            row["yfinance"] = yfinance
         if reason:
             row["reason"] = reason
         with path.open("a", encoding="utf-8") as handle:
@@ -646,7 +674,7 @@ def _record_universe_rebuild(
         logging.exception("universe_rebuild ledger row not written (the rebuild itself is unaffected).")
 
 
-def _snapshot_universe_lists() -> None:
+def _snapshot_universe_lists() -> str:
     """Copy the outgoing universe lists aside before they are overwritten.
 
     Recovery, not just detection: after 2026-08-20 the good 1,487-name list was
@@ -668,8 +696,10 @@ def _snapshot_universe_lists() -> None:
             for child in stale.iterdir():
                 child.unlink(missing_ok=True)
             stale.rmdir()
+        return target.name
     except Exception:
         logging.exception("Universe snapshot not taken (the rebuild itself is unaffected).")
+        return ""
 
 
 def _read_watchlist(path: Path) -> list[str]:
@@ -736,6 +766,7 @@ def build_universe(
     empty universe correct (plan.md sec 5)."""
     listed = fetch_all_listed_symbols(refresh=refresh)
     logging.info("Listing directory: %s symbols.", len(listed))
+    stages: dict[str, int] = {"directory": len(listed)}
 
     options_filter = str(options_filter or "none").strip().lower()
     option_symbols: list[str] = []
@@ -746,10 +777,13 @@ def build_universe(
     if option_symbols:
         listed = [s for s in listed if s in set(option_symbols)]
         logging.info("%s options filter: %s symbols remain.", options_filter, len(listed))
+    stages["after_options_filter"] = len(listed)
 
-    history = fetch_price_history(listed, refresh=refresh)
+    yf_stats: dict = {}
+    history = fetch_price_history(listed, refresh=refresh, stats=yf_stats)
     metrics = compute_universe_metrics(history)
     logging.info("Priced %s symbols.", len(metrics))
+    stages["priced"] = len(metrics)
 
     # Scale to the API budget: most-liquid first, cap the priced universe.
     metrics = metrics.sort_values("dollar_volume_20d", ascending=False)
@@ -769,6 +803,8 @@ def build_universe(
         market_caps_m=caps,
         min_market_cap_m=min_market_cap_m,
     )
+    stages["passed_price_volume"] = len(pre_cap)
+    stages["passed_screen"] = len(screened)
 
     longs = sorted(screened[screened["above_sma_100"] & screened["above_sma_200"]]["symbol"])
     shorts = sorted(
@@ -786,6 +822,7 @@ def build_universe(
     all_symbols = sorted(
         set(screened["symbol"]) | set(include_all) | set(include_longs) | set(include_shorts)
     )
+    stages["after_include_lists"] = len(all_symbols)
 
     if write_outputs:
         # plan.md sec 5: a failed publish never destroys the last verified
@@ -798,11 +835,13 @@ def build_universe(
         if screened.empty:
             # An outage that prices nothing used to overwrite a good universe
             # with an empty file.
+            refused_count = 0
             reason = (
                 f"Universe screen produced 0 symbols (priced {len(metrics)}); "
                 "refusing to overwrite the existing universe files."
             )
         elif not force and floor and len(all_symbols) < floor:
+            refused_count = len(all_symbols)
             reason = (
                 f"Universe rebuild produced {len(all_symbols)} symbols, below the write "
                 f"floor of {floor} (previous universe {before.get('all')}); refusing to "
@@ -818,9 +857,11 @@ def build_universe(
             refused=bool(reason),
             reason=reason,
             forced=bool(force),
+            stages=stages,
+            yfinance=yf_stats,
         )
         if reason:
-            raise RuntimeError(reason)
+            raise UniverseWriteRefused(reason, produced=refused_count, floor=floor, kept=before.get("all"))
         _snapshot_universe_lists()
         _write_watchlist(UNIVERSE_ALL_FILE, all_symbols)
         _write_watchlist(UNIVERSE_LONGS_FILE, longs)
@@ -844,7 +885,62 @@ def build_universe(
     }
 
 
-def main() -> int:
+_SNAPSHOT_STAMP = re.compile(r"^\d{8}T\d{6}$")
+
+
+def restore_universe_snapshot(stamp: str) -> dict:
+    """Copy the three universe lists back from ``snapshots/universe-<stamp>``.
+
+    The lists now on disk are snapshotted first, so a restore can itself be undone.
+    Raises ``ValueError`` (nothing written) for a bad stamp or an incomplete or empty
+    snapshot. Writes one keyless ``universe_restore`` job-ledger row.
+    """
+    stamp = str(stamp or "").strip()
+    if stamp.startswith("universe-"):
+        stamp = stamp[len("universe-"):]
+    if not _SNAPSHOT_STAMP.match(stamp):
+        raise ValueError(f"Snapshot stamp {stamp!r} is not YYYYMMDDTHHMMSS.")
+    source = UNIVERSE_SNAPSHOT_DIR / f"universe-{stamp}"
+    targets = (UNIVERSE_ALL_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE)
+    contents: dict[Path, str] = {}
+    for target in targets:
+        path = source / target.name
+        if not path.is_file():
+            raise ValueError(f"Snapshot {source} has no {target.name}; nothing restored.")
+        contents[target] = path.read_text(encoding="utf-8")
+    after = {
+        name: len({token.strip().upper() for token in contents[target].replace(",", "\n").split() if token.strip()})
+        for name, target in zip(("all", "longs", "shorts"), targets)
+    }
+    if not after["all"]:
+        raise ValueError(f"Snapshot {source} has an empty {UNIVERSE_ALL_FILE.name}; nothing restored.")
+    before = _previous_universe_counts()
+    # Contents are already in memory, so pruning the source folder here is harmless.
+    aside = _snapshot_universe_lists()
+    for target, text in contents.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    row = {
+        "event": "universe_restore",
+        "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "stamp": stamp,
+        "before": before,
+        "after": after,
+        "previous_lists_saved_as": aside,
+    }
+    try:
+        from job_ledger import LEDGER_SCHEMA
+
+        path = _universe_ledger_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"schema": LEDGER_SCHEMA, **row}) + "\n")
+    except Exception:
+        logging.exception("universe_restore ledger row not written (the lists were restored).")
+    return row
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the self-sufficient scan universe")
     parser.add_argument("--max-symbols", type=int, default=DEFAULT_MAX_SYMBOLS)
     parser.add_argument("--min-price", type=float, default=DEFAULT_MIN_PRICE)
@@ -862,8 +958,25 @@ def main() -> int:
         action="store_true",
         help="override the write floor when a shrink is real (never overrides the zero-symbol refusal)",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--restore-snapshot",
+        metavar="STAMP",
+        help="copy the three lists back from snapshots/universe-STAMP (e.g. 20260922T130004) and exit",
+    )
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if args.restore_snapshot:
+        try:
+            row = restore_universe_snapshot(args.restore_snapshot)
+        except ValueError as exc:
+            print(f"Restore refused: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"Universe restored from universe-{row['stamp']}: {row['after']['all']} symbols "
+            f"({row['after']['longs']} longs / {row['after']['shorts']} shorts); "
+            f"was {row['before'].get('all')}. Previous lists saved as {row['previous_lists_saved_as'] or '(not saved)'}."
+        )
+        return 0
     result = build_universe(
         max_symbols=args.max_symbols,
         min_price=args.min_price,

@@ -97,6 +97,23 @@ def _with_warehouse_checks(payload: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _with_tracker_write_line(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add "tracker last written <stamp>" (read on the audit worker, never the Qt thread)."""
+    if not isinstance(payload, dict):
+        return payload
+    try:
+        from tracker_store import read_write_state, tracker_last_written_line, tracker_write_failure_line
+
+        state = read_write_state()
+        line = tracker_last_written_line(state)
+        failure = tracker_write_failure_line(state)
+        merged = dict(payload)
+        merged["tracker_last_written_line"] = f"{line} ({failure})" if failure else line
+        return merged
+    except Exception:
+        return payload
+
+
 # UNKNOWN is its own tone on purpose: "we never measured this" must not look
 # like "we measured this and it is bad" (plan.md sec 6.3 - the page must show
 # UNKNOWN when evidence is absent, and must not convert missing telemetry into
@@ -335,6 +352,7 @@ class HealthPanel(QFrame):
         try:
             payload = build_operations_audit()
             payload = _with_warehouse_checks(payload)
+            payload = _with_tracker_write_line(payload)
         except Exception as exc:
             payload = {
                 "status": "unhealthy",
@@ -416,6 +434,9 @@ class HealthPanel(QFrame):
         label = str(self._payload.get("evidence_label") or "").strip()
         if label:
             meta_text += f" | learning evidence: {label}"
+        tracker_line = str(self._payload.get("tracker_last_written_line") or "").strip()
+        if tracker_line:
+            meta_text += f" | {tracker_line}"
         self.meta_label.setText(meta_text)
 
         checks = [item for item in self._payload.get("checks", []) if isinstance(item, dict)]

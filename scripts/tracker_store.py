@@ -307,17 +307,194 @@ def mirror_payload(payload: dict, *, path: Path | str | None = None) -> SaveRepo
         return None
 
 
+def write_state_path() -> Path:
+    from project_paths import SETUP_TRACKER_WRITE_STATE_FILE
+
+    return Path(SETUP_TRACKER_WRITE_STATE_FILE)
+
+
+def read_write_state(path: Path | str | None = None) -> dict:
+    """The tracker write stamp ({last_written_at, last_failed_at, last_error, last_result}); {} if unknown."""
+    try:
+        payload = json.loads(Path(path or write_state_path()).read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_state(update: dict, path: Path | str | None) -> None:
+    target = Path(path or write_state_path())
+    state = read_write_state(target)
+    state.update(update)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(target.name + ".tmp")
+    temp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    temp.replace(target)
+
+
+def record_write_success(*, path: Path | str | None = None, now: datetime | None = None) -> None:
+    """Stamp a good tracker write. Never raises."""
+    try:
+        stamp = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
+        _write_state({"last_written_at": stamp, "last_result": "ok"}, path)
+    except Exception:
+        logging.warning("Setup tracker write stamp not saved.", exc_info=True)
+
+
+def record_write_failure(
+    error: str,
+    *,
+    slot: str = "",
+    path: Path | str | None = None,
+    ledger_path: Path | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Stamp a failed tracker write and append a keyless ``setup_tracker_write_failed`` ledger row. Never raises."""
+    stamp = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
+    try:
+        _write_state({"last_failed_at": stamp, "last_error": str(error)[:500], "last_result": "failed"}, path)
+    except Exception:
+        logging.warning("Setup tracker failure stamp not saved.", exc_info=True)
+    try:
+        from job_ledger import append_keyless_event
+
+        append_keyless_event(
+            "setup_tracker_write_failed",
+            {"ts": stamp, "error": str(error)[:500], "slot": str(slot or "")},
+            path=ledger_path,
+        )
+    except Exception:
+        logging.warning("setup_tracker_write_failed ledger row not written.", exc_info=True)
+
+
+def _short_stamp(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "unknown"
+    try:
+        return datetime.fromisoformat(text).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
+
+
+def tracker_last_written_line(state: dict | None = None) -> str:
+    """Health line: ``tracker last written <stamp>``."""
+    state = read_write_state() if state is None else state
+    return f"tracker last written {_short_stamp(state.get('last_written_at'))}"
+
+
+def tracker_write_failure_line(state: dict | None = None) -> str:
+    """Digest line when the last tracker write failed; "" otherwise."""
+    state = read_write_state() if state is None else state
+    if str(state.get("last_result") or "") != "failed":
+        return ""
+    return (
+        f"setup tracker write failed {_short_stamp(state.get('last_failed_at'))}; "
+        f"last good {_short_stamp(state.get('last_written_at'))}"
+    )
+
+
+#: The only two stale tracker copies ``--prune-copies`` may delete (decided 2026-09-24).
+PRUNABLE_COPY_NAMES = (
+    "master_avwap_setup_tracker.json.bak",
+    "master_avwap_setup_tracker.sqlite.damaged-20260905T200233",
+)
+
+
+def prune_copies(
+    directory: Path | str,
+    names: Iterable[str] = PRUNABLE_COPY_NAMES,
+    *,
+    delete: bool = False,
+    ledger_path: Path | None = None,
+) -> tuple[int, dict]:
+    """List (and with ``delete`` remove) the stale tracker copies in ``directory``.
+
+    Returns ``(exit_code, report)``. Any name outside ``PRUNABLE_COPY_NAMES``, or a
+    target that is not a plain file, refuses the whole run: exit 2, nothing deleted,
+    no ledger row. A listing or deletion writes one keyless ``tracker_prune_copies``
+    ledger row.
+    """
+    root = Path(directory)
+    requested = [str(name) for name in names]
+    report: dict[str, Any] = {"dir": str(root), "delete": bool(delete), "candidates": [], "refused": []}
+    for name in requested:
+        target = root / name
+        if name not in PRUNABLE_COPY_NAMES or Path(name).name != name:
+            report["refused"].append({"name": name, "reason": "not one of the two prunable copies"})
+        elif target.is_symlink() or (target.exists() and not target.is_file()):
+            report["refused"].append({"name": name, "reason": "not a plain file"})
+    if report["refused"]:
+        return 2, report
+    for name in requested:
+        target = root / name
+        exists = target.is_file()
+        report["candidates"].append(
+            {"name": name, "exists": exists, "bytes": target.stat().st_size if exists else 0, "deleted": False}
+        )
+    exit_code = 0
+    if delete:
+        for item in report["candidates"]:
+            if not item["exists"]:
+                continue
+            try:
+                (root / item["name"]).unlink()
+                item["deleted"] = True
+            except OSError as exc:
+                item["error"] = str(exc)
+                exit_code = 1
+    report["total_bytes"] = sum(int(item["bytes"]) for item in report["candidates"])
+    try:
+        from job_ledger import append_keyless_event
+
+        append_keyless_event(
+            "tracker_prune_copies",
+            {
+                "dir": str(root),
+                "names": [item["name"] for item in report["candidates"] if item["exists"]],
+                "bytes": report["total_bytes"],
+                "deleted": bool(delete) and exit_code == 0,
+                "deleted_names": [item["name"] for item in report["candidates"] if item["deleted"]],
+            },
+            path=ledger_path,
+        )
+    except Exception:
+        logging.warning("tracker_prune_copies ledger row not written.", exc_info=True)
+    return exit_code, report
+
+
 def _main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
 
     parser = argparse.ArgumentParser(description="Setup tracker SQLite mirror: verify parity or mirror once.")
-    parser.add_argument("command", choices=("verify", "mirror", "counts"))
+    parser.add_argument("command", nargs="?", choices=("verify", "mirror", "counts"))
     parser.add_argument("--json", default="", help="tracker JSON path (default: the desk's)")
     parser.add_argument("--db", default="", help="SQLite path (default: beside the JSON)")
+    parser.add_argument(
+        "--prune-copies",
+        action="store_true",
+        help="list the two stale tracker copies (.bak, .damaged-20260905T200233); delete only with --yes",
+    )
+    parser.add_argument("--yes", action="store_true", help="with --prune-copies: actually delete")
+    parser.add_argument("--dry-run", action="store_true", help="with --prune-copies: list only (the default)")
+    parser.add_argument("--tracker-dir", default="", help="with --prune-copies: directory (default: the tracker's)")
+    parser.add_argument("--name", action="append", default=None, help="with --prune-copies: one copy name")
     args = parser.parse_args(argv)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from project_paths import MASTER_AVWAP_SETUP_TRACKER_FILE
+
+    if args.prune_copies:
+        directory = Path(args.tracker_dir) if args.tracker_dir else Path(MASTER_AVWAP_SETUP_TRACKER_FILE).parent
+        code, report = prune_copies(
+            directory,
+            args.name or PRUNABLE_COPY_NAMES,
+            delete=bool(args.yes) and not args.dry_run,
+        )
+        print(json.dumps(report, indent=2))
+        return code
+    if not args.command:
+        parser.error("a command (verify, mirror, counts) or --prune-copies is required")
 
     json_path = Path(args.json) if args.json else Path(MASTER_AVWAP_SETUP_TRACKER_FILE)
     store = TrackerStore(Path(args.db) if args.db else default_store_path())
