@@ -41,12 +41,14 @@ MIN_BOARD_WIDTH = 170
 #: Rows the table shows without scrolling.
 VISIBLE_ROWS = 10
 #: Width that one numeric column needs; narrower tables show fewer columns.
-COLUMN_MIN_PX = 44
-SYMBOL_COLUMN_PX = 52
+COLUMN_MIN_PX = 56
+SYMBOL_COLUMN_PX = 56
 
 MODES = ("pop", "dip", "mine")
 MODE_LABELS = {"pop": "Pop", "dip": "Dip-strong", "mine": "My names"}
 MODE_SHORT = {"pop": "Pop", "dip": "Dip", "mine": "Mine"}
+#: Below this width the chips and header buttons use short labels.
+NARROW_PX = 300
 MOVERS_MODE_SETTING = "movers_board_mode"
 MOVERS_SIDE_SETTING = "movers_board_side"
 MOVERS_DEEP_READ_SETTING = "movers_board_deep_read"
@@ -229,6 +231,7 @@ class MoversBoard(QWidget):
         self.meta_label.setObjectName("MutedLabel")
 
         self.review_button = QToolButton()
+        self.review_button.setObjectName("MoversChip")
         self.review_button.setText("Review ▾")
         self.review_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.review_menu = QMenu(self.review_button)
@@ -241,6 +244,7 @@ class MoversBoard(QWidget):
         self.review_button.setMenu(self.review_menu)
 
         self.deep_read_button = QToolButton()
+        self.deep_read_button.setObjectName("MoversChip")
         self.deep_read_button.setText("Deep read")
         self.deep_read_button.setCheckable(True)
         self.deep_read_button.setToolTip(
@@ -252,7 +256,6 @@ class MoversBoard(QWidget):
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(4)
         header.addWidget(self.title_label)
-        header.addWidget(self.meta_label)
         header.addStretch(1)
         header.addWidget(self.review_button)
         header.addWidget(self.deep_read_button)
@@ -265,14 +268,16 @@ class MoversBoard(QWidget):
         modes_row.setSpacing(2)
         for mode in MODES:
             button = QToolButton()
+            button.setObjectName("MoversChip")
             button.setCheckable(True)
             button.setText(MODE_LABELS[mode])
-            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             button.clicked.connect(lambda _checked=False, m=mode: self.set_mode(m, user=True))
             self.mode_group.addButton(button)
             self.mode_buttons[mode] = button
             modes_row.addWidget(button)
         self.side_button = QToolButton()
+        self.side_button.setObjectName("MoversChip")
         self.side_button.setCheckable(True)
         self.side_button.clicked.connect(self._on_side_clicked)
         modes_row.addWidget(self.side_button)
@@ -280,6 +285,11 @@ class MoversBoard(QWidget):
         self.banner = QLabel(banner_text(None))
         self.banner.setObjectName("MutedLabel")
         self.banner.setWordWrap(True)
+        banner_row = QHBoxLayout()
+        banner_row.setContentsMargins(0, 0, 0, 0)
+        banner_row.setSpacing(6)
+        banner_row.addWidget(self.meta_label, 0, Qt.AlignmentFlag.AlignTop)
+        banner_row.addWidget(self.banner, 1)
 
         self.model = MoversTableModel(self)
         self.table = QTableView()
@@ -305,7 +315,7 @@ class MoversBoard(QWidget):
         layout.setSpacing(3)
         layout.addLayout(header)
         layout.addLayout(modes_row)
-        layout.addWidget(self.banner)
+        layout.addLayout(banner_row)
         layout.addWidget(self.table, 1)
         layout.addWidget(self.empty_label)
 
@@ -349,7 +359,9 @@ class MoversBoard(QWidget):
         self._fit_columns()
 
     def visible_column_count(self) -> int:
-        width = self.table.viewport().width() or self.width()
+        """Columns that fit the board's width (symbol + N numbers, at least 2)."""
+        margins = self.layout().contentsMargins() if self.layout() is not None else None
+        width = self.width() - (margins.left() + margins.right() if margins else 0)
         fit = 1 + max(0, (width - theme.px(SYMBOL_COLUMN_PX)) // theme.px(COLUMN_MIN_PX))
         return max(2, min(len(COLUMNS[self._mode]), int(fit)))
 
@@ -359,10 +371,19 @@ class MoversBoard(QWidget):
             hidden = column >= count
             if self.table.isColumnHidden(column) != hidden:
                 self.table.setColumnHidden(column, hidden)
-        narrow = self.width() < theme.px(260)
+        narrow = self.width() < theme.px(NARROW_PX)
         labels = MODE_SHORT if narrow else MODE_LABELS
         for mode, button in self.mode_buttons.items():
             text = labels[mode] + (" ●" if mode == "dip" and self._dip_live() else "")
+            if button.text() != text:
+                button.setText(text)
+        long_side = self._side == "long"
+        side = ("L" if long_side else "S") if narrow else ("Long" if long_side else "Short")
+        for button, text in (
+            (self.side_button, side),
+            (self.review_button, "Rev ▾" if narrow else "Review ▾"),
+            (self.deep_read_button, "Deep" if narrow else "Deep read"),
+        ):
             if button.text() != text:
                 button.setText(text)
 
@@ -470,7 +491,7 @@ class MoversBoard(QWidget):
         button = self.mode_buttons[self._mode]
         if not button.isChecked():
             button.setChecked(True)
-        self.side_button.setText("Long" if self._side == "long" else "Short")
+        self.side_button.setToolTip("Showing longs" if self._side == "long" else "Showing shorts")
         self.side_button.setChecked(self._side == "short")
         self._fit_columns()
 

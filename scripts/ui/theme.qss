@@ -276,6 +276,11 @@ QToolButton[rowChrome="true"] {
     padding: 0px @pad_small@;
 }
 
+/* The Movers board's mode chips share a 170 px column; tight padding. */
+QToolButton#MoversChip {
+    padding: 2px 4px;
+}
+
 QPushButton[rowChrome="true"]:hover,
 QToolButton[rowChrome="true"]:hover {
     background: @bg_hover@;
