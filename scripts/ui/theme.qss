@@ -294,6 +294,52 @@ QPushButton#PrimaryButton {
     font-weight: 600;
 }
 
+/* The compact desk's thin page-tab row (Settings > Desk layout). */
+QFrame#PageTabRow {
+    background: @bg_panel@;
+    border: 0;
+    border-bottom: 1px solid @border@;
+}
+
+QLabel#PageTabBrand {
+    font-weight: 650;
+    color: @text_secondary@;
+}
+
+QPushButton#PageTabButton,
+QToolButton#PageTabMore {
+    padding: 2px 12px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: @text_secondary@;
+}
+
+QPushButton#PageTabButton:hover,
+QToolButton#PageTabMore:hover {
+    background: @bg_hover@;
+    border-color: @border@;
+    color: @text_primary@;
+}
+
+QPushButton#PageTabButton:checked,
+QToolButton#PageTabMore:checked {
+    background: @accent_soft@;
+    border-color: @accent@;
+    color: @text_primary@;
+}
+
+/* Menu buttons carry their own "▾", so Qt's indicator is dropped. */
+QToolButton#PageTabMore::menu-indicator,
+QToolButton#CompactMenuButton::menu-indicator {
+    image: none;
+    width: 0px;
+}
+
+QPushButton#StatusProxyButton,
+QToolButton#CompactMenuButton[statusProxy="true"] {
+    padding: 1px 8px;
+}
+
 QPushButton#NavButton {
     text-align: left;
     padding: @nav_pad_v@ @nav_pad_h@;

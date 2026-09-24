@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #208 Compact desk: switch Desk layout both ways in Settings (New <-> Old) with the desk live - each side looks complete, no restart; in New the charts are tall, Alt+V/K/N/P/L and Ctrl+J open the Capture/Journal drawer, and the M5/D1 alert menus arm the same watches as before [trader]
 - #207 Auto modes: a sleep-in morning in EVENING - the phone rings every 10 s after SPY moves 1% or a price alert fires, and stops when you change mode; on the flip to DESK the review queue is empty and the catch-up card shows (a row click charts it). A DESK day sends no phone pushes at all [trader]
 - #206 Journal auto-fill: after the next night run the ledger's `journal_auto_tag` reason names `regimes: N written` and `bars lake` (or `lake+durable_d1`), and the Journal's regime columns show up/down/range/unknown; on the 09:00 card a trade with no provisional tag shows a suggested setup whose tooltip says why, and confirming it shows the tag as confirmed in the Journal [trader + lead]
 - #205 Journal P&L: with the desk closed run `journal_pnl_repair.py` (dry run) then `--apply --i-am-the-trader`; the two 2026-06-12 CVNA put legs are CLOSED and net -65 together, no open CVNA BAG, IBKR fill times match TWS, and Analytics (range All) shows 'N trades need missing fills - not counted' [trader]

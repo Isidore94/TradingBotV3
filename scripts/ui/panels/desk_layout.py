@@ -40,10 +40,39 @@ ALERT_TABS_ROW_WEIGHTS = (60, 40)
 
 SAVE_DEBOUNCE_MS = 400
 
+# The compact layout (Settings > Desk layout) saves its drags under its own
+# keys, so a drag in one layout is never replayed onto the other.
+#: Desk columns in compact: M5 bar | Alert Center | Movers | D1 column.
+COMPACT_DESK_SPLIT_KEY = "qt_compact_desk_split_sizes_v1"
+#: The Alert Center's chart pane over its tab drawer, in compact.
+COMPACT_ALERT_SPLIT_KEY = "qt_compact_alert_drawer_sizes_v1"
+#: The Movers column's opening width at scale 1.0.
+COMPACT_MOVERS_WIDTH = 440
+#: The setups column's opening share of the desk when it is shown.
+COMPACT_SETUPS_SHARE = 0.30
+
 
 def desk_split_for(width: int) -> tuple[int, int]:
     """Column weights for a desk of this content width."""
     return DESK_SPLIT_WIDE if int(width or 0) >= WIDE_DESK_THRESHOLD else DESK_SPLIT_NARROW
+
+
+def compact_desk_split_for(width: int, *, setups_visible: bool) -> tuple[int, int, int, int]:
+    """Compact column sizes in pixels: M5 bar, charts, Movers, setups.
+
+    The Movers column holds a fixed width, the M5 bar keeps its classic share,
+    and the charts take the rest. A hidden setups column gets nothing, so the
+    splitter does not share its width out to the Movers column.
+    """
+    from ui import theme
+
+    width = max(int(width or 0), 1)
+    m5_share = DESK_SPLIT_WIDE[0] if width >= WIDE_DESK_THRESHOLD else DESK_SPLIT_NARROW[0]
+    m5 = int(width * m5_share / 100)
+    movers = theme.px(COMPACT_MOVERS_WIDTH)
+    setups = int(width * COMPACT_SETUPS_SHARE) if setups_visible else 0
+    charts = max(width - m5 - movers - setups, 1)
+    return (m5, charts, movers, setups)
 
 
 def scaled_sizes(weights, total: int) -> list[int]:

@@ -506,20 +506,8 @@ class AlertChartReview(QWidget):
         self.give_a_read_button.clicked.connect(self._on_give_a_read)
 
         buttons = QHBoxLayout()
-        buttons.addWidget(self.reviewed_badge)
-        buttons.addWidget(self.mover_badge)
-        buttons.addWidget(self.focus_button)
-        buttons.addWidget(self.skip_button)
-        buttons.addWidget(self.remove_today_button)
-        buttons.addWidget(self.cross_focus_button)
-        buttons.addWidget(self.quick_like_button)
-        buttons.addWidget(self.give_a_read_button)
-        buttons.addStretch(1)
-        buttons.addWidget(self.hidden_button)
-        buttons.addWidget(self.scan_view_button)
-        buttons.addWidget(self.claimed_skipped_label)
-        buttons.addWidget(self.armed_summary)
-        buttons.addWidget(self.queue_label)
+        self._verb_layout = buttons
+        self._fill_verb_row(buttons)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -551,6 +539,10 @@ class AlertChartReview(QWidget):
         else:
             self.capture_rail.setParent(None)
         layout.addLayout(buttons)
+        # The compact desk's single control row (built on first use).
+        self._compact_controls_on = False
+        self.compact_controls: QWidget | None = None
+        self.compact_verb_row: QWidget | None = None
         self._refresh_armed_summary()
         # Open in the empty state rather than falling into it on the first
         # clear(): a pane built with no alert had the placeholder hidden AND
@@ -559,6 +551,88 @@ class AlertChartReview(QWidget):
         self._set_actions_enabled(False)
 
     # -- R4 sections 2.3 and 5 ------------------------------------------
+    def _fill_verb_row(self, row) -> None:
+        """(Re)fill the verb row in its one canonical order."""
+        while row.count():
+            row.takeAt(0)
+        for widget in (
+            self.reviewed_badge,
+            self.mover_badge,
+            self.focus_button,
+            self.skip_button,
+            self.remove_today_button,
+            self.cross_focus_button,
+            self.quick_like_button,
+            self.give_a_read_button,
+        ):
+            row.addWidget(widget)
+        row.addStretch(1)
+        for widget in (
+            self.hidden_button,
+            self.scan_view_button,
+            self.claimed_skipped_label,
+            self.armed_summary,
+            self.queue_label,
+        ):
+            row.addWidget(widget)
+
+    def compact_controls_enabled(self) -> bool:
+        return self._compact_controls_on
+
+    def set_compact_controls(self, compact: bool) -> None:
+        """Compact desk: the arm bar's one row and the verbs share one flow.
+
+        The verbs sit on the arm row when the width allows and wrap to a second
+        row when it does not. Classic puts both back exactly as built. Only a
+        docked arm bar is re-hosted; an undocked one belongs to its host.
+        """
+        compact = bool(compact)
+        if compact == self._compact_controls_on or not self._dock_arm_bar:
+            return
+        self._compact_controls_on = compact
+        layout = self.layout()
+        if compact:
+            if self.compact_controls is None:
+                from ui.widgets.flow_layout import FlowLayout
+
+                self.compact_controls = QWidget(self)
+                self.compact_controls.setObjectName("ReviewCompactControls")
+                self._compact_flow = FlowLayout(self.compact_controls, margin=0, spacing=theme.px(6))
+                self.compact_verb_row = QWidget(self.compact_controls)
+                self.compact_verb_row.setObjectName("ReviewCompactVerbs")
+                verbs = QHBoxLayout(self.compact_verb_row)
+                verbs.setContentsMargins(0, 0, 0, 0)
+                self.compact_controls.setSizePolicy(
+                    self.compact_controls.sizePolicy().horizontalPolicy(),
+                    QSizePolicy.Policy.Maximum,
+                )
+            index = layout.indexOf(self.arm_bar)
+            layout.removeWidget(self.arm_bar)
+            self.arm_bar.set_compact(True)
+            flow = self._compact_flow
+            while flow.count():
+                flow.takeAt(0)
+            flow.addWidget(self.arm_bar)
+            flow.addWidget(self.compact_verb_row)
+            while self._verb_layout.count():
+                self._verb_layout.takeAt(0)
+            self._fill_verb_row(self.compact_verb_row.layout())
+            layout.insertWidget(index, self.compact_controls)
+            self.compact_controls.setVisible(True)
+        else:
+            index = layout.indexOf(self.compact_controls)
+            layout.removeWidget(self.compact_controls)
+            self.compact_controls.setVisible(False)
+            flow = self._compact_flow
+            while flow.count():
+                flow.takeAt(0)
+            self.arm_bar.set_compact(False)
+            layout.insertWidget(index, self.arm_bar)
+            verbs = self.compact_verb_row.layout()
+            while verbs.count():
+                verbs.takeAt(0)
+            self._fill_verb_row(self._verb_layout)
+
     def _on_capture_level_selected(
         self, symbol: str, level_id: str, family: str, _price: float
     ) -> None:

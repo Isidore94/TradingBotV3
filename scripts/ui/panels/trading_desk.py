@@ -60,6 +60,9 @@ D1_COLUMN_SPLIT_KEY = "qt_d1_column_split_sizes_v1"
 #: is what decides from the first time the trader uses it.
 D1_COLUMN_WEIGHTS = (6, 1)
 
+#: The two desk layouts (Settings > Desk layout). Presentation only.
+DESK_LAYOUTS = ("classic", "compact")
+
 
 class TradingDeskPanel(QWidget):
     statusChanged = Signal(str)
@@ -77,9 +80,12 @@ class TradingDeskPanel(QWidget):
         *,
         price_alert_engine_enabled: bool = True,
         price_alert_read_only: bool = False,
+        layout_name: str = "classic",
     ) -> None:
         super().__init__(parent)
         self.workspace_mode = workspace_mode
+        #: "classic" or "compact" (Settings > Desk layout). Presentation only.
+        self.desk_layout = layout_name if layout_name in DESK_LAYOUTS else "classic"
         self.focus_service = FocusService()
         self.price_alert_service = PriceAlertService(
             self, engine_enabled=price_alert_engine_enabled
@@ -302,6 +308,7 @@ class TradingDeskPanel(QWidget):
         # survives mode switches.
         self.tape_host = QWidget()
         tape_layout = QHBoxLayout(self.tape_host)
+        self._tape_layout = tape_layout
         tape_layout.setContentsMargins(0, 0, 0, 0)
         tape_layout.setSpacing(6)
         # Sector/industry strength, always visible across the desk. Since the
@@ -337,28 +344,83 @@ class TradingDeskPanel(QWidget):
         # a few hours into the session, and the charts want it before then.
         self._setups_visible = False
         self._setups_restore_sizes: list[int] | None = None
+        # The compact layout parks what it hides (the tape, the BounceBot
+        # strip) here: a hidden holder, so nothing becomes a top-level window.
+        self._parking = QWidget(self)
+        self._parking.setObjectName("CompactParking")
+        self._parking.hide()
 
         self._build_layout()
         self.set_mode(workspace_mode)
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
+        self._root_layout = layout
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self.center_container)
 
     def set_mode(self, workspace_mode: str) -> None:
+        self.set_layout(workspace_mode=workspace_mode)
+
+    def set_desk_layout(self, desk_layout: str) -> None:
+        """Switch between the classic and the compact desk, live."""
+        self.set_layout(desk_layout=desk_layout)
+
+    def is_compact(self) -> bool:
+        return self.desk_layout == "compact"
+
+    def set_layout(
+        self, *, workspace_mode: str | None = None, desk_layout: str | None = None
+    ) -> None:
+        workspace_mode = workspace_mode if workspace_mode is not None else self.workspace_mode
         workspace_mode = workspace_mode if workspace_mode in {"workspace", "tabs"} else "workspace"
+        desk_layout = desk_layout if desk_layout is not None else self.desk_layout
+        desk_layout = desk_layout if desk_layout in DESK_LAYOUTS else "classic"
         # Any settings save calls this (app.py _apply_state_changes), so
         # changing the theme used to tear down and rebuild the splitter -
         # discarding whatever the trader had dragged. Rebuild only on a real
         # mode change. The _mode_widget check matters: __init__ assigns
         # self.workspace_mode BEFORE the first set_mode call, so guarding on
         # the mode alone would return early and leave the desk empty.
-        if self._mode_widget is not None and workspace_mode == self.workspace_mode:
+        if (
+            self._mode_widget is not None
+            and workspace_mode == self.workspace_mode
+            and desk_layout == self.desk_layout
+        ):
             return
+        if desk_layout != self.desk_layout and self._mode_widget is not None:
+            # F9's "setups own the desk" hides the chart column; undo it so the
+            # other layout does not open with the charts missing.
+            if self._setups_expanded:
+                self.toggle_setups_expanded()
+            # Remembered sizes belong to the old layout's splitter.
+            self._setups_restore_sizes = None
+            self._collapsed_sizes = None
         self.workspace_mode = workspace_mode
+        self.desk_layout = desk_layout
+        compact = desk_layout == "compact"
         self._detach_mode_panels()
         _clear_layout(self.center_layout)
+        margin = 4 if compact else 8
+        self._root_layout.setContentsMargins(margin, margin, margin, margin)
+        # The tape makes no fetches while compact hides it; classic resumes it.
+        if compact:
+            self.group_tape_service.pause()
+        else:
+            self.group_tape_service.resume()
+        # Compact moves the Movers column out and turns the tab stack into a
+        # drawer - workspace mode only; tabs mode keeps the classic inside.
+        self.alert_center.set_compact_layout(compact and workspace_mode == "workspace")
+        if compact:
+            # The tape row is hidden in compact; its setups toggle is lent to
+            # the window's page-tab row, and the strip is parked.
+            self._tape_layout.removeWidget(self.setups_toggle)
+            self.tape_host.setParent(self._parking)
+            self.bounce_panel.setParent(self._parking)
+        elif self.setups_toggle.parent() is not self.tape_host:
+            self._tape_layout.addWidget(
+                self.setups_toggle, 0, Qt.AlignmentFlag.AlignVCenter
+            )
         if self.workspace_mode == "tabs":
             self.alert_center.set_embedded_detail_enabled(True)
             # As tabs of their own, the setups panels chart in a popup: the
@@ -372,7 +434,8 @@ class TradingDeskPanel(QWidget):
             tabs.addTab(self.d1_column, "Master AVWAP")
             tabs.addTab(self.alert_center, "Alert Center")
             tabs.addTab(self.m5_column, "M5 alerts")
-            tabs.addTab(self.bounce_panel, "BounceBot")
+            if not compact:
+                tabs.addTab(self.bounce_panel, "BounceBot")
             # AFTER the tab takes it, never before: `_detach_mode_panels` has
             # just left the column parentless, so showing it there would show
             # it as a top-level WINDOW - and every child would get a real
@@ -406,6 +469,11 @@ class TradingDeskPanel(QWidget):
         # setups.
         splitter.addWidget(self.m5_column)
         splitter.addWidget(self.alert_center)
+        movers = self.alert_center.movers_column
+        if compact:
+            # Compact: the Movers column (board + Deep read) stands on its
+            # own, right of the charts, instead of under them.
+            splitter.addWidget(movers)
         # D1C-L: the right column is the D1 column - setups over the swing
         # picks strip - where the setups workspace alone used to sit.
         splitter.addWidget(self.d1_column)
@@ -414,7 +482,11 @@ class TradingDeskPanel(QWidget):
         # relatively SMALLER on a bigger monitor.
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 3)
-        splitter.setStretchFactor(2, 2)
+        if compact:
+            splitter.setStretchFactor(2, 0)
+            splitter.setStretchFactor(3, 2)
+        else:
+            splitter.setStretchFactor(2, 2)
         splitter.setChildrenCollapsible(False)
         # Both columns aggregate large minimumSizeHints from their children
         # (the setups workspace alone hinted 1372px wide). Their sum exceeded
@@ -432,9 +504,12 @@ class TradingDeskPanel(QWidget):
         # Mount points for the group RS/RW tape (above) and the BounceBot strip
         # (below). They are held as attributes and rescued in
         # _detach_mode_panels so a workspace<->tabs switch cannot destroy them.
-        body_layout.addWidget(self.tape_host)
-        body_layout.addWidget(splitter, 1)
-        body_layout.addWidget(self.bounce_panel)
+        if compact:
+            body_layout.addWidget(splitter, 1)
+        else:
+            body_layout.addWidget(self.tape_host)
+            body_layout.addWidget(splitter, 1)
+            body_layout.addWidget(self.bounce_panel)
 
         self._mode_widget = body
         self.center_layout.addWidget(body)
@@ -635,13 +710,17 @@ class TradingDeskPanel(QWidget):
         # The D1 COLUMN is rescued, never the workspace inside it: detaching
         # `master_workspace` would pull it out of `d1_column` and leave the
         # column holding the strip alone.
-        rescued = (
+        rescued = [
             self.d1_column,
             self.alert_center,
             self.m5_column,
             self.bounce_panel,
             self.tape_host,
-        )
+        ]
+        # The Movers column only when the desk holds it (compact); in classic
+        # it belongs to the Alert Center, which puts it back itself.
+        if self.alert_center.movers_hosted_outside():
+            rescued.append(self.alert_center.movers_column)
         if isinstance(self._mode_widget, QTabWidget):
             for panel in rescued:
                 index = self._mode_widget.indexOf(panel)
@@ -672,6 +751,8 @@ class TradingDeskPanel(QWidget):
         # The floor belongs to the COLUMN the desk splitter holds (D1C-L), so
         # it is the D1 column and not the workspace inside it.
         self.d1_column.setMinimumWidth(theme.px(420))
+        if self.alert_center.movers_hosted_outside():
+            self.alert_center.movers_column.setMinimumWidth(theme.px(260))
 
     def apply_scaled_metrics(self) -> None:
         """Re-apply scale-dependent pixel budgets after a UI scale change."""
@@ -684,17 +765,27 @@ class TradingDeskPanel(QWidget):
         splitter = self.desk_splitter
         if splitter is None:
             return
+        key = self._desk_split_key()
         desk_layout.apply_saved_sizes(
             splitter,
-            DESK_SPLIT_KEY,
-            desk_layout.desk_split_for(self.width() or 1640),
+            key,
+            self._desk_split_weights(self.width() or 1640),
         )
         # The chart column's share widens on a bigger desk instead of holding a
         # fixed ratio - the opposite of the old 1:2 stretch, which shrank it.
-        desk_layout.track_preset(
-            self, splitter, DESK_SPLIT_KEY, desk_layout.desk_split_for
-        )
-        desk_layout.persist_sizes(self, splitter, DESK_SPLIT_KEY)
+        desk_layout.track_preset(self, splitter, key, self._desk_split_weights)
+        desk_layout.persist_sizes(self, splitter, key)
+
+    def _desk_split_key(self) -> str:
+        """Each layout saves its own drag, so one never corrupts the other."""
+        return desk_layout.COMPACT_DESK_SPLIT_KEY if self.is_compact() else DESK_SPLIT_KEY
+
+    def _desk_split_weights(self, width: int):
+        if self.is_compact():
+            return desk_layout.compact_desk_split_for(
+                width, setups_visible=self._setups_visible
+            )
+        return desk_layout.desk_split_for(width)
 
     def set_setups_visible(self, visible: bool) -> None:
         """Show or hide the Master AVWAP half of the desk.
@@ -725,8 +816,8 @@ class TradingDeskPanel(QWidget):
                 # duplicate splitterMoved handler per toggle.
                 desk_layout.apply_saved_sizes(
                     splitter,
-                    DESK_SPLIT_KEY,
-                    desk_layout.desk_split_for(self.width() or 1640),
+                    self._desk_split_key(),
+                    self._desk_split_weights(self.width() or 1640),
                 )
             self._setups_restore_sizes = None
         else:

@@ -77,6 +77,7 @@ class GroupTapeService(QObject):
         self._last_error = ""
         self._last_attempt: datetime | None = None
         self._worker_thread: threading.Thread | None = None
+        self._paused = False
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
@@ -120,6 +121,22 @@ class GroupTapeService(QObject):
         """Manual refresh. Never gated on quiet hours - hard rule 6."""
         return self._start(manual=True)
 
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def pause(self) -> None:
+        """Stop scheduled refreshes (the compact desk hides the tape)."""
+        self._paused = True
+        stop_staggered(self._timer)
+
+    def resume(self) -> None:
+        """Restart scheduled refreshes after `pause`. A no-op when not paused."""
+        if not self._paused:
+            return
+        self._paused = False
+        self._timer.start()
+
     def shutdown(self) -> None:
         stop_staggered(self._timer)
         worker = self._worker_thread
@@ -139,7 +156,7 @@ class GroupTapeService(QObject):
             logging.exception("Group tape tick failed")
 
     def _due(self, now: datetime) -> bool:
-        if self._running:
+        if self._running or self._paused:
             return False
         # Quiet hours (packet R1): automatic work runs on the session window
         # and stops overnight like every other automatic starter. Fail open on
