@@ -44,6 +44,11 @@ globals().update(
 )
 
 
+def load_setup_tracker_payload() -> dict:
+    """The write slot's tracker read: the SQLite mirror when it matches the JSON file, else the JSON."""
+    return _legacy.load_setup_tracker_payload(prefer_store=True)
+
+
 # Purity quarantine (2026-07-17): the all-or-nothing non-IBKR veto blacked out
 # every scheduled tracker write for a week because 1-2 chronic symbols (LC;
 # BF.B symbology) always fall back to Yahoo daily bars. A small dirty tail is

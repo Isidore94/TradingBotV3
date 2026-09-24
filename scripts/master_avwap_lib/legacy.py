@@ -5742,8 +5742,30 @@ def _tracker_payload_record_count(payload) -> int:
     )
 
 
-def load_setup_tracker_payload() -> dict:
-    payload = load_json(SETUP_TRACKER_FILE, default=None)
+def _setup_tracker_payload_from_store() -> dict | None:
+    """The raw tracker from the SQLite mirror when it matches the JSON file, else None (reason logged)."""
+    try:
+        from tracker_store import load_fresh_payload
+
+        payload, reason = load_fresh_payload(SETUP_TRACKER_FILE)
+    except Exception as exc:
+        payload, reason = None, f"store reader unavailable: {exc}"
+    if payload is not None and _tracker_payload_record_count(payload) == 0:
+        payload, reason = None, "store holds no records"
+    if payload is None:
+        logging.warning("Setup tracker read from JSON, not the SQLite store: %s", reason)
+    else:
+        logging.info(
+            "Setup tracker read from the SQLite store (%d records).", _tracker_payload_record_count(payload)
+        )
+    return payload
+
+
+def load_setup_tracker_payload(*, prefer_store: bool = False) -> dict:
+    """The tracker, normalized. ``prefer_store`` reads the SQLite mirror when it is current."""
+    payload = _setup_tracker_payload_from_store() if prefer_store else None
+    if payload is None:
+        payload = load_json(SETUP_TRACKER_FILE, default=None)
     # The tracker lives on a cloud-synced drive and is large; a partial/mid-sync
     # read surfaces as a JSON error (-> None) or an empty dict. Falling straight
     # through to the empty default would let the next save wipe the entire
@@ -5966,14 +5988,13 @@ def save_setup_tracker_payload(
             logging.warning("Could not rotate setup tracker backup before save: %s", exc)
 
     save_json(SETUP_TRACKER_FILE, payload)
-    # F3 step 1 (2026-09-04): mirror the SAME payload into the SQLite record
-    # store beside the JSON. Shadow only - the JSON above stays the file every
-    # reader loads - and never allowed to cost the save (it swallows its own
-    # failures). Parity is measured by `python scripts/tracker_store.py verify`.
+    # Mirror the SAME payload into the SQLite store, encoded as the JSON was and
+    # stamped with the JSON file's size/mtime; readers use the store only while
+    # that stamp matches. A mirror failure never costs the save.
     try:
         from tracker_store import mirror_payload as _mirror_tracker_payload
 
-        _mirror_tracker_payload(payload)
+        _mirror_tracker_payload(payload, source_path=SETUP_TRACKER_FILE, json_default=_json_default)
     except Exception as exc:
         logging.warning("Setup tracker SQLite mirror unavailable: %s", exc)
     try:
