@@ -373,5 +373,5 @@ def test_the_new_stat_cards_leave_out_a_made_up_entry():
                "closed_at": "2026-06-10T15:05:00-04:00", "direction": "SHORT", "entry_invented": True}
 
     stats = trade_performance_stats([real, made_up], "net_pnl")
-    assert stats["net"] == 10.0
+    assert stats["net_pnl"] == 10.0
     assert calendar_day_stats([real, made_up], pnl_key="net_pnl")["2026-06-10"]["net"] == 10.0
