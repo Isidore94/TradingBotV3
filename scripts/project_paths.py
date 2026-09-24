@@ -367,6 +367,12 @@ FOCUS_D1_FLAGS_FILE = RUNTIME_DATA_DIR / "focus_d1_flags.json"
 # keeps hunting the opening side after the live label decays to neutral
 # (2026-07-17: bearish_strong open -> neutral by noon shut off RW shorts).
 AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
+# Append-only per-session history of the opening regime: the day's first
+# regime read and its directional anchor. `opening_regime_history` owns it.
+AUTO_OPENING_REGIME_HISTORY_FILE = RUNTIME_DATA_DIR / "auto_opening_regime_history.jsonl"
+# Dated, append-only copies of `working_lately/setup_grades_latest.json`, one
+# JSONL per day. `setup_grades_history` owns it.
+SETUP_GRADES_HISTORY_DIR = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_history"
 # Append-only JSONL log of the trader's pick verdicts: star likes (with origin
 # alert timeframe/surface), X dislikes (with the typed reason), unfavorites.
 # Lives in the shared home so it syncs across machines and can be handed to an
@@ -411,6 +417,20 @@ DAY_REVIEW_DIR = PERSISTENT_DATA_DIR / "day_review"
 # nothing in the running system reads it to detect, score, rank, gate or alert
 # (plan.md sec 5).
 DAY_REVIEW_READS_DIR = DAY_REVIEW_DIR / "reads"
+# Day Recap coach: one complete point-in-time record per session
+# (`records/<date>.json` + `.md`) and weekly rollups (`records/week-<YYYY-Www>.json`).
+# Never pruned. Written only by `day_session_record.py`.
+DAY_SESSION_RECORDS_DIR = DAY_REVIEW_DIR / "records"
+DAY_SESSION_RECORD_SCHEMA = "day_session_record_v1"
+# Day Recap coach: the trader's recap inputs (card answers, lesson, rule, rule
+# check, chart clues, environment verdict). Append-only JSONL; `recap_store.py`
+# is its one writer. Evidence only: nothing reads it to detect, score or alert.
+DAY_RECAP_EVENTS_FILE = PERSISTENT_DATA_DIR / "day_recap_events.jsonl"
+# Day Recap coach "Ask the AI": the trader's plain-words questions (append-only;
+# `week_coach.py` is the one writer) and the night's cited answers (append-only;
+# `ai_jobs/week_questions.py` is the one writer). Evidence only.
+WEEK_QUESTIONS_FILE = PERSISTENT_DATA_DIR / "week_questions.jsonl"
+WEEK_ANSWERS_FILE = PERSISTENT_DATA_DIR / "week_answers.jsonl"
 # The desk AI's ideas (TJ-6). `ai_ideas.jsonl` is the NIGHT's half: append-only,
 # one row per idea sighting, folded by `idea_id` on read so a repeat keeps every
 # earlier sighting on disk. `ai_ideas_state.json` is the TRADER's half: one entry

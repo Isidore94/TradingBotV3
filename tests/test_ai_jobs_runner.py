@@ -378,6 +378,10 @@ EXPECTED_SLOT_ORDER = (
     "exit_note_fields",
     "ticker_briefs",
     "market_story_narration",
+    # Day Recap coach (2026-09-23): answer the trader's Week Review questions
+    # from the day/week records, cited. End of stage 2: after `day_review_facts`
+    # rebuilt the records, and not directly after it (`ai_summary` is pinned there).
+    "week_questions",
     # stage 3 - the model-gated slots, unchanged
     "journal_enrichment",
     "review_policy_draft",

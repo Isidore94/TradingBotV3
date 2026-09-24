@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTabWidget,
@@ -51,6 +52,7 @@ from ui.services import journal_feed
 from ui.read_worker import ReadWorker, join_worker
 from ui.widgets.data_table import apply_width_rule_to_table_widget
 from ui.widgets.ideas_card import IdeasCard as _IdeasCard
+from ui.widgets.week_coach_card import WeekCoachCard
 from ui.services import weekend_prep_service as prep_service
 from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
 
@@ -636,6 +638,19 @@ class WeekReviewPage(_StepPage):
         # it as its own single-flight guard - what changed is that the
         # trader no longer has to find five of them.
         self._layout.addWidget(self.refresh_note)
+        # Day Recap coach: edge, leaks, repeats, 4-week trend and Ask the AI,
+        # read from the day/week records on the card's own worker.
+        import day_session_record
+
+        self.coach = WeekCoachCard(table_floor_px=TABLE_TEN_ROWS_PX)
+        self.coach.set_week(day_session_record.week_key(friday))
+        self.coach.openSessionRequested.connect(self.openSessionRequested)
+        # In its own scroll area so the page's minimum height does not grow.
+        self.coach_scroll = QScrollArea(self)
+        self.coach_scroll.setWidgetResizable(True)
+        self.coach_scroll.setFrameShape(QFrame.NoFrame)
+        self.coach_scroll.setWidget(self.coach)
+        self._layout.addWidget(self.coach_scroll, 2)
         self._layout.addWidget(self.window_selector)
         self._layout.addWidget(self.learning_note)
         self._layout.addWidget(self.learning_reads)
@@ -688,6 +703,7 @@ class WeekReviewPage(_StepPage):
         worker.failed.connect(lambda message: self._on_week_failed(message, generation))
         self._worker = worker
         worker.start()
+        self.coach.load()
 
     def _on_week_ready(self, payload: object, generation: int) -> None:
         self._reading = False
@@ -720,6 +736,10 @@ class WeekReviewPage(_StepPage):
     def shutdown(self) -> None:
         """This page's read worker, and the ideas card's write worker."""
         super().shutdown()
+        try:
+            self.coach.shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            logging.debug("The week coach could not be shut down.", exc_info=True)
         try:
             self.ideas_card.shutdown()
         except Exception:  # noqa: BLE001 - shutdown must not raise

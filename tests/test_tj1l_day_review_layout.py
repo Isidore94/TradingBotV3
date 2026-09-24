@@ -45,8 +45,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
-    QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QScrollArea,
@@ -129,6 +127,21 @@ def _payload(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def _walkaway_day(rows):
+    """A real `WalkawayDay` whose passed-and-ran population is `rows`' names."""
+    from walkaway_day import WalkawayDay, WalkawayRow
+
+    return WalkawayDay(rejected=tuple(
+        WalkawayRow(
+            decision_id=(SESSION, row.symbol, "LONG", "chart_review", "veto", "D1", ""),
+            time=row.observed_at, symbol=row.symbol, side="LONG",
+            category="chart_review", what_you_did="veto", ran_after_pct=1.25,
+            held_at_close_pct=0.9, state="measured",
+        )
+        for row in rows
+    ))
 
 
 class _Row:
@@ -316,51 +329,49 @@ def test_the_entries_list_and_the_reader_share_a_vertical_splitter(panel, qapp):
 
 
 # ==========================================================================
-# 3. the walk-away grid
+# 3. the walk-away populations: ONE table, five chips (Day Recap step A)
 # ==========================================================================
-def test_the_walkaway_is_a_two_by_two_grid_with_a_full_width_fifth_row(panel):
-    """TJ-11: the four populations, and "Earlier calls, now" across the bottom."""
-    grid = panel.walkaway_grid
-    assert isinstance(grid, QGridLayout)
-    assert grid.rowCount() == 3 and grid.columnCount() == 2
-    fifth = grid.itemAtPosition(2, 0)
-    assert fifth is not None
-    assert _is_descendant(panel.walkaway_tables["earlier_calls"], fifth.widget())
-    top_left = grid.itemAtPosition(0, 0)
-    assert top_left is not None
-    assert _is_descendant(panel.walkaway_tables["rejected"], top_left.widget())
-    # Equal cells: neither column may swallow the other.
-    assert grid.columnStretch(0) == grid.columnStretch(1) == 1
+def test_the_walkaway_is_one_table_with_five_filter_chips(panel):
+    """Day Recap step A (trader, 2026-09-23) replaced the 2 x 2 grid plus a
+    full-width fifth row with ONE table and a chip per population."""
+    from ui.panels.day_review_panel import MISS_FILTERS
 
-
-def test_the_three_tj2_tables_fill_the_other_three_cells_in_order(panel):
-    expected = (
-        ((0, 1), "liked_not_traded", "Liked but never traded"),
-        ((1, 0), "traded_left_early", "Traded, then left early"),
-        ((1, 1), "claimed_d1", "Claimed D1 picks"),
+    assert tuple(panel.miss_chips) == tuple(name for name, _label in MISS_FILTERS) == (
+        "rejected", "liked_not_traded", "traded_left_early", "claimed_d1", "earlier_calls",
     )
-    for (row, column), name, title in expected:
-        item = panel.walkaway_grid.itemAtPosition(row, column)
-        assert item is not None, (row, column)
-        cell = item.widget()
-        assert cell is panel.walkaway_cells[(row, column)]
-        assert title in _labels(cell), (row, column, _labels(cell))
-        assert _is_descendant(panel.walkaway_tables[name], cell)
+    assert _is_descendant(panel.miss_table, panel.miss_section)
+    for chip in panel.miss_chips.values():
+        assert _is_descendant(chip, panel.miss_section)
+    assert panel.miss_population() == "rejected"
 
 
-def test_each_walkaway_cell_is_a_titled_table_with_every_column(panel):
-    from ui.panels.day_review_panel import TJ2B_WALKAWAY_COLUMNS
+def test_the_name_chart_sits_beside_the_table_and_takes_the_rest(panel, qapp):
+    panel.resize(1900, 1000)
+    panel.show()
+    qapp.processEvents()
+    try:
+        table = panel.miss_table.geometry()
+        chart = panel._name_chart_holder
+        assert chart.mapTo(panel, chart.rect().topLeft()).x() > panel.miss_table.mapTo(
+            panel, panel.miss_table.rect().topLeft()
+        ).x() + table.width() - 1
+        assert chart.width() >= table.width() / 2, (chart.width(), table.width())
+    finally:
+        panel.hide()
 
-    for (row, column), name in zip(
-        ((0, 1), (1, 0), (1, 1), (2, 0)),
-        ("liked_not_traded", "traded_left_early", "claimed_d1", "earlier_calls"),
-    ):
-        cell = panel.walkaway_cells[(row, column)]
-        assert isinstance(cell, QFrame), cell
-        table = panel.walkaway_tables[name]
-        assert _is_descendant(table, cell)
-        assert table.columnCount() == len(TJ2B_WALKAWAY_COLUMNS)
 
+def test_the_one_table_keeps_every_column_behind_more_columns(panel):
+    from ui.panels.day_review_panel import MISS_DEFAULT_COLUMNS, TJ2B_WALKAWAY_COLUMNS
+
+    table = panel.miss_table
+    assert table.columnCount() == len(TJ2B_WALKAWAY_COLUMNS)
+    shown = [
+        TJ2B_WALKAWAY_COLUMNS[index]
+        for index in range(table.columnCount()) if not table.isColumnHidden(index)
+    ]
+    assert tuple(shown) == MISS_DEFAULT_COLUMNS
+    panel.more_columns_toggle.setChecked(True)
+    assert not any(table.isColumnHidden(index) for index in range(table.columnCount()))
 
 # ==========================================================================
 # 4. what you traded, beside the ideas
@@ -383,8 +394,8 @@ def test_every_table_on_the_page_stretches_its_last_column(panel):
     from PySide6.QtWidgets import QHeaderView
 
     tables = panel.findChildren(QTableWidget)
-    # Five walk-away populations, market calls, and entries and exits.
-    assert len(tables) == 7, [table.objectName() for table in tables]
+    # ONE miss table (Day Recap step A), market calls, and entries and exits.
+    assert len(tables) == 3, [table.objectName() for table in tables]
     for table in tables:
         header = table.horizontalHeader()
         assert header.stretchLastSection() is True, table
@@ -429,14 +440,16 @@ def test_the_long_walkaway_headers_are_not_clipped(panel, qapp, rows):
     """
     from PySide6.QtGui import QFont
 
-    table = panel.rejected_that_worked_table
+    table = panel.miss_table
+    # Both long headers sit behind "More columns" since Day Recap step A.
+    panel.more_columns_toggle.setChecked(True)
     header = table.horizontalHeader()
     font = QFont(header.font())
     font.setPointSize(16)
     font.setBold(True)
     header.setFont(font)
 
-    panel.render(_payload(rejected_that_worked=rows))
+    panel.render(_payload(walkaway=_walkaway_day(rows)))
     panel.resize(1900, 1000)
     panel.show()
     qapp.processEvents()
