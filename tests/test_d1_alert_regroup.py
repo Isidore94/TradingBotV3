@@ -138,13 +138,14 @@ def test_menu_groups_are_the_three_principles_in_order():
     assert [kinds for _title, kinds in groups] == [
         ("pullback", "d1_line_pullback"),
         ("range_breakout",),
-        ("line_break", "trendline_break", "trendline_break_retest"),
+        ("line_break", "sma_break_retest", "trendline_break", "trendline_break_retest"),
     ]
     menu_d1 = set(chart_watch.D1_MENU_KINDS)
     assert menu_d1 == {
         "d1_line_pullback",
         "range_breakout",
         "line_break",
+        "sma_break_retest",
         "trendline_break",
         "trendline_break_retest",
     }
@@ -361,6 +362,7 @@ def test_compact_d1_menu_order_and_labels():
         "--",
         "== LINE BREAK — it crossed a big line",
         "Line break",
+        "SMA break + 15EMA retest",
         "Trendline break",
         "Trendline break + retest",
         "--",
@@ -437,6 +439,7 @@ def test_classic_rows_carry_the_same_grouping():
         "Pullback to D1 line",
         "Range breakout",
         "Line break",
+        "SMA break + 15EMA retest",
         "Trendline break",
         "Trendline break + retest",
         "Open in TradingView",
