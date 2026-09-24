@@ -39,6 +39,8 @@ class PriceAlertToast(QDialog):
 
         if replayed:
             title_text = "MISSED PRICE ALERT"
+        elif payload.get("push_skipped"):
+            title_text = "PRICE ALERT — DESK (phone quiet)"
         elif payload.get("push_ok") is False:
             title_text = "PRICE ALERT — PHONE PUSH FAILED"
         else:

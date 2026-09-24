@@ -424,7 +424,7 @@ def test_swing_slots_are_refused_outside_the_window(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Evening prepares the morning and then stops
+# Evening scans like DESK all morning (trader, 2026-09-23)
 # ---------------------------------------------------------------------------
 
 
@@ -450,33 +450,32 @@ def test_evening_runs_the_early_slot(monkeypatch):
     assert started == ["07:00"]
 
 
-def test_evening_refuses_every_slot_after_the_early_one(monkeypatch):
+def test_evening_keeps_running_slots_after_the_early_one(monkeypatch):
+    """EVENING scans like DESK all morning (trader, 2026-09-23); it used to
+    stop after the early slot."""
     service, started = _slot_service(
         monkeypatch,
         profile=AUTO_PROFILE_EVENING,
         slots=["07:00", "07:30", "09:00", "10:00"],
-        done=["07:00"],
+        done=["07:00", "07:30", "09:00"],
     )
     service._maybe_run_swing_slot(THURSDAY.replace(hour=10, minute=5))
-    assert started == []
-    assert any("not run" in line for line in service._logged)
+    assert started == ["10:00"]
+    assert not any("not run" in line for line in service._logged)
 
 
-def test_evening_marks_refused_slots_done_so_the_wrapup_still_runs(monkeypatch):
-    """Refused slots are RESOLVED, not left pending.
-
-    `after_close_wrapup_due` requires every slot to be done, so leaving them
-    pending would silently cancel the whole after-close wrap-up - the universe
-    rebuild, the learning refresh and the integrity calibration - for the day.
-    """
-    service, _started = _slot_service(
+def test_evening_never_marks_a_slot_done_that_it_did_not_run(monkeypatch):
+    """The old rule resolved EVENING's later slots unrun. Now the due slot
+    runs, and nothing is marked done before its scan finishes."""
+    service, started = _slot_service(
         monkeypatch,
         profile=AUTO_PROFILE_EVENING,
         slots=["07:00", "07:30", "09:00"],
-        done=["07:00"],
+        done=["07:00", "07:30"],
     )
     service._maybe_run_swing_slot(THURSDAY.replace(hour=9, minute=5))
-    assert set(service._state["slots_done"]) == {"07:00", "07:30", "09:00"}
+    assert started == ["09:00"]
+    assert set(service._state["slots_done"]) == {"07:00", "07:30"}
 
 
 def test_desk_runs_the_ordinary_hourly_slots(monkeypatch):
@@ -487,23 +486,16 @@ def test_desk_runs_the_ordinary_hourly_slots(monkeypatch):
     assert started == ["09:00"]
 
 
-def test_evening_skips_the_open_self_build_without_a_sticky_marker(monkeypatch):
-    """The skip must not survive the wake-up flip to DESK.
-
-    Recording it as `watchlist_built_at` would suppress the build for the rest
-    of the morning - the one time the trader actually wants it.
-    """
+def test_evening_builds_the_open_watchlists_like_desk(monkeypatch):
+    """EVENING scans like DESK (trader, 2026-09-23): the open self-build runs."""
     service = _bare_service(profile=AUTO_PROFILE_EVENING)
     _pin_window(monkeypatch, True)
     monkeypatch.setattr(core, "minutes_since_open", lambda *_a, **_k: 45.0)
-    monkeypatch.setattr("threading.Thread", _NeverStartThread)
+    monkeypatch.setattr(core, "universe_is_stale", lambda *_a, **_k: False)
+    built: list[bool] = []
+    service._start_watchlist_build = lambda *, manual: built.append(manual)  # type: ignore[method-assign]
     service._maybe_build_watchlists(THURSDAY.replace(hour=7, minute=15))
-    assert not service._state.get("watchlist_built_at")
-    assert any("Evening mode" in line for line in service._logged)
-
-    # Logged once a day, not once every 30-second tick.
-    service._maybe_build_watchlists(THURSDAY.replace(hour=7, minute=16))
-    assert len(service._logged) == 1
+    assert built == [False]
 
 
 # ---------------------------------------------------------------------------
@@ -530,12 +522,12 @@ def test_missing_or_unreadable_data_is_never_an_alarm():
     assert not core.spy_move_alarm_due("not a number", None, THURSDAY)
 
 
-def test_the_alarm_repeats_every_five_minutes_and_no_faster():
+def test_the_alarm_repeats_every_ten_seconds():
+    """Trader 2026-09-23: it rings every 10 seconds (was every 5 minutes)."""
+    assert core.EVENING_SPY_ALARM_REPEAT_SECONDS == 10
     now = THURSDAY.replace(hour=7, minute=0)
-    two_minutes_ago = THURSDAY.replace(hour=6, minute=58)
-    five_minutes_ago = THURSDAY.replace(hour=6, minute=55)
-    assert not core.spy_move_alarm_due(1.5, two_minutes_ago, now)
-    assert core.spy_move_alarm_due(1.5, five_minutes_ago, now)
+    assert not core.spy_move_alarm_due(1.5, now - timedelta(seconds=5), now)
+    assert core.spy_move_alarm_due(1.5, now - timedelta(seconds=10), now)
     # A stamp from the future (clock skew) buys silence, never a repeat storm.
     assert not core.spy_move_alarm_due(1.5, THURSDAY.replace(hour=8), now)
 
@@ -607,8 +599,61 @@ def test_the_spy_alarm_fires_at_wake_the_trader_priority(monkeypatch):
     assert len(sent.calls) == 1
     title, message, kwargs = sent.calls[0]
     assert "+3.00%" in title and "UP 3.00%" in message
+    assert "every 10 seconds" in message
     assert kwargs["priority"] == "urgent"
     assert service._state["spy_alarm_last_sent"]
+
+
+def test_the_alarm_latches_and_keeps_ringing_after_spy_drifts_back(monkeypatch):
+    """Once it has fired this session it rings every tick until the mode
+    changes, even with SPY back under 1% (trader, 2026-09-23)."""
+    sent = _Sent()
+    monkeypatch.setattr(push_notify, "send_push", sent)
+    bars = [_Bar(103.0)]
+    service = _alarm_service(monkeypatch, bars=bars)
+    start = THURSDAY.replace(hour=7)
+    service._maybe_push_spy_alarm(start)
+    bars[0] = _Bar(100.2)
+    service._maybe_push_spy_alarm(start + timedelta(seconds=10))
+    service._maybe_push_spy_alarm(start + timedelta(seconds=20))
+    assert len(sent.calls) == 3
+
+
+def test_changing_mode_stops_the_ringing_and_clears_the_latch(monkeypatch):
+    sent = _Sent()
+    monkeypatch.setattr(push_notify, "send_push", sent)
+    bars = [_Bar(103.0)]
+    service = _alarm_service(monkeypatch, bars=bars)
+    start = THURSDAY.replace(hour=7)
+    service._maybe_push_spy_alarm(start)
+    assert len(sent.calls) == 1
+
+    service._profile = AUTO_PROFILE_DESK
+    service._maybe_push_spy_alarm(start + timedelta(seconds=10))
+    assert len(sent.calls) == 1
+    assert not service._state.get("spy_alarm_latched")
+
+    # Back in EVENING with a quiet tape: the old latch does not ring.
+    bars[0] = _Bar(100.2)
+    service._profile = AUTO_PROFILE_EVENING
+    service._maybe_push_spy_alarm(start + timedelta(seconds=20))
+    assert len(sent.calls) == 1
+
+
+def test_the_alarm_has_its_own_ten_second_timer_only_in_evening(monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    service, _bounce, _logged = _boot(monkeypatch, allowed=True)
+    try:
+        assert not service._spy_alarm_timer.isActive()
+        assert service._spy_alarm_timer.interval() == 10_000
+        service.set_profile(AUTO_PROFILE_EVENING)
+        assert service._spy_alarm_timer.isActive()
+        service.set_profile(AUTO_PROFILE_DESK)
+        assert not service._spy_alarm_timer.isActive()
+    finally:
+        service._spy_alarm_timer.stop()
 
 
 def test_a_quiet_tape_never_wakes_the_trader(monkeypatch):
@@ -1393,7 +1438,9 @@ def test_attempts_and_deliveries_are_recorded_separately(monkeypatch):
     assert service._state["spy_alarm_failures"] == 1
 
 
-def test_a_failed_attempt_backs_off_and_a_delivery_clears_it(monkeypatch):
+def test_a_failed_attempt_retries_on_the_next_tick_and_a_delivery_clears_it(monkeypatch):
+    """Trader 2026-09-23: a rejected or rate-limited send never stops the
+    ringing; the next 10-second tick simply tries again. No backoff."""
     rejected = _Outcome("rejected")
     monkeypatch.setattr(push_notify, "send_push", rejected)
     service = _alarm_service(monkeypatch)
@@ -1401,12 +1448,7 @@ def test_a_failed_attempt_backs_off_and_a_delivery_clears_it(monkeypatch):
     service._maybe_push_spy_alarm(start)
     assert rejected.calls == 1
 
-    # 30 seconds later - the tick cadence - is far too soon.
-    service._maybe_push_spy_alarm(start + timedelta(seconds=30))
-    assert rejected.calls == 1, "the 30-second tick must not become a retry storm"
-
-    # A minute later is the floor, so the next attempt goes.
-    service._maybe_push_spy_alarm(start + timedelta(seconds=61))
+    service._maybe_push_spy_alarm(start + timedelta(seconds=10))
     assert rejected.calls == 2
 
     # Now it succeeds: the failure count clears so the next move is not
@@ -1418,33 +1460,34 @@ def test_a_failed_attempt_backs_off_and_a_delivery_clears_it(monkeypatch):
     assert service._state["spy_alarm_last_sent"]
 
 
-def test_the_backoff_is_capped_at_one_attempt_every_five_minutes(monkeypatch):
+def test_many_failures_never_slow_the_ringing(monkeypatch):
+    monkeypatch.setattr(push_notify, "send_push", _Outcome("rejected"))
     service = _alarm_service(monkeypatch)
-    service._state["spy_alarm_last_attempt"] = THURSDAY.replace(hour=7).isoformat()
-    for failures, expected_wait in ((1, 60), (2, 120), (3, 240), (4, 300), (9, 300)):
-        service._state["spy_alarm_failures"] = failures
-        moment = THURSDAY.replace(hour=7) + timedelta(seconds=expected_wait - 1)
-        assert service._spy_alarm_attempt_due(moment) is False, failures
-        moment = THURSDAY.replace(hour=7) + timedelta(seconds=expected_wait)
-        assert service._spy_alarm_attempt_due(moment) is True, failures
+    start = THURSDAY.replace(hour=7)
+    service._maybe_push_spy_alarm(start)
+    service._state["spy_alarm_failures"] = 9
+    sent = _Sent()
+    monkeypatch.setattr(push_notify, "send_push", sent)
+    service._maybe_push_spy_alarm(start + timedelta(seconds=10))
+    assert len(sent.calls) == 1
 
 
 def test_an_ambiguous_timeout_is_logged_as_unknown_not_as_a_rejection(monkeypatch):
-    """The push may already be on the phone, so an immediate retry could wake
-    the trader twice for one move."""
+    """The push may already be on the phone; it is logged as unknown, and the
+    ringing goes on at the next tick either way."""
     monkeypatch.setattr(push_notify, "send_push", _Outcome("ambiguous"))
     service = _alarm_service(monkeypatch)
     service._maybe_push_spy_alarm(THURSDAY.replace(hour=7))
 
     text = " ".join(service._logged)
-    assert "UNKNOWN" in text and "duplicate" in text
+    assert "UNKNOWN" in text
     assert "REJECTED" not in text
     assert not service._state.get("spy_alarm_last_sent")
     assert service._state["spy_alarm_failures"] == 1
 
 
 def test_an_unconfigured_phone_is_not_a_delivery_failure(monkeypatch):
-    """Nothing was transmitted, so it must not push the backoff out - there is
+    """Nothing was transmitted, so it is not counted as a failure - there is
     simply no phone to send to."""
     monkeypatch.setattr(push_notify, "push_configured", lambda: True)
     monkeypatch.setattr(push_notify, "send_push", _Outcome("unconfigured"))

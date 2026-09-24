@@ -494,12 +494,11 @@ def auto_scanning_due(
 # Evening's SPY wake alarm
 # ---------------------------------------------------------------------------
 # Trader rule 2026-08-14: Evening is armed after a late shift, when the trader
-# sleeps through the open. Its second job - after having the day's trades ready
-# on waking - is to wake the trader if the market actually moves. This is the
-# SECOND deliberate exception to the AWAY-only phone-push rule; the first is
-# the always-on Research/Focus price alerts.
+# sleeps through the open, and wakes the trader if the market actually moves.
+# Trader 2026-09-23: once it fires it rings every 10 seconds (latched) until
+# the trader changes Auto mode.
 EVENING_SPY_ALARM_PCT = 1.0
-EVENING_SPY_ALARM_REPEAT_SECONDS = 300
+EVENING_SPY_ALARM_REPEAT_SECONDS = 10
 EVENING_SPY_ALARM_SETTING = "push_evening_spy_alarm"
 EVENING_SPY_ALARM_PCT_SETTING = "push_evening_spy_alarm_pct"
 

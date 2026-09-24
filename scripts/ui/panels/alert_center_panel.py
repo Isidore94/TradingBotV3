@@ -2859,6 +2859,90 @@ class AlertCenterPanel(QFrame):
             self._away_recap_diverted = 0
         self._away_recap_diverted = getattr(self, "_away_recap_diverted", 0) + 1
 
+    #: Most diverted EVENING alerts held for the catch-up card (references).
+    _EVENING_CATCHUP_CAP = 2_000
+
+    def _note_evening_catchup_alert(self, alert: BounceAlert) -> None:
+        """Hold one EVENING-diverted alert for the catch-up card.
+
+        References to rows already in the backing lists, not a new store; the
+        list is session-scoped and reset when EVENING starts.
+        """
+        from datetime import date as _date
+
+        today = _date.today().isoformat()
+        if getattr(self, "_evening_catchup_session", None) != today:
+            self._evening_catchup_session = today
+            self._evening_catchup = []
+        held = self._evening_catchup
+        held.append(alert)
+        if len(held) > self._EVENING_CATCHUP_CAP:
+            del held[: len(held) - self._EVENING_CATCHUP_CAP]
+
+    def evening_catchup_alerts(self) -> list[BounceAlert]:
+        """This session's alerts diverted from the queue while in EVENING."""
+        from datetime import date as _date
+
+        if getattr(self, "_evening_catchup_session", None) != _date.today().isoformat():
+            return []
+        return list(getattr(self, "_evening_catchup", []) or [])
+
+    def evening_started_at(self) -> datetime | None:
+        """When this process saw Auto mode enter EVENING, if it did."""
+        return getattr(self, "_evening_started_at", None)
+
+    def evening_catchup_snapshot(self) -> dict:
+        """Cheap copy of what the catch-up card needs from this panel.
+
+        Tier and cell are read through the Alert Center's own functions, as
+        the AWAY recap does; nothing is ranked here.
+        """
+        import working_lately
+
+        alerts = []
+        for alert in self.evening_catchup_alerts():
+            try:
+                cell = " ".join(working_lately.alert_priority_key(alert)).strip()
+            except Exception:  # noqa: BLE001 - a row without a cell still lists
+                cell = ""
+            alerts.append(
+                {
+                    "symbol": str(getattr(alert, "symbol", "") or ""),
+                    "side": str(getattr(alert, "side", "") or ""),
+                    "tier": extract_alert_tier(alert),
+                    "trigger": str(getattr(alert, "trigger", "") or ""),
+                    "time_text": str(getattr(alert, "time_text", "") or ""),
+                    "is_d1": bool(getattr(alert, "is_d1", False)),
+                    "cell": cell if not getattr(alert, "is_d1", False) else "",
+                }
+            )
+        board = getattr(self, "movers_board", None)
+        try:
+            movers = board.board() if board is not None else {}
+        except Exception:  # noqa: BLE001
+            movers = {}
+        return {"alerts": alerts, "movers_board": movers, "since": self.evening_started_at()}
+
+    def on_auto_mode_changed(self, previous: str, current: str) -> None:
+        """Take a mode flip at once (slot for `autoModeChanged`).
+
+        Entering EVENING starts a fresh catch-up list. Leaving it empties the
+        waiting queue, so the trader comes back to zero charts; the chart on
+        screen and every backing list are left alone.
+        """
+        from datetime import date as _date
+
+        previous = str(previous or "").strip().upper()
+        current = str(current or "").strip().upper() or "OFF"
+        self._auto_mode_cached = (time.monotonic(), current)
+        if current == "EVENING" and previous != "EVENING":
+            self._evening_started_at = datetime.now()
+            self._evening_catchup_session = _date.today().isoformat()
+            self._evening_catchup = []
+        if previous == "EVENING" and current != "EVENING":
+            self._review_queue = []
+            self.chart_review.set_queued_count(0)
+
     def away_recap_count(self) -> int:
         """How many alerts this session routed to the recap instead of the queue."""
         from datetime import date as _date
@@ -2970,10 +3054,14 @@ class AlertCenterPanel(QFrame):
         # from the queue. That is the repetition-control precedent holding -
         # a display decision withholds nothing from evidence.
         #
-        # EVENING deliberately keeps its queue: it is for sleeping through the
-        # morning, and the queue is what the trader wakes up to.
-        if self._auto_mode_now() == "AWAY":
+        # EVENING diverts too (trader, 2026-09-23): the trader flips out of it
+        # to an EMPTY queue and reads the catch-up card instead.
+        mode = self._auto_mode_now()
+        if mode == "AWAY":
             self._note_away_recap_alert(alert)
+            return
+        if mode == "EVENING":
+            self._note_evening_catchup_alert(alert)
             return
         # Parked = the trader armed a D1 alert on this chart and skipped:
         # decision made for the day, so ordinary alerts stop re-occupying the
@@ -9172,7 +9260,7 @@ class AlertCenterPanel(QFrame):
         verdicts: dict[str, dict[str, str]] = {"long": {}, "short": {}}
 
         if mode not in ("DESK", "AWAY"):
-            # EVENING runs its own early slot and OFF does nothing automatic.
+            # EVENING and OFF do not adopt or stage from this board.
             # The board still says so, per row: "nothing happened" was the
             # answer this packet exists to replace.
             for side, rows in rows_by_side.items():

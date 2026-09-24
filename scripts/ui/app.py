@@ -198,6 +198,23 @@ class MainWindow(QMainWindow):
         # attached; the trader asked for that to stop. Nothing here reaches a
         # detector, score, alert, watchlist, Focus or the queue.
         self.autopilot_panel.service.autoModeChanged.connect(self._record_auto_mode_flip)
+        # The phone sender learns a flip at once (DESK is phone-quiet).
+        self.autopilot_panel.service.autoModeChanged.connect(
+            self.trading_panel.price_alert_service.on_auto_mode_changed
+        )
+        # EVENING diverts the review queue; the flip out of it empties it.
+        self.autopilot_panel.service.autoModeChanged.connect(
+            self.trading_panel.alert_center.on_auto_mode_changed
+        )
+        # The flip out of EVENING shows one catch-up card, built off-Qt.
+        from ui.services.evening_catchup_service import EveningCatchupService
+
+        self.evening_catchup_service = EveningCatchupService(self)
+        self.evening_catchup_service.ready.connect(self._show_evening_catchup)
+        self.evening_catchup_card = None
+        self.autopilot_panel.service.autoModeChanged.connect(
+            self._maybe_request_evening_catchup
+        )
         # TJ-1 item 6(b): the staged-pick table lives on the Auto Pilot page now.
         # The ADD is still performed here, by the store's own owner.
         self.autopilot_panel.focusAddRequested.connect(self._add_staged_pick_to_focus)
@@ -486,8 +503,11 @@ class MainWindow(QMainWindow):
         self.auto_mode_button.setToolTip(
             "Click to cycle Auto Mode: OFF -> AUTO-DESK -> AUTO-AWAY -> AUTO-EVENING -> OFF. "
             "Profiles change presentation only - never trading decisions. "
-            "EVENING = arm the night before a sleep-in morning: picks stage silently, "
-            "the morning briefing builds itself, and price alerts push to your phone."
+            "DESK sends nothing to your phone. "
+            "EVENING = arm the night before a sleep-in morning: it scans like DESK, "
+            "keeps the review queue empty, and rings your phone every 10 s after a "
+            "SPY 1% move or a price alert until you change mode; the flip out shows "
+            "a catch-up card."
         )
         self.auto_mode_button.clicked.connect(self._cycle_auto_mode)
         self.autopilot_panel.service.enabledChanged.connect(lambda *_: self._sync_auto_mode_button())
@@ -939,6 +959,28 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             logging.exception("The auto-mode flip could not be logged.")
+
+    def _maybe_request_evening_catchup(self, previous: str, current: str) -> None:
+        """On the flip out of EVENING, start building the catch-up card."""
+        if str(previous or "").upper() != "EVENING" or str(current or "").upper() == "EVENING":
+            return
+        try:
+            snapshot = self.trading_panel.alert_center.evening_catchup_snapshot()
+            self.evening_catchup_service.request(snapshot)
+        except Exception:  # noqa: BLE001 - a card never costs the mode flip
+            logging.exception("The evening catch-up card could not be requested.")
+
+    def _show_evening_catchup(self, payload) -> None:
+        """Show the built card. Rows chart through the board door."""
+        try:
+            if self.evening_catchup_card is None:
+                from ui.widgets.evening_catchup_card import EveningCatchupCard
+
+                self.evening_catchup_card = EveningCatchupCard(self)
+                self.evening_catchup_card.symbolClicked.connect(self._chart_recap_row)
+            self.evening_catchup_card.show_catchup(payload)
+        except Exception:  # noqa: BLE001
+            logging.exception("The evening catch-up card could not be shown.")
 
     def _feed_away_recap(self) -> None:
         """Hand the recap the Alert Center's own backing list, then reload.

@@ -21,7 +21,8 @@ The contract these tests pin:
   ``ARMED_PUSH_SHUTDOWN_WAIT_SECONDS = 2.0`` and then returns; the threads are
   daemons, so they never hold the process;
 * the feed row for a fired watch is drawn while the phone is still answering;
-* no ``auto_mode`` gate is added - DESK, AWAY, EVENING and OFF all deliver.
+* AWAY, EVENING and OFF all deliver; DESK sends nothing to the phone (trader,
+  2026-09-23), so the delivery tests here run in AWAY.
 
 NO REAL PUSH.  ``push_notify.send_push`` is monkeypatched in every test in this
 file and nothing here builds an ntfy URL; the fakes are the only transport.
@@ -69,7 +70,7 @@ def _qt_app():
     return QApplication.instance() or QApplication([])
 
 
-def _service(monkeypatch, sender, *, mode: str = "DESK"):
+def _service(monkeypatch, sender, *, mode: str = "AWAY"):
     """A REAL ``PriceAlertService`` whose only transport is ``sender``."""
     _qt_app()
     import autopilot_core
@@ -373,6 +374,23 @@ def test_every_auto_mode_delivers_the_armed_push_without_holding_the_desk(
         service.shutdown()
 
     assert sent == [f"AAPL {mode}"]
+
+
+def test_desk_skips_the_armed_push_without_touching_the_transport(monkeypatch):
+    """DESK sends nothing to the phone (trader, 2026-09-23)."""
+    sent: list[str] = []
+    service = _service(
+        monkeypatch, lambda title, message, **kw: sent.append(message) or {"ok": True},
+        mode="DESK",
+    )
+    try:
+        result = service.notify_armed_watch(
+            watch_id="rv-h1-DESK", title="H1 retester: AAPL", message="AAPL DESK"
+        )
+    finally:
+        service.shutdown()
+    assert result.get("skipped") == "DESK"
+    assert sent == []
 
 
 # ---------------------------------------------------------------------------

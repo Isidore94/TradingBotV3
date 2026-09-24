@@ -9,16 +9,19 @@ QObject only orchestrates, mirroring AutopilotService.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
 import price_alerts
 import push_notify
+from project_paths import PRICE_ALERT_RING_FILE
 
 _POLL_INTERVAL_MS = 60_000
 # Extended-hours coverage on a Pacific clock: ET premarket opens 04:00 ET =
@@ -37,6 +40,18 @@ _ANNOUNCED_WATCH_ID_LIMIT = 2_000
 #: still running when the budget expires can never hold the process.
 ARMED_PUSH_SHUTDOWN_WAIT_SECONDS = 2.0
 
+#: How long a read of the Auto mode file is trusted. A flip reaches the
+#: service at once through `set_auto_mode`; this only bounds a missed wire.
+_AUTO_MODE_CACHE_SECONDS = 5.0
+
+#: DESK sends nothing to the phone (trader, 2026-09-23).
+PHONE_QUIET_MODE = "DESK"
+
+#: A price alert that fires in EVENING rings again this often until the Auto
+#: mode changes (trader, 2026-09-23: no taper, no cap).
+RING_MODE = "EVENING"
+RING_INTERVAL_MS = 10_000
+
 
 class PriceAlertService(QObject):
     """Polls last prices for armed alert entries and fires push notifications.
@@ -51,6 +66,8 @@ class PriceAlertService(QObject):
     alertTriggered = Signal(dict)
     entriesChanged = Signal()
     statusChanged = Signal(dict)
+    #: Internal: a worker asks the Qt thread to start the ring timer.
+    _ringRequested = Signal()
 
     def __init__(self, parent=None, *, engine_enabled: bool = True) -> None:
         super().__init__(parent)
@@ -71,6 +88,20 @@ class PriceAlertService(QObject):
         #: thread adds to both while a worker may still be finishing.
         self._armed_push_threads: list[threading.Thread] = []
         self._armed_push_lock = threading.Lock()
+        #: (monotonic stamp, mode) of the last Auto mode reading.
+        self._auto_mode_cache: tuple[float, str] | None = None
+        #: EVENING-fired alert messages that ring until the mode changes.
+        self._ringing: list[str] = []
+        #: The day the ring list belongs to; it never rings into the next day.
+        self._ring_date: date | None = None
+        self._ring_lock = threading.Lock()
+        self._ring_sending = False
+        self._ring_timer = QTimer(self)
+        self._ring_timer.setInterval(RING_INTERVAL_MS)
+        self._ring_timer.timeout.connect(self._ring_tick)
+        self._ringRequested.connect(self._start_ringing)
+        if self.engine_enabled:
+            self._restore_ringing()
         self._timer = QTimer(self)
         self._timer.setInterval(_POLL_INTERVAL_MS)
         self._timer.timeout.connect(self.check_now)
@@ -154,6 +185,135 @@ class PriceAlertService(QObject):
         self.statusChanged.emit(self.status_snapshot())
         return result
 
+    # ------------------------------------------------------------------
+    # Auto mode
+    # ------------------------------------------------------------------
+    def set_auto_mode(self, mode: str) -> None:
+        """The Auto mode just changed; take it now rather than at the next read."""
+        text = str(mode or "").strip().upper() or "OFF"
+        self._auto_mode_cache = (time.monotonic(), text)
+        if text != RING_MODE:
+            self._stop_ringing()
+
+    def on_auto_mode_changed(self, _previous: str, current: str) -> None:
+        """Slot for `AutopilotService.autoModeChanged`."""
+        self.set_auto_mode(current)
+
+    def _current_auto_mode(self) -> str:
+        """OFF/DESK/AWAY/EVENING, re-read from the Auto Pilot state file at most
+        every few seconds. An unreadable mode reads OFF, which still pushes."""
+        cached = self._auto_mode_cache
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < _AUTO_MODE_CACHE_SECONDS:
+            return cached[1]
+        try:
+            import autopilot_core as core
+
+            mode = str(core.read_auto_pilot_mode() or "OFF").upper()
+        except Exception:
+            mode = "OFF"
+        self._auto_mode_cache = (now, mode)
+        return mode
+
+    def _phone_quiet(self) -> bool:
+        return self._current_auto_mode() == PHONE_QUIET_MODE
+
+    # ------------------------------------------------------------------
+    # EVENING ringing
+    # ------------------------------------------------------------------
+    def _start_ringing(self) -> None:
+        if self.engine_enabled and not self._ring_timer.isActive():
+            self._ring_timer.start()
+
+    def _stop_ringing(self) -> None:
+        with self._ring_lock:
+            had_ring = bool(self._ringing)
+            self._ringing = []
+        self._ring_timer.stop()
+        if had_ring or Path(PRICE_ALERT_RING_FILE).exists():
+            self._save_ringing([])
+
+    def _save_ringing(self, messages: list[str]) -> None:
+        """Persist the ring list for this machine and day. Never raises."""
+        path = Path(PRICE_ALERT_RING_FILE)
+        try:
+            if not messages:
+                path.unlink(missing_ok=True)
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"date": date.today().isoformat(), "messages": list(messages)}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        except OSError:
+            logging.warning("PRICE ALERT ring list not saved", exc_info=True)
+
+    def _restore_ringing(self) -> None:
+        """At startup: resume today's ring in EVENING, otherwise clear it."""
+        path = Path(PRICE_ALERT_RING_FILE)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        messages = []
+        if isinstance(payload, dict) and payload.get("date") == date.today().isoformat():
+            messages = [str(m) for m in payload.get("messages") or [] if str(m)]
+        if not messages or self._current_auto_mode() != RING_MODE:
+            self._save_ringing([])
+            return
+        with self._ring_lock:
+            self._ringing = messages
+            self._ring_date = date.today()
+        self._ring_timer.start()
+        logging.info("PRICE ALERT ring resumed after restart (%d alerts)", len(messages))
+
+    def _ring_tick(self) -> None:
+        """Every 10 s in EVENING: one combined push of the fired alerts.
+
+        Stops the moment the mode is not EVENING. Single-flight and off the
+        Qt thread; a failed send is simply tried again on the next tick.
+        """
+        if self._current_auto_mode() != RING_MODE or self._ring_date != date.today():
+            # The mode changed, or the day rolled: the ring is over.
+            self._stop_ringing()
+            return
+        with self._ring_lock:
+            messages = list(self._ringing)
+        if not messages:
+            self._ring_timer.stop()
+            return
+        if self._ring_sending:
+            return
+        self._ring_sending = True
+        title = (
+            "Price alert" if len(messages) == 1 else f"{len(messages)} price alerts"
+        ) + " - ringing"
+        body = "\n".join(messages) + (
+            "\nRings every 10 seconds until you change Auto mode."
+        )
+        threading.Thread(
+            target=self._deliver_ring,
+            args=(title, body),
+            name="price-alert-ring",
+            daemon=True,
+        ).start()
+
+    def _deliver_ring(self, title: str, message: str) -> None:
+        try:
+            result = dict(
+                push_notify.send_push(
+                    title, message, priority="urgent", tags="rotating_light"
+                )
+                or {}
+            )
+            if not result.get("ok"):
+                logging.info(
+                    "PRICE ALERT ring not delivered: %s",
+                    result.get("error") or "not configured",
+                )
+        except Exception:
+            logging.exception("PRICE ALERT ring failed; next tick tries again")
+        finally:
+            self._ring_sending = False
+
     def notify_armed_watch(
         self,
         *,
@@ -162,9 +322,11 @@ class PriceAlertService(QObject):
         message: str,
         event_key: str | None = None,
     ) -> dict[str, Any]:
-        """Push one TRADER-ARMED watch hit, once, in every Auto mode.
+        """Push one TRADER-ARMED watch hit, once, in AWAY, EVENING and OFF.
 
-        AWAY is the only mode that pushes routine output. The armed
+        DESK sends nothing to the phone (trader, 2026-09-23): the hit is still
+        on the feed, only the push is skipped, and the result says
+        ``skipped: "DESK"``. The armed
         Research/Focus price alerts are the standing exception - the trader
         asked for that exact condition and is waiting on it - and an armed
         chart watch is the same request made from the chart instead of the
@@ -208,6 +370,9 @@ class PriceAlertService(QObject):
                 "ok": False,
                 "error": "Phone pushes originate from the main desk only.",
             }
+        if self._phone_quiet():
+            logging.info("ARMED WATCH %s (DESK - phone quiet)", message)
+            return {"ok": False, "skipped": PHONE_QUIET_MODE, "watch_id": watch_id}
         if key:
             with self._armed_push_lock:
                 if key in self._announced_watch_ids:
@@ -268,6 +433,7 @@ class PriceAlertService(QObject):
 
     def shutdown(self) -> None:
         self._timer.stop()
+        self._ring_timer.stop()
         self._join_armed_pushes()
 
     def _join_armed_pushes(self) -> None:
@@ -432,9 +598,28 @@ class PriceAlertService(QObject):
         # Trader decision: every price crossing is urgent, including rows made
         # from the advanced Research view. The store has no origin marker.
         priority = "urgent"
+        # DESK keeps the phone quiet; the desk still shows every crossing.
+        mode = self._current_auto_mode()
+        quiet = mode == PHONE_QUIET_MODE
+        rings = mode == RING_MODE
         for trigger in triggers:
             message = price_alerts.format_trigger_message(trigger)
             tags = "chart_with_upwards_trend" if trigger.get("side") == "above" else "chart_with_downwards_trend"
+            payload = dict(trigger)
+            if quiet:
+                logging.info("PRICE ALERT %s (DESK - phone quiet)", message)
+                payload.update(
+                    {
+                        "message": message,
+                        "priority": priority,
+                        "push_ok": None,
+                        "push_error": "",
+                        "push_skipped": PHONE_QUIET_MODE,
+                    }
+                )
+                self.triggered.emit(message)
+                self.alertTriggered.emit(payload)
+                continue
             result = push_notify.send_push(
                 "Price alert", message, priority=priority, tags=tags
             )
@@ -444,7 +629,6 @@ class PriceAlertService(QObject):
                 message,
                 "sent" if result.get("ok") else (self._last_push_error or "not configured"),
             )
-            payload = dict(trigger)
             payload.update(
                 {
                     "message": message,
@@ -453,7 +637,18 @@ class PriceAlertService(QObject):
                     "push_error": self._last_push_error,
                 }
             )
+            if rings:
+                with self._ring_lock:
+                    if self._ring_date != date.today():
+                        self._ringing = []
+                    self._ring_date = date.today()
+                    self._ringing.append(message)
+                    ringing = list(self._ringing)
+                self._save_ringing(ringing)
             # Push deliberately happens before either local presentation or
             # A broken display path cannot suppress the phone.
             self.triggered.emit(message)
             self.alertTriggered.emit(payload)
+        if rings:
+            # Queued to the Qt thread when this runs on the poll worker.
+            self._ringRequested.emit()

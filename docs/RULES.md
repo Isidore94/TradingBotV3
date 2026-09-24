@@ -53,9 +53,9 @@ in the same commit.
 - A quiet Focus pick fades reversibly after 10 trading days through `FocusPickStore`'s removal path; it never touches a watchlist line or writes a `pick_feedback` verdict. Keep the faded marker and append-only record; a faded swing favorite appends a retraction. Check on day roll and the half-hour timer.
 - `focus_auto_picks.json` marks machine picks. No marker means the trader owns the pick; only marked entries may receive Not today or desync repair.
 - Swing favourites: swing Focus is written first and must not fail, then `swing_favorites.jsonl` whose failure is swallowed. Never mark these as automatic picks; a removal appends a retraction. The strip stays below setups in the right D1 column; left is M5 only.
-- Auto modes: discovery is the same everywhere. DESK adopts, AWAY stages only and returns an EOD recap, EVENING runs the early slot and briefing then stops, OFF does nothing.
+- Auto modes (trader, 2026-09-23): discovery is the same everywhere. DESK adopts. AWAY stages only and returns an EOD recap. EVENING scans like DESK all morning (plus the 07:00 early slot, strength checks and briefing), stages, never fills the review queue or M5 bar, empties the queue on the flip out and shows ONE catch-up card whose rows chart through the board door. OFF does nothing.
 - Every automatic starter is gated on `autopilot_core.auto_scanning_due`, and fails open. Manual buttons are never gated.
-- Phone push: only AWAY pushes routine output. The exceptions are price alerts (every mode) and EVENING's SPY ±1% alarm.
+- Phone push (trader, 2026-09-23): DESK sends NOTHING to the phone (desk sound, feed and queue unchanged; the manual test push stays). AWAY pushes routine output; price alerts and armed watches push once in AWAY/EVENING/OFF. In EVENING the SPY ±1% alarm latches and, like any price alert that fired, rings every 10 s until the mode changes: own timer, off the Qt thread, single-flight, no backoff, no cap; a failed send retries next tick.
 - The adoption gate compares timestamps by attaching market-local time to the naive side. It never strips the aware side.
 
 ## Trade Mentor

@@ -758,10 +758,10 @@ def test_the_watch_expires_in_trading_days_not_calendar_days(monkeypatch, tmp_pa
 # 4. Delivery: one phone event per fire, through the ONE armed sender
 # ---------------------------------------------------------------------------
 def test_the_armed_sender_pushes_once_per_watch_id_in_every_mode(monkeypatch):
-    """The armed Research/Focus price-alert sender is the one door to the phone
-    (CLAUDE.md: AWAY is the only mode that pushes routine output, and the armed
-    price alerts are an exception that pushes in EVERY mode).  A watch id that
-    has already been announced is never announced twice."""
+    """The armed Research/Focus price-alert sender is the one door to the phone.
+    It pushes in AWAY, EVENING and OFF; DESK sends nothing to the phone
+    (trader, 2026-09-23), pinned in `test_auto_modes_desk_phone_quiet.py`.
+    A watch id that has already been announced is never announced twice."""
     _qt_app()
     import push_notify
     from ui.services.price_alert_service import PriceAlertService
@@ -772,7 +772,7 @@ def test_the_armed_sender_pushes_once_per_watch_id_in_every_mode(monkeypatch):
     )
     import autopilot_core
 
-    monkeypatch.setattr(autopilot_core, "read_auto_pilot_mode", lambda *a, **kw: "DESK")
+    monkeypatch.setattr(autopilot_core, "read_auto_pilot_mode", lambda *a, **kw: "AWAY")
 
     service = PriceAlertService()
     try:
