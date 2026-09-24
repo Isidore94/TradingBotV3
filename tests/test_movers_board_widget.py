@@ -259,3 +259,38 @@ def test_model_updates_in_place_without_reset(app):
     widget.update_board(_board())
     widget.flush_pending_refresh()
     assert resets == []
+
+
+def _day_board(state, as_of="2026-09-22T10:40:00-04:00"):
+    board = _board()
+    board["state"] = dict(board["state"], state=state)
+    board["as_of"] = as_of
+    return board
+
+
+def test_side_follows_the_day_until_the_trader_taps_it(app):
+    widget = _widget(app)
+    widget.update_board(_day_board("down_day"))
+    widget.flush_pending_refresh()
+    assert widget.side == "short" and _symbols(widget) == ["ZZZ"]
+    # The trader taps Long; the same down day does not pull them back.
+    widget.side_button.click()
+    widget.update_board(_day_board("down_day", as_of="2026-09-22T10:45:00-04:00"))
+    widget.flush_pending_refresh()
+    assert widget.side == "long"
+    # The day turns up: follow it again.
+    widget.update_board(_day_board("up_day", as_of="2026-09-22T11:30:00-04:00"))
+    widget.flush_pending_refresh()
+    assert widget.side == "long"
+    widget.update_board(_day_board("down_day", as_of="2026-09-22T13:00:00-04:00"))
+    widget.flush_pending_refresh()
+    assert widget.side == "short"
+
+
+def test_side_does_not_follow_flat_or_unknown_days(app):
+    widget = _widget(app)
+    widget.set_side("short", user=True)
+    for state in ("flat", "unknown"):
+        widget.update_board(_day_board(state))
+        widget.flush_pending_refresh()
+        assert widget.side == "short"
