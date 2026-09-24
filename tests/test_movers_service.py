@@ -218,6 +218,89 @@ def test_timer_is_single_shot_and_rearms_after_a_tick():
     assert not service._timer.isActive()  # a stopped service never re-arms
 
 
+def _big_universe_bot():
+    names = [f"S{i:03d}" for i in range(svc.BOT_UNIVERSE_MIN)]
+    bars = {"SPY": _naive_la_bars([400.0] * 14),
+            "S000": _naive_la_bars([100.0] * 14),  # fresh
+            "S001": _naive_la_bars([50.0] * 10, volume=5000.0)}  # stale (ends 10:15 NY)
+    return FakeBot(names, bars)
+
+
+def test_gap_fill_fetches_only_stale_or_missing_names(monkeypatch):
+    monkeypatch.setattr(svc, "BOT_UNIVERSE_MIN", 300)
+    bot = _big_universe_bot()
+    downloader = FakeDownloader({"S001": _history_frame()})
+    service = _service(bot, downloader)
+    service._run_once({"long": [], "short": []})
+    gap_calls = [symbols for symbols, period in downloader.calls if period == svc.GAP_FILL_PERIOD]
+    fetched = {s for chunk in gap_calls for s in chunk}
+    assert "S001" in fetched and "S002" in fetched  # stale and missing
+    assert "S000" not in fetched and "SPY" not in fetched  # fresh from the bot
+    assert service._gap_at == NOW
+    assert "S001" in service._yahoo_bars
+
+
+def test_gap_fill_cap_takes_the_most_liquid_first(monkeypatch):
+    monkeypatch.setattr(svc, "GAP_FILL_MAX", 1)
+    bot = _big_universe_bot()
+    downloader = FakeDownloader({})
+    service = _service(bot, downloader)
+    service._run_once({"long": [], "short": []})
+    gap_calls = [symbols for symbols, period in downloader.calls if period == svc.GAP_FILL_PERIOD]
+    assert gap_calls == [("S001",)]  # the only stale name with known volume
+
+
+def test_failed_gap_fill_keeps_last_bars_and_clock():
+    class Broken:
+        def __call__(self, symbols, *, period, interval):
+            raise RuntimeError("down")
+
+    bot = _big_universe_bot()
+    service = _service(bot, Broken())
+    service._yahoo_bars = {"S001": ["kept"]}
+    service._run_once({"long": [], "short": []})
+    assert service._gap_at is None
+    assert service._yahoo_bars["S001"] == ["kept"]
+
+
+def test_board_carries_persistence_group_and_earnings_tags():
+    names = ["AAA", "BBB", "CCC"]
+    rising = _naive_la_bars([100.0] * 78, day=21) + _naive_la_bars(
+        [100.0] * 11 + [101.0, 102.0, 103.0]
+    )  # a prior session so ATR14 is measurable
+    bot = FakeBot(names, {"SPY": _naive_la_bars([400.0] * 14), **{n: rising for n in names}})
+    service = svc.MoversService(
+        bot_provider=lambda: bot, downloader=FakeDownloader({}),
+        universe_provider=lambda: [], clock=lambda: NOW, autostart=False,
+        industry_provider=lambda: {n: "Semiconductors" for n in names},
+        earnings_provider=lambda today: {"BBB"},
+    )
+    service._run_once({"long": [], "short": []})
+    service._run_once({"long": [], "short": []})
+    rows = {r["symbol"]: r for r in service.board()["pop"]["long"]}
+    assert set(rows) == set(names)
+    assert rows["BBB"]["er"] is True and rows["AAA"]["er"] is False
+    assert rows["AAA"]["group"] == "Semis"
+    assert service.board()["groups"]["pop"]["long"] == [["Semis", 3]]
+    assert rows["AAA"]["streak"] == 2 and rows["AAA"]["rank_change"] == 0
+
+
+def test_outcome_rows_are_appended_and_a_failed_write_keeps_the_board(tmp_path, monkeypatch):
+    bot = FakeBot([], {"SPY": _naive_la_bars([400.0] * 14)})
+    service = svc.MoversService(
+        bot_provider=lambda: bot, downloader=FakeDownloader({}),
+        universe_provider=lambda: [], clock=lambda: NOW, autostart=False,
+        outcomes_path=tmp_path / "out.jsonl",
+    )
+    monkeypatch.setattr(service._tracker, "observe",
+                        lambda *a, **k: [{"kind": "flag", "symbol": "X"}])
+    service._run_once({"long": [], "short": []})
+    assert (tmp_path / "out.jsonl").read_text(encoding="utf-8").count('"flag"') == 1
+    service._outcomes_path = tmp_path  # a directory: the write fails
+    service._run_once({"long": [], "short": []})
+    assert service.board() and "state" in service.board()
+
+
 def test_tick_is_idle_outside_regular_hours():
     service = _service(None, FakeDownloader({}))
     service._clock = lambda: datetime(2026, 9, 22, 8, 0, tzinfo=NY)

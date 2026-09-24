@@ -6,10 +6,15 @@ Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
    always off the Qt thread) for the bot's scan set, SPY and the Focus names;
 2. when the bot's scan set is under `BOT_UNIVERSE_MIN` names, also downloads
    the liquid universe's 5m bars from yfinance in batches, on its own 5-minute
-   cadence;
+   cadence; otherwise gap-fills from yfinance only the names whose bot series
+   is stale or missing (capped at GAP_FILL_MAX, most liquid first);
 3. fetches a ~20-session 5m history once per symbol per day for the RVOL
    baseline (batched yfinance, kept in memory);
-4. builds the board with `movers_scan.build_movers_board` and emits it.
+4. builds the board with `movers_scan.build_movers_board`, adds group tags
+   (shared classification cache), ER tags (local earnings calendar, read once
+   per session) and list persistence, and emits it;
+5. feeds the Dip-strong outcome tracker and appends its rows to
+   `MOVERS_DIP_OUTCOMES_FILE` (a failed write loses the rows, never the board).
 
 Zero IB traffic. Display only: no alerts, no watchlist or Focus writes. A failed
 tick keeps the last good board and says so in the status line.
@@ -25,7 +30,30 @@ from typing import Any, Callable, Iterable, Mapping
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+import movers_outcomes
 import movers_scan
+
+
+def default_industry_map() -> dict[str, str]:
+    """symbol -> industry from the shared classification cache (worker thread)."""
+    from industry_scanner import load_symbol_classifications
+
+    return {
+        symbol: str(row.get("industry") or "")
+        for symbol, row in load_symbol_classifications().items()
+        if row.get("industry")
+    }
+
+
+def default_earnings_names(today: date) -> set[str]:
+    """Names reporting today or after the previous session's close (local calendar file)."""
+    from earnings_history import get_events_in_window
+    from market_calendar import previous_session
+
+    previous = previous_session(today)
+    return movers_scan.earnings_symbols(
+        get_events_in_window(previous, today), today=today, previous=previous
+    )
 
 
 #: One tick per 5-minute bar, this many seconds after the boundary (completed
@@ -42,6 +70,10 @@ YAHOO_TODAY_PERIOD = "2d"
 YAHOO_BASELINE_PERIOD = "1mo"
 #: IB historical TRADES volume is in round lots; yfinance is in shares.
 IB_VOLUME_LOT_SIZE = 100
+#: Gap-fill: Yahoo 5m bars for stale/missing names only, at most this many per
+#: tick (most liquid first), over this short window.
+GAP_FILL_MAX = 600
+GAP_FILL_PERIOD = "5d"
 #: A symbol whose baseline download returned nothing is retried after this long.
 BASELINE_RETRY_MINUTES = 15
 #: Gap between two proxy RPCs, so Qt-thread RPCs are not starved of its lock.
@@ -187,8 +219,25 @@ class MoversService(QObject):
         universe_provider: Callable[[], list[str]] | None = None,
         clock: Callable[[], datetime] | None = None,
         autostart: bool = True,
+        industry_provider: Callable[[], Mapping[str, str]] | None = None,
+        earnings_provider: Callable[[date], Iterable[str]] | None = None,
+        outcomes_path=None,
     ) -> None:
         super().__init__(parent)
+        self._industry_provider = industry_provider or default_industry_map
+        self._earnings_provider = earnings_provider or default_earnings_names
+        if outcomes_path is None:
+            from project_paths import MOVERS_DIP_OUTCOMES_FILE
+
+            outcomes_path = MOVERS_DIP_OUTCOMES_FILE
+        self._outcomes_path = outcomes_path
+        self._tracker = movers_outcomes.DipOutcomeTracker()
+        self._industry: dict[str, str] = {}
+        self._earnings: set[str] = set()
+        self._tags_day: date | None = None
+        self._persistence: dict[str, Any] = {}
+        self._gap_at: datetime | None = None
+        self._gap_count = 0
         self._bot_provider = bot_provider
         self._focus_provider = focus_provider
         self._downloader = downloader
@@ -339,9 +388,13 @@ class MoversService(QObject):
                 self._yahoo_bars = fetched
                 self._yahoo_at = now
 
+        else:
+            self._gap_fill(wanted, bot_bars, now=now, local_tz=local_tz, downloader=downloader)
+
+        self._refresh_daily_tags(today)
         series = choose_freshest(bot_bars, self._yahoo_bars, now=now, local_tz=local_tz)
         spy = series.pop("SPY", [])
-        self._publish(series, spy, now, focus, local_tz)
+        self._publish(series, spy, now, focus, local_tz, final=False)
 
         retry = timedelta(minutes=BASELINE_RETRY_MINUTES)
         missing = [
@@ -359,18 +412,98 @@ class MoversService(QObject):
                     self._baselines[symbol] = movers_scan.build_rvol_baseline(
                         history[symbol], before=today, local_tz=local_tz
                     )
-            self._publish(series, spy, now, focus, local_tz)
+        self._publish(series, spy, now, focus, local_tz, final=True)
 
-    def _publish(self, series, spy, now, focus, local_tz) -> None:
+    def _publish(self, series, spy, now, focus, local_tz, *, final: bool) -> None:
+        """Build and emit. Only the tick's FINAL publish advances persistence
+        and the outcome log, so a tick that publishes twice counts once."""
         board = movers_scan.build_movers_board(
             series, spy, now=now, baselines=self._baselines,
-            focus_by_side=focus, local_tz=local_tz,
+            focus_by_side=focus, local_tz=local_tz, earnings=self._earnings,
         )
+        movers_scan.apply_group_tags(board, self._industry)
+        session = now.astimezone(movers_scan.NY_TZ).date()
+        memory = movers_scan.apply_persistence(
+            board, self._persistence if final else dict(self._persistence), session=session
+        )
+        if final:
+            self._persistence = memory
         board["bot_universe"] = self.bot_universe_size
         board["yahoo_universe"] = len(self._yahoo_bars)
+        board["gap_filled"] = self._gap_count
         self._board = board
         self._last_success = datetime.now()
         self.moversChanged.emit(dict(board))
+        if final:
+            try:
+                records = self._tracker.observe(board, series, spy, now=now)
+            except Exception:
+                logging.warning("Movers outcome tracker failed", exc_info=True)
+                records = []
+            if records:
+                movers_outcomes.append_records(self._outcomes_path, records)
+
+    # ------------------------------------------------------------ daily tags
+    def _refresh_daily_tags(self, today: date) -> None:
+        """Industry map and earnings names, read once per session on the worker."""
+        if self._tags_day == today:
+            return
+        try:
+            self._industry = dict(self._industry_provider() or {})
+        except Exception:
+            logging.warning("Movers: industry map unavailable", exc_info=True)
+            self._industry = {}
+        try:
+            self._earnings = set(self._earnings_provider(today) or ())
+        except Exception:
+            logging.warning("Movers: earnings calendar unavailable", exc_info=True)
+            self._earnings = set()
+        self._tags_day = today
+
+    # ------------------------------------------------------------ gap fill
+    def _gap_fill(self, wanted, bot_bars, *, now, local_tz, downloader) -> None:
+        """Yahoo 5m bars for names whose bot series is stale or missing (and whose
+        cached Yahoo series is not fresh either), most liquid first, capped."""
+        cutoff = movers_scan.freshness_cutoff(now)
+        need: list[str] = []
+        for symbol in wanted:
+            fresh = False
+            for source in (bot_bars.get(symbol), self._yahoo_bars.get(symbol)):
+                bars = movers_scan.normalize_bars(source or (), now=now, local_tz=local_tz)
+                if bars and bars[-1]["dt"] >= cutoff:
+                    fresh = True
+                    break
+            if not fresh:
+                need.append(symbol)
+        if not need:
+            self._gap_count = 0
+            return
+        if len(need) > GAP_FILL_MAX:
+            need = sorted(need, key=lambda s: (-self._liquidity(s, bot_bars), s))[:GAP_FILL_MAX]
+        else:
+            need = sorted(need, key=lambda s: (-self._liquidity(s, bot_bars), s))
+        fetched = fetch_yahoo_bars(need, downloader=downloader, period=GAP_FILL_PERIOD)
+        self._gap_count = len(fetched)
+        if fetched:
+            # Only a fetch that returned bars moves the clock; failures keep the last bars.
+            self._yahoo_bars.update(fetched)
+            self._gap_at = now
+
+    def _liquidity(self, symbol: str, bot_bars) -> float:
+        """Price x volume of the latest session we hold for the name; 0 when unknown."""
+        for source in (bot_bars.get(symbol), self._yahoo_bars.get(symbol)):
+            rows = [r for r in (source or []) if isinstance(r, Mapping)]
+            if not rows:
+                continue
+            stamp = rows[-1].get("dt")
+            day = stamp.date() if hasattr(stamp, "date") else None
+            volume = sum(float(r.get("volume") or 0.0) for r in rows
+                         if hasattr(r.get("dt"), "date") and r["dt"].date() == day)
+            try:
+                return float(rows[-1].get("close") or 0.0) * volume
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
 
     def _yahoo_due(self, now: datetime) -> bool:
         if self._yahoo_at is None:
