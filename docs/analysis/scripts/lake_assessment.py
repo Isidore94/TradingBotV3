@@ -25,7 +25,7 @@ from research_warehouse.outcomes import (
     TERMINAL_RESULT_STATES, latest_outcomes,
 )
 from research_warehouse.occurrences import latest_occurrences
-from research_warehouse import like_links, outcome_coverage, trial_ledger
+from research_warehouse import like_links, market_bias_context, outcome_coverage, trial_ledger
 from evidence_stats import (
     MIN_REPORTABLE_N, lately_window,
 )
@@ -221,9 +221,12 @@ for row in q2_table[:10]:
 
 print("\n  Loading market context...")
 ctx_rows = store.read_rows("setup_market_context", "year=2026")
-ctx_by_occ = defaultdict(list)
-for r in ctx_rows:
-    ctx_by_occ[r.get("occurrence_id", "")].append(r)
+# The newest bias definition per occurrence/timeframe (v1 D1 rows read no SPY D1).
+d1_env_by_occ = {
+    occurrence_id: row.get("env_key") or "unknown"
+    for (occurrence_id, timeframe), row in market_bias_context.newest_context_rows(ctx_rows).items()
+    if timeframe == "D1"
+}
 
 # For eligible swing_house_v1 cells, split by D1 bias
 eligible_setups = [(r["setup"], r["side"]) for r in q2_table
@@ -235,12 +238,7 @@ for setup, side in eligible_setups:
     by_bias = defaultdict(list)
     for row in cell_rows:
         oid = row.get("occurrence_id", "")
-        ctx = ctx_by_occ.get(oid, [])
-        d1_ctx = [c for c in ctx if c.get("timeframe") == "D1"]
-        if d1_ctx:
-            bias = d1_ctx[0].get("bias_label", "unknown")
-        else:
-            bias = "no_context"
+        bias = d1_env_by_occ.get(oid, "no_context")
         by_bias[bias].append(row)
 
     for bias, brows in by_bias.items():
