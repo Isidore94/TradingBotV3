@@ -2891,6 +2891,38 @@ class AlertCenterPanel(QFrame):
         """When this process saw Auto mode enter EVENING, if it did."""
         return getattr(self, "_evening_started_at", None)
 
+    def evening_catchup_snapshot(self) -> dict:
+        """Cheap copy of what the catch-up card needs from this panel.
+
+        Tier and cell are read through the Alert Center's own functions, as
+        the AWAY recap does; nothing is ranked here.
+        """
+        import working_lately
+
+        alerts = []
+        for alert in self.evening_catchup_alerts():
+            try:
+                cell = " ".join(working_lately.alert_priority_key(alert)).strip()
+            except Exception:  # noqa: BLE001 - a row without a cell still lists
+                cell = ""
+            alerts.append(
+                {
+                    "symbol": str(getattr(alert, "symbol", "") or ""),
+                    "side": str(getattr(alert, "side", "") or ""),
+                    "tier": extract_alert_tier(alert),
+                    "trigger": str(getattr(alert, "trigger", "") or ""),
+                    "time_text": str(getattr(alert, "time_text", "") or ""),
+                    "is_d1": bool(getattr(alert, "is_d1", False)),
+                    "cell": cell if not getattr(alert, "is_d1", False) else "",
+                }
+            )
+        board = getattr(self, "movers_board", None)
+        try:
+            movers = board.board() if board is not None else {}
+        except Exception:  # noqa: BLE001
+            movers = {}
+        return {"alerts": alerts, "movers_board": movers, "since": self.evening_started_at()}
+
     def on_auto_mode_changed(self, previous: str, current: str) -> None:
         """Take a mode flip at once (slot for `autoModeChanged`).
 
