@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #210 Veto follow-ups: a Compressed veto arms Range breakout, SMA incoming arms SMA break + 15EMA retest on the chart side, Incoming trendline arms Trendline break + retest (or says "no trendline"), each shows on the Armed tab and the chart still retires; the snapshot popup shows the same grouped D1 menu [trader]
 - #209 D1 alert menu regroup: Pullback (fast)/Pullback to D1 line/Range breakout/Line break fire and old armed 15EMA rejects still fire [trader]
 - #208 Compact desk: switch Desk layout both ways in Settings (New <-> Old) with the desk live - each side looks complete, no restart; in New the charts are tall, Alt+V/K/N/P/L and Ctrl+J open the Capture/Journal drawer, and the M5/D1 alert menus arm the same watches as before [trader]
 - #207 Auto modes: a sleep-in morning in EVENING - the phone rings every 10 s after SPY moves 1% or a price alert fires, and stops when you change mode; on the flip to DESK the review queue is empty and the catch-up card shows (a row click charts it). A DESK day sends no phone pushes at all [trader]

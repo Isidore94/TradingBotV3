@@ -4,6 +4,7 @@ One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.
 
+- 2026-09-24 Veto follow-ups (same branch): a saved veto arms one alert by reason - Compressed -> Range breakout, SMA incoming -> new SMA break + 15EMA retest (sma_break_retest_v1, in the Line break group), Incoming trendline -> Trendline break + retest on the nearest incoming scan line, Too extended -> Pullback as before; the snapshot popup uses the same grouped D1 menu.
 - 2026-09-24 D1 alert menu regroup (branch `claude/d1-alert-regroup-2026-09-24`): three groups - Pullback (Pullback (fast) moved from the M5 menu; new Pullback to D1 line), Breakout (new Range breakout: 20-day high/low out of a base <= 4x ATR14), Line break (new Line break; trendline break and retest) - old kinds and Any bounce leave the menu but still fire and show while armed; the Focus auto lane is unchanged.
 - 2026-09-24 WISHLIST.md cleared and replaced by the build plan from the deep review (11 packets, P0 universe floor and swing scan first); an item is work only when the trader moves it to TODO.md or says go.
 - 2026-09-24 Chart wheel zoom (branch `claude/chart-wheel-zoom-2026-09-21`, merged): scrolling back shows more - the wheel anchors on the newest candle and the price scale follows the view.

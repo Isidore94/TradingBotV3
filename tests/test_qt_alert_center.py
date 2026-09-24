@@ -2124,9 +2124,10 @@ def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):
     assert panel.arm_chart_watch_for("NVDA", "LONG", "new_lod") is False
     assert len(panel._chart_watches) == 1
 
-    # The D1 event alerts ride the same action row: arm, reflect, disarm.
+    # The D1 event alerts ride the same action row behind the grouped D1
+    # menu (regroup 2026-09-24): arm, reflect, disarm.
+    assert dialog.d1_menu_button.isVisibleTo(dialog)
     event_button = dialog.d1_event_buttons["new_5d_high"]
-    assert event_button.isVisibleTo(dialog)
     event_button.click()
     assert [watch.kind for watch in panel._d1_event_watches] == ["new_5d_high"]
     assert panel._d1_event_watches[0].symbol == "NVDA"
