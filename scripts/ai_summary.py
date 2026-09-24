@@ -568,9 +568,9 @@ def unwrap_schema_envelope(parsed: Any, schema_name: str) -> Any:
     wrapper this code asked for.
 
     Deliberately narrow, because the OTHER shape that produces that same
-    sentence must stay rejected: ``_local_schema_prompt`` says *"return exactly
-    this JSON object"* and then prints the schema, so a literal-minded model
-    returns the CONTRACT. That object has several top-level keys, carries no
+    sentence must stay rejected: a model that returns the printed schema itself
+    (the real 2026-09 cause, see :func:`reject_schema_echo`) returns the
+    CONTRACT. That object has several top-level keys, carries no
     answer, and is not unwrapped here - an answer-shaped hole must stay a
     failure, never a row.
 
@@ -705,6 +705,47 @@ def record_rejected_reply(
     except Exception:  # never into the slot - see the docstring
         logging.debug("could not persist a rejected model reply", exc_info=True)
         return None
+
+
+#: JSON Schema repetition bounds. Ollama 0.32 fails to compile a grammar for
+#: `maxLength: 2000` ("failed to parse grammar"); without the bounds it compiles.
+_GRAMMAR_BOUND_KEYWORDS = frozenset({"maxLength", "minLength", "maxItems", "minItems"})
+
+
+def grammar_safe_schema(schema: Any) -> Any:
+    """A deep copy of `schema` without repetition bounds, for the grammar only.
+
+    Validation still uses the full schema, so a bound is enforced after the
+    answer arrives instead of inside the decoder.
+    """
+    if isinstance(schema, Mapping):
+        return {
+            key: grammar_safe_schema(value)
+            for key, value in schema.items()
+            if key not in _GRAMMAR_BOUND_KEYWORDS
+        }
+    if isinstance(schema, list):
+        return [grammar_safe_schema(item) for item in schema]
+    return schema
+
+
+def reject_schema_echo(payload: Any, schema: Mapping[str, Any], *, name: str) -> None:
+    """Raise when the reply is the JSON Schema itself instead of an answer.
+
+    The retry prompt then tells the model what it did, not only which keys
+    were missing.
+    """
+    if not isinstance(payload, Mapping):
+        return
+    required = [str(key) for key in schema.get("required") or ()]
+    if any(key in payload for key in required):
+        return
+    if isinstance(payload.get("properties"), Mapping) and payload.get("type") == "object":
+        raise ValueError(
+            f"{name} was the JSON Schema itself, not an answer. Return one JSON "
+            f"object whose keys are {', '.join(required)}, each filled with your "
+            "own answer about the evidence"
+        )
 
 
 def validate_structured_output(
@@ -3075,7 +3116,12 @@ def _local_schema_prompt(
         + COVERAGE_PROMPT_LINE
         + "\n\nEVIDENCE PACKAGE:\n"
         + json.dumps(_model_visible_package(evidence), sort_keys=True, default=str)
-        + "\n\nREQUIRED OUTPUT SHAPE - return exactly this JSON object:\n"
+        # "Return exactly this JSON object" above the schema made gemma3:12b
+        # return the schema itself whenever the grammar was off.
+        + "\n\nREQUIRED OUTPUT SHAPE - your answer is one JSON object with the keys "
+        + ", ".join(properties)
+        + ", each holding your own answer. This JSON Schema DESCRIBES that "
+        "answer; it is not the answer, so never return the schema itself:\n"
         + json.dumps(schema, sort_keys=True)
         + "\n\nEvery one of these keys must be present: "
         + ", ".join(properties)
@@ -3894,13 +3940,24 @@ def _request_local_summary(
         },
     }
     last_error: Exception | None = None
-    grammar_fallback_used = False
+    #: What to send next when the backend cannot compile the grammar: the same
+    #: contract without repetition bounds, then plain JSON-object mode. These
+    #: steps never spend the validation retry budget below.
+    grammar_steps: list[dict[str, Any]] = []
+    unbounded = grammar_safe_schema(contract)
+    if unbounded != contract:
+        grammar_steps.append({
+            "type": "json_schema",
+            "json_schema": {"name": schema_name, "strict": True, "schema": unbounded},
+        })
+    grammar_steps.append({"type": "json_object"})
     #: Whether the ONE shorter-output retry has already been spent, and how many
     #: answers were cut. Kept apart from `attempt` because a length stop and a
     #: validation rejection are different failures that share the same budget.
     retried_shorter = False
     length_stops = 0
-    for attempt in range(LOCAL_JSON_RETRIES + 1):
+    attempt = 0
+    while attempt <= LOCAL_JSON_RETRIES:
         try:
             response = post(
                 url,
@@ -3936,12 +3993,10 @@ def _request_local_summary(
                 and "grammar" in detail.lower()
                 and ("parse" in detail.lower() or "initializ" in detail.lower())
             )
-            if grammar_failure and not grammar_fallback_used:
-                # The local backend rejects this contract only while compiling
-                # its grammar.  Its JSON-object mode still lets the shared
-                # validator enforce the original closed contract below.
-                payload = {**payload, "response_format": {"type": "json_object"}}
-                grammar_fallback_used = True
+            if grammar_failure and grammar_steps:
+                # The backend rejected only the grammar. The shared validator
+                # below still enforces the original closed contract.
+                payload = {**payload, "response_format": grammar_steps.pop(0)}
                 continue
             raise RuntimeError(f"local request failed ({status_code}): {detail}")
         # Checked before the text is parsed, and raised rather than retried: a
@@ -3974,6 +4029,7 @@ def _request_local_summary(
             payload["messages"][1]["content"] = (
                 _prompt(previous_error) + _shorter_output_note()
             )
+            attempt += 1
             continue
         text = _extract_chat_completion_text(body)
         if not text:
@@ -3986,6 +4042,7 @@ def _request_local_summary(
             # Unwrapped here, before validation, and only for that exact shape.
             parsed = unwrap_schema_envelope(parsed, schema_name)
             if own_contract:
+                reject_schema_echo(parsed, contract, name=schema_name)
                 summary = validate_structured_output(parsed, contract, name=schema_name)
             else:
                 summary = validate_ai_summary(parsed, evidence, dropped=drops)
@@ -4004,6 +4061,7 @@ def _request_local_summary(
             if attempt >= LOCAL_JSON_RETRIES:
                 break
             payload["messages"][1]["content"] = _prompt(str(exc))
+            attempt += 1
     raise RuntimeError(
         f"local provider returned invalid summary JSON after "
         f"{LOCAL_JSON_RETRIES + 1} attempt(s): {last_error}"
