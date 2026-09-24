@@ -148,25 +148,20 @@ _MAX_REPORT_LOG_LINES = 30
 #           "collect research while Auto is off" setting is enabled.
 # DESK    - full automation; the desk is the primary surface. Auto-populate
 #           picks stage and are adopted into M5 Focus immediately, for the
-#           trader to prune (2026-08-05 directive: culling is quicker than
-#           approving one at a time). No phone push except price alerts.
+#           trader to prune. NOTHING goes to the phone (trader, 2026-09-23);
+#           desk sound, feed and review queue are unchanged.
 # AWAY    - scans, builds watchlists and writes the hourly digest as always,
 #           and it is the only mode that phones the swing picks and D1 events.
-#           But nobody is at the desk, so: picks STAGE and are never adopted
-#           (a name adopted at 09:00 would alert unwatched all day), and live
-#           alerts queue SILENTLY - feed, history and the D1 unread badge all
-#           keep filling, only the sound is suppressed. The staged picks drain
-#           on the flip back to DESK.
-# EVENING - armed the night before a sleep-in morning (trader home at 23:30,
-#           at the desk 07:00-07:30). It prepares the morning and then STOPS:
-#           the Master AVWAP swing scan runs one slot early (open+30 = 07:00
-#           on a normal session), the 07:00/07:15/07:30 strength-persistence
-#           checks run, and the morning briefing is written - after which no
-#           ordinary hourly slot and no open watchlist self-build runs at all.
-#           Picks stage and adopt on the wake-up flip to DESK. Price-level
-#           alerts push at wake-the-trader priority, and so does the SPY +/-1%
-#           wake alarm, the second deliberate exception to the AWAY-only push
-#           rule.
+#           Picks STAGE and are never adopted, live alerts queue SILENTLY and
+#           the day ends in a recap, not a queue. Price alerts push once. The
+#           staged picks drain on the flip back to DESK.
+# EVENING - a sleep-in morning, always followed by a flip to DESK (trader,
+#           2026-09-23). It scans like DESK all morning (plus the open+30
+#           early slot, the 07:00/07:15/07:30 strength checks and the morning
+#           briefing), stages its picks, and never fills the review queue or
+#           the M5 bar. The flip out empties the queue and shows ONE catch-up
+#           card. The SPY +/-1% alarm (latched) and any price alert that fired
+#           ring the phone every 10 seconds until the mode changes.
 #
 # Over all four, quiet hours (autopilot_core.auto_scanning_due) confine every
 # AUTOMATIC starter to the session window. Manual buttons are never gated.

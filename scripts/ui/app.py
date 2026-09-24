@@ -503,8 +503,11 @@ class MainWindow(QMainWindow):
         self.auto_mode_button.setToolTip(
             "Click to cycle Auto Mode: OFF -> AUTO-DESK -> AUTO-AWAY -> AUTO-EVENING -> OFF. "
             "Profiles change presentation only - never trading decisions. "
-            "EVENING = arm the night before a sleep-in morning: picks stage silently, "
-            "the morning briefing builds itself, and price alerts push to your phone."
+            "DESK sends nothing to your phone. "
+            "EVENING = arm the night before a sleep-in morning: it scans like DESK, "
+            "keeps the review queue empty, and rings your phone every 10 s after a "
+            "SPY 1% move or a price alert until you change mode; the flip out shows "
+            "a catch-up card."
         )
         self.auto_mode_button.clicked.connect(self._cycle_auto_mode)
         self.autopilot_panel.service.enabledChanged.connect(lambda *_: self._sync_auto_mode_button())
