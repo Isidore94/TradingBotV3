@@ -438,6 +438,20 @@ def test_a_trade_whose_only_candidate_is_a_link_gets_no_tag(tmp_path):
     assert state["tag_status"] == "needs_review"
 
 
+def test_a_rejection_never_becomes_a_setup_tag(tmp_path):
+    """Live APTV/ZETA carried `vetoed:...` as a provisional setup tag."""
+    import journal_bulk_tag as bulk
+
+    store = _store(tmp_path)
+    trade_id = _seed_trade(store)
+    _seed_candidate(store, trade_id, "vetoed:too_extended_from_base", 0.95)
+
+    plan = bulk.build_plan(store, refresh=False)
+    bulk.apply_plan(store, plan)
+
+    assert store.annotation_state(trade_id)["setup_tags"] == ""
+
+
 def test_tag_confidence_is_never_a_links_confidence(tmp_path):
     """The column every reader takes to mean "how sure about the SETUP"."""
     from journal_analytics import AutoTagger
