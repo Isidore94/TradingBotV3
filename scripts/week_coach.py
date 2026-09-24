@@ -630,7 +630,8 @@ def row_line(row: Mapping[str, Any]) -> str:
         value = f"avg {row['avg_r']:+.2f}R (n {row['r_n']})"
     else:
         value = f"{fmt_money(row.get('pnl_cad'))} (n {row['pnl_known_n']})"
-    return f"{row['label']} {row['key']}: {value}, {row['wins']} won / {row['losses']} lost"
+    words = str(row["key"]).replace("_", " ")  # plain words for ids like bullish_strong
+    return f"{row['label']} {words}: {value}, {row['wins']} won / {row['losses']} lost"
 
 
 # ---------------------------------------------------------------------------

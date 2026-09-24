@@ -364,3 +364,11 @@ def test_the_night_slot_is_registered_after_day_facts_at_the_end_of_stage_two():
     assert slot.model_free_kwargs == {"answer": False}
     assert "week_questions" in [slot.name for slot in runner.slots_for("weeknight")]
     assert "week_questions" in [slot.name for slot in runner.slots_for("saturday")]
+
+
+def test_a_row_line_shows_plain_words_not_ids():
+    row = {"label": "Market", "key": "bullish_strong", "metric": "pnl", "pnl_cad": -588.0,
+           "pnl_known_n": 13, "wins": 5, "losses": 8}
+    import week_coach
+
+    assert week_coach.row_line(row).startswith("Market bullish strong:")
