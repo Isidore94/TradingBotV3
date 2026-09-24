@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #199 Review my day: after the close the Day Review page shows the "Your day is ready" banner and a dot on its nav entry; the walk opens, Right/Left/1-9/Esc work, a Mentor answer shows in the Journal, a miss answer and the rule land in `day_recap_events.jsonl`, Exit + reopen resumes on the same card, and no desk lag while it builds [trader]
 - #198 Day records: after the next night run, `C:\TradingBotData\day_review\records\<last session>.md` exists and its trades, calls and index closes match the Day Review page; the night ledger's `day_review_facts` reason names the records written [lead]
 - #197 Snappy arms: on the live desk an arm click shows ⏳ at once and flips to ✓ armed (or FAILED + reason) within ~10 s, even after stepping to the next chart; `ui_stalls.jsonl` shows no `_rpc` stalls from the Alert Center, snapshot chart, warehouse tee or Auto Pilot [trader]
 - #196 Wall gate: a D1 chart right under an SMA/trendline is hidden (counted in N hidden, `wall_hidden` in the log), its SMA break/15EMA reject or M15/M30 Pullback shows on the Armed board, live wall arms stay <= 20, and an over-cap name shows tagged `at wall` [trader]

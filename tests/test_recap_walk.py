@@ -447,6 +447,26 @@ def test_no_banner_before_the_close_on_the_clock(app, monkeypatch):
         widget.deleteLater()
 
 
+def test_saved_clues_draw_on_the_pages_trade_chart(panel, app, monkeypatch, tmp_path):
+    from zoneinfo import ZoneInfo
+
+    import project_paths
+    import recap_store
+    from ui.widgets.clue_marker import drawn_clue_count
+
+    monkeypatch.setattr(project_paths, "DAY_RECAP_EVENTS_FILE", tmp_path / "recap.jsonl")
+    et = ZoneInfo("America/New_York")
+    bars = [{"dt": datetime(2026, 9, 22, 10, m, tzinfo=et), "open": 10, "high": 11, "low": 9.5, "close": 10.5,
+             "volume": 100} for m in range(0, 30, 5)]
+    recap_store.record_clue(session_date=SESSION, symbol="AAA", timeframe="M5", bar_time=bars[2]["dt"],
+                            price=10.5, clue_tag="vwap_reclaim")
+    trade = {"trade_id": "t1", "symbol": "AAA", "direction": "LONG", "status": "CLOSED",
+             "opened_at": f"{SESSION}T10:00:00-04:00", "net_pnl": 5.0}
+    _render(panel, trades=[trade], name_charts={"AAA": {"bars": bars, "markers": ()}})
+    assert panel.trade_chart_symbol() == "AAA"
+    assert _wait(app, lambda: drawn_clue_count(panel._trade_chart) == 1)
+
+
 def test_the_walk_replaces_the_page_body_and_exit_brings_it_back(panel, app, monkeypatch):
     import ui.widgets.recap_walk as walk_mod
 

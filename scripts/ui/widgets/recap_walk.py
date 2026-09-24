@@ -461,6 +461,7 @@ class RecapWalk(QFrame):
         self.next_button.setEnabled(loaded and not self.is_finished_screen())
         last = loaded and self.index >= len(self.cards) - 1
         self.next_button.setText("Finish →" if last else "Next →")
+        self.next_button.setVisible(not self.is_finished_screen())
 
     def _show_finished(self, *, remember: bool = True) -> None:
         self._leave_clue_mode()
@@ -692,7 +693,8 @@ class RecapWalk(QFrame):
         made: list[QPushButton] = []
         for position, (value, label) in enumerate(options):
             number = position + 1
-            text = f"{number}  {label}" if primary and number <= 9 else str(label)
+            numbered = primary and number <= 9 and str(label) != str(number)
+            text = f"{number}  {label}" if numbered else str(label)
             button = QPushButton(text)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             button.setProperty("walk_option", value)
@@ -926,7 +928,8 @@ class RecapWalk(QFrame):
             save_lesson()
 
         mood_row = QHBoxLayout()
-        mood_row.addWidget(QLabel("Mood"))
+        mood_label = QLabel("Mood (1 rough - 5 great)")
+        mood_row.addWidget(mood_label)
         mood_row.addLayout(self._buttons(
             index, [(m, str(m)) for m in card.get("moods") or ()], set_mood, primary=not rule,
         ))

@@ -168,3 +168,22 @@ def test_an_exit_draft_becomes_a_looks_like_line():
     assert card["exit_draft"]["sentence"].startswith("Looks like")
     assert card["exit_draft"]["sentence"].endswith("right?")
     assert card["exit_note"] is None
+
+
+def test_a_pending_call_is_not_counted_as_measured():
+    reads = [
+        {"stamp": f"{SESSION}T09:40:00-04:00", "horizon": "m5", "direction": "up", "verdict": "right"},
+        {"stamp": f"{SESSION}T09:41:00-04:00", "horizon": "d1", "direction": "up", "verdict": "pending 2026-09-29"},
+        {"stamp": f"{SESSION}T09:42:00-04:00", "horizon": "m5", "direction": "up", "verdict": "unmeasured:no_bars"},
+    ]
+    card = cards.calls_card(_payload(reads=reads))
+    assert card["measured"] == 1
+    assert card["title"].endswith("1 of 3 measured")
+
+
+def test_a_swing_leg_on_another_day_shows_its_date():
+    trade = _trade(1, 10.0)
+    trade["opened_at"] = "2026-09-18T10:00:00-04:00"
+    card = cards.trade_card(trade, _payload([trade]))
+    assert card["lines"][0].startswith("Opened 09/18 10:00 · closed 11:00")
+    assert "R not known" in card["lines"][1]

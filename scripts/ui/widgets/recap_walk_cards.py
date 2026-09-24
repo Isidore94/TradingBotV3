@@ -95,6 +95,16 @@ def clock(value: Any, zone: Any = ET) -> str:
     return stamp.astimezone(zone or ET).strftime("%H:%M")
 
 
+def when(value: Any, session: str, zone: Any = ET) -> str:
+    """HH:MM, with the date in front when it is not the session's own day."""
+    stamp = _moment(value)
+    if stamp is None:
+        return ""
+    local = stamp.astimezone(zone or ET)
+    text = local.strftime("%H:%M")
+    return text if local.date().isoformat() == str(session)[:10] else local.strftime("%m/%d ") + text
+
+
 def _money(value: float | None) -> str:
     if value is None:
         return NOT_KNOWN
@@ -289,10 +299,11 @@ def trade_card(
         _text(row.get("trade_id")): row for row in payload.get("trade_reviews") or () if isinstance(row, Mapping)
     }
     review = reviews.get(trade_id) or {}
-    opened, closed = clock(trade.get("opened_at"), zone), clock(trade.get("closed_at"), zone)
+    session = _text(payload.get("session_date"))[:10]
+    opened, closed = when(trade.get("opened_at"), session, zone), when(trade.get("closed_at"), session, zone)
     lines = [
         f"Opened {opened or NOT_KNOWN} · " + (f"closed {closed}" if closed else "still open"),
-        f"Result: {_money(pnl)} · {_r(r)}",
+        f"Result: {_money(pnl)} · " + (_r(r) if r is not None else "R not known (no planned stop)"),
     ]
     grade = _text((traits or {}).get("grade")) or "unknown"
     lines.append(
@@ -335,7 +346,6 @@ def trade_card(
             "options": _subject_options(subject),
         })
     exit_note = None
-    session = _text(payload.get("session_date"))[:10]
     if (
         draft is None and not said_exit and closed
         and _text(trade.get("status")).upper() == "CLOSED"
@@ -345,7 +355,7 @@ def trade_card(
     card = {
         "id": f"trade:{trade_id}",
         "kind": "trade",
-        "title": f"{symbol} {side}".strip() + f" · {_money(pnl)} · {_r(r)}",
+        "title": f"{symbol} {side}".strip() + f" · {_money(pnl)}" + (f" · {_r(r)}" if r is not None else ""),
         "subject": {k: v for k, v in (("trade_id", trade_id), ("symbol", symbol), ("side", side)) if v},
         "symbol": symbol,
         "trade_id": trade_id,
@@ -474,7 +484,8 @@ def calls_card(payload: Mapping[str, Any], *, zone: Any = ET) -> dict[str, Any] 
     measured = 0
     for row in reads:
         verdict = _text(row.get("verdict")) or "unmeasured"
-        if not verdict.startswith("unmeasured"):
+        open_ = verdict.startswith("unmeasured") or verdict.startswith("pending")
+        if not open_:
             measured += 1
         shown = "not measured yet" if verdict.startswith("unmeasured") else _words(verdict)
         lines.append(
