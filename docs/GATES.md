@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #204 Journal auto-fill: after the next night run the ledger's `journal_auto_tag` reason names `regimes: N written` and `bars lake+durable_d1`, and the Journal's regime columns show up/down/range/unknown; on the 09:00 card a trade with no provisional tag shows a suggested setup whose tooltip says why, and confirming it shows the tag as confirmed in the Journal [trader + lead]
 - #203 RVOL: on a live chart review the D1 volume columns show white/yellow/orange/green/blue, and `RVOL x.xx×` on the D1 header matches TC2000's 5-minute RVOL within ~0.2 during the session; no desk lag flipping names [trader]
 - #202 Night AI + research fixes: after tonight's run the ledger shows `day_review_narration` ok, `journal_enrichment` without "missing required field(s)", `digests/narration/<date>.json` best_candidates naming tickers from the facts `names` block, and `measured_report_<date>.md` swing rows as tickers; after `backfill-benchmark-d1 --apply` then `backfill-market-context --apply`, v2 `setup_market_context` D1/M5 rows are known [lead]
 - #201 Ask the AI: type a question on Weekend Prep > Week Review; next morning it shows answered with citations, a session citation opens that day in Day Review, no claim is shown without a citation, and `records/week-<W>-frontier.md` exists; the ledger row `week_questions` names answered/pending [trader + lead]
