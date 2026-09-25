@@ -2,7 +2,8 @@
 
 Sits at the top of the Alert Center's lower-right column (trader, 2026-09-23).
 Two modes. Pop stacks three tables (trader, 2026-09-24): Pop (longs and shorts
-together), then Dip-strong and Dip-weak, lit by a SPY pullback or bounce. My
+together), then the strong and weak tables for the live SPY turn: Dip-* in a
+pullback, Bounce-* in a bounce, Rip-* in a rally. My
 names is one table with a Long/Short toggle. A SPY state banner tops both.
 Names new to a list get a tinted Sym cell. Header clicks sort (third click = board order); the trader can hide a
 row for the day (right-click or Delete) and bring hidden rows back. The "Review" menu holds the Focus pick and
@@ -149,9 +150,11 @@ def banner_text(state: dict[str, Any] | None) -> str:
         return f"SPY {off:+.2f}% from {when} high · up day · PULLBACK"
     if state.get("bounce") and off is not None:
         return f"SPY {off:+.2f}% from {when} low · down day · BOUNCE"
+    label = {"up_day": "up day", "down_day": "down day", "flat": "flat"}.get(kind, kind)
+    if state.get("rally") and off is not None:
+        return f"SPY {off:+.2f}% from {when} low · {label} · RALLY"
     day = state.get("spy_day_pct")
     day_text = f" · SPY {day:+.2f}% on the day" if day is not None else ""
-    label = {"up_day": "up day", "down_day": "down day", "flat": "flat"}.get(kind, kind)
     return f"{label} · no pullback{day_text}" if kind == "up_day" else (
         f"{label} · no bounce{day_text}" if kind == "down_day" else f"{label}{day_text}"
     )
@@ -159,11 +162,13 @@ def banner_text(state: dict[str, Any] | None) -> str:
 
 def rows_for(board: dict[str, Any] | None, mode: str, side: str) -> list[dict[str, Any]]:
     """Rows for one list, each tagged `_side`. Pop shows both sides, biggest move first;
-    "strong"/"weak" are the dip lists (beating / lagging SPY since the turn)."""
+    "strong"/"weak" are the live turn's lists (beating / lagging SPY since the turn):
+    the rip lists in a rally, else the dip lists."""
     board = board or {}
     if mode in ("strong", "weak"):
         side = "long" if mode == "strong" else "short"
-        return [dict(row, _side=side) for row in (((board.get("dip") or {}).get(side)) or [])]
+        key = "rip" if (board.get("state") or {}).get("rally") else "dip"
+        return [dict(row, _side=side) for row in (((board.get(key) or {}).get(side)) or [])]
     if mode == "pop":
         both = [dict(row, _side=s) for s in ("long", "short")
                 for row in (((board.get(mode) or {}).get(s)) or [])]
@@ -449,7 +454,7 @@ class MoversSection(QWidget):
 
 
 class MoversBoard(QWidget):
-    """Header, banner, and the Pop / Dip-strong / Dip-weak tables. The Alert Center wires its signals."""
+    """Header, banner, and the Pop / strong / weak tables. The Alert Center wires its signals."""
 
     symbolActivated = Signal(str, str)
     reviewAllRequested = Signal()
@@ -803,8 +808,9 @@ class MoversBoard(QWidget):
         return dict(self._board.get("state") or {})
 
     def _dip_live(self) -> bool:
+        """A SPY turn is live (pullback, bounce or rally): the strong/weak tables show."""
         state = self._state()
-        return bool(state.get("pullback") or state.get("bounce"))
+        return bool(state.get("pullback") or state.get("bounce") or state.get("rally"))
 
     def _day_key(self) -> str:
         state = self._state().get("state")
@@ -822,7 +828,7 @@ class MoversBoard(QWidget):
         self._sync_controls()
 
     def _maybe_auto_switch(self) -> None:
-        """Jump to Pop + Dip once per pullback/bounce episode; never fight the trader."""
+        """Jump to Pop + Dip once per pullback/bounce episode (not a rally); never fight the trader."""
         state = self._state()
         if not (state.get("pullback") or state.get("bounce")):
             return
@@ -903,12 +909,12 @@ class MoversBoard(QWidget):
         pullback = bool(state.get("pullback"))
         when = _local_clock(state.get("start_dt")) or state.get("extreme_time") or ""
         turn = f"since the {when} {'high' if pullback else 'low'}" if when else "since the turn"
-        word = "Dip" if pullback else "Bounce"
+        word = "Rip" if state.get("rally") else "Dip" if pullback else "Bounce"
         self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
         self.weak.title_label.setText(f"{word}-weak ● · lagging SPY {turn}")
         hint = ""
         if pop_mode and not dip_live and self._board:
-            hint = ("Dip-strong / Dip-weak: no SPY pullback or bounce now. "
+            hint = ("Strong / weak: no SPY pullback or bounce, and no rally, now. "
                     f"They light at {movers_scan.PULLBACK_MIN_PCT:.2f}% off the high or low.")
         if self.dip_hint.text() != hint:
             self.dip_hint.setText(hint)

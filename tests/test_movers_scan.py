@@ -201,11 +201,16 @@ def test_pullback_on_at_or_beyond_threshold_and_records_start():
 
 
 def test_pullback_off_below_threshold():
+    """A 0.10% slip is no pullback. The rally state is new since P8 P7 (lead 2026-09-25,
+    the trader can overrule): this SPY opened at its low and ran up, so it is a rally
+    from the open low, and the start is that low."""
     bars, n = _spy_pullback(0.10)
     state = _state(bars, n)
     assert state.state == "up_day"
     assert state.pullback is False
-    assert state.start_dt is None
+    assert state.rally is True
+    assert state.extreme_time == "09:30"
+    assert state.start_dt is not None and state.start_dt.strftime("%H:%M") == "09:30"
 
 
 def test_pullback_off_when_high_is_in_the_first_two_bars():

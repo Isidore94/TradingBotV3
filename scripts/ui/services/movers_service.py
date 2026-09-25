@@ -17,8 +17,9 @@ Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
 4. builds the board with `movers_scan.build_movers_board`, adds group tags
    (shared classification cache), ER tags (local earnings calendar, read once
    per session) and list persistence, and emits it;
-5. feeds the Dip-strong outcome tracker and appends its rows to
-   `MOVERS_DIP_OUTCOMES_FILE` (a failed write loses the rows, never the board).
+5. feeds the dip/rip outcome tracker and the Pop outcome tracker and appends
+   their rows to `MOVERS_DIP_OUTCOMES_FILE` / `MOVERS_POP_OUTCOMES_FILE` (a
+   failed write loses the rows, never the board).
 
 Zero IB historical or market-data traffic: the scanner client sends scanner
 subscriptions only, from the worker thread. Display only: no alerts, no watchlist or Focus writes. A failed
@@ -237,6 +238,7 @@ class MoversService(QObject):
         earnings_provider: Callable[[date], Iterable[str]] | None = None,
         outcomes_path=None,
         scanner: Callable[[], Mapping[str, list[str]]] | None = None,
+        pop_outcomes_path=None,
     ) -> None:
         super().__init__(parent)
         self._industry_provider = industry_provider or default_industry_map
@@ -246,7 +248,19 @@ class MoversService(QObject):
 
             outcomes_path = MOVERS_DIP_OUTCOMES_FILE
         self._outcomes_path = outcomes_path
+        if pop_outcomes_path is None:
+            from pathlib import Path
+
+            from project_paths import MOVERS_DIP_OUTCOMES_FILE, MOVERS_POP_OUTCOMES_FILE
+
+            # An injected dip path keeps the Pop log beside it (never the live store).
+            pop_outcomes_path = (
+                MOVERS_POP_OUTCOMES_FILE if Path(outcomes_path) == MOVERS_DIP_OUTCOMES_FILE
+                else Path(outcomes_path).with_name(movers_outcomes.POP_LOG_NAME)
+            )
+        self._pop_outcomes_path = pop_outcomes_path
         self._tracker = movers_outcomes.DipOutcomeTracker()
+        self._pop_tracker = movers_outcomes.PopOutcomeTracker()
         self._industry: dict[str, str] = {}
         self._earnings: set[str] = set()
         self._tags_day: date | None = None
@@ -510,20 +524,23 @@ class MoversService(QObject):
                 # Once per desk start: today's logged flags rebuild pending
                 # episodes, so a restart never re-flags a name (worker thread).
                 self._tracker_restored = True
+                for tracker, path in ((self._tracker, self._outcomes_path),
+                                      (self._pop_tracker, self._pop_outcomes_path)):
+                    try:
+                        tracker.restore(movers_outcomes.load_records(path),
+                                        session=session, now=now)
+                    except Exception:
+                        logging.warning("Movers outcome log %s could not be read back", path,
+                                        exc_info=True)
+            for tracker, path in ((self._tracker, self._outcomes_path),
+                                  (self._pop_tracker, self._pop_outcomes_path)):
                 try:
-                    self._tracker.restore(
-                        movers_outcomes.load_records(self._outcomes_path),
-                        session=session, now=now,
-                    )
+                    records = tracker.observe(board, series, spy, now=now)
                 except Exception:
-                    logging.warning("Movers outcome log could not be read back", exc_info=True)
-            try:
-                records = self._tracker.observe(board, series, spy, now=now)
-            except Exception:
-                logging.warning("Movers outcome tracker failed", exc_info=True)
-                records = []
-            if records:
-                movers_outcomes.append_records(self._outcomes_path, records)
+                    logging.warning("Movers outcome tracker failed (%s)", path, exc_info=True)
+                    records = []
+                if records:
+                    movers_outcomes.append_records(path, records)
 
     # ------------------------------------------------------------ IB scanner
     def _run_scanner(self) -> Mapping[str, list[str]]:
