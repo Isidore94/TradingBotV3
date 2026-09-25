@@ -221,8 +221,11 @@ def test_the_r_fields_survive_a_note_being_saved(feed):
     assert trade.raw["setup_tags"] == "avwap-reclaim"
 
 
-def test_the_r_multiple_is_computed_in_cad_not_in_whatever_currency(feed):
-    """An R from a native P&L and a risk typed in dollars mixes currencies - B8 again."""
+def test_the_r_multiple_is_in_the_trades_own_currency(feed):
+    """P8-P5 (lead 2026-09-25, reverses the old CAD R): `planned_risk` is in the
+    trade's own currency (the stop backfill and the alert prefill both write
+    |entry - stop| x quantity in it), so R divides the NATIVE net P&L by it.
+    Dividing the CAD P&L by a USD risk inflated every USD trade's R by the rate."""
     _round_trip(feed, "r", "2026-08-05", 100.0, 110.0)
     fx.seed_rate(feed, day="2026-08-05", currency="USD", rate_to_cad=1.5)
     feed.rebuild_trades(refresh_tags=False)
@@ -230,8 +233,10 @@ def test_the_r_multiple_is_computed_in_cad_not_in_whatever_currency(feed):
     journal_feed.save_risk_fields(trade_id, planned_risk=300.0)
 
     trade = journal_feed.load_trades()[0]
-    # net_pnl 990.10 USD -> 1485.15 CAD; / 300 risk
-    assert journal_feed.r_multiple(trade) == pytest.approx(trade.raw["net_pnl_cad"] / 300.0)
+    assert trade.raw["currency"] == "USD"
+    assert trade.raw["net_pnl_cad"] != pytest.approx(trade.raw["net_pnl"])
+    # net_pnl ~990 USD / 300 USD risk - never the 1485 CAD figure / 300.
+    assert journal_feed.r_multiple(trade) == pytest.approx(trade.raw["net_pnl"] / 300.0)
 
 
 def test_an_r_multiple_without_a_risk_is_none_not_zero(feed):

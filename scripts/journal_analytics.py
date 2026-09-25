@@ -2241,10 +2241,13 @@ def close_order_key(row: dict[str, Any]) -> tuple[str, str]:
     return (stamp, str(row.get("trade_id") or ""))
 
 
-def trade_r_multiple(row: dict[str, Any]) -> float | None:
-    """`net_pnl_cad / |planned_risk|`, the journal's one R, or None."""
+def trade_r_multiple(row: Any) -> float | None:
+    """The journal's one R: native `net_pnl / |planned_risk|`, or None.
+
+    `planned_risk` is in the trade's own currency, so the P&L must be too.
+    """
     risk = _coerce_float(row.get("planned_risk"))
-    pnl = _coerce_float(row.get("net_pnl_cad"))
+    pnl = _coerce_float(row.get("net_pnl"))
     if risk is None or pnl is None or abs(risk) < 1e-9:
         return None
     return pnl / abs(risk)

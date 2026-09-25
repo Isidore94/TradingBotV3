@@ -100,6 +100,15 @@ class TestTradePerformanceStats:
         assert stats["r_trades"] == 2
 
 
+def test_r_of_a_usd_trade_divides_the_usd_pnl_by_the_usd_risk():
+    """P8-P5: R is net P&L in the trade's currency / planned_risk in that currency."""
+    row = _trade("usd", 100.0, opened="2026-09-14T09:35:00-04:00", closed="2026-09-14T09:40:00-04:00",
+                 net_pnl_cad=140.0, planned_risk=50.0)
+    assert ja.trade_r_multiple(row) == pytest.approx(2.0)
+    assert ja.trade_r_multiple({**row, "planned_risk": None}) is None
+    assert ja.trade_r_multiple({**row, "net_pnl": None}) is None
+
+
 def test_long_and_short_side_by_side():
     split = ja.direction_split_stats(TRADES)
     assert set(split) == {"LONG", "SHORT"}
