@@ -189,6 +189,7 @@ class ContextStores:
     _triggers: dict[str, dict] | None = field(default=None, repr=False)
     _m5: dict[str, dict] | None = field(default=None, repr=False)
     _labels: dict[str, str] | None = field(default=None, repr=False)
+    _trigger_times: dict[str, dict] | None = field(default=None, repr=False)
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def paths(self) -> list[Path | None]:
@@ -214,6 +215,9 @@ class ContextStores:
             for event in events:
                 by_session.setdefault(_text(event.get("trade_date"))[:10], []).append(event)
             self._triggers = {day: spc.entry_triggers(rows, day) for day, rows in by_session.items()}
+            self._trigger_times = {
+                day: spc.entry_trigger_checkpoints(rows, day) for day, rows in by_session.items()
+            }
         if self.m5_outcomes is not None and self._m5 is None:
             by_session = {}
             for row in _read_rows(Path(self.m5_outcomes)):
@@ -241,6 +245,9 @@ class ContextStores:
             triggers=(self._triggers or {}).get(session, {}) if self._triggers is not None else None,
             m5=(self._m5 or {}).get(session, {}) if self._m5 is not None else None,
             environment=(self._labels or {}).get(session, sp.UNKNOWN) if self._labels is not None else sp.UNKNOWN,
+            trigger_times=(
+                (self._trigger_times or {}).get(session, {}) if self._trigger_times is not None else None
+            ),
         )
         self._cache[session] = context
         return context

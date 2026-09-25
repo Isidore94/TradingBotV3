@@ -111,16 +111,47 @@ def entry_triggers(events: Iterable[Mapping[str, Any]], session: Any) -> dict[tu
     return out
 
 
+def entry_trigger_checkpoints(events: Iterable[Mapping[str, Any]], session: Any) -> dict[tuple[str, str], str]:
+    """``{(SYMBOL, SIDE): checkpoint}``: the exchange-clock window of the session's first ``watch_fired``."""
+    from datetime import datetime as _datetime
+
+    from master_avwap_lib import scan_replay
+
+    wanted = _session_text(session)
+    stamped = []
+    for event in events or ():
+        if not isinstance(event, Mapping) or str(event.get("action") or "") != "watch_fired":
+            continue
+        if _session_text(event.get("trade_date")) != wanted:
+            continue
+        try:
+            moment = _datetime.fromisoformat(str(event.get("ts") or ""))
+        except ValueError:
+            continue
+        stamped.append((str(event.get("ts") or ""), event, moment))
+    out: dict[tuple[str, str], str] = {}
+    for _ts, event, moment in sorted(stamped, key=lambda item: item[0]):
+        key = (str(event.get("symbol") or "").strip().upper(), _side_text(event.get("side")))
+        if key[0] and key[1] and key not in out:
+            out[key] = scan_replay._checkpoint_for(scan_replay._exchange_time(moment))
+    return out
+
+
 def load_entry_triggers(session: Any, *, path: Path | None = None) -> dict[tuple[str, str], str] | None:
     """The session's triggers, or None when the review log could not be read."""
+    events = load_review_events(path=path)
+    return None if events is None else entry_triggers(events, session)
+
+
+def load_review_events(*, path: Path | None = None) -> list[dict] | None:
+    """Every review event, or None when the log could not be read."""
     import review_events
 
     try:
-        events = review_events.load_review_events(path) if path else review_events.load_review_events()
+        return review_events.load_review_events(path) if path else review_events.load_review_events()
     except Exception:  # noqa: BLE001 - an unreadable log is "unknown", never a crash
         logging.debug("setup permutations: review events unreadable", exc_info=True)
         return None
-    return entry_triggers(events, session)
 
 
 # --- M5 confirmation
@@ -233,17 +264,21 @@ class SessionContext:
         triggers: Mapping[tuple[str, str], str] | None = None,
         m5: Mapping[tuple[str, str], str] | None = None,
         environment: str = sp.UNKNOWN,
+        trigger_times: Mapping[tuple[str, str], str] | None = None,
     ) -> None:
         self.slots = slots
         self.triggers = triggers
         self.m5 = m5
         self.environment = environment or sp.UNKNOWN
+        self.trigger_times = trigger_times
 
     @classmethod
     def load(cls, session: Any, **paths: Any) -> "SessionContext":
+        events = load_review_events(path=paths.get("review_events_path"))
         return cls(
             slots=load_discovery_slots(session, reports_dir=paths.get("reports_dir")),
-            triggers=load_entry_triggers(session, path=paths.get("review_events_path")),
+            triggers=entry_triggers(events, session) if events is not None else None,
+            trigger_times=entry_trigger_checkpoints(events, session) if events is not None else None,
             m5=load_m5_bounce_types(session, path=paths.get("m5_outcomes_path")),
             environment=load_d1_environment(session, path=paths.get("environment_path")),
         )
@@ -255,6 +290,8 @@ class SessionContext:
             ctx["discovery_slot"] = self.slots[key]
         if self.triggers is not None:
             ctx["entry_trigger"] = self.triggers.get(key, NO_ENTRY_TRIGGER)
+        if self.trigger_times is not None and key in self.trigger_times:
+            ctx["entry_trigger_checkpoint"] = self.trigger_times[key]
         if self.m5 is not None:
             ctx["m5_bounce_type"] = self.m5.get(key, "none")
         return ctx
@@ -298,6 +335,7 @@ __all__ = [
     "NO_ENTRY_TRIGGER",
     "SessionContext",
     "discovery_slots",
+    "entry_trigger_checkpoints",
     "entry_triggers",
     "load_d1_environment",
     "load_discovery_slots",

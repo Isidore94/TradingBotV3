@@ -14,7 +14,7 @@ the live CSV header. Sign conventions on the row:
 - ``distance_from_current_<level>`` = close - level (positive: price above).
 - ``hv_level_nearest_distance_atr`` / ``cloud_level_nearest_distance_atr`` =
   (level - price) / ATR (positive: level above price), from ``levels.levels_near``.
-- ``dist_<ma>_atr`` (not on the row yet) follows the research warehouse:
+- ``dist_<ma>_atr`` (written by the enrichment step since 4a) follows the research warehouse:
   (close - ma) / ATR (positive: price above the MA).
 - ``current_band_zone`` is "A to B" with the order flipped for shorts, so the zone
   is normalised to low-to-high band order before it becomes a value.
@@ -599,6 +599,60 @@ def _weekday(row, ctx, side):
 def _side_aligned_day(row, ctx, side):
     # The writer leaves side_aligned_day blank in every live row so far (2026-09-24).
     return _yes_no(row.get("side_aligned_day"), "side_aligned_day", "side_not_aligned_day")
+
+
+# --- 4f: wider facets (only where the row or its ctx holds the data at scan time)
+
+
+@facet("earnings_gap_size", "earnings", in_label=False)
+def _earnings_gap_size(row, ctx, side):
+    # Written only inside the post-earnings window; blank elsewhere is unknown, never "no gap".
+    value = _num(row.get("post_earnings_gap_atr_multiple"))
+    if value is None:
+        return UNKNOWN
+    return _band(abs(value), (1.0, 2.0, 4.0), ("gap_below_1atr", "gap_1_2atr", "gap_2_4atr", "gap_4atr_plus"))
+
+
+@facet("pullback_52w", "weekly", in_label=False)
+def _pullback_52w(row, ctx, side):
+    # Weekly close vs the 52-week high, in %; the scan writes it only when the TOP weekly structure holds.
+    value = _num(row.get("top_pattern_weekly_pullback_from_52w_high_pct"))
+    if value is None or value < 0:
+        return UNKNOWN
+    return _band(value, (5.0, 15.0, 30.0), ("off_52w_high_0_5pct", "off_52w_high_5_15pct",
+                                            "off_52w_high_15_30pct", "off_52w_high_30pct_plus"))
+
+
+@facet("htf_retest_age", "htf", in_label=False)
+def _htf_retest_age(row, ctx, side):
+    # Intraday bars since the HTF retest; only meaningful when a retest was confirmed.
+    if not _flag(row.get("htf_retest_confirmed")):
+        return UNKNOWN
+    bars = _num(row.get("htf_retest_age_bars"))
+    if bars is None or bars < 0:
+        return UNKNOWN
+    return _band(bars, (3.0, 8.0, 20.0), ("htf_retest_0_2bars", "htf_retest_3_7bars",
+                                          "htf_retest_8_19bars", "htf_retest_20bars_plus"))
+
+
+@facet("industry_rs_consistent", "strength", in_label=False)
+def _industry_rs_consistent(row, ctx, side):
+    # The writer stores False when the industry ETF or rs_vs_industry is missing; that is unknown.
+    if not _text(row.get("industry_etf")) or _num(row.get("rs_vs_industry")) is None:
+        return UNKNOWN
+    return _yes_no(row.get("industry_rs_consistent"), "industry_rs_consistent", "industry_rs_mixed")
+
+
+ENTRY_TRIGGER_CHECKPOINTS = ("open", "midday", "final hour", "close")
+
+
+@facet("entry_trigger_time", "entry", in_label=False)
+def _entry_trigger_time(row, ctx, side):
+    # From ctx: the exchange-clock checkpoint of the first watch_fired that session.
+    checkpoint = (_text(ctx.get("entry_trigger_checkpoint")) or "").lower()
+    if checkpoint not in ENTRY_TRIGGER_CHECKPOINTS:
+        return UNKNOWN
+    return "trigger_" + checkpoint.replace(" ", "_")
 
 
 # --- stamping (4a): the scan-row columns and the honest input view
