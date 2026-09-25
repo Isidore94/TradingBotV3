@@ -1112,9 +1112,11 @@ def schema_for(inputs: Mapping[str, Any]) -> dict[str, Any]:
     item = body["properties"]["ideas"]["items"]
     offered = [_text(name) for name in inputs.get("measurables") or ()]
     item["properties"]["measurable"]["enum"] = offered + [""]
-    item["properties"]["evidence"]["maxItems"] = min(
-        MAX_EVIDENCE_PER_IDEA, len(list(inputs.get("allowed_source_ids") or ()))
-    )
+    allowed = [_text(name) for name in inputs.get("allowed_source_ids") or ()]
+    item["properties"]["evidence"]["maxItems"] = min(MAX_EVIDENCE_PER_IDEA, len(allowed))
+    # The grammar then only lets the model write an id tonight really carries.
+    if allowed:
+        item["properties"]["evidence"]["items"]["enum"] = allowed
     return body
 
 
