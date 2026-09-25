@@ -142,6 +142,27 @@ def load_bounce_config() -> dict[str, Any]:
     }
 
 
+def with_internals_axis(reading: Any, bot: Any) -> Any:
+    """A COPY of the regime reading with the display-only internals axis (P2-8 8b).
+
+    Reads the bot's last recorded internals snapshot (an attribute, no fetch);
+    a missing or stale snapshot leaves the reading as it was.
+    """
+    if not isinstance(reading, dict) or not reading:
+        return reading
+    try:
+        import market_axes
+
+        snapshot = getattr(bot, "latest_market_internals", None)
+        axis = market_axes.internals_axis(snapshot, now=datetime.now().astimezone())
+    except Exception:  # noqa: BLE001 - the axis never costs the chip
+        logging.debug("Internals axis unavailable.", exc_info=True)
+        return reading
+    if axis is None:
+        return reading
+    return {**reading, "internals_axis": axis}
+
+
 class BounceService(QObject):
     alertReceived = Signal(object)
     rrsStatusChanged = Signal(str)
@@ -850,6 +871,7 @@ class BounceService(QObject):
                 reading = bot.get_auto_regime_reading()
             except Exception:
                 reading = None
+            reading = with_internals_axis(reading, bot)
             try:
                 assist = bot.entry_assist_state()
             except Exception:

@@ -224,6 +224,8 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         # page prints, and it says "no mood recorded yet" rather than nothing.
         "mood": {},
         "day_type": "",
+        # P2-8: the morning's SPY / breadth / internals read and its grade.
+        "market_axes": {},
         "pnl_by_session": (),
         "glance": {},
     }
@@ -617,6 +619,7 @@ class DayReviewService:
             problems.append(f"the desk's ideas could not be read: {exc}")
             _log.debug("Day Review ideas unreadable.", exc_info=True)
         payload["day_type"] = self._d1_label_for(session)
+        payload["market_axes"] = self._market_axes(session, moment)
         try:
             import day_report_card
 
@@ -1028,6 +1031,19 @@ class DayReviewService:
             return []
         rows.sort(key=lambda row: str(row.get("event_at") or ""))
         return rows
+
+    @staticmethod
+    def _market_axes(session: str, now: datetime | None) -> dict[str, Any]:
+        """The morning's three-axis read going into `session`, graded (P2-8). {} on failure."""
+        if not session:
+            return {}
+        try:
+            import market_axes
+
+            return dict(market_axes.day_axes(session, now or datetime.now().astimezone()))
+        except Exception:  # noqa: BLE001 - the axes never cost the day
+            _log.debug("The market axes could not be read.", exc_info=True)
+            return {}
 
     @staticmethod
     def _d1_label_for(session: str, *, strict: bool = False) -> str:

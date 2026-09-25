@@ -1739,7 +1739,10 @@ def glance(payload: Mapping[str, Any]) -> dict[str, Any]:
                     "population": population,
                 }
     day_type = _text(payload.get("day_type"))
+    axes = payload.get("market_axes")
     return {
+        # P2-8: the morning's three-axis read and its evening grade, as built.
+        "market_axes": dict(axes) if isinstance(axes, Mapping) and axes else None,
         "trades": len(trades),
         "pnl": pnl,
         "pnl_counted": len(known),

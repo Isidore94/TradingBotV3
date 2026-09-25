@@ -553,6 +553,11 @@ WATCHLIST_INTENT_EVENTS_FILE = PERSISTENT_DATA_DIR / "watchlist_intent_events.js
 # different store with a different contract. Shadow evidence: nothing detects,
 # scores, ranks, gates or alerts on it (plan.md sec 5).
 D1_ENVIRONMENT_FILE = PERSISTENT_DATA_DIR / "d1_environment.jsonl"
+# Append-only daily breadth (advance/decline, % of universe_all above SMA20/50),
+# one row per (session, universe, rule_version), beside the D1 environment rows.
+# Written only by scripts/market_breadth_store.py (the nightly read-grades slot
+# and its dry-by-default backfill CLI). Display and grading only (P2-8 8a).
+MARKET_BREADTH_FILE = PERSISTENT_DATA_DIR / "market_breadth.jsonl"
 # Aggregated revealed-preference state derived from the review-events log by
 # scripts/review_learning.py: per-segment take rates, taken-vs-passed
 # outcomes, blind spots / leaks, watch conversion. Rebuilt when stale.

@@ -6,9 +6,9 @@ comes back for it: every night it re-reads the bars, re-measures every OPEN read
 in the ledger, and appends a NEW row naming the one it supersedes.
 
 Deterministic: ``uses_model=False``, no inference, no network, no provider,
-seconds of work. It calls exactly one function - `market_read_grades.regrade_matured`
-- and that function is pure arithmetic over bars read from files the desk already
-has.
+seconds of work. It calls `market_read_grades.regrade_matured` - pure arithmetic
+over bars read from files the desk already has - after first recording the last
+completed session's breadth (`market_breadth_store.record_last_session`, P2-8 8a).
 
 Three rules it is built around, all of them from the fix round 2026-09-20:
 
@@ -53,6 +53,7 @@ def run_read_grades_mature(
     ledger is walked whole.
     """
     moment = now or datetime.now()
+    breadth_note = _record_breadth(moment)
     try:
         import market_read_grades as grader
     except Exception as exc:  # noqa: BLE001 - an unimportable grader is a reason
@@ -75,7 +76,7 @@ def run_read_grades_mature(
         }
 
     if not written:
-        return {"status": "ok", "model": "", "reason": NOTHING_OPEN, "outputs": []}
+        return {"status": "ok", "model": "", "reason": NOTHING_OPEN + breadth_note, "outputs": []}
 
     sessions = sorted({str(row.get("session") or "") for row in written})
     verdicts: dict[str, int] = {}
@@ -93,9 +94,23 @@ def run_read_grades_mature(
         "reason": (
             f"closed {len(written)} matured read(s) over {len(sessions)} session(s) "
             f"({printed}); every row appended, none rewritten"
-        ),
+        ) + breadth_note,
         "outputs": outputs,
     }
+
+
+def _record_breadth(moment: datetime) -> str:
+    """Record the last completed session's breadth (P2-8 8a). A note, or ""."""
+    try:
+        import market_breadth_store
+
+        result = market_breadth_store.record_last_session(moment)
+    except Exception:  # noqa: BLE001 - breadth never costs the night
+        _log.debug("read_grades_mature: breadth was not recorded.", exc_info=True)
+        return ""
+    if result.get("written"):
+        return f"; breadth {result.get('session')} recorded"
+    return ""
 
 
 __all__ = ["NOTHING_OPEN", "run_read_grades_mature"]
