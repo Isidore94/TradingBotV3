@@ -624,6 +624,7 @@ def _load_journal_trades() -> list[dict[str, Any]]:
 
 def truth_view(
     weeks: Sequence[str], rollup_weeks: Sequence[str], *, trades_loader=None, grades_at=None,
+    measure=None,
 ) -> dict[str, Any]:
     """Stocks/options, longs/shorts and confirmed setups (CAD) for the chosen
     weeks and for the 4-week rollup, and the D-or-worse setups traded in the
@@ -653,6 +654,10 @@ def truth_view(
         "worst_line": journal_truth.worst_setups_line(
             chosen, grades, span="this month" if len(weeks) > 1 else "this week"
         ),
+        # Exits need n, so they are read over the rollup window.
+        "exit_lines": journal_truth.exit_scoreboard(
+            rollup, journal_truth.measure_exits(rollup, measure)
+        )["lines"],
     }
 
 
@@ -667,7 +672,7 @@ def rollup_weeks_for(week: str, *, weeks: int = TREND_WEEKS) -> list[str]:
 def read_view(
     week: str = "", *, month: bool = False, root: Path | None = None,
     questions_path: Path | None = None, answers_path: Path | None = None,
-    trades_loader=None, grades_at=None,
+    trades_loader=None, grades_at=None, measure=None,
 ) -> dict[str, Any]:
     """Everything the Week Review coach section shows. Worker only."""
     available = list_weeks(root)
@@ -702,6 +707,7 @@ def read_view(
             rollup_weeks_for(covered[-1] if month and covered else chosen),
             trades_loader=trades_loader,
             grades_at=grades_at,
+            measure=measure,
         ),
     }
 

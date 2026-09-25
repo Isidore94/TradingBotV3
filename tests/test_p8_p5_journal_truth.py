@@ -400,3 +400,124 @@ def test_the_rollup_reaches_n_10_and_thin_rows_are_labelled_not_hidden(tmp_path,
         assert "gap" not in edge
     finally:
         card.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# step 5: the exit scoreboard (needs stops for the loser half)
+# ---------------------------------------------------------------------------
+EXIT_DAY = "2026-09-14"
+EXIT_NOW = datetime(2026, 9, 15, 9, 0, tzinfo=NY)
+
+
+def _seed_journal(tmp_path, *, stops: bool):
+    """A temp journal: two winners and two losers, day trades 10:00-11:00, entry 50."""
+    from journal_store import JournalStore
+
+    store = JournalStore(tmp_path / "journal.sqlite3")
+    trades = {"W1": 52.0, "W2": 52.8, "L1": 49.5, "L2": 49.8}  # exit prices
+    with store.connection() as conn:
+        for trade_id, exit_price in trades.items():
+            conn.execute(
+                """
+                INSERT INTO trades(
+                    trade_id, broker, account_number, symbol, security_type, currency, direction,
+                    status, opened_at, closed_at, trade_date, quantity_opened, quantity_closed,
+                    average_entry_price, average_exit_price, net_pnl, net_pnl_cad, updated_at
+                ) VALUES(?, 'IBKR', 'U1', ?, 'STK', 'USD', 'LONG', 'CLOSED', ?, ?, ?, 100, 100, 50.0, ?, ?, ?, ?)
+                """,
+                (trade_id, trade_id, f"{EXIT_DAY}T10:00:00-04:00", f"{EXIT_DAY}T11:00:00-04:00", EXIT_DAY,
+                 exit_price, (exit_price - 50.0) * 100, (exit_price - 50.0) * 140, "2026-09-14T12:00:00"),
+            )
+    if stops:
+        for trade_id in trades:
+            store.save_risk_fields(trade_id, planned_entry=50.0, planned_stop=49.0, planned_risk=100.0)
+    return list(store.list_trades())
+
+
+#: Each name's M5 highs/lows over the hold: W1/W2 run to 54; L1 dips to 48.5 (1.5R), L2 to 49.6.
+EXIT_BARS = {"W1": (54.0, 49.8), "W2": (54.0, 49.9), "L1": (50.2, 48.5), "L2": (50.1, 49.6)}
+
+
+def _measure(row):
+    import journal_excursion
+
+    def m5(symbol, _session):
+        high, low = EXIT_BARS[symbol]
+        start = datetime(2026, 9, 14, 10, 0, tzinfo=NY)
+        return [{"dt": start + timedelta(minutes=5 * i), "high": high if i == 3 else 50.1,
+                 "low": low if i == 5 else 49.95} for i in range(12)]
+
+    return journal_excursion.measure_trade(row, now=EXIT_NOW, m5_loader=m5, zone=NY)
+
+
+def test_the_exit_scoreboard_says_what_winners_kept_and_which_losers_ran_past_the_stop(tmp_path):
+    import journal_truth
+
+    rows = _seed_journal(tmp_path, stops=True)
+    board = journal_truth.exit_scoreboard(rows, journal_truth.measure_exits(rows, _measure))
+    # W1 kept 2 of a 4 move (50%), W2 2.8 of 4 (70%): 60% on average.
+    assert board["lines"] == [
+        "Winners kept 60% of their best move (n 2).",
+        "Losers held past the stop: 1 of 2.",
+    ]
+
+
+def test_without_stops_the_loser_half_is_unknown(tmp_path):
+    import journal_truth
+
+    rows = _seed_journal(tmp_path, stops=False)
+    board = journal_truth.exit_scoreboard(rows, journal_truth.measure_exits(rows, _measure))
+    assert board["lines"][1] == "Losers held past the stop: unknown (no stop on 4 of 4 trades)."
+
+
+def test_the_week_card_shows_the_exit_scoreboard_over_the_rollup(tmp_path, qapp):
+    import week_coach
+    from ui.widgets.week_coach_card import WeekCoachCard
+
+    rows = _seed_journal(tmp_path, stops=True)
+    truth = week_coach.truth_view(["2026-W38"], week_coach.rollup_weeks_for("2026-W38"),
+                                  trades_loader=lambda: rows, grades_at=lambda _when: None, measure=_measure)
+    assert truth["exit_lines"] == ["Winners kept 60% of their best move (n 2).", "Losers held past the stop: 1 of 2."]
+    card = WeekCoachCard(read=lambda *_a, **_k: {})
+    try:
+        card.render({"week": "2026-W38", "truth": truth})
+        assert "Exits, last 4 weeks:\nWinners kept 60% of their best move (n 2)." in card.truth_label.text()
+    finally:
+        card.deleteLater()
+
+
+def test_the_analytics_tab_reads_the_exit_scoreboard_on_a_worker_once_shown(qapp, monkeypatch):
+    import threading
+    import time
+
+    import journal_truth
+    from ui.models.journal import JournalTrade
+    from ui.panels.journal import analytics_tab as at
+    from ui.services import journal_feed
+
+    trades = [JournalTrade.from_mapping(row) for row in TRADES]
+    monkeypatch.setattr(journal_feed, "load_trades", lambda **_kw: trades)
+    threads: list[int] = []
+
+    def fake_measure(rows, measure=None):
+        threads.append(threading.get_ident())
+        return {}
+
+    monkeypatch.setattr(journal_truth, "measure_exits", fake_measure)
+    tab = at.AnalyticsTab(_Header())
+    try:
+        tab.reload()
+        assert threads == [] and tab.exit_note.text() == ""  # hidden: nothing read yet
+        tab.show()
+        deadline = time.monotonic() + 5
+        while "Losers" not in tab.exit_note.text() and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert threads and threads[0] != threading.get_ident()
+        assert tab.exit_note.text() == (
+            "Winners kept: unknown (no bars for 2 of 2 winners).\n"
+            "Losers held past the stop: unknown (no stop on 4 of 4 trades)."
+        )
+    finally:
+        tab.shutdown()
+        tab.deleteLater()

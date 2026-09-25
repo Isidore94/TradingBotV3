@@ -283,6 +283,9 @@ class WeekCoachCard(QFrame):
         if rollup:
             lines.append(f"Last {len(rollup)} weeks ({rollup[0]} to {rollup[-1]}):")
             lines.extend(str(line) for line in truth.get("rollup_lines") or ())
+            if truth.get("exit_lines"):
+                lines.append(f"Exits, last {len(rollup)} weeks:")
+                lines.extend(str(line) for line in truth.get("exit_lines") or ())
         return "\n".join(lines)
 
     def _repeats_text(self) -> str:
