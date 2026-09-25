@@ -957,7 +957,7 @@ class AutopilotService(QObject):
                 if not pool:
                     self._log("Universe files are empty/missing - keeping the existing watchlists. Run the Universe builder.")
                     return
-                # P1-5 5c: Focus and typed names are swept first, never cut.
+                # P1-5 5c: M5 Focus names are swept first, never cut.
                 pool = core.prioritise_pool(self._open_sweep_priority_names(), pool)
                 moves = core.fetch_open_scan_moves(pool, log=self._log)
                 if not moves:
@@ -975,18 +975,21 @@ class AutopilotService(QObject):
                     return
                 trend_context = core.load_daily_context(list(moves.keys()))
                 built = core.build_watchlists_from_moves(moves, spy_move, trend_context=trend_context)
-                longs = built["longs"]
-                shorts = built["shorts"]
+                # Keep the trader's hand-added names: replace only what Auto
+                # Pilot itself wrote last time. A typed name is never an auto
+                # pick on either side, so it is never recorded and never dropped.
+                written = self._state.get("autopilot_written") or {}
+                current_longs, current_shorts = self._read_watchlists()
+                plan = core.plan_watchlist_write(
+                    built["longs"], built["shorts"], current_longs, current_shorts, written
+                )
+                longs = plan["longs"]
+                shorts = plan["shorts"]
                 if not longs and not shorts:
                     self._log(f"Open scan found no gap/RS movers across {built['scanned']} names - watchlists unchanged.")
                     return
-
-                # Keep the trader's hand-added names: replace only what Auto
-                # Pilot itself wrote last time.
-                written = self._state.get("autopilot_written") or {}
-                current_longs, current_shorts = self._read_watchlists()
-                merged_longs = core.merge_autopilot_watchlist(longs, current_longs, written.get("longs", []))
-                merged_shorts = core.merge_autopilot_watchlist(shorts, current_shorts, written.get("shorts", []))
+                merged_longs = plan["merged_longs"]
+                merged_shorts = plan["merged_shorts"]
                 wrote = core.write_bouncebot_watchlists(
                     merged_longs["symbols"], merged_shorts["symbols"]
                 )
@@ -1004,7 +1007,7 @@ class AutopilotService(QObject):
                         "designated writer for the home folder."
                     )
                     return
-                self._state["autopilot_written"] = {"longs": list(longs), "shorts": list(shorts)}
+                self._state["autopilot_written"] = plan["written"]
                 self._state["watchlist_built_at"] = datetime.now().strftime("%H:%M:%S")
                 self._save_state()
 
@@ -1068,7 +1071,7 @@ class AutopilotService(QObject):
                     self._state["suggested_at"] = "skipped (no universe)"
                     self._save_state()
                     return
-                # P1-5 5c: Focus and typed names are swept first, never cut.
+                # P1-5 5c: M5 Focus names are swept first, never cut.
                 pool = core.prioritise_pool(self._open_sweep_priority_names(), pool)
                 moves = core.fetch_open_scan_moves(pool, log=self._log)
                 spy_move = (moves or {}).get("SPY")
@@ -2159,9 +2162,11 @@ class AutopilotService(QObject):
             return []
 
     def _open_sweep_priority_names(self) -> list[str]:
-        """P1-5 5c: typed longs/shorts, then M5 Focus names - swept first, never cut."""
-        longs, shorts = self._read_watchlists()
-        names = [*longs, *shorts]
+        """P1-5 5c: the M5 Focus names, swept first and never cut.
+
+        Typed longs/shorts are NOT pooled: a typed name must never become an auto pick.
+        """
+        names: list[str] = []
         for path in (FOCUS_LONGS_FILE, FOCUS_SHORTS_FILE):
             try:
                 names.extend(read_watchlist_symbols(Path(path)))
