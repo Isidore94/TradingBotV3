@@ -254,6 +254,10 @@ def plan_trade(trade: Mapping[str, Any], alerts, daily) -> TradeResult:
                 and _stop_on_right_side(side, proposal.entry, proposal.stop)):
             rejected.append(f"{proposal.source} stop {proposal.stop:g} on the wrong side")
             continue
+        # A fill more than 1R (alert entry to alert stop) from the alert is not that alert's trade.
+        if proposal.source == SOURCE_M5 and abs(actual - proposal.entry) > abs(proposal.entry - proposal.stop):
+            rejected.append(f"alert too far from fill (alert entry {proposal.entry:g}, fill {actual:g})")
+            continue
         quantity = _number(trade.get("quantity_opened"))
         risk = abs(actual - proposal.stop) * abs(quantity) if quantity is not None else None
         currency = str(trade.get("currency") or "").strip()

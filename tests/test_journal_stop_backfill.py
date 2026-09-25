@@ -170,6 +170,47 @@ def test_store_guard_refuses_a_row_with_any_plan_field(tmp_path):
     assert _trade(store)["planned_stop"] == 48.0
 
 
+def test_store_guard_refuses_when_only_risk_source_is_set(tmp_path):
+    store = _store(tmp_path)
+    _seed_trade(store)
+    store.save_risk_fields("T1", risk_source="manual")
+
+    wrote = store.backfill_risk_fields("T1", planned_entry=49.9, planned_stop=49.5,
+                                       planned_risk=50.0, risk_source="backfill_m5_alert")
+
+    assert wrote is False
+    trade = _trade(store)
+    assert trade["planned_stop"] is None and trade["risk_source"] == "manual"
+
+
+def test_store_guard_refuses_when_only_planned_risk_is_set(tmp_path):
+    store = _store(tmp_path)
+    _seed_trade(store)
+    store.save_risk_fields("T1", planned_risk=75.0, risk_source="")
+
+    wrote = store.backfill_risk_fields("T1", planned_entry=49.9, planned_stop=49.5,
+                                       planned_risk=50.0, risk_source="backfill_m5_alert")
+
+    assert wrote is False
+    trade = _trade(store)
+    assert trade["planned_stop"] is None and trade["planned_risk"] == 75.0
+
+
+def test_an_alert_more_than_1r_from_the_fill_is_refused(tmp_path, capsys):
+    """ZETA 2026-08-11: alert entry 27.83, stop 27 (1R = 0.83), filled at 30.26."""
+    store = _store(tmp_path)
+    _seed_trade(store, symbol="ZETA", opened="2026-08-11T10:00:00-04:00",
+                closed="2026-08-11T11:00:00-04:00", entry=30.26)
+    outcomes = _alerts(tmp_path, [_alert("2026-08-11T06:30:00-07:00", symbol="ZETA", entry=27.83, stop=27.0)])
+
+    _run(tmp_path, store, outcomes, _daily(tmp_path), "--apply")
+
+    assert _trade(store)["planned_stop"] is None
+    out = capsys.readouterr().out
+    assert "alert too far from fill" in out
+    assert "no source found 1" in out
+
+
 def test_only_same_session_same_side_alerts_before_the_fill_count(tmp_path, capsys):
     store = _store(tmp_path)
     _seed_trade(store)
